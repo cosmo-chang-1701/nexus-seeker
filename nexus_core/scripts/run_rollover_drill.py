@@ -92,13 +92,13 @@ async def run_scenario_1() -> None:
         (
             "條件二",
             "做市商正 Gamma 底牆",
-            "Support GEX Wall $80.00 (+1.5M GEX 支撐彈簧床)",
+            "Support GEX Wall $80.00 (+1.5M)，牆距 5.9% 落在動態緩衝雙邊界內",
             "通過 ✅",
         ),
         (
             "條件三",
             "UOA 無實質物理封頂",
-            "Call Wall $95.00 (空間 11.8% > 5%)，無 STO 蓋頂",
+            "Call Wall $95.00 (空間 11.8% > 動態門檻 8.2%)，無 STO 蓋頂",
             "通過 ✅",
         ),
         (
@@ -319,20 +319,120 @@ async def run_scenario_2() -> None:
     print_embed_preview(embed_2d)
 
 
+async def run_scenario_3() -> None:
+    print_banner("情境三演練：TSLA 跌破 Put Wall，Regime V 破位追空 (Short Side)")
+
+    print_section("1. 盤勢分類與 Regime 路由 (TSLA)")
+    print(f" • 標的: {C_YELLOW}TSLA{C_RESET} | 交易策略: 動態調整 (DYNAMIC)")
+    print(" • 即時現價: $92.00 | Session VWAP: $99.00 | Gamma Flip: $100.00")
+    print(" • 做市商結構: PutWall $95.00 (已跌破) | ResistanceWall $100.00 (+3.0M GEX)")
+    print(" • 全鏈 Net GEX: -2.5M (負 Gamma 順勢助跌) | 15m RSI: 12.4")
+    print(" • ATR₁₅ₘ: $1.00 | ATR₁D: $5.00")
+    print(
+        f" • 分類結果: {C_RED}Regime V 破位追空態{C_RESET} "
+        "(跌破 Gamma Flip / VWAP / Put Wall，放量陰線，RSI < 45)"
+    )
+    print("   └─ 優先序說明: 個股結構封頂 (Call Wall 空間 8.7% < 動態門檻) 同時成立，")
+    print("      但 Regime V 優先——否則做空將永遠被 Regime IV 遮蔽而無法觸發")
+
+    print_section("2. 動態自適應波動率空間門檻推導")
+    print(" • Stop  = ResistanceWall $100.00 + 1.5 × ATR₁₅ₘ $1.00 = $101.50")
+    print(" • Risk  = ($101.50 - $92.00) / $92.00 = 10.33%")
+    print(f" • 門檻 = max(2.2 × 10.33%, 1.5 × (5/92), 3.5%) = {C_CYAN}22.72%{C_RESET}")
+    print(
+        "   └─ 但現價已跌破 Put Wall，條件三改走「破位追空」子模式："
+        "次級節點空間 >= 2.0 × ATR₁D"
+    )
+
+    print_section("3. 做空進場訊號六重嚴格過濾鐵律檢驗")
+    gates = [
+        (
+            "條件一",
+            "結構性放量破位",
+            "15m 實體陰線收盤 $92.00 < Gamma Flip $100.00，量能 2.0x 均量，跌破 VWAP",
+            "通過 ✅",
+        ),
+        (
+            "條件二",
+            "做市商負 Gamma 頂牆",
+            "ResistanceWall $100.00 (+3.0M GEX)，牆距 8.70% 落在 [2.72%, 9.78%] 雙邊界內",
+            "通過 ✅",
+        ),
+        (
+            "條件三",
+            "下行空間 + 無接刀",
+            "[破位追空] 至次級負 Gamma 節點 $80.00 空間 13.04% >= 10.87% (2.0×ATR₁D)"
+            "；無主力 PUT STO 接刀",
+            "通過 ✅",
+        ),
+        (
+            "條件四",
+            "主力跨週期賣壓",
+            "偵測到 $90P BTO 主力方向性押注，DTE = 25 天、ratio 1.50x、權利金 $400,000",
+            "通過 ✅",
+        ),
+        ("條件五", "總經與財報安全閥", "距財報 45 天，大盤處於 NORMAL 模式", "通過 ✅"),
+        (
+            "條件六",
+            "效期與 IVR 分流",
+            "最近效期 DTE = 25 天 (>= 14)，IVR 20.0% -> Long Put (輕度 OTM)",
+            "通過 ✅",
+        ),
+    ]
+    for g_num, g_name, g_desc, g_res in gates:
+        print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}{g_res}{C_RESET}")
+
+    print_section("4. 做空部位出場矩陣 (鏡像雙軌防洗盤停損)")
+    print(" • 錨點 AnchorShort = ResistanceWall $100.00 (上方阻力頂牆)")
+    print(
+        f" • 軌道一 SL-結構失效: $100.00 + 0.5 × ATR₁₅ₘ = {C_YELLOW}$100.50{C_RESET} "
+        "(現價升穿即觸發)"
+    )
+    print(f" • 軌道二 極端瞬時停損: $100.00 + 3.0 × ATR₁₅ₘ = {C_RED}$103.00{C_RESET}")
+    print(" • SL-狀態翻轉: Net GEX >= 0 (做市商回到正 Gamma 吸收) -> 強制 100% 回補")
+    print(" • SL-主力對沖: 近平值大額 CALL BTO (逼空起點) -> 強制 100% 回補")
+    print(
+        " • TP1 $95.48 (PutWall × 1.005) 50% | TP2 跌穿 PutWall 1.5% 30% | TP3 Δ<=-0.85 20%"
+    )
+
+    print_section("5. 風險揭露")
+    print(
+        f" {C_YELLOW}⚠️ risk_engine/ 的 Beta 加權 Delta、VIX 戰情階梯、凱利模型皆假設"
+        f"全部部位為多頭；做空部位存在時組合層指標可能失真（已知缺口）。{C_RESET}"
+    )
+
+
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Nexus Seeker 動態轉倉演練執行工具")
     parser.add_argument(
         "--scenario",
-        choices=["1", "2", "all"],
+        choices=["1", "2", "3", "all"],
         default="all",
-        help="指定演練情境 (1: SPCX轉強, 2: 無標的符合, all: 全部)",
+        help="指定演練情境 (1: SPCX轉強, 2: 無標的符合, 3: TSLA破位追空, all: 全部)",
     )
     args = parser.parse_args()
 
-    if args.scenario in ("1", "all"):
-        await run_scenario_1()
-    if args.scenario in ("2", "all"):
-        await run_scenario_2()
+    # 逐情境隔離：本演練腳本會對真實市場資料源發動請求，而情境一/二使用的是
+    # 示範用代號 (SPCX)，在真實資料源上取不到 K 線就會拋例外。早期版本沒有
+    # 隔離，任何一個情境的資料層失敗都會中止整個 main()，讓後續情境**完全
+    # 不會執行**——演練工具的價值正在於一次跑完所有情境並比對，故改為逐個
+    # 捕捉、印出失敗原因後繼續。
+    scenarios = (
+        ("1", run_scenario_1),
+        ("2", run_scenario_2),
+        ("3", run_scenario_3),
+    )
+    for key, fn in scenarios:
+        if args.scenario not in (key, "all"):
+            continue
+        try:
+            await fn()
+        except Exception as e:
+            print(
+                f"\n{C_RED}⚠️ 情境 {key} 演練中止：{type(e).__name__}: {e}{C_RESET}\n"
+                f"{C_YELLOW}   (本腳本會對真實資料源發動請求；示範用代號取不到 "
+                f"K 線屬預期情形，不影響其餘情境){C_RESET}"
+            )
 
 
 if __name__ == "__main__":

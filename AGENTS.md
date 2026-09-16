@@ -94,7 +94,9 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 以下所有量化模型、交易策略、風控引擎與平台功能的詳細規格，SSOT 已整併至 `docs/`（見 [`docs/README.md`](docs/README.md) 的完整索引與跨模組導讀路徑）。本節僅列出「主題 → 文件」對照，供貢獻者快速定位；**新增或修改功能時，請更新對應的 docs/ 頁面，而不是把敘事堆進本檔案。**
 
 ### 交易策略與進出場 (`docs/strategies/`)
-- 4-Regime 市場環境動態路由矩陣、右側動能六重鐵律、左側均值回歸六重鐵律、Trading Strategy Modes（`RIGHT_SIDE`/`LEFT_SIDE`/`DYNAMIC`，`user_settings.trading_strategy`）→ [`01_regime_routing_matrix.md`](docs/strategies/01_regime_routing_matrix.md)、[`02_right_side_momentum_ironclad.md`](docs/strategies/02_right_side_momentum_ironclad.md)、[`03_left_side_mean_reversion_ironclad.md`](docs/strategies/03_left_side_mean_reversion_ironclad.md)
+- 5-Regime 市場環境動態路由矩陣、右側動能六重鐵律、左側均值回歸六重鐵律、做空破位追空六重鐵律、Trading Strategy Modes（`RIGHT_SIDE`/`LEFT_SIDE`/`SHORT_SIDE`/`DYNAMIC`，`user_settings.trading_strategy`）→ [`01_regime_routing_matrix.md`](docs/strategies/01_regime_routing_matrix.md)、[`02_right_side_momentum_ironclad.md`](docs/strategies/02_right_side_momentum_ironclad.md)、[`03_left_side_mean_reversion_ironclad.md`](docs/strategies/03_left_side_mean_reversion_ironclad.md)、[`07_short_side_breakdown_ironclad.md`](docs/strategies/07_short_side_breakdown_ironclad.md)
+- 動態自適應波動率空間門檻（單一權威演算法，取代先前散落 7 處的固定百分比；含緩衝雙邊界與破位追空次級節點空間）→ [`06_dynamic_adaptive_room_threshold.md`](docs/strategies/06_dynamic_adaptive_room_threshold.md)
+  - ⚠️ **左側（`LEFT_SIDE`）本質是做多**——逆勢均值回歸、Put Wall 底牆接刀，條件三算的是「向上」回歸空間。`SHORT_SIDE` 才是唯一的空頭方向進場路徑。
 - Dynamic Rollover Engine 八大情境（Fundamental Thesis／Opportunity Cost／Core-Satellite Rebalance／Margin Defense／Core Deployment／Macro Top-Escape／Covered Call Profit-Lock／Transition Engine）、DTE 三態機、`/stress_test` 現金赤字精算 → [`04_dynamic_rollover_state_machine.md`](docs/strategies/04_dynamic_rollover_state_machine.md)
 - 雙軌防洗盤動態停損與微觀結構出場決策矩陣（SL-結構失效／SL-狀態翻轉／SL-主力對沖／SL-動態保本／TP1-TP3）→ [`05_dual_track_anti_washout_stop_loss.md`](docs/strategies/05_dual_track_anti_washout_stop_loss.md)
 - Watchlist 心跳所依賴的 Relative Strength 公式、ExecutionRouter、Skew Divergence Gate、Momentum Vector Gate，以及 Event-Driven Market Scenario Alerts（巨鯨護航共振等六大情境）亦記載於本系列文件。
@@ -152,7 +154,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/cogs/order_ui.py` — active orders entrypoints
 - `nexus_core/cogs/order_views.py` — interactive list views and telemetry alignment buttons
 - `nexus_core/cogs/order_modals.py` — cancellation/adjustment modals
-- `nexus_core/cogs/settings_ui.py` — interactive account, notification settings views, `TradingStrategySelectView` (交易策略 3 選 1 選單), and WtiConfigModal
+- `nexus_core/cogs/settings_ui.py` — interactive account, notification settings views, `TradingStrategySelectView` (交易策略 4 選 1 選單), and WtiConfigModal
 - `nexus_core/cogs/terminal.py` — terminal command entrypoints (including settings, runway analysis, and `/wti_config`)
 - `nexus_core/cogs/unified_terminal/` — modular trader terminal and radar hubs (`cog.py`, `symbol_view.py`, `portfolio_view.py`, `batch_scan_view.py`, `pulse_view.py`, `utils.py`)
 - `nexus_core/cogs/calendar.py` — upgraded macro and earnings calendar command with event caching
@@ -166,11 +168,15 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/migrations/v047_remediate_missing_structures.py` — migration remediating/adding economic calendar columns consensus_value and fedwatch_probability
 - `nexus_core/database/migrations/v048_add_escape_window_settings.py` — migration adding escape window configuration columns to user settings
 - `nexus_core/database/migrations/v062_add_fundamental_scan_state.py` — migration registering the fundamental_scan_state table, the dedup cursor (per-symbol last analyzed accession_number) used by the automated daily SEC filing scanner
-- `nexus_core/database/migrations/v068_add_trading_strategy.py` — migration adding `user_settings.trading_strategy` (交易策略模式，預設 `RIGHT_SIDE` 以維持既有行為不變)
+- `nexus_core/database/migrations/v068_add_trading_strategy.py` — migration adding `user_settings.trading_strategy` (交易策略模式，預設 `RIGHT_SIDE` 以維持既有行為不變；該欄位為 `TEXT DEFAULT` 且無 `CHECK` 約束，後續新增 `SHORT_SIDE` enum 值**不需要**新的 migration)
 - `nexus_core/database/migrations/v070_split_heartbeat_symbol_deep.py` — migration backfilling `heartbeat_symbol_deep` from each user's existing `heartbeat_watchlist` value when the two heartbeat channels were split, so anyone who had muted the shared toggle is not silently re-subscribed by the new key's `True` default
 - `nexus_core/database/migrations/v072_remove_margin_buying_power.py` — migration dropping deprecated `option_buying_power` and `margin_used` manual reference columns from `user_settings`
+- `nexus_core/database/migrations/v074_add_previous_put_wall.py` — migration adding `market_cache.put_wall` / `previous_put_wall`, the mirror of `v069`'s call-wall pair. Without it the short-side TP2 "支撐牆向下遷移 >= 3%" branch is permanently dormant and silently falls back to the 1.5% break test
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
+- `nexus_core/market_analysis/margin.py` — 全資產類別保證金模型（`calculate_option_margin` 名稱沿用歷史）。空頭選擇權走既有公式，空頭**現貨**走 Reg-T 初始保證金（市值 × 50%）。⚠️ 其輸出經 `total_margin_used` 匯總成 `portfolio_heat`，是「是否允許開新倉」的主要煞車——任何一種空頭部位若在此回傳 0.0，該煞車對它就完全失效
+- `nexus_core/market_analysis/room_threshold.py` — **單一權威**的動態自適應波動率空間門檻實作（公式 A 方向性空間門檻／公式 B 牆體緩衝雙邊界／公式 C 破位追空次級節點空間）。刻意只依賴 stdlib 的葉模組（比照 `sentiment/skew_taxonomy.py`），故可同時被 `dynamic_rollover/`、`gamma_squeeze_engine.py` 與 `cogs/embed_builders/` 匯入而不產生循環相依。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫，`constants.py` 的「路由層與進場確認層門檻不合併」政策不被破壞
+- `nexus_core/market_analysis/atr_utils.py` — 共用 ATR helper：`fetch_atr_15m()`／`compute_atr_15m_from_df()`／`compute_atr_14_from_daily_df()`／`fetch_atr_1d()`（後者刻意不 `force_refresh`，日線 ATR 盤中幾乎不動）
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
@@ -188,14 +194,18 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
-- `nexus_core/market_analysis/dynamic_rollover/` — Dynamic rollover engine package (facade `__init__.py` + `fundamental_thesis.py` / `opportunity_cost.py` / `anti_washout.py` / `margin_defense.py` / `structural_signals.py` (also houses the DTE three-tier state machine, `evaluate_option_dte_tier`) / `covered_call_profit_lock.py` / `inverse_hedge.py` (Scenario 4's third `target_core` destination: symbol→inverse-ETF resolution + pure-spot momentum confirmation) / `core_deployment.py` (Scenario 5 + Covered Call Overlay) / `macro_top_escape_defense.py` (Scenario 6: probabilistic leading-indicator defense, dispatched last in the evaluation order) / `left_side_entry.py` (左側交易六重鐵律) / `regime_classifier.py` (動態調整 4 態盤勢分類器) / `transition_engine.py` (動態調整狀態切換引擎) / `models.py` / `constants.py`), anti-washout stop engine, and asset class bifurcation logic. Public import path stays `market_analysis.dynamic_rollover`.
+- `nexus_core/market_analysis/dynamic_rollover/` — Dynamic rollover engine package (facade `__init__.py` + `fundamental_thesis.py` / `opportunity_cost.py` / `anti_washout.py` / `margin_defense.py` / `structural_signals.py` (also houses the DTE three-tier state machine, `evaluate_option_dte_tier`) / `covered_call_profit_lock.py` / `inverse_hedge.py` (Scenario 4's third `target_core` destination: symbol→inverse-ETF resolution + pure-spot momentum confirmation) / `core_deployment.py` (Scenario 5 + Covered Call Overlay) / `macro_top_escape_defense.py` (Scenario 6: probabilistic leading-indicator defense, dispatched last in the evaluation order) / `left_side_entry.py` (左側交易六重鐵律，**做多**) / `short_side_entry.py` (做空交易六重鐵律，本系統唯一的空頭方向進場路徑，含「區間內做空」與「破位追空」兩子模式) / `regime_classifier.py` (動態調整 5 態盤勢分類器，含 Regime V 破位追空態) / `transition_engine.py` (動態調整狀態切換引擎) / `models.py` / `constants.py`), anti-washout stop engine, and asset class bifurcation logic. Public import path stays `market_analysis.dynamic_rollover`.
 - `nexus_core/market_analysis/signal_calculator.py` — Dynamic trading signal calculator (1.5x ATR buffers, capital allocation models)
 - `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_db_write_centralization.py` — AST 掃描強制「單一寫入者」不變式：除 `database/connection.py` 與 `database/core.py` 外，不得出現 `sqlite3.connect`、`conn.commit()`，或把連線當成 context manager 使用
 - `nexus_core/tests/unit/test_left_side_entry.py` — unit tests for the left-side six-rule entry gate (per-condition pass/fail/fail-safe, candle-pattern primitive, confirmed-bar guard)
-- `nexus_core/tests/unit/test_regime_classifier.py` — unit tests for the 4-regime classifier boundaries and its fail-safe default to Regime II
+- `nexus_core/tests/unit/test_regime_classifier.py` — unit tests for the 5-regime classifier boundaries, the Regime V vs Regime IV priority split, and its fail-safe default to Regime II
+- `nexus_core/tests/unit/test_room_threshold.py` — unit tests for the three dynamic-threshold formulas, the four degradation paths, and the √26 ATR scaling ladder
+- `nexus_core/tests/unit/test_short_side_entry.py` — unit tests for the short-side six-rule entry gate (per-condition pass/fail/fail-safe, both sub-modes, signature parity with the left/right gates)
+- `nexus_core/tests/unit/test_short_exit_matrix.py` — unit tests for the mirrored short SL/TP matrix and the position-side dispatch (long path must stay bit-identical)
+- `nexus_core/tests/unit/test_short_position_risk.py` — unit tests for the portfolio-level direction-awareness remediation: Reg-T short-stock margin, the shared `is_short_exposure_strategy()` direction inference, gross-vs-net capital, and the two-sided hedge threshold
 - `nexus_core/tests/unit/test_transition_engine.py` — unit tests for the four transition paths, entry-bar-low capture, and the anti_washout coordination/Track-2 universality guards
 - `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
 - `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
@@ -283,6 +293,33 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - **跨程序競爭無法用佇列消除。** 藍綠部署期間會有兩個容器並存掛載同一個 DB volume，
   因此 worker 內建 SQLITE_BUSY 的 jittered 指數退避重試；`busy_timeout` 與退避重試
   是一等公民設計，不是備援。
+
+### 部位方向語意（多空共存）
+
+**全系統以「股數／口數為負」辨識空頭部位**，不另設方向欄位。此慣例原本只用於
+空頭選擇權（Covered Call / CSP），做空進場系統上線後擴及空頭現貨。
+
+- **量值 vs 帶號**：凡是回答「佔用多少資本／曝險多大」的計算一律取 `abs()`
+  （帳戶規模、配置比例、保證金、熱度）；凡是回答「方向性曝險是多少」的計算
+  一律保留正負號（Beta 加權 Delta、各階 Greeks 加總）。混用是這一區最常見的
+  缺陷來源——帶號加總會讓多空互相抵銷，使帳戶看起來變小、其餘部位的配置比例
+  同步高估。
+- **不得用 `if qty > 0` 過濾持倉列**。那會讓空頭部位對整條下游管線隱形。
+  需要排除的是 `qty == 0`。
+- **候選交易的方向判定**走
+  `market_analysis/risk_engine.py::is_short_exposure_strategy()`，不要再寫
+  `-1 if "STO" in strategy else 1`——那只涵蓋「賣出選擇權收權利金」一種空頭
+  形式，對 `SHORT_SIDE` / `Long Put` / `Bear Call Spread` 全部誤判為多頭。
+  已成交部位一律以 `quantity` 正負號為準，策略字串只是未成交候選的代理。
+- **負的組合 Delta 不必然是對沖**。也可能是刻意建立的做空 alpha 部位。
+  區分依據是 `trade_category == "HEDGE"`（見 `hedging._sum_hedge_only_delta`）；
+  誤判的代價是系統建議使用者平掉自己的論點。
+
+⚠️ **尚未方向感知化**：VIX 戰情階梯（`config.py::VIX_LADDER_CONFIG`）的所有
+閘門以 `"STO"`/`"BTO"` 字串為鍵，做空進場不經過任何一道；且其前提對做空是反的
+（高 VIX 給最大侵略性，對賣權利金正確、對追空錯誤）。
+`services/execution_router.py` 的凱利勝率先驗（`RSI < 50 ⇒ 勝率較高`）同樣是
+多頭先驗。兩者需要獨立校準，不宜機械翻轉。
 
 ### Memory / VPS safety
 

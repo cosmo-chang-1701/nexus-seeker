@@ -53,19 +53,27 @@
    \text{Support Wall} = \operatorname{argmax}_{K < \text{Spot}} \big(\text{Net GEX}(K)\big)
    $$
    - 若現價下方無正 GEX 峰值，或該峰值低於薄紙牆門檻 $\text{GEX\_THIN\_WALL\_THRESHOLD} = 500,000$，則 $\text{Support Wall} = 0.0$，條件二直接判定未通過。此約束徹底杜絕了將現價上方龐大的 Call Wall 阻力誤判為支撐底牆的系統性缺陷。
-2. **即時有效防禦距離約束**：
+2. **即時有效防禦距離：停損距離雙邊界約束**：
+   判定自固定上限 $5\%$ 升級為緩衝雙邊界（完整推導見 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 B，`profile="RIGHT"`）。量的是**停損距離**而非牆距：
    $$
-   0 < \frac{\text{Spot} - \text{SupportWall}}{\text{Spot}} \le \text{\_ENTRY\_SUPPORT\_WALL\_MAX\_DISTANCE\_PCT} = 0.05 \quad (5\%)
+   2.5 \times \frac{\text{ATR}_{15m}}{\text{Spot}} \le \frac{\text{Spot} - (\text{SupportWall} - 0.5 \times \text{ATR}_{15m})}{\text{Spot}} \le 0.08
    $$
-   現價距離支撐牆超過 5% 視為缺乏即時保護（防守線過遠）。
+   - **下界**防「停損落在日內雜訊帶內」：停損就在腳邊時，任何日內隨機雜訊都會先掃穿它再回頭，即遭做市商 Liquidity Sweep 洗出場。舊版的 $0 < d$ 只要求牆在下方，對此完全無防護。
+   - **上界為絕對 $8\%$**，純粹的絕對風險兜底。刻意不用 ATR 縮放——那會與條件三的 $2.2 \times \text{Risk}$ 重複定價同一風險，且低波標的的可接受帶會窄於一個履約價間距（實測見 `06` 的 §2.2）。
+   - $\text{ATR}_{15m}$ 不可得時自動退回舊版的 $0 < d \le 5\%$ 單邊牆距判定。
 
 ### 2.3 條件三：做市商阻力結構與非對稱空間
 1. **無 UOA 巨鯨物理封頂**：
    以 Call Wall 作為履約價基準，調用 `detect_uoa_sto_call_physical_cap`，嚴禁存在 $\text{Ratio} \ge \text{\_ENTRY\_UOA\_CAP\_RATIO\_THRESHOLD} = 1.5\text{x}$ 且 $\text{Strike} \ge \text{CallWall}$ 的單筆 STO Call 大單。
-2. **非對稱向上獲利空間（帶正負號距離）**：
+2. **非對稱向上獲利空間（帶正負號距離，動態門檻）**：
    $$
-   \Delta_{\text{CallWall}} = \frac{\text{CallWall} - \text{Spot}}{\text{Spot}} \ge \text{\_ENTRY\_ASYMMETRIC\_ROOM\_PCT} = 0.05 \quad (5\%)
+   \Delta_{\text{CallWall}} = \frac{\text{CallWall} - \text{Spot}}{\text{Spot}} \ge \max\Big(2.2 \times \text{Risk}_{\text{actual}},\ 1.5 \times \frac{\text{ATR}_{1D}}{\text{Spot}},\ 0.035\Big)
    $$
+   $$
+   \text{Risk}_{\text{actual}} = \frac{\text{Spot} - (\text{PutWall} - 0.5 \times \text{ATR}_{15m})}{\text{Spot}}
+   $$
+   門檻自固定 $5\%$ 升級為動態自適應波動率門檻：「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 的盈虧比成為結構性保證，而非對高波標的失效、對低波標的過嚴的一刀切數字。完整推導與降級階梯見 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md)。
+
    若現價已觸及或跌破 Call Wall（距離為負值），視為做市商壓制仍在且向上空間耗竭，拒絕進場。
 
 ### 2.4 條件四：主力跨週期買盤認證與雜訊過濾
@@ -146,10 +154,10 @@ flowchart TD
     Start([開始: 候選標的右側進場六重鐵律檢核]) --> C1{"條件一: 結構性突破<br/>15m 實體陽線 + 放量 1.5x<br/>站穩 VWAP + GammaFlip / Fallback?"}
 
     C1 -- 失敗 --> Fail1[條件一❌: 突破未確認] --> StopFail([進場未通過: 拒絕轉倉/部署])
-    C1 -- 通過 --> C2{"條件二: 做市商正 Gamma 底牆<br/>Support Wall 位於現價下方 (K < Spot)?<br/>距離現價 <= 5% 且 GEX >= 500k?"}
+    C1 -- 通過 --> C2{"條件二: 做市商正 Gamma 底牆<br/>Support Wall 位於現價下方 (K < Spot)?<br/>停損距離落在 [2.5 x ATR_15m, 絕對 8%] 且 GEX >= 500k?"}
 
     C2 -- 失敗 --> Fail2[條件二❌: 缺乏有效正 Gamma 底牆] --> StopFail
-    C2 -- 通過 --> C3{"條件三: 阻力空間與物理封頂<br/>Call Wall 距離 >= 5%?<br/>無 STO Call 巨鯨封頂?"}
+    C2 -- 通過 --> C3{"條件三: 阻力空間與物理封頂<br/>Call Wall 距離 >= 動態門檻<br/>max(2.2 x Risk, 1.5 x ATR_1D, 3.5%)?<br/>無 STO Call 巨鯨封頂?"}
 
     C3 -- 失敗 --> Fail3[條件三❌: 上方空間受阻或存在封頂] --> StopFail
     C3 -- 通過 --> C4{"條件四: 主力跨週期買盤<br/>存在 CALL BTO: DTE >= 7<br/>Ratio >= 0.8x, 名目 >= $200k<br/>Strike >= Spot?"}
@@ -186,9 +194,14 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `_ENTRY_VOLUME_LOOKBACK_BARS` | `20` | 15m K 線均量回看根數（排除當前根） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_VOLUME_SURGE_MULTIPLIER` | `1.5` | 15m 突破放量倍數門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | 現價距離正 Gamma 支撐底牆之最大防禦距離 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_BUFFER_LOWER_MULTIPLIERS["RIGHT"]` | `2.5` | 停損距離下界倍率（×ATR₁₅ₘ） | `nexus_core/market_analysis/room_threshold.py` |
+| `_BUFFER_MAX_STOP_DISTANCE_PCT` | `0.08` ($8\%$) | 停損距離的絕對上限兜底 | `nexus_core/market_analysis/room_threshold.py` |
+| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_CAP_RATIO_THRESHOLD` | `1.5` | 單筆 STO Call 判定為物理封頂之最低 Volume/OI 比值 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_ASYMMETRIC_ROOM_PCT` | `0.05` ($5\%$) | Call Wall 距現價最低非對稱獲利空間 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ROOM_RISK_MULTIPLIER` | `2.2` | 盈虧比要求；取代退役的 `_ENTRY_ASYMMETRIC_ROOM_PCT` 固定 $5\%$ | `nexus_core/market_analysis/room_threshold.py` |
+| `_ROOM_ATR_1D_MULTIPLIER` | `1.5` | 空間至少須涵蓋 1.5 個單日波幅 | `nexus_core/market_analysis/room_threshold.py` |
+| `_ROOM_ABSOLUTE_FLOOR_PCT` | `0.035` ($3.5\%$) | 動態門檻的絕對底線與資料缺失時的退回值 | `nexus_core/market_analysis/room_threshold.py` |
+| `_ROOM_STOP_ATR_15M_MULTIPLIER` | `0.5` | 停損墊片；必須與軌道一的 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` 同步 | `nexus_core/market_analysis/room_threshold.py` |
 | `_ENTRY_UOA_MIN_DTE` | `7` | 主力 UOA 買盤最低到期天數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_MIN_RATIO` | `0.8` | 主力 UOA 買盤最低 Volume/OI 比值 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 主力 UOA 買盤最低權利金名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
@@ -205,12 +218,18 @@ flowchart TD
 ## 5. 邊界條件、風控熔斷與例外處理
 
 1. **底牆現價物理約束之嚴格執行**：
-   在 `_scan_gex_walls` 中，若現價下方無任何正 GEX 峰值，支撐牆回傳 `0.0`。條件二代碼嚴格檢查 `support_wall > 0` 與 `dist_pct <= 0.05`，防止在無支撐保護的懸崖結構中進場。
-2. **全鏈 Short Gamma 泥淖即時熔斷**：
+   在 `_scan_gex_walls` 中，若現價下方無任何正 GEX 峰值，支撐牆回傳 `0.0`。條件二代碼嚴格檢查 `support_wall > 0`，並將牆距交由緩衝雙邊界判定，防止在無支撐保護的懸崖結構中進場。
+2. **⚠️ 條件二的行為變化與進場頻率影響**：
+   支撐牆極貼現價（例如 $0.5\%$）在舊版的 $0 < d \le 5\%$ 判定下會**通過**條件二，改版後判為 `TOO_TIGHT` 而**不通過**。這正是新增下界閘門的目的（防 Liquidity Sweep 掃損）。
+
+   252 點參數掃描的實測結果：舊版固定 $5\%/5\%$ 的通過率 $59.5\%$ 中，有 $46.7\%$ 屬於「本來就不該進」（真實 $\text{R:R} < 2.2$ 佔 $17.3\%$、停損落在雜訊帶內佔 $30.0\%$；舊版最差 $\text{R:R}$ 僅 $0.91$，即賠率比 $1:1$ 還差）。新規則的通過率為 $37.3\%$，最差 $\text{R:R}$ 為 $2.23$，且「本來就該通過」的格點保留率為 $100\%$。頻率下降是正當淘汰，不是誤殺——但上線後仍應監控機會成本轉倉的實際觸發次數。
+3. **動態門檻的降級揭露義務**：
+   ATR 或 Put Wall 缺失時，門檻退回 $3.5\%$ 絕對底線並標記降級。條件二／三的逐項判定字串會以 `｜⚠️` 前綴附加降級原因，該字串流入「進場鐵律檢核」面板——使用者有權知道看到的門檻不是完整推導出來的。
+4. **全鏈 Short Gamma 泥淖即時熔斷**：
    在條件一中，若 `gamma_flip_est <= 0` 且 `effective_net_gex < 0`，系統立即終止後續判定，回報「全域 Short Gamma 泥淖，結構性空頭直接不通過」，防止在市場極端單邊下殺時誤觸發突破買進。
-3. **外部行事曆與到期日異常防呆**：
+5. **外部行事曆與到期日異常防呆**：
    若財報快取讀取失敗，或無法取得選擇權到期日清單，系統遵循 Fail-Closed 原則，一律判定該條件未通過，拒絕承擔未知的事件風險。
-4. **短路展示一致性保證**：
+6. **短路展示一致性保證**：
    當前四項條件有任一項未通過時，條件五與六不會發起任何 HTTP 或資料庫查詢，但在 `reasons` 陣列中主動寫入 `條件五⏭️` 與 `條件六⏭️`，避免前端視圖只渲染四項條件造成的使用者混淆。
 
 ---

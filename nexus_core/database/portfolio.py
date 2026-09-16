@@ -235,7 +235,14 @@ def get_all_portfolio() -> Any:
             avg_cost = float(m_hold.get("avg_cost", 0.0))
             qty = float(m_hold.get("quantity", 0.0))
             holding_map[(uid, sym.upper())] = avg_cost
-            if qty > 0:
+            # qty != 0：空頭現貨持倉 (qty < 0) 同樣必須納入全站持倉饋送。
+            # 早期版本是 `if qty > 0`，會讓做空現貨部位對 audit_real_portfolio_risk()
+            # 與盤後 check_portfolio_status_logic() **完全隱形**——組合層的
+            # Beta 加權 Delta、曝險百分比、保證金熱度全部看不到它。這是
+            # 「risk_engine 假設全多頭」缺口中影響面最大的一行。
+            # 下游的 Greeks 加總 (market_analysis/portfolio.py) 本來就吃帶號
+            # quantity，不需要另外處理。
+            if qty != 0:
                 holding_rows.append(
                     (
                         uid,

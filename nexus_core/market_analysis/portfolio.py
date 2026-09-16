@@ -122,11 +122,16 @@ class PortfolioStatusOrchestrator:
                 # 🚀 處理現貨持倉 (HOLDING / STOCK)
                 if str(opt_type).lower() == "stock" or expiry == "PERPETUAL":
                     current_price = current_stock_price
-                    pnl_pct = (
-                        (current_price - entry_price) / entry_price
-                        if entry_price > 0
-                        else 0.0
-                    )
+                    # 空頭現貨 (quantity < 0) 的損益方向相反：價格下跌才是獲利。
+                    # 與下方選擇權分支既有的空頭 P&L 反轉處理對稱。
+                    if entry_price > 0:
+                        pnl_pct = (
+                            (entry_price - current_price) / entry_price
+                            if quantity < 0
+                            else (current_price - entry_price) / entry_price
+                        )
+                    else:
+                        pnl_pct = 0.0
                     weight_factor = (
                         beta * (current_stock_price / self.spy_price)
                         if self.spy_price > 0
@@ -134,6 +139,17 @@ class PortfolioStatusOrchestrator:
                     )
                     spx_weighted_delta = (quantity / 100.0) * 100 * weight_factor
                     self.total_beta_delta += spx_weighted_delta
+                    # 空頭現貨佔用 Reg-T 初始保證金；多頭回傳 0.0。不計入的話
+                    # 一個純空頭帳戶的 portfolio_heat 會顯示 0%，使 30%/50% 的
+                    # 熱度煞車完全失效。
+                    self.total_margin_used += calculate_option_margin(
+                        "stock",
+                        0.0,
+                        current_stock_price,
+                        0.0,
+                        int(quantity),
+                        stock_cost,
+                    )
                     self.report_lines.append(
                         format_position_report(
                             symbol,

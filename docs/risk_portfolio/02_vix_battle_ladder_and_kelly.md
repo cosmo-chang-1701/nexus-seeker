@@ -161,7 +161,25 @@ if odds <= 0:
 ```
 保證在無實質勝率空間時，輸出倉位配額精確為零。
 
-### 5.3 All-in 模式的宏觀修正因子繞過 (Bypass Attenuation in All-in Mode)
+### 5.3 部位方向的推導：`quantity` 正負號優先，策略字串僅為候選交易的代理
+NRO 倉位模型的 $\text{val\_adj\_unit\_delta}$ 需要知道一筆**尚未成交**的候選交易會帶來多頭還是空頭曝險，而候選交易還沒有 `quantity`，只有策略標籤。
+
+早期實作在三個檔案裡各自寫了 `-1 if "STO" in strategy else 1`。該判定只涵蓋「賣出選擇權收權利金」一種空頭形式，對做空進場系統新增的路徑（`SHORT_SIDE`、`Long Put`、`Bear Call Spread`、空頭現貨）**全部誤判為多頭**，使倉位模型把一筆空單當成「增加多頭 Delta」來編列預算，`safe_qty` 因此落在風險帶的錯誤一側。
+
+現行作法抽成單一函式 `risk_engine.is_short_exposure_strategy()`，理由與 `kelly_position_fraction` 完全相同——同一個語意判斷散在多處必然漂移。新增空頭策略標籤時只需在該函式加一個關鍵字。
+
+⚠️ 此函式是**代理判定**，不是權威來源。已成交部位一律以 `quantity` 正負號為準。
+
+### 5.4 ⚠️ VIX 戰情階梯與凱利勝率先驗尚未方向感知化（已知缺口）
+本篇描述的兩個模型目前都建立在「進場方向為多頭、或為賣出權利金」的前提上，做空進場系統上線後尚未校準：
+
+1. **VIX 戰情階梯的所有閘門以 `"STO"` / `"BTO"` 字串為鍵**（見 §5.1 的 Dormant 熔斷、`apply_vix_ladder()` 的 `sto_delta_cap` 鉗制、Stage 1 Macro reject）。一筆 `SHORT_SIDE` 的方向性做空**不經過任何一道閘門**。
+2. **階梯的前提對做空是反的**。VIX $\ge 35$ 時 `sizing_multiplier` 給到 $2.0$、`kelly_override` 給到 $0.50$（最大侵略性）——那對「恐慌中賣出權利金」是正確的逆向邏輯，對「追殺一個已經崩跌的標的」則恰好相反：VIX 35 的洗盤正是空頭最容易被軋的時點。反之 Dormant（VIX < 15）封鎖 STO，卻對做空完全開放。
+3. **凱利勝率先驗是多頭先驗**。`services/execution_router.py` 的 `expected_win_rate = 0.55 if rsi_14 < 50 else 0.45`（註解明寫「RSI < 50 時勝率預期較高，適合做多 UOA」）。對破位追空而言，低 RSI 正是空頭最延伸、最容易反抽的位置，該先驗方向相反。
+
+這三者**刻意未以機械翻轉處理**——把倍率取負或把先驗反轉，只會用一個未經驗證的假設取代另一個。正確的補強需要獨立的做空校準（理想上以歷史回測支撐，但本專案目前無回測基礎設施）。在完成校準之前，做空部位的倉位大小應由使用者自行判斷，不得依賴本篇的階梯輸出。
+
+### 5.5 All-in 模式的宏觀修正因子繞過 (Bypass Attenuation in All-in Mode)
 在一般市場狀況下，若原油暴漲或 Skew 偏大，宏觀修正因子（$d_{\text{oil}}, d_{\text{regime}}$）會衰減風險限額。然而，當 $\text{VIX} \ge 35.0$ 時，系統判定這屬於歷史級世紀大底，此時若繼續套用原油或偏斜衰減將錯失最佳逆向建倉良機。因此 `risk_engine.py:296` 特別設計：
 ```python
 if vix_spot is not None and vix_spot >= 35.0:
@@ -177,7 +195,9 @@ if vix_spot is not None and vix_spot >= 35.0:
 - **VIX 戰情階梯與分位數配置**:
   - `nexus_core/config.py`: `VIX_LADDER_CONFIG` (lines 99–172), `VIX_QUANTILE_BOUNDS` (lines 175–182)
 - **凱利公式核心運算與 NRO 風險優化器**:
-  - `nexus_core/market_analysis/risk_engine.py`: `kelly_position_fraction()` (lines 210–233), `optimize_position_risk()` (lines 235–360), `get_macro_modifiers()` (lines 169–207)
+  - `nexus_core/market_analysis/risk_engine.py`: `kelly_position_fraction()`, `optimize_position_risk()`, `get_macro_modifiers()`
+  - `nexus_core/market_analysis/risk_engine.py`: `is_short_exposure_strategy()`（候選交易的方向判定單一來源，見 §5.3）
+  - `nexus_core/tests/unit/test_short_position_risk.py`: 方向判定的迴歸鎖定
 - **策略層流動性與倉位分配執行**:
   - `nexus_core/market_analysis/strategy/liquidity_risk.py`: lines 234–259
 - **下單路由與執行閘門**:

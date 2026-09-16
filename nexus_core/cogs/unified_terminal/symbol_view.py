@@ -293,12 +293,27 @@ class SymbolHubView(discord.ui.View):
                 ) = await _confirm_left_entry_signal(
                     self.symbol, self.base_data, target_spot
                 )
+            elif trading_strategy == TradingStrategyMode.SHORT_SIDE.value:
+                from market_analysis.dynamic_rollover.short_side_entry import (
+                    _confirm_short_entry_signal,
+                )
+
+                (
+                    six_rule_passed,
+                    six_rule_reason,
+                    structure_directive,
+                ) = await _confirm_short_entry_signal(
+                    self.symbol, self.base_data, target_spot
+                )
             elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
                 from market_analysis.dynamic_rollover.left_side_entry import (
                     _confirm_left_entry_signal,
                 )
                 from market_analysis.dynamic_rollover.regime_classifier import (
                     classify_dynamic_regime,
+                )
+                from market_analysis.dynamic_rollover.short_side_entry import (
+                    _confirm_short_entry_signal,
                 )
 
                 gex_profile_data = self.base_data.get("gex_profile_data") or {}
@@ -331,6 +346,19 @@ class SymbolHubView(discord.ui.View):
                         six_rule_reason,
                         structure_directive,
                     ) = await _confirm_left_entry_signal(
+                        self.symbol,
+                        self.base_data,
+                        target_spot,
+                        df_15m=regime_market_data.df_15m,
+                        session_vwap=regime_market_data.session_vwap,
+                        atr_15m=regime_market_data.atr_15m,
+                    )
+                elif dynamic_regime == DynamicRegime.REGIME_V_BREAKDOWN_CHASE:
+                    (
+                        six_rule_passed,
+                        six_rule_reason,
+                        structure_directive,
+                    ) = await _confirm_short_entry_signal(
                         self.symbol,
                         self.base_data,
                         target_spot,

@@ -50,6 +50,8 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "03_left_side_mean_reversion_ironclad.md",
         "04_dynamic_rollover_state_machine.md",
         "05_dual_track_anti_washout_stop_loss.md",
+        "06_dynamic_adaptive_room_threshold.md",
+        "07_short_side_breakdown_ironclad.md",
     ],
     "docs/microstructure": [
         "01_gex_topology_and_walls.md",

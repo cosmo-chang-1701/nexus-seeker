@@ -1,7 +1,7 @@
 # 🌌 Nexus Seeker 量化架構與交易策略技術全景導讀
 
 > **版本**：v1.13.22 ｜ **系統核心**：Production Quant Engine ｜ **語言**：100% 繁體中文規範
-> **單一真實來源 (SSOT)**：本全景導讀與 29 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
+> **單一真實來源 (SSOT)**：本全景導讀與 31 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
 
 ---
 
@@ -9,7 +9,7 @@
 
 Nexus Seeker 是一套專為低延遲、高資訊密度美股期權風險控制與量化交易運作打造的生產級非同步架構。系統以做市商庫存對沖微觀結構為基石，深度融合 Black-Scholes-Merton 定價模型、高階希臘字母敏感度推導、事件驅動日曆防衛以及大語言模型（LLM）結構化推論輔助。
 
-本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **29 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
+本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **31 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
 
 ---
 
@@ -63,11 +63,13 @@ flowchart TB
 
     subgraph Strategies_Layer["1. 交易策略與進出場體系 (strategies/)"]
         direction TB
-        S01["4-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
+        S01["5-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
         S02["右側動能突破進場六重鐵律<br/>(02_right_side_momentum_ironclad.md)"]
         S03["左側均值回歸接刀六重鐵律<br/>(03_left_side_mean_reversion_ironclad.md)"]
         S04["動態轉倉 8 大情境狀態機<br/>(04_dynamic_rollover_state_machine.md)"]
         S05["雙軌防洗盤動態停損與出場決策矩陣<br/>(05_dual_track_anti_washout_stop_loss.md)"]
+        S06["動態自適應波動率空間門檻<br/>(06_dynamic_adaptive_room_threshold.md)"]
+        S07["做空交易六重嚴格過濾鐵律<br/>(07_short_side_breakdown_ironclad.md)"]
     end
 
     subgraph Risk_Portfolio_Layer["4. 投資組合風控與數學模型 (risk_portfolio/)"]
@@ -114,11 +116,13 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 4-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, `Call Wall 空間 < 5%`, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
+| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 5-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 02 | [`02_right_side_momentum_ironclad.md`](strategies/02_right_side_momentum_ironclad.md) | 右側動能突破進場六重鐵律 | 15m 實體陽線放量 1.5x, 站穩 VWAP, 底牆 $K < \text{Spot}$, 主力買盤 DTE $\ge 7$ | `market_analysis/dynamic_rollover/opportunity_cost.py` |
-| 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge 3.5\%$ | `market_analysis/dynamic_rollover/mean_reversion_entry.py` |
+| 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge$ 動態門檻 | `market_analysis/dynamic_rollover/left_side_entry.py` |
 | 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 8 大情境全景狀態機 | 涵蓋 Core/Satellite/Margin/Macro/DTE $\le 1$ 等 8 大轉倉情境, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
 | 05 | [`05_dual_track_anti_washout_stop_loss.md`](strategies/05_dual_track_anti_washout_stop_loss.md) | 雙軌防洗盤動態停損與出場決策矩陣 | 軌道一 $0.5\times\text{ATR}$ 實體 K 收盤撤退線, 軌道二 $3.0\times\text{ATR}$ 瞬時硬熔斷 | `market_analysis/dynamic_rollover/constants.py` |
+| 06 | [`06_dynamic_adaptive_room_threshold.md`](strategies/06_dynamic_adaptive_room_threshold.md) | 動態自適應波動率空間門檻 | $\max(2.2\times\text{Risk}, 1.5\times\text{ATR}_{1D}, 3.5\%)$, 停損距離雙邊界 $[2.5\times\text{ATR}_{15m}, 8\%]$ | `market_analysis/room_threshold.py` |
+| 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$ | `market_analysis/dynamic_rollover/short_side_entry.py` |
 
 ---
 
@@ -200,7 +204,7 @@ flowchart TB
 
 ```mermaid
 graph LR
-    P1_1["1. 判盤路由<br/>(01_regime_routing_matrix.md)"] --> P1_2["2. 進場鐵律<br/>(02_right_side & 03_left_side)"]
+    P1_1["1. 判盤路由<br/>(01_regime_routing_matrix.md)"] --> P1_2["2. 進場鐵律<br/>(02_right_side / 03_left_side / 07_short_side)"]
     P1_2 --> P1_3["3. 資金與部位管理<br/>(02_vix_battle_ladder_and_kelly.md)"]
     P1_3 --> P1_4["4. 防洗盤與出場<br/>(05_dual_track_anti_washout.md)"]
     P1_4 --> P1_5["5. 獲利動態轉倉<br/>(04_dynamic_rollover_state_machine.md)"]
@@ -291,7 +295,7 @@ graph LR
 
 ## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
 
-本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「29 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「31 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
 
 | 檔案 | 核心主題 |
 |:---|:---|

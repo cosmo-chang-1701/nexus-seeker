@@ -11,6 +11,10 @@ from typing import List, Dict, Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.room_threshold import (
+    compute_dynamic_room_threshold,
+    evaluate_wall_buffer,
+)
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
@@ -1215,16 +1219,68 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 / effective_c_val
                                 * 100
                             )
+                            # 下行緩衝判定自固定 5% 升級為 room_threshold.py
+                            # 公式 B。量的是**停損距離**（現價到 PutWall −
+                            # 0.5×ATR₁₅ₘ，即引擎軌道一真正會掛的那條線）：
+                            #   過窄 (< 2.5×ATR₁₅ₘ)：停損落在日內雜訊帶內，
+                            #        會先被掃穿再回頭，即 Liquidity Sweep。
+                            #   過寬 (> 絕對 8%)：絕對風險上限兜底。
+                            # 「PutWall 已高於現價」的資料異常分支優先於三態判定
+                            # 保留——那是資料問題，不是緩衝問題。
+                            _pw_atr_15m = _to_float(data.get("atr_15m"), 0.0)
+                            _pw_atr_1d = _to_float(data.get("atr_14"), 0.0)
+                            put_buffer_eval = evaluate_wall_buffer(
+                                effective_c_val,
+                                put_wall_float,
+                                _pw_atr_15m,
+                                _pw_atr_1d,
+                                profile="RIGHT",
+                            )
+                            put_arrow = "↓" if put_buffer_pct >= 0 else "↑"
                             if put_buffer_pct < 0:
                                 put_space_flag = " ⚠️ [數據異常：PutWall已高於現價]"
-                            elif put_buffer_pct < 5.0:
-                                put_space_flag = " ❌ 不足5%"
+                                put_items.append(
+                                    f"距現價空間 (下行緩衝): {put_arrow}"
+                                    f"{abs(put_buffer_pct):.2f}%{put_space_flag}"
+                                )
+                            elif put_buffer_eval.state == "SWEET_SPOT":
+                                put_items.append(
+                                    f"距現價空間 (下行緩衝): {put_arrow}"
+                                    f"{abs(put_buffer_pct):.2f}% ✅ 進場甜蜜點"
+                                )
+                            elif put_buffer_eval.state == "TOO_TIGHT":
+                                # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
+                                # 有公式卻無數值的誤導文案——該情境走的是降級的
+                                # 固定 5% 判定，應改為據實揭露降級原因。
+                                if put_buffer_eval.min_pct is not None:
+                                    _note = (
+                                        f"❌ 過窄 (< 2.5×ATR₁₅ₘ = "
+                                        f"{put_buffer_eval.min_pct * 100:.2f}%)，易遭掃損"
+                                    )
+                                else:
+                                    _note = (
+                                        f"❌ 緩衝過窄，易遭掃損"
+                                        f"（⚠ {put_buffer_eval.degrade_reason}）"
+                                    )
+                                put_items.append(
+                                    f"距現價空間 (下行緩衝): {put_arrow}"
+                                    f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
+                                )
                             else:
-                                put_space_flag = ""
-                            put_arrow = "↓" if put_buffer_pct >= 0 else "↑"
-                            put_items.append(
-                                f"距現價空間 (下行緩衝): {put_arrow}{abs(put_buffer_pct):.2f}%{put_space_flag}"
-                            )
+                                if put_buffer_eval.max_pct is not None:
+                                    _note = (
+                                        f"⚠ 過寬 (> 絕對上限 "
+                                        f"{put_buffer_eval.max_pct * 100:.2f}%)，停損距離過遠"
+                                    )
+                                else:
+                                    _note = (
+                                        f"⚠ 緩衝過寬，停損距離過遠"
+                                        f"（⚠ {put_buffer_eval.degrade_reason}）"
+                                    )
+                                put_items.append(
+                                    f"距現價空間 (下行緩衝): {put_arrow}"
+                                    f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
+                                )
 
                         atr_15m_val = _to_float(data.get("atr_15m"), 0.0)
                         if atr_15m_val > 0:
@@ -1307,17 +1363,41 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
                         )
+                        # 上檔空間門檻自固定 5% 升級為動態自適應波動率門檻
+                        # (room_threshold.py 公式 A)：由該標的「下方實際要冒多少
+                        # 風險」反推「上方要留多少空間」，使 2.2:1 盈虧比成為
+                        # 結構性保證。資料缺失時退回 3.5% 絕對底線，並在旗標
+                        # 下方獨立一行揭露降級原因（使用者有權知道看到的門檻
+                        # 不是完整推導出來的）。
+                        _cw_room = compute_dynamic_room_threshold(
+                            effective_c_val,
+                            float(gex_putwall) if has_putwall else 0.0,
+                            _to_float(data.get("atr_15m"), 0.0),
+                            _to_float(data.get("atr_14"), 0.0),
+                            direction="LONG",
+                        )
+                        _cw_threshold_pct = _cw_room.threshold_pct * 100
+                        space_flag = ""
+                        degrade_line: Optional[str] = None
                         if call_wall_dist_pct < 0:
                             space_flag = " ⚠️ [數據異常：CallWall已低於現價]"
-                        elif call_wall_dist_pct < 5.0:
-                            space_flag = " ❌ 不足5%"
-                        else:
-                            space_flag = ""
+                        elif call_wall_dist_pct < _cw_threshold_pct:
+                            space_flag = f" ❌ 不足 {_cw_threshold_pct:.2f}%"
+                            if _cw_room.degrade_reason:
+                                degrade_line = f" │  ⚠ {_cw_room.degrade_reason}"
+                            else:
+                                space_flag += " (動態門檻)"
                         call_arrow = "↑" if call_wall_dist_pct >= 0 else "↓"
                         depth_sign = "+" if call_wall_depth >= 0 else "-"
+                        _space_line = (
+                            f"距現價空間: {call_arrow}"
+                            f"{abs(call_wall_dist_pct):.2f}%{space_flag}"
+                        )
+                        if degrade_line:
+                            _space_line += f"\n{degrade_line}"
                         call_items = [
                             f"CallWall: ${call_wall_float:.2f}",
-                            f"距現價空間: {call_arrow}{abs(call_wall_dist_pct):.2f}%{space_flag}",
+                            _space_line,
                             f"深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K",
                         ]
                         _append_tree_block(gex_lines, "🚧 上檔壓力", call_items)
@@ -1782,6 +1862,11 @@ _ENTRY_RULES_DETAIL_LEFT = [
     "•做市商 Put Wall / 負 Gamma 吸附牆密著截擊",
     "•現價距 Put Wall 須落在 −1.0% ~ +1.5% 區間 (允許微幅穿刺洗盤或提前掛單)",
     "•防禦厚度：該履約價絕對 GEX 曝險量級 ≥ $5,000,000",
+    "•下檔緩衝雙邊界 (防 Liquidity Sweep)：停損距離 (現價−(PutWall−1.5×ATR₁₅ₘ))/現價",
+    "  須落在 [0.5×ATR₁₅ₘ, 絕對 8%] 之內。量停損距離而非牆距——條件二本來",
+    "  就要求密著 Put Wall，牆距趨近於零，量牆距會把理想進場點誤判為緩衝過窄",
+    "•左側下界 0.5× 與停損墊片 0.5× 綁定：貼牆時停損距離恆等於 0.5×ATR₁₅ₘ，",
+    "  下界一旦高於它，策略的設計中心點本身就永遠無法通過",
     "•⚠️ 厚度為 GEX 曝險量級代理值，非真實 Put OI 名目金額",
     "  (現有 GEX 資料源沒有逐履約價的 OI 名目金額欄位)",
     "",
@@ -1789,7 +1874,11 @@ _ENTRY_RULES_DETAIL_LEFT = [
     "•下檔無恐慌踩踏斷崖 + 向上均值回歸空間",
     "•UOA 不得存在 strike < Put Wall 且 ratio > 1.2x、權利金 ≥ $200,000 的",
     "  PUT BTO 追空踩踏單 (防做市商破牆後進入負 Gamma 螺旋式拋售)",
-    "•(min(Session VWAP, Gamma Flip) − 現價)/現價 ≥ 3.5% (非對稱盈虧比保證)",
+    "•(min(Session VWAP, Gamma Flip) − 現價)/現價 ≥ 動態自適應波動率門檻",
+    "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
+    "  Risk = (現價 − (PutWall − 0.5×ATR₁₅ₘ)) / 現價 (與引擎軌道一停損一致)",
+    "•即「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 盈虧比",
+    "  成為結構性保證；3.5% 僅為資料缺失時的絕對底線，非主要判據",
     "",
     "條件四",
     "•主力大額吸收認證 (二擇一即可)",
@@ -1815,6 +1904,61 @@ _ENTRY_RULES_DETAIL_LEFT = [
 ]
 
 
+_ENTRY_RULES_DETAIL_SHORT: List[str] = [
+    "```ansi",
+    " 做空六重鐵律：結構破位追空／做市商負 Gamma 順勢助跌。",
+    " ⚠️ 這是本系統唯一的空頭方向進場路徑——左側交易雖然技術定義與右側相反，",
+    "    本質仍是做多 (Put Wall 底牆接刀、向上回歸空間)。",
+    " 條件一～四為核心結構性門檻；條件五、六屬事件安全閥與 candidate 自身效期",
+    " 檢查，僅於前置條件皆通過後才真正發動 (未發動時列「⏭️ 略過」)",
+    " ----------------------------------",
+    "條件一",
+    "•結構性放量破位確認 (全面鏡像右側條件一)",
+    "•15m 實體『陰線』收盤價 < Gamma Flip 估算門檻",
+    "•若全鏈 Net GEX > 0 且無交叉點：做市商正 Gamma 買跌賣漲吸收波動，",
+    "  結構性多頭直接判定未通過 (右側「Net GEX < 0 直接不通過」的鏡像)",
+    "•若全鏈 Net GEX < 0 且無交叉點：改以跌破 Session VWAP − 0.5×ATR₁₅ₘ 確認",
+    "•15m 成交量 ≥ 前20根均量 × 1.5 倍，且收盤須跌破 Session VWAP",
+    "",
+    "條件二",
+    "•做市商負 Gamma 壓制頂牆完好",
+    "•阻力牆強制約束在現價上方 (K > Spot)，即 Resistance Wall = argmax_{K > Spot} (Net GEX(K))",
+    "•曝險低於 500k 薄紙牆門檻視為未偵測到有效頂牆 (未通過)",
+    "•停損距離 (現價→頂牆+0.5×ATR₁₅ₘ) 落在 [2.5×ATR₁₅ₘ, 絕對 8%]：下界防停損",
+    "  落在日內雜訊帶內遭反抽掃損，上界為絕對風險兜底",
+    "  (空單停損設在頂牆上方，牆太近時任何反抽都會先掃穿停損)",
+    "",
+    "條件三",
+    "•下行獲利空間充足 + 無主力大額接刀",
+    "•UOA 不得存在 ratio > 1.2x、權利金 ≥ $200,000、strike ≤ 現價的 PUT STO",
+    "  接刀單 (主力賣 PUT 為下跌提供接盤，拋壓路徑會被墊住)",
+    "•[區間內做空] 現價 > Put Wall：(現價−PutWall)/現價 ≥ 動態門檻",
+    "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
+    "  Risk = ((CallWall + 1.5×ATR₁₅ₘ) − 現價)/現價 (停損設在頂牆上方)",
+    "•[破位追空] 現價 ≤ Put Wall：改判次級節點空間 ≥ 2.0 × ATR₁D，",
+    "  停損貼緊剛跌破的 Put Wall (回站上即停損)",
+    "",
+    "條件四",
+    "•主力跨週期賣壓認證 (二擇一即可，皆須 DTE ≥ 7、ratio ≥ 0.8x、名目 ≥ $200,000)",
+    "•PUT BTO 方向性押注：strike ≥ 現價 × 0.85 (排除深度價外低成本尾部樂透單)",
+    "•CALL STO 上方築頂：strike ≥ 現價 (排除賣出價內 Call 的平倉單)",
+    "",
+    "條件五",
+    "•總經與財報事件安全閥",
+    "•完全重用右側條件五 (財報緩衝期 + 大盤 Regime)：二元事件風險對做多做空",
+    "  同樣致命，空單遇上優於預期的財報會被跳空軋空",
+    "•刻意不疊加 VIX 倒掛檢查：左側視倒掛為流動性凍結風險，對做空卻是順風，",
+    "  兩者語意相反，硬套會方向性地誤殺",
+    "",
+    "條件六",
+    "•Candidate 自身效期防禦與 IVR 結構分流",
+    "•最近效期 DTE ≥ 14：破位後常有劇烈反抽回測，短天期會被 Theta/Vega 雙殺",
+    "•IVR ≤ 50 建議 Long Put (輕度 OTM)",
+    "•IVR > 50 強制改 Bear Call Spread (改當賣方收取恐慌溢價，避免 Vega 崩塌)",
+    "```",
+]
+
+
 def create_entry_rules_embed(
     symbol: str,
     six_rule_passed: Optional[bool],
@@ -1832,7 +1976,7 @@ def create_entry_rules_embed(
     標的確認的生產路徑，含總經/財報安全閥與 candidate 自身 DTE 檢查等 I/O。
 
     :param trading_strategy: 呼叫端使用者當前 /settings 選擇的交易策略模式
-        (RIGHT_SIDE/LEFT_SIDE/DYNAMIC)。僅 "DYNAMIC" 且提供 dynamic_regime 時
+        (RIGHT_SIDE/LEFT_SIDE/SHORT_SIDE/DYNAMIC)。僅 "DYNAMIC" 且提供 dynamic_regime 時
         才會額外渲染「當前 Regime」欄位；其餘情境維持既有輸出格式不變
         (向下相容既有呼叫端)。
     :param dynamic_regime: `regime_classifier.py::classify_dynamic_regime`
@@ -1851,13 +1995,19 @@ def create_entry_rules_embed(
     )
 
     # 實際發動的是哪一套鐵律，完全由 trading_strategy + dynamic_regime 決定，
-    # 不需要呼叫端額外傳參：LEFT_SIDE 走左側；DYNAMIC 依分類結果路由 (Regime I
-    # 走左側、Regime III 走右側、Regime II/IV 兩套都不發動)；其餘走右側。
-    if trading_strategy == "LEFT_SIDE" or (
+    # 不需要呼叫端額外傳參：LEFT_SIDE 走左側、SHORT_SIDE 走做空；DYNAMIC 依分類
+    # 結果路由 (Regime I 走左側、III 走右側、V 走做空、II/IV 皆不發動)；
+    # 其餘走右側。
+    if trading_strategy == "SHORT_SIDE" or (
+        trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_V_BREAKDOWN_CHASE"
+    ):
+        _effective_gate = "SHORT"
+        _gate_label = "做空交易：結構破位追空"
+    elif trading_strategy == "LEFT_SIDE" or (
         trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_I_LEFT_CATCH"
     ):
         _effective_gate = "LEFT"
-        _gate_label = "左側交易：逆勢均值回歸"
+        _gate_label = "左側交易：逆勢均值回歸 (做多)"
     elif trading_strategy == "DYNAMIC" and dynamic_regime in (
         "REGIME_II_CHAOS_STANDASIDE",
         "REGIME_IV_STRUCTURAL_CAP_CRISIS",
@@ -1874,6 +2024,7 @@ def create_entry_rules_embed(
             "REGIME_II_CHAOS_STANDASIDE": "⚪ Regime II：混沌泥淖態 (全系統休眠)",
             "REGIME_III_RIGHT_MOMENTUM": "🎯 Regime III：右側動能態 (結構突破伽馬擠壓)",
             "REGIME_IV_STRUCTURAL_CAP_CRISIS": "🔴 Regime IV：結構封頂／危機態 (強制鎖定)",
+            "REGIME_V_BREAKDOWN_CHASE": "🐻 Regime V：破位追空態 (負 Gamma 順勢助跌)",
         }.get(dynamic_regime, dynamic_regime)
         regime_lines = [
             "```ansi",
@@ -1920,9 +2071,10 @@ def create_entry_rules_embed(
             "📖 判定說明",
             [
                 "```ansi",
-                " 目前 Regime 禁止任何多頭開倉，左右兩套六重鐵律皆未發動判定。",
-                " 待盤勢結構回到 Regime I (左側接刀態) 或 Regime III (右側動能態)",
-                " 時，系統才會套用對應的六重鐵律並在此列出逐項 Pass/Fail。",
+                " 目前 Regime 禁止任何方向開倉，三套六重鐵律皆未發動判定。",
+                " 待盤勢結構回到 Regime I (左側接刀態)、III (右側動能態) 或",
+                " V (破位追空態) 時，系統才會套用對應的六重鐵律並在此列出",
+                " 逐項 Pass/Fail。",
                 "```",
             ],
         )
@@ -1931,58 +2083,70 @@ def create_entry_rules_embed(
         )
         return embed
 
-    detail_lines = (
-        _ENTRY_RULES_DETAIL_LEFT
-        if _effective_gate == "LEFT"
-        else [
-            "```ansi",
-            " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
-            " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
-            " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
-            " ----------------------------------",
-            "條件一",
-            "•結構性右側放量突破確認",
-            "•15m 實體K棒收盤價 > Gamma Flip 估算門檻 (若全鏈動態 Net GEX > 0 且無交叉點，改以站穩 Session VWAP + 0.5 × ATR₁₅ₘ 替代門檻)",
-            "•若全鏈動態 Net GEX < 0 且無交叉點：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過",
-            "•15m 成交量 ≥ 前20根均量 × 1.5倍 (放量確認)",
-            "•K棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破",
-            "•15m 收盤價須站穩 Session VWAP",
-            "•突破要素同時滿足才通過，避免誤殺全域 Long Gamma 或誤判空頭摜壓",
-            "",
-            "條件二",
-            "•做市商正 Gamma 底牆完好",
-            "•支撐牆強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot} (Net GEX(K))",
-            "•避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆",
-            "•現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未偵測到有效支撐牆 (未通過)",
-            "•現價須 > 支撐牆，且距離 (現價-支撐牆)/現價 ≤ 5% (支撐牆離現價過遠不構成即時有效防禦)",
-            "",
-            "條件三",
-            "•UOA 無實質物理封頂",
-            "•無單筆 STO Call ratio(成交量/OI) > 1.5x 且 strike 位於 Call Wall 上方的物理封頂",
-            "•Call Wall 距現價空間 (call_wall-現價)/現價 ≥ 5% (帶正負號；現價已觸及或跌破 Call Wall 同樣視為空間不足，而非「已站上、無封頂」)",
-            "•兩項條件須同時成立",
-            "",
-            "條件四",
-            "•主力跨週期買盤認證與雜訊過濾",
-            "•掃描 UOA 清單 (依權利金金額/名目價值降序)",
-            "•尋找 CALL BTO 買盤，且 DTE ≥ 7、ratio(成交量/OI) ≥ 0.8x、權利金名目金額 ≥ $200,000、strike ≥ 現價 (排除深實值避險單)",
-            "•找到第一筆同時符合四項門檻者即判定通過",
-            "",
-            "條件五",
-            "•總經負 Gamma 與財報黑天鵝防禦閘門",
-            "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
-            "•candidate 3 天內即將發布財報 -> 直接判定未通過",
-            "•大盤 Regime 為 SHORT_GAMMA_CRITICAL 或 SYSTEMIC_LIQUIDITY_CRISIS -> 直接判定未通過",
-            "•財報行事曆/總經 Regime 任一資料抓取失敗，安全起見一律判定未通過 (fail-safe，不預設放行)",
-            "",
-            "條件六",
-            "•candidate 自身到期日雜訊過濾",
-            "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
-            "•candidate 自身最近效期選擇權 DTE 須 > 1 (避開 0/1 DTE 結算日前夕/當日雜訊)",
-            "•無法取得到期日清單或解析失敗，同樣一律判定未通過",
-            "```",
-        ]
-    )
+    if _effective_gate == "SHORT":
+        detail_lines = _ENTRY_RULES_DETAIL_SHORT
+    else:
+        detail_lines = (
+            _ENTRY_RULES_DETAIL_LEFT
+            if _effective_gate == "LEFT"
+            else [
+                "```ansi",
+                " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
+                " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
+                " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
+                " ----------------------------------",
+                "條件一",
+                "•結構性右側放量突破確認",
+                "•15m 實體K棒收盤價 > Gamma Flip 估算門檻 (若全鏈動態 Net GEX > 0 且無交叉點，改以站穩 Session VWAP + 0.5 × ATR₁₅ₘ 替代門檻)",
+                "•若全鏈動態 Net GEX < 0 且無交叉點：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過",
+                "•15m 成交量 ≥ 前20根均量 × 1.5倍 (放量確認)",
+                "•K棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破",
+                "•15m 收盤價須站穩 Session VWAP",
+                "•突破要素同時滿足才通過，避免誤殺全域 Long Gamma 或誤判空頭摜壓",
+                "",
+                "條件二",
+                "•做市商正 Gamma 底牆完好",
+                "•支撐牆強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot} (Net GEX(K))",
+                "•避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆",
+                "•現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未偵測到有效支撐牆 (未通過)",
+                "•現價須 > 支撐牆，且停損距離落在動態雙邊界之內",
+                "•量的是停損距離 (現價 → 支撐牆 − 0.5×ATR₁₅ₘ，即軌道一真正會掛的線)，非牆距",
+                "•下界 2.5×ATR₁₅ₘ：停損落在日內雜訊帶內會先被掃穿再回頭 (Liquidity Sweep)",
+                "•上界 絕對 8%：純粹的絕對風險兜底。刻意不用 ATR 縮放——那會與條件三的",
+                "  2.2×Risk 重複定價同一風險，且低波標的的可接受帶會窄於一個履約價間距",
+                "•ATR₁₅ₘ 不可得時退回舊版的 0 < 牆距 ≤ 5% 單邊判定",
+                "",
+                "條件三",
+                "•UOA 無實質物理封頂",
+                "•無單筆 STO Call ratio(成交量/OI) > 1.5x 且 strike 位於 Call Wall 上方的物理封頂",
+                "•Call Wall 距現價空間 (call_wall−現價)/現價 ≥ 動態自適應波動率門檻",
+                "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
+                "  Risk = (現價 − (PutWall − 0.5×ATR₁₅ₘ)) / 現價 (與引擎軌道一停損一致)",
+                "•帶正負號；現價已觸及或跌破 Call Wall 同樣視為空間不足，而非「已站上、無封頂」",
+                "•資料缺失時退回 3.5% 絕對底線，並在對應欄位揭露降級原因",
+                "•兩項條件須同時成立",
+                "",
+                "條件四",
+                "•主力跨週期買盤認證與雜訊過濾",
+                "•掃描 UOA 清單 (依權利金金額/名目價值降序)",
+                "•尋找 CALL BTO 買盤，且 DTE ≥ 7、ratio(成交量/OI) ≥ 0.8x、權利金名目金額 ≥ $200,000、strike ≥ 現價 (排除深實值避險單)",
+                "•找到第一筆同時符合四項門檻者即判定通過",
+                "",
+                "條件五",
+                "•總經負 Gamma 與財報黑天鵝防禦閘門",
+                "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
+                "•candidate 3 天內即將發布財報 -> 直接判定未通過",
+                "•大盤 Regime 為 SHORT_GAMMA_CRITICAL 或 SYSTEMIC_LIQUIDITY_CRISIS -> 直接判定未通過",
+                "•財報行事曆/總經 Regime 任一資料抓取失敗，安全起見一律判定未通過 (fail-safe，不預設放行)",
+                "",
+                "條件六",
+                "•candidate 自身到期日雜訊過濾",
+                "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
+                "•candidate 自身最近效期選擇權 DTE 須 > 1 (避開 0/1 DTE 結算日前夕/當日雜訊)",
+                "•無法取得到期日清單或解析失敗，同樣一律判定未通過",
+                "```",
+            ]
+        )
     _add_ansi_field_safely(
         embed, f"📖 條件一～六判定說明 ({_gate_label}指標定義)", detail_lines
     )

@@ -145,7 +145,7 @@ async def update_settings_impl(
             )
 
     if trading_strategy is not None:
-        if trading_strategy in {"RIGHT_SIDE", "LEFT_SIDE", "DYNAMIC"}:
+        if trading_strategy in {"RIGHT_SIDE", "LEFT_SIDE", "SHORT_SIDE", "DYNAMIC"}:
             db_updates["trading_strategy"] = trading_strategy
             from cogs.settings_ui import TRADING_STRATEGY_DISPLAY
 

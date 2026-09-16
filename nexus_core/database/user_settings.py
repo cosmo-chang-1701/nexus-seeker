@@ -183,12 +183,20 @@ def calculate_auto_capital(
             try:
                 meta = json.loads(metadata_json)
                 qty = float(meta.get("quantity", 0.0))
+                # 一律取絕對值：本函式算的是「帳戶規模」，而帳戶規模是資本
+                # 佔用的**量值**，與部位方向無關。
+                #
+                # 早期版本用帶號 qty，使空頭部位從總資本中**扣除**自身名目
+                # 價值。由於 capital 是曝險百分比、portfolio_heat、凱利預算與
+                # 財務跑道的共同分母，一個夠大的空頭會把分母壓向 max(..., 1.0)
+                # 的地板，讓所有百分比同時爆表。空頭選擇權 (Covered Call / CSP)
+                # 早已存在，只是名目較小所以症狀不明顯；空頭現貨會放大它。
                 if ctx_type == "HOLDING":
                     avg_cost = float(meta.get("avg_cost", 0.0))
-                    holdings_value += qty * avg_cost
+                    holdings_value += abs(qty) * avg_cost
                 elif ctx_type == "TRADE":
                     entry_price = float(meta.get("entry_price", 0.0))
-                    options_value += qty * entry_price * 100.0
+                    options_value += abs(qty) * entry_price * 100.0
             except Exception as ex:
                 logger.error(f"解析 asset metadata 失敗: {ex}")
 

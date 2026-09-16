@@ -38,8 +38,15 @@ def evaluate_rehedge_necessity(
         current_exposure_pct = (
             (u_ctx.total_weighted_delta * spy_price) / u_ctx.capital * 100
         )
-        if current_exposure_pct > u_ctx.risk_limit:
-            rehedge_reason = f"🔥 總曝險 ({current_exposure_pct:.1f}%) 已超過個人風險上限 ({u_ctx.risk_limit}%)"
+        # 風險上限必須雙邊判定：早期版本只比 `> risk_limit`，導致淨空頭曝險
+        # (負值) 無論多大都永遠不會觸發個人風險上限——一個 -60% 淨 Delta 的
+        # 帳戶在舊邏輯下看起來完全安全。曝險的「大小」與方向無關，故取絕對值。
+        if abs(current_exposure_pct) > u_ctx.risk_limit:
+            _side = "淨空頭" if current_exposure_pct < 0 else "淨多頭"
+            rehedge_reason = (
+                f"🔥 {_side}總曝險 ({current_exposure_pct:+.1f}%) "
+                f"已超過個人風險上限 ({u_ctx.risk_limit}%)"
+            )
             needed_spy_qty = u_ctx.total_weighted_delta
             return {
                 "action": "RE_HEDGE",
@@ -120,6 +127,13 @@ async def get_market_regime_target(
         target_delta = user_capital * 0.002
         regime_desc = "Bull Market (SMA200 Up)"
     elif spy_price < (sma_200 or 9999) or vix_price > 35:
+        # 空頭/崩盤警戒：目標為 0（完全中性），而非負值。
+        #
+        # ⚠️ 刻意不給負目標：本函式回傳的是「自主對沖引擎要把組合拉到哪裡」，
+        #   它的職責是消除**非預期**的方向性曝險，不是代替使用者建立方向性
+        #   觀點。若這裡給負目標，等於系統自己決定要做空。使用者的做空部位
+        #   (SHORT_SIDE / Regime V) 是刻意建立的 alpha 曝險，其防守由
+        #   anti_washout.py 的做空 SL/TP 矩陣負責，不歸對沖引擎管。
         target_delta = 0.0
         regime_desc = "Bear/Crash Warning (Defensive)"
     else:
@@ -139,6 +153,43 @@ def calculate_autonomous_hedge(
     return {"action": action, "quantity": qty}
 
 
+def _sum_hedge_only_delta(u_ctx: UserContext) -> float:
+    """僅加總標記為 HEDGE 的部位 Beta 加權 Delta。
+
+    用來把「刻意做空的 alpha 曝險」與「為了中和多頭而掛上的對沖」區分開。
+    兩者在 `total_weighted_delta` 裡是同一個負號，但語意完全相反：前者是
+    使用者的論點，後者是保險。
+
+    分類依據沿用 `analyze_hedge_performance` 既有的 `trade_category == "HEDGE"`
+    慣例（於 `cogs/terminal/trades.py` 建倉時寫入）。
+
+    任何資料缺失一律回傳 0.0（視為「沒有可解除的對沖」），fail-safe 方向是
+    不發出解除建議——誤發的代價是平掉使用者的部位，遠高於漏發。
+    """
+    try:
+        from database.portfolio import get_user_portfolio
+
+        rows = get_user_portfolio(u_ctx.user_id)
+    except Exception:
+        return 0.0
+    if not rows:
+        return 0.0
+
+    total = 0.0
+    for row in rows:
+        try:
+            # get_user_portfolio 的 tuple 佈局：
+            # (asset_id, symbol, opt_type, strike, expiry, entry_price,
+            #  quantity, stock_cost, weighted_delta, theta, gamma, category)
+            category = str(row[11] or "").upper()
+            if category != "HEDGE":
+                continue
+            total += float(row[8] or 0.0)
+        except (IndexError, TypeError, ValueError):
+            continue
+    return total
+
+
 def suggest_hedge_unlock(
     u_ctx: UserContext, result: Dict[str, Any], mtf: MTFResult
 ) -> Optional[Dict[str, Any]]:
@@ -153,8 +204,18 @@ def suggest_hedge_unlock(
         return None
     if result.get("weighted_delta", 0.0) <= 0 or u_ctx.total_weighted_delta >= 0:
         return None
+    # 負的組合 Delta 不必然來自對沖——也可能是使用者刻意建立的做空 alpha
+    # 部位 (SHORT_SIDE / Regime V)。早期版本把「總 Delta < 0」直接等同於
+    # 「有對沖可解除」，於是在多頭共振訊號出現時建議 UNLOCK_HEDGE、
+    # reduce_spy_qty = |總 Delta|——實際上是在叫使用者平掉自己的做空論點。
+    #
+    # 只把標記為 HEDGE 的部位視為可解除的對沖曝險；扣掉 alpha 空頭之後若
+    # 已無淨對沖，就不該發出解除建議。
+    hedge_delta = _sum_hedge_only_delta(u_ctx)
+    if hedge_delta >= 0:
+        return None
 
-    potential_delta_shift = abs(u_ctx.total_weighted_delta)
+    potential_delta_shift = abs(hedge_delta)
     return {
         "action": "UNLOCK_HEDGE",
         "symbol": result.get("symbol"),

@@ -3188,7 +3188,12 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
 
 
 def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> None:
-    """GEX CallWall 距現價空間 < 5% 時應附註「❌ 不足5%」警示。"""
+    """GEX CallWall 距現價空間低於動態門檻時應附註「❌ 不足 X%」警示。
+
+    本案例刻意不提供 atr_15m/atr_14，走 room_threshold 的降級路徑：門檻退回
+    3.5% 絕對底線，且必須在旗標下方獨立一行揭露降級原因——使用者有權知道
+    看到的門檻不是完整推導出來的。
+    """
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3210,7 +3215,79 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     desc = get_embed_text(embed)
 
     assert "Net GEX Regime: -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
-    assert "距現價空間: ↑3.00% ❌ 不足5%" in desc
+    assert "距現價空間: ↑3.00% ❌ 不足 3.50%" in desc
+    assert "數據缺失" in desc and "已退回 3.5% 絕對底線" in desc
+
+
+def test_create_tactical_symbol_embed_callwall_uses_dynamic_threshold() -> None:
+    """ATR 與 PutWall 齊備時，CallWall 旗標須顯示實際推導出的動態門檻值，
+    而非 3.5% 底線，且不得出現降級揭露。
+
+    現價 100、PutWall 96、ATR₁₅ₘ 1.0 -> Stop = 95.5、Risk = 4.5%，
+    門檻 = max(2.2×4.5%, 1.5×5%, 3.5%) = 9.90%；CallWall 108 的 8% 空間不足。
+    停損墊片 0.5×ATR₁₅ₘ 與引擎軌道一一致。
+    """
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "NVDA",
+        "price": 100.0,
+        "atr_15m": 1.0,
+        "atr_14": 5.0,
+        "gex_profile_data": {
+            "put_wall": 96.0,
+            "call_wall": 108.0,
+            "net_gex": 5_000_000.0,
+            "gex_profile": {
+                "96.0": 1_000_000,
+                "100.0": 2_000_000,
+                "108.0": 3_000_000,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "距現價空間: ↑8.00% ❌ 不足 9.90% (動態門檻)" in desc
+    assert "已退回 3.5% 絕對底線" not in desc
+
+
+def test_create_tactical_symbol_embed_putwall_buffer_three_states() -> None:
+    """PutWall 下行緩衝的過窄／甜蜜點／過寬三態渲染。
+
+    量的是停損距離 (現價 → PutWall − 0.5×ATR₁₅ₘ)。
+    ATR₁₅ₘ 1.0、現價 100 -> 下界 2.5%、上界為絕對 8%。
+    """
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    def _build(put_wall: float) -> str:
+        data = {
+            "symbol": "NVDA",
+            "price": 100.0,
+            "atr_15m": 1.0,
+            "atr_14": 5.0,
+            "gex_profile_data": {
+                "put_wall": put_wall,
+                "call_wall": 130.0,
+                "net_gex": 5_000_000.0,
+                "gex_profile": {
+                    str(put_wall): 1_000_000,
+                    "100.0": 2_000_000,
+                    "130.0": 3_000_000,
+                },
+            },
+        }
+        return get_embed_text(create_tactical_symbol_embed(data))
+
+    too_tight = _build(98.5)  # 停損 98.0 -> 停損距離 2.0% < 下界 2.5%
+    assert "❌ 過窄 (< 2.5×ATR₁₅ₘ = 2.50%)，易遭掃損" in too_tight
+
+    sweet = _build(95.9)  # 停損 95.4 -> 停損距離 4.6%，落在 [2.5%, 8%]
+    assert "距現價空間 (下行緩衝): ↓4.10% ✅ 進場甜蜜點" in sweet
+
+    too_wide = _build(91.0)  # 停損 90.5 -> 停損距離 9.5% > 絕對上界 8%
+    assert "⚠ 過寬 (> 絕對上限 8.00%)，停損距離過遠" in too_wide
 
 
 def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spot() -> (
@@ -3798,8 +3875,8 @@ def test_create_entry_rules_embed_renders_six_rule_checklist() -> None:
 
     six_rule_reasons = [
         "條件一✅：15m收盤 $101.00 > Gamma Flip估算 $100.00，量能 5000 vs 均量×1.5=4500",
-        "條件二✅：現價 $101.00 > 正 Gamma 支撐牆 $95.00",
-        "條件三❌：Call Wall $103.00 距現價不足 5% 非對稱空間",
+        "條件二✅：現價 $101.00 距正 Gamma 支撐牆 $95.00 +5.94%（落在動態緩衝甜蜜點）",
+        "條件三❌：Call Wall $103.00 距現價空間 +1.98% 不足 8.25% 動態非對稱空間門檻",
         "條件四✅：主力買盤 DTE=14、ratio=1.20x OI (符合門檻 DTE>=7、ratio>=0.8)",
         "條件五✅：總經環境與財報事件風控安全",
         "條件六✅：標的最近效期 2026-10-16 DTE=42（符合門檻 >1）",
@@ -4580,9 +4657,10 @@ def test_create_entry_rules_embed_dynamic_regime_iv_shows_no_gate_notice() -> No
         dynamic_regime_reason="Call Wall 空間不足",
     )
     blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
-    assert "左右兩套六重鐵律皆未發動判定" in blob
+    assert "三套六重鐵律皆未發動判定" in blob
     assert "結構性右側放量突破確認" not in blob
     assert "結構性空頭力竭與極值乖離確認" not in blob
+    assert "結構性放量破位確認" not in blob
 
 
 def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None:

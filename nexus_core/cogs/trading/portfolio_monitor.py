@@ -73,6 +73,7 @@ class PortfolioMonitorCog(commands.Cog):
             "put_wall": 0.0,
             "call_wall": 0.0,
             "previous_call_wall": 0.0,
+            "previous_put_wall": 0.0,
             "is_uoa_sweep": False,
             "gamma_flip": 0.0,
             "sqz_mom": 0.0,
@@ -205,13 +206,34 @@ class PortfolioMonitorCog(commands.Cog):
                 )
                 or 0.0
             )
-            if prev_call_wall_val <= 0:
+            # 做空部位 TP2-空間擴展的「支撐牆向下遷移」判定所需，取數路徑完全
+            # 鏡像上方的 previous_call_wall（radar payload > gex_profile_data >
+            # market_cache 持久化欄位，見 v074）。
+            prev_put_wall_val = float(
+                r_data.get("previous_put_wall")
+                or (
+                    r_data.get("gex_profile_data", {}).get("previous_put_wall", 0.0)
+                    if isinstance(r_data.get("gex_profile_data"), dict)
+                    else 0.0
+                )
+                or 0.0
+            )
+            if prev_call_wall_val <= 0 or prev_put_wall_val <= 0:
                 try:
                     from database.market_cache import get_market_cache
 
                     mc = get_market_cache(sym)
-                    if mc and mc.get("previous_call_wall") is not None:
-                        prev_call_wall_val = float(mc["previous_call_wall"] or 0.0)
+                    if mc:
+                        if (
+                            prev_call_wall_val <= 0
+                            and mc.get("previous_call_wall") is not None
+                        ):
+                            prev_call_wall_val = float(mc["previous_call_wall"] or 0.0)
+                        if (
+                            prev_put_wall_val <= 0
+                            and mc.get("previous_put_wall") is not None
+                        ):
+                            prev_put_wall_val = float(mc["previous_put_wall"] or 0.0)
                 except Exception:
                     pass
 
@@ -238,6 +260,7 @@ class PortfolioMonitorCog(commands.Cog):
                 if isinstance(r_data.get("gex_profile_data"), dict)
                 else 0.0,
                 "previous_call_wall": prev_call_wall_val,
+                "previous_put_wall": prev_put_wall_val,
                 "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
                 if r_data.get("uoa")
                 else False,
@@ -352,6 +375,7 @@ class PortfolioMonitorCog(commands.Cog):
             "put_wall": metrics["put_wall"],
             "call_wall": metrics["call_wall"],
             "previous_call_wall": metrics.get("previous_call_wall", 0.0),
+            "previous_put_wall": metrics.get("previous_put_wall", 0.0),
             "is_uoa_sweep": metrics["is_uoa_sweep"],
             "gamma_flip": metrics.get("gamma_flip", 0.0),
             "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -682,6 +706,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "put_wall": metrics["put_wall"],
                         "call_wall": metrics["call_wall"],
                         "previous_call_wall": metrics.get("previous_call_wall", 0.0),
+                        "previous_put_wall": metrics.get("previous_put_wall", 0.0),
                         "is_uoa_sweep": metrics["is_uoa_sweep"],
                         "gamma_flip": metrics.get("gamma_flip", 0.0),
                         "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -863,7 +888,10 @@ class PortfolioMonitorCog(commands.Cog):
                 all_user_ids = set(user_assets.keys()) | set(user_short_calls.keys())
                 for u_id in all_user_ids:
                     portfolio_assets = user_assets.get(u_id, [])
-                    total_val = sum(a["current_value"] for a in portfolio_assets)
+                    # 取絕對值：帳戶規模是資本佔用的量值。帶號加總會讓多空
+                    # 部位互相抵銷，使帳戶看起來變小，連帶高估其餘每一個部位
+                    # 的配置比例。
+                    total_val = sum(abs(a["current_value"]) for a in portfolio_assets)
 
                     rebalance_instructions = (
                         await self.rollover_engine.check_satellite_rebalancing(

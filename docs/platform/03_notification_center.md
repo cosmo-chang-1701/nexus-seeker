@@ -14,7 +14,8 @@
 - `capital`（總資本，必須 `> 0`）
 - `risk_limit`（基礎風險百分比限制，範圍 `1.0` 至 `50.0`）
 - `enable_vtr`、`enable_psq_watchlist`、`monthly_expense`、`tax_reserve_rate`、`cash_reserve`
-- `trading_strategy`（`RIGHT_SIDE` / `LEFT_SIDE` / `DYNAMIC`，遷移 `v068`，預設 `RIGHT_SIDE`）——詳見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)。這是第一個既非布林開關、也非自由文字數值欄位的設定，因此 `AccountSettingsView.on_select_callback()` 新增了**第三分支**：一個固定 3 選項的 `TradingStrategySelectView`，直接寫入資料庫並導回父視圖，不經過 Modal（仿照 `ui/watchlist_tags.py` 的 Select 子類作法）。
+- `trading_strategy`（`RIGHT_SIDE` / `LEFT_SIDE` / `SHORT_SIDE` / `DYNAMIC`，遷移 `v068`，預設 `RIGHT_SIDE`）——詳見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)。這是第一個既非布林開關、也非自由文字數值欄位的設定，因此 `AccountSettingsView.on_select_callback()` 新增了**第三分支**：一個固定 4 選項的 `TradingStrategySelectView`，直接寫入資料庫並導回父視圖，不經過 Modal（仿照 `ui/watchlist_tags.py` 的 Select 子類作法）。
+  - `SHORT_SIDE`（做空交易）是後續新增的第四個值。因該欄位是 `TEXT DEFAULT 'RIGHT_SIDE'` 且無 `CHECK` 約束，新增 enum 值**不需要**新的 migration。選單描述文字刻意標明方向（「做多・逆勢均值回歸」／「做空・結構破位追空」），避免使用者把「左側」誤讀為「做空」——左側本質仍是做多。
 - 也整合了**自選股標籤系統**：允許使用者透過互動下拉選單與 Modal，為自選股資產附加自訂分類標籤（如 `TECH`、`CORE`，`ui/watchlist_tags.py`）。此標籤引擎也完整暴露於 `/list_watch` 指令輸出中，透過在地化的「🏷️ 原地編輯標籤」捷徑按鈕，實現自動重建並替換原始 Discord 視圖的無縫、類 SPA 編輯體驗。
 
 ### 2.2 通知偏好（`/notif_settings`）

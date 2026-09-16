@@ -22,13 +22,22 @@ class RolloverScenario(str, Enum):
 class TradingStrategyMode(str, Enum):
     """使用者 /settings 可選的交易策略模式，決定 Scenario 2 (opportunity_cost.py)
     進場閘門要套用哪一套六重鐵律。RIGHT_SIDE 為現行、已上線的預設行為，未選擇的
-    使用者一律沿用 RIGHT_SIDE，零行為變化。"""
+    使用者一律沿用 RIGHT_SIDE，零行為變化。
+
+    ⚠️ SHORT_SIDE 是本系統唯一的空頭方向進場路徑。左側 (LEFT_SIDE) 儘管技術定義
+    與右側相反，本質仍是**做多**——逆勢均值回歸、做市商 Put Wall 底牆接刀，條件三
+    算的是「向上」回歸空間，條件六在高 IVR 時建議的是 Bull Call Spread / Short
+    Put。不要把左側誤讀為做空。
+
+    新增 enum 值不需要 migration：user_settings.trading_strategy 是
+    TEXT DEFAULT 'RIGHT_SIDE'，無 CHECK 約束 (見 v068_add_trading_strategy.py)。"""
 
     RIGHT_SIDE = (
         "RIGHT_SIDE"  # 右側交易：順勢動能突破六重鐵律 (opportunity_cost.py 現行邏輯)
     )
     LEFT_SIDE = "LEFT_SIDE"  # 左側交易：逆勢均值回歸六重鐵律 (left_side_entry.py)
-    DYNAMIC = "DYNAMIC"  # 動態調整：4態 Regime 分類器路由 (regime_classifier.py)
+    SHORT_SIDE = "SHORT_SIDE"  # 做空交易：結構破位追空六重鐵律 (short_side_entry.py)
+    DYNAMIC = "DYNAMIC"  # 動態調整：5態 Regime 分類器路由 (regime_classifier.py)
 
 
 class RegimeMarketData(NamedTuple):
@@ -46,7 +55,20 @@ class RegimeMarketData(NamedTuple):
 
 
 class DynamicRegime(str, Enum):
-    """動態調整模式的 4 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。"""
+    """動態調整模式的 5 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
+
+    判定優先序（非 enum 宣告序）：
+
+        1. Regime IV 的**宏觀鎖定**分支 (SYSTEMIC_LIQUIDITY_CRISIS /
+           SHORT_GAMMA_CRITICAL / VIX 深度倒掛) —— 壓過一切，做多做空皆禁。
+           系統性流動性危機下做空同樣會被劇烈軋空，不是安全的方向。
+        2. Regime V  破位追空態
+        3. Regime IV 的**個股結構封頂**分支 (Call Wall 空間不足 / STO 封頂)
+        4. Regime III → Regime I → Regime II
+
+    第 2 與第 3 的先後是刻意的：個股結構封頂與破位追空的條件可以同時成立
+    (壓頂 + 跌破底牆)，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
+    """
 
     REGIME_I_LEFT_CATCH = "REGIME_I_LEFT_CATCH"  # 左側接刀態：極端負乖離吸籌
     REGIME_II_CHAOS_STANDASIDE = (
@@ -57,6 +79,9 @@ class DynamicRegime(str, Enum):
     )
     REGIME_IV_STRUCTURAL_CAP_CRISIS = (
         "REGIME_IV_STRUCTURAL_CAP_CRISIS"  # 結構封頂／危機態：強制鎖定
+    )
+    REGIME_V_BREAKDOWN_CHASE = (
+        "REGIME_V_BREAKDOWN_CHASE"  # 破位追空態：跌破底牆 + 負 Gamma 順勢助跌
     )
 
 

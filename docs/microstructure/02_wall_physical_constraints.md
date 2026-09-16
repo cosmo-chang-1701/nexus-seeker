@@ -52,9 +52,19 @@ $$
 $$
 \Delta_{\text{CallWall}} = \frac{\text{CallWall} - \text{Spot}}{\text{Spot}}
 $$
-- 當 $\Delta_{\text{CallWall}} < \text{\_ENTRY\_ASYMMETRIC\_ROOM\_PCT} = 0.05$（$5\%$）時：
+- 當 $\Delta_{\text{CallWall}} < \text{Threshold}_{\text{dynamic}} = \max\big(2.2 \times \text{Risk}_{\text{actual}},\ 1.5 \times \text{ATR}_{1D\_pct},\ 0.035\big)$ 時（門檻自固定 $5\%$ 升級為動態自適應波動率門檻，完整推導見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md)）：
   - 若 $\Delta_{\text{CallWall}} \in [0, 0.05)$：上方空間過窄，盈虧比不足。
   - 若 $\Delta_{\text{CallWall}} \le 0$：現價已觸及或跌破 Call Wall（即現價 $\ge$ Call Wall），做市商阻尼與滯留拋售壓制依然存在，此負值明確表示「空間耗竭且壓制沉重」，判定空間不足拒絕進場。
+
+### 2.2.1 阻力頂牆鏡像定理 (Resistance Wall Mirror Theorem)
+
+做空系統需要的是現價**上方**的壓制頂牆，其物理約束與支撐底牆完整鏡像：
+
+$$\text{ResistanceWall} = \underset{K > \text{Spot}}{\arg\max}\ \text{NetGEX}(K), \qquad \text{NetGEX}(K) > 0$$
+
+物理意義同樣對稱：做市商在該履約價持有大量正 Gamma，價格漲上去時必須賣出對沖形成天花板；正如支撐牆處他們必須買進對沖而形成地板。牆體厚度沿用同一套 $\text{GEX} \ge 500{,}000$ 薄紙牆門檻。
+
+⚠️ 此掃描**刻意不重用** `_scan_gex_walls()` 既有的 `resistance_wall` 回傳值：那一路分支走的是 `classify_gex_wall(...) == "RESISTANCE_CALL_WALL"`（針對重倉價外 Call 的分類），且**沒有** $K > \text{Spot}$ 的物理約束，語意與本定理不同；改動它會連帶影響 `anti_washout.py` 的 `_correct_wall_topology`，故另立函式 `_scan_resistance_wall_above_spot()`。
 
 ### 2.3 拓撲逆轉修復公式 (Topology Inversion Correction)
 在異常期權結構或資料源偶發翻轉時，若偵測到 $\text{Put Wall} > \text{Call Wall}$，系統啟動拓撲逆轉修復：
@@ -97,8 +107,9 @@ flowchart TD
 | 常數名稱 | 數值 / 門檻 | 物理 / 代碼約束 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |
 | `GEX_THIN_WALL_THRESHOLD` | `500,000.0` | 支撐底牆有效性之最低 GEX 深度門檻 | `nexus_core/market_analysis/index_microstructure.py` |
-| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | 現價距離約束支撐牆之最大即時防禦有效距離 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_ASYMMETRIC_ROOM_PCT` | `0.05` ($5\%$) | 帶正負號 Call Wall 空間率最低門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ROOM_RISK_MULTIPLIER` / `_ROOM_ATR_1D_MULTIPLIER` / `_ROOM_ABSOLUTE_FLOOR_PCT` | `2.2` / `1.5` / `0.035` | 帶正負號 Call Wall 空間率的動態門檻三項；取代退役的 `_ENTRY_ASYMMETRIC_ROOM_PCT` 固定 $5\%$ | `nexus_core/market_analysis/room_threshold.py` |
+| `_BUFFER_MULTIPLIERS` | `RIGHT/SHORT: (2.5, 1.8)`, `LEFT: (1.0, 1.2)` | 牆體緩衝雙邊界倍率；取代退役的固定 $5\%$ 上限 | `nexus_core/market_analysis/room_threshold.py` |
 
 ---
 

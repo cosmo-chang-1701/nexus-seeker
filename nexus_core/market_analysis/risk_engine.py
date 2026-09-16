@@ -143,6 +143,36 @@ async def analyze_sector_correlation(
         return []
 
 
+def is_short_exposure_strategy(strategy: str) -> bool:
+    """由策略字串判定該筆交易帶來的是**空頭**方向曝險。
+
+    ⚠️ 這是一個**代理判定**，不是權威來源。權威來源是部位的 `quantity` 正負
+    號（見 `cogs/trading/portfolio_monitor.py` 既有的 `quantity < 0` 慣例），
+    但「尚未成交的候選交易」還沒有 quantity，只有策略標籤，故仍需本函式。
+
+    早期版本散落在三處、各自寫成 `-1 if "STO" in strategy else 1`。那個判定
+    只涵蓋「賣出選擇權收權利金」一種空頭形式，對本系統後來新增的做空進場
+    路徑 (SHORT_SIDE / Regime V：Long Put、Bear Call Spread、空頭現貨) 全部
+    誤判為多頭，使 NRO 倉位模型把空單當成「增加多頭 Delta」來編列預算。
+
+    抽成單一函式的理由與 `kelly_position_fraction` 相同：同一個語意判斷散在
+    多處必然漂移。新增空頭策略標籤時只需在此加一個關鍵字。
+    """
+    upper = str(strategy).upper()
+    return any(
+        token in upper
+        for token in (
+            "STO",  # 賣出開倉 (Covered Call / CSP / Bear Call Spread 的賣腳)
+            "SHORT",  # SHORT_SIDE / SHORT_STOCK
+            "BEAR",  # Bear Call Spread / Bear Put Spread
+            "LONG_PUT",
+            "LONG PUT",
+            "BTO_PUT",
+            "BTO PUT",
+        )
+    )
+
+
 def simulate_exposure_impact(
     current_total_delta: float,
     new_trade_data: Dict[str, Any],
@@ -151,7 +181,7 @@ def simulate_exposure_impact(
     suggested_contracts: int = 1,
 ) -> Tuple[float, float]:
     strategy = new_trade_data.get("strategy", "")
-    side_multiplier = -1 if "STO" in strategy else 1
+    side_multiplier = -1 if is_short_exposure_strategy(strategy) else 1
     new_trade_weighted_delta = (
         new_trade_data.get("weighted_delta", 0.0)
         * side_multiplier
@@ -324,10 +354,15 @@ def optimize_position_risk(
         current_risk_limit *= 1.0 / vanna_weight
     # ---------------------------------------------------------
 
+    # 方向判定：早期版本只看 strategy 字串是否含 "STO"，那是**選擇權權利金
+    # 方向**的代理，不是部位方向。做空策略 (SHORT_SIDE / REGIME_V_BREAKDOWN_
+    # CHASE / SHORT_STOCK / Long Put / Bear Call Spread) 的字串裡沒有 "STO"，
+    # 會被誤判為 +1，使 sizer 把一筆空單當成「增加多頭 Delta」來編列預算。
+    _is_short_exposure = is_short_exposure_strategy(strategy)
     val_adj_unit_delta = (
         unit_weighted_delta
         * (stock_iv / max(spy_iv, 0.01))
-        * (-1 if "STO" in strategy else 1)
+        * (-1 if _is_short_exposure else 1)
     )
     max_safe_shares = (user_capital * (current_risk_limit / 100)) / spy_price
     safe_qty = (

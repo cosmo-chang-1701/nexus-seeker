@@ -88,7 +88,7 @@ $$\text{Protection Score} = \operatorname{clip}\Big(\text{Base Efficiency} \time
 ```mermaid
 flowchart TD
     Start([觸發每日對沖歸因審計]) --> FetchTrades[抓取用戶真實與虛擬持倉]
-    FetchTrades --> SplitTrades[依 trade_category 正交拆分: Alpha 部位 vs Hedge 部位]
+    FetchTrades --> SplitTrades[依 trade_category 正交拆分: Alpha 部位 vs Hedge 部位<br/>註: 負 Delta 不等於對沖，做空 alpha 也是負的]
 
     SplitTrades --> CalcPnL[計算各部位 PnL 與加權 Delta]
     CalcPnL --> CalcRatio[計算 Hedge Ratio = |Delta_hedge / Delta_alpha|]
@@ -161,7 +161,16 @@ effectiveness = (
 ```
 確保在此邊界下有效性精確回傳 `0.0`，不拋出異常。
 
-### 5.3 對沖成本為零防護 (Zero Cost Protection Guard)
+### 5.3 `trade_category` 是區分「對沖」與「做空 alpha」的唯一依據
+做空進場系統（`SHORT_SIDE` / Regime V）上線後，$\Delta_{\alpha}$ 本身可能為**負值**——那是使用者刻意建立的空頭論點，不是對沖。本篇的正交拆分因此從「歸因分析的分類法」升格為**風控語意的權威定義**：
+
+$$\Delta_{\text{portfolio}} < 0 \;\nRightarrow\; \text{存在可解除的對沖}$$
+
+`market_analysis/hedging.py::suggest_hedge_unlock()` 早期正是踩了這個坑：它把「組合總 Delta < 0」直接等同於「有對沖掛著」，於是在多頭共振訊號出現時發出 `UNLOCK_HEDGE`、`reduce_spy_qty = |總 Delta|`——實際效果是建議使用者平掉自己的做空部位。現行實作改為呼叫 `_sum_hedge_only_delta()`，只加總 `trade_category == "HEDGE"` 的部位，扣除 alpha 空頭後若已無淨對沖就不發出建議。
+
+⚠️ 連帶影響：`cogs/terminal/trades.py` 在建倉時對 `symbol ∈ {SPY, QQQ, IWM}` 且 `quantity < 0` 的部位自動標記為 `HEDGE`。若使用者的做空論點**就是**放空大盤指數，該部位會被歸入 $\Delta_{\text{hedge}}$，使 $\text{Hedge Ratio}$ 虛高並可能誤報 `OVER_HEDGED`。此自動標記規則在做空系統上線後已不再永遠正確，是本篇已知的分類邊界。
+
+### 5.4 對沖成本為零防護 (Zero Cost Protection Guard)
 在計算事件保護評分時，若未支付任何對沖成本（$\text{Cost of Hedge} \le 0$），若避免了損失則給予最高分 100 分，否則為 0 分，避免數值無窮大溢出。
 
 ---

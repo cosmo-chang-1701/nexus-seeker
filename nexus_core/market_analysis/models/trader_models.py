@@ -64,6 +64,20 @@ class TickerMarketData(BaseModel):
         default=None, description="全鏈 STO 物理封頂履約價清單"
     )
 
+    # 動態自適應波動率空間門檻 (market_analysis/room_threshold.py 公式 A) 的三項
+    # 輸入。磁吸目標價原本硬編碼 spot * 1.05 (固定 5% 非對稱要求)，改為依標的
+    # 自身波動率推導後，本模型必須一併攜帶這三項。預設 None 保證向後相容：
+    # 缺失時 room_threshold 會降級至 3.5% 絕對底線並標記 is_degraded。
+    put_wall: Optional[float] = Field(
+        default=None, description="GEX Put Wall 履約價 (動態空間門檻的停損參考牆)"
+    )
+    atr_15m: Optional[float] = Field(
+        default=None, description="真實 15 分鐘 K 棒 ATR(14)，絕對價格量綱"
+    )
+    atr_1d: Optional[float] = Field(
+        default=None, description="日線 ATR(14)，絕對價格量綱"
+    )
+
 
 class AdvancedTraderOutput(BaseModel):
     """量化風控與執行決策輸出 (繁體中文格式化)"""

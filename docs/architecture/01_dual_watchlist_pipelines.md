@@ -114,13 +114,25 @@ flowchart TD
 | `RADAR_CHUNK_SIZE` | `10` 檔 / 頁 | 雷達批次掃描 Embed 每頁封裝上限（防 4096 溢位） | `nexus_core/cogs/embed_builders/market_embeds.py:387` |
 | `DEEP_PIPELINE_INTERVAL` | `1800` 秒 (30 分鐘) | 深度心跳每輪執行完畢後的非阻塞休眠間隔 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:45` |
 | `CLOSED_STANDBY_INTERVAL` | `600` 秒 (10 分鐘) | 休市或非 Leader 實例時的待機探測間隔 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:409` |
-| `ANTI_WASHOUT_ATR_MULT` | `1.50` (1.5x) | 防洗盤動態停損之 ATR 倍數緩衝 | `nexus_core/market_analysis/signal_calculator.py` |
+| `ANTI_WASHOUT_ATR_MULT` | `1.50` (1.5x) | 自選標的心跳的買賣點 ATR 緩衝（**與持倉停損無關**，見下方消歧義） | `nexus_core/market_analysis/signal_calculator.py` |
 | `NOTIF_CHANNEL_RADAR` | `"heartbeat_watchlist"` | 15 分鐘雷達通知開關名稱 | `nexus_core/database/notifications.py` |
 | `NOTIF_CHANNEL_DEEP` | `"heartbeat_symbol_deep"` | 30 分鐘深度心跳通知開關名稱（migration v070） | `nexus_core/database/notifications.py` |
 
 ---
 
 ## 5. 邊界條件、風控熔斷與例外處理
+
+### ⚠️ 三個 ATR 倍數的消歧義（刻意分歧，不得合併）
+
+系統中有三個外觀相近、語意完全不同的 ATR 倍數，過去已有人嘗試「去重」而險些改錯：
+
+| 常數 | 值 | 語意 | 檔案 |
+| :--- | :--- | :--- | :--- |
+| `ANTI_WASHOUT_ATR_MULT` | `1.5` | **自選標的心跳**的建議買/賣點緩衝（`suitable_buy -= 1.5 × ATR`）。這是給尚未持倉的觀察標的算進場價位用的，不是停損 | `market_analysis/signal_calculator.py` |
+| `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` | `0.5` | **既有持倉**雙軌停損的軌道一實際停損（`anchor ∓ 0.5 × ATR₁₅ₘ`） | `dynamic_rollover/constants.py` |
+| `_ROOM_STOP_ATR_15M_MULTIPLIER` | `0.5` | **動態空間門檻**推導 `Risk_actual` 用的停損墊片 | `market_analysis/room_threshold.py` |
+
+後兩者**必須恆等**（見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md) §5.4 的同步不變式，有單元測試鎖定）；第一個與它們**無關**，改動任一個都不該連動其餘兩個。此處的處理原則比照本專案對三種 `gamma_cliff_level` 公式的既有慣例：概念不同的模型不應為了去重而強行統一。
 
 ### 5.1 動態 Leader Election 實例鎖定禁忌
 - **嚴禁在 `__init__` 建構時鎖定**：Discord Bot 的 Cogs 載入於 `setup_hook` 階段，而分散式叢集的 Leader 選舉是在 `on_ready` 事件後由 `bot._leader_lock_loop` 動態確立。若在建構時進行 `if not bot._is_leader_instance: return`，將導致管線永遠無法啟動。

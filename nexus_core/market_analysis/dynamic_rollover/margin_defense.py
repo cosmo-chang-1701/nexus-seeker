@@ -156,8 +156,11 @@ async def evaluate_margin_defense_impl(
     else:
         # 退化代理：無 GTC 買單造成赤字時，以 SATELLITE 總市值 vs 現金儲備
         # 作為「高波動衛星部位超過安全緩衝」的保守保證金壓力訊號。
+        # 取絕對值：這裡衡量的是「高波動衛星部位佔用了多少資本」，是量值。
+        # 帶號加總會讓空頭衛星部位**降低**測得的曝險，恰好在槓桿最高時抑制
+        # 保證金壓力訊號。
         satellite_value = sum(
-            float(a.get("current_value", 0.0))
+            abs(float(a.get("current_value", 0.0)))
             for a in portfolio_assets
             if a.get("asset_class") == "SATELLITE"
         )

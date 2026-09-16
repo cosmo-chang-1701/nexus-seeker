@@ -75,10 +75,16 @@ async def add_holding_impl(
             ephemeral=True,
         )
 
-    if quantity <= 0 or avg_cost < 0:
+    # 允許負股數 = 空頭現貨部位（做空系統 SHORT_SIDE / Regime V 的實際持倉）。
+    # 慣例與空頭選擇權一致（見 cogs/terminal/trades.py 既有的 quantity < 0
+    # 處理），全系統以「股數為負」辨識空頭，不新增方向欄位。
+    # 仍禁止 0 股與負成本——前者無意義，後者是輸入錯誤。
+    if quantity == 0 or avg_cost < 0:
         return await interaction.followup.send(
             embed=create_error_embed(
-                "數量必須大於 0 且成本不能為負數。", title="系統錯誤"
+                "數量不得為 0，且成本不能為負數。\n"
+                "（負股數代表空頭現貨部位，例如 `-100` 表示放空 100 股。）",
+                title="系統錯誤",
             ),
             ephemeral=True,
         )
@@ -167,7 +173,12 @@ async def add_holding_impl(
         await interaction.followup.send(
             embed=create_info_embed(
                 title="操作成功",
-                message=f"✅ **現貨持倉已{action_text}**: `{symbol}` | `{quantity:,.0f}` 股 | 成本 `${avg_cost:,.2f}`",
+                message=(
+                    f"✅ **現貨持倉已{action_text}**: `{symbol}` | "
+                    f"`{quantity:,.0f}` 股"
+                    f"{' (🔻 空頭部位)' if quantity < 0 else ''} | "
+                    f"成本 `${avg_cost:,.2f}`"
+                ),
             ),
             ephemeral=True,
         )

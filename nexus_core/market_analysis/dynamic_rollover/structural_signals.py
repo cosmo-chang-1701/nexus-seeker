@@ -150,6 +150,98 @@ def _scan_gex_walls(
     return support_wall, resistance_wall, support_gex, resistance_gex
 
 
+def _scan_resistance_wall_above_spot(
+    symbol: str,
+    gex_profile_data: Optional[Dict[str, Any]],
+    spot: float,
+) -> Tuple[float, float]:
+    """做空專用：掃描現價**上方**的做市商正 Gamma 壓制頂牆。
+
+        Resistance Wall = argmax_{K > Spot} (Net GEX(K))
+
+    與 `_scan_gex_walls()` 的支撐牆掃描完全鏡像——後者把範圍強制約束在
+    `K < Spot`，本函式約束在 `K > Spot`。物理意義同樣對稱：做市商在該履約價
+    持有大量正 Gamma，價格漲上去時他們必須賣出對沖，形成天花板；正如支撐牆處
+    他們必須買進對沖而形成地板。
+
+    ⚠️ 刻意不重用 `_scan_gex_walls()` 既有的 `resistance_wall` 回傳值：那一路
+    分支走的是 `classify_gex_wall(...) == "RESISTANCE_CALL_WALL"`（針對重倉價外
+    Call 的分類），且**沒有** `K > Spot` 的物理約束，語意與本函式不同。改動它
+    會連帶影響 anti_washout.py 的 `_correct_wall_topology`，故另立函式。
+
+    牆體厚度沿用同一套 GEX_THIN_WALL_THRESHOLD 薄紙牆門檻：低於門檻視為
+    「未偵測到有效頂牆」回傳 (0.0, 0.0)，而非信任一面隨時會被打穿的薄牆。
+
+    回傳 ``(resistance_wall, resistance_gex)``。
+    """
+    from market_analysis.index_microstructure import GEX_THIN_WALL_THRESHOLD
+
+    if spot <= 0 or not (
+        gex_profile_data
+        and "gex_profile" in gex_profile_data
+        and isinstance(gex_profile_data["gex_profile"], dict)
+    ):
+        return 0.0, 0.0
+
+    best_strike: float = 0.0
+    best_gex: float = 0.0
+    for k, v in gex_profile_data["gex_profile"].items():
+        try:
+            strike_flt = float(k)
+            val_flt = float(v)
+        except (ValueError, TypeError) as e:
+            logger.debug(f"[{symbol}] GEX strike {k}/{v} 解析失敗，略過: {e}")
+            continue
+        if math.isnan(strike_flt) or math.isnan(val_flt):
+            continue
+        if strike_flt <= spot or val_flt <= 0:
+            continue
+        if val_flt > best_gex:
+            best_gex = val_flt
+            best_strike = strike_flt
+
+    if best_gex < GEX_THIN_WALL_THRESHOLD:
+        return 0.0, 0.0
+    return best_strike, best_gex
+
+
+def _detect_whale_call_bto_block(
+    uoa_list: Optional[List[Dict[str, Any]]], spot: float
+) -> bool:
+    """做空部位的 SL-主力對沖：偵測近平值單筆 CALL BTO 大單推升。
+
+    完全鏡像 `_detect_whale_put_bto_block()`（多頭部位用），僅方向反轉為
+    CALL BTO——主力買入 CALL 押注上漲，做市商需即時多頭對沖買進現貨，對空頭
+    部位而言即是逼空的起點，屬於「做空邏輯消亡」的硬性離場訊號。
+
+    ratio 門檻與名目金額門檻刻意與多頭版共用同一組常數
+    (_MICROSTRUCTURE_SL_WHALE_PUT_*)：兩者衡量的是同一件事（單筆近平值巨鯨
+    買方大單的異常程度），沒有理由對空頭部位採用不同的靈敏度。
+    """
+    if not uoa_list or spot <= 0:
+        return False
+    for entry in uoa_list:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")).upper() != "CALL":
+            continue
+        if "BTO" not in str(entry.get("action", "")):
+            continue
+        ratio = float(entry.get("paced_ratio", entry.get("ratio", 0.0)) or 0.0)
+        if ratio < _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO:
+            continue
+        notional_value = float(entry.get("notional_value", 0.0) or 0.0)
+        if notional_value < _MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD:
+            continue
+        strike = float(entry.get("strike", 0.0) or 0.0)
+        if strike <= 0:
+            continue
+        if abs(strike - spot) / spot > _MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT:
+            continue
+        return True
+    return False
+
+
 def _detect_whale_put_bto_block(
     uoa_list: Optional[List[Dict[str, Any]]], spot: float
 ) -> bool:

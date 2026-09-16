@@ -4617,7 +4617,17 @@ def _green_candidate_radar() -> dict:
       (>= GEX_THIN_WALL_THRESHOLD=500,000，Phase 3 薄弱紙牆過濾門檻)，
       避免 $95 支撐牆被誤判為 THIN_SUPPORT_WALL 而在條件二失效
       (各數值等比例放大 10,000 倍，保留原始由負轉正的累積和交叉點不變)。
-    - call_wall $110，距現價 $100 有 10% 空間 (>= 5% 門檻)。
+    - call_wall $120，距現價 $100 有 20% 空間。空間門檻改為動態自適應波動率
+      門檻後，以下方的 atr_15m=1.2 / put_wall=97 計算：
+          Stop = 97 - 1.5×1.2 = 95.2 → Risk = 4.8%
+          Threshold = max(2.2×4.8%, 1.5×6%, 3.5%) = 10.56%
+      舊值 call_wall $110 的 10% 空間已不足以通過，故一併上調。
+    - put_wall $97、atr_15m 1.2、atr_14 6.0 為動態門檻 (room_threshold.py 公式
+      A/B) 的三項輸入。atr_14/atr_15m 比值 5.0 貼近 √26 ≈ 5.1 的真實量綱關係；
+      若不顯式提供，resolve_room_threshold_inputs 會去呼叫 fetch_atr_1d，在
+      測試中會落到被 patch 的 get_history_df 上而取到 15m 的 ATR 當日線用。
+    - 條件二的支撐牆緩衝雙邊界 (profile="RIGHT")：支撐牆 $95 距現價 5%，
+      下界 2.5×1.2/100 = 3%、上界 1.8×6/100 = 10.8%，落在甜蜜點。
     - net_gex 為正值 (LONG_GAMMA)，比照分析中心對淨 GEX Regime 的判讀，
       供條件一的個股淨 Gamma regime 檢查使用。
     - uoa 僅含一筆次週 CALL BTO (DTE=14，權利金 $300,000 >= 條件四門檻)，
@@ -4626,9 +4636,11 @@ def _green_candidate_radar() -> dict:
     far_expiry = (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d")
     return {
         "quote": {"c": 100.0},
+        "atr_15m": 1.2,
+        "atr_14": 6.0,
         "gex_profile_data": {
-            "call_wall": 110.0,
-            "put_wall": 95.0,
+            "call_wall": 120.0,
+            "put_wall": 97.0,
             "net_gex": 800_000.0,
             "gex_profile": {
                 "90": -500_000.0,
@@ -4852,7 +4864,10 @@ async def test_confirm_entry_signal_condition1_long_gamma_fallback_passes(
     (站穩 Session VWAP + 0.5 × ATR₁₅ₘ)。當 15m 陽線收盤突破替代門檻且放量站穩 VWAP，
     條件一應順利通過，避免誤殺做市商自穩定盤。"""
     radar = _green_candidate_radar()
-    radar["gex_profile_data"]["gex_profile"] = {"99": 600_000.0}
+    # 支撐牆自 $99 下移至 $95：全鏈仍無零交叉點 (皆為正值) 故 Fallback 模式不變，
+    # 但緩衝雙邊界 (2.5×ATR₁₅ₘ = 3%) 下，$99 距現價僅 1% 會被判為過窄而讓
+    # 條件二失敗，掩蓋本測試真正要驗證的條件一 Fallback 行為。
+    radar["gex_profile_data"]["gex_profile"] = {"95": 600_000.0}
     radar["gex_profile_data"]["net_gex"] = 600_000.0
     with (
         patch(
@@ -5119,7 +5134,7 @@ async def test_confirm_entry_signal_condition2_fails_wall_too_far(
     confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件二❌" in reason
-    assert "距離過遠" in reason
+    assert "絕對風險上限" in reason
 
 
 @pytest.mark.asyncio
@@ -5156,14 +5171,19 @@ async def test_confirm_entry_signal_condition2_spcx_support_wall_below_spot_pass
 ) -> None:
     """條件二演算法修復驗證：現價 $147.95，上方有 Call Wall $150 (GEX=1,000,000)，
     現價下方有有效支撐牆 $145 (GEX=800,000)。
-    支撐位應精準錨定為 $145.00，距離 (147.95 - 145.0) / 147.95 = 1.99% <= 5%，
-    條件二應順利通過。"""
+    支撐位應精準錨定為 $145.00。條件二量的是**停損距離**：
+    停損 = 145 − 0.5×1.0 = 144.5 → 距現價 2.33%，落在
+    [2.5×ATR₁₅ₘ = 1.69%, 絕對 8%] 之內，條件二應順利通過。"""
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["gex_profile"] = {
         "140": 200_000.0,
         "145": 800_000.0,  # 現價下方最大正 GEX 峰值，即 Support Wall
         "150": 1_000_000.0,  # 現價上方更大峰值 (Call Wall) 不應干擾支撐判斷
     }
+    # fixture 預設的 ATR 是對應 $100 價位的量級；本案例現價 $147.95，須換成
+    # 對應量級，否則緩衝雙邊界會以錯誤的相對波動率評估 1.99% 的牆距。
+    radar["atr_15m"] = 1.0
+    radar["atr_14"] = 5.0
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
@@ -5172,8 +5192,8 @@ async def test_confirm_entry_signal_condition2_spcx_support_wall_below_spot_pass
         confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 147.95)
     assert "條件二✅" in reason
     assert "正 Gamma 支撐牆 $145.00" in reason
-    assert "+1.99%" in reason
-    assert "有效防禦" in reason
+    assert "停損距離 2.33%" in reason
+    assert "落在緩衝甜蜜點" in reason
 
 
 @pytest.mark.asyncio
@@ -5230,7 +5250,7 @@ async def test_confirm_entry_signal_all_six_conditions_pass_long_gamma_fallback(
 async def test_confirm_entry_signal_condition3_fails_physical_cap(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """條件三：Call Wall ($110) 上方存在單筆 ratio > 1.5x OI 的 STO Call -> 未通過。
+    """條件三：Call Wall ($120) 上方存在單筆 ratio > 1.5x OI 的 STO Call -> 未通過。
     物理封頂偵測已改以 Call Wall (而非現價) 作為 strike 位置基準，且 ratio 門檻
     由 1.0x 調升為 1.5x，故封頂 strike 須設於 Call Wall 之上、ratio 須超過 1.5x
     才會觸發 (低於任一門檻皆視為一般平倉/避險單，不誤判為物理封頂)。"""
@@ -5239,7 +5259,7 @@ async def test_confirm_entry_signal_condition3_fails_physical_cap(
         {
             "type": "CALL",
             "action": "🔴 賣出開倉 (STO - Bid)",
-            "strike": 112.0,  # > call_wall $110
+            "strike": 122.0,  # > call_wall $120
             "ratio": 2.0,  # > 新門檻 1.5x
             "expiry": (datetime.now().date() + timedelta(days=14)).strftime("%Y-%m-%d"),
         }
@@ -6300,6 +6320,99 @@ async def test_evaluate_opportunity_cost_for_satellites_left_side_routes_to_left
         )
     mock_left_gate.assert_awaited_once()
     assert entry_confirmation == (True, "左側測試通過")
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_short_side_routes_to_short_gate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=SHORT_SIDE 時應略過左右兩套多頭鐵律，改呼叫
+    short_side_entry._confirm_short_entry_signal。
+
+    ⚠️ SHORT_SIDE 是本系統唯一的空頭方向進場路徑；LEFT_SIDE 雖然技術定義與
+    右側相反，本質仍是做多。"""
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="SHORT_SIDE"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.short_side_entry._confirm_short_entry_signal",
+            new_callable=AsyncMock,
+            return_value=(True, "做空測試通過", "Long Put (輕度 OTM)"),
+        ) as mock_short_gate,
+        patch(
+            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
+            new_callable=AsyncMock,
+        ) as mock_left_gate,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999005,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    mock_short_gate.assert_awaited_once()
+    mock_left_gate.assert_not_awaited()
+    assert entry_confirmation == (True, "做空測試通過")
+    assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_to_short_gate(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """trading_strategy=DYNAMIC 且分類為 Regime V (破位追空態) 時，應路由至
+    做空六重鐵律，並原樣沿用分類階段已抓取的資料快照。"""
+    from market_analysis.dynamic_rollover.models import (
+        DynamicRegime,
+        RegimeMarketData,
+    )
+
+    market_data = RegimeMarketData(df_15m=_GREEN_15M_DF, session_vwap=99.0, atr_15m=1.5)
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
+            return_value=MagicMock(trading_strategy="DYNAMIC"),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+            new_callable=AsyncMock,
+            return_value=(
+                DynamicRegime.REGIME_V_BREAKDOWN_CHASE,
+                "結構破位負 Gamma 順勢助跌確認",
+                market_data,
+            ),
+        ),
+        patch(
+            "market_analysis.dynamic_rollover.short_side_entry._confirm_short_entry_signal",
+            new_callable=AsyncMock,
+            return_value=(False, "做空條件四❌", None),
+        ) as mock_short_gate,
+    ):
+        (
+            instructions,
+            entry_confirmation,
+        ) = await engine.evaluate_opportunity_cost_for_satellites(
+            user_id=999999006,
+            portfolio_assets=[],
+            already_flagged_symbols=set(),
+            candidate_symbol="TEST",
+            candidate_radar=_green_candidate_radar(),
+        )
+    mock_short_gate.assert_awaited_once()
+    # 分類階段的快照必須原樣傳入，不得讓做空鐵律重抓一次
+    assert mock_short_gate.await_args is not None
+    kwargs = mock_short_gate.await_args.kwargs
+    assert kwargs["df_15m"] is _GREEN_15M_DF
+    assert kwargs["session_vwap"] == 99.0
+    assert kwargs["atr_15m"] == 1.5
+    assert entry_confirmation == (False, "做空條件四❌")
     assert instructions == []
 
 

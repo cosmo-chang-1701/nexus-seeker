@@ -323,7 +323,7 @@ SETTINGS_LABELS = {
     ),
     "trading_strategy": (
         "📐 交易策略",
-        "選擇動態轉倉引擎的進場邏輯模式 (動態調整/左側交易/右側交易)",
+        "選擇動態轉倉引擎的進場邏輯模式 (動態調整/左側交易/右側交易/做空交易)",
         None,
     ),
 }
@@ -335,12 +335,17 @@ TRADING_STRATEGY_DISPLAY = {
     "DYNAMIC": "動態調整",
     "LEFT_SIDE": "左側交易",
     "RIGHT_SIDE": "右側交易",
+    "SHORT_SIDE": "做空交易",
 }
 
+# ⚠️ 左側交易**仍是做多**（逆勢均值回歸、Put Wall 底牆接刀，算的是向上回歸
+# 空間）。做空交易 (SHORT_SIDE) 才是本系統唯一的空頭方向進場路徑，描述文字
+# 刻意寫明方向，避免使用者把「左側」誤讀為「做空」。
 TRADING_STRATEGY_DESCRIPTIONS = {
-    "DYNAMIC": "4 態 Regime 路由：依結構自動切換左側/右側六重鐵律或強制鎖倉",
-    "LEFT_SIDE": "逆勢均值回歸：Put Wall 底牆接刀六重鐵律",
-    "RIGHT_SIDE": "順勢動能突破：現行六重鐵律 (預設)",
+    "DYNAMIC": "5 態 Regime 路由：依結構自動切換左/右側/做空六重鐵律或強制鎖倉",
+    "LEFT_SIDE": "做多・逆勢均值回歸：Put Wall 底牆接刀六重鐵律",
+    "RIGHT_SIDE": "做多・順勢動能突破：現行六重鐵律 (預設)",
+    "SHORT_SIDE": "做空・結構破位追空：負 Gamma 順勢助跌六重鐵律",
 }
 
 
@@ -667,7 +672,7 @@ class AccountSettingsView(discord.ui.View):
 
 
 class TradingStrategySelect(discord.ui.Select):
-    """交易策略模式 (動態調整/左側交易/右側交易) 固定 3 選項選單，選中即直接寫入
+    """交易策略模式 (動態調整/左側/右側/做空) 固定 4 選項選單，選中即直接寫入
     DB 並導回父層 AccountSettingsView，不需要 Modal（比照
     ui/watchlist_tags.py::WatchlistTagSelect 的 Select 子類別模式）。"""
 
@@ -680,7 +685,7 @@ class TradingStrategySelect(discord.ui.Select):
                 description=TRADING_STRATEGY_DESCRIPTIONS[code],
                 default=(code == current),
             )
-            for code in ("DYNAMIC", "LEFT_SIDE", "RIGHT_SIDE")
+            for code in ("DYNAMIC", "LEFT_SIDE", "RIGHT_SIDE", "SHORT_SIDE")
         ]
         super().__init__(
             placeholder="請選擇交易策略模式...",

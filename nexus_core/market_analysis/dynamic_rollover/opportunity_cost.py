@@ -8,24 +8,27 @@ from market_analysis.index_microstructure import (
     detect_uoa_sto_call_physical_cap,
     estimate_symbol_gamma_flip,
 )
+from market_analysis.room_threshold import (
+    compute_dynamic_room_threshold,
+    evaluate_wall_buffer,
+)
 
 from . import logger
 from ._shared import (
     format_cash_impact,
     format_illiquidity_warning,
     resolve_current_value,
+    resolve_room_threshold_inputs,
 )
 from .constants import (
     CORE_DEFENSE_ETF_SYMBOLS,
     _BREAKOUT_READY_THRESHOLD,
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
-    _ENTRY_ASYMMETRIC_ROOM_PCT,
     _ENTRY_CANDIDATE_MIN_DTE,
     _ENTRY_DTE_BAND_SHORT,
     _ENTRY_DTE_BAND_SWING,
     _ENTRY_IVR_SPREAD_THRESHOLD,
     _ENTRY_ROOM_EXTENDED_PCT,
-    _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
     _ENTRY_UOA_MIN_DTE,
     _ENTRY_UOA_MIN_NOTIONAL_USD,
@@ -263,45 +266,77 @@ def _confirm_entry_condition2_support_wall(
     gex_profile_data: Any,
     target_spot: float,
     reasons: list,
+    atr_15m: float = 0.0,
+    atr_1d: float = 0.0,
 ) -> bool:
-    """條件二：做市商正 Gamma 底牆完好 (現價須站上支撐牆，且距離落在
-    (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT] 之內才算「即時有效防禦」——
-    支撐牆離現價過遠即便現價仍在其上方，也不構成短線可依靠的保護)。
+    """條件二：做市商正 Gamma 底牆完好，且緩衝距離落在動態雙邊界之內。
 
     物理定義約束：支撐位在物理定義上必須位於現價下方 (K < Spot)。
     透過 _scan_gex_walls(..., spot=target_spot) 將掃描範圍強制約束在現價下方：
         Support Wall = argmax_{K < Spot} (Net GEX(K))
     避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆。若現價下方無任何
-    正 GEX 峰值 (或曝險低於 GEX_THIN_WALL_THRESHOLD 門檻)，直接判定未通過。"""
+    正 GEX 峰值 (或曝險低於 GEX_THIN_WALL_THRESHOLD 門檻)，直接判定未通過。
+
+    緩衝判定自固定上限 (_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT = 5%) 升級為
+    room_threshold.evaluate_wall_buffer(profile="RIGHT")，量的是**停損距離**
+    (現價到 SupportWall − 0.5×ATR₁₅ₘ) 而非牆距：
+
+      * 下界 2.5×ATR₁₅ₘ：防停損落在日內隨機雜訊帶內而遭做市商 Liquidity
+        Sweep 掃損。舊版的 ``0 < d`` 只要求牆在下方，對此完全無防護。
+      * 上界為**絕對** 8%：純粹的絕對風險兜底。刻意不用 ATR 縮放——ATR 縮放
+        的上界與條件三的 2.2×Risk 在防同一件事（牆太遠 = 風險太大），而條件三
+        已對該風險做了連續定價；且低波標的的可接受帶會窄於一個履約價間距，
+        等同抽籤（實測見 docs/strategies/06）。
+
+    ⚠️ 行為變化：支撐牆極貼現價 (如 0.5%) 在舊版會**通過**本條件，改版後判為
+    TOO_TIGHT 而不通過。這是本次新增閘門的目的，但會降低進場頻率。
+
+    ATR 兩項皆不可得時，evaluate_wall_buffer 會自動退回舊版的
+    0 < d <= 5% 單邊判定，行為與本次改版前一致。"""
     support_wall, _resistance_wall, support_gex, _resistance_gex = _scan_gex_walls(
         candidate_symbol,
         gex_profile_data if isinstance(gex_profile_data, dict) else None,
         spot=target_spot,
     )
     has_support_wall = support_wall > 0 and support_gex > 0
-    dist_pct = (
-        (target_spot - support_wall) / target_spot
-        if has_support_wall and target_spot > 0
-        else None
-    )
-    is_above_wall = (
-        dist_pct is not None and 0 < dist_pct <= _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT
-    )
-    c2_passed = has_support_wall and is_above_wall
     if not has_support_wall:
         reasons.append("條件二❌：未偵測到有效正 Gamma 支撐牆 (現價下方無正 GEX 峰值)")
-    elif dist_pct is None:
+        return False
+    if target_spot <= 0:
         reasons.append("條件二❌：candidate 現價無效，無法計算支撐牆距離")
-    elif dist_pct <= 0:
+        return False
+
+    buffer = evaluate_wall_buffer(
+        target_spot, support_wall, atr_15m, atr_1d, profile="RIGHT"
+    )
+    c2_passed = buffer.passed
+    degrade_suffix = f"｜⚠️ {buffer.degrade_reason}" if buffer.degrade_reason else ""
+
+    if buffer.state == "TOO_TIGHT" and buffer.buffer_pct <= 0:
         reasons.append(
-            f"條件二❌：現價 ${target_spot:.2f} <= 正 Gamma 支撐牆 ${support_wall:.2f}"
+            f"條件二❌：現價 ${target_spot:.2f} <= 正 Gamma 支撐牆 "
+            f"${support_wall:.2f}{degrade_suffix}"
+        )
+    elif buffer.state == "TOO_TIGHT":
+        bound = f"{buffer.min_pct:.2%}" if buffer.min_pct is not None else "下界"
+        reasons.append(
+            f"條件二❌：現價 ${target_spot:.2f} 距正 Gamma 支撐牆 "
+            f"${support_wall:.2f}，停損距離 {buffer.buffer_pct:.2%}（< {bound} "
+            f"= 2.5×ATR₁₅ₘ 下界，停損落在日內雜訊帶內，易遭 Liquidity Sweep 掃損）"
+            f"{degrade_suffix}"
+        )
+    elif buffer.state == "TOO_WIDE":
+        bound = f"{buffer.max_pct:.2%}" if buffer.max_pct is not None else "上界"
+        reasons.append(
+            f"條件二❌：現價 ${target_spot:.2f} 距正 Gamma 支撐牆 "
+            f"${support_wall:.2f}，停損距離 {buffer.buffer_pct:.2%}（> {bound} "
+            f"絕對風險上限，停損距現價過遠）{degrade_suffix}"
         )
     else:
         reasons.append(
-            f"條件二{'✅' if is_above_wall else '❌'}：現價 ${target_spot:.2f} "
-            f"距正 Gamma 支撐牆 ${support_wall:.2f} +{dist_pct:.2%}"
-            f"（{'≤' if is_above_wall else '>'}{_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT:.0%} "
-            f"{'有效防禦' if is_above_wall else '距離過遠，非即時有效保護'}）"
+            f"條件二✅：現價 ${target_spot:.2f} 距正 Gamma 支撐牆 "
+            f"${support_wall:.2f}，停損距離 {buffer.buffer_pct:.2%}（落在緩衝甜蜜點）"
+            f"{degrade_suffix}"
         )
     return c2_passed
 
@@ -311,14 +346,27 @@ def _confirm_entry_condition3_no_physical_cap(
     call_wall: float,
     target_spot: float,
     reasons: list,
+    put_wall: float = 0.0,
+    atr_15m: float = 0.0,
+    atr_1d: float = 0.0,
 ) -> bool:
-    """條件三：UOA 無實質物理封頂 (上方空間暢通)。比照分析中心 (Symbol Hub) 的
-    GEX CallWall 距現價空間% 判讀：不要求 Call Wall 必須還在現價之上，只要帶
-    正負號的距離 (call_wall - spot) / spot 小於門檻，即代表做市商壓制仍在——
-    現價已觸及甚至跌破 Call Wall 時（距離為負值）同樣視為空間不足，而非誤判
-    為「已站上、無封頂」。物理封頂偵測改以 Call Wall（而非現價）作為 strike
-    位置基準，並套用 _ENTRY_UOA_CAP_RATIO_THRESHOLD 較高的 ratio 門檻，降低
-    一般 STO 平倉/避險單被誤判為物理封頂的假警報率。"""
+    """條件三：UOA 無實質物理封頂，且上方非對稱空間達動態門檻。
+
+    比照分析中心 (Symbol Hub) 的 GEX CallWall 距現價空間% 判讀：不要求 Call
+    Wall 必須還在現價之上，只要帶正負號的距離 (call_wall - spot) / spot 小於
+    門檻，即代表做市商壓制仍在——現價已觸及甚至跌破 Call Wall 時（距離為負值）
+    同樣視為空間不足，而非誤判為「已站上、無封頂」。物理封頂偵測改以 Call
+    Wall（而非現價）作為 strike 位置基準，並套用 _ENTRY_UOA_CAP_RATIO_THRESHOLD
+    較高的 ratio 門檻，降低一般 STO 平倉/避險單被誤判為物理封頂的假警報率。
+
+    非對稱空間門檻自固定 5% 升級為動態自適應波動率門檻（見
+    market_analysis/room_threshold.py 公式 A）：
+
+        Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
+        Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+
+    即「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 盈虧比成為
+    結構性保證，而非對高波標的失效、對低波標的過嚴的一刀切數字。"""
     has_physical_cap, capping_strike = detect_uoa_sto_call_physical_cap(
         uoa_list,
         target_spot,
@@ -331,11 +379,15 @@ def _confirm_entry_condition3_no_physical_cap(
         if call_wall > 0 and target_spot > 0
         else None
     )
+    room = compute_dynamic_room_threshold(
+        target_spot, put_wall, atr_15m, atr_1d, direction="LONG"
+    )
     has_tight_call_wall = (
-        call_wall_dist_pct is not None
-        and call_wall_dist_pct < _ENTRY_ASYMMETRIC_ROOM_PCT
+        call_wall_dist_pct is not None and call_wall_dist_pct < room.threshold_pct
     )
     c3_passed = not has_physical_cap and not has_tight_call_wall
+    degrade_suffix = f"｜⚠️ {room.degrade_reason}" if room.degrade_reason else ""
+
     if has_physical_cap:
         reasons.append(
             f"條件三❌：偵測到單筆 ratio>{_ENTRY_UOA_CAP_RATIO_THRESHOLD}x OI 的 "
@@ -344,11 +396,14 @@ def _confirm_entry_condition3_no_physical_cap(
     elif has_tight_call_wall and call_wall_dist_pct is not None:
         reasons.append(
             f"條件三❌：Call Wall ${call_wall:.2f} 距現價空間 "
-            f"{call_wall_dist_pct:+.2%} 不足 {_ENTRY_ASYMMETRIC_ROOM_PCT:.0%} "
-            f"非對稱空間"
+            f"{call_wall_dist_pct:+.2%} 不足 {room.threshold_pct:.2%} "
+            f"動態非對稱空間門檻{degrade_suffix}"
         )
     else:
-        reasons.append("條件三✅：上方無實質物理封頂，非對稱空間充足")
+        reasons.append(
+            f"條件三✅：上方無實質物理封頂，非對稱空間充足"
+            f"（動態門檻 {room.threshold_pct:.2%}）{degrade_suffix}"
+        )
     return c3_passed
 
 
@@ -867,6 +922,13 @@ class _OpportunityCostMixin:
         if math.isnan(net_gex):
             net_gex = 0.0
 
+        # 動態空間門檻 (room_threshold.py 公式 A/B) 所需的三項輸入，在迴圈外
+        # 一次解析完畢後同時餵給條件二與條件三——刻意不讓兩個條件各自去抓，
+        # 否則同一輪次會對同一標的重複發動網路請求，且兩者可能取到不同快照。
+        put_wall, atr_15m_val, atr_1d_val = await resolve_room_threshold_inputs(
+            candidate_symbol, candidate_radar, gex_profile_data, df_15m
+        )
+
         c1_passed = await _confirm_entry_condition1_breakout(
             candidate_symbol,
             target_spot,
@@ -877,10 +939,21 @@ class _OpportunityCostMixin:
             session_vwap=session_vwap,
         )
         c2_passed = _confirm_entry_condition2_support_wall(
-            candidate_symbol, gex_profile_data, target_spot, reasons
+            candidate_symbol,
+            gex_profile_data,
+            target_spot,
+            reasons,
+            atr_15m=atr_15m_val,
+            atr_1d=atr_1d_val,
         )
         c3_passed = _confirm_entry_condition3_no_physical_cap(
-            uoa_list, call_wall, target_spot, reasons
+            uoa_list,
+            call_wall,
+            target_spot,
+            reasons,
+            put_wall=put_wall,
+            atr_15m=atr_15m_val,
+            atr_1d=atr_1d_val,
         )
         c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, target_spot, reasons)
         (
@@ -973,10 +1046,12 @@ class _OpportunityCostMixin:
         target_uoa_sweep = len(candidate_radar.get("uoa", []) or []) > 0
 
         # 交易策略引擎：依使用者 /settings 選擇的 trading_strategy (右側交易/
-        # 左側交易/動態調整) 決定要套用哪一套進場鐵律。RIGHT_SIDE 為預設值，
-        # 呼叫既有六重鐵律，行為與改動前完全一致 (零行為變化)。LEFT_SIDE 呼叫
-        # 全新的逆勢均值回歸六重鐵律 (left_side_entry.py)。DYNAMIC 先透過
-        # 4-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
+        # 左側交易/做空交易/動態調整) 決定要套用哪一套進場鐵律。RIGHT_SIDE 為
+        # 預設值，呼叫既有六重鐵律，行為與改動前完全一致 (零行為變化)。
+        # LEFT_SIDE 呼叫逆勢均值回歸六重鐵律 (left_side_entry.py)——注意左側
+        # **仍是做多**。SHORT_SIDE 呼叫結構破位追空六重鐵律
+        # (short_side_entry.py)，是本系統唯一的空頭方向進場路徑。DYNAMIC 先透過
+        # 5-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
         # 直接判定未通過 (Regime II 混沌泥淖態/IV 結構封頂危機態)。
         try:
             trading_strategy = get_full_user_context(user_id).trading_strategy
@@ -1000,9 +1075,20 @@ class _OpportunityCostMixin:
             ) = await _confirm_left_entry_signal(
                 candidate_symbol, candidate_radar, target_spot
             )
+        elif trading_strategy == TradingStrategyMode.SHORT_SIDE.value:
+            from .short_side_entry import _confirm_short_entry_signal
+
+            (
+                is_entry_confirmed,
+                entry_reason,
+                structure_directive,
+            ) = await _confirm_short_entry_signal(
+                candidate_symbol, candidate_radar, target_spot
+            )
         elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
             from .left_side_entry import _confirm_left_entry_signal
             from .regime_classifier import classify_dynamic_regime
+            from .short_side_entry import _confirm_short_entry_signal
 
             gex_profile_data_for_regime = candidate_radar.get("gex_profile_data") or {}
             uoa_list_for_regime = candidate_radar.get("uoa") or []
@@ -1039,6 +1125,20 @@ class _OpportunityCostMixin:
                     # 原樣沿用分類階段已抓取的 15m frame / Session VWAP /
                     # ATR₁₅ₘ，確保「盤勢分類」與「進場確認」建立在同一份資料
                     # 快照上，並省去對同一標的的重複網路請求。
+                    df_15m=regime_market_data.df_15m,
+                    session_vwap=regime_market_data.session_vwap,
+                    atr_15m=regime_market_data.atr_15m,
+                )
+            elif regime == DynamicRegime.REGIME_V_BREAKDOWN_CHASE:
+                (
+                    is_entry_confirmed,
+                    entry_reason,
+                    structure_directive,
+                ) = await _confirm_short_entry_signal(
+                    candidate_symbol,
+                    candidate_radar,
+                    target_spot,
+                    # 同上：原樣沿用分類階段已抓取的資料快照。
                     df_15m=regime_market_data.df_15m,
                     session_vwap=regime_market_data.session_vwap,
                     atr_15m=regime_market_data.atr_15m,

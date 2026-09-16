@@ -19,7 +19,20 @@ async def save_market_cache(
     expiry: Optional[str] = None,
     call_wall: Optional[float] = None,
     previous_call_wall: Optional[float] = None,
+    put_wall: Optional[float] = None,
+    previous_put_wall: Optional[float] = None,
 ) -> bool:
+    """寫入 market_cache。
+
+    ``call_wall`` / ``previous_call_wall`` 追蹤做市商**阻力**牆的跨週期遷移，
+    供多頭 TP2-空間擴展的「牆向上遷移 >= 3%」判定使用（v069）。
+    ``put_wall`` / ``previous_put_wall`` 是其鏡像，追蹤**支撐**牆的跨週期遷移，
+    供做空 TP2 的「牆向下遷移 >= 3%」判定使用（v074）。
+
+    兩組欄位的 UPSERT 語意完全對稱：只有在新舊牆位皆有效且**確實不同**時，才把
+    舊值搬進 previous_*；呼叫端也可顯式傳入 previous_* 覆蓋。牆位為 None 或
+    <= 0 時保留既有值，避免一次抓取失敗就抹掉整條遷移軌跡。
+    """
     if not expiry:
         expiry = "WEEKLY"
     call_wall_val = (
@@ -30,15 +43,24 @@ async def save_market_cache(
         if (previous_call_wall is not None and float(previous_call_wall) > 0)
         else None
     )
+    put_wall_val = (
+        float(put_wall) if (put_wall is not None and float(put_wall) > 0) else None
+    )
+    prev_pw_val = (
+        float(previous_put_wall)
+        if (previous_put_wall is not None and float(previous_put_wall) > 0)
+        else None
+    )
     try:
         await execute_write_async(
             """
             INSERT INTO market_cache (
                 symbol, expiry, max_pain, expected_move_lower, expected_move_upper,
                 reference_spot_price, is_stale, calculation_mode, is_degraded,
-                circuit_breaker_triggered, call_wall, previous_call_wall, updated_at
+                circuit_breaker_triggered, call_wall, previous_call_wall,
+                put_wall, previous_put_wall, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(symbol, expiry) DO UPDATE SET
             max_pain = excluded.max_pain,
             expected_move_lower = excluded.expected_move_lower,
@@ -62,6 +84,20 @@ async def save_market_cache(
                 WHEN excluded.call_wall IS NOT NULL AND excluded.call_wall > 0 THEN excluded.call_wall
                 ELSE market_cache.call_wall
             END,
+            previous_put_wall = CASE
+                WHEN excluded.previous_put_wall IS NOT NULL THEN excluded.previous_put_wall
+                WHEN excluded.put_wall IS NOT NULL
+                     AND excluded.put_wall > 0
+                     AND market_cache.put_wall IS NOT NULL
+                     AND market_cache.put_wall > 0
+                     AND excluded.put_wall != market_cache.put_wall
+                THEN market_cache.put_wall
+                ELSE market_cache.previous_put_wall
+            END,
+            put_wall = CASE
+                WHEN excluded.put_wall IS NOT NULL AND excluded.put_wall > 0 THEN excluded.put_wall
+                ELSE market_cache.put_wall
+            END,
             updated_at = CURRENT_TIMESTAMP
         """,
             (
@@ -77,6 +113,8 @@ async def save_market_cache(
                 circuit_breaker_triggered,
                 call_wall_val,
                 prev_cw_val,
+                put_wall_val,
+                prev_pw_val,
             ),
         )
         return True

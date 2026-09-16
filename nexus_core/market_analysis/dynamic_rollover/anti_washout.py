@@ -28,7 +28,11 @@ from .constants import (
     _MICROSTRUCTURE_TP3_RATIO,
 )
 from .models import RolloverInstruction, RolloverScenario
-from .structural_signals import _resolve_canonical_anchor_base, evaluate_option_dte_tier
+from .structural_signals import (
+    _detect_whale_call_bto_block,
+    _resolve_canonical_anchor_base,
+    evaluate_option_dte_tier,
+)
 from .transition_engine import evaluate_transition_for_position
 
 
@@ -69,6 +73,9 @@ class _AntiWashoutMixin:
         若 put_wall 與 call_wall 顛倒，或是已有 GEX 提取之 support_wall / resistance_wall，
         優先採用後者。
         """
+        if self._resolve_position_side(metrics) == "SHORT":
+            return self._correct_wall_topology_short(metrics)
+
         spot = float(metrics.get("spot_price", 0.0))
         put_wall = float(metrics.get("put_wall", 0.0))
         call_wall = float(metrics.get("call_wall", 0.0))
@@ -103,7 +110,14 @@ class _AntiWashoutMixin:
         rebalancing_impl) 透過 evaluate_option_dte_tier() 判定為
         EXPIRATION_SETTLEMENT_ALERT 並短路為強制結算保護指令，因此本函式
         不再需要處理 0/1 DTE 分支。
+
+        空頭部位 (股數為負，或顯式 metrics["position_side"] == "SHORT") 分流至
+        鏡像版 `_compute_short_anti_washout_stop()`；多頭路徑在位元層級完全
+        不變。
         """
+        if self._resolve_position_side(metrics) == "SHORT":
+            return self._compute_short_anti_washout_stop(anchor_base, metrics)
+
         spot = float(metrics.get("spot_price", 0.0))
         atr_15m = float(metrics.get("atr_15m", 0.0))
         lvn = float(metrics.get("lvn", 0.0))
@@ -180,7 +194,12 @@ class _AntiWashoutMixin:
         無狀態、每 15 分鐘重新評估、無「TP1 是否已執行過」的持久化狀態，故採
         「本輪最高已觸發層級」而非累加：優先序 TP3 > TP2 > TP1。回傳
         (tier_name 或 None, sell_ratio, reason_text)。
+
+        空頭部位分流至鏡像版 `_evaluate_microstructure_tp_ladder_short()`。
         """
+        if self._resolve_position_side(metrics) == "SHORT":
+            return self._evaluate_microstructure_tp_ladder_short(metrics)
+
         spot = float(metrics.get("spot_price", 0.0))
         call_wall = float(metrics.get("call_wall", 0.0))
         delta_raw = metrics.get("delta")
@@ -267,7 +286,14 @@ class _AntiWashoutMixin:
 
         回傳 (tier_name 或 None, sell_ratio, reason_text, new_stop_level)。
         new_stop_level 僅 SL-動態保本 (HOLD，停損上移至保本點) 會有值。
+
+        空頭部位分流至鏡像版 `_evaluate_microstructure_sl_ladder_short()`。
         """
+        if self._resolve_position_side(metrics) == "SHORT":
+            return self._evaluate_microstructure_sl_ladder_short(
+                metrics, anchor_base, stop_loss, asset_class
+            )
+
         spot = float(metrics.get("spot_price", 0.0))
         price_15m_close = float(metrics.get("price_15m_close", spot))
         call_wall = float(metrics.get("call_wall", 0.0))
@@ -335,6 +361,311 @@ class _AntiWashoutMixin:
                     f"🛡️ **SL-動態保本**：現價距 Call Wall 空間已達 {progress:.0%}"
                     f"（>= {_MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT:.0%}），"
                     f"停損上移至保本點 ${new_stop:.2f}{approx_note}，"
+                    "鎖定基礎成本，消除本金承險敞口。",
+                    new_stop,
+                )
+
+        return None, 0.0, "", None
+
+    # ------------------------------------------------------------------
+    # 做空部位鏡像出場矩陣
+    # ------------------------------------------------------------------
+    # 以下四個方法是上方多頭矩陣的完整鏡像，供空頭部位使用。方向語意全面反轉：
+    # 錨點由「下方支撐牆」改為「上方阻力頂牆」、停損由 anchor − k×ATR 改為
+    # anchor + k×ATR、TP 目標由 Call Wall 改為 Put Wall、SL-狀態翻轉由
+    # Net GEX <= 0 改為 >= 0（做市商回到正 Gamma 吸收波動，做空邏輯消亡）、
+    # SL-主力對沖由近平值 PUT BTO 改為 CALL BTO（逼空起點）。
+    #
+    # 刻意採「另立方法 + 入口分流」而非「在既有方法內插入 if side == SHORT」：
+    # 多頭矩陣是已上線、有完整測試覆蓋的程式碼，在其內部埋方向分支會讓每一條
+    # 既有路徑都多一層可能寫錯的條件；鏡像方法則讓多頭行為在位元層級保持不變。
+    @staticmethod
+    def _resolve_position_side(metrics: dict) -> str:
+        """解析部位方向，回傳 "LONG" 或 "SHORT"。
+
+        優先採用顯式的 metrics["position_side"]；未提供時依既有慣例以
+        **股數/口數為負** 判定為空頭（portfolio_monitor.py:445 早已用
+        `quantity < 0` 辨識空頭期權部位），故不需要新增 migration 欄位。
+        """
+        explicit = str(metrics.get("position_side", "") or "").upper()
+        if explicit in ("LONG", "SHORT"):
+            return explicit
+        try:
+            quantity = float(metrics.get("quantity", 0.0) or 0.0)
+        except (ValueError, TypeError):
+            return "LONG"
+        return "SHORT" if quantity < 0 else "LONG"
+
+    def _correct_wall_topology_short(self, metrics: dict) -> Tuple[float, float]:
+        """做空部位的拓撲校正：回傳 (anchor_short, effective_support_floor)。
+
+        完全鏡像 `_correct_wall_topology()`：多頭的防守錨點是下方的支撐底牆、
+        獲利天花板是上方的阻力牆；做空反轉為防守錨點是**上方的阻力頂牆**、
+        獲利地板是**下方的支撐牆**。拓撲逆轉修復同樣鏡像——put_wall > call_wall
+        時取較高者為頂牆（多頭版取較低者為底牆）。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        put_wall = float(metrics.get("put_wall", 0.0))
+        call_wall = float(metrics.get("call_wall", 0.0))
+        support_wall = float(metrics.get("support_wall", 0.0))
+        resistance_wall = float(metrics.get("resistance_wall", 0.0))
+        gamma_flip = float(metrics.get("gamma_flip", 0.0))
+        hvn = float(metrics.get("hvn", 0.0))
+
+        if resistance_wall > 0:
+            anchor_short = resistance_wall
+        elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
+            anchor_short = max(put_wall, call_wall)
+        elif call_wall > 0:
+            anchor_short = call_wall
+        elif gamma_flip > 0:
+            anchor_short = gamma_flip
+        elif hvn > 0:
+            anchor_short = hvn
+        else:
+            anchor_short = spot
+
+        if support_wall > 0:
+            effective_support_floor = support_wall
+        elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
+            effective_support_floor = min(put_wall, call_wall)
+        elif put_wall > 0:
+            effective_support_floor = put_wall
+        else:
+            effective_support_floor = spot * 0.95
+
+        return anchor_short, effective_support_floor
+
+    def _compute_short_anti_washout_stop(
+        self, anchor_short: float, metrics: dict
+    ) -> Tuple[float, float, float]:
+        """做空部位的雙軌停損：回傳 (stop_loss, limit_price, extreme_stop_loss)。
+
+        軌道一 (SL-結構失效)：`anchor_short + 0.5 × ATR₁₅ₘ`
+        軌道二 (極端瞬時停損)：`anchor_short + 3.0 × ATR₁₅ₘ`
+        兩者的 ATR 倍數與多頭版共用同一組常數——衡量的是同一件事（做市商結構
+        被穿透的幅度），沒有理由對空頭採用不同靈敏度。
+
+        LVN 吸附同樣鏡像：多頭把落在流動性真空的停損往**下**推到次級 HVN 上緣
+        之上；做空把落在真空的停損往**上**推到次級 HVN 下緣之下。流動性真空區
+        的價格會被一次貫穿，停損留在裡面等於保證滑價。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        atr_15m = float(metrics.get("atr_15m", 0.0))
+        lvn = float(metrics.get("lvn", 0.0))
+        hvn = float(metrics.get("hvn", 0.0))
+
+        if anchor_short > 0:
+            raw_stop_loss = anchor_short + (
+                _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT * atr_15m
+            )
+        else:
+            raw_stop_loss = spot * 1.04 if spot > 0 else 0.0
+
+        base_stop_loss = raw_stop_loss
+
+        if lvn > 0 and base_stop_loss > 0 and abs(base_stop_loss - lvn) / lvn <= 0.015:
+            secondary_hvn = float(metrics.get("secondary_hvn", 0.0))
+            target_hvn = 0.0
+            if secondary_hvn > lvn:
+                target_hvn = secondary_hvn
+            elif hvn > lvn:
+                target_hvn = hvn
+            elif anchor_short > lvn:
+                target_hvn = anchor_short
+
+            if target_hvn > 0:
+                base_stop_loss = target_hvn - (0.2 * atr_15m)
+            else:
+                base_stop_loss = lvn + (1.0 * atr_15m)
+
+        # 保本地板的鏡像：空頭的棘輪是「停損只會往下降、不會再退回成本以上」，
+        # 故取 min 而非 max。
+        ratchet_stop = float(metrics.get("ratchet_stop", 0.0) or 0.0)
+        if ratchet_stop > 0:
+            base_stop_loss = min(base_stop_loss, ratchet_stop)
+
+        stop_loss = round(base_stop_loss, 2)
+        limit_price = round(
+            min(stop_loss + (0.5 * atr_15m if atr_15m > 0 else 0.6), stop_loss * 1.005),
+            2,
+        )
+
+        if anchor_short > 0 and atr_15m > 0:
+            extreme_stop_loss = round(
+                anchor_short + (_ANTI_WASHOUT_EXTREME_ATR_MULT * atr_15m), 2
+            )
+        else:
+            extreme_stop_loss = 0.0
+
+        return (stop_loss, limit_price, extreme_stop_loss)
+
+    def _evaluate_microstructure_tp_ladder_short(
+        self, metrics: dict
+    ) -> Tuple[Optional[str], float, str]:
+        """做空部位的止盈分層 (TP1/TP2/TP3)，優先序 TP3 > TP2 > TP1。
+
+        完整鏡像多頭版，目標牆由 Call Wall 換成 Put Wall：
+          TP1 現價跌至 Put Wall × 1.005 以內；
+          TP2 跌破 Put Wall 達 1.5%，或 Put Wall **向下遷移** >= 3% 且現價
+              已跌破舊底牆（牆往下搬 = 做市商讓出更多下行空間）；
+          TP3 Delta <= −0.85（深價內 Pinning 風險）、DTE <= 5、或 15m VWAP
+              帶量**收復**（空頭的趨勢耗竭訊號，鏡像多頭的 VWAP 帶量失守）。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        put_wall = float(metrics.get("put_wall", 0.0))
+        delta_raw = metrics.get("delta")
+        delta: Optional[float] = float(delta_raw) if delta_raw is not None else None
+        vwap_reclaim_with_volume = bool(metrics.get("vwap_reclaim_with_volume", False))
+        dte = int(metrics.get("dte", 99))
+
+        if put_wall <= 0 or spot <= 0:
+            return None, 0.0, ""
+
+        wall_break_pct = (put_wall - spot) / put_wall
+        is_tp1 = spot <= put_wall * (2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT)
+        previous_put_wall = float(metrics.get("previous_put_wall") or 0.0)
+        is_wall_break = wall_break_pct >= _MICROSTRUCTURE_TP2_WALL_BREAK_PCT
+        is_wall_migrated_down = (
+            previous_put_wall > 0
+            and put_wall
+            <= previous_put_wall * (1.0 - _MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT)
+            and spot <= previous_put_wall  # 現價必須跌穿舊底牆，確認破位成立
+        )
+        is_tp2 = is_wall_break or is_wall_migrated_down
+        is_tp3_delta = (
+            delta is not None and delta <= -_MICROSTRUCTURE_TP3_DELTA_THRESHOLD
+        )
+        is_tp3_dte = 0 < dte <= _MICROSTRUCTURE_TP3_DTE_THRESHOLD
+        is_tp3 = is_tp3_delta or vwap_reclaim_with_volume or is_tp3_dte
+
+        if is_tp3:
+            triggers = []
+            if is_tp3_delta and delta is not None:
+                triggers.append(
+                    f"Delta {delta:.2f} <= -{_MICROSTRUCTURE_TP3_DELTA_THRESHOLD}"
+                )
+            if vwap_reclaim_with_volume:
+                triggers.append("15m VWAP 帶量收復")
+            if is_tp3_dte:
+                triggers.append(f"DTE={dte} <= {_MICROSTRUCTURE_TP3_DTE_THRESHOLD}")
+            return (
+                "TP3",
+                _MICROSTRUCTURE_TP3_RATIO,
+                f"🎯 **TP3-終局回補**：{' 或 '.join(triggers)}，空頭動能耗竭，"
+                f"消除非線性 Theta 耗損與做市商 Pinning 釘住風險，執行 "
+                f"{_MICROSTRUCTURE_TP3_RATIO:.0%} 回補。",
+            )
+        if is_tp2:
+            if is_wall_migrated_down:
+                migration_pct = (put_wall - previous_put_wall) / previous_put_wall
+                return (
+                    "TP2",
+                    _MICROSTRUCTURE_TP2_RATIO,
+                    f"🎯 **TP2-空間擴展**：做市商支撐牆向下遷移 ${previous_put_wall:.2f} → ${put_wall:.2f} "
+                    f"({migration_pct:+.1%})，現價 ${spot:.2f} 跌穿舊支撐位，釋放下行 Gamma 空間，"
+                    f"執行 {_MICROSTRUCTURE_TP2_RATIO:.0%} 回補。",
+                )
+            return (
+                "TP2",
+                _MICROSTRUCTURE_TP2_RATIO,
+                f"🎯 **TP2-空間擴展**：現價已跌穿 Put Wall ${put_wall:.2f} 達 "
+                f"{wall_break_pct:+.2%}（>= {_MICROSTRUCTURE_TP2_WALL_BREAK_PCT:.1%}），"
+                f"釋放負 Gamma 踩踏利潤、防範滯留反抽，執行 "
+                f"{_MICROSTRUCTURE_TP2_RATIO:.0%} 回補。",
+            )
+        if is_tp1:
+            return (
+                "TP1",
+                _MICROSTRUCTURE_TP1_RATIO,
+                f"🎯 **TP1-支撐初探**：現價 ${spot:.2f} 已觸及 Put Wall ${put_wall:.2f} 的 "
+                f"{2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%} 範圍內，做市商空頭避險動能竭盡，"
+                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 回補。",
+            )
+        return None, 0.0, ""
+
+    def _evaluate_microstructure_sl_ladder_short(
+        self,
+        metrics: dict,
+        anchor_short: float,
+        stop_loss: float,
+        asset_class: str,
+    ) -> Tuple[Optional[str], float, str, Optional[float]]:
+        """做空部位的止損分層，由硬到軟：
+        SL-結構失效 > SL-狀態翻轉 > SL-主力對沖 > SL-動態保本。
+
+        三處方向反轉（其餘與多頭版逐字對稱）：
+          * SL-結構失效：現價**升穿**停損（多頭是跌破）。
+          * SL-狀態翻轉：Net GEX **>= 0**——做市商回到正 Gamma 會買跌賣漲吸收
+            波動，順勢助跌的拋壓路徑消失，做空的結構前提消亡。
+          * SL-主力對沖：近平值單筆 **CALL BTO** 大單（做市商須買進現貨對沖，
+            即逼空起點），見 structural_signals.py::_detect_whale_call_bto_block。
+        """
+        spot = float(metrics.get("spot_price", 0.0))
+        price_15m_close = float(metrics.get("price_15m_close", spot))
+        put_wall = float(metrics.get("put_wall", 0.0))
+        net_gex_raw = metrics.get("net_gex")
+        net_gex = float(net_gex_raw) if net_gex_raw is not None else None
+        is_whale_call_block = bool(metrics.get("is_whale_call_block", False))
+        avg_cost = float(metrics.get("avg_cost", 0.0))
+
+        is_structural_break = (
+            (spot > 0 and spot > stop_loss)
+            if asset_class == "OPTIONS"
+            else (price_15m_close > 0 and price_15m_close > stop_loss)
+        ) and stop_loss > 0
+        if is_structural_break:
+            return (
+                "SL_STRUCTURAL",
+                1.0,
+                f"🚨 **SL-結構失效**："
+                f"{'現價即時升穿' if asset_class == 'OPTIONS' else '15m 實體收盤站上'} "
+                f"防守線 (${stop_loss:.2f} = 錨點 ${anchor_short:.2f} + "
+                f"{_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT}×ATR_15m)，回到正 Gamma 區，"
+                "做市商加速買進對沖，強制 100% 回補。",
+                None,
+            )
+
+        # net_gex 為 None（資料缺失，而非「已抓到且確認 >= 0」）時 fail-safe
+        # 不觸發，理由與多頭版完全相同。
+        if net_gex is not None and net_gex >= _MICROSTRUCTURE_SL_NET_GEX_THRESHOLD:
+            return (
+                "SL_REGIME_FLIP",
+                1.0,
+                f"🚨 **SL-狀態翻轉**：個股 Net GEX 已回正為 {net_gex:+,.0f}"
+                f"（>= {_MICROSTRUCTURE_SL_NET_GEX_THRESHOLD:.0f}），"
+                "做市商轉為正 Gamma 吸收波動，順勢助跌路徑消失，強制 100% 回補。",
+                None,
+            )
+
+        if is_whale_call_block:
+            return (
+                "SL_WHALE_CALL",
+                1.0,
+                "🚨 **SL-主力對沖**：偵測到近平值單筆 CALL BTO 大單"
+                "（權利金 >= $500k 且 Vol/OI >= 1.5x），機構級大單推升，"
+                "做市商產生即時多頭對沖，逼空風險，強制 100% 回補。",
+                None,
+            )
+
+        # SL-動態保本：現價跌幅達距 Put Wall 空間之 50%，停損下移至保本點
+        if 0 < put_wall < anchor_short and spot > 0:
+            progress = (anchor_short - spot) / (anchor_short - put_wall)
+            if progress >= _MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT:
+                new_stop = (
+                    anchor_short if avg_cost <= 0 else min(avg_cost, anchor_short)
+                )
+                approx_note = (
+                    "（期權部位無單筆成本基礎資料，以結構錨點近似保本點）"
+                    if avg_cost <= 0
+                    else ""
+                )
+                return (
+                    "SL_TRAILING_BREAKEVEN",
+                    0.0,
+                    f"🛡️ **SL-動態保本**：現價距 Put Wall 空間已達 {progress:.0%}"
+                    f"（>= {_MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT:.0%}），"
+                    f"停損下移至保本點 ${new_stop:.2f}{approx_note}，"
                     "鎖定基礎成本，消除本金承險敞口。",
                     new_stop,
                 )
@@ -498,8 +829,12 @@ class _AntiWashoutMixin:
         # 矛盾。真實案例：TSLA 現價同時站上 Call Wall (獲利解鎖) 且跌破以 GEX
         # Support Wall 算出的極端熔斷線，過去在此處會回傳 True，讓 embed 呈現
         # 「獲利了結」內文配「立即人工執行」急迫標題的錯亂訊息。
+        # 方向分流：多頭是現價**跌破**極端熔斷線，空頭是現價**升穿**。
+        _is_short = self._resolve_position_side(metrics) == "SHORT"
         is_extreme_tick_breach = not tp_tier and (
-            spot < extreme_stop_loss if (extreme_stop_loss > 0 and spot > 0) else False
+            (spot > extreme_stop_loss if _is_short else spot < extreme_stop_loss)
+            if (extreme_stop_loss > 0 and spot > 0)
+            else False
         )
 
         fired_tier: Optional[str] = None
@@ -517,10 +852,11 @@ class _AntiWashoutMixin:
             sell_ratio = 1.0
             system_conflict_note = (
                 f"🆘 **極端瞬時停損觸發**：標的現價 (${spot:.2f}) 貫穿極端防守位 "
-                f"(${extreme_stop_loss:.2f} = ${anchor_base:.2f} - "
+                f"(${extreme_stop_loss:.2f} = ${anchor_base:.2f} "
+                f"{'+' if _is_short else '-'} "
                 f"{_ANTI_WASHOUT_EXTREME_ATR_MULT}× ATR_15m)，無視 15m 實體收盤"
-                f"等待，立即市價平倉轉入 {final_target}（現貨與期權皆適用的"
-                "最後防線，阻斷突發黑天鵝與流動性真空滑步）。"
+                f"等待，立即市價{'回補' if _is_short else '平倉'}轉入 {final_target}"
+                "（現貨與期權皆適用的最後防線，阻斷突發黑天鵝與流動性真空滑步）。"
             )
             options_strategy = f"100% LIQUIDATE / STC (極端瞬時停損轉入 {final_target})"
             fired_tier = "EXTREME_TICK_BREACH"
@@ -1084,9 +1420,17 @@ async def check_satellite_rebalancing_impl(
                 "iv_term_structure_status"
             )
 
-            # 計算比例
+            # 計算比例。current_value 對空頭部位為負值，但「部位佔帳戶多少
+            # 比重」是資本佔用的量值，與方向無關，故取絕對值。
+            #
+            # 早期版本用帶號值：空頭的 current_alloc 恆為負，於是下方的
+            # `current_alloc > max_alloc` 永遠為 False——衛星部位再平衡**永遠
+            # 無法削減一個過大的空頭**，而 sell_ratio = excess_value /
+            # current_value 若真的執行到也會因分母為負而翻號。
             current_alloc: float = (
-                current_value / total_account_value if total_account_value > 0 else 0.0
+                abs(current_value) / total_account_value
+                if total_account_value > 0
+                else 0.0
             )
 
             gex_profile_data = asset.get("gex_profile_data", {})
@@ -1173,6 +1517,24 @@ async def check_satellite_rebalancing_impl(
                 "is_whale_put_block": is_whale_put_block,
                 "session_vwap": session_vwap,
                 "vwap_reclaim_with_volume": vwap_reclaim_with_volume,
+                # 部位方向：沿用既有的「股數為負即空頭」慣例
+                # (portfolio_monitor.py:445)，不新增 migration 欄位。出場矩陣的
+                # 四個入口 (_correct_wall_topology / _compute_anti_washout_stop /
+                # TP ladder / SL ladder) 皆依此分流至鏡像版。
+                "quantity": quantity,
+                # 空頭部位的 SL-主力對沖訊號：近平值單筆 CALL BTO 大單（逼空
+                # 起點）。多頭版的 is_whale_put_block 由
+                # _compute_structural_breakdown_signals 一併算出；空頭版走獨立
+                # 的偵測器，只在確實是空頭部位時才掃描，避免對多頭部位增加
+                # 一次無意義的 UOA 走訪。
+                "is_whale_call_block": (
+                    _detect_whale_call_bto_block(uoa_list, spot)
+                    if quantity < 0
+                    else False
+                ),
+                # 空頭 TP2 的牆體遷移判定用：做市商支撐牆向下遷移。與多頭的
+                # previous_call_wall 對稱，資料來源同為呼叫端快取。
+                "previous_put_wall": float(asset.get("previous_put_wall", 0.0) or 0.0),
             }
 
             # 微觀結構出場決策矩陣：TP 分層 (TP1/TP2/TP3) 與 SL 分層 (SL-結構
@@ -1195,7 +1557,10 @@ async def check_satellite_rebalancing_impl(
             # 在此先行計算，唯一用途是確保它對「所有」部位通用——包含下方
             # 交由 Transition Engine 接管的已標記部位。
             is_extreme_breach_gate = (
-                (not tp_tier) and extreme_gate > 0 and spot > 0 and spot < extreme_gate
+                (not tp_tier)
+                and extreme_gate > 0
+                and spot > 0
+                and (spot > extreme_gate if quantity < 0 else spot < extreme_gate)
             )
 
             # ----------------------------------------------------
@@ -1302,7 +1667,11 @@ async def check_satellite_rebalancing_impl(
                     "target_allocation_pct", max_alloc
                 )
                 excess_value = excess_alloc * total_account_value
-                sell_ratio = excess_value / current_value
+                # 分母同步取絕對值，與上方 current_alloc 的量值語意一致；
+                # 否則空頭部位會算出負的 sell_ratio。
+                sell_ratio = (
+                    excess_value / abs(current_value) if current_value != 0 else 0.0
+                )
 
                 report = await engine._generate_rule_based_rebalance_report(
                     symbol,

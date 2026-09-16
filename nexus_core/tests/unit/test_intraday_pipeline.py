@@ -133,8 +133,39 @@ def test_analyze_ticker_spear_route(  # type: ignore
     # 分數凱利硬上限 5.0% (VIX < 15)
     assert output.kelly_position_scaling == 0.05
     assert "SPEAR" in output.recommended_actions[0]
-    # 現價 173.5，滿足 >= 5% 向上空間 (182.175) 且為 5 的倍數之目標價為 185.0
-    assert output.magnet_target == 185.0
+    # default_market_data 刻意不帶 put_wall/atr（向後相容的既有 fixture），
+    # 動態門檻降級至 3.5% 絕對底線：現價 173.5 -> 最低目標 179.57，
+    # 向上取 5 的倍數得 180.0。門檻確實生效於動態推導的案例見下方
+    # test_analyze_ticker_magnet_target_uses_dynamic_threshold。
+    assert output.magnet_target == 180.0
+
+
+def test_analyze_ticker_magnet_target_uses_dynamic_threshold(  # type: ignore
+    squeeze_engine: Any,
+    default_market_data: Any,
+    default_account_state: Any,
+    default_holdings: Any,
+    default_greeks: Any,
+):
+    """帶齊 put_wall/ATR 時，磁吸目標價須依動態門檻推導，而非固定 5%。
+
+    現價 173.5、PutWall 165、ATR₁₅ₘ 1.5 -> Stop = 164.25、Risk = 5.33%，
+    門檻 = max(2.2×5.33%, 1.5×(7/173.5), 3.5%) = 11.73%
+    -> 最低目標 193.85 -> 向上取 5 的倍數得 195.0。
+    固定 5% 門檻下只會要求 182.18（取整 185），兩者明顯可區分。
+    """
+    default_market_data.put_wall = 165.0
+    default_market_data.atr_15m = 1.5
+    default_market_data.atr_1d = 7.0
+
+    output = squeeze_engine.analyze_ticker(
+        data=default_market_data,
+        account_state=default_account_state,
+        options_holdings=default_holdings,
+        portfolio_greeks=default_greeks,
+        market_phase="Phase B",
+    )
+    assert output.magnet_target == 195.0
 
 
 def test_analyze_ticker_shield_vix_gated(  # type: ignore

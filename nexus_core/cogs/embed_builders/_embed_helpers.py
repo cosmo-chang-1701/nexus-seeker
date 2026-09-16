@@ -640,7 +640,11 @@ def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):
     # 🚀 方向校正邏輯：
     # 若是賣方 (STO)，部位方向 = 合約方向 * -1
     # 若是買方 (BTO)，部位方向 = 合約方向
-    pos_multiplier = -1 if "STO" in strategy else 1
+    from market_analysis.risk_engine import is_short_exposure_strategy
+
+    # 與 risk_engine 的 NRO 倉位模型共用同一個方向判定，避免呈現層與計算層
+    # 對同一筆交易給出相反的方向。
+    pos_multiplier = -1 if is_short_exposure_strategy(strategy) else 1
     pos_weighted_shares = weighted_delta * pos_multiplier
 
     embed.add_field(

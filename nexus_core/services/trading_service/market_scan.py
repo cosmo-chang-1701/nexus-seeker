@@ -12,7 +12,10 @@ import market_math
 from config import get_vix_tier
 from market_analysis import portfolio, hedging
 from market_analysis.gap_analysis import GapAnalyzer
-from market_analysis.risk_engine import optimize_position_risk
+from market_analysis.risk_engine import (
+    optimize_position_risk,
+    is_short_exposure_strategy,
+)
 from services import market_data_service, news_service
 from models.execution import MarketCondition, Signal
 
@@ -301,7 +304,9 @@ class MarketScanMixin:
                             opt_data["nro_warnings"] = opt_res.warnings
 
                         # 模擬成交後的衝擊
-                        side_multiplier = -1 if "STO" in strategy else 1
+                        side_multiplier = (
+                            -1 if is_short_exposure_strategy(strategy) else 1
+                        )
                         new_trade_impact = (
                             opt_data.get("weighted_delta", 0.0)
                             * side_multiplier

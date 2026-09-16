@@ -852,16 +852,32 @@ class IntradayScanPipeline:
 
             # GEX 結構與 Call Wall
             call_wall = None
+            put_wall = None
             net_gex = None
             gex_profile = None
             try:
                 gex_data = await fetch_symbol_gex_metrics(ticker)
                 if gex_data:
                     call_wall = gex_data.get("call_wall")
+                    put_wall = gex_data.get("put_wall")
                     net_gex = gex_data.get("net_gex")
                     gex_profile = gex_data.get("gex_profile")
             except Exception as e:
                 logger.debug(f"[{ticker}] 抓取 GEX 數據失敗: {e}")
+
+            # 動態自適應波動率空間門檻 (room_threshold.py 公式 A) 所需的兩項 ATR。
+            # 磁吸目標價的向上空間要求已自硬編碼 5% 改為依此推導，缺失時
+            # room_threshold 會降級至 3.5% 絕對底線並在 veto 文案中揭露。
+            atr_15m_val: float | None = None
+            atr_1d_val: float | None = None
+            try:
+                from market_analysis.atr_utils import fetch_atr_15m, fetch_atr_1d
+
+                atr_15m_val, atr_1d_val = await asyncio.gather(
+                    fetch_atr_15m(ticker), fetch_atr_1d(ticker)
+                )
+            except Exception as e:
+                logger.debug(f"[{ticker}] 抓取動態空間門檻 ATR 失敗: {e}")
 
             # 全鏈 STO 物理封頂
             physical_cap_strikes = None
@@ -898,6 +914,9 @@ class IntradayScanPipeline:
                 net_gex=net_gex,
                 gex_profile=gex_profile,
                 physical_cap_strikes=physical_cap_strikes,
+                put_wall=put_wall,
+                atr_15m=atr_15m_val,
+                atr_1d=atr_1d_val,
             )
         except Exception as e:
             logger.error(f"Failed to fetch market data for {ticker}: {e}")

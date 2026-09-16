@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any, Deque, Dict, List, Optional, Tuple
 
 from market_time import ny_tz
+from market_analysis.room_threshold import compute_dynamic_room_threshold
 from market_analysis.models.trader_models import (
     TraderAccountState,
     OptionHolding,
@@ -157,8 +158,26 @@ class NexusGammaSqueezeEngine:
             runway_status_msg = f"🔴 🚨 財務跑道極度危險！僅剩 {financial_runway_days} 天，期權 Theta 覆蓋率僅 {theta_coverage_pct:.1f}%，觸發存活熔斷，嚴禁建立期權買方部位！"
 
         # 4. Gamma 磁吸目標價演算與微觀結構否決 (GEX Peak & Asymmetric Payoff)
+        # 向上空間要求自硬編碼的固定 5% (spot * 1.05) 升級為動態自適應波動率
+        # 門檻 (market_analysis/room_threshold.py 公式 A)：
+        #     Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
+        #     Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+        # 固定 5% 對 ATR 4% 的高波標的等同沒有盈虧比保護、對 ATR 0.8% 的低波
+        # 標的又是遙不可及的天花板；改為由該標的自身下行風險反推後，SPEAR 進攻
+        # 訊號的 2.2:1 盈虧比成為結構性保證。
         spot = data.spot_price
-        min_target_price = spot * 1.05  # 向上空間必須滿足 >= 5% 的非對稱獲利要求
+        room = compute_dynamic_room_threshold(
+            spot,
+            data.put_wall or 0.0,
+            data.atr_15m or 0.0,
+            data.atr_1d or 0.0,
+            direction="LONG",
+        )
+        room_threshold_pct = room.threshold_pct
+        min_target_price = spot * (1.0 + room_threshold_pct)
+        room_degrade_suffix = (
+            f"（⚠️ {room.degrade_reason}）" if room.degrade_reason else ""
+        )
         magnet_target: Optional[float] = None
         microstructure_veto = False
         veto_reasons: List[str] = []
@@ -191,7 +210,7 @@ class NexusGammaSqueezeEngine:
                 "微觀結構否決：標的處於負 Gamma 泥淖 (Net GEX < 0)，做市商順向拋壓阻礙上行"
             )
 
-        # 若 Call Wall 空間不足 5% 或遭遇天量 STO 封頂，阻力牆壓頂，同樣予以否決
+        # 若 Call Wall 空間不足動態門檻或遭遇天量 STO 封頂，阻力牆壓頂，同樣予以否決
         if (
             not microstructure_veto
             and data.call_wall is not None
@@ -200,7 +219,9 @@ class NexusGammaSqueezeEngine:
             if data.call_wall < min_target_price:
                 microstructure_veto = True
                 veto_reasons.append(
-                    f"空間不足否決：Call Wall (${data.call_wall:.2f}) 距現價 (${spot:.2f}) 向上空間不足 5%，不滿足非對稱獲利要求"
+                    f"空間不足否決：Call Wall (${data.call_wall:.2f}) 距現價 (${spot:.2f}) "
+                    f"向上空間不足動態門檻 {room_threshold_pct:.2%}，不滿足非對稱獲利要求"
+                    f"{room_degrade_suffix}"
                 )
             elif _is_severe_sto_cap(data.call_wall):
                 microstructure_veto = True
@@ -210,7 +231,7 @@ class NexusGammaSqueezeEngine:
 
         if not microstructure_veto:
             if data.gex_profile:
-                # 尋找現價上方且空間 >= 5% 的實體正 Gamma 深度節點 (GEX Peak)
+                # 尋找現價上方且空間 >= 動態門檻的實體正 Gamma 深度節點 (GEX Peak)
                 candidate_peaks: List[Tuple[float, float]] = []
                 for k_str, gex_val in data.gex_profile.items():
                     try:
@@ -235,12 +256,15 @@ class NexusGammaSqueezeEngine:
                 if not target_found:
                     microstructure_veto = True
                     veto_reasons.append(
-                        "微觀結構否決：現價上方無具備實體正 Gamma 深度 (GEX Peak) 且空間 >= 5% 之安全磁吸目標（候選履約價均沉澱負 Gamma 斷層或遭遇 > 1.0x OI 之天量 STO 封頂）"
+                        f"微觀結構否決：現價上方無具備實體正 Gamma 深度 (GEX Peak) 且"
+                        f"空間 >= {room_threshold_pct:.2%} (動態門檻) 之安全磁吸目標"
+                        f"（候選履約價均沉澱負 Gamma 斷層或遭遇 > 1.0x OI 之天量 STO 封頂）"
+                        f"{room_degrade_suffix}"
                     )
             elif data.call_wall is not None and data.call_wall > 0:
                 magnet_target = data.call_wall
             else:
-                # 降級純代數計算：仍強制滿足 >= 5% 空間
+                # 降級純代數計算：仍強制滿足 >= 動態門檻的空間
                 candidate = float(math.ceil(min_target_price / 5.0) * 5.0)
                 if candidate < min_target_price:
                     candidate += 5.0

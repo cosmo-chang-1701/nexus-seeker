@@ -83,3 +83,28 @@ def compute_atr_14_from_daily_df(df_daily: Optional[Any]) -> float:
     except Exception as e:
         logger.warning(f"日線 ATR(14) 就地計算失敗: {e}")
         return 0.0
+
+
+async def fetch_atr_1d(symbol: str) -> float:
+    """計算日線 K 棒 ATR(14)，供動態自適應空間門檻的單日波幅項使用。
+
+    與 `fetch_atr_15m()` 刻意分開的兩點：
+      1. **不 force_refresh**。日線 ATR 的量級在盤中幾乎不動，`get_history_df()`
+         對 `period="1y", interval="1d"` 的既有快取足以覆蓋整個交易日；每個候選
+         標的都強制重抓一年份日線是純粹的浪費。
+      2. 抓取區間沿用 repo 既有的 `period="1y"` 慣例（見
+         `intraday_pipeline/metrics.py` 與 `cogs/unified_terminal/radar_data.py`），
+         不另立新的視窗長度。
+
+    呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、EnhancedWatchlistMetrics
+    等皆已攜帶），只有真的取不到才呼叫本函式。資料不足或任何例外一律 fail-safe
+    回傳 0.0，語意與 `fetch_atr_15m()` 一致。
+    """
+    try:
+        df_daily = await market_data_service.get_history_df(
+            symbol, period="1y", interval="1d"
+        )
+        return compute_atr_14_from_daily_df(df_daily)
+    except Exception as e:
+        logger.warning(f"[{symbol}] ATR_1D 計算失敗: {e}")
+        return 0.0

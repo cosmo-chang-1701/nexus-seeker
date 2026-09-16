@@ -125,5 +125,5 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
   - 右側突破引用與 Fallback 替代：`_confirm_entry_condition1_breakout()`（第 55–255 行）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：
-  - 4-Regime 路由引用：`classify_dynamic_regime()`
+  - 5-Regime 路由引用：`classify_dynamic_regime()`
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：Symbol Hub 個股 GEX Flip 線呈現

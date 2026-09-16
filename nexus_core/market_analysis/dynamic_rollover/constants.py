@@ -104,9 +104,10 @@ _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT: float = (
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
     1.5  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
 )
-_ENTRY_ASYMMETRIC_ROOM_PCT: float = (
-    0.05  # 條件三：Call Wall 距現價須保留的最低非對稱獲利空間 (帶正負號距離)
-)
+# ⚠️ 已退役：條件三的非對稱獲利空間門檻已自固定 5% 升級為動態自適應波動率門檻，
+#   唯一實作在 market_analysis/room_threshold.py::compute_dynamic_room_threshold()
+#   （公式 A：max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)）。此處刻意不留
+#   常數，避免有人「順手」把它接回去而讓固定值與動態值再度分歧。
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
 _ENTRY_UOA_MIN_RATIO: float = (
     0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
@@ -317,17 +318,10 @@ _LEFT_ENTRY_UOA_CHASE_RATIO_THRESHOLD: float = 1.2  # 追空踩踏 PUT BTO 的 r
 _LEFT_ENTRY_UOA_CHASE_MIN_PREMIUM_USD: float = (
     200_000.0  # 追空踩踏 PUT BTO 的最低權利金
 )
-_LEFT_ENTRY_ASYMMETRIC_ROOM_PCT: float = 0.035  # 向上均值回歸空間門檻 (3.5%)
-# ⚠️ 校準備註：文獻規格宣稱此 3.5% 是「在停損設於 Put Wall 下方 1% 的前提下，
-# 隱含風報比達 3:1 以上」，但該推導只在現價幾乎正好貼齊 Put Wall 時成立。
-# 令 d = (Spot-PutWall)/Spot、停損 = PutWall × 0.99，則風險 = 0.01 + 0.99d：
-#   d = 0      → 風險 1.00%  → R:R 3.50 ✅
-#   d = +1.5%  → 風險 2.49%  → R:R 1.41 ❌ (條件二允許的上界)
-#   d = -1.0%  → 風險 0.01%  → 停損落在進場價下方 0.01%，數學上退化
-# 即 R:R >= 3 僅在 d <= 0.168% 時成立。本引擎目前**沒有**實作那個
-# 「PutWall 下方 1%」的停損 (左側部位仍走 anti_washout.py 的錨點停損體系)，
-# 故此處僅是門檻本身；若日後真要實作該停損並保證整個密著帶都有 3:1，需將本
-# 門檻提高至約 7.5%、或把 _LEFT_ENTRY_PUT_WALL_UPPER_PCT 收斂至 0.17% 左右。
+# ⚠️ 已退役：左側條件三的向上均值回歸空間門檻原為固定 3.5%，並附有一段校準備註
+#   坦承「宣稱 3:1 R:R 實際只在現價貼齊 Put Wall ±0.168% 時成立」。該備註連同
+#   常數一併移除——動態門檻 (room_threshold.py 公式 A) 已由 2.2 × Risk_actual
+#   結構性保證盈虧比，3.5% 降級為 max() 的絕對底線而非主要判據。
 # 條件四：主力大額 PUT STO 接刀或長天期 CALL BTO 佈局
 _LEFT_ENTRY_PUT_STO_MIN_DTE: int = 14
 _LEFT_ENTRY_PUT_STO_MIN_RATIO: float = 1.0
@@ -356,12 +350,12 @@ _REGIME_I_RSI_MAX: float = 30.0
 _REGIME_I_PUT_WALL_LOWER_PCT: float = -0.01
 _REGIME_I_PUT_WALL_UPPER_PCT: float = 0.015
 # Regime III 右側動能態
-_REGIME_III_CALL_WALL_MIN_ROOM_PCT: float = 0.05
 _REGIME_III_SUPPORT_WALL_MAX_DIST_PCT: float = 0.05
 _REGIME_III_RSI_MIN: float = 55.0
 _REGIME_III_VOLUME_SURGE_MULT: float = 1.5
 # Regime IV 結構封頂／危機態 (最優先判定，全面鎖定態)
-_REGIME_IV_CALL_WALL_PROXIMITY_PCT: float = 0.05
+# Regime III/IV 的 Call Wall 空間門檻同樣改由 room_threshold.py 公式 A 推導，
+# 常數已退役（政策不變：路由層與進場確認層仍各自獨立呼叫，共用的是演算法而非旋鈕）。
 # VIX 期限結構深度倒掛 (front-month 溢價於 3-month 超過 10%)。與左側條件五的
 # _LEFT_ENTRY_VTS_BACKWARDATION_RATIO 數值相同但刻意分開命名：前者決定「盤勢
 # 是否已進入全面鎖定態」(路由層)，後者是「六重鐵律本身是否放行」(進場確認層)，
@@ -381,3 +375,50 @@ _TRANSITION_PATH1_VWAP_VOLUME_MULT: float = (
 # (與 TP3 的 vwap_loss_with_volume 共用同一次 get_confirmed_15m_bar 呼叫結果)，
 # 結果以 metrics["vwap_reclaim_with_volume"] 布林值傳入 transition_engine.py；
 # 後者只在文案中引用本常數。調整此值時請一併確認該處。
+
+# --- 做空六重嚴格過濾鐵律 (short_side_entry.py::_confirm_short_entry_signal) 具名常數 ---
+# 結構性破位追空／做市商負 Gamma 順勢助跌，組裝方式完全比照右側 (opportunity_cost.py)
+# 與左側 (left_side_entry.py) 六重鐵律，技術定義全面鏡像：右側要求 15m 實體陽線收盤
+# 站上 Gamma Flip，做空要求實體陰線收盤跌破 Gamma Flip。
+#
+# ⚠️ 本系統在此之前**完全沒有空頭方向的進場路徑**。左側 (LEFT_SIDE) 雖然技術定義
+# 與右側相反，本質仍是做多（Put Wall 底牆接刀、向上回歸空間、Bull Call Spread）。
+# 新增本組常數等同新增一個方向性風險完全相反的子系統，上線前請留意風險揭露段落。
+#
+# 條件一：結構性放量破位確認
+_SHORT_ENTRY_VOLUME_SURGE_MULTIPLIER: float = 1.5  # 「放量」門檻，須達回看均量的 1.5 倍（與右側 _ENTRY_VOLUME_SURGE_MULTIPLIER 同值）
+# 條件二：做市商負 Gamma 頂牆完好
+# 阻力牆的物理定義約束與支撐牆完全鏡像：Resistance Wall = argmax_{K > Spot}(Net GEX(K))，
+# 掃描範圍強制約束在現價上方，避免把下方的支撐牆誤當成上方的壓制頂牆。
+# 牆體厚度門檻沿用既有的 GEX_THIN_WALL_THRESHOLD (500k) 薄紙牆判定慣例。
+# 緩衝距離判定走 room_threshold.evaluate_wall_buffer(profile="SHORT")，無獨立常數。
+#
+# 條件三：下行獲利空間 + 無主力接刀
+_SHORT_ENTRY_UOA_CATCH_RATIO_THRESHOLD: float = 1.2  # 主力 PUT STO 接刀單的 ratio 門檻（鏡像左側 _LEFT_ENTRY_UOA_CHASE_RATIO_THRESHOLD）
+_SHORT_ENTRY_UOA_CATCH_MIN_PREMIUM_USD: float = (
+    200_000.0  # 主力 PUT STO 接刀單的最低權利金
+)
+# 條件四：主力跨週期賣壓認證 (PUT BTO 或 CALL STO)
+_SHORT_ENTRY_UOA_MIN_DTE: int = 7  # 驅動進場的主力 UOA 賣壓最低 DTE 要求
+_SHORT_ENTRY_UOA_MIN_RATIO: float = 0.8  # 最低 ratio (volume/OI) 要求
+_SHORT_ENTRY_UOA_MIN_NOTIONAL_USD: float = 200_000.0  # 最低權利金名目金額要求
+# 條件六：Candidate 自身效期與 IVR 分流
+_SHORT_ENTRY_CANDIDATE_MIN_DTE: int = (
+    14  # 嚴禁 0~14 DTE 合約：破位後常有劇烈反抽，需承受回測前高的震盪期
+)
+_SHORT_ENTRY_IVR_SPREAD_THRESHOLD: float = (
+    50.0  # IVR > 此值改建議 Bear Call Spread (改當賣方)，避免恐慌高隱波下買 Long Put
+)
+_SHORT_ENTRY_DTE_BAND_SHORT: tuple[int, int] = (14, 30)
+_SHORT_ENTRY_DTE_BAND_SWING: tuple[int, int] = (30, 60)
+
+# --- Regime V 破位追空態 (regime_classifier.py) 具名常數 ---
+# 與上方 _SHORT_ENTRY_* 刻意分開命名而不合併重用，比照 _REGIME_I_* / _REGIME_III_*
+# 與 _LEFT_ENTRY_* / _ENTRY_* 的既有分層慣例：本組是「是否進入破位追空盤勢」的
+# 路由層分類門檻，_SHORT_ENTRY_* 是「六重鐵律本身」的進場確認門檻，語意不同
+# （前者決定路由，後者決定是否真的允許下單），未來可各自獨立調整。
+_REGIME_V_RSI_MAX: float = 45.0  # 15m RSI < 此值視為動能偏空
+# ⚠️ 校準備註：45.0 是對 _REGIME_III_RSI_MIN = 55.0 的鏡像推導值 (以 50 為軸對稱)，
+# **未經歷史回測校準**。破位追空的假訊號成本高於右側動能（空頭軋空的尾部風險
+# 不對稱），上線後應優先觀察此門檻的實際觸發率與勝率再行調整。
+_REGIME_V_VOLUME_SURGE_MULT: float = 1.5

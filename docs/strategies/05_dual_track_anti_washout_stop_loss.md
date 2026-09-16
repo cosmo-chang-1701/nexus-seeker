@@ -102,6 +102,40 @@ $$
    $$
    停損點上移至保本點：$\text{New Stop} = \max(\text{Average Cost}, \; \text{Anchor Base})$。
 
+### 2.7 做空部位鏡像矩陣
+
+做空部位（股數／口數為負）走完整鏡像的同一套矩陣，方向全面反轉。多頭路徑在位元層級完全不變——鏡像以「另立方法 + 入口分流」實作，而非在既有方法內埋方向分支。
+
+| 分層 | 多頭 | 做空（鏡像） |
+| :--- | :--- | :--- |
+| 錨點 | $\text{AnchorBase}$ = 下方支撐牆階梯 | $\text{AnchorShort}$ = 上方阻力頂牆階梯 |
+| 拓撲逆轉修復 | $\min(\text{PutWall}, \text{CallWall})$ | $\max(\text{PutWall}, \text{CallWall})$ |
+| 軌道一 SL-結構失效 | $\text{Anchor} - 0.5 \times \text{ATR}_{15m}$ | $\text{Anchor} + 0.5 \times \text{ATR}_{15m}$ |
+| 軌道二極端瞬時停損 | $\text{Anchor} - 3.0 \times \text{ATR}_{15m}$ | $\text{Anchor} + 3.0 \times \text{ATR}_{15m}$ |
+| 結構失效觸發方向 | 現價**跌破**停損 | 現價**升穿**停損 |
+| SL-狀態翻轉 | $\text{NetGEX} \le 0$ | $\text{NetGEX} \ge 0$（做市商回到正 Gamma 吸收波動，順勢助跌路徑消失） |
+| SL-主力對沖 | 近平值大額 **PUT** BTO | 近平值大額 **CALL** BTO（逼空起點） |
+| SL-動態保本 | $\dfrac{\text{Spot} - \text{Anchor}}{\text{CallWall} - \text{Anchor}} \ge 0.5$ | $\dfrac{\text{Anchor} - \text{Spot}}{\text{Anchor} - \text{PutWall}} \ge 0.5$ |
+| 保本棘輪 | $\max(\cdot)$，停損只上移 | $\min(\cdot)$，停損只下移 |
+| TP1 | $\text{Spot} \ge \text{CallWall} \times 0.995$ | $\text{Spot} \le \text{PutWall} \times 1.005$ |
+| TP2 | 突破 CallWall $1.5\%$ 或牆**上**移 $3\%$ | 跌破 PutWall $1.5\%$ 或牆**下**移 $3\%$（資料通路見 §5.7） |
+| TP3 | $\Delta \ge 0.85$、DTE $\le 5$、VWAP 帶量**失守** | $\Delta \le -0.85$、DTE $\le 5$、VWAP 帶量**收復** |
+| LVN 吸附 | 往**下**推至次級 HVN 上緣 $+0.2 \times \text{ATR}_{15m}$ | 往**上**推至次級 HVN 下緣 $-0.2 \times \text{ATR}_{15m}$ |
+
+ATR 倍數與名目金額門檻刻意與多頭版共用同一組常數——衡量的是同一件事（做市商結構被穿透的幅度、單筆近平值巨鯨大單的異常程度），沒有理由對空頭採用不同的靈敏度。
+
+**部位方向識別**：沿用既有的「股數／口數為負即空頭」慣例，**不新增資料庫欄位**。四個入口（`_correct_wall_topology` / `_compute_anti_washout_stop` / TP ladder / SL ladder）皆依此分流；未標記方向的既有部位一律視為多頭，確保零行為變化。
+
+### 2.8 與動態空間門檻的停損墊片同步不變式
+
+動態自適應波動率空間門檻（[`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 A/B）的 $\text{Risk}_{\text{actual}}$ 與緩衝距離，量的都是「現價到**軌道一**停損」的距離：
+
+$$\text{Stop} = \text{Wall} \mp 0.5 \times \text{ATR}_{15m}, \qquad 0.5 \equiv \text{\_MICROSTRUCTURE\_SL\_STRUCTURAL\_ATR\_MULT}$$
+
+**兩者必須恆等**。早期版本的公式 A 依文獻規格使用 $1.5$，與本規格書的 $0.5$ 脫鉤，造成兩個後果：$\text{Risk}_{\text{actual}}$ 系統性高估真實停損距離（門檻過嚴，實測使「應保留進場格點」的保留率自 $100\%$ 掉到 $92.5\%$），且 $2.2:1$ 從可直接驗證的實際盈虧比退化成無法驗證的保守下界。
+
+修改 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` 時必須同步 `_ROOM_STOP_ATR_15M_MULTIPLIER`，否則門檻會再次與真實停損脫鉤。軌道二的 $3.0$ 不參與此不變式——它是黑天鵝最後防線，不是常規停損。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -177,7 +211,13 @@ flowchart TD
 3. **Net GEX 資料缺失之 Fail-Safe**：
    在判定 SL-狀態翻轉時，若 `net_gex is None`（代表端點抓取失敗或數據未初始化，而非數值已確認為負），系統一律不觸發該止損，防止因網路抖動對全體健康部位造成災難性清倉。
 4. **LVN 絕對吸附防呆**：
-   若計算出的停損點與 LVN 價位重合，演算法堅持使用量價支撐節點進行絕對吸附，禁止使用無微觀意義的固定百分比平移。
+   若計算出的停損點與 LVN 價位重合，演算法堅持使用量價支撐節點進行絕對吸附，禁止使用無微觀意義的固定百分比平移。做空鏡像時吸附方向反轉——把落在流動性真空的停損往**上**推，流動性真空區的價格會被一次貫穿，停損留在裡面等於保證滑價。
+5. **極端瞬時停損的方向分流**：
+   `_apply_decision_matrix` 內的 `is_extreme_tick_breach` 與外層 gate 皆依部位方向分流：多頭是 $\text{Spot} < \text{ExtremeStop}$，做空是 $\text{Spot} > \text{ExtremeStop}$。兩處定義必須保持一致，否則會出現「外層判定已熔斷、內層卻按一般流程處理」的分歧。
+6. **牆體遷移判定的資料通路依賴**：
+   TP2 的「牆體遷移」分支依賴跨週期持久化的 `previous_call_wall` / `previous_put_wall`（`market_cache` 欄位，分別由 `v069` 與 `v074` 建立）。若該欄位缺失或為 0，遷移分支會**靜默**退回單純的 $1.5\%$ 突破／跌破判定——不會報錯，只會少一條觸發路徑。做空側在 `v074` 之前正是處於這個狀態。新增鏡像分層時務必一併確認資料通路存在，否則等於寫了一段永遠不會執行的程式碼。
+7. **做空部位的組合層風控缺口**：
+   `risk_engine/` 的 Beta 加權 Delta、VIX 戰情階梯、動態分數凱利模型皆建立在「全部部位為多頭」的假設上。做空部位存在時組合層指標可能失真——淨 Delta 會被做空部位抵銷，但凱利分數仍以多頭勝率推導。這是已知且待後續處理的缺口。
 
 ---
 

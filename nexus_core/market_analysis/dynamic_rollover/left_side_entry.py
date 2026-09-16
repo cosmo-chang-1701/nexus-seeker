@@ -4,11 +4,15 @@ from typing import Any, Dict, Optional, Tuple
 
 from market_analysis.atr_utils import compute_atr_15m_from_df
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.room_threshold import (
+    compute_dynamic_room_threshold,
+    evaluate_wall_buffer,
+)
 
 from . import logger
+from ._shared import resolve_room_threshold_inputs
 from .constants import (
     _ENTRY_VOLUME_LOOKBACK_BARS,
-    _LEFT_ENTRY_ASYMMETRIC_ROOM_PCT,
     _LEFT_ENTRY_CALL_BTO_MIN_DTE,
     _LEFT_ENTRY_CALL_BTO_MIN_NOTIONAL_USD,
     _LEFT_ENTRY_CALL_BTO_MIN_RATIO,
@@ -232,6 +236,8 @@ def _confirm_left_entry_condition2_put_wall_test(
     gex_profile_data: Any,
     target_spot: float,
     reasons: list,
+    atr_15m: float = 0.0,
+    atr_1d: float = 0.0,
 ) -> bool:
     """左側條件二：做市商 Put Wall / 負 Gamma 吸附牆密著截擊。
 
@@ -240,6 +246,16 @@ def _confirm_left_entry_condition2_put_wall_test(
     曝險值。改用該履約價絕對 GEX 曝險量級是否超過 _LEFT_ENTRY_PUT_WALL_GEX_
     PROXY_THRESHOLD 代理門檻（比照既有 GEX_THIN_WALL_THRESHOLD 薄紙牆判定
     慣例），作為「防禦厚度」的近似代理，非真實 OI 名目金額。
+
+    Liquidity Sweep 防護：在既有的密著帶判定之上，額外疊加一道依標的波動率
+    伸縮的緩衝雙邊界檢查（room_threshold.evaluate_wall_buffer，profile="LEFT"，
+    即下界 0.5×ATR₁₅ₘ、上界絕對 8%）。左側下界刻意遠低於右側的 2.5×——貼牆
+    截擊本質上緩衝就極薄，若沿用右側倍率會與上方的密著帶
+    [_LEFT_ENTRY_PUT_WALL_LOWER_PCT, _LEFT_ENTRY_PUT_WALL_UPPER_PCT]
+    = [-1.0%, +1.5%] 互斥，導致左側六重鐵律永遠無法通過本條件。
+
+    ATR 兩項皆不可得時 evaluate_wall_buffer 會退回固定上限判定，此時本道檢查
+    對密著帶內的標的必然放行，行為與本次改版前一致。
     """
     put_wall = (
         float(gex_profile_data.get("put_wall", 0.0) or 0.0)
@@ -272,14 +288,23 @@ def _confirm_left_entry_condition2_put_wall_test(
 
     is_thick_wall = wall_gex_magnitude >= _LEFT_ENTRY_PUT_WALL_GEX_PROXY_THRESHOLD
 
-    c2_passed = is_densely_attached and is_thick_wall
+    buffer = evaluate_wall_buffer(
+        target_spot, put_wall, atr_15m, atr_1d, profile="LEFT"
+    )
+    c2_passed = is_densely_attached and is_thick_wall and buffer.passed
+    buffer_tag = {
+        "TOO_TIGHT": "緩衝過窄，易遭 Liquidity Sweep 掃損",
+        "TOO_WIDE": "緩衝過寬，停損距離超出單日波幅",
+        "SWEET_SPOT": "緩衝落在甜蜜點",
+    }[buffer.state]
+    degrade_suffix = f"｜⚠️ {buffer.degrade_reason}" if buffer.degrade_reason else ""
     reasons.append(
         f"左側條件二{'✅' if c2_passed else '❌'}：現價 ${target_spot:.2f} 距 Put Wall "
         f"${put_wall:.2f} {dist_pct:+.2%}"
         f"（{'密著區間內' if is_densely_attached else '未密著'}），防禦厚度代理值 "
         f"${wall_gex_magnitude:,.0f} {'>=' if is_thick_wall else '<'} "
         f"${_LEFT_ENTRY_PUT_WALL_GEX_PROXY_THRESHOLD:,.0f} "
-        f"(⚠️GEX曝險量級代理，非真實OI名目金額)"
+        f"(⚠️GEX曝險量級代理，非真實OI名目金額)，{buffer_tag}{degrade_suffix}"
     )
     return c2_passed
 
@@ -290,8 +315,21 @@ def _confirm_left_entry_condition3_no_panic_cliff(
     target_spot: float,
     session_vwap: float,
     reasons: list,
+    atr_15m: float = 0.0,
+    atr_1d: float = 0.0,
 ) -> bool:
-    """左側條件三：下檔無恐慌踩踏斷崖 + 向上均值回歸空間 >= 3.5%。"""
+    """左側條件三：下檔無恐慌踩踏斷崖 + 向上均值回歸空間達動態門檻。
+
+    回歸空間門檻自固定 3.5% 升級為動態自適應波動率門檻（見
+    market_analysis/room_threshold.py 公式 A）：
+
+        Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
+        Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+
+    舊版 3.5% 附有一段校準備註坦承「宣稱 3:1 R:R 實際只在現價貼齊 Put Wall
+    ±0.168% 時成立」——左側條件二允許的密著帶上界 +1.5% 處實際 R:R 僅 1.41。
+    改為動態門檻後，密著帶內任一位置的盈虧比都由 2.2 × Risk_actual 直接保證，
+    3.5% 降格為 max() 的絕對底線而非主要判據。"""
     put_wall = (
         float(gex_profile_data.get("put_wall", 0.0) or 0.0)
         if isinstance(gex_profile_data, dict)
@@ -336,7 +374,11 @@ def _confirm_left_entry_condition3_no_panic_cliff(
 
     reference_level = min(candidates)
     room_pct = (reference_level - target_spot) / target_spot
-    has_room = room_pct >= _LEFT_ENTRY_ASYMMETRIC_ROOM_PCT
+    room = compute_dynamic_room_threshold(
+        target_spot, put_wall, atr_15m, atr_1d, direction="LONG"
+    )
+    has_room = room_pct >= room.threshold_pct
+    degrade_suffix = f"｜⚠️ {room.degrade_reason}" if room.degrade_reason else ""
 
     c3_passed = (not has_chase_selloff) and has_room
     if has_chase_selloff:
@@ -347,14 +389,15 @@ def _confirm_left_entry_condition3_no_panic_cliff(
         )
     elif not has_room:
         reasons.append(
-            f"左側條件三❌：回歸空間 {room_pct:+.2%} 不足 "
-            f"{_LEFT_ENTRY_ASYMMETRIC_ROOM_PCT:.1%}"
-            f"（參考 min(VWAP,GammaFlip)=${reference_level:.2f}）"
+            f"左側條件三❌：回歸空間 {room_pct:+.2%} 不足動態門檻 "
+            f"{room.threshold_pct:.2%}"
+            f"（參考 min(VWAP,GammaFlip)=${reference_level:.2f}）{degrade_suffix}"
         )
     else:
         reasons.append(
-            f"左側條件三✅：無追空踩踏，回歸空間 {room_pct:+.2%}"
-            f"（參考 min(VWAP,GammaFlip)=${reference_level:.2f}）"
+            f"左側條件三✅：無追空踩踏，回歸空間 {room_pct:+.2%} "
+            f"(動態門檻 {room.threshold_pct:.2%})"
+            f"（參考 min(VWAP,GammaFlip)=${reference_level:.2f}）{degrade_suffix}"
         )
     return c3_passed
 
@@ -580,11 +623,36 @@ async def _confirm_left_entry_signal(
         df_15m=df_15m,
         atr_15m=atr_15m,
     )
+    # 動態空間門檻 (room_threshold.py 公式 A/B) 所需輸入在此一次解析，同時餵給
+    # 條件二與條件三，避免兩者各自抓取而取到不同快照。條件一已把實際用到的
+    # 15m frame 回傳為 _df_15m_used，優先沿用它（與呼叫端傳入的 df_15m 可能不同
+    # ——條件一在 df_15m 為 None 時會自行抓取）。
+    _pw, _atr15, _atr1d = await resolve_room_threshold_inputs(
+        candidate_symbol,
+        candidate_radar,
+        gex_profile_data,
+        _df_15m_used if _df_15m_used is not None else df_15m,
+    )
+    if atr_15m is not None and atr_15m > 0:
+        # 呼叫端 (Regime 分類器) 已就地算好同一份 frame 的 ATR₁₅ₘ，原樣沿用以
+        # 確保「盤勢分類」與「進場確認」建立在同一份資料快照上。
+        _atr15 = atr_15m
     c2_passed = _confirm_left_entry_condition2_put_wall_test(
-        candidate_symbol, gex_profile_data, target_spot, reasons
+        candidate_symbol,
+        gex_profile_data,
+        target_spot,
+        reasons,
+        atr_15m=_atr15,
+        atr_1d=_atr1d,
     )
     c3_passed = _confirm_left_entry_condition3_no_panic_cliff(
-        uoa_list, gex_profile_data, target_spot, session_vwap, reasons
+        uoa_list,
+        gex_profile_data,
+        target_spot,
+        session_vwap,
+        reasons,
+        atr_15m=_atr15,
+        atr_1d=_atr1d,
     )
     c4_passed = _confirm_left_entry_condition4_smart_money_absorption(
         uoa_list, target_spot, reasons

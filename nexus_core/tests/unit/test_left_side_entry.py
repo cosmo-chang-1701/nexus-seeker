@@ -80,10 +80,19 @@ _NEAR_EXPIRY = (datetime.now().date() + timedelta(days=3)).strftime("%Y-%m-%d")
 def _left_candidate_radar() -> dict:
     """左側六重鐵律全數通過的候選標的基準 fixture：現價 $95 密著 Put Wall
     $95（區間 -1%~+1.5%），Put Wall 曝險量級 $6M（>= 5M 代理門檻），無追空
-    踩踏 PUT BTO，含一筆符合條件四門檻的 PUT STO 護盤單。"""
+    踩踏 PUT BTO，含一筆符合條件四門檻的 PUT STO 護盤單。
+
+    條件二的緩衝雙邊界 (profile="LEFT") 量的是**停損距離**而非牆距：
+    ΔS = 1.5×ATR₁₅ₘ/95 ≈ 2.3%，落在 [1.0×ATR₁₅ₘ/95 ≈ 1.5%, 1.2×2.5/95 ≈ 3.2%]
+    之內。左側量停損距離的理由見 room_threshold.py::_BUFFER_MEASURE。"""
     return {
         "quote": {"c": 95.0},
         "iv_metrics": {"iv_rank": 20.0},
+        # 動態空間門檻 (room_threshold.py) 的日線 ATR 輸入。若不顯式提供，
+        # resolve_room_threshold_inputs 會呼叫 fetch_atr_1d，在測試中會落到被
+        # patch 的 get_history_df 上而取到 15m frame 的 ATR 當日線用，造成
+        # 「ATR₁D ≈ ATR₁₅ₘ」這個現實中不可能的組合，使緩衝上界退化。
+        "atr_14": 2.5,
         "gex_profile_data": {
             "put_wall": 95.0,
             "call_wall": 110.0,
@@ -563,7 +572,12 @@ class TestOrchestrator:
             patch(
                 "market_analysis.vwap_utils.fetch_session_vwap",
                 new_callable=AsyncMock,
-                return_value=100.0,
+                # 103.0（原為 100.0）：條件三的回歸空間門檻改為動態值後，
+                # reference = min(VWAP, GammaFlip) = VWAP，空間 (100-95)/95
+                # = 5.26% 僅略高於門檻 5.07%，餘裕過薄。改為 103 後空間
+                # 8.42% 有足夠餘裕，且條件一的乖離判定仍成立
+                # (95 <= 103 - 1.5×1.46 = 100.81)。
+                return_value=103.0,
             ),
             patch("database.calendar_cache.get_cached_earnings", return_value=None),
             patch(
@@ -612,7 +626,12 @@ class TestOrchestrator:
             patch(
                 "market_analysis.vwap_utils.fetch_session_vwap",
                 new_callable=AsyncMock,
-                return_value=100.0,
+                # 103.0（原為 100.0）：條件三的回歸空間門檻改為動態值後，
+                # reference = min(VWAP, GammaFlip) = VWAP，空間 (100-95)/95
+                # = 5.26% 僅略高於門檻 5.07%，餘裕過薄。改為 103 後空間
+                # 8.42% 有足夠餘裕，且條件一的乖離判定仍成立
+                # (95 <= 103 - 1.5×1.46 = 100.81)。
+                return_value=103.0,
             ),
         ):
             confirmed, reason, directive = await _confirm_left_entry_signal(

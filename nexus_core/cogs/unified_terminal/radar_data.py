@@ -474,6 +474,11 @@ class RadarDataMixin:
                 or radar_cache.get("previous_call_wall")
                 or 0.0
             ),
+            "previous_put_wall": float(
+                market_cache.get("previous_put_wall")
+                or radar_cache.get("previous_put_wall")
+                or 0.0
+            ),
             "gex_metrics": {
                 "put_wall": put_wall,
                 "call_wall": call_wall,
@@ -648,14 +653,17 @@ class RadarDataMixin:
             else 0.0
         )
 
-        # 持久化 call_wall 至 market_cache 供做市商阻力牆跨週期遷移追蹤 (TP2)
+        # 持久化 call_wall / put_wall 至 market_cache 供做市商牆體跨週期遷移
+        # 追蹤 (多頭 TP2 用阻力牆向上遷移、做空 TP2 用支撐牆向下遷移)
         c_wall_val = (
             float(gex_data.get("call_wall", 0.0) or 0.0)
             if isinstance(gex_data, dict)
             else 0.0
         )
+        p_wall_val = float(pw_strike or 0.0)
         prev_call_wall_val = 0.0
-        if c_wall_val > 0:
+        prev_put_wall_val = 0.0
+        if c_wall_val > 0 or p_wall_val > 0:
             try:
                 from database.market_cache import save_market_cache, get_market_cache
 
@@ -675,13 +683,19 @@ class RadarDataMixin:
                     if isinstance(mp_data, dict)
                     else 0.0,
                     reference_spot_price=price,
-                    call_wall=c_wall_val,
+                    call_wall=c_wall_val or None,
+                    put_wall=p_wall_val or None,
                 )
                 cached_mc = await asyncio.to_thread(get_market_cache, sym)
-                if cached_mc and cached_mc.get("previous_call_wall") is not None:
-                    prev_call_wall_val = float(cached_mc["previous_call_wall"] or 0.0)
+                if cached_mc:
+                    if cached_mc.get("previous_call_wall") is not None:
+                        prev_call_wall_val = float(
+                            cached_mc["previous_call_wall"] or 0.0
+                        )
+                    if cached_mc.get("previous_put_wall") is not None:
+                        prev_put_wall_val = float(cached_mc["previous_put_wall"] or 0.0)
             except Exception as cw_err:
-                logger.warning(f"[{sym}] 寫入 market_cache call_wall 失敗: {cw_err}")
+                logger.warning(f"[{sym}] 寫入 market_cache 牆體失敗: {cw_err}")
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
         if mp_data.get("is_stale"):
@@ -828,6 +842,7 @@ class RadarDataMixin:
             "uoa": uoa_data,
             "uoa_age_seconds": 0.0,
             "previous_call_wall": prev_call_wall_val,
+            "previous_put_wall": prev_put_wall_val,
             "gex_profile_data": {
                 "put_wall": gex_data.get("put_wall")
                 if isinstance(gex_data, dict)
@@ -836,6 +851,7 @@ class RadarDataMixin:
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "previous_call_wall": prev_call_wall_val,
+                "previous_put_wall": prev_put_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
@@ -856,6 +872,7 @@ class RadarDataMixin:
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "previous_call_wall": prev_call_wall_val,
+                "previous_put_wall": prev_put_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,
@@ -917,6 +934,7 @@ class RadarDataMixin:
                 if isinstance(gex_data, dict)
                 else 0.0,
                 "previous_call_wall": prev_call_wall_val,
+                "previous_put_wall": prev_put_wall_val,
                 "net_gex": gex_data.get("net_gex")
                 if isinstance(gex_data, dict)
                 else 0.0,

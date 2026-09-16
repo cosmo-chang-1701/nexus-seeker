@@ -71,15 +71,27 @@ $$
 
 ---
 
-### 2.3 Gamma 磁吸目標價 (Magnet Target)
-在 Gamma 擠壓啟動時，做市商對沖買盤將推動現價向上磁吸至下一個整數期權履約價：
+### 2.3 Gamma 磁吸目標價 (Magnet Target) 與微觀結構否決
+
+在 Gamma 擠壓啟動時，做市商對沖買盤將推動現價向上磁吸至上方具備實體正 Gamma 深度的履約價。目標價的搜尋下界不再是固定的 $5\%$ 非對稱要求，而是**動態自適應波動率門檻**（完整推導見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md) 公式 A）：
+
 $$
-\text{Magnet Target} = \lceil\text{Spot} / 5.0\rceil \times 5.0
+\text{MinTarget} = \text{Spot} \times \big(1 + \text{Threshold}_{\text{dynamic}}\big)
 $$
-若計算結果與現價過於貼近（$|\text{Magnet Target} - \text{Spot}| < 0.01$），向上順延一個履約價區間：
+
 $$
-\text{Magnet Target} = \text{Magnet Target} + 5.0
+\text{Threshold}_{\text{dynamic}} = \max\Big(2.2 \times \text{Risk}_{\text{actual}},\ 1.5 \times \frac{\text{ATR}_{1D}}{\text{Spot}},\ 0.035\Big), \qquad \text{Risk}_{\text{actual}} = \frac{\text{Spot} - (\text{PutWall} - 1.5 \times \text{ATR}_{15m})}{\text{Spot}}
 $$
+
+固定 $5\%$ 對單日 ATR 達 $4\%$ 的高波標的等同沒有盈虧比保護、對單日 ATR 僅 $0.8\%$ 的低波標的又是遙不可及的天花板；改由該標的自身下行風險反推後，SPEAR 進攻訊號的 $2.2:1$ 盈虧比成為結構性保證。
+
+目標價的選取與否決依資料可得性分三層：
+
+1. **GEX Profile 可得**：在 $K \ge \text{MinTarget}$ 且 $\text{NetGEX}(K) > 0$ 的候選中，依正 GEX 深度降序取第一個未遭天量 STO 剛性封頂者。全數候選皆沉澱負 Gamma 斷層或遭封頂時，觸發微觀結構否決（SDDM 路由強制 SHIELD）。
+2. **僅有 Call Wall**：直接採用 Call Wall；若 $\text{CallWall} < \text{MinTarget}$ 則觸發「空間不足否決」。
+3. **降級純代數計算**：$\text{Magnet Target} = \lceil \text{MinTarget} / 5.0 \rceil \times 5.0$，仍強制滿足動態門檻。
+
+全鏈 $\text{NetGEX} < 0$（負 Gamma 泥淖，做市商順向拋壓阻礙上行）一律優先否決，不進入上述三層。
 
 ---
 
@@ -202,6 +214,7 @@ flowchart TD
 | `Gate 3 Floor` | `$500,000.0` | 盤後歸因進化放寬之最低絕對下限 | `nexus_core/market_analysis/gamma_squeeze_engine.py` |
 | `Gate 3 Ceiling` | `$2,000,000.0` | 盤後歸因進化收緊之最高絕對上限 | `nexus_core/market_analysis/gamma_squeeze_engine.py` |
 | `base_kelly` | `0.25` ($25\%$) | 基準分數凱利倉位配比 | `nexus_core/market_analysis/gamma_squeeze_engine.py` |
+| `_ROOM_RISK_MULTIPLIER` / `_ROOM_ATR_1D_MULTIPLIER` / `_ROOM_ABSOLUTE_FLOOR_PCT` | `2.2` / `1.5` / `0.035` | 磁吸目標價的動態向上空間門檻；取代硬編碼的 `spot * 1.05` | `nexus_core/market_analysis/room_threshold.py` |
 | `VIX Panic Line` | `25.0` | 全局強制切換 SHIELD 避險之 VIX 門檻 | `nexus_core/market_analysis/gamma_squeeze_engine.py` |
 | `d_vol` | `0.10` ($10\%$) | Vanna 對沖計算之盤中波動率預期瞬時漂移量 | `nexus_core/market_analysis/gamma_squeeze_engine.py` |
 | `protection_history_maxlen` | `252` | 盤後歸因歷史記錄長度上限（約 1 個交易年） | `nexus_core/market_analysis/gamma_squeeze_engine.py` |

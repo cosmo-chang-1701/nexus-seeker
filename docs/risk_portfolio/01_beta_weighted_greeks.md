@@ -19,6 +19,18 @@ Gamma 衡量 Delta 隨標的價格變動的加速度。當從個別標的資產 
 3. **Daily Theta（每日無風險時間價值現金流）**。
 當組合熱度逼近警戒上限（80%）時，風控系統將自動觸發部位縮減或反向指數期權對沖（VTR 對沖機制）。
 
+### 1.4 多空共存下的「帶號 vs 量值」二分原則
+做空進場系統（`SHORT_SIDE` / Regime V，見 [`../strategies/07_short_side_breakdown_ironclad.md`](../strategies/07_short_side_breakdown_ironclad.md)）上線後，投資組合中同時存在多頭與空頭部位。此時本篇所有公式必須嚴格區分兩類量：
+
+| 類別 | 語意 | 處理 | 代表 |
+| :--- | :--- | :--- | :--- |
+| **帶號量（方向性）** | 「方向性曝險是多少、往哪一邊」 | **保留正負號**，空頭自然貢獻負值 | $\Delta_{\text{SPY}}$、各階 Greeks 加總、Delta Dollars |
+| **量值（資本佔用）** | 「佔用了多少資本 / 曝險絕對規模多大」 | **取絕對值** | Portfolio Heat、配置比例、保證金、帳戶總資本 |
+
+混用這兩者是本區最常見的缺陷來源。若對「資本佔用」類的量採用帶號加總，多空部位會互相抵銷，使帳戶測得規模縮小，連帶**高估**其餘每一個部位的配置比例；反之若對「方向性曝險」取絕對值，一個 $100\%$ 淨空頭的帳戶會與 $100\%$ 淨多頭的帳戶在所有讀數上完全無法區分。
+
+**部位方向的權威來源是 `quantity` 的正負號**（全系統慣例，見 [`../../AGENTS.md`](../../AGENTS.md) 的「部位方向語意」一節），不是策略字串。
+
 ---
 
 ## 2. 數學模型與量化推導
@@ -57,6 +69,15 @@ $$\Delta_{\text{portfolio, SPY}} = \sum_{k \in \text{Positions}} \Delta_{\text{S
 #### 4. 美元淨曝險 (Delta Dollars) 與組合熱度 (Portfolio Heat)
 $$\text{Delta Dollars} = \Delta_{\text{portfolio, SPY}} \times S_{\text{SPY}}$$
 $$\text{Portfolio Heat \%} = \frac{|\Delta_{\text{portfolio, SPY}}| \times S_{\text{SPY}}}{\text{Total Capital}} \times 100\%$$
+
+兩式的符號處理刻意不同，對應 §1.4 的二分原則：Delta Dollars **保留正負號**（負值即淨空頭美元曝險），Portfolio Heat 取**絕對值**（熱度是曝險規模，與方向無關）。分母 $\text{Total Capital}$ 同樣是量值——`calculate_auto_capital()` 對每一筆持倉取 $|\text{quantity}| \times \text{cost}$ 後加總，空頭不得從總資本中扣除自身名目，否則會壓縮所有百分比的共同分母。
+
+#### 5. 空頭現貨的保證金佔用 (Reg-T)
+保證金是本篇唯一「以量值計、且只有空頭才非零」的項目：
+
+$$\text{Margin}_{\text{short stock}} = S_{\text{current}} \times |\text{quantity}| \times 0.50$$
+
+乘數為 $1$ 而非 $100$（現貨以股計價，非合約）。此項匯入 $\text{total\_margin\_used}$ 後決定 `portfolio_heat`，而 heat 是系統「是否允許開新倉」的主要煞車——任何一種空頭部位若在保證金模型中回傳 $0$，該煞車對它就完全失效。
 
 ### 2.4 二階 Beta 加權 Gamma 連鎖律二次微商數學推導
 設投資組合在標的 $i$ 上的期權總價值為 $V_i$。依據定義：
@@ -142,6 +163,7 @@ flowchart TD
 | `DAYS_IN_YEAR` | `365.0` | 年化 Theta 轉化為每日時間價值消耗的分母常數 | `nexus_core/market_analysis/portfolio.py` |
 | `PORTFOLIO_HEAT_LIMIT` | `80.0\%` | 總淨 Delta 美元曝險佔帳戶總資產的安全預警紅線 | `nexus_core/market_analysis/risk_engine.py` |
 | `CONTRACT_MULTIPLIER` | `100` | 標準美股期權合約乘數 | `nexus_core/market_analysis/portfolio.py` |
+| `_REG_T_SHORT_STOCK_INITIAL_MARGIN_RATE` | `0.50` ($50\%$) | 空頭現貨 Reg-T 初始保證金比例；乘數為 $1$ 非 $100$ | `nexus_core/market_analysis/margin.py` |
 
 ---
 
@@ -158,7 +180,12 @@ weight_factor = (
 ```
 若基準價無效，加權因子安全退回 `0.0`，並阻斷倉位開立。
 
-### 5.2 深度價外持倉期權鏈保留原則 (No-Pruning Contract Guarantee)
+### 5.2 持倉列過濾不得使用 `quantity > 0`
+`get_all_portfolio()` 早期以 `if qty > 0` 過濾現貨持倉列，使空頭現貨對整條下游管線**完全隱形**——它不會出現在盤後報告、`audit_real_portfolio_risk()`，也不會計入任何一項組合層指標。這類缺陷不會報錯，只會安靜地少算。
+
+正確的排除條件是 `qty != 0`（零股數無意義）。下游的 Greeks 加總本來就吃帶號 `quantity`，不需要額外處理。同理，`/add_holding` 的輸入驗證只應拒絕 `quantity == 0`，負股數即空頭現貨。
+
+### 5.3 深度價外持倉期權鏈保留原則 (No-Pruning Contract Guarantee)
 在計算歷史持倉 Greeks 時，部分持倉在建倉後現價可能已產生巨大位移，合約淪為深度價外（DOTM）或深度價內（DITM）。若行情抓取時套用常規的履約價範圍裁剪（如只抓 ATM $\pm 10\%$），這些真實持倉合約將憑空從期權鏈中消失，導致 Greeks 暴跌失真。`portfolio.py:162` 嚴格要求：
 ```python
 option_chains_cache[expiry] = await get_option_chain(
@@ -178,4 +205,7 @@ option_chains_cache[expiry] = await get_option_chain(
 - **單一期權合約 Greeks 求解器**:
   - `nexus_core/market_analysis/greeks.py`: `calculate_greeks()`, `calculate_vanna()` (lines 22–88)
 - **保證金佔用與槓桿計算**:
-  - `nexus_core/market_analysis/portfolio.py`: `calculate_option_margin()`
+  - `nexus_core/market_analysis/margin.py`: `calculate_option_margin()`（全資產類別入口：空頭選擇權走既有公式，空頭現貨走 Reg-T 初始保證金）
+  - `nexus_core/market_analysis/portfolio.py`: 選擇權分支與現貨分支各自匯入 `total_margin_used`
+  - `nexus_core/database/user_settings.py`: `calculate_auto_capital()`（總資本取量值）
+  - `nexus_core/tests/unit/test_short_position_risk.py`: 方向感知化的迴歸鎖定

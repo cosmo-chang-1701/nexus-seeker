@@ -3,7 +3,7 @@ test_gamma_squeeze_spear_audit.py — 針對 Gamma 擠壓 SPEAR 進攻訊號 7 �
 
 測試覆蓋：
 1. 決策邏輯全局風控覆蓋機制 (Global Risk Override / Hard Lock)
-2. 目標價與微觀結構校準 (GEX Peak, >= 5% 空間, STO 剛性物理封頂與負 GEX 否決)
+2. 目標價與微觀結構校準 (GEX Peak, 動態自適應空間門檻, STO 剛性物理封頂與負 GEX 否決)
 3. 波動率體制即時判定 (IVR > 50% 高波劇烈洗盤環境，嚴禁溫和標籤，限制裸買 OTM)
 4. Phase A 開盤時段加權修正 (門檻調高 30%，RVOL_15m >= 1.5 右側驗證)
 5. 門檻微觀代理指標採樣 (RVOL_15m，DTE >= 7 且 Vol/OI >= 0.8x 主力單)
@@ -99,7 +99,15 @@ def test_item1_global_risk_override_hard_lock(
 def test_item2_target_price_positive_gex_peak(
     engine: NexusGammaSqueezeEngine, base_account: TraderAccountState
 ) -> None:
-    """Gamma 磁吸目標必須為具備實體正 Gamma 深度之節點 (GEX Peak)，且向上空間 >= 5%"""
+    """Gamma 磁吸目標必須為具備實體正 Gamma 深度之節點 (GEX Peak)，且向上空間
+    達動態自適應波動率門檻。
+
+    本案例帶齊 put_wall/ATR，動態門檻實際生效：
+      Stop = 96 - 0.5×0.5 = 95.75 -> Risk = 4.25%
+      門檻 = max(2.2×4.25%, 1.5×2%, 3.5%) = 9.35%
+    故 $102 (2%)、$105 (5%) 皆被排除；$110 (10%) 達標且為正 GEX 最高峰。
+    這正是固定 5% 與動態門檻可區分之處：舊版會連 $105 一起放行。
+    """
     data = TickerMarketData(
         ticker="AAPL",
         spot_price=100.0,
@@ -109,16 +117,19 @@ def test_item2_target_price_positive_gex_peak(
         tomorrow_expiring_otm_calls_premium=1500000.0,
         iv_rank=30.0,
         option_skew=0.06,
-        # 102.0: 空間 2% (< 5%) 不得選
-        # 105.0: 空間 5%, GEX 10k
-        # 110.0: 空間 10%, GEX 50k (Peak)
-        # 115.0: 負 GEX 斷層 (-20k)
+        # 102.0: 空間 2%，低於動態門檻 9.35%，不得選
+        # 105.0: 空間 5%，同樣低於動態門檻 (舊版固定 5% 會放行)
+        # 110.0: 空間 10% 達標，且為正 GEX 最高峰 -> 磁吸目標
+        # 115.0: 負 GEX 斷層
         gex_profile={
             "102.0": 80000.0,
             "105.0": 10000.0,
             "110.0": 50000.0,
             "115.0": -20000.0,
         },
+        put_wall=96.0,
+        atr_15m=0.5,
+        atr_1d=2.0,
     )
     output = engine.analyze_ticker(
         data=data,
@@ -128,7 +139,47 @@ def test_item2_target_price_positive_gex_peak(
         market_phase="Phase B",
     )
     assert output.sddm_route == "SPEAR"
-    assert output.magnet_target == 110.0  # 空間 >= 5% 且正 GEX 最高峰
+    assert output.magnet_target == 110.0
+
+
+def test_item2_target_price_positive_gex_peak_with_loose_threshold(
+    engine: NexusGammaSqueezeEngine, base_account: TraderAccountState
+) -> None:
+    """同一組 GEX Profile，但 Put Wall 貼近現價使動態門檻放鬆至 3.5% 底線時，
+    磁吸目標應正常落在正 GEX 最高峰 $110。
+
+    Stop = 99.8 - 0.75 = 99.05 -> Risk = 0.95% -> 2.2×0.95% = 2.09%
+    門檻 = max(2.09%, 1.5×0.5% = 0.75%, 3.5%) = 3.5% (由絕對底線接管)
+    """
+    data = TickerMarketData(
+        ticker="AAPL",
+        spot_price=100.0,
+        market_cap_billion=2500.0,
+        avg_option_volume=100000,
+        days_until_earnings=20,
+        tomorrow_expiring_otm_calls_premium=1500000.0,
+        iv_rank=30.0,
+        option_skew=0.06,
+        gex_profile={
+            "102.0": 80000.0,
+            "105.0": 10000.0,
+            "110.0": 50000.0,
+            "115.0": -20000.0,
+        },
+        put_wall=99.8,
+        atr_15m=0.5,
+        atr_1d=0.5,
+    )
+    output = engine.analyze_ticker(
+        data=data,
+        account_state=base_account,
+        options_holdings=[],
+        portfolio_greeks={"vanna": 0.5, "beta": 1.0},
+        market_phase="Phase B",
+    )
+    assert output.sddm_route == "SPEAR"
+    # $102 (2%) 仍低於 3.5% 底線被排除；$105 與 $110 達標，取正 GEX 最高峰
+    assert output.magnet_target == 110.0
 
 
 def test_item2_tsla_microstructure_veto_due_to_sto_and_negative_gex(
