@@ -76,7 +76,8 @@ def _compress_profile(gex_profile: dict[str, float], spot: float) -> bytes:
 def _get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_MS / 1000.0)
     conn.row_factory = sqlite3.Row
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # PRAGMA 無法參數化；數值來自模組常數並經 int() 強制轉型，非外部輸入。
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     conn.execute(f"PRAGMA busy_timeout={int(_BUSY_TIMEOUT_MS)};")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
@@ -286,22 +287,17 @@ def get_gex_history(
 ) -> list[dict[str, Any]]:
     """依 bucket_ts 升冪讀取歷史快照 (since 含、until 不含)，limit 上限 500。"""
     limit = max(1, min(int(limit), _GEX_HISTORY_MAX_LIMIT))
-    clauses = ["symbol = ?"]
-    params: list[Any] = [symbol.upper()]
-    if since:
-        clauses.append("bucket_ts >= ?")
-        params.append(since)
-    if until:
-        clauses.append("bucket_ts < ?")
-        params.append(until)
-    params.append(limit)
     conn = _get_connection()
     try:
         cursor = conn.execute(
-            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
-            f"SELECT * FROM gex_snapshot_history WHERE {' AND '.join(clauses)} "
-            "ORDER BY bucket_ts ASC LIMIT ?",
-            tuple(params),
+            """
+            SELECT * FROM gex_snapshot_history
+            WHERE symbol = ?
+              AND (? IS NULL OR bucket_ts >= ?)
+              AND (? IS NULL OR bucket_ts < ?)
+            ORDER BY bucket_ts ASC LIMIT ?
+            """,
+            (symbol.upper(), since, since, until, until, limit),
         )
         rows: list[dict[str, Any]] = []
         for row in cursor.fetchall():

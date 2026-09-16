@@ -21,11 +21,12 @@ def migrate_data(conn: Any) -> None:
     故沿用 v069 的逐欄 try/except 模式以保證重複執行時的冪等性。
     """
     cursor = conn.cursor()
-    for column in ("put_wall", "previous_put_wall"):
+    for statement in (
+        "ALTER TABLE market_cache ADD COLUMN put_wall REAL DEFAULT NULL",
+        "ALTER TABLE market_cache ADD COLUMN previous_put_wall REAL DEFAULT NULL",
+    ):
         try:
-            cursor.execute(
-                f"ALTER TABLE market_cache ADD COLUMN {column} REAL DEFAULT NULL"
-            )
+            cursor.execute(statement)
         except Exception as e:
             if (
                 "duplicate column name" in str(e).lower()

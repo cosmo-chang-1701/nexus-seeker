@@ -51,13 +51,30 @@ def _kelly_getter(side: str, index: int) -> Callable[[], float]:
     return _get
 
 
-def _const_getter(module: str, name: str) -> Callable[[], Any]:
-    def _get() -> Any:
-        import importlib
+def _regime_v_rsi_max() -> float:
+    from market_analysis.dynamic_rollover.constants import _REGIME_V_RSI_MAX
 
-        return getattr(importlib.import_module(module), name)
+    return float(_REGIME_V_RSI_MAX)
 
-    return _get
+
+def _room_atr_1d_multiplier() -> float:
+    from market_analysis.room_threshold import _ROOM_ATR_1D_MULTIPLIER
+
+    return float(_ROOM_ATR_1D_MULTIPLIER)
+
+
+def _breakdown_next_strike_multiplier() -> float:
+    from market_analysis.room_threshold import (
+        _BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER,
+    )
+
+    return float(_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER)
+
+
+def _room_absolute_floor_pct() -> float:
+    from market_analysis.room_threshold import _ROOM_ABSOLUTE_FLOOR_PCT
+
+    return float(_ROOM_ABSOLUTE_FLOOR_PCT)
 
 
 VIX_TIER_KEYS: tuple[str, ...] = (
@@ -96,34 +113,25 @@ def _build_registry() -> tuple[CalibratableParameter, ...]:
             CalibratableParameter(
                 name="_REGIME_V_RSI_MAX",
                 code_path="market_analysis/dynamic_rollover/constants.py::_REGIME_V_RSI_MAX",
-                getter=_const_getter(
-                    "market_analysis.dynamic_rollover.constants", "_REGIME_V_RSI_MAX"
-                ),
+                getter=_regime_v_rsi_max,
                 description="Regime V 破位追空態的 15m RSI 上限",
             ),
             CalibratableParameter(
                 name="_ROOM_ATR_1D_MULTIPLIER",
                 code_path="market_analysis/room_threshold.py::_ROOM_ATR_1D_MULTIPLIER",
-                getter=_const_getter(
-                    "market_analysis.room_threshold", "_ROOM_ATR_1D_MULTIPLIER"
-                ),
+                getter=_room_atr_1d_multiplier,
                 description="公式 A 單日波幅項倍數",
             ),
             CalibratableParameter(
                 name="_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER",
                 code_path="market_analysis/room_threshold.py::_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER",
-                getter=_const_getter(
-                    "market_analysis.room_threshold",
-                    "_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER",
-                ),
+                getter=_breakdown_next_strike_multiplier,
                 description="公式 C 破位追空次級節點空間倍數",
             ),
             CalibratableParameter(
                 name="_ROOM_ABSOLUTE_FLOOR_PCT",
                 code_path="market_analysis/room_threshold.py::_ROOM_ABSOLUTE_FLOOR_PCT",
-                getter=_const_getter(
-                    "market_analysis.room_threshold", "_ROOM_ABSOLUTE_FLOOR_PCT"
-                ),
+                getter=_room_absolute_floor_pct,
                 description="空間門檻絕對底線 (風險政策，只報告不提案)",
             ),
         ]

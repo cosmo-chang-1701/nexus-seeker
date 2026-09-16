@@ -340,3 +340,26 @@ class TestShortEntryOpportunity:
             )
         # $500 × 0.5% = $2.5 風險預算 < 停損距離 $5.5 → 0 股
         assert out == []
+
+
+def test_get_user_ids_by_trading_strategy_filters_modes(db_conn: Any) -> None:
+    from database.user_settings import (
+        get_user_ids_by_trading_strategy,
+        upsert_user_config,
+    )
+
+    upsert_user_config(9001, trading_strategy="SHORT_SIDE")
+    upsert_user_config(9002, trading_strategy="DYNAMIC")
+    upsert_user_config(9003, trading_strategy="RIGHT_SIDE")
+    ids = get_user_ids_by_trading_strategy(("SHORT_SIDE", "DYNAMIC"))
+    assert sorted(ids) == [9001, 9002]
+    assert get_user_ids_by_trading_strategy(()) == []
+
+
+def test_trading_strategy_whitelist_matches_enum() -> None:
+    """database 層白名單必須與 TradingStrategyMode 同步：曾漏掉 SHORT_SIDE，
+    使「做空交易」設定被靜默改寫為 RIGHT_SIDE。"""
+    from database.user_settings import _VALID_TRADING_STRATEGIES
+    from market_analysis.dynamic_rollover.models import TradingStrategyMode
+
+    assert _VALID_TRADING_STRATEGIES == {m.value for m in TradingStrategyMode}

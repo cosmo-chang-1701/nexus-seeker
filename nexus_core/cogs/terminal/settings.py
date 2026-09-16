@@ -155,7 +155,7 @@ async def update_settings_impl(
         else:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    "交易策略需為 RIGHT_SIDE / LEFT_SIDE / DYNAMIC 其中之一",
+                    "交易策略需為 RIGHT_SIDE / LEFT_SIDE / SHORT_SIDE / DYNAMIC 其中之一",
                     title="系統錯誤",
                 ),
                 ephemeral=True,

@@ -39,12 +39,19 @@ class UserContext:
     enable_macro_top_escape_defense: bool = (
         False  # 是否啟用宏觀逃頂前瞻防禦 (Dynamic Rollover Scenario 6)，嚴格 opt-in
     )
-    trading_strategy: str = "RIGHT_SIDE"  # 交易策略模式: RIGHT_SIDE/LEFT_SIDE/DYNAMIC
+    trading_strategy: str = (
+        "RIGHT_SIDE"  # 交易策略模式: RIGHT_SIDE/LEFT_SIDE/SHORT_SIDE/DYNAMIC
+    )
 
 
 # ==========================================
 # 使用者設定檔 (User Settings) CRUD
 # ==========================================
+
+
+_VALID_TRADING_STRATEGIES: frozenset[str] = frozenset(
+    {"RIGHT_SIDE", "LEFT_SIDE", "SHORT_SIDE", "DYNAMIC"}
+)
 
 
 def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
@@ -105,10 +112,12 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                 elif key == "tax_reserve_rate":
                     value = max(0.0, min(float(value), 1.0))
                 elif key == "trading_strategy":
+                    # 必須與 dynamic_rollover.models.TradingStrategyMode 同步
+                    # (不直接匯入：database 層匯入引擎套件會形成循環)。曾漏掉
+                    # SHORT_SIDE，使 /settings 選擇「做空交易」被靜默改寫為
+                    # RIGHT_SIDE；test_short_entry_scenario.py 有對 enum 的同步測試。
                     value = (
-                        value
-                        if value in {"RIGHT_SIDE", "LEFT_SIDE", "DYNAMIC"}
-                        else "RIGHT_SIDE"
+                        value if value in _VALID_TRADING_STRATEGIES else "RIGHT_SIDE"
                     )
 
                 update_pairs.append(f"{key} = ?")
@@ -270,12 +279,11 @@ def get_user_ids_by_trading_strategy(strategies: Sequence[str]) -> List[int]:
     try:
         conn = get_read_connection()
         cursor = conn.cursor()
-        placeholders = ",".join("?" for _ in strategies)
-        cursor.execute(
-            f"SELECT user_id FROM user_settings WHERE trading_strategy IN ({placeholders})",  # nosemgrep
-            tuple(strategies),
-        )
-        return [int(row[0]) for row in cursor.fetchall()]
+        # 靜態 SQL + Python 端過濾：避免依集合大小動態組出 IN (?, ?, ...) 字串。
+        # user_settings 每位使用者一列，資料量極小。
+        wanted = {str(s) for s in strategies}
+        cursor.execute("SELECT user_id, trading_strategy FROM user_settings")
+        return [int(row[0]) for row in cursor.fetchall() if row[1] in wanted]
     except Exception as e:
         logger.error(f"依交易策略查詢使用者 ID 失敗: {e}")
         return []
