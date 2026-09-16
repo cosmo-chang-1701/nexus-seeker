@@ -1,3 +1,4 @@
+from datetime import date
 from typing import Any
 from unittest.mock import patch, MagicMock, AsyncMock
 import os
@@ -338,6 +339,9 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
         patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
+        # 固定今天日期，避免真實日期越過會議日後測試失效。
+        patch("local_api.macro._fedwatch_today", return_value=date(2026, 9, 16)),
     ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
@@ -408,6 +412,9 @@ def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> Non
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
         patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
+        # 固定今天日期，避免真實日期越過會議日後測試失效。
+        patch("local_api.macro._fedwatch_today", return_value=date(2026, 9, 16)),
     ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200

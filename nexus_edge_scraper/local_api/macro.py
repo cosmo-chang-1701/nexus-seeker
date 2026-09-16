@@ -1,5 +1,6 @@
 """local_api：總經 GEX/流動性/FedWatch Playwright 抓取，以及個股 GEX 端點。"""
 
+from datetime import date
 from typing import Any, Optional
 import logging
 
@@ -21,6 +22,16 @@ from gex_scraper import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+def _fedwatch_today() -> date:
+    """FedWatch 判定「下一次 FOMC 會議」所用的今天日期。
+
+    抽成模組層級函式，讓測試能固定日期——ZQ 期貨階梯的權重 (d_prior/d_post)
+    與要查的合約月份都取決於距下一次會議的天數，寫死日期的斷言在真實日期
+    越過會議日後就會失效。
+    """
+    return date.today()
 
 
 def calculate_total_gex(
@@ -551,7 +562,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
             12: "Z",
         }
 
-        today = date.today()
+        today = _fedwatch_today()
         future_meetings = [m for m in fomc_schedule if m >= today]
         next_meeting = min(future_meetings) if future_meetings else date(2026, 9, 16)
 
@@ -751,7 +762,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
             by_meeting[meeting_date].append(r)
 
         # Find the next meeting date >= today
-        today = date.today()
+        today = _fedwatch_today()
         future_meetings = [m for m in by_meeting.keys() if m >= today]
         if not future_meetings:
             latest_available_meeting = sorted(by_meeting.keys())[-1]

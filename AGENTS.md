@@ -401,7 +401,7 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME
 
 What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9.
 
-Edge scraper tests (note: two FedWatch ZQ tests in `test_local_api.py` currently fail on a clean `HEAD` as well):
+Edge scraper tests:
 
 ```bash
 PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tests
