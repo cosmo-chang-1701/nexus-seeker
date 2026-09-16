@@ -12,6 +12,8 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - GEX_HISTORY_ENABLED=${GEX_HISTORY_ENABLED:-true}
+      - GEX_HISTORY_RETENTION_DAYS=${GEX_HISTORY_RETENTION_DAYS:-180}
 
   # 服務 2：Cloudflare Tunnel (Sidecar Pattern)
   cloudflared:

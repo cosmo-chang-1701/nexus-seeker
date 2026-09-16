@@ -161,7 +161,7 @@ class NexusGammaSqueezeEngine:
         # 向上空間要求自硬編碼的固定 5% (spot * 1.05) 升級為動態自適應波動率
         # 門檻 (market_analysis/room_threshold.py 公式 A)：
         #     Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
-        #     Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+        #     Risk_actual = (Spot − (PutWall − 0.5 × ATR₁₅ₘ)) / Spot
         # 固定 5% 對 ATR 4% 的高波標的等同沒有盈虧比保護、對 ATR 0.8% 的低波
         # 標的又是遙不可及的天花板；改為由該標的自身下行風險反推後，SPEAR 進攻
         # 訊號的 2.2:1 盈虧比成為結構性保證。

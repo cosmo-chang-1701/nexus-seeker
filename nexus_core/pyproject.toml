@@ -37,7 +37,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["cogs*", "database*", "market_analysis*", "models*", "services*", "ui*", "tests*"]
+include = ["calibration*", "cogs*", "database*", "market_analysis*", "models*", "services*", "ui*", "tests*"]
 
 [tool.setuptools]
 py-modules = ["bot", "bot_healthy", "cli", "config", "main", "market_math", "market_time"]

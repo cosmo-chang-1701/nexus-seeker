@@ -249,6 +249,11 @@ class SymbolHubView(discord.ui.View):
         await interaction.response.defer()
         await self._set_loading(interaction)
         embed = None
+        from market_analysis import evaluation_recorder
+
+        # 前向蒐集：使用者手動檢核同樣是一次真實評估，標記來源後於回應送出
+        # 「之後」才批次寫入，不拖慢互動回應。
+        eval_source_token = evaluation_recorder.set_evaluation_source("SYMBOL_VIEW")
         try:
             from market_analysis.dynamic_rollover import DynamicRolloverEngine
             from market_analysis.dynamic_rollover.models import (
@@ -400,7 +405,9 @@ class SymbolHubView(discord.ui.View):
                 embed=create_error_embed(f"進場鐵律檢核失敗: {e}"), ephemeral=True
             )
         finally:
+            evaluation_recorder.reset_evaluation_source(eval_source_token)
             await self._reset_loading(interaction, embed=embed)
+            await evaluation_recorder.flush_evaluations()
 
 
 class WatchlistHeartbeatView(discord.ui.View):

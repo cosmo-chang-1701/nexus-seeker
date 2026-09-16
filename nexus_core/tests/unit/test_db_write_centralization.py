@@ -19,7 +19,15 @@ from typing import Any
 # tests/unit/<this file> → parents[2] 即 nexus_core 專案根目錄
 _CORE_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
-_SCAN_DIRS = ("database", "services", "cogs", "market_analysis", "ui", "risk_engine")
+_SCAN_DIRS = (
+    "database",
+    "services",
+    "cogs",
+    "market_analysis",
+    "ui",
+    "risk_engine",
+    "calibration",
+)
 
 # 唯一允許自行建立連線並提交的地方：
 #   - database/connection.py：連線工廠與寫入佇列本身

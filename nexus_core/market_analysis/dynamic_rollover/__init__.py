@@ -39,6 +39,7 @@ from .models import (  # noqa: E402
     RolloverScenario,
 )
 from .opportunity_cost import _OpportunityCostMixin  # noqa: E402
+from .short_entry_deployment import ShortCandidateInput, _ShortEntryMixin  # noqa: E402
 from .structural_signals import (  # noqa: E402
     _resolve_canonical_anchor_base,
     _scan_gex_walls,
@@ -51,6 +52,7 @@ __all__ = [
     "FundamentalThesisResult",
     "RolloverInstruction",
     "RolloverScenario",
+    "ShortCandidateInput",
     "_resolve_canonical_anchor_base",
     "_scan_gex_walls",
 ]
@@ -63,9 +65,12 @@ class DynamicRolloverEngine(
     _CoreDeploymentMixin,
     _MacroTopEscapeDefenseMixin,
     _CoveredCallProfitLockMixin,
+    _ShortEntryMixin,
 ):
     def __init__(self) -> None:
         self._structural_signals_cache: BoundedCache = BoundedCache(max_size=256)
+        # SHORT_ENTRY 做空評估結果 (與使用者無關)，以 (symbol, 15m bar) 記憶。
+        self._short_entry_eval_cache: BoundedCache = BoundedCache(max_size=64)
 
     async def evaluate_fundamental_thesis(
         self,

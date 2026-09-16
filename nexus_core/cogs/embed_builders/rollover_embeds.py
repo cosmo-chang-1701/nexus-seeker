@@ -1,6 +1,6 @@
 import discord
 import logging
-from typing import Optional, Any, Callable, Coroutine, Dict
+from typing import Optional, Any, Callable, Coroutine, Dict, Mapping
 
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import _pad_string
@@ -60,6 +60,13 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         # 隨 Regime 演化」這類中性偏正面的生命週期管理事件（加碼/停損上移/
         # 防禦性平倉/獲利了結皆可能觸發），不預設是危急或獲利結果。
         "color": discord.Color.gold(),
+    },
+    "SHORT_ENTRY": {
+        "emoji": "🐻",
+        "label": "做空進場訊號",
+        # 深紅：方向性做空是風險輪廓完全相反的子系統 (理論上無限虧損、軋空
+        # 跳空)，視覺上須與任何多頭建議明確區隔。
+        "color": discord.Color.dark_red(),
     },
 }
 
@@ -839,6 +846,109 @@ def create_transition_pyramid_embed(
     return embed
 
 
+_SHORT_ENTRY_BINDING_LABELS: Dict[str, str] = {
+    "RISK_PCT": "單筆帳戶風險上限",
+    "KELLY": "凱利先驗 (R:R 偏低)",
+    "EXPOSURE_CAP": "組合曝險名目上限",
+}
+
+
+def create_short_entry_embed(
+    symbol: str,
+    reason: str,
+    plan: Mapping[str, Any],
+    structure_directive: Optional[str] = None,
+    entry_regime: Optional[str] = None,
+) -> discord.Embed:
+    """
+    產生 SHORT_ENTRY「做空進場訊號」的專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：該函式以「賣出 sell_symbol →
+    買入 buy_symbol」的轉倉框架建模，direction 預設 BTO、策略預設 Buy Shares，
+    套用在做空進場上會渲染出方向完全相反的指令。
+
+    plan 為 ShortEntryPlan (market_analysis/dynamic_rollover/models.py)，此處
+    以 Mapping 接收，避免呈現層反向依賴引擎模型。
+    """
+    style = _SCENARIO_STYLE["SHORT_ENTRY"]
+    sub_mode = str(plan.get("sub_mode") or "做空")
+    embed = NexusEmbed(
+        title=f"{style['emoji']} {style['label']}・{sub_mode}: {symbol}",
+        color=style["color"],
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🐻【建議動作：SELL SHORT／開立空方部位】做空六重鐵律全數通過**"
+        f"\n\n{safe_reason}"
+    )
+
+    def _money(key: str) -> str:
+        try:
+            return f"${float(plan.get(key) or 0.0):,.2f}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    action_lines = [
+        f"動作：**SELL SHORT** `{symbol}`",
+        f"子模式：{sub_mode}",
+    ]
+    if structure_directive:
+        action_lines.append(f"期權表達：{structure_directive}")
+    if entry_regime:
+        action_lines.append(f"Regime：`{entry_regime}`")
+    embed.add_field(name="🎯 動作", value="\n".join(action_lines), inline=False)
+
+    stop_structural = float(plan.get("stop_price_structural") or 0.0)
+    stop_exit_engine = float(plan.get("stop_price_exit_engine") or 0.0)
+    level_lines = [
+        f"進場 (限價放空)：`{_money('entry_price')}`",
+        f"停損 (倉位依據)：`{_money('stop_price')}`",
+    ]
+    if (
+        stop_structural > 0
+        and stop_exit_engine > 0
+        and abs(stop_structural - stop_exit_engine) >= 0.01
+    ):
+        level_lines.append(
+            f"└ 結構停損 `${stop_structural:,.2f}`／出場引擎停損 "
+            f"`${stop_exit_engine:,.2f}` (取較遠者)"
+        )
+    level_lines.append(f"目標：`{_money('target_price')}`")
+    try:
+        level_lines.append(f"R:R：`{float(plan.get('reward_risk_ratio') or 0.0):.2f}`")
+    except (TypeError, ValueError):
+        pass
+    if plan.get("invalidation_note"):
+        level_lines.append(f"⚠️ {plan.get('invalidation_note')}")
+    embed.add_field(name="📐 價位", value="\n".join(level_lines), inline=False)
+
+    binding = str(plan.get("binding_constraint") or "")
+    vix_spot = plan.get("vix_spot")
+    vix_text = f"{float(vix_spot):.1f}" if vix_spot is not None else "未知"
+    sizing_lines = [
+        f"風險預算：`{_money('risk_budget_usd')}`",
+        f"建議股數：`{int(plan.get('share_qty') or 0):,}` 股"
+        f"（名目 {_money('notional_usd')}）",
+        f"約束來源：{_SHORT_ENTRY_BINDING_LABELS.get(binding, binding or 'N/A')}",
+        f"VIX `{vix_text}`｜{plan.get('vix_tier_name') or 'N/A'}｜"
+        f"做空倉位乘數 `{float(plan.get('short_vix_multiplier') or 0.0):.2f}x`",
+        "以期權表達時：Long Put 權利金總額、或 Bear Call Spread 最大虧損"
+        "（價差寬度 − 收入）皆不應超過上方風險預算",
+    ]
+    embed.add_field(
+        name="⚖️ 倉位",
+        value=truncate_with_boundary("\n".join(sizing_lines), 1000),
+        inline=False,
+    )
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 僅為建議不代為下單；成交後請以"
+        "『負股數／負口數』登錄，出場由做空鏡像出場矩陣接管"
+    )
+    return embed
+
+
 def create_transition_ratchet_embed(
     symbol: str,
     reason: str,
@@ -1015,6 +1125,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "MACRO_TOP_ESCAPE_DEFENSE": "逃頂前瞻",
     "COVERED_CALL_PROFIT_LOCK": "CC停利",
     "TRANSITION_ENGINE": "動態切換",
+    "SHORT_ENTRY": "做空進場",
 }
 
 

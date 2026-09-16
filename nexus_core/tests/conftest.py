@@ -145,6 +145,14 @@ def clean_db(db_conn: Any):  # type: ignore
     except Exception:
         pass
 
+    # 前向蒐集記錄器是模組層級緩衝區，避免跨測試殘留
+    try:
+        from market_analysis.evaluation_recorder import clear_buffer
+
+        clear_buffer()
+    except Exception:
+        pass
+
     # Clear tables before each test if needed
     cursor = db_conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")

@@ -324,7 +324,7 @@ def _confirm_left_entry_condition3_no_panic_cliff(
     market_analysis/room_threshold.py 公式 A）：
 
         Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
-        Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+        Risk_actual = (Spot − (PutWall − 0.5 × ATR₁₅ₘ)) / Spot
 
     舊版 3.5% 附有一段校準備註坦承「宣稱 3:1 R:R 實際只在現價貼齊 Put Wall
     ±0.168% 時成立」——左側條件二允許的密著帶上界 +1.5% 處實際 R:R 僅 1.41。
@@ -675,4 +675,15 @@ async def _confirm_left_entry_signal(
     all_passed = (
         c1_passed and c2_passed and c3_passed and c4_passed and c5_passed and c6_passed
     )
-    return all_passed, " | ".join(reasons), structure_directive
+    reason_text = " | ".join(reasons)
+    from market_analysis.evaluation_recorder import record_gate_reason
+
+    record_gate_reason(
+        "ENTRY_LEFT",
+        candidate_symbol,
+        target_spot,
+        bool(all_passed),
+        reason_text,
+        candidate_radar=candidate_radar,
+    )
+    return all_passed, reason_text, structure_directive

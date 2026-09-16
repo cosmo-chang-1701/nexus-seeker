@@ -279,7 +279,7 @@ class TestCondition3:
         assert passed is True
         assert mode == "破位追空"
         assert "次級負 Gamma 節點 $80.00" in reasons[0]
-        assert "停損貼緊 Put Wall" in reasons[0]
+        assert "收復 Put Wall $95.00 即論點失效" in reasons[0]
 
     def test_breakdown_chase_without_next_peak_fails_closed(self) -> None:
         """下方無顯著負 Gamma 節點 -> fail-closed（追空是進攻動作）。"""
@@ -537,3 +537,135 @@ class TestOrchestrator:
         left = inspect.signature(_confirm_left_entry_signal)
         short = inspect.signature(_confirm_short_entry_signal)
         assert list(left.parameters) == list(short.parameters)
+
+
+def _patched_all_pass_io():  # type: ignore[no-untyped-def]
+    """六重鐵律全數通過所需的 I/O patch 組合 (ExitStack)。"""
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_BREAKDOWN_DF,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=100.0,
+        )
+    )
+    stack.enter_context(
+        patch("database.calendar_cache.get_cached_earnings", return_value=None)
+    )
+    stack.enter_context(
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        )
+    )
+    stack.enter_context(
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+            return_value=[_FAR_EXPIRY],
+        )
+    )
+    return stack
+
+
+# ---------------------------------------------------------------- 完整評估結果
+class TestEvaluateShortEntry:
+    @pytest.mark.asyncio
+    async def test_breakdown_chase_surfaces_levels(self) -> None:
+        """完整評估必須一併回傳下游建立價位所需的中間值，不得讓 SHORT_ENTRY
+        情境重新抓取或重算 (確認與下單價位須建立在同一份快照上)。"""
+        from market_analysis.dynamic_rollover.short_side_entry import (
+            evaluate_short_entry,
+        )
+
+        with _patched_all_pass_io():
+            ev = await evaluate_short_entry("TEST", _short_candidate_radar(), 92.0)
+        assert ev.all_passed is True
+        assert ev.sub_mode == "破位追空"
+        assert ev.conditions == (True, True, True, True, True, True)
+        assert ev.spot == 92.0
+        assert ev.resistance_wall == 97.0
+        assert ev.put_wall == 95.0
+        assert ev.call_wall == 97.0
+        assert ev.next_negative_node == 80.0
+        # ATR₁₅ₘ 取自條件一實際使用的同一份 15m frame (而非雷達快照)
+        assert ev.atr_15m > 0
+        assert ev.structure_directive == "Long Put (輕度 OTM)"
+
+    @pytest.mark.asyncio
+    async def test_range_mode_has_no_next_node(self) -> None:
+        """區間內做空的目標是 Put Wall，next_negative_node 不適用 (0.0)。"""
+        from market_analysis.dynamic_rollover.short_side_entry import (
+            evaluate_short_entry,
+        )
+
+        radar = _short_candidate_radar()
+        radar["gex_profile_data"]["put_wall"] = 80.0
+        with _patched_all_pass_io():
+            ev = await evaluate_short_entry("TEST", radar, 92.0)
+        assert ev.sub_mode == "區間內做空"
+        assert ev.next_negative_node == 0.0
+        assert ev.put_wall == 80.0
+
+    @pytest.mark.asyncio
+    async def test_short_circuit_marks_skipped_conditions_none(self) -> None:
+        from market_analysis.dynamic_rollover.short_side_entry import (
+            evaluate_short_entry,
+        )
+
+        radar = _short_candidate_radar()
+        radar["uoa"] = []  # 條件四刻意失敗
+        with _patched_all_pass_io():
+            ev = await evaluate_short_entry("TEST", radar, 92.0)
+        assert ev.all_passed is False
+        assert ev.conditions[3] is False
+        assert ev.conditions[4] is None
+        assert ev.conditions[5] is None
+
+    @pytest.mark.asyncio
+    async def test_wrapper_matches_full_evaluation(self) -> None:
+        from market_analysis.dynamic_rollover.short_side_entry import (
+            evaluate_short_entry,
+        )
+
+        with _patched_all_pass_io():
+            ev = await evaluate_short_entry("TEST", _short_candidate_radar(), 92.0)
+        with _patched_all_pass_io():
+            triple = await _confirm_short_entry_signal(
+                "TEST", _short_candidate_radar(), 92.0
+            )
+        assert triple == (ev.all_passed, ev.reason, ev.structure_directive)
+
+    @pytest.mark.asyncio
+    async def test_condition5_macro_lockout_wording_is_short_specific(self) -> None:
+        """宏觀鎖定時做空同樣封鎖，但文案不得寫「嚴禁開倉個股買方」。"""
+        with (
+            patch("database.calendar_cache.get_cached_earnings", return_value=None),
+            patch(
+                "market_analysis.index_microstructure.get_market_regime",
+                new_callable=AsyncMock,
+                return_value="SHORT_GAMMA_CRITICAL",
+            ),
+        ):
+            from market_analysis.dynamic_rollover.short_side_entry import (
+                _confirm_short_entry_condition5_macro_earnings_gate,
+            )
+
+            reasons: list = []
+            passed = await _confirm_short_entry_condition5_macro_earnings_gate(
+                "TEST", True, reasons
+            )
+        assert passed is False
+        joined = " ".join(reasons)
+        assert "空單" in joined
+        assert "買方" not in joined

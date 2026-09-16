@@ -164,3 +164,80 @@ def test_option_chain_snapshot_latest_when_multiple_expiries() -> None:
     row = database.get_option_chain_snapshot("AAPL")
     assert row is not None
     assert row["expiry"] == "2026-09-25"
+
+
+def test_gex_history_keeps_first_snapshot_per_15m_bucket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime, timezone
+
+    moments = iter(
+        [
+            datetime(2026, 3, 2, 15, 1, tzinfo=timezone.utc),
+            datetime(2026, 3, 2, 15, 14, tzinfo=timezone.utc),  # 同桶，忽略
+            datetime(2026, 3, 2, 15, 16, tzinfo=timezone.utc),  # 新桶
+        ]
+    )
+    real_bucket = database.gex_history_bucket
+    monkeypatch.setattr(
+        database, "gex_history_bucket", lambda now=None: real_bucket(next(moments))
+    )
+    profile = {"50": 1.0, "100": 2.0, "101": -3.0, "200": 9.0}
+    database.save_gex_snapshot("aapl", 100.0, -1.0, 110.0, 95.0, profile)
+    database.save_gex_snapshot("AAPL", 101.0, -2.0, 110.0, 95.0, profile)
+    database.save_gex_snapshot("AAPL", 102.0, -3.0, 110.0, 95.0, profile)
+
+    rows = database.get_gex_history("AAPL")
+    assert [r["bucket_ts"] for r in rows] == [
+        "2026-03-02T15:00:00Z",
+        "2026-03-02T15:15:00Z",
+    ]
+    assert rows[0]["spot"] == 100.0  # 第一筆勝出
+    # ±25% 履約價裁切：50 與 200 被剔除
+    assert rows[0]["gex_profile"] == {"100": 2.0, "101": -3.0}
+    # 最新快照表仍為 upsert
+    snap = database.get_gex_snapshot("AAPL")
+    assert snap is not None and snap["spot"] == 102.0
+
+
+def test_gex_history_range_and_limit() -> None:
+    import zlib
+
+    conn = database._get_connection()
+    try:
+        for minute in (0, 15, 30):
+            conn.execute(
+                "INSERT INTO gex_snapshot_history (symbol, bucket_ts, spot, gex_profile_z) "
+                "VALUES (?, ?, ?, ?)",
+                ("AAPL", f"2026-03-02T15:{minute:02d}:00Z", 1.0, zlib.compress(b"{}")),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    assert len(database.get_gex_history("AAPL", since="2026-03-02T15:15:00Z")) == 2
+    assert len(database.get_gex_history("AAPL", until="2026-03-02T15:15:00Z")) == 1
+    assert len(database.get_gex_history("AAPL", limit=1)) == 1
+
+
+def test_prune_gex_history_by_retention() -> None:
+    conn = database._get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO gex_snapshot_history (symbol, bucket_ts, captured_at) "
+            "VALUES ('OLD', 'x', datetime('now', '-200 days'))"
+        )
+        conn.execute(
+            "INSERT INTO gex_snapshot_history (symbol, bucket_ts) VALUES ('NEW', 'y')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    assert database.prune_gex_history(180) == 1
+    assert database.get_gex_history("OLD") == []
+    assert len(database.get_gex_history("NEW")) == 1
+
+
+def test_gex_history_disabled_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(database, "GEX_HISTORY_ENABLED", False)
+    database.save_gex_snapshot("AAPL", 100.0, -1.0, 110.0, 95.0, {"100": 1.0})
+    assert database.get_gex_history("AAPL") == []

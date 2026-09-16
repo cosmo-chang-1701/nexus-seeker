@@ -11,7 +11,7 @@ from .constants import (
     _COVERED_CALL_MIN_DTE,
     _COVERED_CALL_MIN_SHARES,
 )
-from .models import RolloverInstruction, RolloverScenario
+from .models import EntryConfirmation, RolloverInstruction, RolloverScenario
 
 
 class _CoreDeploymentMixin:
@@ -55,7 +55,7 @@ class _CoreDeploymentMixin:
         total_account_value: float,
         candidate_symbol: str,
         candidate_radar: Optional[Dict[str, Any]],
-        precomputed_entry_confirmation: Optional[Tuple[bool, str]] = None,
+        precomputed_entry_confirmation: Optional[EntryConfirmation] = None,
     ) -> List[RolloverInstruction]:
         """
         邏輯 (5)：對每一個使用者明確設定過 target_allocation_pct 的 CORE 持倉，
@@ -67,11 +67,15 @@ class _CoreDeploymentMixin:
 
         precomputed_entry_confirmation：由呼叫端沿用 Scenario 2
         (evaluate_opportunity_cost_for_satellites) 針對同一 candidate_symbol/
-        candidate_radar 已經算好的 _confirm_entry_signal 結果 (is_confirmed, reason)。
+        candidate_radar 已經算好的 _confirm_entry_signal 結果 (EntryConfirmation)。
         兩者的確認結果僅取決於 (candidate_symbol, candidate_radar, target_spot)，
         在同一輪次呼叫端傳入的三者皆相同，故重用安全且非僅為效能優化。若為 None
         (例如 Scenario 2 未觸及確認步驟，如 candidate_symbol 為 "VOO")，則照舊
         獨立呼叫 _confirm_entry_signal。
+
+        ⚠️ `direction == "SHORT"` 的確認一律視為「未確認」：本分支產生的是
+        Buy Shares 指令，把 CORE 超額現金部署進剛被確認要**做空**的標的是方向
+        完全相反的下單。BOXX 防禦分支不依賴候選確認，不受影響。
         """
         instructions: List[RolloverInstruction] = []
         if total_account_value <= 0.0:
@@ -94,9 +98,14 @@ class _CoreDeploymentMixin:
         candidate_entry_confirmed: Optional[bool] = None
         candidate_entry_reason: str = ""
         if precomputed_entry_confirmation is not None:
-            candidate_entry_confirmed, candidate_entry_reason = (
-                precomputed_entry_confirmation
-            )
+            if precomputed_entry_confirmation.direction == "SHORT":
+                candidate_entry_confirmed = False
+                candidate_entry_reason = (
+                    "做空確認不適用核心資金部署 (改由 SHORT_ENTRY 情境處理)"
+                )
+            else:
+                candidate_entry_confirmed = precomputed_entry_confirmation.is_confirmed
+                candidate_entry_reason = precomputed_entry_confirmation.reason
         boxx_auto_suggestion: Optional[float] = None
 
         for asset in portfolio_assets:

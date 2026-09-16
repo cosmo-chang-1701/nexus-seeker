@@ -70,3 +70,7 @@ nexus_core/data/yfinance_cache/
 ORIGINAL_REQUEST.md
 .agents/*
 !.agents/AGENTS.md
+
+# 回測校準工具的 K 線快取與報告輸出 (python -m calibration)
+nexus_core/.calibration_cache/
+nexus_core/reports/

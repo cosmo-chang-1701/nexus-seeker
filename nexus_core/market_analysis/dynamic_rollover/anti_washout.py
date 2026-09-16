@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Tuple
 
 from market_analysis.option_guidance import is_spread_illiquid
 from market_analysis.sentiment.history_storage import get_indicator_percentile
@@ -55,6 +55,49 @@ def apply_ivr_strategy_overlay_impl(
     if ivr > _BUYER_LOCKOUT_IVR_THRESHOLD:
         return options_strategy + " | 嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
     return options_strategy
+
+
+def resolve_short_anchor(metrics: Mapping[str, Any]) -> Tuple[float, float]:
+    """做空部位的拓撲校正：回傳 (anchor_short, effective_support_floor)。
+
+    抽成模組層級純函式，讓出場矩陣 (`_correct_wall_topology_short`) 與
+    SHORT_ENTRY 倉位計算 (short_entry_sizing.py) 共用同一個錨點定義——倉位
+    必須以「部位登錄後出場引擎真正會執行的停損」為準，兩處各寫一份必然漂移。
+
+    完全鏡像多頭 `_correct_wall_topology()`：防守錨點是**上方的阻力頂牆**、
+    獲利地板是**下方的支撐牆**；put_wall > call_wall 的拓撲逆轉取較高者為頂牆。
+    """
+    spot = float(metrics.get("spot_price", 0.0) or 0.0)
+    put_wall = float(metrics.get("put_wall", 0.0) or 0.0)
+    call_wall = float(metrics.get("call_wall", 0.0) or 0.0)
+    support_wall = float(metrics.get("support_wall", 0.0) or 0.0)
+    resistance_wall = float(metrics.get("resistance_wall", 0.0) or 0.0)
+    gamma_flip = float(metrics.get("gamma_flip", 0.0) or 0.0)
+    hvn = float(metrics.get("hvn", 0.0) or 0.0)
+
+    if resistance_wall > 0:
+        anchor_short = resistance_wall
+    elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
+        anchor_short = max(put_wall, call_wall)
+    elif call_wall > 0:
+        anchor_short = call_wall
+    elif gamma_flip > 0:
+        anchor_short = gamma_flip
+    elif hvn > 0:
+        anchor_short = hvn
+    else:
+        anchor_short = spot
+
+    if support_wall > 0:
+        effective_support_floor = support_wall
+    elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
+        effective_support_floor = min(put_wall, call_wall)
+    elif put_wall > 0:
+        effective_support_floor = put_wall
+    else:
+        effective_support_floor = spot * 0.95
+
+    return anchor_short, effective_support_floor
 
 
 class _AntiWashoutMixin:
@@ -404,37 +447,7 @@ class _AntiWashoutMixin:
         獲利地板是**下方的支撐牆**。拓撲逆轉修復同樣鏡像——put_wall > call_wall
         時取較高者為頂牆（多頭版取較低者為底牆）。
         """
-        spot = float(metrics.get("spot_price", 0.0))
-        put_wall = float(metrics.get("put_wall", 0.0))
-        call_wall = float(metrics.get("call_wall", 0.0))
-        support_wall = float(metrics.get("support_wall", 0.0))
-        resistance_wall = float(metrics.get("resistance_wall", 0.0))
-        gamma_flip = float(metrics.get("gamma_flip", 0.0))
-        hvn = float(metrics.get("hvn", 0.0))
-
-        if resistance_wall > 0:
-            anchor_short = resistance_wall
-        elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
-            anchor_short = max(put_wall, call_wall)
-        elif call_wall > 0:
-            anchor_short = call_wall
-        elif gamma_flip > 0:
-            anchor_short = gamma_flip
-        elif hvn > 0:
-            anchor_short = hvn
-        else:
-            anchor_short = spot
-
-        if support_wall > 0:
-            effective_support_floor = support_wall
-        elif put_wall > 0 and call_wall > 0 and put_wall > call_wall:
-            effective_support_floor = min(put_wall, call_wall)
-        elif put_wall > 0:
-            effective_support_floor = put_wall
-        else:
-            effective_support_floor = spot * 0.95
-
-        return anchor_short, effective_support_floor
+        return resolve_short_anchor(metrics)
 
     def _compute_short_anti_washout_stop(
         self, anchor_short: float, metrics: dict
@@ -511,6 +524,13 @@ class _AntiWashoutMixin:
               已跌破舊底牆（牆往下搬 = 做市商讓出更多下行空間）；
           TP3 Delta <= −0.85（深價內 Pinning 風險）、DTE <= 5、或 15m VWAP
               帶量**收復**（空頭的趨勢耗竭訊號，鏡像多頭的 VWAP 帶量失守）。
+
+        ⚠️ 破位追空的目標牆替換：現價已跌破 Put Wall、且 metrics 帶有其下方的
+        次級負 GEX 節點 (`next_negative_node`) 時，TP1/TP2 的「目標牆」改為該
+        節點。否則「跌破 Put Wall 1.5%」正是破位追空的**進場條件**，部位一登錄
+        就落在 TP2 內，下一個 15 分鐘週期即建議回補。區間內做空的部位在下跌途中
+        已於 Put Wall 觸發過 TP1，跌破後目標順延至次級節點，語意一致。
+        節點缺失時維持原行為 (以 Put Wall 為目標)。牆體遷移分支不受影響。
         """
         spot = float(metrics.get("spot_price", 0.0))
         put_wall = float(metrics.get("put_wall", 0.0))
@@ -522,8 +542,17 @@ class _AntiWashoutMixin:
         if put_wall <= 0 or spot <= 0:
             return None, 0.0, ""
 
-        wall_break_pct = (put_wall - spot) / put_wall
-        is_tp1 = spot <= put_wall * (2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT)
+        next_negative_node = float(metrics.get("next_negative_node") or 0.0)
+        is_chase_target = 0 < next_negative_node < put_wall and spot < put_wall
+        target_wall = next_negative_node if is_chase_target else put_wall
+        target_label = (
+            f"次級負 Gamma 節點 ${target_wall:.2f}"
+            if is_chase_target
+            else f"Put Wall ${target_wall:.2f}"
+        )
+
+        wall_break_pct = (target_wall - spot) / target_wall
+        is_tp1 = spot <= target_wall * (2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT)
         previous_put_wall = float(metrics.get("previous_put_wall") or 0.0)
         is_wall_break = wall_break_pct >= _MICROSTRUCTURE_TP2_WALL_BREAK_PCT
         is_wall_migrated_down = (
@@ -569,7 +598,7 @@ class _AntiWashoutMixin:
             return (
                 "TP2",
                 _MICROSTRUCTURE_TP2_RATIO,
-                f"🎯 **TP2-空間擴展**：現價已跌穿 Put Wall ${put_wall:.2f} 達 "
+                f"🎯 **TP2-空間擴展**：現價已跌穿 {target_label} 達 "
                 f"{wall_break_pct:+.2%}（>= {_MICROSTRUCTURE_TP2_WALL_BREAK_PCT:.1%}），"
                 f"釋放負 Gamma 踩踏利潤、防範滯留反抽，執行 "
                 f"{_MICROSTRUCTURE_TP2_RATIO:.0%} 回補。",
@@ -578,7 +607,7 @@ class _AntiWashoutMixin:
             return (
                 "TP1",
                 _MICROSTRUCTURE_TP1_RATIO,
-                f"🎯 **TP1-支撐初探**：現價 ${spot:.2f} 已觸及 Put Wall ${put_wall:.2f} 的 "
+                f"🎯 **TP1-支撐初探**：現價 ${spot:.2f} 已觸及 {target_label} 的 "
                 f"{2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%} 範圍內，做市商空頭避險動能竭盡，"
                 f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 回補。",
             )

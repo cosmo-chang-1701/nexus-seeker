@@ -146,3 +146,37 @@ def test_scrape_symbol_gex_endpoint_still_delegates_to_core(
     data = response.json()
     assert data["status"] == "success"
     assert data["data"]["spot"] == 100.0
+
+
+def test_get_gex_history_paginates() -> None:
+    import zlib
+
+    conn = database._get_connection()
+    try:
+        for minute in (0, 15, 30):
+            conn.execute(
+                "INSERT INTO gex_snapshot_history (symbol, bucket_ts, spot, gex_profile_z) "
+                "VALUES (?, ?, ?, ?)",
+                (
+                    "AAPL",
+                    f"2026-03-02T15:{minute:02d}:00Z",
+                    float(minute),
+                    zlib.compress(b'{"100": 1.0}'),
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+    first = client.get("/api/v1/cache/gex/history/aapl", params={"limit": 2}).json()
+    assert first["status"] == "success"
+    assert [r["spot"] for r in first["data"]] == [0.0, 15.0]
+    assert first["data"][0]["gex_profile"] == {"100": 1.0}
+    assert first["next_since"]
+
+    second = client.get(
+        "/api/v1/cache/gex/history/AAPL",
+        params={"limit": 2, "since": first["next_since"]},
+    ).json()
+    assert [r["spot"] for r in second["data"]] == [30.0]
+    assert second["next_since"] is None

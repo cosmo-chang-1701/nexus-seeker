@@ -370,3 +370,102 @@ def test_optimize_position_risk_very_near_event() -> None:
     qty_1h = res_1h.suggested_contracts
 
     assert qty_1h < qty_71h
+
+
+# ---------------------------------------------------------------- 做空 VIX 倒 U 形
+def test_short_vix_multiplier_inverted_u_bounded_by_one() -> None:
+    from config import (
+        SHORT_VIX_UNKNOWN_MULTIPLIER,
+        VIX_LADDER_CONFIG,
+        get_short_vix_multiplier,
+    )
+
+    for tier in VIX_LADDER_CONFIG:
+        assert 0.0 <= tier["short_sizing_multiplier"] <= 1.0
+    assert [t["short_sizing_multiplier"] for t in VIX_LADDER_CONFIG] == [
+        0.5,
+        0.75,
+        1.0,
+        1.0,
+        0.5,
+        0.0,
+    ]
+    assert get_short_vix_multiplier(40.0) == 0.0
+    # VIX 未知不得退回 Ready (1.0)
+    assert get_short_vix_multiplier(None) == SHORT_VIX_UNKNOWN_MULTIPLIER == 0.5
+    assert get_short_vix_multiplier(float("nan")) == 0.5
+
+
+def test_seller_ladder_multipliers_unchanged() -> None:
+    """賣方階梯是既有行為，做空係數不得改動它。"""
+    from config import VIX_LADDER_CONFIG, get_vix_sizing_multiplier
+
+    assert [t["sizing_multiplier"] for t in VIX_LADDER_CONFIG] == [
+        0.0,
+        0.5,
+        1.0,
+        1.2,
+        1.5,
+        2.0,
+    ]
+    assert get_vix_sizing_multiplier(36.0, "PREMIUM_SELL") == 2.0
+    assert get_vix_sizing_multiplier(36.0, "DIRECTIONAL_LONG") == 2.0
+    assert get_vix_sizing_multiplier(36.0, "DIRECTIONAL_SHORT") == 0.0
+
+
+def test_optimize_position_risk_blocks_directional_short_in_vix_extreme() -> None:
+    macro_extreme = MacroContext(vix=36.0, oil_price=70.0, vix_change=0.0)
+    res_put = optimize_position_risk(
+        0.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro_extreme, vix_spot=36.0
+    )
+    assert res_put.suggested_contracts == 0
+    assert any("做空新倉暫停" in w for w in res_put.warnings)
+    # 多頭買方在 All-in 仍放行 (既有行為)
+    res_call = optimize_position_risk(
+        0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", macro_extreme, vix_spot=36.0
+    )
+    assert res_call.suggested_contracts > 0
+
+
+def test_optimize_position_risk_blocks_short_even_without_macro() -> None:
+    """宏觀資料缺失不能讓做空繞過 VIX 極端區閘門。"""
+    res = optimize_position_risk(
+        0.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", None, vix_spot=40.0
+    )
+    assert res.suggested_contracts == 0
+
+
+def test_optimize_position_risk_dormant_allows_short_but_rejects_seller() -> None:
+    macro_dormant = MacroContext(vix=12.0, oil_price=70.0, vix_change=0.0)
+    res_put = optimize_position_risk(
+        0.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro_dormant, vix_spot=12.0
+    )
+    assert res_put.suggested_contracts > 0  # 做空 0.5x
+    res_sto = optimize_position_risk(
+        0.0, -1.0, 100000.0, 500.0, 0.2, "STO_PUT", macro_dormant, vix_spot=12.0
+    )
+    assert res_sto.suggested_contracts == 0
+    assert "VIX Dormant: STO 禁用" in res_sto.warnings
+
+
+def test_optimize_position_risk_low_pcr_haircut_only_for_long_buyers() -> None:
+    macro = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9)
+    res_put = optimize_position_risk(
+        0.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro, pcr=0.5
+    )
+    assert not any("PCR 低位" in w for w in res_put.warnings)
+    res_call = optimize_position_risk(
+        0.0, 1.0, 100000.0, 500.0, 0.2, "BTO_CALL", macro, pcr=0.5
+    )
+    assert any("PCR 低位" in w for w in res_call.warnings)
+
+
+def test_optimize_position_risk_bought_put_sizes_against_short_limit() -> None:
+    """買進 Put 的帶號合約 Delta 為負：投影後應消耗「空頭」曝險額度。
+    既有淨空頭已貼近上限時，可開口數必須明顯少於淨多頭時。"""
+    macro = MacroContext(vix=20.0, oil_price=70.0, vix_change=0.0, vts_ratio=0.9)
+    flat = optimize_position_risk(0.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro)
+    net_short = optimize_position_risk(
+        -25.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro
+    )
+    assert flat.suggested_contracts > net_short.suggested_contracts

@@ -4722,3 +4722,66 @@ def test_create_gamma_squeeze_alert_embed() -> None:
     assert "代理數據揭露" in text
     assert "RVOL_15m" in text
     assert "DTE >= 7" in text
+
+
+def test_create_short_entry_embed_renders_short_levels_and_sizing() -> None:
+    from cogs.embed_builders.rollover_embeds import create_short_entry_embed
+
+    plan = {
+        "sub_mode": "破位追空",
+        "entry_price": 92.0,
+        "stop_price": 97.5,
+        "stop_price_structural": 97.5,
+        "stop_price_exit_engine": 98.0,
+        "target_price": 80.0,
+        "reward_risk_ratio": 2.18,
+        "risk_budget_usd": 250.0,
+        "share_qty": 45,
+        "notional_usd": 4140.0,
+        "binding_constraint": "RISK_PCT",
+        "vix_spot": None,
+        "vix_tier_name": "未知",
+        "short_vix_multiplier": 0.5,
+        "kelly_fraction": 0.01,
+        "invalidation_note": "收復 Put Wall $95.00 即論點失效",
+    }
+    embed = create_short_entry_embed(
+        "TSLA",
+        "做空六重鐵律全數通過",
+        plan,
+        "Long Put (輕度 OTM)",
+        "REGIME_V_BREAKDOWN_CHASE",
+    )
+    assert embed.title is not None and "做空進場訊號" in embed.title
+    text = " ".join(f"{f.name} {f.value}" for f in embed.fields)
+    assert "SELL SHORT" in text
+    assert "$92.00" in text and "$80.00" in text
+    assert "結構停損 `$97.50`／出場引擎停損 `$98.00`" in text
+    assert "收復 Put Wall $95.00 即論點失效" in text
+    assert "`45` 股" in text
+    assert "VIX `未知`" in text
+    assert "做空倉位乘數 `0.50x`" in text
+    assert "BUY" not in text.upper().replace("BUYING", "")
+    assert "Buy Shares" not in (embed.description or "")
+    assert embed.footer.text is not None and "負股數" in embed.footer.text
+
+
+def test_vix_battle_status_zero_multiplier_is_not_treated_as_missing() -> None:
+    from cogs.embed_builders._embed_helpers import _add_vix_battle_status_field
+
+    embed = discord.Embed()
+    _add_vix_battle_status_field(
+        embed,
+        {
+            "vix_battle_status": {
+                "name": "All-in (Extreme)",
+                "emoji": "🟥",
+                "vix_spot": 38.0,
+                "sto_delta_cap": -0.35,
+                "sizing_multiplier": 0.0,
+                "trade_intent": "DIRECTIONAL_SHORT",
+            }
+        },
+    )
+    value = embed.fields[0].value or ""
+    assert "做空倉位乘數: `0.00x`" in value

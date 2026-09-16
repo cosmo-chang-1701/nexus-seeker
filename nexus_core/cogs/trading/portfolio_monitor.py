@@ -18,7 +18,9 @@ from services.trading_service import TradingService
 from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
     CORE_DEFENSE_ETF_SYMBOLS,
+    ShortCandidateInput,
 )
+from market_analysis.dynamic_rollover.models import TradingStrategyMode
 from market_analysis.dynamic_rollover.constants import (
     _TRANSITION_PATH1_VWAP_VOLUME_MULT,
 )
@@ -33,6 +35,7 @@ from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
+    create_short_entry_embed,
     create_transition_pyramid_embed,
     create_transition_ratchet_embed,
 )
@@ -43,6 +46,18 @@ logger = logging.getLogger(__name__)
 portfolio_scanner_times = [
     time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (5, 20, 35, 50)
 ]
+
+
+def _resolve_next_negative_node(gex_profile_data: Any, spot: float) -> float:
+    """現價下方第一個顯著負 GEX 節點；任何失敗回傳 0.0 (出場矩陣退回原行為)。"""
+    try:
+        from market_analysis.dynamic_rollover.short_side_entry import (
+            _find_next_negative_gex_peak,
+        )
+
+        return float(_find_next_negative_gex_peak(gex_profile_data, spot))
+    except Exception:
+        return 0.0
 
 
 class PortfolioMonitorCog(commands.Cog):
@@ -74,6 +89,7 @@ class PortfolioMonitorCog(commands.Cog):
             "call_wall": 0.0,
             "previous_call_wall": 0.0,
             "previous_put_wall": 0.0,
+            "next_negative_node": 0.0,
             "is_uoa_sweep": False,
             "gamma_flip": 0.0,
             "sqz_mom": 0.0,
@@ -261,6 +277,12 @@ class PortfolioMonitorCog(commands.Cog):
                 else 0.0,
                 "previous_call_wall": prev_call_wall_val,
                 "previous_put_wall": prev_put_wall_val,
+                # 現價下方第一個顯著負 GEX 節點。做空出場矩陣在現價已跌破 Put Wall
+                # 時以它取代 Put Wall 作為 TP1/TP2 目標牆——否則破位追空部位一登錄
+                # 就落在「跌破 Put Wall 1.5%」的 TP2 內。
+                "next_negative_node": _resolve_next_negative_node(
+                    r_data.get("gex_profile_data"), spot_val
+                ),
                 "is_uoa_sweep": len(r_data.get("uoa", [])) > 0
                 if r_data.get("uoa")
                 else False,
@@ -376,6 +398,7 @@ class PortfolioMonitorCog(commands.Cog):
             "call_wall": metrics["call_wall"],
             "previous_call_wall": metrics.get("previous_call_wall", 0.0),
             "previous_put_wall": metrics.get("previous_put_wall", 0.0),
+            "next_negative_node": metrics.get("next_negative_node", 0.0),
             "is_uoa_sweep": metrics["is_uoa_sweep"],
             "gamma_flip": metrics.get("gamma_flip", 0.0),
             "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -419,6 +442,13 @@ class PortfolioMonitorCog(commands.Cog):
             return
 
         logger.info("🛡️ [NRO] 開始執行真實持倉風險審計...")
+        # 前向蒐集：本週期內所有 Regime 分類與進場鐵律評估都標記為此來源，週期
+        # 結束時一次批次寫入 (market_analysis/evaluation_recorder.py)。
+        from market_analysis import evaluation_recorder
+
+        eval_source_token = evaluation_recorder.set_evaluation_source(
+            "PORTFOLIO_MONITOR"
+        )
         try:
             risk_events = await self.trading_service.audit_real_portfolio_risk()
 
@@ -707,6 +737,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "call_wall": metrics["call_wall"],
                         "previous_call_wall": metrics.get("previous_call_wall", 0.0),
                         "previous_put_wall": metrics.get("previous_put_wall", 0.0),
+                        "next_negative_node": metrics.get("next_negative_node", 0.0),
                         "is_uoa_sweep": metrics["is_uoa_sweep"],
                         "gamma_flip": metrics.get("gamma_flip", 0.0),
                         "sqz_mom": metrics.get("sqz_mom", 0.0),
@@ -886,6 +917,28 @@ class PortfolioMonitorCog(commands.Cog):
                 # 避免僅持有空頭 CALL、無對應現貨紀錄的邊界情況被靜默忽略，
                 # 仍以聯集為準，portfolio_assets 缺席時安全退回空列表。
                 all_user_ids = set(user_assets.keys()) | set(user_short_calls.keys())
+
+                # 🚀 SHORT_ENTRY 做空進場訊號的前置資料：做空／動態使用者集合
+                # (含沒有任何持倉的純現金使用者——上方集合只涵蓋有持倉者，他們
+                # 原本永遠不會被評估) 與 VIX 即時值。VIX 刻意走嚴格抓取：
+                # get_macro_environment() 失敗時回傳的 18.0 與真實值無從區分，
+                # 做空倉位需要知道「VIX 未知」才能退回保守乘數。
+                short_strategy_user_ids: set[int] = set(
+                    await asyncio.to_thread(
+                        database.get_user_ids_by_trading_strategy,
+                        (
+                            TradingStrategyMode.SHORT_SIDE.value,
+                            TradingStrategyMode.DYNAMIC.value,
+                        ),
+                    )
+                )
+                vix_spot_for_short: Optional[float] = None
+                if short_strategy_user_ids:
+                    from services import market_data_service as _mds
+
+                    vix_spot_for_short = await _mds.get_vix_spot_strict()
+                    evaluation_recorder.set_cycle_context(vix_spot=vix_spot_for_short)
+                all_user_ids |= short_strategy_user_ids
                 for u_id in all_user_ids:
                     portfolio_assets = user_assets.get(u_id, [])
                     # 取絕對值：帳戶規模是資本佔用的量值。帶號加總會讓多空
@@ -1042,6 +1095,72 @@ class PortfolioMonitorCog(commands.Cog):
                         user_short_calls.get(u_id, []),
                     )
 
+                    # 🚀 SHORT_ENTRY：獨立的做空進場訊號。與 Scenario 2 的「賣衛星、
+                    # 買候選」完全脫鉤——後者整條下游是多頭假設。候選有兩個來源：
+                    # (a) Scenario 2 在 DYNAMIC + Regime V 已確認的做空評估 (原樣
+                    # 沿用，不重算)；(b) 依下行空間 × 空頭動能挑出的做空候選。
+                    # 本週期若已有保證金防禦指令，引擎內部抑制新開空單。
+                    if u_id in short_strategy_user_ids:
+                        short_candidates: List[ShortCandidateInput] = []
+                        if (
+                            candidate_entry_confirmation is not None
+                            and candidate_entry_confirmation.direction == "SHORT"
+                            and candidate_entry_confirmation.short_evaluation
+                            is not None
+                        ):
+                            short_candidates.append(
+                                ShortCandidateInput(
+                                    symbol=candidate_symbol,
+                                    radar=candidate_radar,
+                                    precomputed=candidate_entry_confirmation.short_evaluation,
+                                    entry_regime=candidate_entry_confirmation.entry_regime,
+                                    rsi_15m=candidate_entry_confirmation.rsi_15m,
+                                )
+                            )
+                        short_symbol = self.rollover_engine._find_best_short_target(
+                            u_id,
+                            {a["symbol"] for a in portfolio_assets},
+                            shared_cache,
+                        )
+                        if short_symbol:
+                            short_radar = radar_cache_map.get(short_symbol)
+                            if short_radar is None and is_shared_fresh:
+                                short_radar = shared_cache.get(short_symbol)
+                            if short_radar is None and terminal_cog:
+                                try:
+                                    if radar_cache_map:
+                                        await asyncio.sleep(1.5)  # 沿用既有節流保護
+                                    short_radar = (
+                                        await terminal_cog._fetch_sym_radar_data_slow(
+                                            short_symbol
+                                        )
+                                    )
+                                    radar_cache_map[short_symbol] = short_radar
+                                except Exception as ex:
+                                    logger.error(
+                                        f"Failed to fetch short candidate radar for {short_symbol}: {ex}"
+                                    )
+                            if short_radar:
+                                short_candidates.append(
+                                    ShortCandidateInput(
+                                        symbol=short_symbol, radar=short_radar
+                                    )
+                                )
+                        if short_candidates:
+                            margin_defense_active = any(
+                                i.get("scenario") == "MARGIN_DEFENSE"
+                                and i.get("action") != "HOLD"
+                                for i in rebalance_instructions
+                            )
+                            rebalance_instructions += await self.rollover_engine.evaluate_short_entry_opportunity(
+                                u_id,
+                                short_candidates,
+                                vix_spot_for_short,
+                                suppress_reason="MARGIN_DEFENSE"
+                                if margin_defense_active
+                                else None,
+                            )
+
                     # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
                     # 由 create_dynamic_rollover_embed 依 scenario 明確對照表決定，
                     # 不再依賴此處字串是否包含特定關鍵字。
@@ -1053,6 +1172,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "MACRO_TOP_ESCAPE_DEFENSE": "宏觀逃頂前瞻防禦",
                         "COVERED_CALL_PROFIT_LOCK": "賣方期權時間價值停利 (Covered Call / CSP)",
                         "TRANSITION_ENGINE": "動態調整狀態切換引擎",
+                        "SHORT_ENTRY": "做空進場訊號",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -1062,11 +1182,14 @@ class PortfolioMonitorCog(commands.Cog):
                         # 獨立於例行轉倉建議 (Scenario 2/3) 的開關之外，避免使用者
                         # 在 `mute_intraday` 等預設情境下靜音例行雜訊時，連帶誤將
                         # 系統性保證金風控紅線警報一併關閉。
-                        notif_key = (
-                            "defense_margin_call"
-                            if scenario == "MARGIN_DEFENSE"
-                            else "defense_option_rollover"
-                        )
+                        # SHORT_ENTRY 是進場訊號而非持倉防禦，走 Alpha 策略頻道；
+                        # focus / mute_intraday 預設關閉該頻道，校準前較安全。
+                        if scenario == "MARGIN_DEFENSE":
+                            notif_key = "defense_margin_call"
+                        elif scenario == "SHORT_ENTRY":
+                            notif_key = "alpha_market_signals"
+                        else:
+                            notif_key = "defense_option_rollover"
                         if not database.is_notification_enabled(u_id, notif_key):
                             continue
 
@@ -1109,12 +1232,29 @@ class PortfolioMonitorCog(commands.Cog):
                         limit_price_val = ins.get("limit_price")
                         if ins["action"] == "HOLD":
                             suggested_price = "N/A (維持現狀)"
+                        elif scenario == "SHORT_ENTRY" and limit_price_val:
+                            suggested_price = (
+                                f"${float(limit_price_val):.2f} (限價放空)"
+                            )
                         elif limit_price_val:
                             suggested_price = f"${float(limit_price_val):.2f} (限價)"
                         else:
                             suggested_price = "Market"
 
-                        if ins.get("is_covered_call_overlay"):
+                        short_plan = ins.get("short_entry_plan")
+                        if scenario == "SHORT_ENTRY" and short_plan is not None:
+                            # 做空進場訊號：沒有「賣出來源 → 買進目標」的轉倉框架，
+                            # 通用 embed 會以 BTO/Buy Shares 渲染，方向完全相反；
+                            # RolloverActionView 試算的是 BUY 股數，同樣不適用，
+                            # 故不附加互動按鈕。
+                            embed = create_short_entry_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                plan=short_plan,
+                                structure_directive=ins.get("structure_directive"),
+                                entry_regime=ins.get("entry_regime"),
+                            )
+                        elif ins.get("is_covered_call_overlay"):
                             # Covered Call Overlay：不賣出任何標的持股、沒有第二個
                             # 轉倉標的，套用 create_dynamic_rollover_embed 的
                             # sell/buy 轉倉框架會產生誤導文案 (該函式的 is_hold
@@ -1233,12 +1373,20 @@ class PortfolioMonitorCog(commands.Cog):
                         # 行為分佈尚未經過實際流量驗證；dry-run 期間僅記錄
                         # log 與審計軌跡，不實際推播 DM，待觀察 1-2 週分佈合理
                         # 後再關閉 OPTIONS_ROLLOVER_DRY_RUN。
+                        is_short_entry_dry_run = (
+                            scenario == "SHORT_ENTRY" and config.SHORT_ENTRY_DRY_RUN
+                        )
                         if (
                             instrument_type == "OPTIONS"
                             and config.OPTIONS_ROLLOVER_DRY_RUN
-                        ):
+                        ) or is_short_entry_dry_run:
+                            dry_run_tag = (
+                                "ShortEntry"
+                                if is_short_entry_dry_run
+                                else "OptionsRollover"
+                            )
                             logger.info(
-                                f"[OptionsRollover][DryRun] 略過推播 (僅記錄審計軌跡): "
+                                f"[{dry_run_tag}][DryRun] 略過推播 (僅記錄審計軌跡): "
                                 f"user={u_id} symbol={ins['symbol']} scenario={scenario} "
                                 f"action={action}"
                             )
@@ -1284,6 +1432,9 @@ class PortfolioMonitorCog(commands.Cog):
 
         except Exception as e:
             logger.error(f"真實持倉風險審計錯誤: {e}")
+        finally:
+            evaluation_recorder.reset_evaluation_source(eval_source_token)
+            await evaluation_recorder.flush_evaluations()
 
     @monitor_real_portfolio_task.before_loop
     async def before_monitor_real_portfolio_task(self) -> None:

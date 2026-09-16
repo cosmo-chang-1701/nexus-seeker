@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, List, Sequence
 import sqlite3
 import logging
 from dataclasses import dataclass
@@ -251,6 +251,33 @@ def get_all_user_ids() -> Any:
         return [row[0] for row in rows]
     except Exception as e:
         logger.error(f"獲取所有使用者 ID 失敗: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_user_ids_by_trading_strategy(strategies: Sequence[str]) -> List[int]:
+    """取得 `trading_strategy` 落在指定集合內的使用者 ID (單次查詢)。
+
+    SHORT_ENTRY 情境用它把「沒有任何持倉的做空／動態使用者」併入 15 分鐘
+    評估迴圈——該迴圈原本只涵蓋有持倉的使用者，純現金的做空使用者永遠不會
+    被評估。讀取失敗回傳空清單 (fail-closed：不評估)。
+    """
+    if not strategies:
+        return []
+    conn = None
+    try:
+        conn = get_read_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in strategies)
+        cursor.execute(
+            f"SELECT user_id FROM user_settings WHERE trading_strategy IN ({placeholders})",  # nosemgrep
+            tuple(strategies),
+        )
+        return [int(row[0]) for row in cursor.fetchall()]
+    except Exception as e:
+        logger.error(f"依交易策略查詢使用者 ID 失敗: {e}")
         return []
     finally:
         if conn:

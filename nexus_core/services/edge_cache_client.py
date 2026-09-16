@@ -3,6 +3,7 @@ services/edge_cache_client.py
 
 集中封裝 nexus_core 對 nexus_edge_scraper 新增的「讀快取」端點呼叫
 (`POST /api/v1/watchlist/sync`、`GET /api/v1/cache/gex/{symbol}`、
+`GET /api/v1/cache/gex/history/{symbol}` (僅校準工具)、
 `GET /api/v1/cache/options/{symbol}/chain`)。
 
 這些呼叫全部是**純附加的快速路徑**：edge 目前部署不穩定，任何一次呼叫
@@ -104,3 +105,43 @@ async def get_cached_option_chain(
             f"[{symbol}] 讀取 edge Option Chain 快取失敗（將 fallback 至即時抓取): {e}"
         )
     return None
+
+
+async def get_gex_history(
+    symbol: str,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    max_pages: int = 20,
+) -> list[dict[str, Any]]:
+    """分頁讀取 edge 的 GEX 快照歷史 (15 分鐘分桶)。
+
+    ⚠️ 僅供離線校準工具 (`calibration/`) 使用，bot 執行期不應呼叫。edge 離線或
+    任何失敗回傳已取得的部分 (可能為空清單)。"""
+    base_url = _base_url()
+    if not base_url:
+        return []
+    rows: list[dict[str, Any]] = []
+    cursor = since
+    try:
+        async with httpx.AsyncClient(timeout=_SYNC_TIMEOUT_SECONDS) as client:
+            for _ in range(max_pages):
+                params: dict[str, Any] = {"limit": 500}
+                if cursor:
+                    params["since"] = cursor
+                if until:
+                    params["until"] = until
+                res = await client.get(
+                    f"{base_url}/api/v1/cache/gex/history/{symbol}", params=params
+                )
+                if res.status_code != 200:
+                    break
+                payload = res.json()
+                if payload.get("status") != "success":
+                    break
+                rows.extend(payload.get("data") or [])
+                cursor = payload.get("next_since")
+                if not cursor:
+                    break
+    except Exception as e:
+        logger.info(f"[{symbol}] 讀取 edge GEX 快照歷史失敗: {e}")
+    return rows

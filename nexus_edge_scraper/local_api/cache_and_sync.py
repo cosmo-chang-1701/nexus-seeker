@@ -80,6 +80,30 @@ async def get_cached_gex(symbol: str) -> dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
+@router.get("/api/v1/cache/gex/history/{symbol}")
+async def get_cached_gex_history(
+    symbol: str,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """讀取 GEX 快照歷史 (15 分鐘分桶)，供 nexus_core 離線校準工具使用。
+
+    分頁：以回傳最後一筆的 bucket_ts 之後作為下一頁的 since。
+    """
+    try:
+        rows = await asyncio.to_thread(
+            database.get_gex_history, symbol, since, until, limit
+        )
+        next_since = None
+        if rows and len(rows) >= max(1, min(limit, 500)):
+            next_since = rows[-1]["bucket_ts"] + "~"  # 字典序緊接於最後一筆之後
+        return {"status": "success", "data": rows, "next_since": next_since}
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 GEX 快照歷史失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @router.get("/api/v1/cache/options/{symbol}/chain")
 async def get_cached_option_chain(
     symbol: str, expiry: str | None = None

@@ -80,7 +80,7 @@ $$
 $$
 
 $$
-\text{Threshold}_{\text{dynamic}} = \max\Big(2.2 \times \text{Risk}_{\text{actual}},\ 1.5 \times \frac{\text{ATR}_{1D}}{\text{Spot}},\ 0.035\Big), \qquad \text{Risk}_{\text{actual}} = \frac{\text{Spot} - (\text{PutWall} - 1.5 \times \text{ATR}_{15m})}{\text{Spot}}
+\text{Threshold}_{\text{dynamic}} = \max\Big(2.2 \times \text{Risk}_{\text{actual}},\ 1.5 \times \frac{\text{ATR}_{1D}}{\text{Spot}},\ 0.035\Big), \qquad \text{Risk}_{\text{actual}} = \frac{\text{Spot} - (\text{PutWall} - 0.5 \times \text{ATR}_{15m})}{\text{Spot}}
 $$
 
 固定 $5\%$ 對單日 ATR 達 $4\%$ 的高波標的等同沒有盈虧比保護、對單日 ATR 僅 $0.8\%$ 的低波標的又是遙不可及的天花板；改由該標的自身下行風險反推後，SPEAR 進攻訊號的 $2.2:1$ 盈虧比成為結構性保證。

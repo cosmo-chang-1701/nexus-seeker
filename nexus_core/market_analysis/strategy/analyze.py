@@ -6,7 +6,8 @@ from datetime import datetime
 from typing import Any, Optional
 
 from services import market_data_service
-from market_analysis.risk_engine import calculate_beta
+from config import get_vix_sizing_multiplier
+from market_analysis.risk_engine import calculate_beta, classify_trade_intent
 from market_analysis.greeks import calculate_greeks
 
 from market_analysis.strategy.indicators import _determine_strategy_signal
@@ -102,8 +103,17 @@ async def analyze_symbol(
 
         # ---------- VIX 戰情階梯閘門 (VIX Battle Ladder Gate) ----------
         vix_tier = apply_vix_ladder(vix_spot)
-        vix_sizing_multiplier = vix_tier.get("sizing_multiplier", 1.0)
-        vix_kelly_override = vix_tier.get("kelly_fraction_override")
+        # 倉位乘數依交易意圖分流：賣方與做多沿用階梯 sizing_multiplier，方向性
+        # 做空 (BTO_PUT) 改走倒 U 形 short_sizing_multiplier——賣方階梯在 VIX
+        # 極端區放大到 2.0，對追空是方向相反的前提。
+        trade_intent = classify_trade_intent(strategy)
+        vix_sizing_multiplier = get_vix_sizing_multiplier(vix_spot, trade_intent)
+        # All-in 階梯的凱利分數放大 (0.5) 同樣只屬於賣方／做多前提。
+        vix_kelly_override = (
+            None
+            if trade_intent == "DIRECTIONAL_SHORT"
+            else vix_tier.get("kelly_fraction_override")
+        )
 
         # VIX 戰情階梯資訊注入，供 Service 層進行 Macro 階段判定
         vix_allow_signal = vix_tier.get("allow_signal", True)
@@ -335,6 +345,7 @@ async def analyze_symbol(
             "vix_tier_emoji": vix_tier.get("emoji", ""),
             "vix_tier_color": vix_tier.get("color_hex", 0x808080),
             "vix_sizing_multiplier": vix_sizing_multiplier,
+            "trade_intent": trade_intent,
             "vix_sto_delta_cap": vix_tier.get("sto_delta_cap", 0.0),
             "vix_allow_signal": vix_allow_signal,
         }

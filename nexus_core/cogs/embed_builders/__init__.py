@@ -143,6 +143,7 @@ from cogs.embed_builders.rollover_embeds import (
     build_fundamental_broken_embed,
     create_thesis_passed_embed,
     create_rollover_history_embed,
+    create_short_entry_embed,
 )
 
 # ── Settings Embeds ───────────────────────────────────────────────────────────
@@ -294,6 +295,7 @@ __all__ = [
     "build_fundamental_broken_embed",
     "create_thesis_passed_embed",
     "create_rollover_history_embed",
+    "create_short_entry_embed",
     # Settings embeds
     "create_notification_settings_embed",
     "create_account_settings_embed",

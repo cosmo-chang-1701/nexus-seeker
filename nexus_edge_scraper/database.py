@@ -10,10 +10,12 @@ nexus_core 的查詢，不必每次都重新即時抓取。
 nexus_core 那套 migration engine —— 這是獨立服務，維持既有的輕量單檔風格。
 """
 
+from datetime import datetime, timezone
 from typing import Any, Optional
 import json
 import os
 import sqlite3
+import zlib
 
 DB_PATH = os.environ.get(
     "EDGE_CACHE_DB_PATH",
@@ -27,6 +29,48 @@ DB_PATH = os.environ.get(
 # 寫入，是 `database is locked` 的典型成因。busy_timeout 與 connect(timeout=)
 # 等價，這裡顯式設定以便與 nexus_core 的連線層寫法一致。
 _BUSY_TIMEOUT_MS = 10_000
+
+# GEX 快照歷史 (前向蒐集)：gex_snapshot 是 upsert、只留最新值，使 nexus_core 的
+# GEX 相關門檻 (Put Wall / Gamma Flip / 次級負 GEX 節點) 完全無法回測。歷史表以
+# 15 分鐘分桶、每桶只留第一筆，5 分鐘優先輪詢每標的每日最多 26 列。
+GEX_HISTORY_ENABLED = os.environ.get("GEX_HISTORY_ENABLED", "true").lower() == "true"
+try:
+    GEX_HISTORY_RETENTION_DAYS = int(
+        os.environ.get("GEX_HISTORY_RETENTION_DAYS", "180")
+    )
+except ValueError:
+    GEX_HISTORY_RETENTION_DAYS = 180
+_GEX_HISTORY_BUCKET_MINUTES = 15
+# 只保留現價 ±25% 內的履約價：遠端履約價對牆體與節點判定無意義，卻佔大半體積。
+_GEX_HISTORY_STRIKE_BAND = 0.25
+_GEX_HISTORY_MAX_LIMIT = 500
+
+
+def gex_history_bucket(now: Optional[datetime] = None) -> str:
+    """UTC 時間向下取整至 15 分鐘的 ISO 字串 (歷史表主鍵之一)。"""
+    moment = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    floored = moment.replace(
+        minute=moment.minute - moment.minute % _GEX_HISTORY_BUCKET_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+    return floored.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _compress_profile(gex_profile: dict[str, float], spot: float) -> bytes:
+    if spot and spot > 0:
+        lo = spot * (1.0 - _GEX_HISTORY_STRIKE_BAND)
+        hi = spot * (1.0 + _GEX_HISTORY_STRIKE_BAND)
+        trimmed: dict[str, float] = {}
+        for k, v in gex_profile.items():
+            try:
+                if lo <= float(k) <= hi:
+                    trimmed[k] = v
+            except (TypeError, ValueError):
+                continue
+    else:
+        trimmed = dict(gex_profile)
+    return zlib.compress(json.dumps(trimmed, separators=(",", ":")).encode("utf-8"))
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -61,6 +105,21 @@ def init_db() -> None:
                 gex_profile_json TEXT,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS gex_snapshot_history (
+                symbol TEXT NOT NULL,
+                bucket_ts TEXT NOT NULL,
+                captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                spot REAL,
+                net_gex REAL,
+                call_wall REAL,
+                put_wall REAL,
+                gex_profile_z BLOB,
+                PRIMARY KEY (symbol, bucket_ts)
+            ) WITHOUT ROWID;
+
+            CREATE INDEX IF NOT EXISTS idx_gex_hist_captured
+                ON gex_snapshot_history(captured_at);
 
             CREATE TABLE IF NOT EXISTS option_chain_snapshot (
                 symbol TEXT NOT NULL,
@@ -196,7 +255,79 @@ def save_gex_snapshot(
                 json.dumps(gex_profile),
             ),
         )
+        if GEX_HISTORY_ENABLED:
+            # 同一交易內寫入歷史；同一 15 分鐘桶只保留第一筆 (INSERT OR IGNORE)。
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO gex_snapshot_history
+                    (symbol, bucket_ts, spot, net_gex, call_wall, put_wall, gex_profile_z)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol.upper(),
+                    gex_history_bucket(),
+                    spot,
+                    net_gex,
+                    call_wall,
+                    put_wall,
+                    _compress_profile(gex_profile, spot),
+                ),
+            )
         conn.commit()
+    finally:
+        conn.close()
+
+
+def get_gex_history(
+    symbol: str,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = _GEX_HISTORY_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """依 bucket_ts 升冪讀取歷史快照 (since 含、until 不含)，limit 上限 500。"""
+    limit = max(1, min(int(limit), _GEX_HISTORY_MAX_LIMIT))
+    clauses = ["symbol = ?"]
+    params: list[Any] = [symbol.upper()]
+    if since:
+        clauses.append("bucket_ts >= ?")
+        params.append(since)
+    if until:
+        clauses.append("bucket_ts < ?")
+        params.append(until)
+    params.append(limit)
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+            f"SELECT * FROM gex_snapshot_history WHERE {' AND '.join(clauses)} "
+            "ORDER BY bucket_ts ASC LIMIT ?",
+            tuple(params),
+        )
+        rows: list[dict[str, Any]] = []
+        for row in cursor.fetchall():
+            data = dict(row)
+            blob = data.pop("gex_profile_z", None)
+            try:
+                data["gex_profile"] = (
+                    json.loads(zlib.decompress(blob).decode("utf-8")) if blob else {}
+                )
+            except (zlib.error, ValueError):
+                data["gex_profile"] = {}
+            rows.append(data)
+        return rows
+    finally:
+        conn.close()
+
+
+def prune_gex_history(retention_days: int = GEX_HISTORY_RETENTION_DAYS) -> int:
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM gex_snapshot_history WHERE captured_at < datetime('now', ?)",
+            (f"-{int(retention_days)} days",),
+        )
+        conn.commit()
+        return cursor.rowcount
     finally:
         conn.close()
 

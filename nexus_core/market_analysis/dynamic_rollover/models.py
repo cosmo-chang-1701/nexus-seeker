@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, NamedTuple, Optional, TypedDict
+from typing import Any, Dict, Literal, NamedTuple, Optional, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -17,6 +17,11 @@ class RolloverScenario(str, Enum):
     MACRO_TOP_ESCAPE_DEFENSE = "MACRO_TOP_ESCAPE_DEFENSE"
     COVERED_CALL_PROFIT_LOCK = "COVERED_CALL_PROFIT_LOCK"
     TRANSITION_ENGINE = "TRANSITION_ENGINE"
+    # 做空進場訊號 (short_entry_deployment.py)。刻意獨立成情境、不借用
+    # OPPORTUNITY_COST：後者的語意是「賣掉衛星持倉、把資金**買進**候選標的」，
+    # 整條下游 (PowerSqueeze > 80 門檻、Buy Shares 工具別、RolloverActionView
+    # 的 BUY 數量計算) 全是多頭假設，做空確認走進去只會得到自相矛盾的指令。
+    SHORT_ENTRY = "SHORT_ENTRY"
 
 
 class TradingStrategyMode(str, Enum):
@@ -52,6 +57,59 @@ class RegimeMarketData(NamedTuple):
     df_15m: Optional[Any] = None
     session_vwap: float = 0.0
     atr_15m: float = 0.0
+    # 分類器判定 Regime V / III 時本來就已算出的 15m RSI，供做空倉位的凱利勝率
+    # 先驗查表沿用 (kelly_priors.get_win_rate_prior)。未算出時為 NaN。
+    rsi_15m: float = float("nan")
+
+
+EntryDirection = Literal["LONG", "SHORT"]
+
+
+class ShortEntryEvaluation(NamedTuple):
+    """做空六重鐵律的完整評估結果 (short_side_entry.evaluate_short_entry)。
+
+    舊的 `(bool, reason, structure_directive)` 三元組只回答「過不過」，但下游
+    建立做空指令需要進場／停損／目標三個價位——它們全是六重鐵律評估過程中
+    本來就已經算出的中間值 (頂牆、Put Wall、次級負 GEX 節點、ATR)。若只回傳
+    三元組，下游勢必重新抓取與重算，除了多餘 I/O，更會讓「確認」與「下單價位」
+    建立在兩份不同的資料快照上。
+
+    `conditions` 逐項記錄六條件：True／False，或 None 表示被短路略過 (⏭️)。
+    """
+
+    all_passed: bool
+    reason: str
+    structure_directive: Optional[str]
+    sub_mode: str  # "區間內做空" | "破位追空" | "N/A"
+    conditions: tuple[Optional[bool], ...]
+    spot: float
+    resistance_wall: float
+    call_wall: float
+    put_wall: float
+    gamma_flip: float
+    next_negative_node: float
+    net_gex: Optional[float]
+    session_vwap: float
+    atr_15m: float
+    atr_1d: float
+    ivr: float
+
+
+class EntryConfirmation(NamedTuple):
+    """Scenario 2 進場鐵律的確認結果，轉交 Scenario 5 與 SHORT_ENTRY 情境沿用。
+
+    早期是 `(is_confirmed, reason)` 二元組，**不帶方向**——`core_deployment.py`
+    因此把做空確認當成「候選標的可以買進」，把 CORE 超額資金以 Buy Shares 部署
+    進剛被確認要做空的標的。`direction` 是修復該缺陷的最小必要資訊。
+    """
+
+    is_confirmed: bool
+    reason: str
+    direction: EntryDirection = "LONG"
+    short_evaluation: Optional[ShortEntryEvaluation] = None
+    entry_regime: Optional[str] = None
+    # 分類器算出的 15m RSI (Regime V 路徑)，供做空倉位的凱利先驗查表沿用。
+    rsi_15m: Optional[float] = None
 
 
 class DynamicRegime(str, Enum):
@@ -93,6 +151,33 @@ class FundamentalThesisResult(BaseModel):
         description="True if structural thesis is broken, False if just macro/temporary"
     )
     confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+
+
+class ShortEntryPlan(TypedDict):
+    """SHORT_ENTRY 指令攜帶的進場計畫 (short_entry_sizing.py 產出)。
+
+    停損刻意列出兩個來源：`stop_price_structural` 是進場鐵律條件二／三的
+    參考停損 (頂牆 + 0.5×ATR₁₅ₘ)，`stop_price_exit_engine` 是部位登錄後做空
+    鏡像出場矩陣實際會執行的停損。`stop_price` 取兩者較遠者用於倉位計算——
+    倉位必須以「真的會被執行的停損」為準，否則風險預算會被低估。
+    """
+
+    sub_mode: str
+    entry_price: float
+    stop_price: float
+    stop_price_structural: float
+    stop_price_exit_engine: float
+    target_price: float
+    reward_risk_ratio: float
+    risk_budget_usd: float
+    share_qty: int
+    notional_usd: float
+    binding_constraint: str
+    vix_spot: Optional[float]
+    vix_tier_name: str
+    short_vix_multiplier: float
+    kelly_fraction: float
+    invalidation_note: Optional[str]
 
 
 class _RolloverInstructionRequired(TypedDict):
@@ -183,3 +268,5 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 提前寫入會讓一次性切換 (pyramided / lockout) 在推播被抑制時永久燒掉。
     asset_id: Optional[int]
     dynamic_state_patch: Optional[Dict[str, Any]]
+    # SHORT_ENTRY 情境專屬：進場／停損／目標價位與倉位計算結果。
+    short_entry_plan: Optional[ShortEntryPlan]

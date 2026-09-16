@@ -29,6 +29,7 @@
      - 兩者是完全獨立的推播路徑（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。過去共用同一個 `heartbeat_watchlist` key，無法分別靜音，而標籤還誤寫成「30 分鐘」卻同時管著 15 分鐘那條。
   3. `defense`（🛡️ 持倉風控與極端防禦）：`defense_portfolio_risk`、`defense_option_rollover`、`defense_fundamental_thesis`、`defense_macro_tail_risk`
   4. `alpha`（🎯 Alpha 策略與情報）：`alpha_market_signals`、`alpha_polymarket`、`alpha_wti_oil`、`alpha_price_volume_watch`
+     - 動態轉倉引擎的 **`SHORT_ENTRY` 做空進場訊號**走 `alpha_market_signals`，而非 `defense_option_rollover`：它是進場訊號、不是持倉防禦。`focus` 與 `mute_intraday` 預設關閉此頻道，做空系統校準前較不易打擾使用者；另受 `SHORT_ENTRY_DRY_RUN`（預設開啟，只寫稽核紀錄）控制。其餘動態轉倉情境維持 `defense_option_rollover`，保證金強制平倉維持 `defense_margin_call`。
 - **動態雙層架構與預設模式**：為提供簡潔不雜亂的使用者體驗：
   - Row 0：類別選擇器（`briefings`、`telemetry`、`defense`、`alpha`）
   - Row 1：開關選項，即時 `🟢` / `🔴` 指示器

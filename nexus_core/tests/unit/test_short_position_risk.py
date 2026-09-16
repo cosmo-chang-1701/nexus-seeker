@@ -15,7 +15,9 @@ from market_analysis.margin import (
     calculate_option_margin,
 )
 from market_analysis.risk_engine import (
+    classify_trade_intent,
     is_short_exposure_strategy,
+    position_delta_sign,
     simulate_exposure_impact,
 )
 
@@ -61,7 +63,6 @@ class TestShortExposureStrategyDetection:
     @pytest.mark.parametrize(
         "strategy",
         [
-            "STO_PUT",
             "STO_CALL",
             "SHORT_SIDE",
             "SHORT_STOCK",
@@ -76,7 +77,18 @@ class TestShortExposureStrategyDetection:
 
     @pytest.mark.parametrize(
         "strategy",
-        ["BTO_CALL", "Long Call (ATM/輕度 OTM)", "Bull Call Spread", "Buy Shares"],
+        [
+            "BTO_CALL",
+            "Long Call (ATM/輕度 OTM)",
+            "Bull Call Spread",
+            "Buy Shares",
+            # 賣出 Put 是**看多**的賣方收權利金：合約 Delta 為負、乘 -1 後部位
+            # Delta 為正。早期版本以字串含 STO／SHORT 判為空頭。
+            "STO_PUT",
+            "Short Put (賣出價外 Put)",
+            "CSP",
+            "LONG_STOCK",  # STO 字元不得命中 STOCK
+        ],
     )
     def test_long_strategies_not_detected(self, strategy: str) -> None:
         assert is_short_exposure_strategy(strategy) is False
@@ -95,6 +107,50 @@ class TestShortExposureStrategyDetection:
             suggested_contracts=2,
         )
         assert projected == pytest.approx(800.0)  # 1000 − 100×2
+
+    def test_bought_put_projects_negative_delta(self) -> None:
+        """買進 Put 的合約 Delta 本身已為負 (bs_delta, flag="p")，乘數必須是 +1。
+
+        `a801d5e` 曾以 `-1 if is_short_exposure_strategy(...)` 投影：
+        `-50 × -1 = +50`，NRO 把一筆買進的 Put 當成增加多頭 Delta 編列預算。
+        """
+        projected, _pct = simulate_exposure_impact(
+            current_total_delta=1000.0,
+            new_trade_data={"strategy": "BTO_PUT", "weighted_delta": -50.0},
+            user_capital=100_000.0,
+            spy_price=500.0,
+            suggested_contracts=2,
+        )
+        assert projected == pytest.approx(900.0)  # 1000 + (−50 × 2)
+
+    def test_sold_put_projects_positive_delta(self) -> None:
+        """賣出 Put：合約 Delta 為負，乘 -1 後為正——看多，正確。"""
+        projected, _pct = simulate_exposure_impact(
+            current_total_delta=1000.0,
+            new_trade_data={"strategy": "STO_PUT", "weighted_delta": -20.0},
+            user_capital=100_000.0,
+            spy_price=500.0,
+            suggested_contracts=2,
+        )
+        assert projected == pytest.approx(1040.0)
+
+    @pytest.mark.parametrize(
+        ("strategy", "sign"),
+        [
+            ("BTO_PUT", 1),
+            ("Long Put (輕度 OTM)", 1),
+            ("BTO_CALL", 1),
+            ("Buy Shares", 1),
+            ("LONG_STOCK", 1),
+            ("STO_PUT", -1),
+            ("STO_CALL", -1),
+            ("SHORT_SIDE", -1),
+            ("Bear Call Spread (IVR 過高)", -1),
+            ("Short Put (賣出價外 Put)", -1),
+        ],
+    )
+    def test_position_delta_sign(self, strategy: str, sign: int) -> None:
+        assert position_delta_sign(strategy) == sign
 
     def test_long_side_entry_unchanged(self) -> None:
         projected, _pct = simulate_exposure_impact(
@@ -166,3 +222,35 @@ class TestHedgingDoesNotMistakeAlphaShortForHedge:
         src = inspect.getsource(hedging.get_market_regime_target)
         assert "target_delta = 0.0" in src
         assert "user_capital * -" not in src
+
+
+# ---------------------------------------------------------------- 交易意圖分類
+class TestTradeIntentClassification:
+    @pytest.mark.parametrize(
+        ("strategy", "intent"),
+        [
+            # 掃描器四種訊號
+            ("STO_PUT", "PREMIUM_SELL"),
+            ("STO_CALL", "PREMIUM_SELL"),
+            ("BTO_PUT", "DIRECTIONAL_SHORT"),
+            ("BTO_CALL", "DIRECTIONAL_LONG"),
+            # 明確的看多賣方必須最先比對 (Short Put 含 "SHORT" 字元)
+            ("Short Put (賣出價外 Put)", "PREMIUM_SELL"),
+            ("Covered Call", "PREMIUM_SELL"),
+            ("CSP", "PREMIUM_SELL"),
+            ("Bull Put Spread", "PREMIUM_SELL"),
+            # 做空進場系統的條件六結構
+            ("Long Put (輕度 OTM)", "DIRECTIONAL_SHORT"),
+            ("Bear Call Spread (IVR 過高，改當賣方收取恐慌溢價)", "DIRECTIONAL_SHORT"),
+            ("SHORT_SIDE", "DIRECTIONAL_SHORT"),
+            ("OPEN_SHORT", "DIRECTIONAL_SHORT"),
+            ("REGIME_V_BREAKDOWN_CHASE", "DIRECTIONAL_SHORT"),
+            # 其餘
+            ("Short Call", "PREMIUM_SELL"),
+            ("Buy Shares", "DIRECTIONAL_LONG"),
+            ("LONG_STOCK", "DIRECTIONAL_LONG"),
+            ("Bull Call Spread", "DIRECTIONAL_LONG"),
+        ],
+    )
+    def test_intent_table(self, strategy: str, intent: str) -> None:
+        assert classify_trade_intent(strategy) == intent

@@ -3,6 +3,8 @@
 import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from config import get_short_vix_multiplier
+from market_analysis.risk_engine import classify_trade_intent
 from services import market_data_service
 from models.execution import MarketCondition, Signal
 
@@ -166,10 +168,21 @@ class ExecutionMixin:
 
         # --- Stage 1: Macro (VIX Battle Ladder & Regime) ---
         vix_allow = data.get("vix_allow_signal", True)
-        if "STO" in strategy and not vix_allow:
+        intent = classify_trade_intent(strategy)
+        # allow_signal 是賣方階梯的閘門 (休兵區禁 STO)；方向性做空另走倒 U 形
+        # 乘數，係數為 0 (VIX 極端區) 時拒絕。
+        if intent == "PREMIUM_SELL" and not vix_allow:
             return (
                 False,
                 f"MACRO_REJECT: VIX {data.get('vix_spot'):.1f} tier '{data.get('vix_tier_name')}' restricts STO entry.",
+            )
+        if (
+            intent == "DIRECTIONAL_SHORT"
+            and get_short_vix_multiplier(data.get("vix_spot")) <= 0
+        ):
+            return (
+                False,
+                f"MACRO_REJECT: VIX {data.get('vix_spot'):.1f} 極端區，做空新倉暫停（軋空／投降區）。",
             )
 
         # --- Stage 2: Alpha (AROC & Signal Strength) ---

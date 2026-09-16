@@ -34,6 +34,9 @@ class MarketCondition(BaseModel):
     hvn: float = Field(default=0.0, description="高籌碼密集區 (HVN)")
     lvn: float = Field(default=0.0, description="籌碼真空區 (LVN)")
     dte: int = Field(default=99, description="最近期權到期天數 (DTE)")
+    # 交易方向，決定凱利勝率先驗查哪一張表 (market_analysis/kelly_priors.py)。
+    # ExecutionRouter 目前只發出多頭 SHIELD/SPEAR 訊號，預設 LONG 維持既有行為。
+    side: Literal["LONG", "SHORT"] = Field(default="LONG", description="交易方向")
 
     @field_validator(
         "vix",

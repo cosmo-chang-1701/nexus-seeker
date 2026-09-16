@@ -178,15 +178,19 @@ def resolve_atr_15m(atr_15m: float, atr_14: float) -> float:
     return 0.0
 
 
-def _compute_reference_stop(
+def compute_reference_stop(
     spot: float, stop_wall: float, atr_15m: float, direction: Direction
 ) -> float:
     """推導名目參考停損價。
 
-    LONG  : PutWall  - 1.5 × ATR₁₅ₘ；若結果 >= 現價（PutWall 資料異常高於現價，
+    LONG  : StopWall - 0.5 × ATR₁₅ₘ；若結果 >= 現價（牆體資料異常高於現價，
             即牆體拓撲逆轉），改用 現價 - 2.0 × ATR₁₅ₘ。
-    SHORT : CallWall + 1.5 × ATR₁₅ₘ；若結果 <= 現價（CallWall 異常低於現價），
+    SHORT : StopWall + 0.5 × ATR₁₅ₘ；若結果 <= 現價（牆體異常低於現價），
             改用 現價 + 2.0 × ATR₁₅ₘ。
+
+    墊片倍數與出場矩陣 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` 同步。公開此
+    函式是為了讓 SHORT_ENTRY 倉位計算 (short_entry_sizing.py) 與進場鐵律條件
+    二／三使用同一個停損定義，不另寫一份。
     """
     if direction == "LONG":
         stop = stop_wall - _ROOM_STOP_ATR_15M_MULTIPLIER * atr_15m
@@ -197,6 +201,10 @@ def _compute_reference_stop(
     if stop <= spot:
         stop = spot + _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER * atr_15m
     return stop
+
+
+# 保留私有別名：既有測試與模組內部呼叫點沿用。
+_compute_reference_stop = compute_reference_stop
 
 
 def compute_dynamic_room_threshold(
@@ -391,8 +399,8 @@ def evaluate_next_strike_space(
     NextStrikeSpace = (Spot − NextPutPeak) / Spot >= 2.0 × ATR₁D / Spot
 
     ``next_peak`` 為現價下方第一個顯著負 GEX 節點（做市商順勢助跌拋壓的落點）。
-    此分支的停損貼緊剛跌破的 Put Wall（回站上即停損），刻意不套用公式 A 的
-    ``Wall ∓ 1.5 × ATR₁₅ₘ`` 墊片。
+    本公式只判定「目標空間夠不夠」，不含停損項——「收復 Put Wall」是論點失效
+    訊號，實際倉位停損由 SHORT_ENTRY 情境以頂牆錨點另行計算。
 
     回傳 ``(是否通過, 實際空間佔比, 要求門檻佔比)``。資料缺失時 fail-safe 回傳
     ``(False, 0.0, None)``——追空是進攻動作，無法確認空間一律不進場。

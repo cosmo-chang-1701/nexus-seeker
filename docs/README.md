@@ -1,7 +1,7 @@
 # 🌌 Nexus Seeker 量化架構與交易策略技術全景導讀
 
 > **版本**：v1.13.22 ｜ **系統核心**：Production Quant Engine ｜ **語言**：100% 繁體中文規範
-> **單一真實來源 (SSOT)**：本全景導讀與 31 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
+> **單一真實來源 (SSOT)**：本全景導讀與 32 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
 
 ---
 
@@ -9,7 +9,7 @@
 
 Nexus Seeker 是一套專為低延遲、高資訊密度美股期權風險控制與量化交易運作打造的生產級非同步架構。系統以做市商庫存對沖微觀結構為基石，深度融合 Black-Scholes-Merton 定價模型、高階希臘字母敏感度推導、事件驅動日曆防衛以及大語言模型（LLM）結構化推論輔助。
 
-本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **31 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
+本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **32 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
 
 ---
 
@@ -119,10 +119,10 @@ flowchart TB
 | 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 5-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 02 | [`02_right_side_momentum_ironclad.md`](strategies/02_right_side_momentum_ironclad.md) | 右側動能突破進場六重鐵律 | 15m 實體陽線放量 1.5x, 站穩 VWAP, 底牆 $K < \text{Spot}$, 主力買盤 DTE $\ge 7$ | `market_analysis/dynamic_rollover/opportunity_cost.py` |
 | 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge$ 動態門檻 | `market_analysis/dynamic_rollover/left_side_entry.py` |
-| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 8 大情境全景狀態機 | 涵蓋 Core/Satellite/Margin/Macro/DTE $\le 1$ 等 8 大轉倉情境, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
+| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 9 大情境全景狀態機 | 涵蓋 Core/Satellite/Margin/Macro/DTE $\le 1$/SHORT_ENTRY 等 9 大情境, 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
 | 05 | [`05_dual_track_anti_washout_stop_loss.md`](strategies/05_dual_track_anti_washout_stop_loss.md) | 雙軌防洗盤動態停損與出場決策矩陣 | 軌道一 $0.5\times\text{ATR}$ 實體 K 收盤撤退線, 軌道二 $3.0\times\text{ATR}$ 瞬時硬熔斷 | `market_analysis/dynamic_rollover/constants.py` |
 | 06 | [`06_dynamic_adaptive_room_threshold.md`](strategies/06_dynamic_adaptive_room_threshold.md) | 動態自適應波動率空間門檻 | $\max(2.2\times\text{Risk}, 1.5\times\text{ATR}_{1D}, 3.5\%)$, 停損距離雙邊界 $[2.5\times\text{ATR}_{15m}, 8\%]$ | `market_analysis/room_threshold.py` |
-| 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$ | `market_analysis/dynamic_rollover/short_side_entry.py` |
+| 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律與 SHORT_ENTRY 做空進場訊號 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$, 倉位 $\min(0.5\%, f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}$ ÷ 停損距離 | `market_analysis/dynamic_rollover/short_side_entry.py` |
 
 ---
 
@@ -161,7 +161,7 @@ flowchart TB
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
 | 16 | [`01_beta_weighted_greeks.md`](risk_portfolio/01_beta_weighted_greeks.md) | Beta 加權 Delta 與投資組合二階 Gamma 曝險數學模型 | SPY 基準 60 日對數協方差 Beta, 二階連鎖律 $\Gamma_{\text{SPY}, i} = \Gamma_i \cdot (w_i)^2$ 推導證明 | `market_analysis/portfolio.py` |
-| 17 | [`02_vix_battle_ladder_and_kelly.md`](risk_portfolio/02_vix_battle_ladder_and_kelly.md) | VIX 戰情階梯 6 階矩陣與動態分數凱利資金配置公式 | 6 階 VIX 戰情梯次, 純凱利期望增長率微分推導, 分數凱利縮放與動態線性插值 | `market_analysis/risk_engine.py` |
+| 17 | [`02_vix_battle_ladder_and_kelly.md`](risk_portfolio/02_vix_battle_ladder_and_kelly.md) | VIX 戰情階梯 6 階矩陣與動態分數凱利資金配置公式 | 6 階 VIX 戰情梯次, 交易意圖分流 (賣方／做多／方向性做空倒 U 形 $\le 1.0$), 方向感知凱利勝率先驗, 分數凱利縮放與動態線性插值 | `market_analysis/risk_engine.py` |
 | 18 | [`03_aroc_capital_efficiency.md`](risk_portfolio/03_aroc_capital_efficiency.md) | 年化資本回報率 (AROC) 資本效率衡量與進場硬鎖閘門 | 監管保證金模型, STO AROC 15.0% 進場硬鎖, BTO AROC 30.0% 進場硬鎖 | `market_analysis/strategy/liquidity_risk.py` |
 | 19 | [`04_ditm_convexity_profit_lock.md`](risk_portfolio/04_ditm_convexity_profit_lock.md) | DITM 深價內凸性防護與獲利鎖定決策階梯 | 伊藤引理證明極限深價內 $\lim \Gamma = 0$ 凸性衰竭, DTE 7 天與 21 天轉倉/平倉狀態機 | `market_analysis/risk_engine.py` |
 | 20 | [`05_financial_runway_and_liquidity.md`](risk_portfolio/05_financial_runway_and_liquidity.md) | 財務生存跑道分析與 Theta 現金流防禦緩衝模型 | 淨月度現金消耗率, 核心生存跑道公式, $\text{Burn} \le 0$ 輸出 9999.0 天鐵血不破 | `market_analysis/pro_management.py` |
@@ -192,6 +192,7 @@ flowchart TB
 | 27 | [`02_pre_market_cache_aside.md`](architecture/02_pre_market_cache_aside.md) | 盤前 08:45 預熱與 SQLite Cache-Aside 機制 | 08:45 ET 盤前全標的預熱, 30s 冷卻, 2% 價格偏離度重算, SingleFlight 併發摺疊 | `cogs/trading/pre_market.py` |
 | 28 | [`03_dual_service_and_proxy.md`](architecture/03_dual_service_and_proxy.md) | 雙服務架構與三階式降級代理 | 第 1 階 Edge 快照 $\to$ 第 2 階 Playwright 實時 Scrape $\to$ 第 3 階 本地 yfinance 直連 | `services/market_data_service/options.py` |
 | 29 | [`04_engineering_standards.md`](architecture/04_engineering_standards.md) | 量化系統工程規範與 Discord 防爆分頁原則 | 10 標的分頁 (37.7% 安全裕度), `chunk_embeds` 雙約束背包, 單訊息就地換頁 | `cogs/embed_builders/market_embeds.py` |
+| 30 | [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md) | 回測校準工具與前向蒐集管線 | 次一根開盤進場無前視, 方向中性 $\pm k\,\text{ATR}_{1D}$ 屏障標註, Wilson + 交易日叢集 bootstrap, $n \ge 100$／收縮 $n_0 = 200$, 只產報告不改參數 | `calibration/pipeline.py` |
 
 ---
 
@@ -254,6 +255,7 @@ graph LR
 2. **快取穿透防護與預熱**：研讀 [`02_pre_market_cache_aside.md`](architecture/02_pre_market_cache_aside.md)，掌握盤前 08:45 ET 批次計算、SingleFlight 併發請求摺疊與價格偏離快取自癒。
 3. **高併發定時任務排程**：研讀 [`01_dual_watchlist_pipelines.md`](architecture/01_dual_watchlist_pipelines.md)，掌握 15m 與 30m 心跳管線在資料來源、記憶體快取與通知頻道的完全隔離。
 4. **前端交互與防爆分頁**：研讀 [`04_engineering_standards.md`](architecture/04_engineering_standards.md)，掌握 Discord API 4096 字元限制下之雙約束背包演算法、單訊息就地換頁以及 SQLite 遷移引擎自癒。
+5. **參數校準與前向蒐集**：研讀 [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md)，掌握哪些門檻現在就能回測、哪些只能從前向蒐集取得證據，以及「工具只產報告、人工審核後才改常數」的流程。
 
 ---
 
@@ -295,7 +297,7 @@ graph LR
 
 ## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
 
-本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「31 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「32 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
 
 | 檔案 | 核心主題 |
 |:---|:---|

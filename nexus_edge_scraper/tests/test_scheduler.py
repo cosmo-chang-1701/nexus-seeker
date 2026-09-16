@@ -251,3 +251,20 @@ def test_start_and_stop_are_idempotent() -> None:
         scheduler.stop()  # stopping twice should not raise
 
     asyncio.run(_run())
+
+
+@pytest.mark.asyncio
+async def test_gex_history_prune_runs_at_most_once_per_et_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[int] = []
+
+    def _prune(retention_days: int = 180) -> int:
+        calls.append(retention_days)
+        return 0
+
+    monkeypatch.setattr(database, "prune_gex_history", _prune)
+    monkeypatch.setattr(scheduler, "_last_history_prune_date", None)
+    await scheduler._maybe_prune_gex_history()
+    await scheduler._maybe_prune_gex_history()
+    assert len(calls) == 1

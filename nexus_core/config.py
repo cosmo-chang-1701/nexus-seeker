@@ -1,7 +1,7 @@
 from typing import Any
 import os
 import math
-from typing import List, TypedDict, Optional
+from typing import List, Literal, TypedDict, Optional
 from dotenv import load_dotenv
 
 # 載入 .env 檔案（若非正式環境）
@@ -16,6 +16,12 @@ class VixTier(TypedDict):
     allow_signal: bool
     sto_delta_cap: float
     sizing_multiplier: float
+    # 方向性做空 (Long Put / Bear Call Spread / 空頭現貨) 專用倉位乘數。
+    # 賣方係數 (sizing_multiplier) 隨 VIX 單調遞增到 2.0，因為高隱波是賣方的
+    # 權利金溢價來源；但對追空而言，VIX 極端區是投降賣壓與政策干預引發暴力
+    # 軋空的區域。故做空採「保守倒 U 形」：中段 (18–30) 最大 1.0，兩端收斂，
+    # VIX >= 35 直接為 0 (禁止新開空單)。上限 1.0，校準前不放大。
+    short_sizing_multiplier: float
     kelly_fraction_override: Optional[float]
     vtr_entry_allowed: bool
     emoji: str
@@ -87,6 +93,15 @@ ENABLE_OPTIONS_ROLLOVER_INGESTION = (
 OPTIONS_ROLLOVER_DRY_RUN = (
     get_env_or_secret("OPTIONS_ROLLOVER_DRY_RUN", "true").lower() == "true"
 )
+# SHORT_ENTRY 做空進場訊號 dry-run (預設開啟)：只寫入 rollover_audit_log 稽核
+# 軌跡、不推播 DM。做空進場的倉位與 VIX 係數皆未經回測校準，觀察稽核紀錄的
+# 觸發分佈合理後再關閉。
+SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() == "true"
+# Regime／進場鐵律評估紀錄的前向蒐集 (market_analysis/evaluation_recorder.py)。
+# GEX 相關門檻無法回測，這是唯一的校準資料來源，預設開啟 (~260 列/日)。
+ENABLE_REGIME_EVALUATION_LOG = (
+    get_env_or_secret("ENABLE_REGIME_EVALUATION_LOG", "true").lower() == "true"
+)
 
 # 策略目標 Delta 參數
 TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL": 0.50}
@@ -104,6 +119,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": False,
         "sto_delta_cap": 0.0,
         "sizing_multiplier": 0.0,
+        "short_sizing_multiplier": 0.5,
         "kelly_fraction_override": None,
         "vtr_entry_allowed": False,
         "emoji": "⚪",
@@ -116,6 +132,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": True,
         "sto_delta_cap": -0.12,
         "sizing_multiplier": 0.5,
+        "short_sizing_multiplier": 0.75,
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🟡",
@@ -128,6 +145,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": True,
         "sto_delta_cap": -0.20,
         "sizing_multiplier": 1.0,
+        "short_sizing_multiplier": 1.0,
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🟠",
@@ -140,6 +158,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": True,
         "sto_delta_cap": -0.20,
         "sizing_multiplier": 1.2,
+        "short_sizing_multiplier": 1.0,
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🔴",
@@ -152,6 +171,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": True,
         "sto_delta_cap": -0.25,
         "sizing_multiplier": 1.5,
+        "short_sizing_multiplier": 0.5,
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🔴",
@@ -164,6 +184,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "allow_signal": True,
         "sto_delta_cap": -0.35,
         "sizing_multiplier": 2.0,
+        "short_sizing_multiplier": 0.0,
         "kelly_fraction_override": 0.50,
         "vtr_entry_allowed": True,
         "emoji": "🟥",
@@ -197,3 +218,27 @@ def get_vix_tier(vix_spot: Optional[float]) -> VixTier:
 
     # Fallback: 若 vix_spot 超出所有範圍 (理論上不會發生)
     return VIX_LADDER_CONFIG[-1]
+
+
+# 交易意圖分類 (market_analysis/risk_engine.py::classify_trade_intent 的輸出)。
+# 放在 config 而非 risk_engine：risk_engine 已匯入 config，反向匯入會形成循環。
+TradeIntent = Literal["PREMIUM_SELL", "DIRECTIONAL_LONG", "DIRECTIONAL_SHORT"]
+
+# VIX 未知時的做空乘數。刻意**不**沿用 get_vix_tier(None) 的 Ready (1.0)：
+# 那個預設是為了「資料遺失時不要硬拒所有賣方訊號」，但對做空而言，VIX 抓取
+# 失敗絕不能是最寬鬆的情況。
+SHORT_VIX_UNKNOWN_MULTIPLIER: float = 0.5
+
+
+def get_short_vix_multiplier(vix_spot: Optional[float]) -> float:
+    """方向性做空的 VIX 倉位乘數 (保守倒 U 形，上限 1.0)。VIX 未知回傳 0.5。"""
+    if vix_spot is None or math.isnan(vix_spot) or vix_spot < 0:
+        return SHORT_VIX_UNKNOWN_MULTIPLIER
+    return float(get_vix_tier(vix_spot)["short_sizing_multiplier"])
+
+
+def get_vix_sizing_multiplier(vix_spot: Optional[float], intent: TradeIntent) -> float:
+    """依交易意圖回傳 VIX 倉位乘數：方向性做空走倒 U 形，其餘沿用賣方階梯。"""
+    if intent == "DIRECTIONAL_SHORT":
+        return get_short_vix_multiplier(vix_spot)
+    return float(get_vix_tier(vix_spot)["sizing_multiplier"])

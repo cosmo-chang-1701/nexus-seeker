@@ -33,6 +33,7 @@ from .user_settings import (
     upsert_user_config,
     get_full_user_context,
     get_all_user_ids,
+    get_user_ids_by_trading_strategy,
     any_user_local_tunnel_enabled,
     UserContext,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "upsert_user_config",
     "get_full_user_context",
     "get_all_user_ids",
+    "get_user_ids_by_trading_strategy",
     "any_user_local_tunnel_enabled",
     "UserContext",
     "add_virtual_trade",

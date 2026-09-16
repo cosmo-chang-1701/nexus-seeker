@@ -115,6 +115,27 @@ def _next_batch(symbols: list[str]) -> list[str]:
     return batch
 
 
+_last_history_prune_date: Optional[str] = None
+
+
+async def _maybe_prune_gex_history() -> None:
+    """GEX 快照歷史保留期清理，每個美東日期最多執行一次 (輪詢每 5 分鐘一輪，
+    每輪都跑 DELETE 是純粹浪費)。"""
+    global _last_history_prune_date
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+    if _last_history_prune_date == today:
+        return
+    try:
+        removed = await asyncio.to_thread(database.prune_gex_history)
+        _last_history_prune_date = today
+        if removed:
+            logger.info(f"已清除 {removed} 筆超過保留期的 GEX 快照歷史")
+    except Exception as e:
+        logger.warning(f"GEX 快照歷史保留期清理失敗: {e}")
+
+
 async def poll_once() -> None:
     """執行一輪 GEX + Option Chain 輪詢：priority 標的（持倉）每輪必抓，
     其餘一般自選標的取出下一小批（分批輪詢，見模組頂端 POLL_ROTATION_CYCLES
@@ -157,6 +178,8 @@ async def poll_once() -> None:
     pruned = await asyncio.to_thread(database.prune_stale_symbols, PRUNE_AFTER_HOURS)
     if pruned:
         logger.info(f"已清除 {pruned} 個逾時未同步的追蹤標的")
+
+    await _maybe_prune_gex_history()
 
     elapsed = time.monotonic() - start_ts
     level = logger.warning if elapsed > POLL_BASE_INTERVAL_SECONDS else logger.info

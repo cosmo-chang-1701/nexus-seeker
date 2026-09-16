@@ -5,7 +5,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List
 
 import database
-from config import get_vix_tier
+from config import get_short_vix_multiplier, get_vix_tier
+from market_analysis.risk_engine import classify_trade_intent
 from market_analysis import hedging
 from market_analysis.pro_management import simulate_cc_transition
 from services import market_data_service
@@ -32,7 +33,13 @@ class VtrMixin:
         # VIX 戰情階梯 VTR 建倉閘門
         vix_spot_val = data.get("vix_spot")
         current_vix_tier = get_vix_tier(vix_spot_val)
-        if not current_vix_tier.get("vtr_entry_allowed", True):
+        # 方向性做空 (BTO_PUT) 以倒 U 形乘數判定：休兵區賣方禁建倉，但做空仍
+        # 允許 (0.5x)；極端區做空係數為 0 則禁止。
+        if classify_trade_intent(strategy) == "DIRECTIONAL_SHORT":
+            vtr_entry_allowed = get_short_vix_multiplier(vix_spot_val) > 0
+        else:
+            vtr_entry_allowed = bool(current_vix_tier.get("vtr_entry_allowed", True))
+        if not vtr_entry_allowed:
             logger.info(
                 f"[VTR] 建倉已被 VIX 階梯 '{current_vix_tier['name']}' 放行禁止，略過 {sym}"
             )

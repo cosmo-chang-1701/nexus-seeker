@@ -1,4 +1,5 @@
 import logging
+import re
 import asyncio
 import numpy as np
 import pandas as pd
@@ -6,7 +7,12 @@ from dataclasses import dataclass
 from services import market_data_service
 from enum import Enum
 from typing import Dict, List, Tuple, Any, Optional
-from config import get_vix_tier, VIX_QUANTILE_BOUNDS
+from config import (
+    TradeIntent,
+    VIX_QUANTILE_BOUNDS,
+    get_short_vix_multiplier,
+    get_vix_tier,
+)
 from models.quant import OptimizationResult, MacroRiskMetrics
 
 logger = logging.getLogger(__name__)
@@ -143,34 +149,111 @@ async def analyze_sector_correlation(
         return []
 
 
+# 「賣出開倉」字元：STO 必須排除 STOCK (否則 "LONG_STOCK" / "BUY STOCK" 會被
+# 誤判為賣出)。早期版本的 `"STO" in strategy` 就有這個缺陷。
+_STO_TOKEN_RE = re.compile(r"STO(?!CK)")
+
+# 明確的「看多賣方收權利金」標籤。必須最先比對：Short Put 含 "SHORT"、
+# Bull Put 不含 STO，若落到後面的方向性規則會被誤判為做空。
+_PREMIUM_SELL_EXPLICIT_TOKENS: Tuple[str, ...] = (
+    "COVERED CALL",
+    "COVERED_CALL",
+    "CSP",
+    "CASH-SECURED",
+    "CASH_SECURED",
+    "SHORT PUT",
+    "SHORT_PUT",
+    "BULL PUT",
+    "BULL_PUT",
+)
+_DIRECTIONAL_SHORT_TOKENS: Tuple[str, ...] = (
+    "BTO_PUT",
+    "BTO PUT",
+    "LONG_PUT",
+    "LONG PUT",
+    "BEAR",  # Bear Call Spread (做空鐵律條件六) / Bear Put Spread
+    "SHORT_SIDE",
+    "SHORT_STOCK",
+    "SHORT STOCK",
+    "OPEN_SHORT",
+    "REGIME_V",
+)
+# 部位「賣出」該工具的標籤 (對帶號合約 Delta 或無號股數 Delta 需乘 -1)。
+_SELL_SIDE_TOKENS: Tuple[str, ...] = (
+    "SHORT",  # SHORT_SIDE / SHORT_STOCK / SHORT PUT / SHORT CALL / OPEN_SHORT
+    "BEAR CALL",
+    "BEAR_CALL",
+    "BULL PUT",
+    "BULL_PUT",
+    "CSP",
+    "CASH-SECURED",
+    "CASH_SECURED",
+    "COVERED CALL",
+    "COVERED_CALL",
+    "REGIME_V",
+)
+
+
+def classify_trade_intent(strategy: str) -> TradeIntent:
+    """把策略字串分類為三種交易意圖 (先命中者勝)。
+
+    VIX 戰情階梯的前提是「高 VIX = 權利金溢價高 = 賣方最佳時機」，只對賣方
+    成立；方向性做空在 VIX 極端區面對的是軋空風險，前提相反。早期所有閘門以
+    `"STO"` / `"BTO"` 字串為鍵，把 BTO_PUT (方向性做空) 與 BTO_CALL 同等對待。
+
+    1. PREMIUM_SELL (明確看多賣方)：Covered Call / CSP / Short Put / Bull Put
+    2. DIRECTIONAL_SHORT：BTO_PUT / Long Put / Bear* / SHORT_SIDE / 空頭現貨 / Regime V
+    3. PREMIUM_SELL：其餘 STO / Short Call
+    4. DIRECTIONAL_LONG：其餘
+    """
+    upper = str(strategy).upper()
+    if any(t in upper for t in _PREMIUM_SELL_EXPLICIT_TOKENS):
+        return "PREMIUM_SELL"
+    if any(t in upper for t in _DIRECTIONAL_SHORT_TOKENS):
+        return "DIRECTIONAL_SHORT"
+    if _STO_TOKEN_RE.search(upper) or "SHORT CALL" in upper or "SHORT_CALL" in upper:
+        return "PREMIUM_SELL"
+    return "DIRECTIONAL_LONG"
+
+
+def position_delta_sign(strategy: str) -> int:
+    """候選交易的部位方向乘數，乘在**帶號合約 Delta** 或無號股數 Delta 上。
+
+    回答的是「這筆交易是買進還是賣出該工具」，**不是**「方向看多還是看空」：
+
+    * 買進 Put (BTO_PUT / Long Put)：合約 Delta 本身已為負 (bs_delta, flag="p")，
+      乘數必須是 +1。`a801d5e` 曾以 `-1 if is_short_exposure_strategy(...)` 投影，
+      使 `-0.5 × -1 = +0.5`，NRO 把買進的 Put 當成多頭 Delta 編列預算。
+    * 賣出 Put (STO_PUT / Short Put)：合約 Delta 為負，乘 -1 得正——看多，正確。
+    * 空頭現貨 (SHORT_SIDE)：無號股數 Delta 為正，乘 -1 得負。
+    """
+    upper = str(strategy).upper()
+    if _STO_TOKEN_RE.search(upper) or any(t in upper for t in _SELL_SIDE_TOKENS):
+        return -1
+    return 1
+
+
 def is_short_exposure_strategy(strategy: str) -> bool:
-    """由策略字串判定該筆交易帶來的是**空頭**方向曝險。
+    """由策略字串判定該筆交易的**淨方向**是否為空頭 (布林方向旗標)。
 
     ⚠️ 這是一個**代理判定**，不是權威來源。權威來源是部位的 `quantity` 正負
     號（見 `cogs/trading/portfolio_monitor.py` 既有的 `quantity < 0` 慣例），
     但「尚未成交的候選交易」還沒有 quantity，只有策略標籤，故仍需本函式。
 
-    早期版本散落在三處、各自寫成 `-1 if "STO" in strategy else 1`。那個判定
-    只涵蓋「賣出選擇權收權利金」一種空頭形式，對本系統後來新增的做空進場
-    路徑 (SHORT_SIDE / Regime V：Long Put、Bear Call Spread、空頭現貨) 全部
-    誤判為多頭，使 NRO 倉位模型把空單當成「增加多頭 Delta」來編列預算。
+    ⚠️ **不要拿本函式當 Delta 乘數**——那是 `position_delta_sign()` 的工作。
+    `a801d5e` 曾把兩個語意混為一談：買進 Put 是淨空頭 (本函式 True)，但它的
+    合約 Delta 已經是負的，乘數必須是 +1。
 
-    抽成單一函式的理由與 `kelly_position_fraction` 相同：同一個語意判斷散在
-    多處必然漂移。新增空頭策略標籤時只需在此加一個關鍵字。
+    淨空頭 = 方向性做空意圖，或賣出 Call (賣方收權利金但淨 Delta 為負)。
+    Short Put / CSP 是看多的賣方，回傳 False。
     """
-    upper = str(strategy).upper()
-    return any(
-        token in upper
-        for token in (
-            "STO",  # 賣出開倉 (Covered Call / CSP / Bear Call Spread 的賣腳)
-            "SHORT",  # SHORT_SIDE / SHORT_STOCK
-            "BEAR",  # Bear Call Spread / Bear Put Spread
-            "LONG_PUT",
-            "LONG PUT",
-            "BTO_PUT",
-            "BTO PUT",
-        )
-    )
+    intent = classify_trade_intent(strategy)
+    if intent == "DIRECTIONAL_SHORT":
+        return True
+    if intent == "PREMIUM_SELL":
+        upper = str(strategy).upper()
+        return "CALL" in upper and "COVERED" not in upper
+    return False
 
 
 def simulate_exposure_impact(
@@ -181,7 +264,7 @@ def simulate_exposure_impact(
     suggested_contracts: int = 1,
 ) -> Tuple[float, float]:
     strategy = new_trade_data.get("strategy", "")
-    side_multiplier = -1 if is_short_exposure_strategy(strategy) else 1
+    side_multiplier = position_delta_sign(strategy)
     new_trade_weighted_delta = (
         new_trade_data.get("weighted_delta", 0.0)
         * side_multiplier
@@ -290,6 +373,27 @@ def optimize_position_risk(
 
     spy_iv, current_risk_limit = 0.16, risk_limit
     warnings = []
+    intent = classify_trade_intent(strategy)
+    is_directional_short = intent == "DIRECTIONAL_SHORT"
+
+    # 方向性做空走倒 U 形乘數：VIX 極端區 (>= 35) 係數為 0，直接拒絕新空單。
+    # 刻意在 macro_data 區塊之外判定——宏觀資料缺失不能讓做空繞過這道閘門。
+    if is_directional_short:
+        short_vix_ref = (
+            vix_spot
+            if vix_spot is not None
+            else (macro_data.vix if macro_data is not None else None)
+        )
+        short_vix_multiplier = get_short_vix_multiplier(short_vix_ref)
+        if short_vix_multiplier <= 0:
+            logger.info(
+                f"NRO Reject: VIX {short_vix_ref} Extreme tier. Directional short entry forbidden."
+            )
+            return OptimizationResult(
+                suggested_contracts=0,
+                exposure_pct=0.0,
+                warnings=["VIX Extreme: 做空新倉暫停（軋空／投降區）"],
+            )
 
     # ------------------ Calendar-Aware Vanna Weighting ------------------
     vanna_weight = 1.0
@@ -302,7 +406,7 @@ def optimize_position_risk(
 
     if macro_data:
         # ---------- VIX < 15.0 Dormant Tier Enforcement ----------
-        if macro_data.vix < 15.0 and "STO" in strategy:
+        if macro_data.vix < 15.0 and intent == "PREMIUM_SELL":
             logger.info(
                 f"NRO Reject: VIX {macro_data.vix:.1f} is in Dormant tier. STO entry forbidden."
             )
@@ -314,16 +418,22 @@ def optimize_position_risk(
         # --------------------------------------------------------
 
         d_vix, d_oil, d_regime = get_macro_modifiers(macro_data, pcr, skew)
+        if is_directional_short:
+            # 賣方階梯的 w_vix 在 VIX 極端區放大到 2.0，對追空方向相反。
+            d_vix = short_vix_multiplier
 
-        # 整合 PCR 與 Skew 的進一步細節
-        if pcr < 0.6 and "BTO" in strategy:
+        # 整合 PCR 與 Skew 的進一步細節。PCR 過低 = 多頭過熱，只縮減「做多」
+        # 買方；早期以 "BTO" 比對，連 BTO_PUT (做空) 也被砍，方向相反。
+        if pcr < 0.6 and intent == "DIRECTIONAL_LONG":
             # 市場過熱，警告但不一定硬拒，此處微幅縮減買方額度
             d_regime *= 0.8
             warnings.append("PCR 低位: 市場過熱，買方倉位縮減")
 
         # All-in 模式 (VIX > 35): 繞過宏觀修正因子的衰減效應，
         # 直接使用 risk_limit * d_vix 以最大化風險額度。
-        if vix_spot is not None and vix_spot >= 35.0:
+        # 方向性做空不適用：做空在此區係數為 0，已於上方拒絕；即使未來校準
+        # 放寬，也不應繞過油價與 Regime 衰減。
+        if vix_spot is not None and vix_spot >= 35.0 and not is_directional_short:
             current_risk_limit = risk_limit * d_vix  # d_vix=2.0 at this tier
             warnings.append("VIX Extreme: All-in 模式啟動")
         else:
@@ -336,7 +446,7 @@ def optimize_position_risk(
 
     # 動態 Kelly 縮放：VIX 超過 upper_10 (29.5) 時，
     # 從 1/4 Kelly 向 1/2 Kelly 線性插值。
-    if vix_spot is not None:
+    if vix_spot is not None and not is_directional_short:
         upper_10 = VIX_QUANTILE_BOUNDS.get("upper_10", 29.5)
         if vix_spot > upper_10:
             # 以 VIX 45 為插值上限 (避免無窮外推)
@@ -354,15 +464,13 @@ def optimize_position_risk(
         current_risk_limit *= 1.0 / vanna_weight
     # ---------------------------------------------------------
 
-    # 方向判定：早期版本只看 strategy 字串是否含 "STO"，那是**選擇權權利金
-    # 方向**的代理，不是部位方向。做空策略 (SHORT_SIDE / REGIME_V_BREAKDOWN_
-    # CHASE / SHORT_STOCK / Long Put / Bear Call Spread) 的字串裡沒有 "STO"，
-    # 會被誤判為 +1，使 sizer 把一筆空單當成「增加多頭 Delta」來編列預算。
-    _is_short_exposure = is_short_exposure_strategy(strategy)
+    # 方向乘數：乘在帶號合約 Delta 上，回答「買進或賣出該工具」(見
+    # position_delta_sign)。不可用 is_short_exposure_strategy——買進 Put 是淨
+    # 空頭，但合約 Delta 已為負，再乘 -1 會被投影成多頭。
     val_adj_unit_delta = (
         unit_weighted_delta
         * (stock_iv / max(spy_iv, 0.01))
-        * (-1 if _is_short_exposure else 1)
+        * position_delta_sign(strategy)
     )
     max_safe_shares = (user_capital * (current_risk_limit / 100)) / spy_price
     safe_qty = (

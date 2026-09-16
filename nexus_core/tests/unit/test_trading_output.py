@@ -787,7 +787,9 @@ async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_
         "avg_cost": 200.0,
     }
 
-    entry_confirmation = (True, "已確認突破")
+    from market_analysis.dynamic_rollover.models import EntryConfirmation
+
+    entry_confirmation = EntryConfirmation(True, "已確認突破")
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
         return_value=([], entry_confirmation)
@@ -1647,3 +1649,149 @@ async def test_monitor_real_portfolio_task_logs_rollover_instruction_with_correc
     assert call_kwargs["target_core"] == "VOO"
     assert call_kwargs["suggested_price"] == "Market"
     assert call_kwargs["cash_impact"] == "$600"
+
+
+def _short_entry_instruction() -> dict:
+    return {
+        "symbol": "AAA",
+        "action": "OPEN_SHORT",
+        "sell_ratio": 0.0,
+        "target_core": "AAA",
+        "reason": "🐻 做空進場訊號",
+        "suggested_strategy": "Long Put (輕度 OTM)",
+        "structure_directive": "Long Put (輕度 OTM)",
+        "scenario": "SHORT_ENTRY",
+        "direction": "SHORT",
+        "instrument_type": "SPOT",
+        "limit_price": 100.0,
+        "is_manual_override_required": False,
+        "cash_impact": None,
+        "entry_regime": None,
+        "short_entry_plan": {
+            "sub_mode": "區間內做空",
+            "entry_price": 100.0,
+            "stop_price": 105.5,
+            "stop_price_structural": 104.5,
+            "stop_price_exit_engine": 105.5,
+            "target_price": 90.0,
+            "reward_risk_ratio": 1.82,
+            "risk_budget_usd": 500.0,
+            "share_qty": 90,
+            "notional_usd": 9000.0,
+            "binding_constraint": "RISK_PCT",
+            "vix_spot": 20.0,
+            "vix_tier_name": "摩拳擦掌 (Ready)",
+            "short_vix_multiplier": 1.0,
+            "kelly_fraction": 0.01,
+            "invalidation_note": None,
+        },
+    }
+
+
+async def _run_short_entry_cycle(dry_run: bool) -> tuple[Any, ...]:
+    import time as _time
+
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+    bot._latest_radar_data_cache = {"AAA": {"quote": {"c": 100.0}}}
+    bot._latest_radar_cache_time = _time.time()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    cog.rollover_engine._find_best_short_target = MagicMock(return_value="AAA")  # type: ignore
+    cog.rollover_engine.evaluate_short_entry_opportunity = AsyncMock(  # type: ignore
+        return_value=[_short_entry_instruction()]
+    )
+
+    short_embed = object()
+    notif_keys: list[str] = []
+
+    def _notif(uid: int, key: str) -> bool:
+        notif_keys.append(key)
+        return True
+
+    with patch(
+        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
+        "database.holdings.get_all_holdings", return_value=[]
+    ), patch("database.get_user_ids_by_trading_strategy", return_value=[7]), patch(
+        "services.market_data_service.get_vix_spot_strict",
+        new_callable=AsyncMock,
+        return_value=20.0,
+    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
+        "market_analysis.trading_orchestration.recommend_covered_calls",
+        new_callable=AsyncMock,
+        return_value={"recommendations": []},
+    ), patch("database.is_notification_enabled", side_effect=_notif), patch(
+        "database.get_kv_cache", return_value=None
+    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
+        "database.log_rollover_instruction", new_callable=AsyncMock
+    ) as mock_audit, patch(
+        "cogs.trading.portfolio_monitor.create_short_entry_embed",
+        return_value=short_embed,
+    ) as mock_short_embed, patch(
+        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+    ) as mock_rotation_embed, patch(
+        "cogs.trading.portfolio_monitor.config.SHORT_ENTRY_DRY_RUN", dry_run
+    ):
+        await cog.monitor_real_portfolio_task()
+    return (
+        cog,
+        bot,
+        short_embed,
+        notif_keys,
+        mock_audit,
+        mock_short_embed,
+        mock_rotation_embed,
+    )
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_short_entry_for_user_without_holdings() -> (
+    None
+):
+    """做空／動態使用者即使沒有任何持倉也必須被評估；SHORT_ENTRY 指令走專屬
+    embed (不得以 Buy Shares／BTO 渲染、不掛 RolloverActionView)，通知頻道為
+    alpha_market_signals。"""
+    (
+        cog,
+        bot,
+        short_embed,
+        notif_keys,
+        mock_audit,
+        mock_short_embed,
+        mock_rotation_embed,
+    ) = await _run_short_entry_cycle(dry_run=False)
+
+    cog.rollover_engine.evaluate_short_entry_opportunity.assert_awaited_once()
+    args = cog.rollover_engine.evaluate_short_entry_opportunity.await_args
+    assert args is not None
+    assert args.args[0] == 7
+    assert args.args[2] == 20.0  # 嚴格抓取的 VIX
+    mock_short_embed.assert_called_once()
+    mock_rotation_embed.assert_not_called()
+    assert "alpha_market_signals" in notif_keys
+    assert not hasattr(short_embed, "_view")
+    bot.queue_dm.assert_awaited_once_with(7, embed=short_embed)
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args.kwargs["suggested_price"] == "$100.00 (限價放空)"
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_short_entry_dry_run_audits_without_dm() -> (
+    None
+):
+    (
+        _cog,
+        bot,
+        _embed,
+        _keys,
+        mock_audit,
+        _short_embed,
+        _rotation,
+    ) = await _run_short_entry_cycle(dry_run=True)
+    bot.queue_dm.assert_not_awaited()
+    mock_audit.assert_awaited_once()

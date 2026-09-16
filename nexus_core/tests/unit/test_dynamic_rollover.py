@@ -24,6 +24,7 @@ from market_analysis.dynamic_rollover.structural_signals import (
     evaluate_option_dte_tier,
 )
 from market_analysis.dynamic_rollover.models import DynamicRegime, RegimeMarketData
+from tests.unit.short_entry_helpers import make_short_entry_evaluation
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
@@ -1671,7 +1672,8 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     assert len(result) == 1
     assert result[0]["symbol"] == "NVDA"
     assert result[0]["target_core"] == "SMCI"
-    assert entry_confirmation == (True, "mocked")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (True, "mocked")
     assert result[0]["action"] == "REDUCE"
     assert result[0]["sell_ratio"] == 0.3
     assert result[0]["scenario"] == "OPPORTUNITY_COST"
@@ -2311,7 +2313,8 @@ async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
     ) = await engine.evaluate_opportunity_cost_for_satellites(
         1, portfolio, set(), "SPCX", candidate_radar
     )
-    assert entry_confirmation == (True, "confirmed")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (True, "confirmed")
 
     core_deployment_instructions = await engine.evaluate_core_deployment(
         1,
@@ -5826,7 +5829,8 @@ async def test_evaluate_opportunity_cost_for_satellites_blocked_by_entry_gate(
         1, portfolio, set(), "SMCI", candidate_radar
     )
     assert result == []
-    assert entry_confirmation == (False, "mocked: entry not confirmed")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (False, "mocked: entry not confirmed")
     mock_entry_gate.assert_awaited_once()
 
 
@@ -6284,7 +6288,7 @@ async def test_evaluate_opportunity_cost_for_satellites_right_side_default_match
             candidate_radar=_green_candidate_radar(),
         )
     assert entry_confirmation is not None
-    confirmed, reason = entry_confirmation
+    confirmed, reason = entry_confirmation[:2]
     assert confirmed is True
     assert "條件一✅" in reason
     assert "左側" not in reason
@@ -6319,16 +6323,19 @@ async def test_evaluate_opportunity_cost_for_satellites_left_side_routes_to_left
             candidate_radar=_green_candidate_radar(),
         )
     mock_left_gate.assert_awaited_once()
-    assert entry_confirmation == (True, "左側測試通過")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (True, "左側測試通過")
     assert instructions == []
 
 
 @pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_short_side_routes_to_short_gate(
+async def test_evaluate_opportunity_cost_for_satellites_short_side_skips_long_candidate(
     engine: DynamicRolloverEngine,
 ) -> None:
-    """trading_strategy=SHORT_SIDE 時應略過左右兩套多頭鐵律，改呼叫
-    short_side_entry._confirm_short_entry_signal。
+    """trading_strategy=SHORT_SIDE 時，Scenario 2 的候選來自
+    _find_best_rollover_target()——依「上漲」期望值排序的多頭候選。對它跑做空
+    鐵律在建構上就是錯的對象，故不得呼叫任何進場閘門，直接回傳 SHORT 方向的
+    未確認結果，做空候選改由 SHORT_ENTRY 情境獨立挑選與評估。
 
     ⚠️ SHORT_SIDE 是本系統唯一的空頭方向進場路徑；LEFT_SIDE 雖然技術定義與
     右側相反，本質仍是做多。"""
@@ -6338,9 +6345,8 @@ async def test_evaluate_opportunity_cost_for_satellites_short_side_routes_to_sho
             return_value=MagicMock(trading_strategy="SHORT_SIDE"),
         ),
         patch(
-            "market_analysis.dynamic_rollover.short_side_entry._confirm_short_entry_signal",
+            "market_analysis.dynamic_rollover.short_side_entry.evaluate_short_entry",
             new_callable=AsyncMock,
-            return_value=(True, "做空測試通過", "Long Put (輕度 OTM)"),
         ) as mock_short_gate,
         patch(
             "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
@@ -6357,9 +6363,11 @@ async def test_evaluate_opportunity_cost_for_satellites_short_side_routes_to_sho
             candidate_symbol="TEST",
             candidate_radar=_green_candidate_radar(),
         )
-    mock_short_gate.assert_awaited_once()
+    mock_short_gate.assert_not_awaited()
     mock_left_gate.assert_not_awaited()
-    assert entry_confirmation == (True, "做空測試通過")
+    assert entry_confirmation is not None
+    assert entry_confirmation.is_confirmed is False
+    assert entry_confirmation.direction == "SHORT"
     assert instructions == []
 
 
@@ -6368,13 +6376,29 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_
     engine: DynamicRolloverEngine,
 ) -> None:
     """trading_strategy=DYNAMIC 且分類為 Regime V (破位追空態) 時，應路由至
-    做空六重鐵律，並原樣沿用分類階段已抓取的資料快照。"""
+    做空六重鐵律，並原樣沿用分類階段已抓取的資料快照。做空確認一律在衛星迴圈
+    **之前**返回 (direction="SHORT")，即使確認通過、且有可轉倉的衛星持倉，也
+    絕不產生任何 Buy Shares 機會成本指令。"""
     from market_analysis.dynamic_rollover.models import (
         DynamicRegime,
         RegimeMarketData,
     )
 
-    market_data = RegimeMarketData(df_15m=_GREEN_15M_DF, session_vwap=99.0, atr_15m=1.5)
+    market_data = RegimeMarketData(
+        df_15m=_GREEN_15M_DF, session_vwap=99.0, atr_15m=1.5, rsi_15m=38.0
+    )
+    short_ev = make_short_entry_evaluation(all_passed=True)
+    satellites = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10,
+            "spot_price": 500.0,
+            "avg_cost": 400.0,
+            "psq_result": {"squeeze_level": "Normal"},
+        }
+    ]
     with (
         patch(
             "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
@@ -6390,9 +6414,9 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_
             ),
         ),
         patch(
-            "market_analysis.dynamic_rollover.short_side_entry._confirm_short_entry_signal",
+            "market_analysis.dynamic_rollover.short_side_entry.evaluate_short_entry",
             new_callable=AsyncMock,
-            return_value=(False, "做空條件四❌", None),
+            return_value=short_ev,
         ) as mock_short_gate,
     ):
         (
@@ -6400,7 +6424,7 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_
             entry_confirmation,
         ) = await engine.evaluate_opportunity_cost_for_satellites(
             user_id=999999006,
-            portfolio_assets=[],
+            portfolio_assets=satellites,
             already_flagged_symbols=set(),
             candidate_symbol="TEST",
             candidate_radar=_green_candidate_radar(),
@@ -6412,8 +6436,67 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_
     assert kwargs["df_15m"] is _GREEN_15M_DF
     assert kwargs["session_vwap"] == 99.0
     assert kwargs["atr_15m"] == 1.5
-    assert entry_confirmation == (False, "做空條件四❌")
+    assert entry_confirmation is not None
+    assert entry_confirmation.is_confirmed is True
+    assert entry_confirmation.direction == "SHORT"
+    assert entry_confirmation.short_evaluation is short_ev
+    assert entry_confirmation.entry_regime == "REGIME_V_BREAKDOWN_CHASE"
+    assert entry_confirmation.rsi_15m == 38.0
     assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_core_deployment_ignores_short_confirmation_but_boxx_still_fires(
+    engine: DynamicRolloverEngine,
+) -> None:
+    """核心資金部署收到 SHORT 方向的確認時，機會分支必須視為未確認——把 CORE
+    超額現金以 Buy Shares 部署進剛被確認要做空的標的是方向相反的下單。
+    BOXX 防禦分支不依賴候選確認，照常觸發。"""
+    from market_analysis.dynamic_rollover.models import EntryConfirmation
+
+    short_confirmation = EntryConfirmation(
+        True,
+        "做空六重鐵律通過",
+        "SHORT",
+        short_evaluation=make_short_entry_evaluation(all_passed=True),
+    )
+    candidate_radar = {"quote": {"c": 40.0}, "gex_profile_data": {}, "uoa": []}
+    opportunity_holding = [
+        {
+            "symbol": "VOO",
+            "asset_class": "CORE",
+            "current_value": 10000.0,
+            "target_allocation_pct": 0.5,
+            "boxx_allocation_pct": 0.0,
+        }
+    ]
+    with patch.object(
+        engine, "_confirm_entry_signal", new_callable=AsyncMock
+    ) as mock_long_gate:
+        opportunity = await engine.evaluate_core_deployment(
+            1,
+            opportunity_holding,
+            set(),
+            10000.0,
+            "SPCX",
+            candidate_radar,
+            precomputed_entry_confirmation=short_confirmation,
+        )
+    assert opportunity == []
+    mock_long_gate.assert_not_awaited()
+
+    boxx_holding = [dict(opportunity_holding[0], boxx_allocation_pct=80.0)]
+    boxx = await engine.evaluate_core_deployment(
+        1,
+        boxx_holding,
+        set(),
+        10000.0,
+        "SPCX",
+        candidate_radar,
+        precomputed_entry_confirmation=short_confirmation,
+    )
+    assert len(boxx) == 1
+    assert boxx[0]["target_core"] == "BOXX"
 
 
 @pytest.mark.asyncio
@@ -6491,7 +6574,8 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regim
             candidate_symbol="ABC",
             candidate_radar=candidate_radar,
         )
-    assert entry_confirmation == (True, "左側測試通過")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (True, "左側測試通過")
     assert len(instructions) == 1
     assert instructions[0]["entry_regime"] == "REGIME_I_LEFT_CATCH"
     assert instructions[0]["structure_directive"] == "測試策略指令"
@@ -6547,7 +6631,8 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_iii_reuse
     _args, kwargs = mock_confirm.call_args
     assert kwargs["df_15m"] is sentinel_df_15m
     assert kwargs["session_vwap"] == 123.45
-    assert entry_confirmation == (True, "右側測試通過")
+    assert entry_confirmation is not None
+    assert entry_confirmation[:2] == (True, "右側測試通過")
     assert instructions == []
 
 
@@ -6589,7 +6674,7 @@ async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_ii_blocks
     mock_classify.assert_awaited_once()
     mock_left_gate.assert_not_awaited()
     assert entry_confirmation is not None
-    confirmed, reason = entry_confirmation
+    confirmed, reason = entry_confirmation[:2]
     assert confirmed is False
     assert "REGIME_II_CHAOS_STANDASIDE" in reason
     assert instructions == []

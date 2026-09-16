@@ -1,5 +1,6 @@
 from typing import Any
 import pytest
+from market_analysis.risk_engine import kelly_position_fraction
 from models.execution import MarketCondition
 from services.execution_router import ExecutionRouter
 
@@ -217,3 +218,38 @@ def test_ivr_above_lockout_does_not_affect_routing(router: Any) -> None:
     result = router.evaluate_market(condition)
     # IVR 正常，UOA 偵測到，應路由至 SPEAR
     assert result.decision_type == "SPEAR"
+
+
+def _kelly_condition(rsi: float, side: str = "LONG") -> MarketCondition:
+    return MarketCondition(  # type: ignore[call-arg]
+        vix=15.0,
+        skew_percent=0.0,
+        asset_price=100.0,
+        ma20=100.0,
+        atr_14=2.0,
+        rsi_14=rsi,
+        side=side,  # type: ignore[arg-type]
+    )
+
+
+def test_kelly_long_path_bit_identical_to_legacy(router: Any) -> None:
+    """多頭先驗改讀 kelly_priors.py 後，數值必須與改動前寫死的公式位元一致。"""
+    legacy_low = kelly_position_fraction(0.55, 1.8, 0.5, 0.15)
+    legacy_high = kelly_position_fraction(0.45, 1.8, 0.5, 0.15)
+    assert router._calculate_kelly_size(_kelly_condition(40.0)).kelly_percentage == (
+        legacy_low
+    )
+    assert router._calculate_kelly_size(_kelly_condition(60.0)).kelly_percentage == (
+        pytest.approx(legacy_high)
+    )
+    assert legacy_low == 0.15
+    assert legacy_high == pytest.approx(0.0722, abs=1e-4)
+
+
+@pytest.mark.parametrize("rsi", [0.0, 20.0, 45.0, 50.0, 65.0, 100.0])
+def test_kelly_short_never_larger_than_long(router: Any, rsi: float) -> None:
+    long_f = router._calculate_kelly_size(_kelly_condition(rsi)).kelly_percentage
+    short_f = router._calculate_kelly_size(
+        _kelly_condition(rsi, "SHORT")
+    ).kelly_percentage
+    assert short_f <= long_f

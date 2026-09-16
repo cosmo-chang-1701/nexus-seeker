@@ -8,12 +8,14 @@
 
 本系統將做空拆為兩個共用同一套六重鐵律的子模式，差異只在條件三的空間判定：
 
-| 子模式 | 觸發條件 | 獲利目標 | 停損位置 |
-| :--- | :--- | :--- | :--- |
-| **區間內做空** | $\text{Spot} > \text{PutWall}$ | Put Wall（做市商正 Gamma 底牆） | 上方阻力頂牆 $+ 1.5 \times \text{ATR}_{15m}$ |
-| **破位追空** | $\text{Spot} \le \text{PutWall}$ | 現價下方第一個顯著負 GEX 節點 | 貼緊剛跌破的 Put Wall（回站上即停損） |
+| 子模式 | 觸發條件 | 獲利目標 | 停損位置 | 論點失效訊號 |
+| :--- | :--- | :--- | :--- | :--- |
+| **區間內做空** | $\text{Spot} > \text{PutWall}$ | Put Wall（做市商正 Gamma 底牆） | 頂牆 $+ 0.5 \times \text{ATR}_{15m}$ 與出場引擎停損取較遠者 | 升穿停損 |
+| **破位追空** | $\text{Spot} \le \text{PutWall}$ | 現價下方第一個顯著負 GEX 節點 | 同上 | 收復剛跌破的 Put Wall |
 
-**適用市場環境**：Regime V 破位追空態（`DYNAMIC` 模式自動路由），或使用者於 `/settings` 手動選擇 `SHORT_SIDE`。**不適用**於 Regime IV 的宏觀鎖定分支——系統性流動性危機與大盤負 Gamma 踩踏下，做空同樣會被劇烈軋空，該分支對做多做空一視同仁地全面封鎖。
+**六重鐵律通過之後**，系統產生一筆獨立的 **`SHORT_ENTRY` 做空進場訊號**，自帶進場／停損／目標與倉位，與「賣衛星、買候選」的機會成本轉倉完全脫鉤。早期版本把做空確認丟進多頭下游：候選來源只看上漲空間、機會成本轉倉要求 PowerSqueeze $> 80$（多頭突破分數）、核心資金部署甚至會把 CORE 超額現金以 Buy Shares 部署進剛被確認要做空的標的——方向完全相反的下單。
+
+**適用市場環境**：Regime V 破位追空態（`DYNAMIC` 模式自動路由），或使用者於 `/settings` 手動選擇 `SHORT_SIDE`。⚠️ Regime V 要求 $\text{Spot} < \text{PutWall}$，因此 **`DYNAMIC` 只會產生「破位追空」**，「區間內做空」只能經由 `SHORT_SIDE` 觸發。**不適用**於 Regime IV 的宏觀鎖定分支——系統性流動性危機與大盤負 Gamma 踩踏下，做空同樣會被劇烈軋空，該分支對做多做空一視同仁地全面封鎖。
 
 ---
 
@@ -78,7 +80,7 @@ $$\text{Risk} = \frac{(\text{CallWall} + 0.5 \times \text{ATR}_{15m}) - \text{Sp
 
 $$\frac{\text{Spot} - \text{NextPutPeak}}{\text{Spot}} \ge 2.0 \times \frac{\text{ATR}_{1D}}{\text{Spot}}$$
 
-$\text{NextPutPeak}$ 取現價下方、GEX 為負、絕對曝險最大的履約價。找不到候選一律 fail-closed——追空是進攻動作，無法確認空間即不進場。
+$\text{NextPutPeak}$ 取現價下方、GEX 為負、絕對曝險最大的履約價。找不到候選一律 fail-closed——追空是進攻動作，無法確認空間即不進場。公式 C 只判定目標空間，不含停損項；「收復 Put Wall」是論點失效訊號，實際倉位停損見 §2.6。
 
 ### 2.4 條件四：主力跨週期賣壓認證
 
@@ -105,6 +107,47 @@ $$\text{Structure} = \begin{cases}
 \text{Long Put（輕度 OTM）} & \text{IVR} \le 50\\
 \text{Bear Call Spread} & \text{IVR} > 50
 \end{cases}$$
+
+條件五在大盤鎖定時的文案依方向分流：做空顯示「宏觀鎖定期間嚴禁開立個股新空單（軋空與流動性斷層風險同樣極端）」，封鎖行為與做多相同。
+
+### 2.6 SHORT_ENTRY 價位與倉位
+
+**三個停損錨點**（同一筆空單在不同層各自有定義，倉位必須以真正會被執行的那個為準）：
+
+| 層 | 定義 | 程式碼 |
+| :--- | :--- | :--- |
+| 進場鐵律條件二／三 | $\text{ResistanceWall} + 0.5 \times \text{ATR}_{15m}$ | `room_threshold.compute_reference_stop()` |
+| 出場矩陣 SL-結構失效 | $\text{AnchorShort} + 0.5 \times \text{ATR}_{15m}$，錨點優先序 resistance_wall → Call Wall（拓撲逆轉取較高者）→ Gamma Flip | `anti_washout.resolve_short_anchor()` |
+| 倉位計算 | 兩者較遠者 | `short_entry_sizing.build_short_entry_levels()` |
+
+`portfolio_monitor` 不提供 `resistance_wall`，部位登錄後出場引擎實際錨定的是 Call Wall；若只用條件二的頂牆計算倉位，風險預算會被低估。
+
+$$\text{Stop} = \max\big(\text{Stop}_{\text{structural}},\ \text{Stop}_{\text{exit}}\big), \qquad \text{Target} = \begin{cases}\text{PutWall} & \text{區間內做空}\\ \text{NextPutPeak} & \text{破位追空}\end{cases}$$
+
+$$\text{R:R} = \frac{\text{Entry} - \text{Target}}{\text{Stop} - \text{Entry}}$$
+
+**倉位**採「風險預算 ÷ 停損距離」：
+
+$$
+\begin{aligned}
+p &= \text{WinRatePrior}_{\text{SHORT}}(\text{RSI}_{15m}), \qquad b = \min(\text{R:R},\ 1.8)\\
+f_{\text{kelly}} &= \text{clip}\Big(0.5 \times \big(p - \tfrac{1-p}{b}\big),\ 0,\ 0.01\Big)\\
+\text{RiskUSD} &= \text{Capital} \times \min(0.005,\ f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}\\
+\text{Qty} &= \min\Big(\Big\lfloor \frac{\text{RiskUSD}}{\text{Stop} - \text{Entry}} \Big\rfloor,\ \Big\lfloor \frac{\text{Capital} \times \text{risk\_limit}\%}{\text{Entry}} \Big\rfloor\Big)
+\end{aligned}
+$$
+
+$b$ 取 $\min$：永遠不信任高於先驗的賠率。$f_{\text{kelly}} \le 0$（R:R 太差）時不出訊號——凱利本身就是一道天然閘門；以 $p = 0.45$ 計，$\text{R:R} < 1.22$ 即無邊際。$m_{\text{VIX}}^{\text{short}}$ 與做空勝率先驗見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md)。
+
+**以期權表達時**，Long Put 權利金總額、或 Bear Call Spread 最大虧損（價差寬度 − 收入）皆不應超過 $\text{RiskUSD}$。
+
+### 2.7 做空候選來源
+
+多頭候選的排序依據是 $(\text{EM}_{\text{upper}} - \text{Spot})/\text{Spot}$，做空標的在建構上就不會被選出。做空候選另行挑選：
+
+$$\text{Base} = \frac{\text{Spot} - \text{EM}_{\text{lower}}}{\text{Spot}} > 0.05, \qquad \text{PSQ} \le 30, \qquad \text{Score} = \text{Base} \times \frac{100 - \text{PSQ}}{100}$$
+
+預期波幅本身對稱，排序的方向性完全來自 PSQ 權重；門檻只看 $\text{Base}$（與多頭同一口徑），權重只用於排序。排除已持有、核心防禦 ETF、反向 ETF（做空反向 ETF 等於做多大盤）、財報緩衝期內標的、過期或降級的 `market_cache`。零網路 I/O：只讀 `market_cache` 與共享雷達快取快照。
 
 ---
 
@@ -142,6 +185,29 @@ flowchart TD
     IVR -- 否 --> LongPut["✅ 全數通過<br/>建議 Long Put (輕度 OTM)"]
 ```
 
+確認之後的下游路徑（`portfolio_monitor.monitor_real_portfolio_task` 每 15 分鐘）：
+
+```mermaid
+flowchart TD
+    Users["SHORT_SIDE / DYNAMIC 使用者<br/>(含沒有任何持倉者)"] --> S2["Scenario 2 evaluate_opportunity_cost_for_satellites"]
+    S2 -- "SHORT_SIDE" --> Skip["回傳 SHORT 未確認<br/>不對多頭候選跑做空鐵律"]
+    S2 -- "DYNAMIC + Regime V" --> Eval["evaluate_short_entry()<br/>在衛星迴圈之前返回 SHORT 確認"]
+    Eval --> S5["Scenario 5 核心資金部署<br/>SHORT 確認視為未確認 (BOXX 防禦照常)"]
+    Eval --> Cands["做空候選清單<br/>(a) Regime V 已確認評估 (原樣沿用)<br/>(b) _find_best_short_target()"]
+    Skip --> Cands
+    Cands --> Gate1{"本週期有 MARGIN_DEFENSE 指令?"}
+    Gate1 -- 是 --> Suppress["抑制新開空單"]
+    Gate1 -- 否 --> Gate2{"做空 VIX 乘數 = 0?<br/>(VIX >= 35)"}
+    Gate2 -- 是 --> Suppress
+    Gate2 -- 否 --> Size["價位 → 凱利 × VIX 倉位<br/>停損/目標不合法或 Qty < 1 → fail-closed"]
+    Size --> One["取 R:R 最佳者，每週期至多 1 筆"]
+    One --> Notif{"alpha_market_signals 通知開啟?"}
+    Notif -- 否 --> Drop["略過"]
+    Notif -- 是 --> Dry{"SHORT_ENTRY_DRY_RUN?"}
+    Dry -- 是 --> Audit["僅寫 rollover_audit_log"]
+    Dry -- 否 --> DM["create_short_entry_embed() → DM 佇列<br/>+ rollover_audit_log"]
+```
+
 ---
 
 ## 4. 關鍵具名常數與物理約束
@@ -162,6 +228,13 @@ flowchart TD
 | `_SHORT_ENTRY_IVR_SPREAD_THRESHOLD` | `50.0` | 條件六：IVR 超過即改 Bear Call Spread | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_V_RSI_MAX` | `45.0` | Regime V 路由層的 15m RSI 上限（未經回測校準） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_V_VOLUME_SURGE_MULT` | `1.5` | Regime V 路由層的放量倍數門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_CANDIDATE_MAX_PSQ` | `30.0` | 做空候選的 PowerSqueeze 上限（動能須弱於中性） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_ACCOUNT_RISK_PCT` | `0.005` ($0.5\%$) | 單筆做空的帳戶風險上限（未經回測校準） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_KELLY_SCALE` | `0.5` | 做空凱利縮放（Half-Kelly） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_KELLY_CAP` | `0.01` ($1\%$) | 做空凱利分數上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE` | `1` | 每位使用者每週期最多做空指令數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_MAX_CANDIDATES` | `2` | 每週期最多評估的做空候選數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `SHORT_ENTRY_DRY_RUN` | `true`（環境變數） | 只寫稽核紀錄、不推播 DM | `nexus_core/config.py` |
 
 做空部位的出場矩陣常數與多頭共用同一組（`_MICROSTRUCTURE_SL_*` / `_MICROSTRUCTURE_TP*`），僅方向反轉，詳見 [`05_dual_track_anti_washout_stop_loss.md`](05_dual_track_anti_washout_stop_loss.md)。
 
@@ -195,25 +268,42 @@ flowchart TD
    | 三處 `-1 if "STO" in strategy else 1` | `SHORT_SIDE` / `Long Put` / `Bear Call Spread` 皆無 "STO" 字串，被誤判為多頭 | 抽出 `risk_engine.is_short_exposure_strategy()` 單一判定並共用 |
    | 現貨 P&L 未依方向翻號 | 空頭現貨回報反向損益 | 比照選擇權分支加上 `quantity < 0` 翻轉 |
 
-   ⚠️ **仍未處理**：VIX 戰情階梯的所有閘門都以 `"STO"`/`"BTO"` 字串為鍵，做空進場不經過任何一道；且該階梯的前提對做空是反的（高 VIX 給最大侵略性，那對賣權利金正確、對追空錯誤）。`execution_router` 的凱利勝率先驗 `RSI < 50 ⇒ 勝率較高` 同樣是多頭先驗。兩者都需要獨立的做空校準，不宜以機械翻轉處理。
+   **VIX 戰情階梯與凱利先驗（已方向感知化）**：各閘門改以 `risk_engine.classify_trade_intent()` 的交易意圖分流，方向性做空走保守倒 U 形乘數（VIX $\ge 35$ 禁止新開空單）與獨立的做空勝率先驗，詳見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md)。數值皆未經回測校準，由 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) 的工具產出建議、人工審核後以 PR 修改。
 
-7. **部位方向的識別**：做空部位沿用既有的「股數/口數為負」慣例識別，不新增資料庫欄位。出場矩陣的四個入口皆依此分流至鏡像版，未標記方向的既有部位一律視為多頭，確保零行為變化。
+   ⚠️ **`is_short_exposure_strategy` 不可當 Delta 乘數**：買進 Put 是淨空頭，但它的合約 Delta 本身已為負，乘數必須是 $+1$。曾有版本以 `-1 if is_short_exposure_strategy(...)` 投影，把 `BTO_PUT` 當成增加多頭 Delta 編列預算；乘數改由 `position_delta_sign()` 提供。
+
+7. **破位追空的止盈目標牆替換**：「跌破 Put Wall $1.5\%$」正是破位追空的**進場條件**。若出場矩陣仍以 Put Wall 為 TP2 目標，部位一登錄就落在 TP2 內，下一個週期即建議回補。現價已跌破 Put Wall 且 metrics 帶有次級負 GEX 節點 (`next_negative_node`) 時，TP1／TP2 改以該節點為目標牆；節點缺失時維持原行為，牆體向下遷移分支不受影響。
+
+8. **無持倉使用者**：15 分鐘評估迴圈原本只涵蓋有持倉的使用者。`SHORT_SIDE` / `DYNAMIC` 使用者一律併入（單次讀取 `user_settings`），純現金的做空使用者才會被評估。
+
+9. **抑制與上線保護**：本週期若已有 `MARGIN_DEFENSE` 指令即不開新空單；`SHORT_ENTRY_DRY_RUN` 預設開啟，只寫 `rollover_audit_log`。何時可以開啟推播、上線後要觀察哪些數據，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9（含 2026-09 試跑基準：代理事件的做空期望值為負，當時決定維持只記錄）。通知走 `alpha_market_signals`（進場訊號而非持倉防禦；`focus`／`mute_intraday` 預設關閉該頻道）。VIX 以 `get_vix_spot_strict()` 抓取——`get_macro_environment()` 失敗時回傳的 `18.0` 與真實值無從區分，做空需要知道「VIX 未知」才能退回保守乘數 $0.5$。
+
+10. **不代為下單**：`SHORT_ENTRY` 是建議。使用者成交後須以**負股數／負口數**登錄，做空鏡像出場矩陣才會接管。
+
+11. **部位方向的識別**：做空部位沿用既有的「股數/口數為負」慣例識別，不新增資料庫欄位。出場矩陣的四個入口皆依此分流至鏡像版，未標記方向的既有部位一律視為多頭，確保零行為變化。
 
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：
-  - Orchestrator：`_confirm_short_entry_signal()`
+  - 完整評估（含價位中間值）：`evaluate_short_entry()` → `ShortEntryEvaluation`
+  - 三元組包裝（與左右側簽章一致）：`_confirm_short_entry_signal()`
   - 條件一～六：`_confirm_short_entry_condition{1..6}_*()`
   - 次級節點探測：`_find_next_negative_gex_peak()`
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`_scan_resistance_wall_above_spot()`（$K > \text{Spot}$ 阻力頂牆掃描）、`_detect_whale_call_bto_block()`（做空的 SL-主力對沖偵測）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime V 破位追空態的分類與優先序
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：做空鏡像出場矩陣（`_correct_wall_topology_short()`、`_compute_short_anti_washout_stop()`、`_evaluate_microstructure_tp_ladder_short()`、`_evaluate_microstructure_sl_ladder_short()`）
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：`SHORT_SIDE` 與 Regime V 的策略路由分支
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：`SHORT_SIDE` 與 Regime V 的策略路由分支（回傳帶方向的 `EntryConfirmation`）、`_find_best_short_target()`
+- `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`SHORT_ENTRY` 情境（`_ShortEntryMixin.evaluate_short_entry_opportunity()`、`ShortCandidateInput`）
+- `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：`build_short_entry_levels()`、`compute_short_entry_sizing()`
+- `nexus_core/market_analysis/dynamic_rollover/core_deployment.py`：SHORT 確認不進入機會分支
+- `nexus_core/cogs/trading/portfolio_monitor.py`：做空使用者集合、候選組裝、`SHORT_ENTRY` 派送與 dry-run
+- `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_short_entry_embed()`
 - `nexus_core/market_analysis/dynamic_rollover/models.py`：`TradingStrategyMode.SHORT_SIDE`、`DynamicRegime.REGIME_V_BREAKDOWN_CHASE`
 - `nexus_core/database/migrations/v074_add_previous_put_wall.py`／`nexus_core/database/market_cache.py`：`previous_put_wall` 的持久化通路（做空 TP2 牆體向下遷移判定所需，鏡像 `v069`）
 - `nexus_core/cogs/settings_ui.py`：交易策略 4 選 1 選單與方向標註
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：做空鐵律說明區塊 `_ENTRY_RULES_DETAIL_SHORT`
 - `nexus_core/tests/unit/test_short_side_entry.py`：六重鐵律逐條單元測試
-- `nexus_core/tests/unit/test_short_exit_matrix.py`：做空 SL/TP 矩陣與方向分流測試
+- `nexus_core/tests/unit/test_short_exit_matrix.py`：做空 SL/TP 矩陣與方向分流測試（含破位追空目標牆替換）
+- `nexus_core/tests/unit/test_short_entry_sizing.py`／`test_short_entry_scenario.py`：價位、倉位與 `SHORT_ENTRY` 情境閘門測試

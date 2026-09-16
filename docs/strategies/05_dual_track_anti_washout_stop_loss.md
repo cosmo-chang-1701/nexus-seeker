@@ -117,8 +117,14 @@ $$
 | SL-主力對沖 | 近平值大額 **PUT** BTO | 近平值大額 **CALL** BTO（逼空起點） |
 | SL-動態保本 | $\dfrac{\text{Spot} - \text{Anchor}}{\text{CallWall} - \text{Anchor}} \ge 0.5$ | $\dfrac{\text{Anchor} - \text{Spot}}{\text{Anchor} - \text{PutWall}} \ge 0.5$ |
 | 保本棘輪 | $\max(\cdot)$，停損只上移 | $\min(\cdot)$，停損只下移 |
-| TP1 | $\text{Spot} \ge \text{CallWall} \times 0.995$ | $\text{Spot} \le \text{PutWall} \times 1.005$ |
-| TP2 | 突破 CallWall $1.5\%$ 或牆**上**移 $3\%$ | 跌破 PutWall $1.5\%$ 或牆**下**移 $3\%$（資料通路見 §5.7） |
+| TP1 | $\text{Spot} \ge \text{CallWall} \times 0.995$ | $\text{Spot} \le \text{Target} \times 1.005$ |
+| TP2 | 突破 CallWall $1.5\%$ 或牆**上**移 $3\%$ | 跌破 Target $1.5\%$ 或 PutWall 牆**下**移 $3\%$（資料通路見 §5.7） |
+
+做空的目標牆 $\text{Target}$ 依現價位置替換：
+
+$$\text{Target} = \begin{cases} \text{NextNegativeNode} & \text{Spot} < \text{PutWall} \ \wedge\ 0 < \text{NextNegativeNode} < \text{PutWall}\\ \text{PutWall} & \text{否則} \end{cases}$$
+
+「跌破 Put Wall $1.5\%$」正是破位追空的**進場條件**；若不替換，部位一登錄就落在 TP2 內，下一個週期即建議回補。`portfolio_monitor` 以 `_find_next_negative_gex_peak()` 補上 `metrics["next_negative_node"]`，取不到時為 $0$ 並退回原行為。
 | TP3 | $\Delta \ge 0.85$、DTE $\le 5$、VWAP 帶量**失守** | $\Delta \le -0.85$、DTE $\le 5$、VWAP 帶量**收復** |
 | LVN 吸附 | 往**下**推至次級 HVN 上緣 $+0.2 \times \text{ATR}_{15m}$ | 往**上**推至次級 HVN 下緣 $-0.2 \times \text{ATR}_{15m}$ |
 
@@ -216,8 +222,8 @@ flowchart TD
    `_apply_decision_matrix` 內的 `is_extreme_tick_breach` 與外層 gate 皆依部位方向分流：多頭是 $\text{Spot} < \text{ExtremeStop}$，做空是 $\text{Spot} > \text{ExtremeStop}$。兩處定義必須保持一致，否則會出現「外層判定已熔斷、內層卻按一般流程處理」的分歧。
 6. **牆體遷移判定的資料通路依賴**：
    TP2 的「牆體遷移」分支依賴跨週期持久化的 `previous_call_wall` / `previous_put_wall`（`market_cache` 欄位，分別由 `v069` 與 `v074` 建立）。若該欄位缺失或為 0，遷移分支會**靜默**退回單純的 $1.5\%$ 突破／跌破判定——不會報錯，只會少一條觸發路徑。做空側在 `v074` 之前正是處於這個狀態。新增鏡像分層時務必一併確認資料通路存在，否則等於寫了一段永遠不會執行的程式碼。
-7. **做空部位的組合層風控缺口**：
-   `risk_engine/` 的 Beta 加權 Delta、VIX 戰情階梯、動態分數凱利模型皆建立在「全部部位為多頭」的假設上。做空部位存在時組合層指標可能失真——淨 Delta 會被做空部位抵銷，但凱利分數仍以多頭勝率推導。這是已知且待後續處理的缺口。
+7. **做空部位的組合層風控（已方向感知化）**：
+   組合層的保證金、資本、對沖門檻已依「量值 vs 帶號」原則修正（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md) §5）；VIX 戰情階梯與凱利先驗改以交易意圖分流（見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §5.4）。做空出場矩陣的錨點邏輯已抽成純函式 `resolve_short_anchor()`，與 SHORT_ENTRY 倉位計算共用，確保倉位依據的停損與出場引擎實際執行的停損一致。
 
 ---
 
@@ -232,5 +238,6 @@ flowchart TD
   - 統一決策矩陣：`_apply_decision_matrix()`（第 448–580 行）
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`：具名常數 `_MICROSTRUCTURE_*`, `_ANTI_WASHOUT_*`
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`_resolve_canonical_anchor_base()`, `_detect_whale_put_bto_block()`
+- `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：做空錨點純函式 `resolve_short_anchor()`、做空止盈目標牆替換 (`_evaluate_microstructure_tp_ladder_short()`)
 - `nexus_core/market_analysis/volume_profile.py`：`calculate_volume_profile()` (HVN/LVN)
 - `nexus_core/market_analysis/atr_utils.py`：`compute_atr_15m_from_df()`

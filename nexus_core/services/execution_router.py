@@ -8,6 +8,12 @@ from models.execution import (
     Signal,
 )
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
+from market_analysis.kelly_priors import (
+    KELLY_PRIOR_CAP,
+    KELLY_PRIOR_ODDS,
+    KELLY_PRIOR_SCALE,
+    get_win_rate_prior,
+)
 from market_analysis.risk_engine import kelly_position_fraction
 
 
@@ -185,14 +191,15 @@ class ExecutionRouter:
         """
         利用凱利公式計算倉位百分比，並實施風險上限控制。
         """
-        # 假設預期勝率與 RSI 相關 (RSI < 50 時勝率預期較高，適合做多 UOA)
-        expected_win_rate = 0.55 if condition.rsi_14 < 50 else 0.45
-        # 預期賠率 (Profit/Loss Ratio) 設為固定的 1.8
-        odds = 1.8
-
-        # 安全邊際控制：Half-Kelly 並封頂於 15%
+        # 勝率先驗依方向查表 (kelly_priors.py 單一來源)。多頭路徑與改動前位元
+        # 一致：RSI < 50 → 0.55、否則 0.45；賠率 1.8；Half-Kelly 封頂 15%。
+        side = condition.side
+        expected_win_rate = get_win_rate_prior(side, condition.rsi_14)
         safe_percentage = kelly_position_fraction(
-            win_prob=expected_win_rate, odds=odds, kelly_scale=0.5, cap=0.15
+            win_prob=expected_win_rate,
+            odds=KELLY_PRIOR_ODDS[side],
+            kelly_scale=KELLY_PRIOR_SCALE,
+            cap=KELLY_PRIOR_CAP[side],
         )
 
         return PositionSizing(

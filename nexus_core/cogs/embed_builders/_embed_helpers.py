@@ -532,9 +532,13 @@ def _add_vix_battle_status_field(embed: Any, data: Any):  # type: ignore
     tier_name = vix_status.get("name") or data.get("vix_tier_name", "N/A")
     tier_emoji = vix_status.get("emoji") or data.get("vix_tier_emoji", "")
     delta_cap = vix_status.get("sto_delta_cap") or data.get("vix_sto_delta_cap", 0.0)
-    sizing_mult = vix_status.get("sizing_multiplier") or data.get(
-        "vix_sizing_multiplier", 1.0
-    )
+    # 不可用 `or`：0.0 乘數 (休兵賣方 / 極端區做空) 是有效值，`or` 會把它當成
+    # 缺值而落到 1.0，使「禁止開倉」顯示成「正常倉位」。
+    sizing_mult = vix_status.get("sizing_multiplier")
+    if sizing_mult is None:
+        sizing_mult = data.get("vix_sizing_multiplier", 1.0)
+    trade_intent = vix_status.get("trade_intent") or data.get("trade_intent")
+    sizing_label = "做空倉位乘數" if trade_intent == "DIRECTIONAL_SHORT" else "倉位乘數"
 
     if vix_spot is None:
         return
@@ -544,7 +548,7 @@ def _add_vix_battle_status_field(embed: Any, data: Any):  # type: ignore
     if delta_cap != 0.0:
         details.append(f"Delta Cap: `{delta_cap:.2f}`")
     if sizing_mult != 1.0:
-        details.append(f"\u5009\u4f4d\u4e58\u6578: `{sizing_mult:.1f}x`")
+        details.append(f"{sizing_label}: `{sizing_mult:.2f}x`")
 
     value = status_line
     if details:
@@ -640,11 +644,11 @@ def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):
     # 🚀 方向校正邏輯：
     # 若是賣方 (STO)，部位方向 = 合約方向 * -1
     # 若是買方 (BTO)，部位方向 = 合約方向
-    from market_analysis.risk_engine import is_short_exposure_strategy
+    from market_analysis.risk_engine import position_delta_sign
 
-    # 與 risk_engine 的 NRO 倉位模型共用同一個方向判定，避免呈現層與計算層
-    # 對同一筆交易給出相反的方向。
-    pos_multiplier = -1 if is_short_exposure_strategy(strategy) else 1
+    # 與 risk_engine 的 NRO 倉位模型共用同一個方向乘數，避免呈現層與計算層
+    # 對同一筆交易給出相反的方向。買進 Put 的合約 Delta 已為負，乘數為 +1。
+    pos_multiplier = position_delta_sign(strategy)
     pos_weighted_shares = weighted_delta * pos_multiplier
 
     embed.add_field(

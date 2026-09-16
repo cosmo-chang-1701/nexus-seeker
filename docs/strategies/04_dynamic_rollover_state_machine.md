@@ -1,10 +1,10 @@
-# 動態轉倉 8 大情境決策狀態機與演化引擎技術規格書
+# 動態轉倉 9 大情境決策狀態機與演化引擎技術規格書
 
 ## 1. 核心哲學與適用市場環境
 
 在多資產與美股期權交易實務中，靜態的「買入並持有」策略在面對市場體系切換、做市商伽馬擠壓、期限結構倒掛及保證金壓力時，極易面臨流動性枯竭或大幅獲利回吐。
 
-Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）將整個投資組合生命週期劃分為 **8 大業務情境（8 Major Scenarios）**，由專屬枚舉類 `RolloverScenario` 統轄：
+Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）將整個投資組合生命週期劃分為 **9 大業務情境（9 Major Scenarios）**，由專屬枚舉類 `RolloverScenario` 統轄：
 1. `CORE_DEPLOYMENT`：核心資金超額部署與 Covered Call 增強。
 2. `OPPORTUNITY_COST`：機會成本動能替換與極致不對稱全倉轉移。
 3. `SATELLITE_REBALANCE`：衛星部位微觀結構出場與超額風險修剪。
@@ -13,6 +13,9 @@ Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）將整個投�
 6. `MACRO_TOP_ESCAPE_DEFENSE`：宏觀逃頂前瞻防禦性降槓桿。
 7. `FUNDAMENTAL_BROKEN`：基本面護城河破滅之清倉保護。
 8. `TRANSITION_ENGINE`：動態調整狀態切換引擎（左側轉右側演化）。
+9. `SHORT_ENTRY`：獨立的做空進場訊號（做空六重鐵律確認後，自帶進場／停損／目標與倉位）。
+
+⚠️ **進場確認帶方向**：Scenario 2 回傳的進場確認是 `EntryConfirmation(is_confirmed, reason, direction, …)`。早期的 `(bool, reason)` 二元組不帶方向，`CORE_DEPLOYMENT` 因此把做空確認當成「候選可以買進」，以 Buy Shares 部署 CORE 超額現金到剛被確認要做空的標的。現在 `direction == "SHORT"` 的確認**永遠不會**產生 `OPPORTUNITY_COST` 指令，`CORE_DEPLOYMENT` 的機會分支亦視為未確認（BOXX 防禦分支不受影響）；做空確認改由 `SHORT_ENTRY` 處理。
 
 所有轉倉建議皆統一封裝為 `RolloverInstruction` 結構，提供行動指令、目標標的、賣出比例與結構化理由，為交易員或下游排程提供確定性的執行依據。
 
@@ -118,11 +121,18 @@ $$
      $$
   2. **加碼授權**：授權新開立短天期（DTE 7–21 天）右側順勢加碼單（`OPEN_PYRAMID`），實現利潤奔馳。
 
+### 2.9 情境九：做空進場訊號 (`SHORT_ENTRY`)
+僅對 `trading_strategy ∈ {SHORT_SIDE, DYNAMIC}` 的使用者評估（含沒有任何持倉者），在保證金防禦、宏觀逃頂與賣方停利之後執行。候選為 Scenario 2 在 Regime V 已確認的做空評估，以及下行預期波幅 × 空頭動能挑出的做空候選；本週期若有 `MARGIN_DEFENSE` 指令、或 VIX $\ge 35$（做空乘數為 $0$）即抑制。倉位：
+
+$$\text{Qty} = \min\Big(\Big\lfloor \frac{\text{Capital} \times \min(0.5\%,\ f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}}{\text{Stop} - \text{Entry}} \Big\rfloor,\ \Big\lfloor \frac{\text{Capital} \times \text{risk\_limit}\%}{\text{Entry}} \Big\rfloor\Big)$$
+
+每位使用者每週期至多 1 筆（取 R:R 最佳者），`action = "OPEN_SHORT"`、`sell_ratio = 0`。完整規格見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md) §2.6–§2.7。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
 
-### 3.1 動態轉倉 8 大情境全景狀態圖
+### 3.1 動態轉倉 9 大情境全景狀態圖
 
 ```mermaid
 stateDiagram-v2
@@ -136,9 +146,10 @@ stateDiagram-v2
     投資組合資產評估 --> MACRO_TOP_ESCAPE_DEFENSE: 宏觀逃頂評分達 CRITICAL
     投資組合資產評估 --> FUNDAMENTAL_BROKEN: 基本面護城河破滅分析確認
     投資組合資產評估 --> TRANSITION_ENGINE: 左側部位帶量突破 VWAP & GammaFlip
+    投資組合資產評估 --> SHORT_ENTRY: SHORT_SIDE/DYNAMIC 使用者且做空六重鐵律通過
 
     CORE_DEPLOYMENT --> BOXX防禦: boxx_pct >= 50%
-    CORE_DEPLOYMENT --> 候選標的: boxx_pct < 50% 且通過六重鐵律
+    CORE_DEPLOYMENT --> 候選標的: boxx_pct < 50% 且通過六重鐵律 (僅 LONG 確認)
     CORE_DEPLOYMENT --> CoveredCall增強: 股數 >= 100 且上方封頂
 
     MARGIN_DEFENSE --> CASH現金: 存在現金赤字
@@ -146,7 +157,12 @@ stateDiagram-v2
     MARGIN_DEFENSE --> BOXX無風險: 其他情境
 
     TRANSITION_ENGINE --> 升級右側動能倉: 停損上移至保本點 + 授權 PYRAMID 加碼
+
+    SHORT_ENTRY --> 抑制: 本週期有 MARGIN_DEFENSE 或 VIX >= 35
+    SHORT_ENTRY --> 做空訊號: 價位合法且倉位 >= 1 股 (每週期至多 1 筆)
 ```
+
+派送順序（`portfolio_monitor.monitor_real_portfolio_task`）：`SATELLITE_REBALANCE` → `OPPORTUNITY_COST` → `CORE_DEPLOYMENT`（含 Covered Call Overlay）→ `MARGIN_DEFENSE` → `MACRO_TOP_ESCAPE_DEFENSE` → 賣方停利 → `SHORT_ENTRY`。`SHORT_ENTRY` 走 `alpha_market_signals` 通知頻道與專屬 embed（不掛 `RolloverActionView`，該按鈕試算的是 BUY 股數），受 `SHORT_ENTRY_DRY_RUN` 閘門控制。
 
 ### 3.2 DTE 三態狀態機決策階梯
 
@@ -185,6 +201,9 @@ flowchart TD
 | `_COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT` | `0.80` ($80\%$) | 賣方權利金衰減達 80% 時 BTC 100% 全額平倉 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MACRO_TOP_ESCAPE_TRIM_RATIO` | `0.25` ($25\%$) | 宏觀逃頂觸發時 SATELLITE 部位保守減碼比例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_TRANSITION_PATH1_VWAP_VOLUME_MULT` | `1.5` | 左側轉右側演化 15m 收盤站穩 VWAP 放量倍數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_ACCOUNT_RISK_PCT` | `0.005` ($0.5\%$) | `SHORT_ENTRY` 單筆帳戶風險上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE` | `1` | `SHORT_ENTRY` 每位使用者每週期上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `SHORT_ENTRY_DRY_RUN` | `true` | `SHORT_ENTRY` 只寫稽核紀錄不推播 | `nexus_core/config.py` |
 | BOXX 常規清算上限 | `180` 股 (換算 $\$21{,}000$) | `/stress_test` 計算 BOXX 應急套現額度之股數硬上限 | `nexus_core/cogs/unified_terminal/cog.py` |
 | 實體提領紅線 | `$13,000` | `/stress_test` 判定 `is_critical` 時額外揭露之提領額度警戒線 | `nexus_core/cogs/embed_builders/scan_embeds/risk_stress_test.py` |
 
@@ -196,7 +215,8 @@ flowchart TD
    在 `MARGIN_DEFENSE` 路由至反向 ETF 前，必須調用 `confirm_inverse_hedge_spot_momentum()` 驗證日均成交額 $\ge \$5,000,000$ 且技術面偏多。任何流動性不足或歷史數據缺失一律 Fail-Closed 退回無風險的 `BOXX`，防止交易員被困在無量反向商品中。
 2. **末日合約結算與轉倉窗口**：
    當期權部位 $\text{DTE} \le 1$ 時，系統直接短路所有常規指標計算，跳過 15m 實體收盤等待，直接發出 `EXPIRATION_SETTLEMENT_ALERT`，並指示次月合約尋找窗口設定在 $21 \sim 45$ DTE，避免連鎖陷入連續末日合約耗損。
-3. **Delta 終局平倉硬鎖**：
+3. **做空確認的下游隔離**：`direction == "SHORT"` 的 `EntryConfirmation` 在衛星迴圈之前返回、`CORE_DEPLOYMENT` 視為未確認。`SHORT_SIDE` 模式下 Scenario 2 不再對多頭候選跑做空鐵律（該候選依上漲期望值排序，建構上就是錯的對象）。
+4. **Delta 終局平倉硬鎖**：
    當期權部位 Delta 升至 $\ge 0.85$ 時，做市商避險已近乎 1:1 現貨對沖，凸性利潤耗盡並伴隨深實值流動性枯竭風險，系統觸發 TP3 強制收割利潤。
 
 ---
@@ -215,5 +235,8 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/transition_engine.py`：`evaluate_transition_for_position()`
 - `nexus_core/market_analysis/dynamic_rollover/inverse_hedge.py`：`resolve_inverse_hedge_target()`, `confirm_inverse_hedge_spot_momentum()`
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`evaluate_option_dte_tier()`
+- `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`evaluate_short_entry_opportunity()`（情境九）
+- `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：做空價位與倉位
+- `nexus_core/cogs/trading/portfolio_monitor.py`：九大情境的評估順序、通知頻道分流與 dry-run 閘門
 - `nexus_core/cogs/unified_terminal/cog.py`：`/stress_test` 指令，GTC 掛單現金赤字與 BOXX 應急套現額度精算
 - `nexus_core/cogs/embed_builders/scan_embeds/risk_stress_test.py`：`create_stress_test_embed()`

@@ -1,7 +1,7 @@
 import asyncio
 import math
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from database.user_settings import get_full_user_context
 from market_analysis.index_microstructure import (
@@ -22,6 +22,9 @@ from ._shared import (
 )
 from .constants import (
     CORE_DEFENSE_ETF_SYMBOLS,
+    INDEX_INVERSE_MAP,
+    SECTOR_INVERSE_MAP,
+    SINGLE_STOCK_INVERSE_MAP,
     _BREAKOUT_READY_THRESHOLD,
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_CANDIDATE_MIN_DTE,
@@ -43,10 +46,13 @@ from .constants import (
     _PUT_WALL_PROXIMITY_TOLERANCE,
     _ROLLOVER_RATIO_HIGH_PROFIT,
     _ROLLOVER_RATIO_STANDARD,
+    _SHORT_CANDIDATE_MAX_PSQ,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
 )
 from .models import (
     DynamicRegime,
+    EntryConfirmation,
+    EntryDirection,
     RolloverInstruction,
     RolloverScenario,
     TradingStrategyMode,
@@ -363,7 +369,7 @@ def _confirm_entry_condition3_no_physical_cap(
     market_analysis/room_threshold.py 公式 A）：
 
         Threshold = max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)
-        Risk_actual = (Spot − (PutWall − 1.5 × ATR₁₅ₘ)) / Spot
+        Risk_actual = (Spot − (PutWall − 0.5 × ATR₁₅ₘ)) / Spot
 
     即「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 盈虧比成為
     結構性保證，而非對高波標的失效、對低波標的過嚴的一刀切數字。"""
@@ -457,6 +463,7 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     candidate_symbol: str,
     prior_conditions_passed: bool,
     reasons: list,
+    direction: EntryDirection = "LONG",
 ) -> Tuple[bool, Optional[int]]:
     """條件五：總經負 Gamma 與財報黑天鵝防禦閘門 (前四項通過時才發動判定，避免
     為了一個已經確定會失敗的整體結果，仍去打財報行事曆/總經 Regime 這類真實
@@ -467,7 +474,11 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     回傳 (是否通過, 距財報天數)。第二個元素純粹是把本函式「為了判定財報緩衝
     而本來就已經查到」的天數一併帶出，供條件六推導建議進場結構的 DTE band 時
     收斂上限用 (不建議抱過財報)，零額外 I/O。查無財報、解析失敗或短路略過時
-    為 None；財報已過期時為負值，由消費端自行決定如何處理。"""
+    為 None；財報已過期時為負值，由消費端自行決定如何處理。
+
+    `direction` 只影響大盤鎖定時的文案，不影響封鎖行為：負 Gamma 踩踏／流動性
+    危機期間做空同樣被封鎖 (軋空與流動性斷層風險同樣極端)，但告訴做空使用者
+    「嚴禁開倉個股買方」是錯的敘述。"""
     if not prior_conditions_passed:
         reasons.append("條件五⏭️：前四項未全數通過，略過總經/財報安全閥檢查")
         return True, None
@@ -498,9 +509,15 @@ async def _confirm_entry_condition5_macro_earnings_gate(
             regime = await get_market_regime()
             if regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
                 c5_passed = False
-                reasons.append(
-                    f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
-                )
+                if direction == "SHORT":
+                    reasons.append(
+                        f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏／流動性危機模式，"
+                        "宏觀鎖定期間嚴禁開立個股新空單（軋空與流動性斷層風險同樣極端）"
+                    )
+                else:
+                    reasons.append(
+                        f"條件五❌：大盤處於 `{regime}` 負 Gamma 踩踏模式，嚴禁開倉個股買方"
+                    )
         except Exception as e:
             c5_passed = False
             reasons.append(
@@ -669,11 +686,15 @@ class _OpportunityCostMixin:
 
         return float(base_ev)
 
-    def _find_best_rollover_target(
+    def _iter_rollover_candidates(
         self, user_id: int, exclude_symbols: Optional[set] = None
-    ) -> str:
-        """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO。
-        自動避開即將在 3 天內發布財報的高波事件標的。"""
+    ) -> Iterator[str]:
+        """依序產出使用者 Watchlist 中可評估的候選標的代號。
+
+        共用的排除規則 (多空候選來源一致)：已持有／呼叫端指定排除、核心防禦
+        ETF (CORE_DEFENSE_ETF_SYMBOLS)、即將在財報緩衝期內發布財報的高波事件
+        標的 (機構風控：避開二元事件黑天鵝)。Watchlist 讀取失敗時不產出任何值。
+        """
         from database.calendar_cache import get_cached_earnings
         from database.watchlist import get_user_watchlist
 
@@ -684,17 +705,14 @@ class _OpportunityCostMixin:
             watchlist = get_user_watchlist(user_id)
         except Exception as e:
             logger.error(f"取得 user {user_id} watchlist 失敗: {e}")
-            return "VOO"
+            return
 
         today_dt = datetime.now().date()
-        best_symbol = "VOO"
-        best_ev = _EV_SPREAD_MIN_THRESHOLD  # 門檻 EV > _EV_SPREAD_MIN_THRESHOLD
         for sym, _ in watchlist:
             sym_u = str(sym).upper()
             if sym_u in exclude:
                 continue
 
-            # 避開即將發布財報的標的 (機構風控：避開二元事件黑天鵝)
             try:
                 earn = get_cached_earnings(sym_u)
                 if earn and earn.get("earnings_date"):
@@ -706,9 +724,85 @@ class _OpportunityCostMixin:
             except Exception:
                 pass
 
+            yield sym_u
+
+    def _find_best_rollover_target(
+        self, user_id: int, exclude_symbols: Optional[set] = None
+    ) -> str:
+        """掃描使用者 Watchlist 與 market_cache 快取尋找下一個高 EV 衛星標的，若無則回傳 VOO。
+        自動避開即將在 3 天內發布財報的高波事件標的。"""
+        best_symbol = "VOO"
+        best_ev = _EV_SPREAD_MIN_THRESHOLD  # 門檻 EV > _EV_SPREAD_MIN_THRESHOLD
+        for sym_u in self._iter_rollover_candidates(user_id, exclude_symbols):
             ev = self._calculate_ev_proxy(sym_u)
             if ev > best_ev:
                 best_ev = ev
+                best_symbol = sym_u
+        return best_symbol
+
+    def _calculate_short_ev_proxy(
+        self, symbol: str, radar: Optional[Mapping[str, Any]]
+    ) -> float:
+        """做空候選的期望值代理：下行預期波幅 × 空頭動能權重。
+
+            base = (spot − expected_move_lower) / spot
+            score = base × (100 − PSQ) / 100
+
+        預期波幅本身是對稱的，真正讓排序具有方向性的是 PSQ 權重。門檻判定
+        只看 base (與多頭 `_calculate_ev_proxy` 同一個 `_EV_SPREAD_MIN_THRESHOLD`
+        口徑)，PSQ 權重只用於排序——否則做空候選的空間門檻會被權重暗中抬高。
+        PSQ 高於 `_SHORT_CANDIDATE_MAX_PSQ` (動能不夠弱)、base 未達門檻、或
+        market_cache 過期／降級時回傳 0.0。
+        """
+        from database.market_cache import get_market_cache
+
+        if not radar:
+            return 0.0
+        psq = self._normalize_power_squeeze(radar.get("psq_result") or {})
+        if psq > _SHORT_CANDIDATE_MAX_PSQ:
+            return 0.0
+        row = get_market_cache(symbol)
+        if not row or row.get("is_stale") or row.get("is_degraded"):
+            return 0.0
+        spot = float(row.get("reference_spot_price") or 0.0)
+        lower = float(row.get("expected_move_lower") or 0.0)
+        if spot <= 0.0 or lower <= 0.0 or lower >= spot:
+            return 0.0
+        base = (spot - lower) / spot
+        if base <= _EV_SPREAD_MIN_THRESHOLD:
+            return 0.0
+        return float(base * (100.0 - psq) / 100.0)
+
+    def _find_best_short_target(
+        self,
+        user_id: int,
+        exclude_symbols: Optional[set],
+        radar_snapshot: Mapping[str, Mapping[str, Any]],
+    ) -> Optional[str]:
+        """尋找最佳做空候選 (SHORT_ENTRY 情境)，無合格者回傳 None。
+
+        與 `_find_best_rollover_target` 共用 watchlist 迭代與排除規則，另外排除
+        反向 ETF (做空反向 ETF 等於做多大盤，方向相反)。零網路 I/O：只讀
+        market_cache 與呼叫端傳入的共享雷達快取快照 (`bot._latest_radar_data_cache`)；
+        快照中沒有資料的標的直接略過，不為了挑候選而逐檔抓取雷達。
+        """
+        inverse_symbols = (
+            set(INDEX_INVERSE_MAP.values())
+            | set(SECTOR_INVERSE_MAP.values())
+            | {
+                v
+                for variants in SINGLE_STOCK_INVERSE_MAP.values()
+                for v in variants.values()
+            }
+        )
+        best_symbol: Optional[str] = None
+        best_score = 0.0
+        for sym_u in self._iter_rollover_candidates(user_id, exclude_symbols):
+            if sym_u in inverse_symbols:
+                continue
+            score = self._calculate_short_ev_proxy(sym_u, radar_snapshot.get(sym_u))
+            if score > best_score:
+                best_score = score
                 best_symbol = sym_u
         return best_symbol
 
@@ -994,7 +1088,18 @@ class _OpportunityCostMixin:
             and c5_passed
             and c6_passed
         )
-        return all_passed, " | ".join(reasons), structure_directive
+        reason_text = " | ".join(reasons)
+        from market_analysis.evaluation_recorder import record_gate_reason
+
+        record_gate_reason(
+            "ENTRY_RIGHT",
+            candidate_symbol,
+            target_spot,
+            bool(all_passed),
+            reason_text,
+            candidate_radar=candidate_radar,
+        )
+        return all_passed, reason_text, structure_directive
 
     async def evaluate_opportunity_cost_for_satellites(
         self,
@@ -1003,7 +1108,7 @@ class _OpportunityCostMixin:
         already_flagged_symbols: set,
         candidate_symbol: str,
         candidate_radar: Optional[Dict[str, Any]],
-    ) -> Tuple[List[RolloverInstruction], Optional[Tuple[bool, str]]]:
+    ) -> Tuple[List[RolloverInstruction], Optional[EntryConfirmation]]:
         """
         邏輯 (2) 批次橋接：對每一個尚未被 Scenario 3 標記的 SATELLITE 持倉，
         比對其 PowerSqueeze/EV 與單一預篩選候選標的 (candidate_symbol) 的機會成本，
@@ -1013,11 +1118,16 @@ class _OpportunityCostMixin:
         純資料 dict，避免 market_analysis 層依賴 cogs。
 
         回傳 (instructions, entry_confirmation)：entry_confirmation 為
-        (is_entry_confirmed, entry_reason) 或 None (未觸及 _confirm_entry_signal，
+        `EntryConfirmation` (含方向) 或 None (未觸及 _confirm_entry_signal，
         例如 candidate_symbol 為 "VOO" 或無 candidate_radar 而提早返回)。呼叫端
         (portfolio_monitor.py) 將此結果原樣轉交邏輯 (5) 核心資金部署，避免針對
         同一 candidate_symbol 在同一輪次內重複執行 _confirm_entry_signal 的六重
         條件驗證 (內含未快取的 get_market_regime() 呼叫與歷史 K 線/選擇權到期日抓取)。
+
+        ⚠️ 做空確認 (direction="SHORT") **永遠不會**在本函式產生指令：本情境的
+        語意是「賣掉衛星持倉、把資金買進候選標的」，整條下游全是多頭假設。
+        做空確認只原樣回傳，交由 SHORT_ENTRY 情境 (short_entry_deployment.py)
+        建立獨立的做空進場訊號；core_deployment 收到 SHORT 確認同樣略過。
         """
         instructions: List[RolloverInstruction] = []
         if candidate_symbol == "VOO" or not candidate_radar:
@@ -1076,19 +1186,19 @@ class _OpportunityCostMixin:
                 candidate_symbol, candidate_radar, target_spot
             )
         elif trading_strategy == TradingStrategyMode.SHORT_SIDE.value:
-            from .short_side_entry import _confirm_short_entry_signal
-
-            (
-                is_entry_confirmed,
-                entry_reason,
-                structure_directive,
-            ) = await _confirm_short_entry_signal(
-                candidate_symbol, candidate_radar, target_spot
+            # 本函式的 candidate_symbol 來自 _find_best_rollover_target()——依
+            # 「上漲」期望值排序的多頭候選，對它跑做空鐵律在建構上就是錯的對象。
+            # 做空候選由 _find_best_short_target() 另行挑選，在 SHORT_ENTRY 情境
+            # 獨立評估。
+            return instructions, EntryConfirmation(
+                False,
+                "做空模式：多頭候選不適用，改由 SHORT_ENTRY 情境獨立評估",
+                "SHORT",
             )
         elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
             from .left_side_entry import _confirm_left_entry_signal
             from .regime_classifier import classify_dynamic_regime
-            from .short_side_entry import _confirm_short_entry_signal
+            from .short_side_entry import evaluate_short_entry
 
             gex_profile_data_for_regime = candidate_radar.get("gex_profile_data") or {}
             uoa_list_for_regime = candidate_radar.get("uoa") or []
@@ -1130,11 +1240,7 @@ class _OpportunityCostMixin:
                     atr_15m=regime_market_data.atr_15m,
                 )
             elif regime == DynamicRegime.REGIME_V_BREAKDOWN_CHASE:
-                (
-                    is_entry_confirmed,
-                    entry_reason,
-                    structure_directive,
-                ) = await _confirm_short_entry_signal(
+                short_ev = await evaluate_short_entry(
                     candidate_symbol,
                     candidate_radar,
                     target_spot,
@@ -1142,6 +1248,19 @@ class _OpportunityCostMixin:
                     df_15m=regime_market_data.df_15m,
                     session_vwap=regime_market_data.session_vwap,
                     atr_15m=regime_market_data.atr_15m,
+                )
+                if not short_ev.all_passed:
+                    logger.info(
+                        f"[{candidate_symbol}] Regime V 做空訊號未確認: {short_ev.reason}"
+                    )
+                # 做空確認在衛星迴圈之前返回：永遠不產生 Buy Shares 指令。
+                return instructions, EntryConfirmation(
+                    short_ev.all_passed,
+                    short_ev.reason,
+                    "SHORT",
+                    short_evaluation=short_ev,
+                    entry_regime=entry_regime,
+                    rsi_15m=regime_market_data.rsi_15m,
                 )
             else:
                 is_entry_confirmed = False
@@ -1159,9 +1278,11 @@ class _OpportunityCostMixin:
                 candidate_symbol, candidate_radar, target_spot
             )
 
-        entry_confirmation: Optional[Tuple[bool, str]] = (
+        entry_confirmation: Optional[EntryConfirmation] = EntryConfirmation(
             is_entry_confirmed,
             entry_reason,
+            "LONG",
+            entry_regime=entry_regime,
         )
         if not is_entry_confirmed:
             logger.info(

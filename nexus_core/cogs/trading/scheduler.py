@@ -52,6 +52,7 @@ class SchedulerCog(commands.Cog):
         self.dynamic_market_scanner.start()
         self.daily_reddit_update.start()
         self.kv_cache_dedup_purge.start()
+        self.regime_outcome_labeler.start()
 
         logger.info("SchedulerCog loaded. Background tasks started.")
 
@@ -59,6 +60,7 @@ class SchedulerCog(commands.Cog):
         self.dynamic_market_scanner.cancel()
         self.daily_reddit_update.cancel()
         self.kv_cache_dedup_purge.cancel()
+        self.regime_outcome_labeler.cancel()
         self.intraday_pipeline.stop()
         logger.info("SchedulerCog unloaded. Background tasks cancelled.")
 
@@ -142,6 +144,38 @@ class SchedulerCog(commands.Cog):
 
     @kv_cache_dedup_purge.before_loop
     async def before_kv_cache_dedup_purge(self) -> None:
+        await self.bot.wait_until_ready()
+
+    # ==========================================
+    # 🏷️ Regime 評估紀錄事後走勢標註 (03:30 ET，離峰時段)
+    # ==========================================
+    @tasks.loop(time=time(hour=3, minute=30, tzinfo=ny_tz))
+    async def regime_outcome_labeler(self) -> None:
+        """為前向蒐集的 Regime／進場鐵律評估紀錄回填事後走勢，作為 GEX 相關門檻
+        的校準資料 (services/regime_outcome_labeler.py)。與 03:00 維護任務分開：
+        本任務含逐標的網路抓取，不應拖延 WAL checkpoint。"""
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
+
+        import config
+        from services.llm_service import is_memory_safe
+
+        if not getattr(config, "ENABLE_REGIME_EVALUATION_LOG", True):
+            return
+        if not is_memory_safe():
+            logger.warning("🏷️ [評估結果標註] 記憶體水位過高，跳過本輪。")
+            return
+
+        try:
+            from services.regime_outcome_labeler import run_outcome_labeling
+
+            summary = await run_outcome_labeling()
+            logger.info(f"🏷️ [評估結果標註] {summary}")
+        except Exception as e:
+            logger.error(f"Regime 評估紀錄結果標註失敗: {e}")
+
+    @regime_outcome_labeler.before_loop
+    async def before_regime_outcome_labeler(self) -> None:
         await self.bot.wait_until_ready()
 
     # ==========================================

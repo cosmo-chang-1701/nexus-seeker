@@ -59,6 +59,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ### In `cogs/trading/`
 
+- `regime_outcome_labeler` — **03:30 ET** (leader-only, `is_memory_safe()` gated; back-fills forward price paths for `regime_evaluation_log` rows once 5 sessions have elapsed, then applies retention — see `services/regime_outcome_labeler.py`. Kept separate from the 03:00 job because it does per-symbol network fetches)
 - `kv_cache_dedup_purge` — **03:00 ET** (off-peak; deletes stale one-shot daily anti-spam dedup flags in `kv_cache` — see `database.cache.purge_stale_kv_cache_dedup_keys` — past a 3-day retention window; scoped to a whitelist of known dedup-only key prefixes so permanent caches/config are never touched)
 - `fundamental_filing_scan` — **08:00 ET** (holdings-only, skips non-trading days)
 - `daily_reddit_update` — **08:30 ET**
@@ -97,7 +98,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - 5-Regime 市場環境動態路由矩陣、右側動能六重鐵律、左側均值回歸六重鐵律、做空破位追空六重鐵律、Trading Strategy Modes（`RIGHT_SIDE`/`LEFT_SIDE`/`SHORT_SIDE`/`DYNAMIC`，`user_settings.trading_strategy`）→ [`01_regime_routing_matrix.md`](docs/strategies/01_regime_routing_matrix.md)、[`02_right_side_momentum_ironclad.md`](docs/strategies/02_right_side_momentum_ironclad.md)、[`03_left_side_mean_reversion_ironclad.md`](docs/strategies/03_left_side_mean_reversion_ironclad.md)、[`07_short_side_breakdown_ironclad.md`](docs/strategies/07_short_side_breakdown_ironclad.md)
 - 動態自適應波動率空間門檻（單一權威演算法，取代先前散落 7 處的固定百分比；含緩衝雙邊界與破位追空次級節點空間）→ [`06_dynamic_adaptive_room_threshold.md`](docs/strategies/06_dynamic_adaptive_room_threshold.md)
   - ⚠️ **左側（`LEFT_SIDE`）本質是做多**——逆勢均值回歸、Put Wall 底牆接刀，條件三算的是「向上」回歸空間。`SHORT_SIDE` 才是唯一的空頭方向進場路徑。
-- Dynamic Rollover Engine 八大情境（Fundamental Thesis／Opportunity Cost／Core-Satellite Rebalance／Margin Defense／Core Deployment／Macro Top-Escape／Covered Call Profit-Lock／Transition Engine）、DTE 三態機、`/stress_test` 現金赤字精算 → [`04_dynamic_rollover_state_machine.md`](docs/strategies/04_dynamic_rollover_state_machine.md)
+- Dynamic Rollover Engine 九大情境（Fundamental Thesis／Opportunity Cost／Core-Satellite Rebalance／Margin Defense／Core Deployment／Macro Top-Escape／Covered Call Profit-Lock／Transition Engine／**Short Entry 做空進場訊號**）、DTE 三態機、`/stress_test` 現金赤字精算 → [`04_dynamic_rollover_state_machine.md`](docs/strategies/04_dynamic_rollover_state_machine.md)
 - 雙軌防洗盤動態停損與微觀結構出場決策矩陣（SL-結構失效／SL-狀態翻轉／SL-主力對沖／SL-動態保本／TP1-TP3）→ [`05_dual_track_anti_washout_stop_loss.md`](docs/strategies/05_dual_track_anti_washout_stop_loss.md)
 - Watchlist 心跳所依賴的 Relative Strength 公式、ExecutionRouter、Skew Divergence Gate、Momentum Vector Gate，以及 Event-Driven Market Scenario Alerts（巨鯨護航共振等六大情境）亦記載於本系列文件。
 
@@ -132,6 +133,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - 盤前 08:45 預熱與 SQLite Cache-Aside、Quantitative Radar Terminal 零延遲規則引擎 → [`02_pre_market_cache_aside.md`](docs/architecture/02_pre_market_cache_aside.md)
 - 雙服務架構（`nexus_core` / `nexus_edge_scraper`）與三階式降級代理 → [`03_dual_service_and_proxy.md`](docs/architecture/03_dual_service_and_proxy.md)
 - Discord 防爆分頁、`Semaphore(3)` 併發控制、跨模組共享雷達快取（`bot._latest_radar_data_cache`）等高效能背景排程規範 → [`04_engineering_standards.md`](docs/architecture/04_engineering_standards.md)
+- 回測校準工具（離線事件研究，只產報告不改參數）與前向蒐集管線（`regime_evaluation_log`、edge `gex_snapshot_history`）→ [`05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md)
 
 ### 平台工程與使用者體驗 (`docs/platform/`)
 - Analyst Agent 報告排程（盤前財報、盤後綜合結算）→ [`01_analyst_agent_reporting.md`](docs/platform/01_analyst_agent_reporting.md)
@@ -172,6 +174,13 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/migrations/v070_split_heartbeat_symbol_deep.py` — migration backfilling `heartbeat_symbol_deep` from each user's existing `heartbeat_watchlist` value when the two heartbeat channels were split, so anyone who had muted the shared toggle is not silently re-subscribed by the new key's `True` default
 - `nexus_core/database/migrations/v072_remove_margin_buying_power.py` — migration dropping deprecated `option_buying_power` and `margin_used` manual reference columns from `user_settings`
 - `nexus_core/database/migrations/v074_add_previous_put_wall.py` — migration adding `market_cache.put_wall` / `previous_put_wall`, the mirror of `v069`'s call-wall pair. Without it the short-side TP2 "支撐牆向下遷移 >= 3%" branch is permanently dormant and silently falls back to the 1.5% break test
+- `nexus_core/database/migrations/v075_add_regime_evaluation_log.py` — migration adding `regime_evaluation_log` (every regime / entry-gate evaluation with the GEX numbers it actually used; no `user_id`, deduped per symbol/evaluator/source/15m bar) and `regime_evaluation_outcome` (direction-neutral forward path labels). GEX-dependent thresholds cannot be backtested because every GEX cache is an upsert — this is the only calibration data source for them
+- `nexus_core/database/regime_evaluation_log.py` — access layer for the two tables above (single batched writes through `connection.py`)
+- `nexus_core/market_analysis/evaluation_recorder.py` — hot-path forward-collection recorder: O(1) append into a bounded deque, records **only inside an `evaluation_source()` context** (so unit tests and ad-hoc scripts never pollute data), flushed once per cycle. Hooked into `classify_dynamic_regime`, the right/left gates and `evaluate_short_entry`
+- `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
+- `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
+- `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
+- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all`): event study on price/VIX proxies + forward-collection report. **Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/margin.py` — 全資產類別保證金模型（`calculate_option_margin` 名稱沿用歷史）。空頭選擇權走既有公式，空頭**現貨**走 Reg-T 初始保證金（市值 × 50%）。⚠️ 其輸出經 `total_margin_used` 匯總成 `portfolio_heat`，是「是否允許開新倉」的主要煞車——任何一種空頭部位若在此回傳 0.0，該煞車對它就完全失效
@@ -194,7 +203,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/services/order_telemetry_service.py` — Order telemetry scanning service
 - `nexus_core/database/notifications.py` — custom user notification preferences database operations
 - `nexus_core/database/virtual_trading.py` — Database interface for virtual trades (VTR)
-- `nexus_core/market_analysis/dynamic_rollover/` — Dynamic rollover engine package (facade `__init__.py` + `fundamental_thesis.py` / `opportunity_cost.py` / `anti_washout.py` / `margin_defense.py` / `structural_signals.py` (also houses the DTE three-tier state machine, `evaluate_option_dte_tier`) / `covered_call_profit_lock.py` / `inverse_hedge.py` (Scenario 4's third `target_core` destination: symbol→inverse-ETF resolution + pure-spot momentum confirmation) / `core_deployment.py` (Scenario 5 + Covered Call Overlay) / `macro_top_escape_defense.py` (Scenario 6: probabilistic leading-indicator defense, dispatched last in the evaluation order) / `left_side_entry.py` (左側交易六重鐵律，**做多**) / `short_side_entry.py` (做空交易六重鐵律，本系統唯一的空頭方向進場路徑，含「區間內做空」與「破位追空」兩子模式) / `regime_classifier.py` (動態調整 5 態盤勢分類器，含 Regime V 破位追空態) / `transition_engine.py` (動態調整狀態切換引擎) / `models.py` / `constants.py`), anti-washout stop engine, and asset class bifurcation logic. Public import path stays `market_analysis.dynamic_rollover`.
+- `nexus_core/market_analysis/dynamic_rollover/` — Dynamic rollover engine package (facade `__init__.py` + `fundamental_thesis.py` / `opportunity_cost.py` / `anti_washout.py` / `margin_defense.py` / `structural_signals.py` (also houses the DTE three-tier state machine, `evaluate_option_dte_tier`) / `covered_call_profit_lock.py` / `inverse_hedge.py` (Scenario 4's third `target_core` destination: symbol→inverse-ETF resolution + pure-spot momentum confirmation) / `core_deployment.py` (Scenario 5 + Covered Call Overlay) / `macro_top_escape_defense.py` (Scenario 6: probabilistic leading-indicator defense, dispatched last in the evaluation order) / `left_side_entry.py` (左側交易六重鐵律，**做多**) / `short_side_entry.py` (做空交易六重鐵律，本系統唯一的空頭方向進場路徑，含「區間內做空」與「破位追空」兩子模式；`evaluate_short_entry()` 回傳含價位中間值的 `ShortEntryEvaluation`) / `short_entry_deployment.py` (SHORT_ENTRY 情境：做空確認後產生獨立的做空進場訊號，與多頭的機會成本轉倉完全脫鉤) / `short_entry_sizing.py` (做空價位與「風險預算 ÷ 停損距離」倉位) / `regime_classifier.py` (動態調整 5 態盤勢分類器，含 Regime V 破位追空態) / `transition_engine.py` (動態調整狀態切換引擎) / `models.py` / `constants.py`), anti-washout stop engine, and asset class bifurcation logic. Public import path stays `market_analysis.dynamic_rollover`.
 - `nexus_core/market_analysis/signal_calculator.py` — Dynamic trading signal calculator (1.5x ATR buffers, capital allocation models)
 - `nexus_core/market_analysis/scenario_classifier.py` — Event-driven quantitative scenario classifier (6 market scenarios including Whale Escort Resonance)
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
@@ -205,7 +214,11 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/tests/unit/test_room_threshold.py` — unit tests for the three dynamic-threshold formulas, the four degradation paths, and the √26 ATR scaling ladder
 - `nexus_core/tests/unit/test_short_side_entry.py` — unit tests for the short-side six-rule entry gate (per-condition pass/fail/fail-safe, both sub-modes, signature parity with the left/right gates)
 - `nexus_core/tests/unit/test_short_exit_matrix.py` — unit tests for the mirrored short SL/TP matrix and the position-side dispatch (long path must stay bit-identical)
-- `nexus_core/tests/unit/test_short_position_risk.py` — unit tests for the portfolio-level direction-awareness remediation: Reg-T short-stock margin, the shared `is_short_exposure_strategy()` direction inference, gross-vs-net capital, and the two-sided hedge threshold
+- `nexus_core/tests/unit/test_short_position_risk.py` — unit tests for the portfolio-level direction-awareness remediation: Reg-T short-stock margin, `classify_trade_intent()` / `position_delta_sign()` / `is_short_exposure_strategy()`, gross-vs-net capital, and the two-sided hedge threshold
+- `nexus_core/tests/unit/test_short_entry_sizing.py` / `test_short_entry_scenario.py` — SHORT_ENTRY levels, sizing constraints, candidate sourcing and scenario gates (strategy mode, margin-defense suppression, VIX extreme, per-cycle cap, cross-user memoization)
+- `nexus_core/tests/unit/test_kelly_priors.py` / `test_trade_intent_gates.py` — direction-aware Kelly priors and the intent-aware Stage 1 / VTR VIX gates
+- `nexus_core/tests/unit/test_regime_evaluation_forward_collection.py` / `test_outcome_labeling.py` — v075 schema, recorder, labeler job and the shared labeling definition
+- `nexus_core/tests/unit/test_calibration_*.py` — calibration harness on synthetic data (scanner replica parity, no look-ahead, guardrails, deterministic offline run with a socket guard)
 - `nexus_core/tests/unit/test_transition_engine.py` — unit tests for the four transition paths, entry-bar-low capture, and the anti_washout coordination/Track-2 universality guards
 - `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
 - `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
@@ -306,20 +319,26 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
   同步高估。
 - **不得用 `if qty > 0` 過濾持倉列**。那會讓空頭部位對整條下游管線隱形。
   需要排除的是 `qty == 0`。
-- **候選交易的方向判定**走
-  `market_analysis/risk_engine.py::is_short_exposure_strategy()`，不要再寫
-  `-1 if "STO" in strategy else 1`——那只涵蓋「賣出選擇權收權利金」一種空頭
-  形式，對 `SHORT_SIDE` / `Long Put` / `Bear Call Spread` 全部誤判為多頭。
+- **候選交易的方向判定**集中在 `market_analysis/risk_engine.py`，三個函式回答
+  三個**不同**的問題，不要混用，也不要再寫 `-1 if "STO" in strategy else 1`：
+  | 函式 | 回答的問題 | 用途 |
+  |---|---|---|
+  | `position_delta_sign()` | 這筆交易是**買進還是賣出**該工具 | 乘在帶號合約 Delta 上投影部位 Delta。買進 Put 回 `+1`（合約 Delta 已為負） |
+  | `classify_trade_intent()` | `PREMIUM_SELL` / `DIRECTIONAL_LONG` / `DIRECTIONAL_SHORT` | VIX 戰情階梯閘門與倉位乘數、凱利先驗的分流鍵 |
+  | `is_short_exposure_strategy()` | 淨方向是否為空頭（布林） | 顯示與判斷用。**不可當 Delta 乘數**——曾因此把 `BTO_PUT` 投影成多頭 Delta |
   已成交部位一律以 `quantity` 正負號為準，策略字串只是未成交候選的代理。
 - **負的組合 Delta 不必然是對沖**。也可能是刻意建立的做空 alpha 部位。
   區分依據是 `trade_category == "HEDGE"`（見 `hedging._sum_hedge_only_delta`）；
   誤判的代價是系統建議使用者平掉自己的論點。
 
-⚠️ **尚未方向感知化**：VIX 戰情階梯（`config.py::VIX_LADDER_CONFIG`）的所有
-閘門以 `"STO"`/`"BTO"` 字串為鍵，做空進場不經過任何一道；且其前提對做空是反的
-（高 VIX 給最大侵略性，對賣權利金正確、對追空錯誤）。
-`services/execution_router.py` 的凱利勝率先驗（`RSI < 50 ⇒ 勝率較高`）同樣是
-多頭先驗。兩者需要獨立校準，不宜機械翻轉。
+- **VIX 戰情階梯與凱利先驗已方向感知化**：新增任何 VIX 閘門或倉位邏輯時，以
+  `classify_trade_intent()` 分流，不要以 `"STO"`／`"BTO"` 字串為鍵（`BTO_PUT` 是
+  方向性做空）。做空走 `config.get_short_vix_multiplier()`（倒 U 形、上限 1.0、
+  VIX 未知回 0.5 而非 Ready 的 1.0）與 `kelly_priors.py` 的 `SHORT` 表。數值皆為
+  校準前的保守值，調整走 `calibration/` 報告 → 人工審核 → PR。
+- **進場確認帶方向**：Scenario 2 回傳 `EntryConfirmation`（含 `direction`）。
+  `direction == "SHORT"` 的確認不得進入任何「買進候選」的下游（機會成本轉倉、
+  核心資金部署）；做空一律由 `SHORT_ENTRY` 情境處理。
 
 ### Memory / VPS safety
 
@@ -367,6 +386,27 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_notificati
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk_upgrade.py
 ```
 
+Backtest calibration harness (dev machine only; the image runs as uid 1001 and
+cannot write the bind-mounted repo, so run as your own uid). Cache goes to
+`nexus_core/.calibration_cache/`, reports to `nexus_core/reports/` (both gitignored):
+
+```bash
+cd nexus_core
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration fetch --max-symbols 40
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration run --offline --seed 7
+# forward-collection report against a copied production snapshot (never the live DB):
+#   on the VPS: sqlite3 data/nexus_data.db ".backup /tmp/snapshot.db"; copy it to nexus_core/.calibration_cache/
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration forward-report
+```
+
+What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9.
+
+Edge scraper tests (note: two FedWatch ZQ tests in `test_local_api.py` currently fail on a clean `HEAD` as well):
+
+```bash
+PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tests
+```
+
 ---
 
 ## Deployment Notes
@@ -383,7 +423,7 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk
 
 - `docs/README.md` 是所有量化模型／交易策略／風控引擎／平台功能敘述的 SSOT；本檔案（`AGENTS.md`）只負責貢獻者導覽（服務架構、模組地圖）與工程慣例（DB／測試／型別／部署），**不應**再累積功能敘事或修復歷史。
 - 新增或修改一項功能時：
-  - 若屬於既有 29 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
+  - 若屬於既有 32 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
   - 若屬於全新量化主題且值得獨立成篇，新增前請評估是否應納入 `scripts/verify_docs_integrity.py` 的 `EXPECTED_SPECIFICATIONS` 強制清單（需符合 6 段式模板）。
   - 若屬於 UX／排程／通知／委託單等非量化平台功能，寫入或更新 `docs/platform/` 下對應文件（格式較自由，但仍需維持繁體中文、不含 Docker/`.env`/quickstart 內容、內部連結有效），並在 [`docs/README.md`](docs/README.md) 的平台文件索引中加入條目。
 - 撰寫任何文件時：
@@ -392,4 +432,4 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_macro_risk
   3. 反映現行的欄位式（field-based）embed 格式
   4. 討論通知行為時提及持久化 DM 佇列
   5. `docs/` 保持功能／業務邏輯導向，`AGENTS.md` 保持貢獻者工作流程導向
-  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 29 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`
+  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 32 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`

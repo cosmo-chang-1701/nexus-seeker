@@ -70,7 +70,7 @@ $$\text{通過} \iff m_{\text{low}} \times \frac{\text{ATR}_{15m}}{\text{Spot}} 
 
 $$\text{NextStrikeSpace} = \frac{\text{Spot} - \text{NextPutPeak}}{\text{Spot}} \ge 2.0 \times \text{ATR}_{1D\_pct}$$
 
-$\text{NextPutPeak}$ 為現價下方第一個顯著負 GEX 節點（做市商順勢助跌拋壓的落點），取「現價下方、GEX 為負、絕對曝險最大」的履約價。此分支的停損貼緊剛跌破的 Put Wall（回站上即停損），刻意**不**套用公式 A 的 $1.5 \times \text{ATR}_{15m}$ 墊片。
+$\text{NextPutPeak}$ 為現價下方第一個顯著負 GEX 節點（做市商順勢助跌拋壓的落點），取「現價下方、GEX 為負、絕對曝險最大」的履約價。公式 C 只判定**目標空間**、不含停損項；「收復剛跌破的 Put Wall」是論點失效訊號，SHORT_ENTRY 的實際倉位停損以頂牆錨點 $+ 0.5 \times \text{ATR}_{15m}$ 與出場引擎停損取較遠者計算（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md) §2.6）。
 
 ### 2.4 ATR 量綱折算
 
@@ -134,6 +134,8 @@ flowchart TD
 | `_BARS_PER_SESSION` | `26.0` | 美股單日 390 分鐘 / 15 分鐘 = 26 根 K 棒 | `nexus_core/market_analysis/room_threshold.py` |
 | `_ATR_14_PLACEHOLDER` | `0.01` | `EnhancedWatchlistMetrics.atr_14` 因 `gt=0.0` 無法寫 0 的佔位值，須視為缺失 | `nexus_core/market_analysis/room_threshold.py` |
 
+**校準狀態**：`_ROOM_ATR_1D_MULTIPLIER`、`_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER` 已登錄為可校準參數，由離線事件研究以純價格代理產出建議（GEX 牆體以前 10／60 日高低點代理，證據力有限）；`_ROOM_ABSOLUTE_FLOOR_PCT` 屬風險政策，只報告不提案。GEX 相關門檻的正式調整須等待前向蒐集資料，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md)。
+
 ---
 
 ## 5. 邊界條件、風控熔斷與例外處理
@@ -159,7 +161,7 @@ flowchart TD
   - 公式 B：`evaluate_wall_buffer()`、下界倍率表 `_BUFFER_LOWER_MULTIPLIERS`、絕對上界 `_BUFFER_MAX_STOP_DISTANCE_PCT`
   - 公式 C：`evaluate_next_strike_space()`
   - 量綱折算：`resolve_atr_15m()`
-  - 停損推導：`_compute_reference_stop()`
+  - 停損推導：`compute_reference_stop()`（公開，SHORT_ENTRY 倉位計算共用；保留私有別名 `_compute_reference_stop`）
 - `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_1d()`、`fetch_atr_15m()`、`compute_atr_15m_from_df()`、`compute_atr_14_from_daily_df()`
 - `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()`（三項輸入的集中解析與取數優先序）
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三

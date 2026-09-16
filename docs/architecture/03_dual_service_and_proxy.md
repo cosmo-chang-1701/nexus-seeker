@@ -15,7 +15,7 @@ Nexus Seeker 確立了**「雙服務微服務解耦（Dual-Service Microservices
 
 | 服務模組 | 運行環境與技術棧 | 核心職責與邊界約束 | 外部連線暴露方式 |
 | :--- | :--- | :--- | :--- |
-| **`nexus_core`** | Python 3.12, `discord.py`, SQLite | 運行主 Discord Bot、Slash 指令互動、量化風險與 Greeks 運算引擎、八大動態轉倉狀態機、持久化私訊佇列（`queue_dm`） | 不對公網開放任何傳入端口；透過 Client 連線 Discord Gateway 與 Tunnel |
+| **`nexus_core`** | Python 3.12, `discord.py`, SQLite | 運行主 Discord Bot、Slash 指令互動、量化風險與 Greeks 運算引擎、九大動態轉倉狀態機、持久化私訊佇列（`queue_dm`） | 不對公網開放任何傳入端口；透過 Client 連線 Discord Gateway 與 Tunnel |
 | **`nexus_edge_scraper`** | FastAPI, Playwright (Chromium) | 爬取動態渲染網頁（CME FedWatch、TradingView 總經日曆、Reddit RSS）、執行 SEC EDGAR 結構化段落擷取、作為 Yahoo Finance 代理節點 | 透過 Cloudflare Tunnel (`TUNNEL_URL`) 進行受保護的端點暴露 |
 
 ---
@@ -57,6 +57,15 @@ $$\text{Skip Tier 1} \iff force\_live = \text{True}$$
 $$S_{\text{priority}} = \left\{ \text{sym} \mid \text{sym} \in \text{database.get\_all\_portfolio()} \land \text{sym} \neq \emptyset \right\}$$
 邊緣節點的排程器對 $S_{\text{priority}}$ 實施高頻循環，使其數據延遲上限從常規的 30 分鐘壓縮至單一輪詢週期（約 5 分鐘）：
 $$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{delay, normal}} \approx 30 \text{ 分鐘}$$
+
+### 2.4 GEX 快照歷史 (前向蒐集)
+`gex_snapshot` 是 upsert、只保留每個標的的最新值，使 GEX 相關門檻無法回測。邊緣節點在**同一交易內**另寫入 `gex_snapshot_history`，以 15 分鐘分桶、每桶只留第一筆：
+
+$$\text{bucket\_ts} = \Big\lfloor \frac{t_{\text{UTC}}}{15\text{ 分鐘}} \Big\rfloor \times 15\text{ 分鐘}, \qquad \text{PK} = (\text{symbol}, \text{bucket\_ts}), \quad \text{INSERT OR IGNORE}$$
+
+優先標的每 5 分鐘輪詢一次，每標的每日至多 $26$ 列。GEX Profile 只保留現價 $\pm 25\%$ 內的履約價並以 zlib 壓縮，估計約 $30 \text{ 標的} \times 26 \times 1\text{KB} \approx 0.8\text{MB/日}$、保留 180 天約 $140\text{MB}$。保留期清理每個美東日期最多執行一次。
+
+⚠️ 邊緣服務是選用元件；離線時 core 即時計算 GEX、不會有歷史累積。因此 core 的 `regime_evaluation_log`（記錄每次評估**實際使用**的 GEX 數值）才是校準的主要資料源，本表只是補充（見 [`05_calibration_harness_and_forward_collection.md`](05_calibration_harness_and_forward_collection.md)）。
 
 ---
 
@@ -108,6 +117,11 @@ flowchart TD
 | `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 安全穿透端點網址 | `nexus_core/config.py` |
 | `MAX_RETRY_COUNT` | `1` 次 (`_retry_once`) | 外部請求失敗時的快速重試次數（避免阻塞過久） | `nexus_core/services/market_data_service/_utils.py` |
 | `PRIORITY_SYNC_INTERVAL` | 15 分鐘（隨心跳同步） | 持倉標的 Priority 清單同步頻率 | `nexus_core/cogs/trading/heartbeat.py:51` |
+| `GEX_HISTORY_ENABLED` | `true`（環境變數） | 是否寫入 GEX 快照歷史 | `nexus_edge_scraper/database.py` |
+| `GEX_HISTORY_RETENTION_DAYS` | `180`（環境變數） | GEX 快照歷史保留天數 | `nexus_edge_scraper/database.py` |
+| `_GEX_HISTORY_BUCKET_MINUTES` | `15` | 歷史分桶粒度 | `nexus_edge_scraper/database.py` |
+| `_GEX_HISTORY_STRIKE_BAND` | `0.25` ($\pm 25\%$) | 歷史保留的履約價範圍 | `nexus_edge_scraper/database.py` |
+| `_GEX_HISTORY_MAX_LIMIT` | `500` | `GET /api/v1/cache/gex/history/{symbol}` 單頁上限 | `nexus_edge_scraper/database.py` |
 
 ---
 
@@ -133,6 +147,13 @@ flowchart TD
 - `nexus_core/services/edge_cache_client.py`
   - `get_cached_option_chain`: 讀取 Edge 背景寫入之 SQLite 期權鏈快照
   - `sync_watchlist_symbols`: 同步自選與 Priority 持倉清單至邊緣節點
+  - `get_gex_history`: 分頁讀取 GEX 快照歷史（僅供離線校準工具，bot 執行期不呼叫）
+- `nexus_edge_scraper/database.py`
+  - `save_gex_snapshot`（同交易寫入歷史）、`get_gex_history`、`prune_gex_history`
+- `nexus_edge_scraper/scheduler.py`
+  - `_maybe_prune_gex_history`: 每個美東日期最多一次的保留期清理
+- `nexus_edge_scraper/local_api/cache_and_sync.py`
+  - `GET /api/v1/cache/gex/history/{symbol}`（`since`／`until`／`limit`，以 `next_since` 分頁）
 - `nexus_edge_scraper/local_api/`
   - 邊緣 FastAPI 微服務實作端點（Yahoo Finance 代理與數據快照維護）
 - `nexus_core/config.py`

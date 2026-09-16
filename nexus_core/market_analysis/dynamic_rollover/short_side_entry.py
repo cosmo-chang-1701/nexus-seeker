@@ -23,7 +23,7 @@ orchestrator，共用衍生資料、`reasons` 列表原地累積、條件五/六
   `room_threshold.compute_dynamic_room_threshold(direction="SHORT")`。
 * **破位追空**：現價已跌破 Put Wall，目標改為現價下方第一個顯著負 GEX 節點，
   空間門檻走 `room_threshold.evaluate_next_strike_space()`（>= 2.0 × ATR₁D），
-  停損貼緊剛跌破的 Put Wall（回站上即停損）。
+  收復剛跌破的 Put Wall 即論點失效。
 """
 
 import math
@@ -40,6 +40,7 @@ from market_analysis.room_threshold import (
 
 from . import logger
 from ._shared import resolve_room_threshold_inputs
+from .models import ShortEntryEvaluation
 from .constants import (
     _ENTRY_VOLUME_LOOKBACK_BARS,
     _SHORT_ENTRY_CANDIDATE_MIN_DTE,
@@ -309,10 +310,12 @@ def _confirm_short_entry_condition3_downside_room(
     * **區間內做空** (Spot > PutWall)：目標位 = Put Wall，
       `Reward_down = (Spot − PutWall)/Spot` 須 >= 動態門檻
       `max(2.2 × Risk, 1.5 × ATR₁D/Spot, 3.5%)`，其中
-      `Risk = ((CallWall + 1.5 × ATR₁₅ₘ) − Spot)/Spot`（停損設在頂牆上方）。
+      `Risk = ((ResistanceWall + 0.5 × ATR₁₅ₘ) − Spot)/Spot`（停損設在頂牆上方，
+      墊片與出場矩陣 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` 同步）。
     * **破位追空** (Spot <= PutWall)：Put Wall 已被打穿，目標改為現價下方第一個
-      顯著負 GEX 節點，空間要求改走公式 C（>= 2.0 × ATR₁D）。此分支的停損貼緊
-      剛跌破的 Put Wall（回站上即停損），刻意不套用公式 A 的頂牆墊片。
+      顯著負 GEX 節點，空間要求改走公式 C（>= 2.0 × ATR₁D）。「收復 Put Wall」
+      是論點失效的訊號；實際倉位停損仍以頂牆錨點計算 (見
+      short_entry_sizing.py)，與出場矩陣真正會執行的停損一致。
 
     接刀過濾器鏡像左側條件三的「追空踩踏」偵測，方向反轉為 **PUT STO**：主力
     大額賣出 PUT 是在為下跌提供流動性接盤（做市商據此買進現貨對沖），代表
@@ -394,7 +397,7 @@ def _confirm_short_entry_condition3_downside_room(
         f"做空條件三{'✅' if passed else '❌'}[破位追空]：現價已跌破 Put Wall "
         f"${put_wall:.2f}，至次級負 Gamma 節點 ${next_peak:.2f} 空間 {space_pct:.2%} "
         f"{'>=' if passed else '<'} {required_pct:.2%} (2.0×ATR₁D)"
-        f"｜停損貼緊 Put Wall ${put_wall:.2f}（回站上即停損）"
+        f"｜收復 Put Wall ${put_wall:.2f} 即論點失效"
     )
     return passed, "破位追空"
 
@@ -483,7 +486,7 @@ async def _confirm_short_entry_condition5_macro_earnings_gate(
 
     shared_reasons: list = []
     c5_passed, _days_to_earnings = await _confirm_entry_condition5_macro_earnings_gate(
-        candidate_symbol, True, shared_reasons
+        candidate_symbol, True, shared_reasons, direction="SHORT"
     )
     for r in shared_reasons:
         reasons.append(r.replace("條件五", "做空條件五", 1))
@@ -551,22 +554,23 @@ async def _confirm_short_entry_condition6_candidate_dte_ivr(
     return True, structure_directive
 
 
-async def _confirm_short_entry_signal(
+async def evaluate_short_entry(
     candidate_symbol: str,
     candidate_radar: Dict[str, Any],
     target_spot: float,
     df_15m: Optional[Any] = None,
     session_vwap: Optional[float] = None,
     atr_15m: Optional[float] = None,
-) -> Tuple[bool, str, Optional[str]]:
-    """做空交易進場訊號六重嚴格過濾鐵律 orchestrator。
+) -> ShortEntryEvaluation:
+    """做空交易進場訊號六重嚴格過濾鐵律 orchestrator（完整評估版）。
 
-    簽章與 `_confirm_left_entry_signal` / `_confirm_entry_signal` 完全一致，
-    呼叫端可無差別解包 `(all_passed, reason_str, structure_directive)`。
+    除了「過不過」之外，一併回傳六重鐵律評估過程中本來就已算出的價位中間值
+    (頂牆、Put Wall、Gamma Flip、次級負 GEX 節點、ATR)，供 SHORT_ENTRY 情境
+    直接建立進場／停損／目標價位，不重新抓取、不重算——確保「確認」與「下單
+    價位」建立在同一份資料快照上。
 
     `df_15m` / `session_vwap` / `atr_15m` 可選：`regime_classifier.py` 路由至
-    Regime V 時會原樣傳入分類判定階段已抓取的同一份資料 (見 RegimeMarketData)，
-    避免重複抓取，並確保「盤勢分類」與「進場確認」建立在同一份快照上。
+    Regime V 時會原樣傳入分類判定階段已抓取的同一份資料 (見 RegimeMarketData)。
     """
     reasons: list[str] = []
 
@@ -624,7 +628,7 @@ async def _confirm_short_entry_signal(
         atr_15m=_atr15,
         atr_1d=_atr1d,
     )
-    c3_passed, _sub_mode = _confirm_short_entry_condition3_downside_room(
+    c3_passed, sub_mode = _confirm_short_entry_condition3_downside_room(
         uoa_list,
         gex_profile_data,
         target_spot,
@@ -636,22 +640,92 @@ async def _confirm_short_entry_signal(
     c4_passed = _confirm_short_entry_condition4_smart_money_pressure(
         uoa_list, target_spot, reasons
     )
+    c1_to_c4 = c1_passed and c2_passed and c3_passed and c4_passed
     c5_passed = await _confirm_short_entry_condition5_macro_earnings_gate(
-        candidate_symbol,
-        c1_passed and c2_passed and c3_passed and c4_passed,
-        reasons,
+        candidate_symbol, c1_to_c4, reasons
     )
     (
         c6_passed,
         structure_directive,
     ) = await _confirm_short_entry_condition6_candidate_dte_ivr(
         candidate_symbol,
-        c1_passed and c2_passed and c3_passed and c4_passed and c5_passed,
+        c1_to_c4 and c5_passed,
         target_ivr,
         reasons,
     )
 
-    all_passed = (
-        c1_passed and c2_passed and c3_passed and c4_passed and c5_passed and c6_passed
+    all_passed = c1_to_c4 and c5_passed and c6_passed
+
+    # 價位中間值：全部是純計算 (零 I/O)，重用條件函式已用過的同一份輸入。
+    put_wall = _pw
+    call_wall = 0.0
+    gamma_flip = 0.0
+    if isinstance(gex_profile_data, dict):
+        try:
+            put_wall = float(gex_profile_data.get("put_wall", 0.0) or 0.0) or _pw
+            call_wall = float(gex_profile_data.get("call_wall", 0.0) or 0.0)
+        except (ValueError, TypeError):
+            call_wall = 0.0
+        gex_profile = gex_profile_data.get("gex_profile")
+        if isinstance(gex_profile, dict) and target_spot > 0:
+            gamma_flip = estimate_symbol_gamma_flip(gex_profile, target_spot)
+    next_negative_node = (
+        _find_next_negative_gex_peak(gex_profile_data, target_spot)
+        if sub_mode == "破位追空"
+        else 0.0
     )
-    return all_passed, " | ".join(reasons), structure_directive
+
+    evaluation = ShortEntryEvaluation(
+        all_passed=bool(all_passed),
+        reason=" | ".join(reasons),
+        structure_directive=structure_directive,
+        sub_mode=sub_mode,
+        conditions=(
+            c1_passed,
+            c2_passed,
+            c3_passed,
+            c4_passed,
+            c5_passed if c1_to_c4 else None,
+            c6_passed if (c1_to_c4 and c5_passed) else None,
+        ),
+        spot=float(target_spot),
+        resistance_wall=float(resistance_wall),
+        call_wall=call_wall,
+        put_wall=float(put_wall),
+        gamma_flip=float(gamma_flip),
+        next_negative_node=float(next_negative_node),
+        net_gex=net_gex,
+        session_vwap=float(session_vwap or 0.0),
+        atr_15m=float(_atr15 or 0.0),
+        atr_1d=float(_atr1d or 0.0),
+        ivr=target_ivr,
+    )
+    from market_analysis.evaluation_recorder import record_short_evaluation
+
+    record_short_evaluation(evaluation, candidate_symbol)
+    return evaluation
+
+
+async def _confirm_short_entry_signal(
+    candidate_symbol: str,
+    candidate_radar: Dict[str, Any],
+    target_spot: float,
+    df_15m: Optional[Any] = None,
+    session_vwap: Optional[float] = None,
+    atr_15m: Optional[float] = None,
+) -> Tuple[bool, str, Optional[str]]:
+    """`evaluate_short_entry` 的三元組包裝。
+
+    簽章與 `_confirm_left_entry_signal` / `_confirm_entry_signal` 完全一致，
+    呼叫端可無差別解包 `(all_passed, reason_str, structure_directive)`。
+    需要價位的呼叫端 (SHORT_ENTRY 情境) 請直接呼叫 `evaluate_short_entry`。
+    """
+    ev = await evaluate_short_entry(
+        candidate_symbol,
+        candidate_radar,
+        target_spot,
+        df_15m=df_15m,
+        session_vwap=session_vwap,
+        atr_15m=atr_15m,
+    )
+    return ev.all_passed, ev.reason, ev.structure_directive

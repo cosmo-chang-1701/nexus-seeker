@@ -155,6 +155,41 @@ class TestShortTpLadder:
         assert "TP2-空間擴展" in reason
         assert "跌穿 Put Wall" in reason
 
+    def test_breakdown_chase_not_born_inside_tp(
+        self, engine: DynamicRolloverEngine
+    ) -> None:
+        """破位追空剛進場：現價已跌破 Put Wall 2%（正是追空的進場條件），但距
+        次級負 Gamma 節點仍遠。若仍以 Put Wall 為目標牆，部位一登錄就落在 TP2
+        內，下一個 15 分鐘週期即建議回補。"""
+        tier, _ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+            _short_metrics(spot_price=83.3, next_negative_node=75.0)
+        )
+        assert tier is None
+
+    def test_breakdown_chase_tp_targets_next_negative_node(
+        self, engine: DynamicRolloverEngine
+    ) -> None:
+        tp1, _r1, reason1 = engine._evaluate_microstructure_tp_ladder(
+            _short_metrics(spot_price=75.3, next_negative_node=75.0)
+        )
+        assert tp1 == "TP1"
+        assert "次級負 Gamma 節點 $75.00" in reason1
+        tp2, _r2, reason2 = engine._evaluate_microstructure_tp_ladder(
+            _short_metrics(spot_price=73.5, next_negative_node=75.0)  # 跌穿 2%
+        )
+        assert tp2 == "TP2"
+        assert "次級負 Gamma 節點 $75.00" in reason2
+
+    def test_missing_next_node_keeps_put_wall_target(
+        self, engine: DynamicRolloverEngine
+    ) -> None:
+        """節點缺失 (0.0) 時維持原行為：以 Put Wall 為目標牆。"""
+        tier, _ratio, reason = engine._evaluate_microstructure_tp_ladder(
+            _short_metrics(spot_price=83.0, next_negative_node=0.0)
+        )
+        assert tier == "TP2"
+        assert "跌穿 Put Wall" in reason
+
     def test_tp2_wall_migrated_down(self, engine: DynamicRolloverEngine) -> None:
         """做市商支撐牆向下遷移 >= 3% 且現價跌穿舊底牆 -> 釋放下行空間。"""
         tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(

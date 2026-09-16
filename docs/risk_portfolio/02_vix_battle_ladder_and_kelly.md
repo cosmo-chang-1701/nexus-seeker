@@ -17,6 +17,19 @@ Nexus Seeker 將此逆向哲學規格化為 **VIX 戰情階梯（VIX Battle Ladd
 - 對單筆交易設立物理硬上限（賣方策略最高 5%，買方策略最高 3%）；
 - 結合 VIX 歷史分位數進行動態插值，在宏觀極端恐慌時，才謹慎調升至半凱利。
 
+### 1.3 賣方 vs 方向性做空：同一個 VIX，相反的前提
+上述逆向哲學**只對「賣出權利金」成立**：高 VIX 等於高權利金溢價，是賣方的安全墊。對**方向性做空**（Long Put、Bear Call Spread、空頭現貨、`SHORT_SIDE`／Regime V）而言，前提正好相反——VIX $\ge 35$ 的恐慌區是投降賣壓出清、政策干預與暴力軋空最密集的時點，追空在此給出最大侵略性等於在最容易被軋的位置加碼。
+
+因此系統以**交易意圖**（`classify_trade_intent()`）分流，而不是以 `"STO"`／`"BTO"` 字串分流：
+
+| 交易意圖 | 範例 | VIX 乘數 | 凱利勝率先驗 |
+| :--- | :--- | :--- | :--- |
+| `PREMIUM_SELL` | `STO_PUT`、`STO_CALL`、Covered Call、CSP、Short Put、Bull Put | 階梯 `sizing_multiplier`（單調遞增至 $2.0$） | 賣方 Delta 映射 (§2.2) |
+| `DIRECTIONAL_LONG` | `BTO_CALL`、Buy Shares、Bull Call Spread | 階梯 `sizing_multiplier` | `LONG` 先驗表 |
+| `DIRECTIONAL_SHORT` | `BTO_PUT`、Long Put、Bear Call／Put Spread、`SHORT_SIDE`、`OPEN_SHORT` | **倒 U 形** `short_sizing_multiplier`（上限 $1.0$） | `SHORT` 先驗表（結構性不高於 `LONG`） |
+
+做空係數與先驗**刻意不是機械翻轉**——把倍率取負或把先驗反轉，只是用一個未經驗證的假設取代另一個。校準前一律取保守值，由 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) 的工具產出建議、人工審核後以 PR 修改。
+
 ---
 
 ## 2. 數學模型與量化推導
@@ -73,6 +86,35 @@ $$\text{Effective Risk Limit} \leftarrow \text{Current Risk Limit} \times \text{
    若標的微觀結構顯示正 Gamma 枯竭（$\text{is\_high\_tail\_risk} == \text{True}$），風險限額直接砍半：
    $$\text{Current Risk Limit} \leftarrow \text{Current Risk Limit} \times 0.50$$
 
+### 2.6 方向性做空的倒 U 形 VIX 乘數
+$$m_{\text{VIX}}^{\text{short}}(\text{VIX}) = \begin{cases}
+0.50 & \text{VIX} < 15\\
+0.75 & 15 \le \text{VIX} < 18\\
+1.00 & 18 \le \text{VIX} < 30\\
+0.50 & 30 \le \text{VIX} < 35\\
+0.00 & \text{VIX} \ge 35 \quad \text{（禁止新開空單）}\\
+0.50 & \text{VIX 未知}
+\end{cases}$$
+
+VIX 未知時刻意**不**沿用 `get_vix_tier(None)` 的 Ready（$1.0$）：那個預設是為了「資料遺失時不要硬拒所有賣方訊號」，對做空而言，資料抓取失敗絕不能是最寬鬆的情況。
+
+### 2.7 方向感知的凱利勝率先驗
+`ExecutionRouter` 與做空倉位 (`short_entry_sizing.py`) 共用單一先驗表 `kelly_priors.py`：
+
+$$p_{\text{LONG}}(\text{RSI}) = \begin{cases} 0.55 & \text{RSI} < 50\\ 0.45 & \text{RSI} \ge 50 \end{cases}, \qquad
+p_{\text{SHORT}}(\text{RSI}) = \min\Big(\begin{cases} 0.45 & \text{RSI} < 50\\ 0.40 & \text{RSI} \ge 50 \end{cases},\ p_{\text{LONG}}(\text{RSI})\Big)$$
+
+$$f = \text{clip}\Big(0.5 \times \big(p - \tfrac{1-p}{1.8}\big),\ 0,\ \text{Cap}_{\text{side}}\Big), \qquad \text{Cap}_{\text{LONG}} = 0.15,\ \text{Cap}_{\text{SHORT}} = 0.10$$
+
+外層 $\min$ 是**結構性夾制**：即使日後誤改表，做空先驗也不會比做多激進。RSI 缺失時取該方向所有桶的最小值。多頭路徑與改動前位元一致（`RSI < 50 ⇒ 0.55`，賠率 $1.8$，Half-Kelly，封頂 $15\%$）。
+
+### 2.8 候選交易的部位 Delta 投影乘數
+NRO 以帶號合約 Delta 投影新部位對組合 Delta 的影響，乘數回答「**買進還是賣出該工具**」，不是「方向看多還是看空」：
+
+$$\Delta_{\text{position}} = \Delta_{\text{contract}} \times s, \qquad s = \begin{cases} -1 & \text{賣出 (STO／Short Put／Bear Call／CSP／空頭現貨)}\\ +1 & \text{買進 (BTO_CALL／BTO_PUT／Long Put／現貨)} \end{cases}$$
+
+買進 Put 的 $\Delta_{\text{contract}} < 0$ 已表達空頭，$s = +1$；若以「是否為空頭意圖」當乘數，會得到 $-0.5 \times -1 = +0.5$，把買進的 Put 當成增加多頭 Delta。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -113,20 +155,35 @@ flowchart TD
     TailCut --> OutputPosition
 ```
 
+交易意圖分流（`optimize_position_risk` / `analyze_symbol` / Stage 1 Macro / VTR 共用同一個分類）：
+
+```mermaid
+flowchart TD
+    Strategy["策略字串"] --> Classify{"classify_trade_intent()"}
+    Classify -- "PREMIUM_SELL" --> Seller["賣方階梯<br/>Dormant 拒絕 / 乘數至 2.0x<br/>All-in 繞過衰減 + 分位數 Kelly 放大"]
+    Classify -- "DIRECTIONAL_LONG" --> Long["階梯 sizing_multiplier<br/>PCR < 0.6 買方減碼"]
+    Classify -- "DIRECTIONAL_SHORT" --> Short{"做空乘數 = 0?<br/>(VIX >= 35)"}
+    Short -- 是 --> Block["拒絕：做空新倉暫停 (軋空／投降區)"]
+    Short -- 否 --> ShortSize["倒 U 形乘數 (上限 1.0x)<br/>不適用 All-in 繞過 / 分位數 Kelly 放大<br/>不套用 PCR 減碼、不套用 kelly_override"]
+    Seller --> Sign["position_delta_sign() 投影部位 Delta"]
+    Long --> Sign
+    ShortSize --> Sign
+```
+
 ---
 
 ## 4. 關鍵具名常數與物理約束
 
 ### 4.1 VIX 戰情階梯 6 階矩陣 (`VIX_LADDER_CONFIG`)
 
-| 階梯名稱 (Tier) | VIX 區間 $[V_{\min}, V_{\max})$ | 訊號許可 (`allow_signal`) | STO Delta 上限 (`sto_delta_cap`) | 倉位乘數 (`sizing_multiplier`) | 凱利覆寫 (`kelly_fraction_override`) | VTR 許可 | 狀態視覺 |
-|---|---|---|---|---|---|---|---|
-| **休兵 (Dormant)** | $[0.0, 15.0)$ | `False` | $0.00$ | $0.0\times$ | `None` | `False` | ⚪ 灰色 |
-| **少買 (Caution)** | $[15.0, 18.0)$ | `True` | $-0.12$ | $0.5\times$ | `None` | `True` | 🟡 金黃 |
-| **摩拳擦掌 (Ready)** | $[18.0, 24.0)$ | `True` | $-0.20$ | $1.0\times$ | `None` | `True` | 🟠 橙色 |
-| **大買 (Aggressive)** | $[24.0, 30.0)$ | `True` | $-0.20$ | $1.2\times$ | `None` | `True` | 🔴 紅色 |
-| **重砲進場 (Heavy)** | $[30.0, 35.0)$ | `True` | $-0.25$ | $1.5\times$ | `None` | `True` | 🔴 深紅 |
-| **All-in (Extreme)** | $[35.0, 999.0)$ | `True` | $-0.35$ | $2.0\times$ | $0.50$ (Half-Kelly) | `True` | 🟥 暗紅 |
+| 階梯名稱 (Tier) | VIX 區間 $[V_{\min}, V_{\max})$ | 訊號許可 (`allow_signal`) | STO Delta 上限 (`sto_delta_cap`) | 倉位乘數 (`sizing_multiplier`) | 做空倉位乘數 (`short_sizing_multiplier`) | 凱利覆寫 (`kelly_fraction_override`) | VTR 許可 | 狀態視覺 |
+|---|---|---|---|---|---|---|---|---|
+| **休兵 (Dormant)** | $[0.0, 15.0)$ | `False` | $0.00$ | $0.0\times$ | $0.50\times$ | `None` | `False`（做空依乘數 $> 0$） | ⚪ 灰色 |
+| **少買 (Caution)** | $[15.0, 18.0)$ | `True` | $-0.12$ | $0.5\times$ | $0.75\times$ | `None` | `True` | 🟡 金黃 |
+| **摩拳擦掌 (Ready)** | $[18.0, 24.0)$ | `True` | $-0.20$ | $1.0\times$ | $1.00\times$ | `None` | `True` | 🟠 橙色 |
+| **大買 (Aggressive)** | $[24.0, 30.0)$ | `True` | $-0.20$ | $1.2\times$ | $1.00\times$ | `None` | `True` | 🔴 紅色 |
+| **重砲進場 (Heavy)** | $[30.0, 35.0)$ | `True` | $-0.25$ | $1.5\times$ | $0.50\times$ | `None` | `True` | 🔴 深紅 |
+| **All-in (Extreme)** | $[35.0, 999.0)$ | `True` | $-0.35$ | $2.0\times$ | $0.00\times$（禁止新空單） | $0.50$ (Half-Kelly，做空不適用) | `True`（做空禁止） | 🟥 暗紅 |
 
 ### 4.2 歷史分位數與風控參數 (`VIX_QUANTILE_BOUNDS`)
 
@@ -137,6 +194,14 @@ flowchart TD
 | `sto_kelly_cap` | `0.05` ($5.0\%$) | 單筆賣方交易佔總資本之凱利物理硬上限 | `nexus_core/market_analysis/strategy/liquidity_risk.py` |
 | `bto_kelly_cap` | `0.03` ($3.0\%$) | 單筆買方交易佔總資本之凱利物理硬上限 | `nexus_core/market_analysis/strategy/liquidity_risk.py` |
 | `event_tte_limit` | `72.0` 小時 | 觸發日曆 Vanna 隱含 Delta 折價的時間窗口 | `nexus_core/market_analysis/risk_engine.py` |
+| `SHORT_VIX_UNKNOWN_MULTIPLIER` | `0.5` | VIX 未知時的做空乘數（不沿用 Ready 的 1.0） | `nexus_core/config.py` |
+
+### 4.3 凱利勝率先驗表 (`KELLY_WIN_RATE_PRIORS`，`KELLY_PRIOR_STATUS = "PRE_CALIBRATION"`)
+
+| 方向 | RSI $< 50$ | RSI $\ge 50$ | 賠率 `KELLY_PRIOR_ODDS` | 縮放 `KELLY_PRIOR_SCALE` | 上限 `KELLY_PRIOR_CAP` | 程式碼路徑 |
+|---|---|---|---|---|---|---|
+| `LONG` | $0.55$ | $0.45$ | $1.8$ | $0.5$ | $0.15$ | `nexus_core/market_analysis/kelly_priors.py` |
+| `SHORT` | $0.45$ | $0.40$ | $1.8$ | $0.5$ | $0.10$ | `nexus_core/market_analysis/kelly_priors.py` |
 
 ---
 
@@ -145,7 +210,7 @@ flowchart TD
 ### 5.1 VIX < 15.0 休兵狀態一票否決 (Dormant Tier Lockout)
 當 VIX 低於 15.0 時，市場波動率過低。若有交易員嘗試執行 STO 賣方建倉，`risk_engine.py:275` 設置絕對熔斷：
 ```python
-if macro_data.vix < 15.0 and "STO" in strategy:
+if macro_data.vix < 15.0 and intent == "PREMIUM_SELL":
     logger.info(f"NRO Reject: VIX {macro_data.vix:.1f} is in Dormant tier. STO entry forbidden.")
     return OptimizationResult(
         suggested_contracts=0, exposure_pct=0.0, warnings=["VIX Dormant: STO 禁用"]
@@ -166,18 +231,29 @@ NRO 倉位模型的 $\text{val\_adj\_unit\_delta}$ 需要知道一筆**尚未成
 
 早期實作在三個檔案裡各自寫了 `-1 if "STO" in strategy else 1`。該判定只涵蓋「賣出選擇權收權利金」一種空頭形式，對做空進場系統新增的路徑（`SHORT_SIDE`、`Long Put`、`Bear Call Spread`、空頭現貨）**全部誤判為多頭**，使倉位模型把一筆空單當成「增加多頭 Delta」來編列預算，`safe_qty` 因此落在風險帶的錯誤一側。
 
-現行作法抽成單一函式 `risk_engine.is_short_exposure_strategy()`，理由與 `kelly_position_fraction` 完全相同——同一個語意判斷散在多處必然漂移。新增空頭策略標籤時只需在該函式加一個關鍵字。
+現行作法把兩個語意拆成兩個單一來源函式，理由與 `kelly_position_fraction` 相同——同一個判斷散在多處必然漂移：
+
+- `position_delta_sign()`：投影用的 Delta 乘數（買進 $+1$／賣出 $-1$，見 §2.8）。`STO` 的比對排除 `STOCK`，否則 `LONG_STOCK` 會被誤判為賣出。
+- `classify_trade_intent()`：三種交易意圖，VIX 閘門與凱利先驗的分流鍵。
+- `is_short_exposure_strategy()`：淨方向布林旗標（方向性做空，或賣出 Call）。Short Put／CSP 是看多的賣方，回傳 `False`。**不可拿它當 Delta 乘數**。
 
 ⚠️ 此函式是**代理判定**，不是權威來源。已成交部位一律以 `quantity` 正負號為準。
 
-### 5.4 ⚠️ VIX 戰情階梯與凱利勝率先驗尚未方向感知化（已知缺口）
-本篇描述的兩個模型目前都建立在「進場方向為多頭、或為賣出權利金」的前提上，做空進場系統上線後尚未校準：
+### 5.4 VIX 戰情階梯與凱利勝率先驗的方向感知化
+做空進場系統上線時，本篇兩個模型都建立在「多頭或賣出權利金」的前提上：閘門以 `"STO"`／`"BTO"` 字串為鍵（方向性做空不經過任何一道）、VIX $\ge 35$ 給追空最大侵略性、凱利先驗 `RSI < 50 ⇒ 勝率較高` 是多頭均值回歸先驗。現已逐項改為以交易意圖分流：
 
-1. **VIX 戰情階梯的所有閘門以 `"STO"` / `"BTO"` 字串為鍵**（見 §5.1 的 Dormant 熔斷、`apply_vix_ladder()` 的 `sto_delta_cap` 鉗制、Stage 1 Macro reject）。一筆 `SHORT_SIDE` 的方向性做空**不經過任何一道閘門**。
-2. **階梯的前提對做空是反的**。VIX $\ge 35$ 時 `sizing_multiplier` 給到 $2.0$、`kelly_override` 給到 $0.50$（最大侵略性）——那對「恐慌中賣出權利金」是正確的逆向邏輯，對「追殺一個已經崩跌的標的」則恰好相反：VIX 35 的洗盤正是空頭最容易被軋的時點。反之 Dormant（VIX < 15）封鎖 STO，卻對做空完全開放。
-3. **凱利勝率先驗是多頭先驗**。`services/execution_router.py` 的 `expected_win_rate = 0.55 if rsi_14 < 50 else 0.45`（註解明寫「RSI < 50 時勝率預期較高，適合做多 UOA」）。對破位追空而言，低 RSI 正是空頭最延伸、最容易反抽的位置，該先驗方向相反。
+| 消費端 | 修正 |
+| :--- | :--- |
+| `optimize_position_risk` | Dormant 拒絕限 `PREMIUM_SELL`；做空改用倒 U 形乘數，$0$ 時回傳 0 口（宏觀資料缺失時同樣判定）；All-in 繞過與分位數 Kelly 放大不適用做空；PCR $< 0.6$ 減碼限 `DIRECTIONAL_LONG`（原本連 `BTO_PUT` 也被砍） |
+| `strategy/analyze.py` | `vix_sizing_multiplier` 依意圖取值；`kelly_fraction_override` 不套用於做空；輸出 `trade_intent` |
+| `trading_service/execution.py` Stage 1 | STO 拒絕限 `PREMIUM_SELL`；新增做空乘數 $0$ 拒絕 |
+| `trading_service/vtr.py` | 做空建倉依做空乘數 $> 0$；其餘沿用 `vtr_entry_allowed` |
+| `trading_service/market_scan.py` 與 VIX 狀態欄位 | 顯示意圖專屬乘數並標示「做空倉位乘數」；`0.0` 不再被 `or` 當成缺值而顯示為 $1.0$ |
+| `ExecutionRouter` | `MarketCondition.side`（預設 `LONG`）查 `kelly_priors.py`；目前只發多頭訊號，行為不變 |
 
-這三者**刻意未以機械翻轉處理**——把倍率取負或把先驗反轉，只會用一個未經驗證的假設取代另一個。正確的補強需要獨立的做空校準（理想上以歷史回測支撐，但本專案目前無回測基礎設施）。在完成校準之前，做空部位的倉位大小應由使用者自行判斷，不得依賴本篇的階梯輸出。
+**校準證據**：2026-09 的離線試跑顯示做空期望值隨 VIX 單調惡化（VIX $\ge 35$ 為 $-0.30\text{R}$，區間完全在零以下），支持極端區乘數為 $0$，但不支持中段乘數 $1.0$；凱利勝率實測亦低於現行先驗。當時未修改常數，基準數據與調整準則見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8–§5.9。
+
+**刻意不改**：`get_macro_risk_metrics` 的 `heat_limit = 80 \times \text{sizing\_multiplier}` 是**組合層**保證金熱度上限，不是單筆倉位，對多空部位一視同仁；`hedge_monitor_service` 的階梯跳動提醒屬資訊性通知。
 
 ### 5.5 All-in 模式的宏觀修正因子繞過 (Bypass Attenuation in All-in Mode)
 在一般市場狀況下，若原油暴漲或 Skew 偏大，宏觀修正因子（$d_{\text{oil}}, d_{\text{regime}}$）會衰減風險限額。然而，當 $\text{VIX} \ge 35.0$ 時，系統判定這屬於歷史級世紀大底，此時若繼續套用原油或偏斜衰減將錯失最佳逆向建倉良機。因此 `risk_engine.py:296` 特別設計：
@@ -186,19 +262,24 @@ if vix_spot is not None and vix_spot >= 35.0:
     current_risk_limit = risk_limit * d_vix  # d_vix = 2.0
     warnings.append("VIX Extreme: All-in 模式啟動")
 ```
-直接以雙倍基準限額（$2.0\times$）繞過衰減，全力提供流動性支持。
+直接以雙倍基準限額（$2.0\times$）繞過衰減，全力提供流動性支持。**方向性做空不適用**：做空在此區乘數為 $0$，已在前置閘門拒絕；即使日後校準放寬，也不應繞過油價與 Regime 衰減。
 
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - **VIX 戰情階梯與分位數配置**:
-  - `nexus_core/config.py`: `VIX_LADDER_CONFIG` (lines 99–172), `VIX_QUANTILE_BOUNDS` (lines 175–182)
+  - `nexus_core/config.py`: `VIX_LADDER_CONFIG`, `VIX_QUANTILE_BOUNDS`
 - **凱利公式核心運算與 NRO 風險優化器**:
   - `nexus_core/market_analysis/risk_engine.py`: `kelly_position_fraction()`, `optimize_position_risk()`, `get_macro_modifiers()`
-  - `nexus_core/market_analysis/risk_engine.py`: `is_short_exposure_strategy()`（候選交易的方向判定單一來源，見 §5.3）
-  - `nexus_core/tests/unit/test_short_position_risk.py`: 方向判定的迴歸鎖定
+  - `nexus_core/market_analysis/risk_engine.py`: `classify_trade_intent()`、`position_delta_sign()`、`is_short_exposure_strategy()`（見 §5.3）
+  - `nexus_core/config.py`: `get_short_vix_multiplier()`、`get_vix_sizing_multiplier()`、`TradeIntent`
+  - `nexus_core/market_analysis/kelly_priors.py`: `get_win_rate_prior()`、先驗表（見 §4.3）
+  - `nexus_core/services/execution_router.py`: `_calculate_kelly_size()`；`nexus_core/models/execution.py`: `MarketCondition.side`
+  - `nexus_core/tests/unit/test_short_position_risk.py`、`test_risk_engine.py`、`test_kelly_priors.py`、`test_trade_intent_gates.py`: 意圖分類、Delta 投影、做空乘數與先驗的迴歸鎖定
 - **策略層流動性與倉位分配執行**:
   - `nexus_core/market_analysis/strategy/liquidity_risk.py`: lines 234–259
 - **下單路由與執行閘門**:
-  - `nexus_core/services/trading_service/execution.py`: lines 175–181
+  - `nexus_core/services/trading_service/execution.py`: `_validate_trade_pipeline()` Stage 1
+  - `nexus_core/services/trading_service/vtr.py`: `execute_vtr_auto_entry()`
+  - `nexus_core/market_analysis/strategy/analyze.py`: VIX 戰情階梯閘門區段

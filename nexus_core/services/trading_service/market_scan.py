@@ -14,7 +14,7 @@ from market_analysis import portfolio, hedging
 from market_analysis.gap_analysis import GapAnalyzer
 from market_analysis.risk_engine import (
     optimize_position_risk,
-    is_short_exposure_strategy,
+    position_delta_sign,
 )
 from services import market_data_service, news_service
 from models.execution import MarketCondition, Signal
@@ -245,6 +245,15 @@ class MarketScanMixin:
                         "sto_delta_cap": vix_tier.get("sto_delta_cap", 0.0),
                         "sizing_multiplier": vix_tier.get("sizing_multiplier", 1.0),
                     }
+                    # 倉位乘數依交易意圖分流 (analyze_symbol 已算好的意圖專屬值)：
+                    # BTO_PUT 顯示的應是做空倒 U 形乘數，不是賣方階梯乘數。
+                    if base_data.get("vix_sizing_multiplier") is not None:
+                        base_data["vix_battle_status"]["sizing_multiplier"] = base_data[
+                            "vix_sizing_multiplier"
+                        ]
+                        base_data["vix_battle_status"]["trade_intent"] = base_data.get(
+                            "trade_intent"
+                        )
 
                     is_option_valid = base_data.get("is_option_valid", False)
                     psq_result = base_data.get("psq_result")
@@ -304,9 +313,7 @@ class MarketScanMixin:
                             opt_data["nro_warnings"] = opt_res.warnings
 
                         # 模擬成交後的衝擊
-                        side_multiplier = (
-                            -1 if is_short_exposure_strategy(strategy) else 1
-                        )
+                        side_multiplier = position_delta_sign(strategy)
                         new_trade_impact = (
                             opt_data.get("weighted_delta", 0.0)
                             * side_multiplier

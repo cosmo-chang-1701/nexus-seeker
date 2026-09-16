@@ -6,7 +6,7 @@
 
 Nexus Seeker 的核心架構導入了 **5-Regime 市場結構動態路由矩陣**（`DynamicRegime`），將市場行情精確劃分為五種微觀拓撲狀態（依判定優先序列出）：
 1. **Regime IV 宏觀鎖定分支（最高優先級，壓過一切）**：當大盤爆發系統性流動性危機（`SYSTEMIC_LIQUIDITY_CRISIS`）、做市商集體翻入負 Gamma 順向踩踏（`SHORT_GAMMA_CRITICAL`）、或 VIX 期限結構深度倒掛（Front-month 溢價超過 10%）時觸發。此狀態下系統硬性凍結**一切方向**的新開倉——包含做空：系統性流動性危機下空頭同樣會被劇烈軋空，不是安全的方向。此分支刻意在 15m K 線與 ATR 抓取**之前**判定，能早退就不為它多發一次網路請求。
-2. **Regime V（破位追空態）**：標的現價同時跌破 Gamma Flip、Session VWAP 與 Put Wall，做市商翻入負 Gamma 並對下跌順勢助跌；上方阻力頂牆完好且牆距落在緩衝雙邊界內；下方至次級負 Gamma 節點尚有 $\ge 2.0 \times \text{ATR}_{1D}$ 的空間；伴隨 15 分鐘實體陰線與 1.5 倍放量，RSI 位於弱勢空頭區間（$< 45$）。此狀態路由至「做空破位追空六重鐵律」。
+2. **Regime V（破位追空態）**：標的現價同時跌破 Gamma Flip、Session VWAP 與 Put Wall，做市商翻入負 Gamma 並對下跌順勢助跌；上方阻力頂牆完好且牆距落在緩衝雙邊界內；下方至次級負 Gamma 節點尚有 $\ge 2.0 \times \text{ATR}_{1D}$ 的空間；伴隨 15 分鐘實體陰線與 1.5 倍放量，RSI 位於弱勢空頭區間（$< 45$）。此狀態路由至「做空破位追空六重鐵律」；通過後產生**獨立的 `SHORT_ENTRY` 做空進場訊號**（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md)），絕不進入機會成本轉倉或核心資金部署的多頭下游。由於 Regime V 要求跌破 Put Wall，`DYNAMIC` 模式只會產生「破位追空」子模式。
 3. **Regime IV 個股結構封頂分支**：上方阻力牆空間低於動態自適應波動率門檻、或偵測到機構級單筆大額 STO Call 巨鯨物理封頂。此分支**排在 Regime V 之後**是刻意設計——壓頂與破位可以同時成立，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
 4. **Regime III（右側動能態，突破順勢）**：標的現價確認站穩做市商自穩定分界線（Gamma Flip）與當日成交量加權均價（Session VWAP），且上方具備充裕獲利空間（Call Wall 空間 $\ge$ 動態門檻），下方有有效正 Gamma 支撐牆貼身防禦（牆距落在緩衝雙邊界內），同時伴隨 15 分鐘實體陽線與 1.5 倍放量突破，RSI 位於強勢多頭區間（$> 55$）。此狀態路由至「右側動能六重鐵律」。
 5. **Regime I（左側接刀態，極端負乖離吸籌）**：標的價格短線遭遇非理性恐慌拋售，現價嚴重偏離當日均價達 $1.5 \times \text{ATR}_{15m}$ 以上，15 分鐘 RSI 進入極度超賣區（$\le 30$），但下方精準密著做市商 Put Wall 底牆（$-1.0\% \sim +1.5\%$ 容差帶）。此狀態下預期做市商被動買盤將提供強力緩衝，路由至「左側均值回歸六重鐵律」——注意左側**仍是做多**。
@@ -155,7 +155,8 @@ flowchart TD
 
 ## 6. 核心程式碼檔案路徑關聯
 
-- `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：核心函式 `classify_dynamic_regime()`
+- `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：公開入口 `classify_dynamic_regime()`（分類後寫入前向蒐集紀錄）與分類主體 `_classify_dynamic_regime_impl()`；`RegimeMarketData.rsi_15m` 供做空凱利先驗沿用
+- `nexus_core/market_analysis/evaluation_recorder.py`：Regime 分類與進場鐵律評估的前向蒐集（見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md)）
 - `nexus_core/market_analysis/dynamic_rollover/models.py`：枚舉 `DynamicRegime`, `TradingStrategyMode` 及資料載體 `RegimeMarketData`
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`：所有門檻常數定義與物理約束
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：正負 Gamma 牆體掃描 `_scan_gex_walls()`

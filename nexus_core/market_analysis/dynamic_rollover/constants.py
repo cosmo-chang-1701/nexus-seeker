@@ -409,8 +409,23 @@ _SHORT_ENTRY_CANDIDATE_MIN_DTE: int = (
 _SHORT_ENTRY_IVR_SPREAD_THRESHOLD: float = (
     50.0  # IVR > 此值改建議 Bear Call Spread (改當賣方)，避免恐慌高隱波下買 Long Put
 )
-_SHORT_ENTRY_DTE_BAND_SHORT: tuple[int, int] = (14, 30)
-_SHORT_ENTRY_DTE_BAND_SWING: tuple[int, int] = (30, 60)
+
+# --- SHORT_ENTRY 情境 (short_entry_deployment.py / short_entry_sizing.py) 具名常數 ---
+# ⚠️ 全部**未經歷史回測校準** (見 calibration/ 工具)。校準前一律取保守值。
+#
+# 候選來源：PowerSqueeze 正規化分數 <= 此值才視為動能偏空、值得評估做空。
+# 30 = 「Normal 階層的中性分數」——比中性更弱才進候選池。
+_SHORT_CANDIDATE_MAX_PSQ: float = 30.0
+# 單筆做空願意承受的最大帳戶風險 (停損觸發時的虧損 / 帳戶資本)。0.5% 是保守
+# 的單筆風險上限；系統沒有「每筆風險」的使用者設定 (risk_limit 是組合曝險上限)。
+_SHORT_ENTRY_ACCOUNT_RISK_PCT: float = 0.005
+# 做空凱利分數的縮放與上限。上限 1% 帳戶風險，與上方 0.5% 取小者生效。
+_SHORT_ENTRY_KELLY_SCALE: float = 0.5
+_SHORT_ENTRY_KELLY_CAP: float = 0.01
+# 每位使用者每個 15 分鐘週期最多產生的做空進場指令數。
+_SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE: int = 1
+# 每週期最多評估的做空候選數 (含 Scenario 2 預先確認的候選)。
+_SHORT_ENTRY_MAX_CANDIDATES: int = 2
 
 # --- Regime V 破位追空態 (regime_classifier.py) 具名常數 ---
 # 與上方 _SHORT_ENTRY_* 刻意分開命名而不合併重用，比照 _REGIME_I_* / _REGIME_III_*

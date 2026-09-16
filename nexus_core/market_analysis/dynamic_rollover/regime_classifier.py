@@ -33,6 +33,36 @@ async def classify_dynamic_regime(
     uoa_list: Optional[list] = None,
     df_15m: Optional[Any] = None,
 ) -> Tuple[DynamicRegime, str, RegimeMarketData]:
+    """`_classify_dynamic_regime_impl` 的公開入口：分類後寫入前向蒐集紀錄。
+
+    記錄只是 O(1) 的緩衝區 append (evaluation_recorder.py)，且僅在呼叫端標記
+    了評估來源時才生效；分類邏輯本身見 `_classify_dynamic_regime_impl`。
+    """
+    regime, reason, market_data = await _classify_dynamic_regime_impl(
+        candidate_symbol, target_spot, gex_profile_data, uoa_list, df_15m
+    )
+    from market_analysis.evaluation_recorder import record_regime_classification
+
+    record_regime_classification(
+        candidate_symbol,
+        target_spot,
+        regime.value,
+        reason,
+        gex_profile_data,
+        session_vwap=market_data.session_vwap,
+        atr_15m=market_data.atr_15m,
+        rsi_15m=market_data.rsi_15m,
+    )
+    return regime, reason, market_data
+
+
+async def _classify_dynamic_regime_impl(
+    candidate_symbol: str,
+    target_spot: float,
+    gex_profile_data: Optional[dict],
+    uoa_list: Optional[list] = None,
+    df_15m: Optional[Any] = None,
+) -> Tuple[DynamicRegime, str, RegimeMarketData]:
     """動態調整模式 4 態市場結構分類器。依既有結構性指標 (Put Wall / Call
     Wall / Gamma Flip / Session VWAP / ATR₁₅ₘ / 15m RSI / 成交量 / UOA / 大盤
     Regime) 將盤勢分類為 Regime I (左側接刀態) / II (混沌泥淖態，全系統休眠)
@@ -304,7 +334,12 @@ async def classify_dynamic_regime(
             f"Gamma Flip ${gamma_flip:.2f}、VWAP ${session_vwap:.2f} 與 Put Wall "
             f"${put_wall:.2f}，RSI={rsi_val:.1f}，放量陰線破位；至次級負 Gamma "
             f"節點 ${next_peak:.2f} 尚有 {next_space_pct:.2%} 空間",
-            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, atr_15m=atr_15m),
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
         )
 
     # --- Regime IV：個股結構封頂分支 (未達 Regime V 時才判定) ---
@@ -312,7 +347,12 @@ async def classify_dynamic_regime(
         return (
             DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS,
             _build_regime_iv_reason(),
-            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, atr_15m=atr_15m),
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
         )
 
     # --- Regime III：右側動能態 ---
@@ -335,7 +375,7 @@ async def classify_dynamic_regime(
             DynamicRegime.REGIME_III_RIGHT_MOMENTUM,
             f"結構突破伽馬擠壓確認：Spot ${target_spot:.2f} > Gamma Flip ${gamma_flip:.2f} "
             f"且站穩 VWAP ${session_vwap:.2f}，RSI={rsi_val:.1f}，放量突破",
-            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap),
+            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, rsi_15m=rsi_val),
         )
 
     # --- Regime I：左側接刀態 ---
@@ -368,11 +408,21 @@ async def classify_dynamic_regime(
             DynamicRegime.REGIME_I_LEFT_CATCH,
             f"極端負乖離吸籌確認：Spot ${target_spot:.2f} 密著 Put Wall ${put_wall:.2f}，"
             f"RSI={rsi_val:.1f}",
-            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, atr_15m=atr_15m),
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
         )
 
     return (
         DynamicRegime.REGIME_II_CHAOS_STANDASIDE,
         "無人區過渡震盪：未滿足 Regime I/III/IV 任一結構條件",
-        RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, atr_15m=atr_15m),
+        RegimeMarketData(
+            df_15m=df_15m,
+            session_vwap=session_vwap,
+            atr_15m=atr_15m,
+            rsi_15m=rsi_val,
+        ),
     )

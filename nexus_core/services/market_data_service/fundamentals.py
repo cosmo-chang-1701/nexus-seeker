@@ -228,6 +228,28 @@ async def get_macro_environment() -> Dict[str, float]:
         return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
 
 
+async def get_vix_spot_strict() -> Optional[float]:
+    """取得 VIX 最新收盤；任何失敗或空資料回傳 None。
+
+    與 `get_macro_environment()` 刻意分開：後者失敗時靜默回傳 `vix=18.0`，
+    與真實的 18.0 無從區分 (落在 Ready 階梯)。做空倉位需要知道「VIX 未知」
+    才能退回保守乘數 (config.SHORT_VIX_UNKNOWN_MULTIPLIER)。
+    """
+    from services.market_data_service import get_history_df
+
+    try:
+        vix_df = await get_history_df("^VIX", period="5d")
+        if vix_df is None or vix_df.empty:
+            return None
+        vix_val = float(vix_df["Close"].iloc[-1])
+        if math.isnan(vix_val) or vix_val <= 0:
+            return None
+        return round(vix_val, 2)
+    except Exception as e:
+        logger.warning(f"VIX 嚴格抓取失敗，回傳 None: {e}")
+        return None
+
+
 async def get_vix_term_structure() -> Dict[str, Any]:
     """取得 VIX 期限結構 (以 ^VIX / ^VIX3M 為代理)。"""
     # 延遲從套件頂層 import：理由同 get_macro_environment()。

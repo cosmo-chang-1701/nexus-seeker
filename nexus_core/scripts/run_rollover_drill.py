@@ -6,6 +6,8 @@ This script simulates and prints step-by-step telemetry, decision matrices,
 and resulting Discord Embed notifications for:
   - Scenario 1: NVDA turns weak, SPCX turns strong and passes all 6 entry gates.
   - Scenario 2: NVDA turns weak, no candidate meets criteria (Hold / Blocked / VOO / BOXX).
+  - Scenario 3: TSLA breaks below the Put Wall (Regime V) -> standalone SHORT_ENTRY
+    instruction with levels and sizing; long-only downstream paths stay silent.
 """
 
 import argparse
@@ -325,81 +327,150 @@ async def run_scenario_3() -> None:
     print_section("1. 盤勢分類與 Regime 路由 (TSLA)")
     print(f" • 標的: {C_YELLOW}TSLA{C_RESET} | 交易策略: 動態調整 (DYNAMIC)")
     print(" • 即時現價: $92.00 | Session VWAP: $99.00 | Gamma Flip: $100.00")
-    print(" • 做市商結構: PutWall $95.00 (已跌破) | ResistanceWall $100.00 (+3.0M GEX)")
-    print(" • 全鏈 Net GEX: -2.5M (負 Gamma 順勢助跌) | 15m RSI: 12.4")
-    print(" • ATR₁₅ₘ: $1.00 | ATR₁D: $5.00")
+    print(" • 做市商結構: PutWall $95.00 (已跌破) | ResistanceWall $97.00 (+3.0M GEX)")
+    print(" • 全鏈 Net GEX: -2.5M (負 Gamma 順勢助跌) | 15m RSI: 38.0")
+    print(" • ATR₁₅ₘ: $1.00 | ATR₁D: $5.00 | VIX: 20.0 (摩拳擦掌)")
     print(
         f" • 分類結果: {C_RED}Regime V 破位追空態{C_RESET} "
         "(跌破 Gamma Flip / VWAP / Put Wall，放量陰線，RSI < 45)"
     )
-    print("   └─ 優先序說明: 個股結構封頂 (Call Wall 空間 8.7% < 動態門檻) 同時成立，")
-    print("      但 Regime V 優先——否則做空將永遠被 Regime IV 遮蔽而無法觸發")
 
-    print_section("2. 動態自適應波動率空間門檻推導")
-    print(" • Stop  = ResistanceWall $100.00 + 1.5 × ATR₁₅ₘ $1.00 = $101.50")
-    print(" • Risk  = ($101.50 - $92.00) / $92.00 = 10.33%")
-    print(f" • 門檻 = max(2.2 × 10.33%, 1.5 × (5/92), 3.5%) = {C_CYAN}22.72%{C_RESET}")
-    print(
-        "   └─ 但現價已跌破 Put Wall，條件三改走「破位追空」子模式："
-        "次級節點空間 >= 2.0 × ATR₁D"
-    )
-
-    print_section("3. 做空進場訊號六重嚴格過濾鐵律檢驗")
+    print_section("2. 做空進場訊號六重嚴格過濾鐵律檢驗")
     gates = [
         (
             "條件一",
             "結構性放量破位",
-            "15m 實體陰線收盤 $92.00 < Gamma Flip $100.00，量能 2.0x 均量，跌破 VWAP",
-            "通過 ✅",
+            "15m 實體陰線收盤 $92.00 < Gamma Flip $100.00，量能 2.0x，跌破 VWAP",
         ),
         (
             "條件二",
             "做市商負 Gamma 頂牆",
-            "ResistanceWall $100.00 (+3.0M GEX)，牆距 8.70% 落在 [2.72%, 9.78%] 雙邊界內",
-            "通過 ✅",
+            "停損 = $97.00 + 0.5×ATR₁₅ₘ = $97.50，停損距離 5.98% 落在 [2.72%, 8%] 內",
         ),
         (
             "條件三",
             "下行空間 + 無接刀",
-            "[破位追空] 至次級負 Gamma 節點 $80.00 空間 13.04% >= 10.87% (2.0×ATR₁D)"
-            "；無主力 PUT STO 接刀",
-            "通過 ✅",
+            "[破位追空] 至次級負 Gamma 節點 $80.00 空間 13.04% >= 10.87% (2.0×ATR₁D)",
         ),
         (
             "條件四",
             "主力跨週期賣壓",
-            "偵測到 $90P BTO 主力方向性押注，DTE = 25 天、ratio 1.50x、權利金 $400,000",
-            "通過 ✅",
+            "$90P BTO 主力方向性押注，DTE 25、ratio 1.50x、權利金 $400,000",
         ),
-        ("條件五", "總經與財報安全閥", "距財報 45 天，大盤處於 NORMAL 模式", "通過 ✅"),
+        ("條件五", "總經與財報安全閥", "距財報 45 天，大盤 NORMAL"),
         (
             "條件六",
             "效期與 IVR 分流",
-            "最近效期 DTE = 25 天 (>= 14)，IVR 20.0% -> Long Put (輕度 OTM)",
-            "通過 ✅",
+            "最近效期 DTE 25 (>= 14)，IVR 20% -> Long Put (輕度 OTM)",
         ),
     ]
-    for g_num, g_name, g_desc, g_res in gates:
-        print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}{g_res}{C_RESET}")
+    for g_num, g_name, g_desc in gates:
+        print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}通過 ✅{C_RESET}")
 
-    print_section("4. 做空部位出場矩陣 (鏡像雙軌防洗盤停損)")
-    print(" • 錨點 AnchorShort = ResistanceWall $100.00 (上方阻力頂牆)")
-    print(
-        f" • 軌道一 SL-結構失效: $100.00 + 0.5 × ATR₁₅ₘ = {C_YELLOW}$100.50{C_RESET} "
-        "(現價升穿即觸發)"
+    from cogs.embed_builders.rollover_embeds import create_short_entry_embed
+    from market_analysis.dynamic_rollover.models import (
+        EntryConfirmation,
+        ShortEntryEvaluation,
     )
-    print(f" • 軌道二 極端瞬時停損: $100.00 + 3.0 × ATR₁₅ₘ = {C_RED}$103.00{C_RESET}")
-    print(" • SL-狀態翻轉: Net GEX >= 0 (做市商回到正 Gamma 吸收) -> 強制 100% 回補")
-    print(" • SL-主力對沖: 近平值大額 CALL BTO (逼空起點) -> 強制 100% 回補")
-    print(
-        " • TP1 $95.48 (PutWall × 1.005) 50% | TP2 跌穿 PutWall 1.5% 30% | TP3 Δ<=-0.85 20%"
+    from market_analysis.dynamic_rollover.short_entry_sizing import (
+        build_short_entry_levels,
+        build_short_entry_plan,
+        compute_short_entry_sizing,
     )
 
-    print_section("5. 風險揭露")
-    print(
-        f" {C_YELLOW}⚠️ risk_engine/ 的 Beta 加權 Delta、VIX 戰情階梯、凱利模型皆假設"
-        f"全部部位為多頭；做空部位存在時組合層指標可能失真（已知缺口）。{C_RESET}"
+    ev = ShortEntryEvaluation(
+        all_passed=True,
+        reason=" | ".join(f"做空{g[0]}✅：{g[2]}" for g in gates),
+        structure_directive="Long Put (輕度 OTM)",
+        sub_mode="破位追空",
+        conditions=(True, True, True, True, True, True),
+        spot=92.0,
+        resistance_wall=97.0,
+        call_wall=97.0,
+        put_wall=95.0,
+        gamma_flip=100.0,
+        next_negative_node=80.0,
+        net_gex=-2_500_000.0,
+        session_vwap=99.0,
+        atr_15m=1.0,
+        atr_1d=5.0,
+        ivr=20.0,
     )
+
+    print_section("3. 下游隔離：做空確認不進入任何多頭路徑")
+    engine = DynamicRolloverEngine()
+    confirmation = EntryConfirmation(
+        True,
+        ev.reason,
+        "SHORT",
+        short_evaluation=ev,
+        entry_regime="REGIME_V_BREAKDOWN_CHASE",
+    )
+    core = await engine.evaluate_core_deployment(
+        101,
+        [
+            {
+                "symbol": "VOO",
+                "asset_class": "CORE",
+                "current_value": 60000.0,
+                "target_allocation_pct": 0.5,
+                "boxx_allocation_pct": 0.0,
+            }
+        ],
+        set(),
+        100000.0,
+        "TSLA",
+        {"quote": {"c": 92.0}},
+        precomputed_entry_confirmation=confirmation,
+    )
+    print(
+        f" • Scenario 2 機會成本轉倉：{C_GREEN}0 筆{C_RESET} (做空確認在衛星迴圈前返回)"
+    )
+    print(
+        f" • Scenario 5 核心資金部署：{C_GREEN}{len(core)} 筆{C_RESET} "
+        "(SHORT 確認不得把 CORE 現金 Buy Shares 進做空標的)"
+    )
+
+    print_section("4. SHORT_ENTRY 價位與倉位計算")
+    levels = build_short_entry_levels(ev)
+    if levels is None:
+        print(f" {C_RED}價位不合法，fail-closed{C_RESET}")
+        return
+    sizing = compute_short_entry_sizing(
+        levels, 100_000.0, 15.0, vix_spot=20.0, rsi_15m=38.0
+    )
+    print(f" • 進場 (限價放空): ${levels.entry_price:.2f}")
+    print(
+        f" • 停損: 結構 ${levels.stop_price_structural:.2f} ／ 出場引擎 "
+        f"${levels.stop_price_exit_engine:.2f} ➔ 取較遠者 {C_YELLOW}${levels.stop_price:.2f}{C_RESET}"
+    )
+    print(
+        f" • 目標: 次級負 Gamma 節點 ${levels.target_price:.2f} | R:R {levels.reward_risk_ratio:.2f}"
+    )
+    print(
+        f" • 風險預算: $100,000 × min(0.5%, 凱利 {sizing.kelly_fraction:.2%}) × VIX 乘數 "
+        f"{sizing.short_vix_multiplier:.2f} = {C_CYAN}${sizing.risk_budget_usd:,.2f}{C_RESET}"
+    )
+    print(
+        f" • 建議股數: {C_GREEN}{sizing.share_qty}{C_RESET} 股 (約束: {sizing.binding_constraint})"
+    )
+
+    print_section("5. 做空部位出場矩陣 (登錄負股數後接管)")
+    print(" • SL-結構失效: Call Wall $97.00 + 0.5 × ATR₁₅ₘ = $97.50 (現價升穿即觸發)")
+    print(" • SL-狀態翻轉: Net GEX >= 0 -> 強制 100% 回補")
+    print(
+        " • TP1/TP2 目標牆：現價已跌破 Put Wall，改以次級負 Gamma 節點 $80.00 為目標"
+        "（避免部位一登錄就落在「跌破 Put Wall 1.5%」的 TP2 內）"
+    )
+
+    embed = create_short_entry_embed(
+        "TSLA",
+        f"🐻 **做空進場訊號 (Short Entry)**｜{levels.sub_mode}\n{ev.reason}",
+        build_short_entry_plan(levels, sizing),
+        ev.structure_directive,
+        "REGIME_V_BREAKDOWN_CHASE",
+    )
+    print_embed_preview(embed)
 
 
 async def main() -> None:
