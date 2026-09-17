@@ -33,6 +33,7 @@ flowchart TB
         A02["盤前 08:45 預熱與 SQLite Cache-Aside<br/>(02_pre_market_cache_aside.md)"]
         A01["雙自選標的心跳管線架構與排程隔離<br/>(01_dual_watchlist_pipelines.md)"]
         A04["量化系統工程規範與 Discord 防爆分頁<br/>(04_engineering_standards.md)"]
+        A05["回測校準工具與前向蒐集管線<br/>(05_calibration_harness_and_forward_collection.md)"]
     end
 
     subgraph Macro_Sentiment_Layer["5. 總體經濟與輿情預測 (macro_sentiment/)"]
@@ -66,7 +67,7 @@ flowchart TB
         S01["5-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
         S02["右側動能突破進場六重鐵律<br/>(02_right_side_momentum_ironclad.md)"]
         S03["左側均值回歸接刀六重鐵律<br/>(03_left_side_mean_reversion_ironclad.md)"]
-        S04["動態轉倉 8 大情境狀態機<br/>(04_dynamic_rollover_state_machine.md)"]
+        S04["動態轉倉 9 大情境狀態機與 2025 回測<br/>(04_dynamic_rollover_state_machine.md)"]
         S05["雙軌防洗盤動態停損與出場決策矩陣<br/>(05_dual_track_anti_washout_stop_loss.md)"]
         S06["動態自適應波動率空間門檻<br/>(06_dynamic_adaptive_room_threshold.md)"]
         S07["做空交易六重嚴格過濾鐵律<br/>(07_short_side_breakdown_ironclad.md)"]
@@ -119,7 +120,7 @@ flowchart TB
 | 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 5-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 02 | [`02_right_side_momentum_ironclad.md`](strategies/02_right_side_momentum_ironclad.md) | 右側動能突破進場六重鐵律 | 15m 實體陽線放量 1.5x, 站穩 VWAP, 底牆 $K < \text{Spot}$, 主力買盤 DTE $\ge 7$ | `market_analysis/dynamic_rollover/opportunity_cost.py` |
 | 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge$ 動態門檻 | `market_analysis/dynamic_rollover/left_side_entry.py` |
-| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 9 大情境全景狀態機 | 涵蓋 Core/Satellite/Margin/Macro/DTE $\le 1$/SHORT_ENTRY 等 9 大情境, 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
+| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 9 大情境全景狀態機與 2025 全量回測 | 涵蓋 9 大情境, 2025 NVDA/SPY/GLD 全量回測實證 (MDD 降 18.1%, 勝率 79.4%), 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
 | 05 | [`05_dual_track_anti_washout_stop_loss.md`](strategies/05_dual_track_anti_washout_stop_loss.md) | 雙軌防洗盤動態停損與出場決策矩陣 | 軌道一 $0.5\times\text{ATR}$ 實體 K 收盤撤退線, 軌道二 $3.0\times\text{ATR}$ 瞬時硬熔斷 | `market_analysis/dynamic_rollover/constants.py` |
 | 06 | [`06_dynamic_adaptive_room_threshold.md`](strategies/06_dynamic_adaptive_room_threshold.md) | 動態自適應波動率空間門檻 | $\max(2.2\times\text{Risk}, 1.5\times\text{ATR}_{1D}, 3.5\%)$, 停損距離雙邊界 $[2.5\times\text{ATR}_{15m}, 8\%]$ | `market_analysis/room_threshold.py` |
 | 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律與 SHORT_ENTRY 做空進場訊號 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$, 倉位 $\min(0.5\%, f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}$ ÷ 停損距離 | `market_analysis/dynamic_rollover/short_side_entry.py` |
@@ -192,7 +193,7 @@ flowchart TB
 | 27 | [`02_pre_market_cache_aside.md`](architecture/02_pre_market_cache_aside.md) | 盤前 08:45 預熱與 SQLite Cache-Aside 機制 | 08:45 ET 盤前全標的預熱, 30s 冷卻, 2% 價格偏離度重算, SingleFlight 併發摺疊 | `cogs/trading/pre_market.py` |
 | 28 | [`03_dual_service_and_proxy.md`](architecture/03_dual_service_and_proxy.md) | 雙服務架構與三階式降級代理 | 第 1 階 Edge 快照 $\to$ 第 2 階 Playwright 實時 Scrape $\to$ 第 3 階 本地 yfinance 直連 | `services/market_data_service/options.py` |
 | 29 | [`04_engineering_standards.md`](architecture/04_engineering_standards.md) | 量化系統工程規範與 Discord 防爆分頁原則 | 10 標的分頁 (37.7% 安全裕度), `chunk_embeds` 雙約束背包, 單訊息就地換頁 | `cogs/embed_builders/market_embeds.py` |
-| 30 | [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md) | 回測校準工具與前向蒐集管線 | 次一根開盤進場無前視, 方向中性 $\pm k\,\text{ATR}_{1D}$ 屏障標註, Wilson + 交易日叢集 bootstrap, $n \ge 100$／收縮 $n_0 = 200$, 只產報告不改參數 | `calibration/pipeline.py` |
+| 30 | [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md) | 回測校準工具與前向蒐集管線 | 次一根開盤進場無前視, 方向中性 $\pm k\,\text{ATR}_{1D}$ 屏障標註, 2025 全量多資產轉倉回測基準, Wilson + 交易日叢集 bootstrap, $n \ge 100$／收縮 $n_0 = 200$, 只產報告不改參數 | `calibration/pipeline.py` |
 
 ---
 
