@@ -1271,6 +1271,172 @@ def test_build_radar_scan_embed() -> None:
     assert "籌碼斷層" in get_embed_text(embed)
 
 
+def test_build_radar_scan_embed_ted_spread_rendering() -> None:
+    """驗證 build_radar_scan_embed 在處理 TED Spread 宏觀指標時的色彩與警戒標籤：
+    1. 負數利差 (例如 -0.07)：合法 spread，應以青色渲染 -0.07，不可誤判為獲取數據失敗。
+    2. 零利差 (0.0)：合法 spread，應以青色渲染 0.00。
+    3. 高利差警戒 (> 0.5，例如 0.65)：應以紅色渲染 0.65 並附帶 ⚠️ 流動性警戒。
+    4. 無效格式 (例如非數值字串)：安全捕捉例外並以紅色渲染 獲取數據失敗。
+    5. GEX Flip 無效格式：安全捕捉例外並渲染 獲取數據失敗，不影響 TED Spread 解析。
+    """
+    scan_results = [
+        {
+            "symbol": "SPY",
+            "quote": {"c": 500.0, "dp": 0.5},
+            "iv_metrics": {"iv_rank": 20.0, "expected_move_weekly": 5.0},
+            "max_pain": {"max_pain": 500.0},
+        }
+    ]
+
+    # 1. 負數利差情境 (-0.0708 / -0.07)
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00"
+            if k == "macro_spy_gamma_flip"
+            else "-0.0708"
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "TED Spread (流動性指標): \u001b[1;36m-0.07\u001b[0m" in text
+        assert "獲取數據失敗" not in text
+        assert "⚠️ 流動性警戒" not in text
+
+    # 2. 零利差情境 (0.0)
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00"
+            if k == "macro_spy_gamma_flip"
+            else "0.0"
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "TED Spread (流動性指標): \u001b[1;36m0.00\u001b[0m" in text
+        assert "獲取數據失敗" not in text
+        assert "⚠️ 流動性警戒" not in text
+
+    # 3. 高利差警戒情境 (> 0.5, e.g. 0.65)
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00"
+            if k == "macro_spy_gamma_flip"
+            else "0.65"
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert (
+            "TED Spread (流動性指標): \u001b[1;31m0.65\u001b[0m \u001b[1;31m⚠️ 流動性警戒\u001b[0m"
+            in text
+        )
+        assert "獲取數據失敗" not in text
+
+    # 4. 無效格式情境 ("INVALID_STR")
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00"
+            if k == "macro_spy_gamma_flip"
+            else "INVALID_STR"
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+
+    # 5. GEX Flip 無效格式情境 ("INVALID_GEX")
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "INVALID_GEX"
+            if k == "macro_spy_gamma_flip"
+            else "-0.05"
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+        assert "TED Spread (流動性指標): \u001b[1;36m-0.05\u001b[0m" in text
+
+    # 6. 非有限數值防護 ("nan", "inf", "-inf")
+    for non_finite in ("nan", "inf", "-inf"):
+        with patch("database.cache.get_kv_cache") as mock_kv:
+            mock_kv.side_effect = lambda k, val=non_finite: (
+                "515.00"
+                if k == "macro_spy_gamma_flip"
+                else val
+                if k == "macro_ted_spread"
+                else None
+            )
+            embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+            text = get_embed_text(embeds[0])
+            assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+            assert "nan" not in text
+            assert "inf" not in text
+
+    # 7. 布林值型別防護 (True / False 不應被轉成 1.0 或 0.0)
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00"
+            if k == "macro_spy_gamma_flip"
+            else True
+            if k == "macro_ted_spread"
+            else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+        assert "1.00" not in text
+
+    # 8. GEX Flip 非有限數值防護 ("nan", "inf")
+    for gex_nf in ("nan", "inf"):
+        with patch("database.cache.get_kv_cache") as mock_kv:
+            mock_kv.side_effect = lambda k, val=gex_nf: (
+                val
+                if k == "macro_spy_gamma_flip"
+                else "-0.05"
+                if k == "macro_ted_spread"
+                else None
+            )
+            embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+            text = get_embed_text(embeds[0])
+            assert (
+                "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+            )
+            assert "TED Spread (流動性指標): \u001b[1;36m-0.05\u001b[0m" in text
+
+    # 9. 僅 GEX Flip 存在，TED Spread 為 None：不應出現 TED Spread 行
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: (
+            "515.00" if k == "macro_spy_gamma_flip" else None
+        )
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m515.00\u001b[0m" in text
+        assert "TED Spread" not in text
+
+    # 10. 僅 TED Spread 存在，GEX Flip 為 None：不應出現 GEX Flip 行
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.side_effect = lambda k: ("-0.07" if k == "macro_ted_spread" else None)
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "TED Spread (流動性指標): \u001b[1;36m-0.07\u001b[0m" in text
+        assert "SPY 零 Gamma 線" not in text
+
+    # 11. 兩者皆為 None：不應出現宏觀數據表頭
+    with patch("database.cache.get_kv_cache") as mock_kv:
+        mock_kv.return_value = None
+        embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
+        text = get_embed_text(embeds[0])
+        assert "🌍 雷達：宏觀數據發布與流動性枯竭警告" not in text
+        assert "TED Spread" not in text
+        assert "SPY 零 Gamma 線" not in text
+
+
 def test_build_radar_scan_embed_with_none_values() -> None:
     """Verify that build_radar_scan_embed handles None values in dictionaries gracefully."""
     scan_results = [

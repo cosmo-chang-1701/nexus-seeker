@@ -13,6 +13,7 @@
 """
 
 import discord
+import math
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -419,8 +420,17 @@ def build_radar_scan_embed(
                 ted_spread = None
 
             if gex_flip is not None or ted_spread is not None:
-                if gex_flip is not None and float(gex_flip) > 0:
-                    gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{float(gex_flip):.2f}\u001b[0m"
+                gex_val = None
+                if gex_flip is not None and not isinstance(gex_flip, bool):
+                    try:
+                        _parsed_gex = float(gex_flip)
+                        if math.isfinite(_parsed_gex):
+                            gex_val = _parsed_gex
+                    except (ValueError, TypeError):
+                        gex_val = None
+
+                if gex_val is not None and gex_val > 0:
+                    gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_val:.2f}\u001b[0m"
                 elif gex_flip is not None:
                     gex_str = (
                         "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m"
@@ -428,13 +438,21 @@ def build_radar_scan_embed(
                 else:
                     gex_str = ""
 
-                if ted_spread is not None and float(ted_spread) > 0:
-                    ted_val = float(ted_spread)
+                ted_val = None
+                if ted_spread is not None and not isinstance(ted_spread, bool):
+                    try:
+                        _parsed_ted = float(ted_spread)
+                        if math.isfinite(_parsed_ted):
+                            ted_val = _parsed_ted
+                    except (ValueError, TypeError):
+                        ted_val = None
+
+                if ted_val is not None:
                     ted_alert = (
-                        "\u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
+                        " \u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
                     )
                     ted_color = "\u001b[1;31m" if ted_val > 0.5 else "\u001b[1;36m"
-                    ted_str = f"TED Spread (流動性指標): {ted_color}{ted_val:.2f}\u001b[0m {ted_alert}"
+                    ted_str = f"TED Spread (流動性指標): {ted_color}{ted_val:.2f}\u001b[0m{ted_alert}"
                 elif ted_spread is not None:
                     ted_str = (
                         "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m"
