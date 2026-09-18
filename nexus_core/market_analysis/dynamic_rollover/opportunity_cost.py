@@ -48,6 +48,7 @@ from .constants import (
     _ROLLOVER_RATIO_STANDARD,
     _SHORT_CANDIDATE_MAX_PSQ,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
+    resolve_risk_profile,
 )
 from .models import (
     DynamicRegime,
@@ -853,6 +854,7 @@ class _OpportunityCostMixin:
         target_spot: float = 0.0,
         target_put_wall: float = 0.0,
         friction_cost_pct: float = _ESTIMATED_ROUND_TRIP_COST_PCT,
+        base_ev_hurdle_pct: float = _EV_SPREAD_MIN_THRESHOLD,
     ) -> Dict[str, Any]:
         """
         邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
@@ -864,6 +866,12 @@ class _OpportunityCostMixin:
         於高波動環境下會改傳入動態計算值 (候選標的近價期權合約 Bid-Ask 點差
         推算)，確保 EV 門檻在流動性摩擦擴大時自動提高。本函式維持純運算、
         零 I/O，僅接受呼叫端已算好的數值，不在此處發動網路請求。
+
+        base_ev_hurdle_pct：EV 轉倉門檻的「基礎」分量，預設為現行
+        _EV_SPREAD_MIN_THRESHOLD (0.05)。呼叫端依使用者 risk_appetite 解析出的
+        RiskProfile.ev_hurdle 覆寫。⚠️ 刻意與 friction_cost_pct 分開、不合併成
+        單一常數：後者在高波動環境下會被動態放大，若合併會讓那組已驗證的動態
+        摩擦成本機制被靜態值覆蓋掉。
         """
         # 假設 PowerSqueeze 指標中，數值越低代表動能越弱，越高代表突破動能強烈
         holding_momentum_decaying = (
@@ -881,7 +889,7 @@ class _OpportunityCostMixin:
         if (
             holding_momentum_decaying
             and target_breakout_ready
-            and ev_spread > (_EV_SPREAD_MIN_THRESHOLD + friction_cost_pct)
+            and ev_spread > (base_ev_hurdle_pct + friction_cost_pct)
         ):
             should_rollover = True
             if current_holding_profit_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD:
@@ -1167,10 +1175,16 @@ class _OpportunityCostMixin:
         # (short_side_entry.py)，是本系統唯一的空頭方向進場路徑。DYNAMIC 先透過
         # 5-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
         # 直接判定未通過 (Regime II 混沌泥淖態/IV 結構封頂危機態)。
+        # 風險偏好參數化：與 trading_strategy 共用同一次 get_full_user_context
+        # 讀取，避免對同一使用者發動兩次幾乎相同的查詢。resolve_risk_profile 為
+        # 純函式零 I/O，未知值/讀取失敗一律回退 DEFENSIVE (零行為變化)。
         try:
-            trading_strategy = get_full_user_context(user_id).trading_strategy
+            user_ctx = get_full_user_context(user_id)
+            trading_strategy = user_ctx.trading_strategy
+            risk_profile = resolve_risk_profile(user_ctx.risk_appetite)
         except Exception as e:
             trading_strategy = TradingStrategyMode.RIGHT_SIDE.value
+            risk_profile = resolve_risk_profile(None)
             logger.warning(
                 f"[{candidate_symbol}] 讀取使用者 {user_id} 交易策略設定失敗，"
                 f"退回右側交易預設: {e}"
@@ -1367,6 +1381,7 @@ class _OpportunityCostMixin:
                 target_spot=target_spot,
                 target_put_wall=target_put_wall,
                 friction_cost_pct=friction_cost_pct,
+                base_ev_hurdle_pct=risk_profile.ev_hurdle,
             )
             if not result["should_rollover"]:
                 continue

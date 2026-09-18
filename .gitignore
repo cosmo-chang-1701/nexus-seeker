@@ -74,3 +74,6 @@ ORIGINAL_REQUEST.md
 # 回測校準工具的 K 線快取與報告輸出 (python -m calibration)
 nexus_core/.calibration_cache/
 nexus_core/reports/
+
+# 施工交接文件（非規格書，完工後即可刪除，不進版控）
+handoff.md

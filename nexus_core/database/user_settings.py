@@ -42,6 +42,7 @@ class UserContext:
     trading_strategy: str = (
         "RIGHT_SIDE"  # 交易策略模式: RIGHT_SIDE/LEFT_SIDE/SHORT_SIDE/DYNAMIC
     )
+    risk_appetite: str = "DEFENSIVE"  # 風險偏好: DEFENSIVE/AGGRESSIVE
 
 
 # ==========================================
@@ -52,6 +53,7 @@ class UserContext:
 _VALID_TRADING_STRATEGIES: frozenset[str] = frozenset(
     {"RIGHT_SIDE", "LEFT_SIDE", "SHORT_SIDE", "DYNAMIC"}
 )
+_VALID_RISK_APPETITES: frozenset[str] = frozenset({"DEFENSIVE", "AGGRESSIVE"})
 
 
 def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
@@ -89,6 +91,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "cash_reserve_protection",
             "enable_macro_top_escape_defense",
             "trading_strategy",
+            "risk_appetite",
         }
         update_pairs = []
         values = []
@@ -119,6 +122,10 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                     value = (
                         value if value in _VALID_TRADING_STRATEGIES else "RIGHT_SIDE"
                     )
+                elif key == "risk_appetite":
+                    # 必須與 dynamic_rollover.models.RiskAppetite 同步 (同上，
+                    # 不直接匯入以避免循環相依)。未知值一律回退 DEFENSIVE。
+                    value = value if value in _VALID_RISK_APPETITES else "DEFENSIVE"
 
                 update_pairs.append(f"{key} = ?")
                 values.append(value)
@@ -386,6 +393,7 @@ def get_full_user_context(user_id: int) -> UserContext:
                 _get_val("enable_macro_top_escape_defense", False)
             ),
             trading_strategy=_get_val("trading_strategy", "RIGHT_SIDE"),
+            risk_appetite=_get_val("risk_appetite", "DEFENSIVE"),
         )
 
     except Exception as e:

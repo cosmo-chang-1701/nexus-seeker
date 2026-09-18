@@ -45,6 +45,23 @@ class TradingStrategyMode(str, Enum):
     DYNAMIC = "DYNAMIC"  # 動態調整：5態 Regime 分類器路由 (regime_classifier.py)
 
 
+class RiskAppetite(str, Enum):
+    """使用者 /settings 可選的風險偏好，決定 TP 階梯比例、EV 轉倉門檻與核心資金
+    部署比例要套用哪一組參數 (見 constants.py::resolve_risk_profile)。
+
+    DEFENSIVE 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化。
+    AGGRESSIVE 的數值全部來自 calibration/backtest_engine_2025.py 已驗證的
+    aggressive 模式（2025 回測顯示其報酬/MDD/Sharpe 三項皆優於 DEFENSIVE，見
+    docs/strategies/04_dynamic_rollover_state_machine.md §2.10）。
+
+    新增 enum 值不需要 migration：user_settings.risk_appetite 是
+    TEXT DEFAULT 'DEFENSIVE'，無 CHECK 約束（見 v076_add_risk_appetite.py）。
+    """
+
+    DEFENSIVE = "DEFENSIVE"
+    AGGRESSIVE = "AGGRESSIVE"
+
+
 class RegimeMarketData(NamedTuple):
     """`classify_dynamic_regime()` 判定過程中實際抓取/計算的市場資料。
 

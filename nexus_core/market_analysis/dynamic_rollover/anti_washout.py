@@ -26,6 +26,7 @@ from .constants import (
     _MICROSTRUCTURE_TP3_DELTA_THRESHOLD,
     _MICROSTRUCTURE_TP3_DTE_THRESHOLD,
     _MICROSTRUCTURE_TP3_RATIO,
+    resolve_risk_profile,
 )
 from .models import RolloverInstruction, RolloverScenario
 from .structural_signals import (
@@ -230,7 +231,7 @@ class _AntiWashoutMixin:
         )
 
     def _evaluate_microstructure_tp_ladder(
-        self, metrics: dict
+        self, metrics: dict, tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO
     ) -> Tuple[Optional[str], float, str]:
         """微觀結構出場決策矩陣 - 止盈分層 (TP1/TP2/TP3)。
 
@@ -238,10 +239,17 @@ class _AntiWashoutMixin:
         「本輪最高已觸發層級」而非累加：優先序 TP3 > TP2 > TP1。回傳
         (tier_name 或 None, sell_ratio, reason_text)。
 
+        tp1_ratio：TP1 執行比例，預設為現行 _MICROSTRUCTURE_TP1_RATIO (50%)。
+        呼叫端 (check_satellite_rebalancing_impl) 依使用者 risk_appetite 解析出
+        的 RiskProfile.tp1_ratio 覆寫，未傳入時零行為變化。TP2/TP3 比例刻意
+        不比照參數化——階段 0 的範圍只涵蓋 handoff.md §2.5 明列的三個消費端。
+
         空頭部位分流至鏡像版 `_evaluate_microstructure_tp_ladder_short()`。
         """
         if self._resolve_position_side(metrics) == "SHORT":
-            return self._evaluate_microstructure_tp_ladder_short(metrics)
+            return self._evaluate_microstructure_tp_ladder_short(
+                metrics, tp1_ratio=tp1_ratio
+            )
 
         spot = float(metrics.get("spot_price", 0.0))
         call_wall = float(metrics.get("call_wall", 0.0))
@@ -308,10 +316,10 @@ class _AntiWashoutMixin:
         if is_tp1:
             return (
                 "TP1",
-                _MICROSTRUCTURE_TP1_RATIO,
+                tp1_ratio,
                 f"🎯 **TP1-阻力初探**：現價 ${spot:.2f} 已達 Call Wall ${call_wall:.2f} 的 "
                 f"{_MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%}，做市商多頭避險動能竭盡，"
-                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 平倉。",
+                f"執行 {tp1_ratio:.0%} 平倉。",
             )
         return None, 0.0, ""
 
@@ -514,7 +522,7 @@ class _AntiWashoutMixin:
         return (stop_loss, limit_price, extreme_stop_loss)
 
     def _evaluate_microstructure_tp_ladder_short(
-        self, metrics: dict
+        self, metrics: dict, tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO
     ) -> Tuple[Optional[str], float, str]:
         """做空部位的止盈分層 (TP1/TP2/TP3)，優先序 TP3 > TP2 > TP1。
 
@@ -606,10 +614,10 @@ class _AntiWashoutMixin:
         if is_tp1:
             return (
                 "TP1",
-                _MICROSTRUCTURE_TP1_RATIO,
+                tp1_ratio,
                 f"🎯 **TP1-支撐初探**：現價 ${spot:.2f} 已觸及 {target_label} 的 "
                 f"{2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%} 範圍內，做市商空頭避險動能竭盡，"
-                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 回補。",
+                f"執行 {tp1_ratio:.0%} 回補。",
             )
         return None, 0.0, ""
 
@@ -1026,11 +1034,16 @@ class _AntiWashoutMixin:
         active_orders: Optional[list[dict]] = None,
         position_shares: float = 0.0,
         current_value: float = 0.0,
+        tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO,
     ) -> dict:
         """
         Evaluates rebalancing rules under Gray-Scale Quantitative Framework
         and generates the strict 4-part markdown report.
         Returns a dict containing the final action, target asset, and markdown string.
+
+        tp1_ratio：透傳給 `_evaluate_microstructure_tp_ladder`，供呼叫端
+        (check_satellite_rebalancing_impl) 依使用者 risk_appetite 覆寫 TP1
+        執行比例；未傳入時為現行 _MICROSTRUCTURE_TP1_RATIO，零行為變化。
         """
         spot = float(metrics.get("spot_price", 0.0))
         ivr = float(metrics.get("ivr", 0.0))
@@ -1058,7 +1071,9 @@ class _AntiWashoutMixin:
             symbol, active_orders, stop_loss, limit_price
         )
 
-        tp_tier_result = self._evaluate_microstructure_tp_ladder(metrics)
+        tp_tier_result = self._evaluate_microstructure_tp_ladder(
+            metrics, tp1_ratio=tp1_ratio
+        )
         sl_tier_result = self._evaluate_microstructure_sl_ladder(
             metrics, anchor_base, stop_loss, asset_class
         )
@@ -1369,6 +1384,18 @@ async def check_satellite_rebalancing_impl(
         logger.debug(f"無法取得 user {user_id} active_orders: {e}")
         user_orders = []
 
+    # 風險偏好參數化：於入口解析一次後往下傳，不在每個持倉迴圈內各自查表
+    # (RiskProfile 查表為純函式零 I/O，但 get_full_user_context 是一次 DB
+    # 讀取，攤在每個 SATELLITE 持倉上會製造 O(部位數) 次重複查詢)。
+    try:
+        risk_appetite = get_full_user_context(user_id).risk_appetite
+    except Exception as e:
+        risk_appetite = "DEFENSIVE"
+        logger.warning(
+            f"讀取使用者 {user_id} 風險偏好設定失敗，退回 DEFENSIVE 預設: {e}"
+        )
+    risk_profile = resolve_risk_profile(risk_appetite)
+
     for asset in portfolio_assets:
         if asset.get("asset_class") == "SATELLITE":
             symbol: str = str(asset.get("symbol", ""))
@@ -1669,6 +1696,7 @@ async def check_satellite_rebalancing_impl(
                     active_orders=user_orders,
                     position_shares=quantity,
                     current_value=current_value,
+                    tp1_ratio=risk_profile.tp1_ratio,
                 )
 
                 default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
@@ -1710,6 +1738,7 @@ async def check_satellite_rebalancing_impl(
                     active_orders=user_orders,
                     position_shares=quantity,
                     current_value=current_value,
+                    tp1_ratio=risk_profile.tp1_ratio,
                 )
 
                 default_sell_ratio = (

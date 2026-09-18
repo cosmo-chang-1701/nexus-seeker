@@ -1,3 +1,5 @@
+from typing import NamedTuple, Optional
+
 # _compute_structural_breakdown_signals 每 30 分鐘週期會被 Scenario 3
 # (check_satellite_rebalancing) 與 Scenario 4 (evaluate_margin_defense) 對同一批
 # portfolio_assets 各呼叫一次，對同一標的重跑一次完整 GEX 逐履約價掃描屬重複運算。
@@ -437,3 +439,58 @@ _REGIME_V_RSI_MAX: float = 45.0  # 15m RSI < 此值視為動能偏空
 # **未經歷史回測校準**。破位追空的假訊號成本高於右側動能（空頭軋空的尾部風險
 # 不對稱），上線後應優先觀察此門檻的實際觸發率與勝率再行調整。
 _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
+
+# --- 風險偏好參數化 (RiskAppetite / RiskProfile)，見 models.py::RiskAppetite ---
+#
+# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻／核心資金部署比例三處的
+# 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
+# calibration/backtest_engine_2025.py 已驗證的 aggressive 模式
+# (docs/strategies/04_dynamic_rollover_state_machine.md §2.10：報酬/MDD/Sharpe
+# 三項皆優於 DEFENSIVE，對 Buy & Hold 亦無明顯取捨)。
+#
+# 本模組刻意維持 stdlib-only 葉模組性質 (比照 room_threshold.py /
+# skew_taxonomy.py)，不額外建立新檔案。
+
+
+class RiskProfile(NamedTuple):
+    tp1_ratio: float  # anti_washout.py TP1 執行比例，取代 _MICROSTRUCTURE_TP1_RATIO
+    ev_hurdle: float  # opportunity_cost.py 機會成本轉倉 EV Spread 門檻的「基礎」
+    # 分量，取代 _EV_SPREAD_MIN_THRESHOLD。⚠️ 刻意不是
+    # _EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT 的合併值：
+    # evaluate_opportunity_cost() 的 friction_cost_pct 參數在高波動環境下會由
+    # 呼叫端動態覆寫為近價期權合約的實際 Bid-Ask 點差 (見
+    # evaluate_opportunity_cost_for_satellites)，若把往返成本併進本欄位，會讓
+    # 那組已驗證的動態摩擦成本機制在 gate 運算式裡被靜態覆蓋、失去自動放大
+    # 效果。維持「基礎門檻 + 動態摩擦成本」兩項相加的既有運算式不變，本欄位
+    # 只替換其中的基礎門檻分量。
+    rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
+    core_deploy_ratio: float  # core_deployment.py 機會分支部署比例，取代
+    # _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
+    max_satellite_budget_pct: float  # 保留欄位，供後續階段串接單筆衛星預算上限
+
+
+_RISK_PROFILES: dict[str, RiskProfile] = {
+    "DEFENSIVE": RiskProfile(
+        tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
+        ev_hurdle=_EV_SPREAD_MIN_THRESHOLD,  # 0.05，現行行為
+        rotation_cooldown_days=5,
+        core_deploy_ratio=_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,  # 0.50，現行行為
+        max_satellite_budget_pct=0.15,
+    ),
+    "AGGRESSIVE": RiskProfile(
+        tp1_ratio=0.30,
+        ev_hurdle=0.02,
+        rotation_cooldown_days=3,
+        core_deploy_ratio=0.80,
+        max_satellite_budget_pct=0.25,
+    ),
+}
+
+
+def resolve_risk_profile(appetite: Optional[str]) -> RiskProfile:
+    """依 `user_settings.risk_appetite` 的字串值解析出對應的 RiskProfile。
+
+    未知值或 None 一律回退 DEFENSIVE (fail-safe，維持現行行為)——呼叫端無需
+    自行驗證 risk_appetite 是否為合法 enum 值。
+    """
+    return _RISK_PROFILES.get((appetite or "").upper(), _RISK_PROFILES["DEFENSIVE"])

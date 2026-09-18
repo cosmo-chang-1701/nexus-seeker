@@ -326,6 +326,11 @@ SETTINGS_LABELS = {
         "選擇動態轉倉引擎的進場邏輯模式 (動態調整/左側交易/右側交易/做空交易)",
         None,
     ),
+    "risk_appetite": (
+        "⚖️ 風險偏好",
+        "選擇動態轉倉引擎的 TP 階梯比例、EV 轉倉門檻與核心資金部署比例 (防禦/進攻)",
+        None,
+    ),
 }
 
 # 交易策略模式 (trading_strategy) 中文顯示對照與說明 —— DB 內部一律儲存英文
@@ -338,6 +343,13 @@ TRADING_STRATEGY_DISPLAY = {
     "SHORT_SIDE": "做空交易",
 }
 
+# 風險偏好 (risk_appetite) 中文顯示對照與說明 —— 同上，DB 內部一律儲存英文
+# enum code，此處為純呈現層 mapping。
+RISK_APPETITE_DISPLAY = {
+    "DEFENSIVE": "穩健防禦",
+    "AGGRESSIVE": "動能進攻",
+}
+
 # ⚠️ 左側交易**仍是做多**（逆勢均值回歸、Put Wall 底牆接刀，算的是向上回歸
 # 空間）。做空交易 (SHORT_SIDE) 才是本系統唯一的空頭方向進場路徑，描述文字
 # 刻意寫明方向，避免使用者把「左側」誤讀為「做空」。
@@ -346,6 +358,11 @@ TRADING_STRATEGY_DESCRIPTIONS = {
     "LEFT_SIDE": "做多・逆勢均值回歸：Put Wall 底牆接刀六重鐵律",
     "RIGHT_SIDE": "做多・順勢動能突破：現行六重鐵律 (預設)",
     "SHORT_SIDE": "做空・結構破位追空：負 Gamma 順勢助跌六重鐵律",
+}
+
+RISK_APPETITE_DESCRIPTIONS = {
+    "DEFENSIVE": "TP1 執行 50%、EV 門檻較高、核心資金機會部署 50% (預設，現行行為)",
+    "AGGRESSIVE": "TP1 執行 30%、EV 門檻較低、核心資金機會部署 80% (2025 回測驗證)",
 }
 
 
@@ -552,6 +569,8 @@ class AccountSettingsView(discord.ui.View):
                 val_display = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
             elif key == "trading_strategy":
                 val_display = TRADING_STRATEGY_DISPLAY.get(str(raw_val), str(raw_val))
+            elif key == "risk_appetite":
+                val_display = RISK_APPETITE_DISPLAY.get(str(raw_val), str(raw_val))
             else:
                 val_display = str(raw_val)
 
@@ -602,10 +621,20 @@ class AccountSettingsView(discord.ui.View):
             await interaction.response.edit_message(embed=embed, view=self)
         elif key == "trading_strategy":
             # 固定 3 選項的策略模式選單，直接寫入 DB，不需 Modal
-            view = TradingStrategySelectView(self.user_id, parent_view=self)
+            view: discord.ui.View = TradingStrategySelectView(
+                self.user_id, parent_view=self
+            )
             embed = create_info_embed(
                 title="📐 選擇交易策略",
                 message="請選擇動態轉倉引擎的進場邏輯模式：",
+            )
+            await interaction.response.edit_message(embed=embed, view=view)
+        elif key == "risk_appetite":
+            # 固定 2 選項的風險偏好選單，直接寫入 DB，不需 Modal
+            view = RiskAppetiteSelectView(self.user_id, parent_view=self)
+            embed = create_info_embed(
+                title="⚖️ 選擇風險偏好",
+                message="請選擇動態轉倉引擎的風險偏好參數組：",
             )
             await interaction.response.edit_message(embed=embed, view=view)
         else:
@@ -640,6 +669,7 @@ class AccountSettingsView(discord.ui.View):
             f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
             f"🧭 **宏觀逃頂前瞻防禦**: `{'🟢 開啟' if ctx.enable_macro_top_escape_defense else '🔴 關閉'}`",
             f"📐 **交易策略**: `{TRADING_STRATEGY_DISPLAY.get(ctx.trading_strategy, ctx.trading_strategy)}`",
+            f"⚖️ **風險偏好**: `{RISK_APPETITE_DISPLAY.get(ctx.risk_appetite, ctx.risk_appetite)}`",
         ]
 
         runway_settings = [
@@ -718,6 +748,55 @@ class TradingStrategySelectView(discord.ui.View):
         self.user_id = user_id
         self.parent_view = parent_view
         self.add_item(TradingStrategySelect(user_id, parent_view))
+
+
+class RiskAppetiteSelect(discord.ui.Select):
+    """風險偏好 (穩健防禦/動能進攻) 固定 2 選項選單，選中即直接寫入 DB 並導回
+    父層 AccountSettingsView，不需要 Modal（比照 TradingStrategySelect 的
+    既有 Select 子類別模式）。"""
+
+    def __init__(self, user_id: int, parent_view: "AccountSettingsView") -> None:
+        current = database.get_full_user_context(user_id).risk_appetite
+        options = [
+            discord.SelectOption(
+                label=RISK_APPETITE_DISPLAY[code],
+                value=code,
+                description=RISK_APPETITE_DESCRIPTIONS[code],
+                default=(code == current),
+            )
+            for code in ("DEFENSIVE", "AGGRESSIVE")
+        ]
+        super().__init__(
+            placeholder="請選擇風險偏好...",
+            options=options,
+            custom_id="select_risk_appetite",
+        )
+        self.user_id = user_id
+        self.parent_view = parent_view
+
+    async def callback(self, interaction: discord.Interaction) -> Any:
+        if interaction.data is None or not isinstance(interaction.data, dict):
+            return
+        select_values = interaction.data.get("values")
+        if not select_values or not isinstance(select_values, list):
+            return
+
+        selected = str(select_values[0])
+        await asyncio.to_thread(
+            database.upsert_user_config, self.user_id, risk_appetite=selected
+        )
+
+        self.parent_view.refresh_items()
+        embed = self.parent_view.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self.parent_view)
+
+
+class RiskAppetiteSelectView(discord.ui.View):
+    def __init__(self, user_id: int, parent_view: "AccountSettingsView") -> None:
+        super().__init__(timeout=180)
+        self.user_id = user_id
+        self.parent_view = parent_view
+        self.add_item(RiskAppetiteSelect(user_id, parent_view))
 
 
 class WtiConfigModal(discord.ui.Modal, title="🛢️ WTI 原油價格警報閾值設定"):
