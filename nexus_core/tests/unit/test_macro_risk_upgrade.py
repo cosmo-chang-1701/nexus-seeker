@@ -29,8 +29,12 @@ from services.single_flight import SingleFlightManager
 def _reset_regime_and_core_macro_caches() -> Any:
     """Phase 1 (get_market_regime/fetch_core_macro_metrics 記憶體快取) 的
     測試隔離：確保每個測試皆從乾淨的快取狀態開始，避免測試執行順序造成
-    快取命中/未命中結果不確定，也避免 SingleFlightManager 殘留的已完成
-    task 造成後續呼叫誤判為「進行中」而略過重新抓取。"""
+    快取命中/未命中結果不確定。
+
+    一併清 SingleFlightManager._active_tasks 是跨測試隔離（前一個測試若留下
+    仍在飛行中的共享任務，會被本測試併入）。**已完成**的殘留任務不需要在此
+    處理——`run()` 已顯式排除它們，見 tests/unit/test_concurrency_robustness.py
+    的 test_single_flight_never_reuses_a_completed_task。"""
 
     def _reset() -> None:
         index_microstructure._market_regime_cache_value = None
@@ -162,11 +166,10 @@ async def test_get_market_regime_refetches_after_ttl_expiry() -> None:
         mock_compute.assert_awaited_once()
 
         # 模擬 TTL 到期：直接將快取到期時間撥回過去，而非等待真實時間流逝。
-        # 同時清除 SingleFlightManager 殘留的已完成 task：真實情境下兩次呼叫
-        # 相隔遠超過一個事件迴圈 tick，done_callback 排程的清理必然已完成；
-        # 這裡以同步方式模擬該已完成的清理狀態。
+        # 不需要清 SingleFlightManager._active_tasks——`run()` 已顯式排除「已完成
+        # 但尚未被 done_callback 清掉」的任務，重取不再依賴回呼時序
+        # （見 tests/unit/test_concurrency_robustness.py 的不變式測試）。
         index_microstructure._market_regime_cache_expiry = 0.0
-        SingleFlightManager._active_tasks.clear()
 
         await get_market_regime()
         assert mock_compute.await_count == 2
@@ -186,7 +189,6 @@ async def test_invalidate_market_regime_cache_forces_refetch() -> None:
         mock_compute.assert_awaited_once()
 
         invalidate_market_regime_cache()
-        SingleFlightManager._active_tasks.clear()
 
         await get_market_regime()
         assert mock_compute.await_count == 2
@@ -229,7 +231,6 @@ async def test_invalidate_core_macro_metrics_cache_forces_refetch() -> None:
         mock_fetch.assert_awaited_once()
 
         invalidate_core_macro_metrics_cache()
-        SingleFlightManager._active_tasks.clear()
 
         await fetch_core_macro_metrics()
         assert mock_fetch.await_count == 2
@@ -265,7 +266,6 @@ async def test_get_spx_capped_from_above_signal_refetches_after_ttl_expiry() -> 
         mock_compute.assert_awaited_once()
 
         index_microstructure._spx_capped_signal_cache_expiry = 0.0
-        SingleFlightManager._active_tasks.clear()
 
         await get_spx_capped_from_above_signal()
         assert mock_compute.await_count == 2
@@ -283,7 +283,6 @@ async def test_invalidate_spx_capped_from_above_signal_cache_forces_refetch() ->
         mock_compute.assert_awaited_once()
 
         invalidate_spx_capped_from_above_signal_cache()
-        SingleFlightManager._active_tasks.clear()
 
         await get_spx_capped_from_above_signal()
         assert mock_compute.await_count == 2

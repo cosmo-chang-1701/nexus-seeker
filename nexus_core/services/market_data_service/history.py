@@ -121,18 +121,15 @@ async def get_history_df(
         if now < expiry:
             return cached_df.copy()
 
-    # shield：SingleFlightManager 的無 timeout 路徑是 `await task`，共乘者自身被
-    # 取消會連帶取消那個共享 task（進而波及其他共乘者）。在呼叫端 shield 可在不
-    # 改動共用基礎設施的前提下隔離這個影響。
-    shared_df = await asyncio.shield(
-        SingleFlightManager.run(
-            _history_single_flight_key(symbol, period, interval),
-            _fetch_history_uncached,
-            symbol,
-            period,
-            interval,
-            cache_key,
-        )
+    # 取消隔離由 SingleFlightManager.run() 內建的 shield 負責（任一呼叫端被取消
+    # 不會中止共享任務），呼叫端不需再包一層。
+    shared_df = await SingleFlightManager.run(
+        _history_single_flight_key(symbol, period, interval),
+        _fetch_history_uncached,
+        symbol,
+        period,
+        interval,
+        cache_key,
     )
     # 共乘者全部共用同一個 DataFrame 物件，因此一律回傳副本以維持 Copy 隔離契約。
     return shared_df.copy() if shared_df is not None else pd.DataFrame()

@@ -143,7 +143,23 @@ sequenceDiagram
 - 當執行包含 `ALTER TABLE ... RENAME TO ...` 的複合遷移時，若在重建表過程中崩潰，SQLite 內部會遺留名為 `*_new` 的暫存表。次日重啟時，`CREATE TABLE *_new` 會拋出表已存在的死鎖例外。
 - `run_migrations` 在捕捉到例外時，透過正則白名單過濾出合法的 `*_new` 表名稱，強制執行 `DROP TABLE IF EXISTS` 清理殘留結構，並在 rollback 後解除鎖定。
 
-### 5.3 集中化 Embed 渲染禁令
+### 5.3 併發請求合併（Single-Flight）不變式
+
+所有 TTL 記憶體快取的寫入都發生在網路 `await` **之後**，因此「查快取 → 發請求 → 寫快取」之間隔著一整段等待。在 $t=0$ 一起建立的多個 task 會雙雙 miss 快取並發出完全相同的請求。**TTL 快取消除的是「跨輪次」重複，Single-Flight 消除的是「同輪次併發」重複，兩者不互相取代**——例如 `/x symbol` 的並行池曾讓同一標的的期權到期日被重複抓取最多 7 次（`expiries_task` 本身，加上 `iv_metrics` / `max_pain` / `uoa_detector` / `options_flow` 在各自的 task 內又各呼叫一次）。
+
+調度一律經 `services/single_flight.py::SingleFlightManager.run()`，**不得自造 in-flight 表**。該實作受兩條不變式約束：
+
+1. **共享任務一律以 `asyncio.shield` 包裹後等待。** 「取消某個呼叫端」的語意是「我不等了」，**不是**「中止這件事」。若直接 `await task`，對 Task 的 await 被取消時會反向取消該 Task，等於一個呼叫端消失就把其他仍在等待同一個 key 的呼叫端資料一起拉掉，並讓已付出的網路成本與「完成後寫回快取」的副作用全部白費。
+2. **已完成的任務不得被共乘。** `add_done_callback` 由 event loop 以 `call_soon` 呼叫，任務完成到回呼執行之間有一個 loop 迭代的空窗；`run()` 因此顯式以 `task.done()` 排除已完成的任務，讓正確性不依賴回呼時序。否則落在該空窗內的後續呼叫會取得**上一次**的結果（快取被刻意清除或繞過時即為實質錯誤）。同理，清理必須是**同步** `done_callback`，不可再排一層 cleanup task。
+
+衍生約束：
+
+- 該類別**刻意不使用 `asyncio.Lock`**。`run()` 的臨界區（查表 → 建立 task → 寫回表）內部完全沒有 `await`，在單執行緒 event loop 上已是不可分割的操作；類別層級的 `asyncio.Lock` 一旦真的發生競爭就會綁定到當時的 event loop，之後在別的 loop 使用會拋「is bound to a different event loop」。
+- 表中若殘留**屬於其他 event loop** 的任務（單元測試每個 case 各自建 loop），一律忽略並重新執行，而非拋出難以追查的錯誤。
+- `done_callback` 須主動取走例外，避免所有呼叫端都被取消時 asyncio 在 GC 期印出 `Task exception was never retrieved`。
+- 決定 Single-Flight key 時，**凡會改變抓取語意的參數都必須併入 key**：`get_option_chain` 的 `force_live`（切換 Edge Snapshot / 直連資料源分層）與 `get_quote` 的 `allow_stale`（是否接受時間戳過舊的 Finnhub 報價）皆入 key；而 `get_history_df` 的 `force_refresh` **刻意不入 key**——它只略過快取讀取，抓取目標與資料源完全相同，飛行中那一次本身就是「現在」發出的請求。
+
+### 5.4 集中化 Embed 渲染禁令
 - 為了杜絕 Discord API 長度錯誤與風格割裂，專案嚴厲禁止任何業務模組（Cogs, Views, Services）直接調用 `discord.Embed(...)`。
 - 所有輸出必須透過 `cogs/embed_builders/` 模組，並封裝於 `NexusEmbed` 類別中，自動繼承調色盤、字元邊界防禦與標準化頁尾。
 
@@ -161,3 +177,10 @@ sequenceDiagram
   - `run_migrations`: 70+ 版本 SQLite 遷移引擎與 `*_new` 暫存表自癒清理
 - `nexus_core/bot.py`
   - `NexusBot.queue_dm`: 持久化私訊佇列與代碼區塊友善的 2000 字元分段投遞
+- `nexus_core/services/single_flight.py`
+  - `SingleFlightManager.run`: 併發請求合併入口（一律 shield、排除已完成任務）
+  - `SingleFlightManager._reusable` / `_discard`: 可共乘性判定與同步清理
+- `nexus_core/services/market_data_service/`
+  - `history.py::get_history_df`、`quote.py::get_quote`、`options.py::get_all_option_expiries` / `get_option_chain`: 四個套用 Single-Flight 的市場資料抓取入口
+- `nexus_core/tests/unit/test_concurrency_robustness.py`
+  - Single-Flight 兩條不變式的迴歸測試（取消隔離、不共乘已完成任務、跨 loop 殘跡、例外傳播）

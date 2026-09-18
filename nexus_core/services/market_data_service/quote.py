@@ -230,16 +230,12 @@ async def get_quote(symbol: str, allow_stale: bool = False) -> Dict[str, Any]:
     # allow_stale 必須併入 key：它會改變 _fetch() 的行為（是否接受時間戳過舊的
     # Finnhub 報價，或強制轉 yfinance fallback），共乘會拿到不同語意的資料。
     # 比照 options.py::get_option_chain 對 force_live 的處理。
-    # shield：manager 的無 timeout 路徑是 `await task`，共乘者自身被取消會連帶
-    # 取消共享 task 而波及其他共乘者（同 history.py 的作法）。
-    return await asyncio.shield(
-        SingleFlightManager.run(
-            f"quote_{symbol}_{'stale_ok' if allow_stale else 'std'}",
-            _fetch_quote_uncached,
-            symbol,
-            allow_stale,
-            now,
-        )
+    return await SingleFlightManager.run(  # type: ignore[no-any-return]
+        f"quote_{symbol}_{'stale_ok' if allow_stale else 'std'}",
+        _fetch_quote_uncached,
+        symbol,
+        allow_stale,
+        now,
     )
 
 

@@ -46,6 +46,147 @@ async def test_single_flight_coalescing() -> Any:
     assert call_count == 2
 
 
+# ---------------------------------------------------------------------------
+# SingleFlightManager 的兩項基礎設施不變式
+#
+# 1. 任一呼叫端被取消，不得連帶取消共享任務（`run()` 一律 shield）。
+# 2. 已完成但尚未被 done_callback 清掉的任務，不得被後續呼叫取用。
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_single_flight_caller_cancellation_does_not_kill_shared_task() -> None:
+    """共乘者（甚至第一個發起者）被取消，其餘呼叫端仍須取得完整結果。
+
+    修復前 `run()` 的無 timeout 路徑是 `return await task`：對 Task 的 await 被
+    取消時會反向取消該 Task，等於一個呼叫端消失就把其他人的資料一起拉掉。
+    """
+    SingleFlightManager._active_tasks.clear()
+    started = asyncio.Event()
+    gate = asyncio.Event()
+    completed = False
+
+    async def slow_task() -> str:
+        nonlocal completed
+        started.set()
+        await gate.wait()
+        completed = True
+        return "done"
+
+    first = asyncio.ensure_future(SingleFlightManager.run("cancel_probe", slow_task))
+    second = asyncio.ensure_future(SingleFlightManager.run("cancel_probe", slow_task))
+    await started.wait()
+
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+
+    gate.set()
+    assert await asyncio.wait_for(second, timeout=2.0) == "done"
+    assert completed is True, "共享任務必須照常跑完，而非被取消的呼叫端拖垮"
+
+
+@pytest.mark.asyncio
+async def test_single_flight_cancelled_caller_leaves_task_runnable() -> None:
+    """唯一的呼叫端被取消時，共享任務仍會跑完（其副作用——寫回快取——值得保留），
+    且不得在 active 表留下殘跡。"""
+    SingleFlightManager._active_tasks.clear()
+    started = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def slow_task() -> str:
+        started.set()
+        await asyncio.sleep(0.05)
+        finished.set()
+        return "done"
+
+    only = asyncio.ensure_future(SingleFlightManager.run("lonely_probe", slow_task))
+    await started.wait()
+    only.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await only
+
+    await asyncio.wait_for(finished.wait(), timeout=2.0)
+    await asyncio.sleep(0)  # 讓 done_callback 跑完
+    assert SingleFlightManager._active_tasks.get("lonely_probe") is None
+
+
+@pytest.mark.asyncio
+async def test_single_flight_never_reuses_a_completed_task() -> None:
+    """已完成的任務不得被共乘——即使 done_callback 還沒來得及清掉它。
+
+    修復前清理是 `loop.create_task(do_cleanup())`（延後一輪才生效），落在該空窗
+    內的後續呼叫會拿到**上一次**的結果。此處刻意在 await 完成後立刻再呼叫一次，
+    不給 loop 任何額外迭代。
+    """
+    SingleFlightManager._active_tasks.clear()
+    call_count = 0
+
+    async def counting_task() -> int:
+        nonlocal call_count
+        call_count += 1
+        return call_count
+
+    assert await SingleFlightManager.run("done_probe", counting_task) == 1
+    # 不插入 await asyncio.sleep(0)：驗證正確性不依賴 done_callback 的時序
+    assert await SingleFlightManager.run("done_probe", counting_task) == 2
+    assert call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_single_flight_propagates_exception_to_all_callers() -> None:
+    """共享任務拋例外時所有呼乘端都收到同一個例外，且 key 不得殘留。"""
+    SingleFlightManager._active_tasks.clear()
+    gate = asyncio.Event()
+
+    async def failing_task() -> str:
+        await gate.wait()
+        raise ValueError("BOOM")
+
+    first = asyncio.ensure_future(SingleFlightManager.run("exc_probe", failing_task))
+    second = asyncio.ensure_future(SingleFlightManager.run("exc_probe", failing_task))
+    await asyncio.sleep(0)
+    gate.set()
+
+    results = await asyncio.gather(first, second, return_exceptions=True)
+    for res in results:
+        assert isinstance(res, ValueError) and str(res) == "BOOM"
+
+    await asyncio.sleep(0)
+    assert SingleFlightManager._active_tasks.get("exc_probe") is None
+
+
+def test_single_flight_ignores_stale_cross_loop_task() -> None:
+    """表中殘留屬於其他 event loop 的任務時，必須忽略並重新執行。
+
+    跨 loop 的 Future 不可 await；單元測試每個 case 各自建 loop，前一個 loop
+    異常中止就會留下這種殘跡。刻意寫成同步測試，才能在外層沒有 running loop
+    的狀態下安全地收尾另一個 loop。
+    """
+    other_loop = asyncio.new_event_loop()
+
+    async def _never() -> str:
+        await asyncio.sleep(3600)
+        return "stale"
+
+    stale = other_loop.create_task(_never())
+    SingleFlightManager._active_tasks["xloop_probe"] = stale
+
+    async def _fresh() -> str:
+        return "fresh"
+
+    async def _main() -> str:
+        return await SingleFlightManager.run("xloop_probe", _fresh)  # type: ignore[no-any-return]
+
+    try:
+        assert asyncio.run(_main()) == "fresh"
+    finally:
+        SingleFlightManager._active_tasks.pop("xloop_probe", None)
+        stale.cancel()
+        other_loop.run_until_complete(asyncio.gather(stale, return_exceptions=True))
+        other_loop.close()
+
+
 @pytest.mark.asyncio
 async def test_database_write_queue_integration(db_conn: Any):  # type: ignore
     """Test that DatabaseWriteQueue processes queries sequentially and correctly."""

@@ -61,12 +61,8 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
 
     from services.single_flight import SingleFlightManager
 
-    # shield：SingleFlightManager 的無 timeout 路徑是 `await task`，共乘者自身
-    # 被取消會連帶取消共享 task 而波及其他共乘者（同 history.py 的作法）。
-    res = await asyncio.shield(
-        SingleFlightManager.run(
-            f"opt_expiries_{symbol}", _fetch_option_expiries_uncached, symbol, now
-        )
+    res = await SingleFlightManager.run(
+        f"opt_expiries_{symbol}", _fetch_option_expiries_uncached, symbol, now
     )
     return list(res) if res else []
 
