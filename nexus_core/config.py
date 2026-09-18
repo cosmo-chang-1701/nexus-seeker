@@ -97,6 +97,10 @@ OPTIONS_ROLLOVER_DRY_RUN = (
 # 軌跡、不推播 DM。做空進場的倉位與 VIX 係數皆未經回測校準，觀察稽核紀錄的
 # 觸發分佈合理後再關閉。
 SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() == "true"
+# PYRAMID_ADD 順勢加碼 dry-run (預設開啟)：只寫入稽核軌跡、不推播 DM。加碼
+# 倉位模型與 VIX 乘數皆未經回測校準，累積至少 20 筆前向樣本並經
+# `calibration forward-report` 檢視後，才由人工決定翻轉。
+PYRAMID_ADD_DRY_RUN = get_env_or_secret("PYRAMID_ADD_DRY_RUN", "true").lower() == "true"
 # Regime／進場鐵律評估紀錄的前向蒐集 (market_analysis/evaluation_recorder.py)。
 # GEX 相關門檻無法回測，這是唯一的校準資料來源，預設開啟 (~260 列/日)。
 ENABLE_REGIME_EVALUATION_LOG = (

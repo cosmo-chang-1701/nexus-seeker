@@ -9,7 +9,7 @@
 
 Nexus Seeker 確立**「宏觀流動性引導窗口平移，微觀微結構確認踩踏臨界」**之核心哲學，建構兩套互為表裡的宏觀防禦引擎：
 1. **即時流動性窗口平移矩陣（Escape Window Regime Matrix）**：監控 FOMC 聯準會利率期貨、通膨/能源（CPI/WTI）、VIX 期限結構與大盤 Net GEX，動態計算轉倉與防禦窗口的平移天數（前移收縮 vs 後推擴張）。
-2. **五因子複合逃頂評分階梯（Macro Top-Escape Score）**：疊加極端市場情緒（CNN Fear & Greed 指數）與使用者衛星持倉的亢奮廣度（Euphoria Breadth），形成多頭極致過熱的領先量化預警階梯，直接聯動動態轉倉引擎之情境 6（Scenario 6），強制將 25% 衛星曝險防禦性輪動至無風險現金等價物 BOXX。
+2. **五因子複合逃頂評分階梯（Macro Top-Escape Score）**：疊加極端市場情緒（CNN Fear & Greed 指數）與使用者衛星持倉的亢奮廣度（Euphoria Breadth），形成多頭極致過熱的領先量化預警階梯，依 WATCH／ELEVATED／CRITICAL 三級分別聯動動態轉倉引擎之情境 6（Scenario 6）採取強度遞增的動作——前哨階段買保護性 Put 保留上檔，警戒與確認階段才實際減碼（見 §2.5）。
 
 ### 1.2 適用市場環境與制度角色
 - **牛市末期極度亢奮**：當市場指數屢創新高、零售情緒陷入極度貪婪，但利率期貨已悄然隱含鷹派緊縮、或 VIX 期限結構出現倒掛時，系統提前收緊持倉窗口。
@@ -95,10 +95,32 @@ $$\text{Tier} = \begin{cases}
 \text{NORMAL (🟢 常態)} & S_{esc} = 0
 \end{cases}$$
 
-### 2.5 聯動情境 6 宏觀逃頂防禦與 25% BOXX 輪動資金模型
-當評分達最高階 $\text{Tier} = \text{CRITICAL}$ 時，動態轉倉引擎啟動情境 6 防禦：
-$$V_{trim} = _MACRO\_TOP\_ESCAPE\_TRIM\_RATIO \times V_{satellite} = 0.25 \times V_{satellite}$$
-去化目的地嚴格限制為無風險現金等價物 `BOXX`，嚴禁轉入股票大盤 ETF（如 VOO），防範系統性系統風險下股債同跌。
+### 2.5 聯動情境 6 宏觀逃頂防禦：三級階梯化動作強度
+
+情境 6 的動作強度不再是「CRITICAL 才動、其餘不動」的二元判定，而是依 $\text{Tier}$ 對照表 $\_MACRO\_TOP\_ESCAPE\_TIER\_ACTIONS$ 決定動作種類與強度：
+
+$$
+(\text{trim\_ratio},\ \text{action\_kind}) = \begin{cases}
+(0.00,\ \text{PROTECTIVE\_PUT}) & \text{Tier} = \text{WATCH} \\
+(0.25,\ \text{TRIM}) & \text{Tier} = \text{ELEVATED} \\
+(0.50,\ \text{TRIM}) & \text{Tier} = \text{CRITICAL} \\
+\text{（無動作）} & \text{Tier} = \text{NORMAL}
+\end{cases}
+$$
+
+**WATCH：買保護性 Put，不減碼**——前哨訊號初現、尚不足以判定真正逃頂，減碼會放棄上檔曝險；改買大盤 ETF 保護性 Put，保留 100% 上檔曝險，只付出權利金成本，是唯一能同時滿足「不錯過上漲」與「暴跌前出場」兩個需求的機制：
+
+$$
+Q_{\text{put}} = \left\lceil \frac{\Delta_{\beta\text{-weighted}} \times \_WATCH\_TIER\_HEDGE\_RATIO}{|\Delta_{\text{put}}| \times 100} \right\rceil, \qquad \_WATCH\_TIER\_HEDGE\_RATIO = 0.30
+$$
+
+$\Delta_{\beta\text{-weighted}}$ 直接複用 `user_ctx.total_weighted_delta`（[`01_beta_weighted_greeks.md`](../risk_portfolio/01_beta_weighted_greeks.md) 的單一權威來源，`hedging.py` 對沖建議引擎已採同一欄位）；標的固定為 $\_MACRO\_TOP\_ESCAPE\_HEDGE\_SYMBOL = \text{SPY}$（沿用 `hedging.py` 既有以 SPY 作為組合對沖代理的慣例——逃頂訊號是系統性的，指數 Put 的流動性與價差優於個股）；建議合約 Delta $\approx -0.275$（範圍 $-0.25 \sim -0.30$）、DTE $30\sim60$ 天。組合已淨平/淨空（$\Delta_{\beta\text{-weighted}} \le 0$）時無下檔方向性曝險可對沖，fail-safe 不建議一筆語意矛盾的「加碼防護」。
+
+**ELEVATED／CRITICAL：減碼轉入 BOXX**（沿用既有機制，僅比例依級距遞增）：
+$$V_{trim} = \text{trim\_ratio} \times V_{satellite}$$
+去化目的地嚴格限制為無風險現金等價物 `BOXX`，嚴禁轉入股票大盤 ETF（如 VOO），防範系統性系統風險下股債同跌。CRITICAL 由既有的 $25\%$ 提高至 $50\%$——既然 WATCH／ELEVATED 已各自承擔前哨與初階防禦，CRITICAL 應對應更果斷的動作，否則三級階梯只是把同一個 $25\%$ 拆成三次發送。
+
+⚠️ **WATCH 級指令必須標記 `trade_category = "HEDGE"`**：`hedging._sum_hedge_only_delta` 以此欄位區分「對沖」與「刻意建立的方向性部位」，標記錯誤會導致對沖績效引擎誤判、在多頭共振訊號出現時建議使用者平掉自己的保護。
 
 ---
 
@@ -133,12 +155,23 @@ flowchart TD
     CheckTier -- "Score == 0" --> NormalTier[🟢 NORMAL 常態]
 
     CriticalTier --> Scenario6Gate{"使用者開啟<br/>enable_macro_top_escape_defense?"}
-    Scenario6Gate -- 是 --> ExecScenario6["觸發轉倉情境 6:<br/>衛星持倉防禦性減碼 25% 轉入 BOXX"]
+    ElevatedTier --> Scenario6Gate
+    WatchTier --> Scenario6Gate
+
     Scenario6Gate -- 否 --> EndReport[僅呈現終端 Embed 警報]
-    ElevatedTier --> EndReport
-    WatchTier --> EndReport
+    Scenario6Gate -- 是 --> TierAction{"依 Tier 查<br/>_MACRO_TOP_ESCAPE_TIER_ACTIONS"}
+
+    TierAction -- WATCH --> DeltaCheck{"total_weighted_delta > 0?"}
+    DeltaCheck -- 否 --> EndReport
+    DeltaCheck -- 是 --> BuyPut["🛡️ 買 SPY 保護性 Put<br/>對沖 30% Beta 加權 Delta<br/>Delta≈-0.275, DTE 30-60<br/>標記 trade_category=HEDGE"]
+
+    TierAction -- ELEVATED --> Trim25["衛星持倉減碼 25% 轉入 BOXX"]
+    TierAction -- CRITICAL --> Trim50["衛星持倉減碼 50% 轉入 BOXX"]
+
     NormalTier --> EndReport
-    ExecScenario6 --> EndReport([結束])
+    BuyPut --> EndReport([結束])
+    Trim25 --> EndReport
+    Trim50 --> EndReport
 ```
 
 ---
@@ -152,8 +185,13 @@ flowchart TD
 | `_MACRO_ESCAPE_CRITICAL_THRESHOLD` | `3` | 逃頂評分 CRITICAL 確認門檻（啟動情境 6 減碼） | `nexus_core/market_analysis/index_microstructure.py:936` |
 | `_MACRO_ESCAPE_BREADTH_TRIGGER_RATIO`| `0.5` | 衛星持倉亢奮廣度門檻（超過 50% 標的觸頂則觸發因子） | `nexus_core/market_analysis/index_microstructure.py:937` |
 | `_FEAR_GREED_EXTREME_GREED_BOUND` | `75.0` | CNN 恐懼貪婪指數極度貪婪臨界值 | `nexus_core/market_analysis/constants.py:141` |
-| `_MACRO_TOP_ESCAPE_TRIM_RATIO` | `0.25` (25%) | 情境 6 防禦性減碼比例（轉入 BOXX） | `nexus_core/market_analysis/dynamic_rollover/constants.py:140` |
-| `_MACRO_TOP_ESCAPE_MIN_TIER` | `"CRITICAL"` | 情境 6 啟動最低門檻階級 | `nexus_core/market_analysis/dynamic_rollover/constants.py:143` |
+| `_MACRO_TOP_ESCAPE_TRIM_RATIO` | `0.50` (50%) | 情境 6 CRITICAL 級防禦性減碼比例（轉入 BOXX；由 25% 提高，`calibration/backtest_engine_2025.py` 直接匯入此值以維持回測與生產參數一致） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO` | `0.25` (25%) | 情境 6 ELEVATED 級防禦性減碼比例（轉入 BOXX，沿用原本唯一的比例） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_TIER_ACTIONS` | `{WATCH: (0.00, PROTECTIVE_PUT), ELEVATED: (0.25, TRIM), CRITICAL: (0.50, TRIM)}` | Tier → (減碼比例, 動作種類) 查表，取代原本單一 `_MACRO_TOP_ESCAPE_MIN_TIER` 二元判定 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_HEDGE_SYMBOL` | `"SPY"` | WATCH 級保護性 Put 的固定標的（大盤 ETF 而非個股） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_WATCH_TIER_HEDGE_RATIO` | `0.30` (30%) | WATCH 級對沖比例：對沖 30% 的組合 Beta 加權方向性曝險 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA` | `-0.275` | WATCH 級建議合約 Delta 中位數（範圍 $-0.25\sim-0.30$） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_PUT_DTE_MIN` / `_MAX` | `30` / `60` | WATCH 級建議合約 DTE 範圍 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_PROFIT_UNLOCK_TOLERANCE` | `0.005` (0.5%) | 衛星持倉現價逼近 Call Wall 的判斷容差 | `nexus_core/market_analysis/dynamic_rollover/constants.py:14` |
 | `_EUPHORIA_SKEW_PERCENTILE` | `20.0` | 衛星持倉 Skew 倒掛亢奮門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py:11` |
 
@@ -177,7 +215,13 @@ flowchart TD
 
 ### 5.3 減碼執行衝突隔離（Conflict Isolation）
 - 在 `dynamic_rollover` 排程派發器中，情境 6 刻意排在最後順序（3 → 2 → 5 → 4 → 6）。
-- 若某檔標的已在情境 2（機會成本轉倉）、情境 3（Call Wall 亢奮獲利鎖定）、情境 4（流動性危機停損）或情境 5（核心配置超額）被標記處理，情境 6 自動將該標的加入 `already_flagged_symbols` 跳過，嚴禁對同一標的下發相互矛盾的指令。
+- 若某檔標的已在情境 2（機會成本轉倉）、情境 3（Call Wall 亢奮獲利鎖定）、情境 4（流動性危機停損）或情境 5（核心配置超額）被標記處理，情境 6 自動將該標的加入 `already_flagged_symbols` 跳過，嚴禁對同一標的下發相互矛盾的指令。ELEVATED／CRITICAL 的 TRIM 分支沿用此隔離機制；WATCH 的 PROTECTIVE_PUT 分支是組合層級的單一建議、不逐一針對個別持倉，不受 `already_flagged_symbols` 篩選。
+
+### 5.4 WATCH 級 `trade_category` 誤標的下游後果
+若買進的保護性 Put 未以 `trade_category = "HEDGE"` 登錄，`hedging._sum_hedge_only_delta` 會把它排除在「可解除的對沖曝險」之外，視為一筆刻意建立的方向性部位。後果不僅是統計失真：當多頭共振訊號出現、對沖建議引擎判斷「有對沖可解除」時，會反過來建議使用者**平掉自己剛買的保護**——這與 [`06_brinson_performance_attribution.md`](../risk_portfolio/06_brinson_performance_attribution.md) §5.3 記載的 `suggest_hedge_unlock()` 早期誤把「組合總 Delta < 0」等同於「有對沖掛著」是同一類錯誤。
+
+### 5.5 WATCH 級組合已淨平/淨空的 Fail-Safe
+`total_weighted_delta <= 0` 代表組合已無下檔方向性曝險（淨平或淨空），此時買進保護性 Put 在邏輯上是「加碼防護一個不存在的風險」，語意矛盾。系統偵測到此情形時直接回傳空指令列表，不建議任何動作。
 
 ---
 
@@ -191,6 +235,15 @@ flowchart TD
 - `nexus_core/services/calendar_service.py`
   - `update_economic_calendar`: CME FedWatch 定價寫入與數值合理性閘門（Sanity Gating）
 - `nexus_core/market_analysis/dynamic_rollover/macro_top_escape_defense.py`
-  - `evaluate_macro_top_escape_defense`: 情境 6 宏觀逃頂前瞻防禦與 25% BOXX 輪動邏輯
+  - `evaluate_macro_top_escape_defense_impl`: 情境 6 三級階梯化動作分派
+  - `_build_protective_put_instruction`: WATCH 級保護性 Put 倉位計算與指令組裝
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`
-  - 具名常數 `_MACRO_TOP_ESCAPE_TRIM_RATIO`, `_MACRO_TOP_ESCAPE_MIN_TIER`
+  - 具名常數 `_MACRO_TOP_ESCAPE_TRIM_RATIO`、`_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO`、`_MACRO_TOP_ESCAPE_TIER_ACTIONS`、`_MACRO_TOP_ESCAPE_HEDGE_SYMBOL`、`_WATCH_TIER_HEDGE_RATIO`、`_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA`、`_MACRO_TOP_ESCAPE_PUT_DTE_MIN`／`_MAX`
+- `nexus_core/database/user_settings.py`
+  - `UserContext.total_weighted_delta`：WATCH 級 Put 倉位計算的組合 Beta 加權 Delta 來源
+- `nexus_core/cogs/embed_builders/rollover_embeds.py`
+  - `create_protective_put_embed`: WATCH 級保護性 Put 專屬 Embed
+- `nexus_core/cogs/trading/portfolio_monitor.py`
+  - `action == "BUY_PROTECTIVE_PUT"` 分派分支（不掛互動按鈕，需自行至券商終端下單）
+- `nexus_core/tests/unit/test_macro_top_escape_defense.py`
+  - WATCH／ELEVATED／CRITICAL 三級動作測試、組合已淨平無對沖需求 fail-safe 測試

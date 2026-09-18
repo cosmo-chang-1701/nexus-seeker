@@ -80,6 +80,29 @@ $$\text{ATR}_{15m} \approx \frac{\text{ATR}_{1D}}{\sqrt{26}} \approx \frac{\text
 
 真實 15m K 棒 ATR 優先；缺失時由日線 ATR 折算；兩者皆無則視為缺失並觸發降級。
 
+### 2.5 公式 D：晴空萬里有效目標天花板擴展 (Blue-Sky Effective Target Ceiling)
+
+$$
+\text{EffTarget} = \begin{cases}
+\max\big(\text{CallWall},\; \text{High}_{60d},\; \text{Spot} + 3.0 \times \text{ATR}_{1D}\big) & \text{若 } \text{Spot} \ge \text{High}_{60d} \times (1 - 0.02) \\
+\text{CallWall} & \text{否則}
+\end{cases}
+$$
+
+標的貼近或突破 60 個交易日高點時，上方沒有存量 OI 可形成有效 Call Wall——裸 Call Wall 反映的是**流動性真空**，不是**真實阻力**。此時改以 60 日高點與 $3.0 \times \text{ATR}_{1D}$ 外推的動態目標取代之，解鎖創新高標的的趨勢追價權限；未貼近前高時 $\text{EffTarget} = \text{CallWall}$，即現行行為不變。
+
+$\text{High}_{60d}$ 須先經 `shift(1)` 排除當日高點（防前視偏差），需要至少 61 根日線才視為有效，資料不足一律 fail-safe 回傳 $0.0$。
+
+**降級規則**：
+
+| 情境 | 行為 |
+| :--- | :--- |
+| $\text{High}_{60d}$ 與 $\text{ATR}_{1D}$ 皆缺失 | 退回裸 $\text{CallWall}$（即現行行為），標記 `is_degraded` |
+| 僅 $\text{High}_{60d}$ 缺失 | 觸發判定**刻意 fail-open**（無從驗證是否貼近前高，寧可多算一次擴展，也不要因單純抓取失敗把可能正在創新高的標的誤判為封頂），自 $\max()$ 剔除該項 |
+| 僅 $\text{ATR}_{1D}$ 缺失 | 觸發判定正常進行，自 $\max()$ 剔除該項 |
+
+**單一權威、三個消費端**：本公式實作於 `room_threshold.py`（而非任一 `dynamic_rollover/` 情境模組），因為 Regime IV 封頂判定、右側六重鐵律條件三（非對稱空間）、`PYRAMID_ADD` 條件四三處都要用同一個天花板定義——這正是本規格書當初把 7 處固定百分比收斂成單一權威演算法的同一個理由，分散實作必然漂移。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -114,6 +137,26 @@ flowchart TD
     FloorOnly --> Out
 ```
 
+公式 D：`resolve_effective_target(spot, call_wall, high_60d, atr_1d)` 決策流程：
+
+```mermaid
+flowchart TD
+    Start2["resolve_effective_target(spot, call_wall, high_60d, atr_1d)"]
+    Start2 --> SpotCheck2{"Spot 有效?"}
+    SpotCheck2 -- 否 --> Fail["target = 0.0<br/>is_degraded = True"]
+
+    SpotCheck2 -- 是 --> BothMissing{"High_60d 與 ATR_1D<br/>皆缺失?"}
+    BothMissing -- 是 --> BareCallWall["退回裸 CallWall<br/>(現行行為)<br/>is_degraded = True"]
+
+    BothMissing -- 否 --> NearHighCheck{"High_60d 缺失?<br/>(fail-open) 或<br/>Spot >= High_60d × 0.98?"}
+    NearHighCheck -- 否 --> BareCallWall2["is_blue_sky = False<br/>target = CallWall<br/>(現行行為不變)"]
+
+    NearHighCheck -- 是 --> BuildCandidates["候選集合 = {CallWall,<br/>High_60d (若有效),<br/>Spot + 3.0×ATR_1D (若有效)}"]
+    BuildCandidates --> HasCandidates{"候選集合非空?"}
+    HasCandidates -- 否 --> Fail2["target = 0.0<br/>is_degraded = True"]
+    HasCandidates -- 是 --> TakeMax["target = max(候選集合)<br/>is_blue_sky = True<br/>缺項則 is_degraded = True"]
+```
+
 ---
 
 ## 4. 關鍵具名常數與物理約束
@@ -133,6 +176,8 @@ flowchart TD
 | `_LEGACY_BUFFER_MAX_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限 | `nexus_core/market_analysis/room_threshold.py` |
 | `_BARS_PER_SESSION` | `26.0` | 美股單日 390 分鐘 / 15 分鐘 = 26 根 K 棒 | `nexus_core/market_analysis/room_threshold.py` |
 | `_ATR_14_PLACEHOLDER` | `0.01` | `EnhancedWatchlistMetrics.atr_14` 因 `gt=0.0` 無法寫 0 的佔位值，須視為缺失 | `nexus_core/market_analysis/room_threshold.py` |
+| `_BLUE_SKY_ATR_MULTIPLIER` | `3.0` | 公式 D：晴空萬里外推目標之 ATR 倍數，$\text{Spot} + 3.0 \times \text{ATR}_{1D}$ | `nexus_core/market_analysis/room_threshold.py` |
+| `_BLUE_SKY_PROXIMITY_PCT` | `0.02` ($2\%$) | 公式 D：距 60 日高點此比例內即視為貼近前高，啟用擴展 | `nexus_core/market_analysis/room_threshold.py` |
 
 **校準狀態**：`_ROOM_ATR_1D_MULTIPLIER`、`_BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER` 已登錄為可校準參數，由離線事件研究以純價格代理產出建議（GEX 牆體以前 10／60 日高低點代理，證據力有限）；`_ROOM_ABSOLUTE_FLOOR_PCT` 屬風險政策，只報告不提案。GEX 相關門檻的正式調整須等待前向蒐集資料，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md)。
 
@@ -156,6 +201,10 @@ flowchart TD
 
 8. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
+9. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
+
+10. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -164,14 +213,18 @@ flowchart TD
   - 公式 A：`compute_dynamic_room_threshold()`
   - 公式 B：`evaluate_wall_buffer()`、下界倍率表 `_BUFFER_LOWER_MULTIPLIERS`、絕對上界 `_BUFFER_MAX_STOP_DISTANCE_PCT`
   - 公式 C：`evaluate_next_strike_space()`
+  - 公式 D：`resolve_effective_target()`、`EffectiveTarget`（見 §2.5）
   - 量綱折算：`resolve_atr_15m()`
   - 停損推導：`compute_reference_stop()`（公開，SHORT_ENTRY 倉位計算共用；保留私有別名 `_compute_reference_stop`）
-- `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_1d()`、`fetch_atr_15m()`、`compute_atr_15m_from_df()`、`compute_atr_14_from_daily_df()`
+- `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_1d()`、`fetch_atr_15m()`、`compute_atr_15m_from_df()`、`compute_atr_14_from_daily_df()`、`fetch_high_60d()`、`compute_high_60d_from_daily_df()`（公式 D 的 60 日高點資料源，`shift(1)` 防前視）
 - `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()`（三項輸入的集中解析、取數優先序，以及 `target_spot` 的 Put Wall 現價物理約束校驗）
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `put_wall=` 餵入條件三）
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `put_wall=` 餵入條件三；條件三另呼叫公式 D 取得有效目標天花板取代裸 Call Wall，見 §2.5）
+- `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime IV 個股結構封頂分支呼叫公式 D 取代裸 Call Wall 判定空間是否不足（見 §2.5）
+- `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：條件四（上方空間）呼叫公式 D，詳見 [`04_dynamic_rollover_state_machine.md`](04_dynamic_rollover_state_machine.md) §2.11
 - `nexus_core/market_analysis/dynamic_rollover/left_side_entry.py`：左側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `stop_wall=` 餵入條件三；條件二刻意仍用 raw Put Wall——它量的是「距原始底牆多遠」的密著帶，餵重錨值會讓該語意失效）
 - `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：做空條件二／條件三（**刻意不**套用——做空的停損牆是現價上方的 Call Wall，由條件二的 `_scan_resistance_wall_above_spot()` 自行解析並以 `resistance_wall` 傳給條件三）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime III / IV / V 的空間與緩衝判定
 - `nexus_core/market_analysis/gamma_squeeze_engine.py`：SPEAR 磁吸目標價的向上空間要求
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：分析中心 GEX 上檔壓力／下檔支撐欄位的旗標渲染
 - `nexus_core/tests/unit/test_room_threshold.py`：三組公式與降級階梯的單元測試
+- `nexus_core/tests/unit/test_blue_sky_ceiling.py`：公式 D 的降級路徑、貼近前高判定、fail-open 例外與一致性測試

@@ -35,6 +35,7 @@ from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
+    create_protective_put_embed,
     create_short_entry_embed,
     create_transition_pyramid_embed,
     create_transition_ratchet_embed,
@@ -932,12 +933,14 @@ class PortfolioMonitorCog(commands.Cog):
                         ),
                     )
                 )
-                vix_spot_for_short: Optional[float] = None
-                if short_strategy_user_ids:
-                    from services import market_data_service as _mds
+                # 現在一律抓取（不再限定 short_strategy_user_ids）：PYRAMID_ADD
+                # 的倉位計算 (pyramid_add.py) 同樣需要 VIX 即時值，且適用對象是
+                # 全體持有 SATELLITE 部位的使用者，不限於 SHORT_SIDE/DYNAMIC。
+                # get_history_df 內建快取，同一輪次重複呼叫不構成額外網路成本。
+                from services import market_data_service as _mds
 
-                    vix_spot_for_short = await _mds.get_vix_spot_strict()
-                    evaluation_recorder.set_cycle_context(vix_spot=vix_spot_for_short)
+                vix_spot_for_short = await _mds.get_vix_spot_strict()
+                evaluation_recorder.set_cycle_context(vix_spot=vix_spot_for_short)
                 all_user_ids |= short_strategy_user_ids
                 for u_id in all_user_ids:
                     portfolio_assets = user_assets.get(u_id, [])
@@ -948,7 +951,7 @@ class PortfolioMonitorCog(commands.Cog):
 
                     rebalance_instructions = (
                         await self.rollover_engine.check_satellite_rebalancing(
-                            u_id, portfolio_assets, total_val
+                            u_id, portfolio_assets, total_val, vix_spot_for_short
                         )
                     )
 
@@ -1173,6 +1176,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "COVERED_CALL_PROFIT_LOCK": "賣方期權時間價值停利 (Covered Call / CSP)",
                         "TRANSITION_ENGINE": "動態調整狀態切換引擎",
                         "SHORT_ENTRY": "做空進場訊號",
+                        "PYRAMID_ADD": "順勢加碼 (Pyramiding)",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -1289,15 +1293,30 @@ class PortfolioMonitorCog(commands.Cog):
                                 ),
                             )
                         elif ins.get("action") == "OPEN_PYRAMID":
-                            # 動態調整狀態切換引擎路徑1：順勢加碼建議，非賣出
-                            # 導向框架，沒有第二個轉倉標的，理由同上不套用
-                            # 通用轉倉框架。
+                            # OPEN_PYRAMID 有兩個觸發源：動態調整狀態切換引擎
+                            # 路徑1 (TRANSITION_ENGINE，一次性 regime 演化) 與
+                            # PYRAMID_ADD (例行順勢加碼，可重複觸發)——皆為
+                            # 加碼建議，非賣出導向框架，沒有第二個轉倉標的，
+                            # 理由同上不套用通用轉倉框架，但依 scenario 分流
+                            # 文案與是否附加倉位計算欄位。
                             embed = create_transition_pyramid_embed(
                                 symbol=ins["symbol"],
                                 reason=ins["reason"],
                                 suggested_strategy=ins.get(
                                     "suggested_strategy", "新開右側動能部位"
                                 ),
+                                scenario=scenario,
+                                pyramid_add_plan=ins.get("pyramid_add_plan"),
+                            )
+                        elif ins.get("action") == "BUY_PROTECTIVE_PUT":
+                            # 宏觀逃頂前瞻防禦 WATCH 級：買保護性 Put，不賣出
+                            # 任何既有部位，沒有第二個轉倉標的，理由同上不套用
+                            # 通用轉倉框架，也不附加互動按鈕（買方合約需自行
+                            # 於券商終端下單，無法透過 RolloverActionView 試算）。
+                            embed = create_protective_put_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                suggested_strategy=ins.get("suggested_strategy", ""),
                             )
                         elif ins.get("is_covered_call_profit_lock") or ins.get(
                             "is_short_option_profit_lock"
@@ -1376,13 +1395,22 @@ class PortfolioMonitorCog(commands.Cog):
                         is_short_entry_dry_run = (
                             scenario == "SHORT_ENTRY" and config.SHORT_ENTRY_DRY_RUN
                         )
+                        is_pyramid_add_dry_run = (
+                            scenario == "PYRAMID_ADD" and config.PYRAMID_ADD_DRY_RUN
+                        )
                         if (
-                            instrument_type == "OPTIONS"
-                            and config.OPTIONS_ROLLOVER_DRY_RUN
-                        ) or is_short_entry_dry_run:
+                            (
+                                instrument_type == "OPTIONS"
+                                and config.OPTIONS_ROLLOVER_DRY_RUN
+                            )
+                            or is_short_entry_dry_run
+                            or is_pyramid_add_dry_run
+                        ):
                             dry_run_tag = (
                                 "ShortEntry"
                                 if is_short_entry_dry_run
+                                else "PyramidAdd"
+                                if is_pyramid_add_dry_run
                                 else "OptionsRollover"
                             )
                             logger.info(

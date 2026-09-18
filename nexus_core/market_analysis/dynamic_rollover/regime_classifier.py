@@ -5,6 +5,7 @@ from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     evaluate_next_strike_space,
     evaluate_wall_buffer,
+    resolve_effective_target,
 )
 
 from . import logger
@@ -171,15 +172,25 @@ async def _classify_dynamic_regime_impl(
 
     # ATR₁₅ₘ 就地從上方已抓取的同一份 frame 計算 (fetch_atr_15m() 抓的正是同樣的
     # period="5d", interval="15m")，避免對同一標的重複發動 force_refresh 請求。
-    from market_analysis.atr_utils import compute_atr_15m_from_df, fetch_atr_1d
+    from market_analysis.atr_utils import (
+        compute_atr_15m_from_df,
+        fetch_atr_1d,
+        fetch_high_60d,
+    )
 
     atr_15m = compute_atr_15m_from_df(df_confirmed)
     atr_1d = await fetch_atr_1d(candidate_symbol)
+    # 晴空萬里天花板 (room_threshold.py 公式 D)：標的創新高時上方沒有存量 OI
+    # 形成有效 Call Wall，裸 Call Wall 反映的是流動性真空而非真實阻力，需以
+    # 60 日高點／ATR 外推的有效目標取代，否則創新高標的必然被本分支結構性
+    # 誤判為封頂（見 handoff.md §1.4）。
+    high_60d = await fetch_high_60d(candidate_symbol)
 
     # --- Regime IV 個股結構封頂偵測（需要動態門檻，故在抓取之後）---
+    eff_target = resolve_effective_target(target_spot, call_wall, high_60d, atr_1d)
     call_wall_room_pct = (
-        (call_wall - target_spot) / target_spot
-        if call_wall > 0 and target_spot > 0
+        (eff_target.target - target_spot) / target_spot
+        if eff_target.target > 0 and target_spot > 0
         else None
     )
     # Call Wall 空間門檻自固定 5% 升級為動態自適應波動率門檻 (room_threshold.py
@@ -215,12 +226,15 @@ async def _classify_dynamic_regime_impl(
     def _build_regime_iv_reason() -> str:
         reason = f"大盤 Regime={macro_regime}"
         if is_call_wall_capped and call_wall_room_pct is not None:
+            target_label = "晴空萬里有效目標" if eff_target.is_blue_sky else "Call Wall"
             reason += (
-                f"，Call Wall ${call_wall:.2f} 空間 {call_wall_room_pct:+.2%} "
-                f"不足動態門檻 {room.threshold_pct:.2%}"
+                f"，{target_label} ${eff_target.target:.2f} 空間 "
+                f"{call_wall_room_pct:+.2%} 不足動態門檻 {room.threshold_pct:.2%}"
             )
             if room.degrade_reason:
                 reason += f"（⚠️ {room.degrade_reason}）"
+            if eff_target.degrade_reason:
+                reason += f"（⚠️ {eff_target.degrade_reason}）"
         if has_sto_call_cap:
             wall_desc = "位於 Call Wall 上方" if call_wall > 0 else "位於現價上方"
             reason += f"，偵測到 STO Call 壓頂 @ ${capping_strike:.2f}（{wall_desc}）"

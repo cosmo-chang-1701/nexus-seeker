@@ -82,7 +82,7 @@ def test_aggressive_profile_values() -> None:
 
 def test_tp_ladder_default_tp1_ratio_unchanged(engine: DynamicRolloverEngine) -> None:
     metrics = {"spot_price": 100.0, "call_wall": 100.0, "quantity": 10.0}
-    tier, ratio, _reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    tier, ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(metrics)
     assert tier == "TP1"
     assert ratio == _MICROSTRUCTURE_TP1_RATIO
 
@@ -92,7 +92,7 @@ def test_tp_ladder_aggressive_tp1_ratio_override(
 ) -> None:
     metrics = {"spot_price": 100.0, "call_wall": 100.0, "quantity": 10.0}
     profile = resolve_risk_profile("AGGRESSIVE")
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
         metrics, tp1_ratio=profile.tp1_ratio
     )
     assert tier == "TP1"
@@ -104,7 +104,7 @@ def test_tp_ladder_short_default_tp1_ratio_unchanged(
     engine: DynamicRolloverEngine,
 ) -> None:
     metrics = {"spot_price": 100.0, "put_wall": 100.0, "quantity": -10.0}
-    tier, ratio, _reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    tier, ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(metrics)
     assert tier == "TP1"
     assert ratio == _MICROSTRUCTURE_TP1_RATIO
 
@@ -113,7 +113,7 @@ def test_tp_ladder_short_aggressive_tp1_ratio_override(
     engine: DynamicRolloverEngine,
 ) -> None:
     metrics = {"spot_price": 100.0, "put_wall": 100.0, "quantity": -10.0}
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
         metrics, tp1_ratio=0.30
     )
     assert tier == "TP1"

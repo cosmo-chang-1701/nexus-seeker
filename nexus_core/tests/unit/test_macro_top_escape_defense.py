@@ -68,6 +68,120 @@ async def test_evaluate_macro_top_escape_defense_opt_in_gate_off_no_action(
 @patch(
     "services.market_data_service.get_vix_term_structure",
     new_callable=AsyncMock,
+    return_value={"is_valid": True, "vts_ratio": 0.88},
+)
+@patch(
+    "market_analysis.index_microstructure.fetch_core_macro_metrics",
+    new_callable=AsyncMock,
+    return_value={"fear_greed": 48.0},
+)
+@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_macro_top_escape_defense_score_zero_no_action(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_kv: MagicMock,
+    mock_fear_greed: AsyncMock,
+    mock_vts: AsyncMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """Gate 2: 已開啟 opt-in，但綜合評分為 0 (tier=NORMAL，不在三級階梯
+    _MACRO_TOP_ESCAPE_TIER_ACTIONS 之中) -> 不應觸發任何動作。"""
+    mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
+    result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_vix_term_structure",
+    new_callable=AsyncMock,
+    return_value={"is_valid": True, "vts_ratio": 1.05},
+)
+@patch(
+    "market_analysis.index_microstructure.fetch_core_macro_metrics",
+    new_callable=AsyncMock,
+    return_value={"fear_greed": 48.0},
+)
+@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_macro_top_escape_defense_watch_tier_buys_protective_put(
+    mock_ctx: MagicMock,
+    mock_kv: MagicMock,
+    mock_fear_greed: AsyncMock,
+    mock_vts: AsyncMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """WATCH 級 (score=1，僅 VTS 逆價差觸發)：不減碼，改買 SPY 保護性 Put，
+    保留 100% 上檔曝險。倉位 = ceil(Δβ × 30% / (|Δput| × 100))。"""
+    mock_ctx.return_value = MagicMock(
+        enable_macro_top_escape_defense=True, total_weighted_delta=1000.0
+    )
+    result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
+    assert len(result) == 1
+    ins = result[0]
+    assert ins["symbol"] == "SPY"
+    assert ins["action"] == "BUY_PROTECTIVE_PUT"
+    assert ins["sell_ratio"] == 0.0
+    assert ins["scenario"] == "MACRO_TOP_ESCAPE_DEFENSE"
+    assert ins["opt_type"] == "PUT"
+    assert "trade_category" in ins["reason"] and "HEDGE" in ins["reason"]
+    # Q = ceil(1000 * 0.30 / (0.275 * 100)) = ceil(10.909) = 11
+    assert "11" in ins["suggested_strategy"]
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_vix_term_structure",
+    new_callable=AsyncMock,
+    return_value={"is_valid": True, "vts_ratio": 1.05},
+)
+@patch(
+    "market_analysis.index_microstructure.fetch_core_macro_metrics",
+    new_callable=AsyncMock,
+    return_value={"fear_greed": 48.0},
+)
+@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_macro_top_escape_defense_watch_tier_flat_portfolio_no_hedge(
+    mock_ctx: MagicMock,
+    mock_kv: MagicMock,
+    mock_fear_greed: AsyncMock,
+    mock_vts: AsyncMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """WATCH 級但組合已淨平/淨空 (total_weighted_delta <= 0)：無下檔方向性
+    曝險可對沖，fail-safe 不建議一筆語意矛盾的「加碼防護」。"""
+    mock_ctx.return_value = MagicMock(
+        enable_macro_top_escape_defense=True, total_weighted_delta=0.0
+    )
+    result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
+    assert result == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="NORMAL",
+)
+@patch(
+    "services.market_data_service.get_vix_term_structure",
+    new_callable=AsyncMock,
     return_value={"is_valid": True, "vts_ratio": 1.05},
 )
 @patch(
@@ -78,7 +192,7 @@ async def test_evaluate_macro_top_escape_defense_opt_in_gate_off_no_action(
 @patch("database.cache.get_kv_cache", return_value=0.50)
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_macro_top_escape_defense_score_below_critical_no_action(
+async def test_evaluate_macro_top_escape_defense_elevated_tier_trims_25pct(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_kv: MagicMock,
@@ -87,11 +201,14 @@ async def test_evaluate_macro_top_escape_defense_score_below_critical_no_action(
     mock_regime: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
-    """Gate 2: 已開啟 opt-in，但綜合評分僅到 ELEVATED (未達 CRITICAL 門檻) ->
-    不應觸發任何減碼動作。"""
+    """ELEVATED 級 (score=2：VTS 逆價差 + Fear&Greed 極度貪婪)：介於 WATCH 與
+    CRITICAL 之間的中繼防禦強度，減碼 25%（沿用原本唯一的 CRITICAL 比例）。"""
     mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
     result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
-    assert result == []
+    assert len(result) == 1
+    assert result[0]["action"] == "LIQUIDATE"
+    assert result[0]["sell_ratio"] == 0.25
+    assert result[0]["target_core"] == "BOXX"
 
 
 @pytest.mark.asyncio
@@ -123,13 +240,14 @@ async def test_evaluate_macro_top_escape_defense_triggers_bounded_trim_to_boxx(
     engine: DynamicRolloverEngine,
 ) -> None:
     """兩道 Gate 皆通過 (opt-in 開啟 + 評分達 CRITICAL) -> 對 SATELLITE 持倉
-    觸發有界 25% 防禦性減碼，轉入 BOXX，且遠低於 Scenario 3/4 的 90%/100%。"""
+    觸發有界 50% 防禦性減碼 (三級階梯化後由 25% 提高)，轉入 BOXX，且遠低於
+    Scenario 3/4 的 90%/100%。"""
     mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
     result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
     assert len(result) == 1
     assert result[0]["symbol"] == "NVDA"
     assert result[0]["action"] == "LIQUIDATE"
-    assert result[0]["sell_ratio"] == 0.25
+    assert result[0]["sell_ratio"] == 0.5
     assert result[0]["target_core"] == "BOXX"
     assert result[0]["sell_action"] == "STC"
     assert "BOXX" in (result[0]["buy_action_label"] or "")

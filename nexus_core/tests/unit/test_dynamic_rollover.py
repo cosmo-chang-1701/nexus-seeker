@@ -4881,10 +4881,20 @@ async def test_confirm_entry_signal_condition1_fails_gamma_flip_unavailable(
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["gex_profile"] = {"95": 600_000.0, "105": -600_000.0}
     radar["gex_profile_data"]["net_gex"] = 0.0
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-    ) as mock_history:
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+        ) as mock_history,
+        # 晴空萬里天花板 (條件三所需) 的 60 日高點沒有 radar 快取可重用，一律
+        # 走真實抓取；此處直接 patch 掉，維持「條件一提前失敗時零額外網路
+        # 請求」這個既有斷言的精確性。
+        patch(
+            "market_analysis.atr_utils.fetch_high_60d",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+    ):
         confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
@@ -4902,10 +4912,17 @@ async def test_confirm_entry_signal_condition1_fails_short_gamma_no_flip(
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["gex_profile"] = {"95": -600_000.0}
     radar["gex_profile_data"]["net_gex"] = -600_000.0
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-    ) as mock_history:
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+        ) as mock_history,
+        patch(
+            "market_analysis.atr_utils.fetch_high_60d",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ),
+    ):
         confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
     assert "條件一❌" in reason
@@ -5370,10 +5387,19 @@ async def test_confirm_entry_signal_condition3_fails_tight_call_wall(
     """條件三：Call Wall 過近現價 (< 5% 空間) -> 未通過"""
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["call_wall"] = 102.0  # (102-100)/100 = 2% < 5%
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=_GREEN_15M_DF,
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        # 晴空萬里天花板 (公式 D)：現價未貼近 60 日高點，維持裸 Call Wall 判定，
+        # 不讓本測試意外觸發擴展。
+        patch(
+            "market_analysis.atr_utils.fetch_high_60d",
+            new_callable=AsyncMock,
+            return_value=1_000.0,
+        ),
     ):
         confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
@@ -5391,10 +5417,17 @@ async def test_confirm_entry_signal_condition3_fails_call_wall_already_breached(
     穿越 Call Wall」的情境被誤判為「上方無封頂」。"""
     radar = _green_candidate_radar()
     radar["gex_profile_data"]["call_wall"] = 99.0  # < spot $100，已貼平/跌破
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=_GREEN_15M_DF,
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_GREEN_15M_DF,
+        ),
+        patch(
+            "market_analysis.atr_utils.fetch_high_60d",
+            new_callable=AsyncMock,
+            return_value=1_000.0,
+        ),
     ):
         confirmed, reason, _ = await engine._confirm_entry_signal("TEST", radar, 100.0)
     assert confirmed is False
@@ -6779,7 +6812,7 @@ async def test_tp2_call_wall_migration_rejected_if_spot_below_previous(
         "call_wall": 165.0,
         "previous_call_wall": 150.0,
     }
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(metrics)
     assert tier != "TP2"
     assert ratio != 0.3
 
@@ -6795,7 +6828,7 @@ async def test_tp2_call_wall_migration_rejected_if_under_threshold(
         "call_wall": 152.0,  # 遷移幅度 (152-150)/150 = 1.33% < 3%
         "previous_call_wall": 150.0,
     }
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(metrics)
     assert tier != "TP2"
 
 
@@ -6810,7 +6843,9 @@ async def test_tp2_fallback_when_no_previous_call_wall(
         "call_wall": 200.0,
         "previous_call_wall": 0.0,
     }
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics_break)
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
+        metrics_break
+    )
     assert tier == "TP2"
     assert ratio == 0.3
     assert "穿越 Call Wall $200.00" in reason
@@ -6821,7 +6856,9 @@ async def test_tp2_fallback_when_no_previous_call_wall(
         "call_wall": 200.0,
         "previous_call_wall": 0.0,
     }
-    tier_nb, ratio_nb, _ = engine._evaluate_microstructure_tp_ladder(metrics_no_break)
+    tier_nb, ratio_nb, _, _new_stop = engine._evaluate_microstructure_tp_ladder(
+        metrics_no_break
+    )
     assert tier_nb != "TP2"
 
 
@@ -7044,7 +7081,7 @@ async def test_tp2_call_wall_downward_migration_does_not_trigger(
         "call_wall": 150.0,
         "previous_call_wall": 165.0,
     }
-    tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(metrics)
+    tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(metrics)
     assert tier != "TP2"
 
 

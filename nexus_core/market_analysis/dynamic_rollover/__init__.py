@@ -151,13 +151,22 @@ class DynamicRolloverEngine(
         user_id: int,
         portfolio_assets: List[Dict[str, Any]],
         total_account_value: float,
+        vix_spot: Optional[float] = None,
     ) -> List[RolloverInstruction]:
         """
         邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
         包含勝率傾斜與雜訊避險等高階戰術。
+
+        vix_spot：供內部 PYRAMID_ADD (pyramid_add.py) 倉位計算使用；未提供時
+        （例如既有測試沿用舊呼叫簽章）視為 VIX 未知，倉位退回保守預設乘數。
         """
         return await check_satellite_rebalancing_impl(
-            self, get_full_user_context, user_id, portfolio_assets, total_account_value
+            self,
+            get_full_user_context,
+            user_id,
+            portfolio_assets,
+            total_account_value,
+            vix_spot,
         )
 
     async def evaluate_margin_defense(

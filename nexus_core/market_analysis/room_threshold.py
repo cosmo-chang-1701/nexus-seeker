@@ -106,6 +106,11 @@ _LEGACY_BUFFER_MAX_PCT: float = 0.05
 # --- 公式 C：破位追空次級節點空間具名常數 ---
 _BREAKDOWN_NEXT_STRIKE_ATR_1D_MULTIPLIER: float = 2.0
 
+# --- 公式 D：晴空萬里有效目標天花板具名常數 ---
+# EffTarget = max(CallWall, High60d, Spot + κ×ATR₁D)，若 Spot 貼近或突破 60 日高點
+_BLUE_SKY_ATR_MULTIPLIER: float = 3.0
+_BLUE_SKY_PROXIMITY_PCT: float = 0.02  # 距 60 日高點 2% 內即視為晴空萬里
+
 # --- ATR 量綱折算 ---
 # 美股單日 390 分鐘 = 26 根 15 分鐘 K 棒，依隨機遊走平方根法則折算。
 # 沿用 signal_calculator.py 既有的 math.sqrt(26.0) 寫法，刻意不使用
@@ -388,6 +393,120 @@ def evaluate_wall_buffer(
         state=state,
         is_degraded=False,
         degrade_reason=None,
+    )
+
+
+class EffectiveTarget(NamedTuple):
+    """``resolve_effective_target()`` 的結構化輸出（公式 D：晴空萬里天花板擴展）。
+
+    標的創新高時，上方沒有存量 OI 可形成有效 Call Wall，此時 Call Wall
+    反映的是「流動性真空」而非「真實阻力」；``target`` 在該情境下改以 60 日
+    高點與 ATR 外推目標取代裸 Call Wall。``is_blue_sky is False`` 時
+    ``target == call_wall``（傳入值原樣，缺失時為 0.0），即現行行為不變。
+    """
+
+    target: float
+    is_blue_sky: bool
+    is_degraded: bool
+    degrade_reason: Optional[str]
+
+
+def resolve_effective_target(
+    spot: float,
+    call_wall: float,
+    high_60d: float,
+    atr_1d: float,
+) -> EffectiveTarget:
+    """解析有效目標天花板（公式 D：晴空萬里天花板擴展）。
+
+    :param spot: 現價。
+    :param call_wall: 裸 Call Wall（既有天花板），資料缺失請傳 0.0。
+    :param high_60d: 前 60 個交易日最高價，須先經 shift(1) 防前視（見
+        ``atr_utils.fetch_high_60d()`` / ``compute_high_60d_from_daily_df()``）。
+    :param atr_1d: 日線 ATR(14)。
+
+    演算法：
+
+        EffTarget = max(CallWall, High60d, Spot + 3.0 × ATR₁D)
+                    若 Spot >= High60d × (1 − 2%)；否則 EffTarget = CallWall
+
+    物理意義：標的進入歷史新高區間時，上方沒有存量 OI 可形成有效 Call Wall，
+    此時 Call Wall 反映的是「流動性真空」而非「真實阻力」。以 ATR 外推的動態
+    目標取代之，才能解鎖趨勢追價權限。
+
+    刻意放在本模組而非 ``dynamic_rollover/``：Regime IV 封頂判定、六重鐵律
+    條件三（非對稱空間）、``PYRAMID_ADD`` 條件四三處都要用同一個天花板定義，
+    分散實作必然漂移——這正是本模組當初把 7 處固定百分比收斂成單一權威演算法
+    的同一個理由。
+
+    降級規則（``high_60d``／``atr_1d`` 缺失一律傳 0.0 或非正值）：
+
+    * 兩者皆缺失 → 退回裸 Call Wall（即現行行為），標記 ``is_degraded``。
+    * 僅其中一項缺失 → 自 ``max()`` 中剔除該項，其餘項照常參與；且此時
+      **觸發判定本身也視為成立**（``high_60d`` 缺失時無從驗證是否貼近前高）。
+      這是刻意的 fail-open：``regime_classifier.py`` 對 ATR 缺失已有相同慣例
+      ——「資料缺失不應把標的誤鎖進結構封頂危機態」，寧可多算一次擴展，也不要
+      因單純的抓取失敗就把可能正在創新高的標的誤判為封頂。
+    """
+    if not _is_valid(spot):
+        return EffectiveTarget(
+            target=0.0,
+            is_blue_sky=False,
+            is_degraded=True,
+            degrade_reason="數據缺失（現價），無法解析有效目標天花板",
+        )
+
+    call_wall_val = call_wall if _is_valid(call_wall) else 0.0
+
+    if not _is_valid(high_60d) and not _is_valid(atr_1d):
+        return EffectiveTarget(
+            target=call_wall_val,
+            is_blue_sky=False,
+            is_degraded=True,
+            degrade_reason="數據缺失（60 日高點、ATR₁D），已退回裸 Call Wall（現行行為）",
+        )
+
+    # high_60d 缺失時，觸發判定 fail-open（見上方 docstring）；有效時才做真正
+    # 的貼近前高判定。
+    is_near_high = (not _is_valid(high_60d)) or spot >= high_60d * (
+        1.0 - _BLUE_SKY_PROXIMITY_PCT
+    )
+    if not is_near_high:
+        return EffectiveTarget(
+            target=call_wall_val,
+            is_blue_sky=False,
+            is_degraded=False,
+            degrade_reason=None,
+        )
+
+    missing: list[str] = []
+    candidates: list[float] = [call_wall_val] if call_wall_val > 0 else []
+    if _is_valid(high_60d):
+        candidates.append(high_60d)
+    else:
+        missing.append("60 日高點")
+    if _is_valid(atr_1d):
+        candidates.append(spot + _BLUE_SKY_ATR_MULTIPLIER * atr_1d)
+    else:
+        missing.append("ATR₁D")
+
+    if not candidates:
+        return EffectiveTarget(
+            target=0.0,
+            is_blue_sky=False,
+            is_degraded=True,
+            degrade_reason=f"數據缺失（{'、'.join(missing)}），已退回裸 Call Wall（亦缺失）",
+        )
+
+    degrade_reason = None
+    if missing:
+        degrade_reason = f"數據缺失（{'、'.join(missing)}），晴空萬里天花板以剩餘項推導"
+
+    return EffectiveTarget(
+        target=max(candidates),
+        is_blue_sky=True,
+        is_degraded=bool(missing),
+        degrade_reason=degrade_reason,
     )
 
 

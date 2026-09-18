@@ -78,11 +78,20 @@ $$
    做市商防線被向上擊潰：
    - 現價突破 Call Wall 幅度 $\frac{\text{Spot} - \text{CallWall}}{\text{CallWall}} \ge \text{\_MICROSTRUCTURE\_TP2\_WALL\_BREAK\_PCT} = 1.5\%$。
    - 或 Call Wall 向上遷移 $\ge 3\%$ 且現價站穩舊阻力位（$\text{CallWall} \ge \text{CallWall}_{\text{prev}} \times 1.03 \land \text{Spot} \ge \text{CallWall}_{\text{prev}}$）。
-3. **TP1-阻力初探（平倉 50%）**：
+3. **TP1-阻力初探（平倉 50%，或 AGGRESSIVE 風險偏好之 30%，見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §4.4）**：
    現價抵達阻力牆門前：
    $$
    \text{Spot} \ge \text{CallWall} \times \text{\_MICROSTRUCTURE\_TP1\_CALLWALL\_PCT} = 0.995 \times \text{CallWall}
    $$
+
+   **TP1 趨勢豁免（Trend Exemption）**：牆體仍在快速上移代表做市商避險上緣尚未定錨，此時減碼等同砍獲利部位。若同時滿足下列三項，暫緩本輪 TP1 減碼，改為將棘輪停損上移：
+   $$
+   \frac{\text{CallWall} - \text{CallWall}_{\text{prev}}}{\text{CallWall}_{\text{prev}}} \ge \text{\_TP1\_TREND\_EXEMPT\_MIGRATION\_PCT} = 1\%
+   \;\wedge\; \text{NetGEX} > 0 \;\wedge\; \text{Spot} > \text{SessionVWAP}
+   $$
+   豁免時的新棘輪停損為 $\max(\text{AvgCost}, \text{AnchorBase})$（兩者皆不可得時 fail-safe 退回正常 TP1 減碼，絕不在無法算出安全停損的情況下豁免）。
+
+   $\tau_{\text{mig}} = 1\%$ 刻意**低於**下方 TP2 的 $\text{\_MICROSTRUCTURE\_TP2\_WALL\_MIGRATION\_PCT} = 3\%$：兩者回答不同問題——$3\%$ 是「牆大幅擴展、值得主動鎖利」（TP2），$1\%$ 是「牆還在動、不該減碼」（TP1 豁免）。中間 $1\%\sim3\%$ 的灰帶即為「不 TP1、也不 TP2」的續抱區，是趨勢延伸的主戰場，也是本機制存在的直接動機。
 
 #### 2.6.2 止損分層 (SL Ladder，由硬到軟依序判定)
 1. **SL-結構失效（100% 平倉）**：
@@ -154,7 +163,9 @@ flowchart TD
 
     StepTP -- 命中 TP3 --> ActTP3["執行 TP3-終局平倉: 減碼 20%<br/>Delta >= 0.85 或 15m 帶量失守 VWAP 或 DTE <= 5"]
     StepTP -- 命中 TP2 --> ActTP2["執行 TP2-空間擴展: 減碼 30%<br/>穿過 CallWall >= 1.5% 或 CallWall 向上遷移 >= 3%"]
-    StepTP -- 命中 TP1 --> ActTP1["執行 TP1-阻力初探: 減碼 50%<br/>現價 >= 0.995 * CallWall"]
+    StepTP -- 現價達 TP1 門檻 --> TP1ExemptCheck{"TP1 趨勢豁免?<br/>牆遷移>=1% 且 NetGEX>0 且 Spot>VWAP<br/>且可算出安全棘輪停損?"}
+    TP1ExemptCheck -- 是 --> ActTP1Exempt["🛡️ 暫緩 TP1 減碼<br/>棘輪停損上移至 max(AvgCost, AnchorBase)<br/>(HOLD，與 SL-動態保本共用呈現分支)"]
+    TP1ExemptCheck -- 否 --> ActTP1["執行 TP1-阻力初探: 減碼 50%<br/>現價 >= 0.995 * CallWall"]
 
     StepTP -- 未命中任何 TP --> StepTrack2{"軌道二: 極端瞬時停損?<br/>Spot < ExtremeStopLoss?"}
 
@@ -190,7 +201,8 @@ flowchart TD
 | `_MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT` | `0.05` ($5\%$) | SL-主力對沖近平值容差 $|\text{Strike}-\text{Spot}|/\text{Spot}$ | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT` | `0.5` ($50\%$) | 觸發停損上移至保本點之 Call Wall 進度比例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_TP1_CALLWALL_PCT` | `0.995` ($99.5\%$) | TP1-阻力初探價格觸達門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_MICROSTRUCTURE_TP1_RATIO` | `0.5` ($50\%$) | TP1 執行平倉比例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MICROSTRUCTURE_TP1_RATIO` | `0.5` ($50\%$) | TP1 執行平倉比例（DEFENSIVE；AGGRESSIVE 為 $0.3$，見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §4.4） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_TP1_TREND_EXEMPT_MIGRATION_PCT` | `0.01` ($1\%$) | TP1 趨勢豁免：Call Wall 向上遷移達此比例（且 NetGEX>0、Spot>VWAP）暫緩減碼，改抬棘輪停損 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_TP2_WALL_BREAK_PCT` | `0.015` ($1.5\%$) | TP2 現價穿越 Call Wall 幅度門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT` | `0.03` ($3.0\%$) | TP2 Call Wall 向上遷移有效擴展門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_TP2_RATIO` | `0.3` ($30\%$) | TP2 執行平倉比例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
@@ -225,6 +237,12 @@ flowchart TD
 7. **做空部位的組合層風控（已方向感知化）**：
    組合層的保證金、資本、對沖門檻已依「量值 vs 帶號」原則修正（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md) §5）；VIX 戰情階梯與凱利先驗改以交易意圖分流（見 [`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §5.4）。做空出場矩陣的錨點邏輯已抽成純函式 `resolve_short_anchor()`，與 SHORT_ENTRY 倉位計算共用，確保倉位依據的停損與出場引擎實際執行的停損一致。
 
+8. **TP1 趨勢豁免與棘輪停損的三個必要條件（皆已修復，缺一即裸奔）**：
+   - **`previous_call_wall` 曾從未被寫入評估用的 metrics dict**：`asset` 物件本身早已攜帶該欄位（`portfolio_monitor.py` 的 `asset_entry` 組裝早已包含），但 `check_satellite_rebalancing_impl` 組裝評估用 metrics 時漏了這一行，導致 TP2「牆體向上遷移」分支與本節的 TP1 趨勢豁免在生產路徑上恆為死碼（測試直呼叫函式時會通過，正式呼叫鏈卻是啞的）。現已補上。
+   - **TP 階梯回傳型別擴充**：`_evaluate_microstructure_tp_ladder()` 原回傳三元組（`tier`, `ratio`, `reason`）沒有位置攜帶新停損值，已比照 SL 階梯擴充為四元組（新增 `new_stop_level`），`_apply_decision_matrix()` 將 TP1 豁免與 SL-動態保本合併為同一個 HOLD 呈現分支，取兩者候選停損的較高者。
+   - **外層閘門必須把「已豁免」本身視為需要處理的訊號**：`check_satellite_rebalancing_impl` 在真正產出報告前有一道獨立閘門（`tp_tier is not None or sl_tier is not None or ...`）。TP1 豁免的觸發門檻（牆遷移 $\ge 1\%$）明顯早於 SL-動態保本（進度 $\ge 50\%$），兩者皆為 `None` 的 $1\%\sim3\%$ 灰帶——正是本機制最想保護的區間——若閘門不額外納入「TP1 已豁免」訊號，整個報告產生流程會被跳過，棘輪停損算出來也永遠傳不到派發端。閘門現已納入此訊號。
+   - 三者皆有專屬回歸測試鎖定，見 `nexus_core/tests/unit/test_tp1_trend_exemption.py`（§6）。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -241,3 +259,7 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：做空錨點純函式 `resolve_short_anchor()`、做空止盈目標牆替換 (`_evaluate_microstructure_tp_ladder_short()`)
 - `nexus_core/market_analysis/volume_profile.py`：`calculate_volume_profile()` (HVN/LVN)
 - `nexus_core/market_analysis/atr_utils.py`：`compute_atr_15m_from_df()`
+- **TP1 趨勢豁免（見 §2.6.1／§5.8）**：
+  - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_evaluate_microstructure_tp_ladder()`（四元組回傳、豁免分支）、`_apply_decision_matrix()`（TP1 豁免與 SL-動態保本合併呈現分支）、`check_satellite_rebalancing_impl()`（`previous_call_wall` 補齊、外層閘門納入豁免訊號、`asset_id`／`dynamic_state_patch` 一路傳遞）
+  - `nexus_core/market_analysis/dynamic_rollover/models.py`：`RolloverInstruction.dynamic_state_patch`／`asset_id`（狀態延後提交，沿用 `transition_engine.py` 既有機制）
+  - `nexus_core/tests/unit/test_tp1_trend_exemption.py`：七項條件測試 + `previous_call_wall` 補齊、狀態延後提交、灰帶情境端到端回歸測試

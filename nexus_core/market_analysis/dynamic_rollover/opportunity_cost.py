@@ -11,6 +11,7 @@ from market_analysis.index_microstructure import (
 from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     evaluate_wall_buffer,
+    resolve_effective_target,
 )
 
 from . import logger
@@ -356,15 +357,21 @@ def _confirm_entry_condition3_no_physical_cap(
     put_wall: float = 0.0,
     atr_15m: float = 0.0,
     atr_1d: float = 0.0,
+    high_60d: float = 0.0,
 ) -> bool:
     """條件三：UOA 無實質物理封頂，且上方非對稱空間達動態門檻。
 
     比照分析中心 (Symbol Hub) 的 GEX CallWall 距現價空間% 判讀：不要求 Call
-    Wall 必須還在現價之上，只要帶正負號的距離 (call_wall - spot) / spot 小於
+    Wall 必須還在現價之上，只要帶正負號的距離 (eff_target - spot) / spot 小於
     門檻，即代表做市商壓制仍在——現價已觸及甚至跌破 Call Wall 時（距離為負值）
     同樣視為空間不足，而非誤判為「已站上、無封頂」。物理封頂偵測改以 Call
     Wall（而非現價）作為 strike 位置基準，並套用 _ENTRY_UOA_CAP_RATIO_THRESHOLD
     較高的 ratio 門檻，降低一般 STO 平倉/避險單被誤判為物理封頂的假警報率。
+
+    空間測距標的自裸 Call Wall 升級為「晴空萬里有效目標天花板」（見
+    market_analysis/room_threshold.py 公式 D）：標的貼近或突破 60 日高點時，
+    上方沒有存量 OI 形成有效 Call Wall，改以 60 日高點與 ATR 外推目標取代，
+    否則創新高標的必然被本條件結構性誤判為物理封頂（見 handoff.md §1.4）。
 
     非對稱空間門檻自固定 5% 升級為動態自適應波動率門檻（見
     market_analysis/room_threshold.py 公式 A）：
@@ -381,9 +388,10 @@ def _confirm_entry_condition3_no_physical_cap(
         wall_reference=call_wall if call_wall > 0 else None,
     )
 
+    eff_target = resolve_effective_target(target_spot, call_wall, high_60d, atr_1d)
     call_wall_dist_pct = (
-        (call_wall - target_spot) / target_spot
-        if call_wall > 0 and target_spot > 0
+        (eff_target.target - target_spot) / target_spot
+        if eff_target.target > 0 and target_spot > 0
         else None
     )
     room = compute_dynamic_room_threshold(
@@ -394,6 +402,9 @@ def _confirm_entry_condition3_no_physical_cap(
     )
     c3_passed = not has_physical_cap and not has_tight_call_wall
     degrade_suffix = f"｜⚠️ {room.degrade_reason}" if room.degrade_reason else ""
+    if eff_target.degrade_reason:
+        degrade_suffix += f"｜⚠️ {eff_target.degrade_reason}"
+    target_label = "晴空萬里有效目標" if eff_target.is_blue_sky else "Call Wall"
 
     if has_physical_cap:
         reasons.append(
@@ -402,14 +413,14 @@ def _confirm_entry_condition3_no_physical_cap(
         )
     elif has_tight_call_wall and call_wall_dist_pct is not None:
         reasons.append(
-            f"條件三❌：Call Wall ${call_wall:.2f} 距現價空間 "
+            f"條件三❌：{target_label} ${eff_target.target:.2f} 距現價空間 "
             f"{call_wall_dist_pct:+.2%} 不足 {room.threshold_pct:.2%} "
             f"動態非對稱空間門檻{degrade_suffix}"
         )
     else:
         reasons.append(
             f"條件三✅：上方無實質物理封頂，非對稱空間充足"
-            f"（動態門檻 {room.threshold_pct:.2%}）{degrade_suffix}"
+            f"（{target_label}，動態門檻 {room.threshold_pct:.2%}）{degrade_suffix}"
         )
     return c3_passed
 
@@ -1034,6 +1045,13 @@ class _OpportunityCostMixin:
             df_15m,
             target_spot=target_spot,
         )
+        # 晴空萬里天花板 (room_threshold.py 公式 D) 所需的 60 日高點，僅供條件三
+        # 使用，刻意不併入 resolve_room_threshold_inputs 的共用回傳值——左側／
+        # 做空進場鐵律不需要這項資料，擴充該函式的回傳元組會連帶影響它們的呼叫
+        # 端與既有測試，非必要不擴大改動範圍。
+        from market_analysis.atr_utils import fetch_high_60d
+
+        high_60d_val = await fetch_high_60d(candidate_symbol)
 
         c1_passed = await _confirm_entry_condition1_breakout(
             candidate_symbol,
@@ -1060,6 +1078,7 @@ class _OpportunityCostMixin:
             put_wall=put_wall,
             atr_15m=atr_15m_val,
             atr_1d=atr_1d_val,
+            high_60d=high_60d_val,
         )
         c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, target_spot, reasons)
         (

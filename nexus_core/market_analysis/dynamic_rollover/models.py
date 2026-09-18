@@ -22,6 +22,14 @@ class RolloverScenario(str, Enum):
     # 整條下游 (PowerSqueeze > 80 門檻、Buy Shares 工具別、RolloverActionView
     # 的 BUY 數量計算) 全是多頭假設，做空確認走進去只會得到自相矛盾的指令。
     SHORT_ENTRY = "SHORT_ENTRY"
+    # 順勢金字塔加碼 (pyramid_add.py)。刻意獨立成情境、不借用 TRANSITION_ENGINE
+    # 既有的 OPEN_PYRAMID action：後者是 entry_regime 驅動的一次性狀態切換
+    # （Regime I 左側倉進化為右側動能倉，由 state["pyramided"] 旗標保證只觸發
+    # 一次），本情境是任何右側獲利倉在趨勢延續時的例行加碼（可觸發至
+    # _PYRAMID_MAX_ADDS 次）。兩者觸發源、次數上限皆不同，合併會讓路徑一的
+    # 一次性保證失效——但兩者最終都路由到同一個 action=="OPEN_PYRAMID" 下游
+    # 派發分支，必須靠 scenario 欄位區分文案與資料。
+    PYRAMID_ADD = "PYRAMID_ADD"
 
 
 class TradingStrategyMode(str, Enum):
@@ -197,6 +205,29 @@ class ShortEntryPlan(TypedDict):
     invalidation_note: Optional[str]
 
 
+class PyramidAddPlan(TypedDict):
+    """PYRAMID_ADD 指令攜帶的加碼計畫 (pyramid_add.py 產出)。
+
+    倉位模型與 SHORT_ENTRY 的「風險預算 ÷ 停損距離」同源、方向反轉：
+    停損距離為 `spot - ratchet_stop`（棘輪停損已由條件二保證 >= avg_cost，
+    加碼因此只動用「已實現的帳面利潤」承險，不增加原始部位的本金曝險）。
+    """
+
+    entry_price: float
+    stop_price: float
+    stop_distance_usd: float
+    reward_risk_ratio: float
+    risk_budget_usd: float
+    share_qty: int
+    notional_usd: float
+    binding_constraint: str
+    vix_spot: Optional[float]
+    vix_tier_name: str
+    vix_multiplier: float
+    kelly_fraction: float
+    pyramid_count_after: int
+
+
 class _RolloverInstructionRequired(TypedDict):
     symbol: str
     action: str
@@ -287,3 +318,5 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     dynamic_state_patch: Optional[Dict[str, Any]]
     # SHORT_ENTRY 情境專屬：進場／停損／目標價位與倉位計算結果。
     short_entry_plan: Optional[ShortEntryPlan]
+    # PYRAMID_ADD 情境專屬：加碼股數／風險預算／停損距離倉位計算結果。
+    pyramid_add_plan: Optional[PyramidAddPlan]
