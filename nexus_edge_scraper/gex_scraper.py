@@ -325,19 +325,32 @@ async def scrape_symbol_gex_core(
             net_gex += signed_gex
             gex_by_strike[strike] = gex_by_strike.get(strike, 0.0) + signed_gex
 
-        call_wall = spot_price
-        put_wall = spot_price
+        # 空候選集 sentinel 刻意用 0.0 而非 spot_price：後者與「確實存在一道牆
+        # 且恰落在現價上」在數值上無法區分，會讓下游把 0.00% 的牆距當成真實數據
+        # 渲染（intraday_pipeline/evaluation.py 的牆距欄位曾如此）。0.0 與同檔
+        # FALLBACK_GEX 共用同一個「缺失」語意，而 nexus_core 全部消費端都以
+        # `> 0` 為閘門，會正確走缺失／重錨路徑。
+        call_wall = 0.0
+        put_wall = 0.0
 
         # Call Wall (Resistance Ceiling): 現價以上，Call GEX 曝險最大的履約價
         call_wall_candidates: dict[float, float] = {
-            k: v for k, v in call_gex_by_strike.items() if k >= spot_price and v > 0
+            k: v
+            for k, v in call_gex_by_strike.items()
+            if not math.isclose(k, spot_price, abs_tol=1e-4)
+            and k > spot_price
+            and v > 0
         }
         if call_wall_candidates:
             call_wall = max(call_wall_candidates, key=lambda k: call_wall_candidates[k])
 
         # Put Wall (GEX Support Wall): 現價以下，Put GEX 曝險最大的履約價
         put_wall_candidates: dict[float, float] = {
-            k: v for k, v in put_gex_by_strike.items() if k <= spot_price and v > 0
+            k: v
+            for k, v in put_gex_by_strike.items()
+            if not math.isclose(k, spot_price, abs_tol=1e-4)
+            and k < spot_price
+            and v > 0
         }
         if put_wall_candidates:
             put_wall = max(put_wall_candidates, key=lambda k: put_wall_candidates[k])

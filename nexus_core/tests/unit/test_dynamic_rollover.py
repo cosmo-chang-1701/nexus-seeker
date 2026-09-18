@@ -1,6 +1,6 @@
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 import discord
 import pandas as pd
@@ -22,6 +22,7 @@ from market_analysis.dynamic_rollover.anti_washout import (
 )
 from market_analysis.dynamic_rollover.structural_signals import (
     evaluate_option_dte_tier,
+    _scan_resistance_wall_above_spot,
 )
 from market_analysis.dynamic_rollover.models import DynamicRegime, RegimeMarketData
 from tests.unit.short_entry_helpers import make_short_entry_evaluation
@@ -4571,6 +4572,60 @@ def test_scan_gex_walls_spot_at_strike_excludes_atm_strike() -> None:
     assert support_wall == 95.0
     assert support_gex == 800_000.0
     assert resistance_wall == 105.0
+
+
+def test_scan_gex_walls_excludes_strike_within_float_tolerance() -> None:
+    """驗證 math.isclose 輔助判定：現價附近微小浮點擾動 (例如 99.99995，spot=100.0) 不得視為支撐牆。"""
+    gex_profile_data = {
+        "gex_profile": {
+            "90": 700_000.0,  # 有效支撐牆
+            "99.99995": 1_500_000.0,  # 浮點擾動 ATM 履約價，應排除
+            "105": -200_000.0,
+        }
+    }
+    support_wall, _, support_gex, _ = _scan_gex_walls(
+        "TEST", gex_profile_data, spot=100.0
+    )
+    assert support_wall == 90.0
+    assert support_gex == 700_000.0
+
+
+def test_scan_resistance_wall_above_spot_excludes_atm_strike_within_tolerance() -> None:
+    """做空專用頂牆掃描：驗證 ATM 浮點擾動履約價 (例如 100.00005，spot=100.0) 不得視為壓制頂牆。"""
+    gex_profile_data = {
+        "gex_profile": {
+            "95": 500_000.0,
+            "100.00005": 2_000_000.0,  # 浮點擾動 ATM 履約價，應排除
+            "105": 800_000.0,  # 有效壓制頂牆 (K > Spot 且 not isclose)
+        }
+    }
+    wall, gex = _scan_resistance_wall_above_spot("TEST", gex_profile_data, spot=100.0)
+    assert wall == 105.0
+    assert gex == 800_000.0
+
+
+def test_scan_resistance_wall_above_spot_handles_malformed_input() -> None:
+    """驗證 _scan_resistance_wall_above_spot 面對非 dict、缺少 gex_profile 或空資料時安全回傳 0.0。"""
+    assert _scan_resistance_wall_above_spot("TEST", None, 100.0) == (0.0, 0.0)
+    assert _scan_resistance_wall_above_spot("TEST", cast(Any, "invalid"), 100.0) == (
+        0.0,
+        0.0,
+    )
+    assert _scan_resistance_wall_above_spot("TEST", cast(Any, 12345), 100.0) == (
+        0.0,
+        0.0,
+    )
+    assert _scan_resistance_wall_above_spot("TEST", {"spot": 100.0}, 100.0) == (
+        0.0,
+        0.0,
+    )
+    assert _scan_resistance_wall_above_spot("TEST", {"gex_profile": None}, 100.0) == (
+        0.0,
+        0.0,
+    )
+    assert _scan_resistance_wall_above_spot(
+        "TEST", {"gex_profile": "not_dict"}, 100.0
+    ) == (0.0, 0.0)
 
 
 def test_scan_gex_walls_filters_nan_strikes_and_values() -> None:

@@ -100,9 +100,8 @@ def _scan_gex_walls(
     support_gex: float = 0.0
     resistance_gex: float = 0.0
     if not (
-        gex_profile_data
-        and "gex_profile" in gex_profile_data
-        and isinstance(gex_profile_data["gex_profile"], dict)
+        isinstance(gex_profile_data, dict)
+        and isinstance(gex_profile_data.get("gex_profile"), dict)
     ):
         return support_wall, resistance_wall, support_gex, resistance_gex
 
@@ -112,7 +111,7 @@ def _scan_gex_walls(
         try:
             strike_flt = float(k)
             val_flt = float(v)
-            if math.isnan(strike_flt) or math.isnan(val_flt):
+            if not (math.isfinite(strike_flt) and math.isfinite(val_flt)):
                 continue
             parsed_entries.append((strike_flt, val_flt))
         except (ValueError, TypeError) as e:
@@ -125,7 +124,11 @@ def _scan_gex_walls(
     eligible_support = [
         (strike, val)
         for strike, val in parsed_entries
-        if (spot <= 0 or strike < spot) and val > 0
+        if (
+            spot <= 0
+            or (not math.isclose(strike, spot, abs_tol=1e-4) and strike < spot)
+        )
+        and val > 0
     ]
     max_positive_support: float = max((val for _, val in eligible_support), default=0.0)
 
@@ -138,7 +141,10 @@ def _scan_gex_walls(
         )
         if (
             wall_type == "SUPPORT_GEX_WALL"
-            and (spot <= 0 or strike < spot)
+            and (
+                spot <= 0
+                or (not math.isclose(strike, spot, abs_tol=1e-4) and strike < spot)
+            )
             and strike > support_wall
         ):
             support_wall = strike
@@ -177,9 +183,8 @@ def _scan_resistance_wall_above_spot(
     from market_analysis.index_microstructure import GEX_THIN_WALL_THRESHOLD
 
     if spot <= 0 or not (
-        gex_profile_data
-        and "gex_profile" in gex_profile_data
-        and isinstance(gex_profile_data["gex_profile"], dict)
+        isinstance(gex_profile_data, dict)
+        and isinstance(gex_profile_data.get("gex_profile"), dict)
     ):
         return 0.0, 0.0
 
@@ -192,9 +197,13 @@ def _scan_resistance_wall_above_spot(
         except (ValueError, TypeError) as e:
             logger.debug(f"[{symbol}] GEX strike {k}/{v} 解析失敗，略過: {e}")
             continue
-        if math.isnan(strike_flt) or math.isnan(val_flt):
+        if not (math.isfinite(strike_flt) and math.isfinite(val_flt)):
             continue
-        if strike_flt <= spot or val_flt <= 0:
+        if (
+            strike_flt <= spot
+            or math.isclose(strike_flt, spot, abs_tol=1e-4)
+            or val_flt <= 0
+        ):
             continue
         if val_flt > best_gex:
             best_gex = val_flt

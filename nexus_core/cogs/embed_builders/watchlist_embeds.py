@@ -6,13 +6,14 @@
 - create_watchlist_overview_embed：本輪 Watchlist 總覽摘要
 """
 
+import math
 from typing import Any, Optional
 import discord
 
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 from cogs.embed_builders._core import (
     NexusEmbed,
@@ -667,12 +668,20 @@ def create_watchlist_signal_embed(
     ):
         try:
             gex_prof = symbol_gex["gex_profile"]
-            strike_keys = sorted([float(k) for k in gex_prof.keys()])
+            strike_keys: list[float] = []
+            for k in gex_prof.keys():
+                try:
+                    f = float(k)
+                    if math.isfinite(f):
+                        strike_keys.append(f)
+                except (ValueError, TypeError):
+                    continue
+            strike_keys.sort()
             if strike_keys:
                 effective_c_val = (
                     live_price
                     if live_price > 0.0
-                    else float(symbol_gex.get("spot", 0.0))
+                    else _safe_float(symbol_gex.get("spot"), 0.0)
                 )
                 if effective_c_val <= 0.0 and strike_keys:
                     effective_c_val = strike_keys[len(strike_keys) // 2]
@@ -686,11 +695,9 @@ def create_watchlist_signal_embed(
                 display_strikes = strike_keys[start_idx:end_idx]
 
                 def _safe_gex(k_val: float) -> float:
-                    val = gex_prof.get(str(k_val), gex_prof.get(k_val))
-                    try:
-                        return float(val) if val is not None else 0.0
-                    except (ValueError, TypeError):
-                        return 0.0
+                    return _safe_float(
+                        gex_prof.get(str(k_val), gex_prof.get(k_val)), 0.0
+                    )
 
                 max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
                 max_abs_gex = max(max_abs_gex, 1.0)

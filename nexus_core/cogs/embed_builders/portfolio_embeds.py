@@ -3,6 +3,7 @@
 import discord
 from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 import logging
+import math
 import psutil
 
 import re
@@ -14,6 +15,11 @@ from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     evaluate_wall_buffer,
+    resolve_atr_15m,
+)
+from market_analysis.dynamic_rollover.structural_signals import (
+    _scan_gex_walls,
+    _scan_resistance_wall_above_spot,
 )
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
@@ -476,7 +482,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             val = float(value)
             import math
 
-            return None if math.isnan(val) else val
+            return None if (math.isnan(val) or math.isinf(val)) else val
         except (TypeError, ValueError):
             return None
 
@@ -1120,19 +1126,26 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _add_ansi_field_safely(embed, "📊 隱含波動率與預期區間 (IV Context)", iv_lines)
 
     # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
-    gex_data = data.get("gex_profile_data", {})
+    gex_data = data.get("gex_profile_data")
     if (
-        gex_data
-        and "gex_profile" in gex_data
-        and isinstance(gex_data["gex_profile"], dict)
-        and gex_data["gex_profile"]
+        isinstance(gex_data, dict)
+        and isinstance(gex_data.get("gex_profile"), dict)
+        and gex_data.get("gex_profile")
     ):
         try:
             gex_prof = gex_data["gex_profile"]
-            strike_keys = sorted([float(k) for k in gex_prof.keys()])
+            strike_keys: list[float] = []
+            for k in gex_prof.keys():
+                try:
+                    f = float(k)
+                    if math.isfinite(f):
+                        strike_keys.append(f)
+                except (ValueError, TypeError):
+                    continue
+            strike_keys.sort()
             if strike_keys:
                 effective_c_val = (
-                    c_val if c_val > 0.0 else float(gex_data.get("spot", 0.0))
+                    c_val if c_val > 0.0 else _to_float(gex_data.get("spot"), 0.0)
                 )
                 if effective_c_val <= 0.0 and strike_keys:
                     effective_c_val = strike_keys[
@@ -1148,11 +1161,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 display_strikes = strike_keys[start_idx:end_idx]
 
                 def _safe_gex(k_val: float) -> float:
-                    val = gex_prof.get(str(k_val), gex_prof.get(k_val))
-                    try:
-                        return float(val) if val is not None else 0.0
-                    except (ValueError, TypeError):
-                        return 0.0
+                    return _to_float(gex_prof.get(str(k_val), gex_prof.get(k_val)), 0.0)
 
                 is_gex_empty = all(abs(_safe_gex(k)) == 0.0 for k in display_strikes)
                 gex_putwall = gex_data.get("put_wall")
@@ -1167,7 +1176,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     gex_lines = [
                         "```ansi",
                         " ⚠️ [GEX 鏈盤前未刷新] 期權鏈造市商曝險尚未更新",
-                        f" 🛡️ 靜態 GEX PutWall (快取底牆): ${float(gex_putwall):.2f}",
+                        f" 🛡️ 靜態 GEX PutWall (快取底牆): ${_to_float(gex_putwall):.2f}",
                         "```",
                     ]
                 else:
@@ -1209,9 +1218,35 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             prefix = " ├─ " if i < len(items) - 1 else " └─ "
                             lines.append(prefix + item)
 
+                    put_wall_float = _to_float(gex_putwall, 0.0) if has_putwall else 0.0
+                    put_reanchored = False
+
+                    if (
+                        effective_c_val > 0
+                        and isinstance(gex_data, dict)
+                        and isinstance(gex_data.get("gex_profile"), dict)
+                    ):
+                        if (
+                            not has_putwall
+                            or put_wall_float >= effective_c_val
+                            or math.isclose(
+                                put_wall_float, effective_c_val, abs_tol=1e-4
+                            )
+                        ):
+                            dyn_supp, _, _, _ = _scan_gex_walls(
+                                symbol, gex_data, spot=effective_c_val
+                            )
+                            if dyn_supp > 0:
+                                put_wall_float = dyn_supp
+                                has_putwall = True
+                                put_reanchored = True
+
                     if has_putwall:
-                        put_wall_float = float(gex_putwall)
-                        put_items = [f"PutWall: ${put_wall_float:.2f}"]
+                        put_reanchor_note = " (動態重錨)" if put_reanchored else ""
+                        put_items = [
+                            f"PutWall: ${put_wall_float:.2f}{put_reanchor_note}"
+                        ]
+                        _pw_atr_15m: float = 0.0
 
                         if effective_c_val > 0:
                             put_buffer_pct = (
@@ -1227,8 +1262,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             #   過寬 (> 絕對 8%)：絕對風險上限兜底。
                             # 「PutWall 已高於現價」的資料異常分支優先於三態判定
                             # 保留——那是資料問題，不是緩衝問題。
-                            _pw_atr_15m = _to_float(data.get("atr_15m"), 0.0)
                             _pw_atr_1d = _to_float(data.get("atr_14"), 0.0)
+                            if _pw_atr_1d <= 0.0:
+                                _pw_atr_1d = _to_float(data.get("atr_1d"), 0.0)
+                            _pw_atr_15m = resolve_atr_15m(
+                                _to_float(data.get("atr_15m"), 0.0), _pw_atr_1d
+                            )
                             put_buffer_eval = evaluate_wall_buffer(
                                 effective_c_val,
                                 put_wall_float,
@@ -1236,8 +1275,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 _pw_atr_1d,
                                 profile="RIGHT",
                             )
-                            put_arrow = "↓" if put_buffer_pct >= 0 else "↑"
-                            if put_buffer_pct < 0:
+                            is_put_zero = math.isclose(
+                                put_buffer_pct, 0.0, abs_tol=1e-4
+                            )
+                            put_arrow = (
+                                "↓" if (put_buffer_pct >= 0 or is_put_zero) else "↑"
+                            )
+                            # 已把 degrade_reason 內嵌進文案的分支不再重複輸出
+                            put_degrade_inline = False
+                            if put_buffer_pct < 0 and not is_put_zero:
                                 put_space_flag = " ⚠️ [數據異常：PutWall已高於現價]"
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
@@ -1262,6 +1308,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                         f"❌ 緩衝過窄，易遭掃損"
                                         f"（⚠ {put_buffer_eval.degrade_reason}）"
                                     )
+                                    put_degrade_inline = True
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
                                     f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
@@ -1277,12 +1324,29 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                         f"⚠ 緩衝過寬，停損距離過遠"
                                         f"（⚠ {put_buffer_eval.degrade_reason}）"
                                     )
+                                    put_degrade_inline = True
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
                                     f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
                                 )
 
-                        atr_15m_val = _to_float(data.get("atr_15m"), 0.0)
+                            # 降級一律揭露，不限於判定不利時：門檻／邊界本身是
+                            # 降級值時，即使結論是「甜蜜點」使用者同樣有權知道那
+                            # 是在缺數據下算出來的（docs/strategies/06 §5 的強制
+                            # 揭露義務）。
+                            if (
+                                put_buffer_eval.degrade_reason
+                                and not put_degrade_inline
+                            ):
+                                put_items[-1] += (
+                                    f"\n │  ⚠ {put_buffer_eval.degrade_reason}"
+                                )
+
+                        atr_15m_val = (
+                            _pw_atr_15m
+                            if _pw_atr_15m > 0
+                            else _to_float(data.get("atr_15m"), 0.0)
+                        )
                         if atr_15m_val > 0:
                             anti_washout_stop = put_wall_float - 1.5 * atr_15m_val
                             fallback_marker = ""
@@ -1352,13 +1416,38 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                     gex_callwall = gex_data.get("call_wall")
                     has_callwall = False
+                    call_reanchored = False
                     try:
                         if gex_callwall and float(gex_callwall) > 0:
                             has_callwall = True
                     except (ValueError, TypeError):
                         pass
+
+                    call_wall_float = (
+                        _to_float(gex_callwall, 0.0) if has_callwall else 0.0
+                    )
+
+                    if (
+                        effective_c_val > 0
+                        and isinstance(gex_data, dict)
+                        and isinstance(gex_data.get("gex_profile"), dict)
+                    ):
+                        if (
+                            not has_callwall
+                            or call_wall_float <= effective_c_val
+                            or math.isclose(
+                                call_wall_float, effective_c_val, abs_tol=1e-4
+                            )
+                        ):
+                            dyn_res, _ = _scan_resistance_wall_above_spot(
+                                symbol, gex_data, effective_c_val
+                            )
+                            if dyn_res > 0:
+                                call_wall_float = dyn_res
+                                has_callwall = True
+                                call_reanchored = True
+
                     if has_callwall and effective_c_val > 0:
-                        call_wall_float = float(gex_callwall)
                         call_wall_depth = _safe_gex(call_wall_float)
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
@@ -1369,25 +1458,51 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         # 結構性保證。資料缺失時退回 3.5% 絕對底線，並在旗標
                         # 下方獨立一行揭露降級原因（使用者有權知道看到的門檻
                         # 不是完整推導出來的）。
+                        _cw_atr_1d = _to_float(data.get("atr_14"), 0.0)
+                        if _cw_atr_1d <= 0.0:
+                            _cw_atr_1d = _to_float(data.get("atr_1d"), 0.0)
+                        _cw_atr_15m = resolve_atr_15m(
+                            _to_float(data.get("atr_15m"), 0.0), _cw_atr_1d
+                        )
+                        valid_put_stop_wall = (
+                            put_wall_float
+                            if (
+                                has_putwall
+                                and put_wall_float < effective_c_val
+                                and not math.isclose(
+                                    put_wall_float, effective_c_val, abs_tol=1e-4
+                                )
+                            )
+                            else 0.0
+                        )
                         _cw_room = compute_dynamic_room_threshold(
                             effective_c_val,
-                            float(gex_putwall) if has_putwall else 0.0,
-                            _to_float(data.get("atr_15m"), 0.0),
-                            _to_float(data.get("atr_14"), 0.0),
+                            valid_put_stop_wall,
+                            _cw_atr_15m,
+                            _cw_atr_1d,
                             direction="LONG",
                         )
                         _cw_threshold_pct = _cw_room.threshold_pct * 100
                         space_flag = ""
                         degrade_line: Optional[str] = None
-                        if call_wall_dist_pct < 0:
+                        is_call_zero = math.isclose(
+                            call_wall_dist_pct, 0.0, abs_tol=1e-4
+                        )
+                        if call_wall_dist_pct < 0 and not is_call_zero:
                             space_flag = " ⚠️ [數據異常：CallWall已低於現價]"
-                        elif call_wall_dist_pct < _cw_threshold_pct:
+                        elif call_wall_dist_pct < _cw_threshold_pct or is_call_zero:
                             space_flag = f" ❌ 不足 {_cw_threshold_pct:.2f}%"
-                            if _cw_room.degrade_reason:
-                                degrade_line = f" │  ⚠ {_cw_room.degrade_reason}"
-                            else:
+                            if not _cw_room.degrade_reason:
                                 space_flag += " (動態門檻)"
-                        call_arrow = "↑" if call_wall_dist_pct >= 0 else "↓"
+                        # 降級一律揭露，不限於門檻未達時（docs/strategies/06 §5）：
+                        # 空間充足的結論若建立在降級門檻上（例如底牆已失效、
+                        # valid_put_stop_wall 歸 0 使 RISK 項被剔除），靜默通過等於
+                        # 讓使用者誤以為那是完整數據下的判定。
+                        if _cw_room.degrade_reason:
+                            degrade_line = f" │  ⚠ {_cw_room.degrade_reason}"
+                        call_arrow = (
+                            "↑" if (call_wall_dist_pct >= 0 or is_call_zero) else "↓"
+                        )
                         depth_sign = "+" if call_wall_depth >= 0 else "-"
                         _space_line = (
                             f"距現價空間: {call_arrow}"
@@ -1395,8 +1510,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         )
                         if degrade_line:
                             _space_line += f"\n{degrade_line}"
+                        call_reanchor_note = " (動態重錨)" if call_reanchored else ""
                         call_items = [
-                            f"CallWall: ${call_wall_float:.2f}",
+                            f"CallWall: ${call_wall_float:.2f}{call_reanchor_note}",
                             _space_line,
                             f"深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K",
                         ]
@@ -1450,8 +1566,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 _add_ansi_field_safely(
                     embed, f"🧲 Gamma 曝險分布 (GEX Profile){stale_suffix}", gex_lines
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"GEX Profile rendering skipped: {e}")
 
     # 3.8 🌊 動能與擠壓狀態 (Momentum & Squeeze)
     # Exposes the identical SQZ MOM value and directional status used in the

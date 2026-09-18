@@ -1,4 +1,5 @@
 import discord
+import pytest
 from typing import Any, Dict, List
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -2384,9 +2385,10 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
     assert "🔴賣方禁售" in desc
     assert "🟢適宜賣方" in desc
 
-    # 7. 防洗盤絕對防守位與離場判定鐵律驗證
-    # CRWV PutWall 108.0 - 1.5 * 2.8 = $103.80
-    assert "$103.80" in desc
+    # 7. 防洗盤絕對防守位與離場判定鐵律驗證：
+    # 修正後防洗盤停損自日線 ATR (2.8) 改為 15m ATR (0.55)，停損位收斂至 $107.18；
+    # 現價 106.29 已跌破停損位，戰術建議如實轉為跌破底牆警告。
+    assert "跌破底牆 $108.0" in desc
     assert "嚴守 15 分鐘實體 K 線收盤撤退線" in desc
 
 
@@ -3273,6 +3275,7 @@ def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> 
 
     data = {
         "symbol": "NVDA",
+        "price": 105.0,
         "iv_data": {
             "current_iv": 0.5,
             "iv_rank": 50.0,
@@ -3301,6 +3304,7 @@ def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() 
 
     data = {
         "symbol": "NVDA",
+        "price": 105.0,
         "iv_data": {
             "current_iv": 0.5,
             "iv_rank": 50.0,
@@ -3512,7 +3516,7 @@ def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensi
         "price": 100.0,
         "gex_profile_data": {
             "put_wall": 101.0,
-            "gex_profile": {"98.0": 1_000_000, "101.0": 2_000_000},
+            "gex_profile": {"100.0": 1_000_000, "101.0": 2_000_000},
         },
         "atr_15m": 0.2,
     }
@@ -4951,3 +4955,588 @@ def test_vix_battle_status_zero_multiplier_is_not_treated_as_missing() -> None:
     )
     value = embed.fields[0].value or ""
     assert "做空倉位乘數: `0.00x`" in value
+
+
+def test_create_tactical_symbol_embed_reanchors_callwall_when_spot_breaks_out() -> None:
+    """當現價突破原 CallWall (如盤前價由 154.81 漲至 155.15，原 CallWall 155.0 已跌入現價下方) 時，
+    系統應動態向上重錨至下一個有效正 GEX 峰值 (160.0)，消除「CallWall已低於現價」異常紅字。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 155.15,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 154.81,
+            "put_wall": 150.0,
+            "call_wall": 155.0,  # 靜態快取牆體 <= 最新現價 155.15
+            "net_gex": 10_000_000.0,
+            "gex_profile": {
+                "150.0": 3_000_000.0,
+                "155.0": 6_750_000.0,
+                "160.0": 5_830_000.0,  # 上方真實阻力天花板
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    # 驗證動態重錨成功
+    assert "CallWall: $160.00 (動態重錨)" in desc
+    assert "⚠️ [數據異常：CallWall已低於現價]" not in desc
+    assert "距現價空間: ↑" in desc
+
+
+def test_create_tactical_symbol_embed_reanchors_putwall_when_missing_in_cache() -> None:
+    """當快取中未提供 PutWall (0.0 或缺省) 時，應自 GEX Profile 動態掃描現價下方的有效支撐底牆。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 155.0,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 155.0,
+            "call_wall": 160.0,
+            "put_wall": 0.0,  # 快取無 PutWall
+            "net_gex": 10_000_000.0,
+            "gex_profile": {
+                "150.0": 3_000_000.0,
+                "155.0": 6_750_000.0,
+                "160.0": 5_830_000.0,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "PutWall: $150.00 (動態重錨)" in desc
+
+
+def test_create_tactical_symbol_embed_reanchors_putwall_when_spot_breaks_down() -> None:
+    """當現價跌破快取中既有的 PutWall (put_wall >= spot) 時，應自 GEX Profile 向下動態重錨至更低有效底牆，避免誤報數據異常。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 152.0,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 152.0,
+            "call_wall": 160.0,
+            "put_wall": 155.0,  # 跌破快取 PutWall ($155.0 >= $152.0)
+            "net_gex": 10_000_000.0,
+            "gex_profile": {
+                "145.0": 1_000_000.0,
+                "150.0": 4_000_000.0,  # 下方真實有效支撐底牆
+                "155.0": 6_750_000.0,
+                "160.0": 5_830_000.0,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "PutWall: $150.00 (動態重錨)" in desc
+    assert "⚠️ [數據異常：PutWall已高於現價]" not in desc
+    assert "距現價空間 (下行緩衝): ↓" in desc
+
+
+# ---------------------------------------------------------------------------
+# 牆體「恰等於現價」的 math.isclose 臂（edge scraper 空候選集的實際生產輸入）
+#
+# nexus_edge_scraper/gex_scraper.py 現已在無有效候選時回 0.0，但盤中仍可能出現
+# 牆體與現價在 1e-4 內相等（真實 ATM 牆、或快取牆體恰被現價追上）。此時牆距為
+# 0.00%，既不構成有效支撐／阻力，也不該被渲染成真實數據。
+# ---------------------------------------------------------------------------
+
+
+def test_create_tactical_symbol_embed_reanchors_putwall_when_equal_to_spot() -> None:
+    """PutWall 恰等於現價：不得當成有效底牆，須向下重錨且不報數據異常。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 155.0,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 155.0,
+            "call_wall": 165.0,
+            "put_wall": 155.0,  # 恰等於現價（isclose 臂）
+            "net_gex": 10_000_000.0,
+            "gex_profile": {
+                "150.0": 4_000_000.0,  # 下方真實有效支撐
+                "155.0": 6_750_000.0,
+                "165.0": 5_830_000.0,
+            },
+        },
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+
+    assert "PutWall: $150.00 (動態重錨)" in desc
+    assert "⚠️ [數據異常：PutWall已高於現價]" not in desc
+
+
+def test_create_tactical_symbol_embed_reanchors_callwall_when_equal_to_spot() -> None:
+    """CallWall 恰等於現價：不得當成有效天花板，須向上重錨且不報數據異常。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 155.0,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 155.0,
+            "call_wall": 155.0,  # 恰等於現價（isclose 臂）
+            "put_wall": 150.0,
+            "net_gex": 10_000_000.0,
+            "gex_profile": {
+                "150.0": 4_000_000.0,
+                "155.0": 6_750_000.0,
+                "160.0": 5_830_000.0,  # 上方真實阻力天花板
+            },
+        },
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+
+    assert "CallWall: $160.00 (動態重錨)" in desc
+    assert "⚠️ [數據異常：CallWall已低於現價]" not in desc
+
+
+def test_create_tactical_symbol_embed_discloses_degrade_when_no_valid_put_stop_wall() -> (
+    None
+):
+    """PutWall 等於現價且下方無任何正 GEX 支撐：valid_put_stop_wall 歸 0，
+    CallWall 空間門檻必須走降級揭露，而不是靜默套用一個低估的門檻。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 155.0,
+        "atr_14": 2.5,
+        "gex_profile_data": {
+            "spot": 155.0,
+            "call_wall": 165.0,
+            "put_wall": 155.0,
+            "net_gex": 10_000_000.0,
+            # 現價下方僅有負 GEX，無任何可充當停損依託的正 Gamma 支撐
+            "gex_profile": {
+                "150.0": -4_000_000.0,
+                "155.0": 6_750_000.0,
+                "165.0": 5_830_000.0,
+            },
+        },
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+
+    assert "數據缺失" in desc
+    assert "PutWall" in desc
+
+
+def test_create_tactical_symbol_embed_no_atr1d_degrade_when_atr14_present() -> None:
+    """當 data 攜帶 atr_14 (日線 ATR₁D) 時，上檔壓力門檻不得出現「⚠ 數據缺失（ATR₁D）」警告。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "SPCX",
+        "price": 154.0,
+        "atr_14": 2.5,  # 成功補入日線 ATR₁D
+        "gex_profile_data": {
+            "spot": 154.0,
+            "put_wall": 150.0,
+            "call_wall": 160.0,
+            "net_gex": 5_000_000.0,
+            "gex_profile": {
+                "150.0": 2_000_000.0,
+                "154.0": 1_000_000.0,
+                "160.0": 3_000_000.0,
+            },
+        },
+    }
+
+    embed = create_tactical_symbol_embed(data)
+    desc = get_embed_text(embed)
+
+    assert "CallWall: $160.00" in desc
+    assert "ATR₁D" not in desc
+    assert "數據缺失（ATR₁D）" not in desc
+
+
+@pytest.mark.asyncio
+async def test_symbol_deep_dive_atr14_populated() -> None:
+    """驗證 _process_symbol_hub_data 能正確自 df_hist_1d 計算出 atr_14 與 atr_1d 並注入 result。"""
+    import pandas as pd
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+            self.bot.user = MagicMock()
+            self.bot.user.id = 123456789
+
+    highs: list[float] = [100.0 + i * 0.5 + 1.0 for i in range(30)]
+    lows: list[float] = [100.0 + i * 0.5 - 1.0 for i in range(30)]
+    closes: list[float] = [100.0 + i * 0.5 for i in range(30)]
+    df_hist = pd.DataFrame({"High": highs, "Low": lows, "Close": closes})
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 115.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": df_hist,
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 0.0,
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    deep_dive = TestDeepDive()
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ):
+        mock_math.return_value = {"symbol": "TEST", "price": 115.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+
+        result = await deep_dive._process_symbol_hub_data("TEST", 123456789, raw_data)
+
+    assert "atr_14" in result
+    assert "atr_1d" in result
+    assert result["atr_14"] > 0.0
+    assert result["atr_1d"] == result["atr_14"]
+
+
+@pytest.mark.parametrize(
+    "malformed_gex",
+    [
+        12345,
+        "corrupted_gex_cache",
+        [100.0, 105.0],
+        {"gex_profile": "not_a_dict"},
+        {"gex_profile": None},
+        {"gex_profile": 42},
+        {"gex_profile": []},
+        {"gex_profile": {}},
+        {"gex_profile": {"invalid_strike": 1000.0}},
+        {"gex_profile": {"100.0": "corrupted_val"}},
+        {"gex_profile": {"100.0": float("inf"), "105.0": float("nan")}},
+        {"gex_profile": None, "put_wall": "not_a_num", "call_wall": "not_a_num"},
+        {"gex_profile": {"100.0": 500000.0}, "spot": "invalid_spot"},
+    ],
+)
+def test_create_tactical_symbol_embed_handles_malformed_gex_profile_data(
+    malformed_gex: Any,
+) -> None:
+    """驗證在 gex_profile_data 為非 dict 或內部欄位畸形時，isinstance 防禦確保不拋出例外。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data: dict[str, Any] = {
+        "symbol": "AAPL",
+        "price": 150.0,
+        "quote": {"c": 150.0},
+        "gex_profile_data": malformed_gex,
+    }
+    embed = create_tactical_symbol_embed(data)
+    assert embed is not None
+    assert "AAPL" in (embed.title or "") or "AAPL" in (embed.description or "")
+
+
+@pytest.mark.asyncio
+async def test_symbol_deep_dive_atr14_fallback_to_prefetched_atr_1d() -> None:
+    """驗證當 df_hist_1d 為空或無法計算時，_process_symbol_hub_data 正確回退至預抓取的 atr_1d 且為純記憶體計算。"""
+    import pandas as pd
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+            self.bot.user = MagicMock()
+            self.bot.user.id = 123456789
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 115.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": pd.DataFrame(),  # 空 DataFrame，就地計算會回傳 0.0
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 1.25,
+        "atr_1d": 3.45,  # 預先並行抓取的備用日線 ATR
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    deep_dive = TestDeepDive()
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ):
+        mock_math.return_value = {"symbol": "TEST", "price": 115.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+
+        result = await deep_dive._process_symbol_hub_data("TEST", 123456789, raw_data)
+
+    assert result["atr_14"] == pytest.approx(3.45)
+    assert result["atr_1d"] == pytest.approx(3.45)
+
+
+@pytest.mark.asyncio
+async def test_symbol_deep_dive_atr14_lazy_fetch_when_nothing_prefetched() -> None:
+    """驗證 ATR₁D 取數階梯的第三層：日線 frame 算不出、呼叫端也沒帶任何
+    atr_1d/atr_14 時，惰性 await fetch_atr_1d()。
+
+    _fetch_single_symbol_data_raw 已不再於 t=0 並行 fetch_atr_1d（它與
+    df_hist_task 同一個 cache key，冷啟動會重複發請求），因此這一層是日線抓取
+    失敗時「上檔壓力」欄位不回到 ⚠ 數據缺失（ATR₁D）的唯一保障。
+    """
+    import pandas as pd
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+            self.bot.user = MagicMock()
+            self.bot.user.id = 123456789
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 115.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": pd.DataFrame(),  # 就地計算回 0.0
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 1.25,
+        # 刻意不帶 atr_1d / atr_14：階梯前兩層皆落空
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    deep_dive = TestDeepDive()
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ), patch(
+        "cogs.unified_terminal.symbol_deep_dive.fetch_atr_1d",
+        new_callable=AsyncMock,
+    ) as mock_fetch_atr_1d:
+        mock_math.return_value = {"symbol": "TEST", "price": 115.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+        mock_fetch_atr_1d.return_value = 4.2
+
+        result = await deep_dive._process_symbol_hub_data("TEST", 123456789, raw_data)
+
+    mock_fetch_atr_1d.assert_awaited_once_with("TEST")
+    assert result["atr_14"] == pytest.approx(4.2)
+    assert result["atr_1d"] == pytest.approx(4.2)
+
+
+@pytest.mark.asyncio
+async def test_symbol_deep_dive_skips_lazy_atr_fetch_when_daily_frame_usable() -> None:
+    """快樂路徑：日線 frame 能算出 ATR₁D 時不得發動任何網路請求。"""
+    import pandas as pd
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+            self.bot.user = MagicMock()
+            self.bot.user.id = 123456789
+
+    closes = [100.0 + i * 0.5 for i in range(40)]
+    df_1d = pd.DataFrame(
+        {
+            "Open": closes,
+            "High": [c + 1.5 for c in closes],
+            "Low": [c - 1.5 for c in closes],
+            "Close": closes,
+            "Volume": [1_000_000] * len(closes),
+        },
+        index=pd.date_range("2024-01-02", periods=len(closes), freq="D"),
+    )
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 115.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": df_1d,
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 1.25,
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    deep_dive = TestDeepDive()
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ), patch(
+        "cogs.unified_terminal.symbol_deep_dive.fetch_atr_1d",
+        new_callable=AsyncMock,
+    ) as mock_fetch_atr_1d:
+        mock_math.return_value = {"symbol": "TEST", "price": 115.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+
+        result = await deep_dive._process_symbol_hub_data("TEST", 123456789, raw_data)
+
+    mock_fetch_atr_1d.assert_not_awaited()
+    assert result["atr_14"] > 0.0
+    assert result["atr_1d"] == result["atr_14"]
+
+
+@pytest.mark.asyncio
+async def test_symbol_deep_dive_atr14_fallback_order_when_atr1d_and_df_invalid() -> (
+    None
+):
+    """邊界測試：當 df_hist_1d 包含 14 列 NaN 收盤價、atr_1d 為畸形字串時，應安全回退至備用 atr_14。"""
+    import numpy as np
+    import pandas as pd
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+            self.bot.user = MagicMock()
+            self.bot.user.id = 123456789
+
+    df_nan = pd.DataFrame(
+        {
+            "High": [np.nan] * 14,
+            "Low": [np.nan] * 14,
+            "Close": [np.nan] * 14,
+        }
+    )
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 115.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": df_nan,
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 1.25,
+        "atr_1d": "invalid_string_atr",  # 畸形字串
+        "atr_14": 2.85,  # 備用有效數值
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    deep_dive = TestDeepDive()
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ):
+        mock_math.return_value = {"symbol": "TEST", "price": 115.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+
+        result = await deep_dive._process_symbol_hub_data("TEST", 123456789, raw_data)
+
+    assert result["atr_14"] == pytest.approx(2.85)
+    assert result["atr_1d"] == pytest.approx(2.85)

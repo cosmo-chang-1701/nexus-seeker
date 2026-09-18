@@ -1,3 +1,4 @@
+import math
 from typing import Any, Optional, Tuple
 
 from market_analysis.option_guidance import is_spread_illiquid
@@ -44,6 +45,7 @@ async def resolve_room_threshold_inputs(
     candidate_radar: Optional[dict],
     gex_profile_data: Any,
     df_15m: Optional[Any] = None,
+    target_spot: float = 0.0,
 ) -> Tuple[float, float, float]:
     """解析動態空間門檻 (room_threshold.py 公式 A/B/C) 所需的三項共用輸入。
 
@@ -54,7 +56,8 @@ async def resolve_room_threshold_inputs(
     取數優先序（刻意「先用手上已有的，最後才發網路請求」）：
 
     * ``put_wall``：``gex_profile_data["put_wall"]``——呼叫端在六重鐵律開始前
-      早已解析過同一份 dict，零額外成本。
+      早已解析過同一份 dict，零額外成本。傳入 ``target_spot > 0`` 時額外套用
+      **現價物理約束**（見下）。
     * ``atr_15m``：呼叫端傳入的 ``df_15m`` 就地計算 > radar 快取的
       ``atr_15m``（radar_data.py 走的是真實 ``fetch_atr_15m()``）> 由 radar 的
       日線 ``atr_14`` 依 √26 折算。**不**在此發動 ``fetch_atr_15m()``——該函式
@@ -62,6 +65,15 @@ async def resolve_room_threshold_inputs(
       且會與條件一手上的 K 棒取到不同快照。
     * ``atr_1d``：radar 快取的 ``atr_14`` > ``fetch_atr_1d()``（走
       ``get_history_df`` 的既有日線快取，非 force_refresh）。
+
+    ``target_spot``（選填，僅對**支撐底牆**有意義）：帶入現價即啟動 PutWall 的
+    現價物理約束校驗。快取的 ``put_wall`` 是隔夜靜態值，盤前／盤中現價跌穿它時
+    該值已失效；此時以 ``_scan_gex_walls(spot=target_spot)`` 向下重錨至次一道正
+    GEX 支撐，重錨不到則回 ``0.0``。**這不是美化顯示，而是風控必要條件**——失效
+    的牆體會讓 ``compute_reference_stop`` 落入拓撲逆轉 fallback（停損改為
+    ``spot − 2.0 × ATR₁₅ₘ``），``Risk_actual`` 退化成與真實支撐位置脫鉤的固定 ATR
+    代理，使動態門檻系統性低估真實下行風險。做空路徑刻意不傳（其停損牆在現價
+    上方，見 ``short_side_entry.py``）。
 
     ⚠️ radar 快取的 ``atr_14`` 有可能是 ``EnhancedWatchlistMetrics`` 那條路徑寫
     入的 0.01 佔位值（該欄位 ``gt=0.0`` 無法寫 0），``resolve_atr_15m()`` 內建
@@ -75,6 +87,18 @@ async def resolve_room_threshold_inputs(
             put_wall = float(gex_profile_data.get("put_wall", 0.0) or 0.0)
         except (ValueError, TypeError):
             put_wall = 0.0
+
+    # 物理約束校驗：若提供現價，PutWall 必須嚴格小於現價
+    if target_spot > 0 and put_wall > 0:
+        if put_wall >= target_spot or math.isclose(put_wall, target_spot, abs_tol=1e-4):
+            from market_analysis.dynamic_rollover.structural_signals import (
+                _scan_gex_walls,
+            )
+
+            dyn_supp, _, _, _ = _scan_gex_walls(
+                symbol, gex_profile_data, spot=target_spot
+            )
+            put_wall = dyn_supp if dyn_supp > 0 else 0.0
 
     def _radar_float(key: str) -> float:
         try:

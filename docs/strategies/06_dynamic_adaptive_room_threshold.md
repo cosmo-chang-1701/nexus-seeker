@@ -150,7 +150,11 @@ flowchart TD
 
 5. **統一量停損距離的必要性**：三種剖面全部量停損距離（見 §2.2），不再有「量牆距 vs 量停損距離」的分歧。若退回牆距量測，左側六重鐵律的條件二將近乎永遠無法通過——左側條件二本來就要求現價密著 Put Wall，牆距在設計上趨近於零。修改量測基準前必須先確認左側密著帶定義未一併調整。
 
-6. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
+6. **`stop_wall` 的現價物理約束前置義務**：傳入公式 A 的 `stop_wall` 必須是**已通過現價物理約束校驗**的牆體。`compute_reference_stop()` 對「牆體落在現價錯誤一側」有一道拓撲逆轉 fallback（LONG 改用 $\text{Spot} - 2.0 \times \text{ATR}_{15m}$），它保證停損不會落在進場價的錯誤一側，但代價是 $\text{Risk}_{\text{actual}}$ 退化成一個**與真實支撐位置完全脫鉤的固定 ATR 代理**。快取牆體已失效（現價跌穿 Put Wall）而次一道真實支撐遠在下方時，門檻會被系統性低估——現價 $\$100$／失效底牆 $\$102$／真實支撐 $\$90$／$\text{ATR}_{15m} = 1.0$ 的數值範例是門檻 $4.4\%$ vs $23.1\%$。因此呼叫端**有義務**先經 `resolve_room_threshold_inputs(target_spot=...)` 重錨（規則見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §2.2.2），重錨不到則傳 $0.0$ 讓 $\text{Risk}$ 項走降級剔除而非假值。
+
+7. **降級揭露不得因判定有利而省略**：`is_degraded` 的揭露義務與判定結果無關。空間充足、緩衝落在甜蜜點等**有利**結論若建立在降級門檻上，同樣必須輸出 `degrade_reason`——否則使用者會誤以為那是完整數據下的判定。分析中心 GEX 欄位的兩側（PutWall 緩衝三態、CallWall 空間）皆已統一為「一律揭露」。
+
+8. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
 ---
 
@@ -163,10 +167,10 @@ flowchart TD
   - 量綱折算：`resolve_atr_15m()`
   - 停損推導：`compute_reference_stop()`（公開，SHORT_ENTRY 倉位計算共用；保留私有別名 `_compute_reference_stop`）
 - `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_1d()`、`fetch_atr_15m()`、`compute_atr_15m_from_df()`、`compute_atr_14_from_daily_df()`
-- `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()`（三項輸入的集中解析與取數優先序）
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三
-- `nexus_core/market_analysis/dynamic_rollover/left_side_entry.py`：左側條件二／條件三
-- `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：做空條件二／條件三
+- `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()`（三項輸入的集中解析、取數優先序，以及 `target_spot` 的 Put Wall 現價物理約束校驗）
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `put_wall=` 餵入條件三）
+- `nexus_core/market_analysis/dynamic_rollover/left_side_entry.py`：左側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `stop_wall=` 餵入條件三；條件二刻意仍用 raw Put Wall——它量的是「距原始底牆多遠」的密著帶，餵重錨值會讓該語意失效）
+- `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：做空條件二／條件三（**刻意不**套用——做空的停損牆是現價上方的 Call Wall，由條件二的 `_scan_resistance_wall_above_spot()` 自行解析並以 `resistance_wall` 傳給條件三）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime III / IV / V 的空間與緩衝判定
 - `nexus_core/market_analysis/gamma_squeeze_engine.py`：SPEAR 磁吸目標價的向上空間要求
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：分析中心 GEX 上檔壓力／下檔支撐欄位的旗標渲染

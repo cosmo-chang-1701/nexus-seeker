@@ -1020,7 +1020,11 @@ class _OpportunityCostMixin:
         # 一次解析完畢後同時餵給條件二與條件三——刻意不讓兩個條件各自去抓，
         # 否則同一輪次會對同一標的重複發動網路請求，且兩者可能取到不同快照。
         put_wall, atr_15m_val, atr_1d_val = await resolve_room_threshold_inputs(
-            candidate_symbol, candidate_radar, gex_profile_data, df_15m
+            candidate_symbol,
+            candidate_radar,
+            gex_profile_data,
+            df_15m,
+            target_spot=target_spot,
         )
 
         c1_passed = await _confirm_entry_condition1_breakout(

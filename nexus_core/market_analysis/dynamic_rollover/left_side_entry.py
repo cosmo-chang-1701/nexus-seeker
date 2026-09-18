@@ -317,6 +317,7 @@ def _confirm_left_entry_condition3_no_panic_cliff(
     reasons: list,
     atr_15m: float = 0.0,
     atr_1d: float = 0.0,
+    stop_wall: Optional[float] = None,
 ) -> bool:
     """左側條件三：下檔無恐慌踩踏斷崖 + 向上均值回歸空間達動態門檻。
 
@@ -329,7 +330,20 @@ def _confirm_left_entry_condition3_no_panic_cliff(
     舊版 3.5% 附有一段校準備註坦承「宣稱 3:1 R:R 實際只在現價貼齊 Put Wall
     ±0.168% 時成立」——左側條件二允許的密著帶上界 +1.5% 處實際 R:R 僅 1.41。
     改為動態門檻後，密著帶內任一位置的盈虧比都由 2.2 × Risk_actual 直接保證，
-    3.5% 降格為 max() 的絕對底線而非主要判據。"""
+    3.5% 降格為 max() 的絕對底線而非主要判據。
+
+    stop_wall（選填）：由 orchestrator 經 resolve_room_threshold_inputs(target_spot=...)
+    解析過**現價物理約束**的 Put Wall，僅供動態門檻的 stop_wall 使用。之所以不能
+    直接用本函式讀到的 raw put_wall：快取的 put_wall 是隔夜靜態值，現價跌穿它後
+    (put_wall >= spot) compute_reference_stop 會觸發拓撲逆轉 fallback，把停損改成
+    spot − 2.0 × ATR₁₅ₘ——一個與真實支撐位置完全脫鉤的固定 ATR 代理。次一道真實
+    支撐若遠在下方，Risk_actual 會被系統性**低估**（例：現價 100、失效底牆 102、
+    真實支撐 90 → 代理值 2% vs 真實 10.5%，門檻 4.4% vs 23.1%），放行本應拒絕
+    的進場。重錨不到更低支撐時傳入 0.0，門檻會走 room_threshold 的降級階梯並由
+    下方 degrade_suffix 強制揭露。
+
+    ⚠️ 上方的追空踩踏過濾（strike < put_wall）刻意**仍用 raw put_wall**——它問的
+    是「原始底牆下方有無追空大單」，與停損所依託的牆體是兩個不同的問題。"""
     put_wall = (
         float(gex_profile_data.get("put_wall", 0.0) or 0.0)
         if isinstance(gex_profile_data, dict)
@@ -374,8 +388,9 @@ def _confirm_left_entry_condition3_no_panic_cliff(
 
     reference_level = min(candidates)
     room_pct = (reference_level - target_spot) / target_spot
+    effective_stop_wall = stop_wall if stop_wall is not None else put_wall
     room = compute_dynamic_room_threshold(
-        target_spot, put_wall, atr_15m, atr_1d, direction="LONG"
+        target_spot, effective_stop_wall, atr_15m, atr_1d, direction="LONG"
     )
     has_room = room_pct >= room.threshold_pct
     degrade_suffix = f"｜⚠️ {room.degrade_reason}" if room.degrade_reason else ""
@@ -627,11 +642,16 @@ async def _confirm_left_entry_signal(
     # 條件二與條件三，避免兩者各自抓取而取到不同快照。條件一已把實際用到的
     # 15m frame 回傳為 _df_15m_used，優先沿用它（與呼叫端傳入的 df_15m 可能不同
     # ——條件一在 df_15m 為 None 時會自行抓取）。
-    _pw, _atr15, _atr1d = await resolve_room_threshold_inputs(
+    # target_spot 一併傳入以啟動 PutWall 的現價物理約束校驗：現價跌穿底牆時
+    # 向下重錨至次一道正 GEX 支撐，重錨不到則歸 0.0 走降級揭露。缺了它，條件三的
+    # Risk_actual 會退化成 compute_reference_stop 的 2.0×ATR₁₅ₘ 拓撲逆轉代理而
+    # 系統性低估真實下行風險（見該函式 docstring）。
+    _put_wall, _atr15, _atr1d = await resolve_room_threshold_inputs(
         candidate_symbol,
         candidate_radar,
         gex_profile_data,
         _df_15m_used if _df_15m_used is not None else df_15m,
+        target_spot=target_spot,
     )
     if atr_15m is not None and atr_15m > 0:
         # 呼叫端 (Regime 分類器) 已就地算好同一份 frame 的 ATR₁₅ₘ，原樣沿用以
@@ -653,6 +673,7 @@ async def _confirm_left_entry_signal(
         reasons,
         atr_15m=_atr15,
         atr_1d=_atr1d,
+        stop_wall=_put_wall,
     )
     c4_passed = _confirm_left_entry_condition4_smart_money_absorption(
         uoa_list, target_spot, reasons

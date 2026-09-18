@@ -66,6 +66,36 @@ $$\text{ResistanceWall} = \underset{K > \text{Spot}}{\arg\max}\ \text{NetGEX}(K)
 
 ⚠️ 此掃描**刻意不重用** `_scan_gex_walls()` 既有的 `resistance_wall` 回傳值：那一路分支走的是 `classify_gex_wall(...) == "RESISTANCE_CALL_WALL"`（針對重倉價外 Call 的分類），且**沒有** $K > \text{Spot}$ 的物理約束，語意與本定理不同；改動它會連帶影響 `anti_washout.py` 的 `_correct_wall_topology`，故另立函式 `_scan_resistance_wall_above_spot()`。
 
+### 2.2.2 牆體現價動態重錨 (Dynamic Wall Re-anchoring)
+
+期權未平倉量快取每交易日僅更新一次（隔夜），而現價在盤前與盤中連續移動。因此**快取中的牆體隨時可能失效**：現價跌穿 Put Wall、或漲過 Call Wall。此時該牆體既不再提供物理防護，也不該被當成有效數據渲染或餵進風控計算。
+
+設 $\epsilon = 10^{-4}$ 為平值判定容差。牆體有效性判定與重錨規則：
+
+$$
+\text{PutWall}_{\text{eff}} =
+\begin{cases}
+\text{PutWall}_{\text{cache}}, & \text{若 } \text{PutWall}_{\text{cache}} < \text{Spot} - \epsilon \\[4pt]
+\underset{K < \text{Spot}}{\arg\max}\ \text{NetGEX}(K), & \text{否則，且下方存在合格正 GEX 峰值} \\[4pt]
+0.0, & \text{否則}
+\end{cases}
+$$
+
+$$
+\text{CallWall}_{\text{eff}} =
+\begin{cases}
+\text{CallWall}_{\text{cache}}, & \text{若 } \text{CallWall}_{\text{cache}} > \text{Spot} + \epsilon \\[4pt]
+\underset{K > \text{Spot}}{\arg\max}\ \text{NetGEX}(K), & \text{否則，且上方存在合格正 GEX 峰值} \\[4pt]
+0.0, & \text{否則}
+\end{cases}
+$$
+
+三項關鍵語意：
+
+1. **平值（$|K - \text{Spot}| \le \epsilon$）一律排除**。牆體恰落在現價上時緩衝為 $0.00\%$，在物理上不構成支撐或阻力；把它算成有效牆體會讓下游把 $0.00\%$ 的牆距當成真實數據渲染。此容差同時消除浮點誤差使 ATM 巨額 GEX 在兩側候選池之間來回翻轉的不確定性。
+2. **重錨不成功時歸 $0.0$，絕不向另一側借牆**——沿用 §2.1 的推論。
+3. **重錨是風控必要條件，不只是顯示修正**。失效底牆會讓動態空間門檻的停損推導落入拓撲逆轉 fallback（$\text{Stop} = \text{Spot} - 2.0 \times \text{ATR}_{15m}$），使 $\text{Risk}_{\text{actual}}$ 退化成與真實支撐位置完全脫鉤的固定 ATR 代理而**系統性低估**風險。數值範例：現價 $\$100$、失效底牆 $\$102$、次一道真實支撐 $\$90$、$\text{ATR}_{15m} = 1.0$ 時，代理值給出 $\text{Risk} = 2.0\%$（門檻 $4.4\%$），重錨後為 $\text{Risk} = 10.5\%$（門檻 $23.1\%$）——相差逾五倍。
+
 ### 2.3 拓撲逆轉修復公式 (Topology Inversion Correction)
 在異常期權結構或資料源偶發翻轉時，若偵測到 $\text{Put Wall} > \text{Call Wall}$，系統啟動拓撲逆轉修復：
 $$
@@ -121,6 +151,10 @@ flowchart TD
    若現價下方存在多個相同數值的正 GEX 峰值，Python 內建的列表推導與 `max` 函式將按排序穩定返回，確保演算法執行的確定性（Deterministic）。
 3. **Call Wall 穿透後的狀態標記**：
    當現價突破 Call Wall 時，系統不會將阻力標記為「無阻力」，而是透過 $\Delta_{\text{CallWall}} \le 0$ 觸發 TP2 獲利了結，同時在進場端關閉買進權限，防範高位滯留風險。
+4. **空候選集的缺失 sentinel 為 $0.0$**：
+   邊緣爬蟲 (`nexus_edge_scraper/gex_scraper.py`) 在某一側無任何合格候選履約價時回傳 $0.0$，**不回傳現價**。回傳現價與「確實存在一道牆且恰落在現價上」在數值上無法區分，會讓下游把 $0.00\%$ 牆距渲染成真實數據；$0.0$ 與該檔硬失敗時的 `FALLBACK_GEX` 共用同一個「缺失」語意，而 `nexus_core` 全部消費端皆以 `> 0` 為閘門。
+5. **重錨失敗時的強制揭露**：
+   重錨歸 $0.0$ 後，動態空間門檻的 $\text{Risk}$ 項會被自 $\max()$ 中剔除並標記 `is_degraded`。分析中心的 GEX 空間欄位**一律**輸出該降級原因，不限於「判定不利」時——空間充足的結論若建立在降級門檻上，靜默通過等於讓使用者誤以為那是完整數據下的判定（見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md) §5）。
 
 ---
 
@@ -134,3 +168,7 @@ flowchart TD
   - 條件三帶符號空間檢核：`_confirm_entry_condition3_no_physical_cap()`（第 305–349 行）
 - `nexus_core/market_analysis/index_microstructure.py`：`classify_gex_wall()`, `GEX_THIN_WALL_THRESHOLD`
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_correct_wall_topology()`
+- `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()` 的 `target_spot` 物理約束校驗（§2.2.2 的 Put Wall 重錨在進場鐵律側的唯一入口；右側條件三與左側條件三皆經此路徑，做空側刻意不經過——其停損牆在現價上方）
+- `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：`_find_next_negative_gex_peak()`（破位追空次級節點，同樣套用 $\epsilon$ 平值排除）
+- `nexus_core/cogs/embed_builders/portfolio_embeds.py`：分析中心 GEX Profile 欄位的雙側重錨渲染與 `(動態重錨)` 標記、`valid_put_stop_wall` 過濾
+- `nexus_edge_scraper/gex_scraper.py`：`scrape_symbol_gex_core()` 的兩側候選池 $\epsilon$ 平值排除與 $0.0$ 缺失 sentinel

@@ -368,6 +368,78 @@ class TestCondition3:
         )
         assert passed is False
 
+    # ---- stop_wall 的現價物理約束（P1 迴歸鎖）----
+    #
+    # 現價跌穿快取底牆時 (put_wall >= spot)，compute_reference_stop 會落入拓撲
+    # 逆轉 fallback（停損改為 spot − 2.0×ATR₁₅ₘ），Risk_actual 退化成與真實支撐
+    # 位置脫鉤的固定 ATR 代理而系統性低估風險。orchestrator 因此改以
+    # resolve_room_threshold_inputs(target_spot=...) 解析過的值經 stop_wall 傳入。
+
+    def test_condition3_reanchored_stop_wall_raises_threshold_and_blocks(self) -> None:
+        """重錨至次一道更低支撐後，門檻升高並擋下原本會通過的回歸空間。
+
+        現價 100、失效底牆 102（已被跌穿）、次一道真實支撐 90、ATR₁₅ₘ=1.0。
+        - raw put_wall=102：stop = 102 − 0.5 >= spot → fallback stop = 100 − 2.0
+          = 98 → Risk 2.0% → 門檻 = max(2.2×2.0%, 1.5×2.0%, 3.5%) = 4.4%
+          → 回歸空間 10% 通過（假訊號）。
+        - stop_wall=90（重錨值）：stop = 89.5 → Risk = 10.5%
+          → 門檻 = 2.2 × 10.5% = 23.1% → 10% 被擋下。
+        """
+        # 刻意不帶 gex_profile：否則 estimate_symbol_gamma_flip 會把
+        # reference = min(VWAP, GammaFlip) 拉到現價下方，兩條分支都因「無回歸
+        # 空間」而失敗，測不到門檻本身的差異。重錨值直接由 stop_wall 注入。
+        gex = {"put_wall": 102.0}
+
+        raw_reasons: list = []
+        raw_passed = _confirm_left_entry_condition3_no_panic_cliff(
+            [], gex, 100.0, 110.0, raw_reasons, atr_15m=1.0, atr_1d=2.0
+        )
+        assert raw_passed is True, "基準線：未帶 stop_wall 時放行（本缺陷的表現）"
+
+        reasons: list = []
+        passed = _confirm_left_entry_condition3_no_panic_cliff(
+            [], gex, 100.0, 110.0, reasons, atr_15m=1.0, atr_1d=2.0, stop_wall=90.0
+        )
+        assert passed is False
+        assert "回歸空間" in reasons[0]
+        assert "23.10%" in reasons[0]
+
+    def test_condition3_zero_stop_wall_degrades_and_discloses(self) -> None:
+        """重錨不到更低支撐時傳入 0.0：門檻走降級階梯並強制揭露。"""
+        reasons: list = []
+        passed = _confirm_left_entry_condition3_no_panic_cliff(
+            [],
+            {"put_wall": 102.0},
+            100.0,
+            110.0,
+            reasons,
+            atr_15m=1.0,
+            atr_1d=2.0,
+            stop_wall=0.0,
+        )
+        assert passed is True
+        assert "｜⚠️" in reasons[0], "降級必須向使用者揭露"
+        assert "PutWall" in reasons[0]
+
+    def test_condition3_chase_selloff_still_uses_raw_put_wall(self) -> None:
+        """追空踩踏過濾問的是「原始底牆下方有無追空大單」，與停損牆是兩個不同的
+        問題——stop_wall 歸 0 不得讓該分支失效。"""
+        reasons: list = []
+        uoa = [
+            {
+                "type": "PUT",
+                "action": "🟢 買入開倉 (BTO - Ask)",
+                "strike": 85.0,
+                "ratio": 1.5,
+                "notional_value": 300_000.0,
+            }
+        ]
+        passed = _confirm_left_entry_condition3_no_panic_cliff(
+            uoa, {"put_wall": 90.0}, 90.0, 95.0, reasons, stop_wall=0.0
+        )
+        assert passed is False
+        assert "追空踩踏" in reasons[0]
+
 
 # ---- 條件四 ----
 

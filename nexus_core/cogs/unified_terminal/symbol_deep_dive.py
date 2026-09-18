@@ -10,7 +10,11 @@ from services import market_data_service, reddit_service
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
-from market_analysis.atr_utils import fetch_atr_15m
+from market_analysis.atr_utils import (
+    compute_atr_14_from_daily_df,
+    fetch_atr_15m,
+    fetch_atr_1d,
+)
 from market_analysis.vwap_utils import fetch_session_vwap
 from market_analysis.price_volume_alert import get_confirmed_15m_bar
 import market_math
@@ -76,6 +80,13 @@ class SymbolDeepDiveMixin:
         vp_task = asyncio.create_task(
             asyncio.to_thread(calculate_volume_profile, symbol)
         )
+        # 刻意不在此並行 fetch_atr_1d：它內部走的是 get_history_df(symbol, "1y",
+        # "1d")——與上方 df_hist_task 同一個 cache key，而 get_history_df 沒有
+        # single-flight 去重（快取寫入在 await 之後），兩者同時於 t=0 查快取會在
+        # 冷啟動時發出兩次相同的 yfinance/Edge 請求。日線 ATR 改由
+        # _process_symbol_hub_data 以 compute_atr_14_from_daily_df 純記憶體計算，
+        # 真的算不出來時才在那裡惰性 await（此時快取已被 df_hist_task 寫暖）。
+        # atr_15m_task 走 force_refresh=True + 5d/15m 不同 key，不是冗餘，保留。
         atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
         vwap_task = asyncio.create_task(fetch_session_vwap(symbol))
         bar_15m_task = asyncio.create_task(get_confirmed_15m_bar(symbol))
@@ -373,6 +384,32 @@ class SymbolDeepDiveMixin:
         result["volume_profile"] = safe_vp
         result["atr_15m"] = _safe_float(data.get("atr_15m"), 0.0)
         result["session_vwap"] = _safe_float(data.get("session_vwap"), 0.0)
+
+        # ATR₁D 取數階梯（刻意「先用手上已有的，最後才發網路請求」）：
+        #   1. 已 gather 到的日線 frame 就地純記憶體計算
+        #   2. 呼叫端顯式帶入的 atr_1d / atr_14（0.01 為 EnhancedWatchlistMetrics
+        #      的佔位值，須視為缺失）
+        #   3. 惰性 await fetch_atr_1d()——此時 df_hist_task 已把 1y/1d 快取寫暖，
+        #      快樂路徑是快取命中零網路；df_hist 真的抓失敗時這層提供一次重試。
+        # 少了第 3 層，日線抓取失敗就會讓下游「上檔壓力」欄位回到
+        # ⚠ 數據缺失（ATR₁D）的降級揭露。
+        atr_14_val = compute_atr_14_from_daily_df(df_hist_1d)
+        if atr_14_val <= 0.0 or abs(atr_14_val - 0.01) < 1e-6:
+            c_1d = _safe_float(data.get("atr_1d"), 0.0)
+            c_14 = _safe_float(data.get("atr_14"), 0.0)
+            candidate = c_1d if (c_1d > 0.0 and abs(c_1d - 0.01) >= 1e-6) else c_14
+            if candidate > 0.0 and abs(candidate - 0.01) >= 1e-6:
+                atr_14_val = candidate
+        if atr_14_val <= 0.0 or abs(atr_14_val - 0.01) < 1e-6:
+            try:
+                lazy_atr_1d = await fetch_atr_1d(symbol)
+            except Exception as e:  # pragma: no cover - fetch 端已 fail-safe
+                logger.warning(f"[{symbol}] ATR₁D 惰性回抓失敗: {e}")
+                lazy_atr_1d = 0.0
+            if lazy_atr_1d > 0.0 and abs(lazy_atr_1d - 0.01) >= 1e-6:
+                atr_14_val = lazy_atr_1d
+        result["atr_14"] = atr_14_val
+        result["atr_1d"] = atr_14_val
 
         bar_15m = data.get("bar_15m")
         result["bar_15m"] = bar_15m

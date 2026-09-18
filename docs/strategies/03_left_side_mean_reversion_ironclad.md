@@ -75,6 +75,10 @@ $$
    $$
    $3.5\%$ 自「主要判據」降格為 $\max()$ 中的**絕對底線**——它現在只在 Put Wall 或 ATR 缺失、無從推導風險時才會勝出。
 
+   ⚠️ **此處的 Put Wall 必須是已通過現價物理約束校驗的值**，不得直接取自 GEX 快取。快取牆體是隔夜靜態值，現價跌穿它之後 $\text{Risk}_{\text{actual}}$ 會退化成 $2.0 \times \text{ATR}_{15m}$ 的固定代理而系統性低估風險（完整推導與數值範例見 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) §5.6，重錨規則見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §2.2.2）。六重鐵律的 orchestrator 統一以 `resolve_room_threshold_inputs(target_spot=...)` 解析後經 `stop_wall=` 注入條件三；重錨不到更低支撐時傳 $0.0$，門檻走降級階梯並在逐項判定字串以 `｜⚠️` 揭露。
+
+   **條件二（密著底牆帶）刻意仍使用原始 Put Wall**：它量的是「現價距原始底牆 $-1\%$ ~ $+1.5\%$」的密著關係，餵入重錨值會讓該判定失去意義。同理，上方「下檔追空踩踏過濾」的 $\text{Strike} < \text{PutWall}$ 亦使用原始值——它問的是「原始底牆下方有無追空大單」，與停損所依託的牆體是兩個不同的問題。
+
 ### 2.3.1 左側條件二附加：Liquidity Sweep 緩衝雙邊界
 在既有的密著帶與防禦厚度判定之上，額外疊加一道依標的波動率伸縮的緩衝檢查（公式 B，`profile="LEFT"`）：
 $$

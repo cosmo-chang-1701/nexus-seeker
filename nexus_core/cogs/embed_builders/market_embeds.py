@@ -22,6 +22,7 @@ from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 from market_analysis.macro_calendar_translator import translate_macro_event
+from market_analysis.room_threshold import resolve_atr_15m
 
 # UOA kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
 # _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
@@ -613,40 +614,47 @@ def build_radar_scan_embed(
             put_wall = 0.0
             if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
                 put_wall = _safe_float(r["gex_metrics"].get("put_wall"))
-            elif "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+            if (
+                put_wall == 0.0
+                and "gex_profile_data" in r
+                and isinstance(r["gex_profile_data"], dict)
+            ):
                 put_wall = _safe_float(r["gex_profile_data"].get("put_wall"))
-            elif "put_wall" in r:
+            if put_wall == 0.0 and "put_wall" in r:
                 put_wall = _safe_float(r.get("put_wall"))
-            else:
+            if (
+                put_wall == 0.0
+                and r.get("iv_metrics")
+                and hasattr(r["iv_metrics"], "gex_max_put_wall")
+            ):
+                val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
+                if val is not None:
+                    put_wall = _safe_float(val)
+            if put_wall == 0.0:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
                 mp_raw = r.get("max_pain")
                 if isinstance(mp_raw, dict):
                     mp_val = mp_raw.get("max_pain")
-                elif isinstance(mp_raw, (float, int)):
+                elif isinstance(mp_raw, (float, int, str)):
                     mp_val = mp_raw
                 else:
                     mp_val = None
 
-                put_wall = (
-                    float(mp_val) * 0.9 if mp_val is not None else 0.0
-                )  # Fallback 僅供安全
-                if r.get("iv_metrics") and hasattr(r["iv_metrics"], "gex_max_put_wall"):
-                    val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
-                    if val is not None:
-                        put_wall = float(val)
+                mp_flt = _safe_float(mp_val)
+                put_wall = round(mp_flt * 0.9, 2) if mp_flt > 0 else 0.0
 
             # 解析 CallWall
             call_wall = 0.0
             if "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
                 c_wall_raw = r["gex_metrics"].get("call_wall")
-                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
+                call_wall = _safe_float(c_wall_raw)
             if (
                 call_wall == 0.0
                 and "gex_profile_data" in r
                 and isinstance(r["gex_profile_data"], dict)
             ):
                 c_wall_raw = r["gex_profile_data"].get("call_wall")
-                call_wall = float(c_wall_raw) if c_wall_raw is not None else 0.0
+                call_wall = _safe_float(c_wall_raw)
             if (
                 call_wall == 0.0
                 and r.get("iv_metrics")
@@ -654,7 +662,7 @@ def build_radar_scan_embed(
             ):
                 val = getattr(r["iv_metrics"], "gex_max_call_wall", 0.0)
                 if val is not None:
-                    call_wall = float(val)
+                    call_wall = _safe_float(val)
 
             # 動態判定共振狀態
             vpoc_raw = (
@@ -662,7 +670,7 @@ def build_radar_scan_embed(
                 if r.get("volume_poc") is not None
                 else r.get("dp_poc")
             )
-            volume_poc = float(vpoc_raw) if vpoc_raw is not None else 0.0
+            volume_poc = _safe_float(vpoc_raw)
             is_magnetic = False
             if (
                 price_val > 0
@@ -1216,9 +1224,12 @@ def build_radar_scan_embed(
                 top_uoa_str = f"{icon} {expiry_short} ${u_strike:.1f}{u_type} ({u_action} {vol_k})"
 
             # 6. 防洗盤絕對防守位 (Anti-Washout Stop Loss)
-            atr_14 = float(r.get("atr_14", 0.0) or 0.0)
-            if put_wall > 0 and atr_14 > 0:
-                anti_washout_stop = round(put_wall - 1.5 * atr_14, 2)
+            atr_1d = _safe_float(r.get("atr_14"), 0.0)
+            if atr_1d <= 0.0:
+                atr_1d = _safe_float(r.get("atr_1d"), 0.0)
+            atr_15m_res = resolve_atr_15m(_safe_float(r.get("atr_15m"), 0.0), atr_1d)
+            if put_wall > 0 and atr_15m_res > 0:
+                anti_washout_stop = round(put_wall - 1.5 * atr_15m_res, 2)
             elif put_wall > 0:
                 anti_washout_stop = round(put_wall * 0.96, 2)
             else:

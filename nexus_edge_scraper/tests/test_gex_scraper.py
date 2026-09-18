@@ -112,27 +112,28 @@ async def test_put_wall_only_selects_from_strikes_at_or_below_spot() -> None:
     assert result["put_wall"] <= 100.0
 
 
-async def test_call_wall_falls_back_to_spot_when_no_strike_above_spot_has_calls() -> (
-    None
-):
+async def test_call_wall_returns_zero_when_no_strike_above_spot_has_calls() -> None:
+    """空候選集回 0.0（缺失 sentinel），不回現價——否則下游無法與「牆恰在現價上」
+    區分，會把 0.00% 牆距當成真實數據渲染。"""
     html = _make_html(
         spot=100.0,
         call_rows=[_row("TESTC1", 95.0, 1000, 20)],
         put_rows=[_row("TESTP1", 85.0, 1000, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
-    assert result["call_wall"] == 100.0
+    assert result["call_wall"] == 0.0
     assert result["put_wall"] == 85.0
 
 
-async def test_put_wall_falls_back_to_spot_when_no_strike_below_spot_has_puts() -> None:
+async def test_put_wall_returns_zero_when_no_strike_below_spot_has_puts() -> None:
+    """同上：底牆側的空候選集 sentinel 亦為 0.0。"""
     html = _make_html(
         spot=100.0,
         call_rows=[_row("TESTC1", 115.0, 1000, 20)],
         put_rows=[_row("TESTP1", 110.0, 1000, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
-    assert result["put_wall"] == 100.0
+    assert result["put_wall"] == 0.0
     assert result["call_wall"] == 115.0
 
 
@@ -223,5 +224,39 @@ async def test_scrape_symbol_gex_core_with_dividend_yield() -> None:
     expected_gex = 500 * 100.0 * gamma * 100.0 * 100.0
     assert expected_gex > 0
     assert result["gex_profile"][100.0] == pytest.approx(0.0, abs=1.0)
-    assert result["call_wall"] == 100.0
-    assert result["put_wall"] == 100.0
+    # 本 fixture 只有 ATM 履約價，兩側候選池皆空 → 缺失 sentinel 0.0
+    assert result["call_wall"] == 0.0
+    assert result["put_wall"] == 0.0
+
+
+async def test_atm_strike_within_tolerance_excluded_from_walls() -> None:
+    """驗證 math.isclose 輔助判定：微小浮點浮動（例如 100.00005 與 99.99995）不應被誤判為 CallWall 或 PutWall。"""
+    # 案例 1：存在大 OI 的 ATM 浮點擾動合約與較小 OI 的真實 OTM 合約時，應選取真實 OTM 合約
+    html_with_otm = _make_html(
+        spot=100.0,
+        call_rows=[
+            _row("TESTC1", 100.00005, 5000, 20),
+            _row("TESTC2", 105.0, 1000, 20),
+        ],
+        put_rows=[
+            _row("TESTP1", 99.99995, 5000, 20),
+            _row("TESTP2", 95.0, 1000, 20),
+        ],
+    )
+    result_with_otm = await gex_scraper.scrape_symbol_gex_core(
+        "TEST", _make_browser(html_with_otm)
+    )
+    assert result_with_otm["call_wall"] == 105.0
+    assert result_with_otm["put_wall"] == 95.0
+
+    # 案例 2：若僅有 ATM 浮點擾動合約而無其他 OTM 合約時，候選池為空並回 0.0
+    html_atm_only = _make_html(
+        spot=100.0,
+        call_rows=[_row("TESTC1", 100.00005, 5000, 20)],
+        put_rows=[_row("TESTP1", 99.99995, 5000, 20)],
+    )
+    result_atm_only = await gex_scraper.scrape_symbol_gex_core(
+        "TEST", _make_browser(html_atm_only)
+    )
+    assert result_atm_only["call_wall"] == 0.0
+    assert result_atm_only["put_wall"] == 0.0

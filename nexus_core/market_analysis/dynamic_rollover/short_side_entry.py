@@ -284,9 +284,13 @@ def _find_next_negative_gex_peak(gex_profile_data: Any, target_spot: float) -> f
             val = float(v)
         except (ValueError, TypeError):
             continue
-        if math.isnan(strike) or math.isnan(val):
+        if not (math.isfinite(strike) and math.isfinite(val)):
             continue
-        if strike >= target_spot or val >= 0:
+        if (
+            strike >= target_spot
+            or math.isclose(strike, target_spot, abs_tol=1e-4)
+            or val >= 0
+        ):
             continue
         if abs(val) > best_magnitude:
             best_magnitude = abs(val)
@@ -611,6 +615,10 @@ async def evaluate_short_entry(
     )
 
     # 動態空間門檻所需輸入在此一次解析，同時餵給條件二與條件三。
+    # 刻意不傳 target_spot（不啟動 PutWall 重錨）：做空的停損牆是現價**上方**的
+    # Call Wall，由條件二的 _scan_resistance_wall_above_spot 自行解析並以
+    # resistance_wall 傳給條件三；resolve_room_threshold_inputs 的重錨邏輯只處理
+    # 支撐底牆，對做空不適用，故此處 _pw 一律丟棄，只取兩個 ATR。
     _pw, _atr15, _atr1d = await resolve_room_threshold_inputs(
         candidate_symbol,
         candidate_radar,
