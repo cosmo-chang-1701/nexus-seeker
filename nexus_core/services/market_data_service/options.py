@@ -44,7 +44,14 @@ async def _retry_once(
 
 
 async def get_all_option_expiries(symbol: str) -> List[str]:
-    """取得該標的所有可用的期權到期日 (支援 12 小時快取)。"""
+    """取得該標的所有可用的期權到期日 (支援 12 小時快取與併發請求合併)。
+
+    ⚠️ **為什麼 12 小時 TTL 不足以取代 single-flight**：快取寫入發生在網路
+    `await` 之後，因此同一瞬間 miss 的呼叫端會各自打一次。`/x symbol` 的 t=0
+    並行池會讓同一標的的到期日被重複抓取多次——`expiries_task` 本身，加上
+    `iv_metrics` / `max_pain` / `uoa_detector` / `options_flow` 在各自的 task
+    內又各呼叫一次（六重鐵律的三條進場路徑同理）。
+    """
     symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _option_expiries_cache:
@@ -52,7 +59,21 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
         if now < expiry:
             return list(cached_val)
 
-    res = []
+    from services.single_flight import SingleFlightManager
+
+    # shield：SingleFlightManager 的無 timeout 路徑是 `await task`，共乘者自身
+    # 被取消會連帶取消共享 task 而波及其他共乘者（同 history.py 的作法）。
+    res = await asyncio.shield(
+        SingleFlightManager.run(
+            f"opt_expiries_{symbol}", _fetch_option_expiries_uncached, symbol, now
+        )
+    )
+    return list(res) if res else []
+
+
+async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
+    """實際抓取期權到期日並寫入 `_option_expiries_cache`（Edge 優先、yfinance 降級）。"""
+    res: List[str] = []
     from config import TUNNEL_URL
     import urllib.parse
 

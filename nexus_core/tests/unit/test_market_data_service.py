@@ -244,6 +244,214 @@ async def test_clear_history_cache() -> None:
         mock_yf_ticker.assert_called_once()
 
 
+# ---------------------------------------------------------------------------
+# 併發請求合併 (single-flight)
+#
+# _history_cache 的寫入發生在 await 之後，因此 TTL 快取無法消除「同輪次併發」的
+# 重複請求——在 t=0 一起建立的多個 task 會雙雙 miss 快取並各自打一次 yfinance。
+# ---------------------------------------------------------------------------
+
+
+def _single_flight_mock_df() -> Any:
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    df.index.name = "Date"
+    return df
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_single_flight_merges_concurrent_calls() -> None:
+    """同一 cache key 的併發呼叫只發出一次網路請求，且 force_refresh 也共乘。"""
+    import asyncio
+    from services.market_data_service import get_history_df, clear_history_cache
+    from services.market_data_service import history as history_mod
+    from services.single_flight import SingleFlightManager
+
+    clear_history_cache()
+    SingleFlightManager._active_tasks.clear()
+
+    calls = 0
+    gate = asyncio.Event()
+
+    async def fake_safe_yf_history(
+        ticker: Any, *, period: str, interval: Any = None
+    ) -> Any:
+        nonlocal calls
+        calls += 1
+        await gate.wait()  # 把抓取卡在飛行中，確保三個 task 同時在途
+        return _single_flight_mock_df()
+
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch.object(history_mod, "_safe_yf_history", fake_safe_yf_history),
+        patch.object(history_mod.yf, "Ticker", return_value=MagicMock()),
+    ):
+        leader = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        rider = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        forced = asyncio.create_task(
+            get_history_df("AAPL", period="1y", interval="1d", force_refresh=True)
+        )
+        for _ in range(8):
+            await asyncio.sleep(0)  # 讓三個 task 都推進到各自的 await
+
+        assert calls == 1, "併發同 key 只應發出一次抓取"
+        gate.set()
+        df_leader, df_rider, df_forced = await asyncio.gather(leader, rider, forced)
+
+    assert calls == 1
+    for df in (df_leader, df_rider, df_forced):
+        assert not df.empty
+        assert df.loc["2026-05-25", "Close"] == 102.0
+    # SingleFlightManager 的 active task 表必須自我清理（done_callback 是排程的
+    # 非同步清理，先讓 loop 跑一圈）
+    await asyncio.sleep(0)
+    assert SingleFlightManager._active_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_single_flight_isolates_copies() -> None:
+    """共乘者拿到的是各自獨立的副本，改動其一不得污染其他呼叫端。"""
+    import asyncio
+    from services.market_data_service import get_history_df, clear_history_cache
+    from services.market_data_service import history as history_mod
+    from services.single_flight import SingleFlightManager
+
+    clear_history_cache()
+    SingleFlightManager._active_tasks.clear()
+
+    gate = asyncio.Event()
+
+    async def fake_safe_yf_history(
+        ticker: Any, *, period: str, interval: Any = None
+    ) -> Any:
+        await gate.wait()
+        return _single_flight_mock_df()
+
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch.object(history_mod, "_safe_yf_history", fake_safe_yf_history),
+        patch.object(history_mod.yf, "Ticker", return_value=MagicMock()),
+    ):
+        leader = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        rider = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        for _ in range(8):
+            await asyncio.sleep(0)
+        gate.set()
+        df_leader, df_rider = await asyncio.gather(leader, rider)
+
+    assert df_leader is not df_rider
+    df_rider.loc["2026-05-25", "Close"] = 999.0
+    assert df_leader.loc["2026-05-25", "Close"] == 102.0
+
+    # 後續的快取命中同樣不受污染（快取存的是獨立副本）
+    with patch("config.TUNNEL_URL", ""):
+        df_cached = await get_history_df("AAPL", period="1y", interval="1d")
+    assert df_cached.loc["2026-05-25", "Close"] == 102.0
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_single_flight_survives_rider_cancellation() -> None:
+    """共乘者被取消不得連帶取消共享 Future，領隊與其他共乘者必須照常完成。"""
+    import asyncio
+    from services.market_data_service import get_history_df, clear_history_cache
+    from services.market_data_service import history as history_mod
+    from services.single_flight import SingleFlightManager
+
+    clear_history_cache()
+    SingleFlightManager._active_tasks.clear()
+
+    gate = asyncio.Event()
+
+    async def fake_safe_yf_history(
+        ticker: Any, *, period: str, interval: Any = None
+    ) -> Any:
+        await gate.wait()
+        return _single_flight_mock_df()
+
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch.object(history_mod, "_safe_yf_history", fake_safe_yf_history),
+        patch.object(history_mod.yf, "Ticker", return_value=MagicMock()),
+    ):
+        leader = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        rider = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        survivor = asyncio.create_task(
+            get_history_df("AAPL", period="1y", interval="1d")
+        )
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        rider.cancel()
+        for _ in range(4):
+            await asyncio.sleep(0)
+
+        gate.set()
+        df_leader, df_survivor = await asyncio.gather(leader, survivor)
+
+    assert not df_leader.empty
+    assert not df_survivor.empty
+    assert df_survivor.loc["2026-05-25", "Close"] == 102.0
+    await asyncio.sleep(0)
+    assert SingleFlightManager._active_tasks == {}
+
+
+@pytest.mark.asyncio
+async def test_get_history_df_single_flight_survives_first_caller_cancellation() -> (
+    None
+):
+    """第一個發起者被取消，共乘者仍取得完整結果。
+
+    SingleFlightManager 把抓取放在獨立的 asyncio.Task 上，呼叫端之間沒有「領隊」
+    關係；再加上呼叫端的 asyncio.shield（manager 的無 timeout 路徑是 `await
+    task`，不 shield 會讓任一呼叫端的取消反向取消共享 task），任何一個呼叫端消失
+    都不得影響其餘呼叫端。"""
+    import asyncio
+    from services.market_data_service import get_history_df, clear_history_cache
+    from services.market_data_service import history as history_mod
+    from services.single_flight import SingleFlightManager
+
+    clear_history_cache()
+    SingleFlightManager._active_tasks.clear()
+
+    gate = asyncio.Event()
+
+    async def fake_safe_yf_history(
+        ticker: Any, *, period: str, interval: Any = None
+    ) -> Any:
+        await gate.wait()
+        return _single_flight_mock_df()
+
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch.object(history_mod, "_safe_yf_history", fake_safe_yf_history),
+        patch.object(history_mod.yf, "Ticker", return_value=MagicMock()),
+    ):
+        first = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        rider = asyncio.create_task(get_history_df("AAPL", period="1y", interval="1d"))
+        for _ in range(8):
+            await asyncio.sleep(0)
+
+        first.cancel()
+        gate.set()
+        df_rider = await asyncio.wait_for(rider, timeout=2.0)
+
+    assert not df_rider.empty, (
+        "SingleFlightManager 的抓取跑在獨立 task 上，任一呼叫端被取消都不影響它，"
+        "共乘者仍應取得完整結果"
+    )
+    assert df_rider.loc["2026-05-25", "Close"] == 102.0
+
+
 @pytest.mark.asyncio
 async def test_get_all_option_expiries_caching() -> None:
     """Test that get_all_option_expiries caches the returned expiry dates list."""

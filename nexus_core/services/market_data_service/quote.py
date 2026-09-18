@@ -211,7 +211,46 @@ def _is_finnhub_quote_stale(data: Dict[str, Any]) -> bool:
 
 
 async def get_quote(symbol: str, allow_stale: bool = False) -> Dict[str, Any]:
-    """取得即時報價 (非同步)。對於指數型標的，強制轉向 yfinance。"""
+    """取得即時報價 (非同步，支援 15 秒快取與併發請求合併)。對於指數型標的，強制轉向 yfinance。
+
+    ⚠️ **為什麼 15 秒 TTL 不足以取代 single-flight**：快取寫入發生在網路 `await`
+    之後，同一瞬間 miss 的呼叫端會各自打一次 Finnhub／yfinance。已知的併發同標的
+    呼叫點：`/x symbol` 的 `quote_task` 與同一並行池中 `uoa_detector` 的
+    `get_quote(symbol)`、以及 `get_option_chain` 內 Strike Pruning 的 `_get_spot()`。
+    """
+    symbol = _sanitize_ticker(symbol)
+    now = time.time()
+    if symbol in _quote_cache:
+        val, expiry = _quote_cache[symbol]
+        if now < expiry or (allow_stale and val.get("c", 0) > 0):
+            return val  # type: ignore
+
+    from services.single_flight import SingleFlightManager
+
+    # allow_stale 必須併入 key：它會改變 _fetch() 的行為（是否接受時間戳過舊的
+    # Finnhub 報價，或強制轉 yfinance fallback），共乘會拿到不同語意的資料。
+    # 比照 options.py::get_option_chain 對 force_live 的處理。
+    # shield：manager 的無 timeout 路徑是 `await task`，共乘者自身被取消會連帶
+    # 取消共享 task 而波及其他共乘者（同 history.py 的作法）。
+    return await asyncio.shield(
+        SingleFlightManager.run(
+            f"quote_{symbol}_{'stale_ok' if allow_stale else 'std'}",
+            _fetch_quote_uncached,
+            symbol,
+            allow_stale,
+            now,
+        )
+    )
+
+
+async def _fetch_quote_uncached(
+    symbol: str, allow_stale: bool, now: float
+) -> Dict[str, Any]:
+    """實際抓取即時報價並寫入 `_quote_cache`（Finnhub 優先、yfinance 降級）。
+
+    `SYMBOL_NOT_FOUND` 會外拋給所有共乘者——那是「標的不存在」的確定結論，
+    不是暫時性失敗，不應被吞成空 dict。
+    """
     # 延遲從套件頂層 import：讓單元測試對 `services.market_data_service.X`
     # (is_finnhub_rate_limited / _get_client / _execute_api_call / get_yfinance_quote)
     # 的 patch 能正確攔截本函式內部呼叫（這幾個名稱originally 與 get_quote 同屬
@@ -222,13 +261,6 @@ async def get_quote(symbol: str, allow_stale: bool = False) -> Dict[str, Any]:
         get_yfinance_quote as _get_yfinance_quote,
         is_finnhub_rate_limited,
     )
-
-    symbol = _sanitize_ticker(symbol)
-    now = time.time()
-    if symbol in _quote_cache:
-        val, expiry = _quote_cache[symbol]
-        if now < expiry or (allow_stale and val.get("c", 0) > 0):
-            return val  # type: ignore
 
     async def _fetch() -> Any:
         if symbol.startswith("^") or symbol == "VIX" or symbol.endswith("=F"):

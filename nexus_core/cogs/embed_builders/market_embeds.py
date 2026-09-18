@@ -22,11 +22,23 @@ from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
 from market_analysis.macro_calendar_translator import translate_macro_event
+from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.insight_generator import compute_realtime_insights
+from market_analysis.insights_engine import InsightsEngine, RiskInsightsContext
 from market_analysis.room_threshold import resolve_atr_15m
 
 # UOA kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
 # _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
 from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+
+# `import database`（模組物件 + 呼叫時屬性存取）可以留在頂層：
+# `patch("database.get_full_user_context")` 改寫的是模組屬性，仍能攔截到。
+# 但 `from database.X import <name>` **不可**提升——那會在 import 時就把函式物件
+# 綁進本模組的命名空間，讓既有測試對來源模組的 patch
+# (`patch("database.cache.get_kv_cache")` 等，全套件共 11 個測試檔在用) 對本模組
+# 完全失效。同一理由在 `services/market_data_service/quote.py` 也有記載；省下的
+# 只是一次 sys.modules 字典查詢，不值得換掉一個全套件共用的 patch 介面。
+import database
 
 _UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
@@ -474,14 +486,12 @@ def build_radar_scan_embed(
         # 以本頁第一個有效的 max_pain expiry 為準
         _mp_header_dte_label = ""
         try:
-            import datetime as _dt_mod
-
-            _today = _dt_mod.datetime.now().date()
+            _today = datetime.now().date()
             for _r in chunk:
                 _mp_d = _r.get("max_pain") or {}
                 _expiry_str = _mp_d.get("expiry") if isinstance(_mp_d, dict) else None
                 if _expiry_str and isinstance(_expiry_str, str):
-                    _exp_dt = _dt_mod.datetime.strptime(_expiry_str, "%Y-%m-%d").date()
+                    _exp_dt = datetime.strptime(_expiry_str, "%Y-%m-%d").date()
                     _dte_days = (_exp_dt - _today).days
                     if _dte_days <= 7:
                         _mp_header_dte_label = " (本週)"
@@ -705,12 +715,6 @@ def build_radar_scan_embed(
                 status_label = "正常運行"
 
             # -- D-MP 動態阻斷機制與 InsightsEngine --
-            from market_analysis.insights_engine import (
-                InsightsEngine,
-                RiskInsightsContext,
-            )
-            import database
-
             ctx_db = database.get_full_user_context(user_id)
 
             # 解析 UOA
@@ -847,10 +851,6 @@ def build_radar_scan_embed(
 
                 # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
                 if abs(dist_pct) > 10.0:
-                    from market_analysis.insight_generator import (
-                        compute_realtime_insights,
-                    )
-
                     data = {
                         "symbol": sym,
                         "spot": price_val,
@@ -1238,11 +1238,6 @@ def build_radar_scan_embed(
             # 6.5 訊號融合層嚴格布林 AND-gate (Entry Trigger)
             # 「現貨重砲」等進場建議須四規則同時成立才可輸出激進語句，
             # 任一規則為 False 僅能降級為「保持觀察」或「禁止進場」。
-            from database.cache import get_kv_cache as _get_kv_cache_gate
-            from market_analysis.index_microstructure import (
-                estimate_symbol_gamma_flip as _estimate_gamma_flip_gate,
-            )
-
             oi_pcr_val = (
                 _safe_float(r.get("oi_pcr")) if r.get("oi_pcr") is not None else None
             )
@@ -1256,8 +1251,12 @@ def build_radar_scan_embed(
                 if isinstance(gex_prof_data_dict, dict)
                 else {}
             ) or {}
-            gamma_flip_est_gate = _estimate_gamma_flip_gate(gex_profile_gate, price_val)
-            prev_iv_rank_gate = _get_kv_cache_gate(f"iv_rank_prev_{sym.upper()}")
+            gamma_flip_est_gate = estimate_symbol_gamma_flip(
+                gex_profile_gate, price_val
+            )
+            from database.cache import get_kv_cache
+
+            prev_iv_rank_gate = get_kv_cache(f"iv_rank_prev_{sym.upper()}")
             iv_rising_with_price_gate = (
                 prev_iv_rank_gate is not None and iv_rank_val > float(prev_iv_rank_gate)
             )
