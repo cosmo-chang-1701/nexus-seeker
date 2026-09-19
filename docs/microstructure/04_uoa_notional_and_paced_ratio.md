@@ -136,7 +136,28 @@ flowchart TD
 
 ---
 
+4. **UOA 的兩種儲存：最新快照 vs 可回看歷史**：
+   UOA 有兩個持久化目的地，語意刻意不同，不可互相取代。
+   - `kv_cache` 的 `uoa_{SYMBOL}`（由 15 分鐘心跳寫入，供 `/x` 終端複用）是
+     `ON CONFLICT DO UPDATE` 的 **upsert**——每輪覆蓋前一輪，整張表每個標的
+     永遠只有一列。它回答「**現在**有沒有機構掃單」。
+   - `uoa_history`（migration `v077`）為**逐筆累積**，去重鍵為
+     `(symbol, 15m bar, expiry, strike, type, action)`，回答「**最近 N 個交易日**
+     有沒有出現過機構買盤」。右側進場鐵律條件四的 Regime III-B 時間窗
+     （見 [`../strategies/02_right_side_momentum_ironclad.md`](../strategies/02_right_side_momentum_ironclad.md) §2.4.1）
+     是它目前唯一的消費者。
+   兩者共用同一份 `detect_uoa()` 結果，**不產生任何額外的期權鏈抓取成本**。
+   `uoa_history` 只落地條件四判定用得到的欄位（不含 delta/iv/bid/ask），
+   保留 10 天，由 03:00 ET 離峰排程清理。
+   ⚠️ `detect_uoa()` 只回傳名目價值**前 5 大**（`uoa_detector.py`），
+   因此 `uoa_history` 繼承同一個截斷——它記錄的是「最顯著的機構活動」，
+   不是完整的 UOA 全集。
+
 ## 6. 核心程式碼檔案路徑關聯
+
+- `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 15 分鐘心跳寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）
+- `nexus_core/database/migrations/v077_add_uoa_history.py`：`uoa_history` 資料表與去重索引定義
+- `nexus_core/market_time.py`：回看窗基準點 `get_trading_days_ago_utc()`（NYSE 行事曆，只計入已開盤的交易日）
 
 - `nexus_core/market_analysis/sentiment/uoa_detector.py`：
   - 候選列向量篩選：`_select_uoa_candidate_rows()`（第 85–107 行）

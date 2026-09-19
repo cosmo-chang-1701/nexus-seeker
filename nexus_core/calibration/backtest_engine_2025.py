@@ -61,6 +61,20 @@ from market_analysis.room_threshold import (
 )
 
 
+# --- Regime III-B 趨勢延續態的 1h 代理常數 ---
+# production 的判定是「近 6 根**已收盤 15m** K 棒至少 5 根站穩結構」(1.5 小時窗、
+# 83% 容差)。本回測只有 1h K 線，粒度粗 4 倍，無法逐根複製；改以「近 4 根 1h K 棒
+# 至少 3 根」(4 小時窗、75% 容差) 作為同形狀的代理。窗口在時間維度上比 production
+# **更長更嚴**，方向是保守的。
+#
+# ⚠️ 本代理只能量測條件一放寬 (不再要求放量陽線) 的效果。條件四的 UOA 5 日回看窗
+# **在本回測中完全未實作**——backtest_engine_2025.py 原本就沒有 UOA 條件
+# (見 handoff.md §1.3 的門檻對照表)。因此 A/B 結果低估 III-B 的實際進場頻率，
+# 判讀時必須把這點算進去：回測說「勉強打平」在 production 可能是明顯負向。
+_BT_TREND_CONT_LOOKBACK_BARS_1H = 4
+_BT_TREND_CONT_MIN_HELD_BARS_1H = 3
+
+
 @dataclass
 class Position:
     symbol: str
@@ -165,6 +179,14 @@ class BacktestMetrics:
     benchmark_max_drawdown: float
     calmar_ratio: float
     benchmark_calmar: float
+    # 減碼 B&H 對照組 (docs/architecture/05 §6.1 指定的最重要 KPI)：以「與本策略
+    # 同等年化波動的 B&H + 現金」為基準。回答的是「這套引擎創造 alpha，還是只是在
+    # 降低曝險」——高勝率但年化波動只有 B&H 一半的策略，報酬本來就該低於 B&H，
+    # 拿裸 B&H 比較會同時誤判它變好或變壞。
+    scaled_benchmark_weight: float
+    scaled_benchmark_total_return: float
+    scaled_benchmark_max_drawdown: float
+    excess_return_vs_scaled: float
     win_rate: float
     profit_factor: float
     total_trades: int
@@ -499,8 +521,12 @@ class RolloverBacktestEngine2025:
         start_date: str = "2025-01-02",
         end_date: str = "2025-12-30",
         mode: str = "aggressive",
+        enable_trend_continuation: bool = False,
     ) -> None:
         self.mode: str = mode.lower()
+        # Regime III-B 趨勢延續進場路徑 (handoff.md §4)。預設關閉＝基準線，
+        # 開啟後才加入第二條多頭進場路徑，供 §4.4 強制要求的 A/B 對比使用。
+        self.enable_trend_continuation: bool = enable_trend_continuation
         self.cache_dir: Path = (
             cache_dir
             if cache_dir is not None
@@ -1408,6 +1434,32 @@ class RolloverBacktestEngine2025:
                                 and target_room >= room_eval.threshold_pct
                                 and buffer_eval.state != "TOO_TIGHT"
                             )
+                            # Regime III-B: 右側趨勢延續 (非突破瞬間)。判定優先序
+                            # 必須在 Regime III 之後——突破當下兩者都會成立，
+                            # 歸類為 III 才不會把更強的進場證據降級。
+                            regime_iii_b_ok = False
+                            held_bars_1h = 0
+                            if self.enable_trend_continuation and not regime_iii_ok:
+                                window = (
+                                    nvda_hours
+                                    if sym == self.alpha_symbol
+                                    else gld_hours
+                                )
+                                lo = max(0, b_idx + 1 - _BT_TREND_CONT_LOOKBACK_BARS_1H)
+                                win = window.iloc[lo : b_idx + 1]
+                                if len(win) >= _BT_TREND_CONT_LOOKBACK_BARS_1H:
+                                    level = max(gf, vwap)
+                                    held_bars_1h = int((win["close"] > level).sum())
+                                    regime_iii_b_ok = (
+                                        held_bars_1h >= _BT_TREND_CONT_MIN_HELD_BARS_1H
+                                        and c_val > vwap
+                                        and c_val > gf
+                                        and c_val > h10
+                                        and 50.0 < rsi_val < 78.0
+                                        and target_room >= room_eval.threshold_pct
+                                        and buffer_eval.state != "TOO_TIGHT"
+                                    )
+
                             # Regime I: 左側超跌均值回歸接刀確認
                             dist_pw = (c_val - pw) / c_val if c_val > 0 else 0.0
                             regime_i_ok = (
@@ -1431,6 +1483,26 @@ class RolloverBacktestEngine2025:
                                     target_wall=eff_target,
                                     stop_loss=sl_candidate,
                                     entry_regime="REGIME_III_RIGHT_MOMENTUM",
+                                )
+                                cash_above_reserve -= budget
+                            elif regime_iii_b_ok:
+                                self.portfolio.buy(
+                                    symbol=sym,
+                                    asset_class="SATELLITE",
+                                    price=c_val,
+                                    notional=budget,
+                                    scenario="REGIME_III_B_TREND_CONT",
+                                    reason=(
+                                        f"🚀 趨勢延續進場 (${c_val:.2f} 持續站穩結構 "
+                                        f"{held_bars_1h}/{_BT_TREND_CONT_LOOKBACK_BARS_1H} 根, "
+                                        f"RSI={rsi_val:.1f}, 空間={target_room:.1%})"
+                                    ),
+                                    timestamp=ts_str,
+                                    date_str=date_str,
+                                    anchor_base=h10,
+                                    target_wall=eff_target,
+                                    stop_loss=sl_candidate,
+                                    entry_regime="REGIME_III_B_TREND_CONTINUATION",
                                 )
                                 cash_above_reserve -= budget
                             elif regime_i_ok:
@@ -1912,6 +1984,18 @@ class RolloverBacktestEngine2025:
                 monthly_returns[m_str] = float(m_ret)
                 benchmark_monthly_returns[m_str] = float(b_ret)
 
+        # --- 減碼 B&H 對照組 (docs/architecture/05 §6.1 的首要 KPI) ---
+        # 以年化波動比推回「有效曝險」w，對照組 = w × B&H + (1−w) × 無風險利率。
+        # 為什麼需要它：策略年化波動若只有 B&H 的一半，報酬低於 B&H 是必然的，
+        # 拿裸 B&H 比較會把「單純減碼」誤讀成「策略變差」，也會把「單純加槓桿」
+        # 誤讀成「策略變好」。w 夾在 [0, 1]：本引擎不使用槓桿，w > 1 只會是
+        # 波動估計的雜訊，放行會讓對照組憑空虛增。
+        scaled_w = min(1.0, max(0.0, vol / bench_vol)) if bench_vol > 0 else 0.0
+        scaled_total_return = (
+            scaled_w * bench_total_return + (1.0 - scaled_w) * rf * years
+        )
+        scaled_max_dd = scaled_w * bench_max_dd
+
         return BacktestMetrics(
             total_return=total_return,
             cagr=cagr,
@@ -1927,6 +2011,10 @@ class RolloverBacktestEngine2025:
             benchmark_max_drawdown=bench_max_dd,
             calmar_ratio=calmar,
             benchmark_calmar=bench_calmar,
+            scaled_benchmark_weight=scaled_w,
+            scaled_benchmark_total_return=scaled_total_return,
+            scaled_benchmark_max_drawdown=scaled_max_dd,
+            excess_return_vs_scaled=total_return - scaled_total_return,
             win_rate=win_rate,
             profit_factor=profit_factor,
             total_trades=len(self.portfolio.trades),

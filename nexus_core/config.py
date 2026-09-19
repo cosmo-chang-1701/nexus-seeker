@@ -101,6 +101,13 @@ SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() =
 # 倉位模型與 VIX 乘數皆未經回測校準，累積至少 20 筆前向樣本並經
 # `calibration forward-report` 檢視後，才由人工決定翻轉。
 PYRAMID_ADD_DRY_RUN = get_env_or_secret("PYRAMID_ADD_DRY_RUN", "true").lower() == "true"
+# Regime III-B 趨勢延續進場路徑 dry-run (預設開啟)：由 III-B 確認的機會成本轉倉／
+# 核心資金部署指令只寫稽核軌跡、不推播 DM。本路徑刻意放寬右側條件一與條件四，
+# 必然提高交易頻率與摩擦成本，依 docs/architecture/05 §5.8 的不對稱原則，
+# 「放寬門檻」一律需要前向紀錄背書才能翻轉為 false。
+REGIME_III_B_DRY_RUN = (
+    get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
+)
 # Regime／進場鐵律評估紀錄的前向蒐集 (market_analysis/evaluation_recorder.py)。
 # GEX 相關門檻無法回測，這是唯一的校準資料來源，預設開啟 (~260 列/日)。
 ENABLE_REGIME_EVALUATION_LOG = (

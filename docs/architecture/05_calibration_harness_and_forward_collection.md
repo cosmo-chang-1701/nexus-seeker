@@ -232,7 +232,16 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 離線報告的建議值僅在「充足」欄為 ✅ 時才納入考慮；並應以至少 40 檔、涵蓋非多頭年份的標的池重跑確認，而不是只用當下的強勢自選清單。
 
-**C. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
+**D. 開啟 Regime III-B 趨勢延續推播（`REGIME_III_B_DRY_RUN` 改為 `false`）**，須同時成立：
+
+1. `ENTRY_RIGHT_B` 且 `decision = 1` 的已標註紀錄 $\ge 100$ 筆、橫跨 $\ge 30$ 個交易日。該路徑刻意使用**獨立的 evaluator 名稱**（而非沿用 `ENTRY_RIGHT`）：`regime_evaluation_log` 的去重鍵為 `(symbol, evaluator, source, bar_ts)`，同名會讓同一根 K 棒的嚴格／放寬兩套判定互相覆蓋，A/B 分離統計即不可能。
+2. `ENTRY_RIGHT_B` 的期望值**高於同期 `ENTRY_RIGHT`**。只贏過零不夠——若放寬後的期望值低於嚴格版，代表多出來的那些進場機會是負向的。
+3. `scripts/run_rollover_backtest_2025.py --ab-compare` 的「超額報酬 vs 減碼 B&H」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
+4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
+
+> ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
+
+**E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
 ### 5.9 基準：2026-09-16 試跑結果
 作為日後比較的起點。條件：使用者自選清單 36 檔（含 TZA、SOXL 等槓桿／反向 ETF 與 IBIT、ETHA 加密 ETF）、日線自 2005 年或上市日起、1h 為 2023-10 至 2026-09、seed $7$、期望值以 $1.5 \times \text{ATR}_{1D}$ 為 $\pm 1\text{R}$。
@@ -286,11 +295,11 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
   - `nexus_core/calibration/forward_log.py`：前向蒐集報告
   - `nexus_core/calibration/report.py`：報告輸出與路徑限制
   - `nexus_core/calibration/backtest_engine_2025.py`：2025 全年度多資產動態轉倉回測引擎
-  - `nexus_core/scripts/run_rollover_backtest_2025.py`：回測執行入口腳本
+  - `nexus_core/scripts/run_rollover_backtest_2025.py`：回測執行入口腳本（`--enable-trend-continuation` 啟用 Regime III-B；`--ab-compare` 一次跑出基準線／III-B 兩份報告與差異摘要）
   - `nexus_core/reports/report_2025_rollover.md`：2025 全量回測報告
 - **共用標註**：`nexus_core/market_analysis/outcome_labeling.py`
 - **前向蒐集 (core)**
-  - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器
+  - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器。`_LONG_ENTRY_REGIMES` 是「會放行多頭新開倉」的 Regime 白名單——新增這類 Regime 時必須同步加入，否則它會被記成 `direction=None` / `decision=0`，該路徑的校準資料靜默歸零
   - `nexus_core/database/migrations/v075_add_regime_evaluation_log.py`：資料表定義
   - `nexus_core/database/regime_evaluation_log.py`：存取層
   - `nexus_core/services/regime_outcome_labeler.py`：事後走勢標註

@@ -39,9 +39,16 @@ def build_initial_dynamic_strategy_state(
     """建立部位首次標記為動態調整引擎管理時的初始 `dynamic_strategy_state`
     JSON 結構，供 `/add_trade`、`/add_holding` 手動標記時使用。
 
-    `entry_regime` 僅接受 `REGIME_I_LEFT_CATCH` 或 `REGIME_III_RIGHT_MOMENTUM`
+    `entry_regime` 僅接受會產生多頭新開倉的三個值：`REGIME_I_LEFT_CATCH`、
+    `REGIME_III_RIGHT_MOMENTUM` 或 `REGIME_III_B_TREND_CONTINUATION`
     ——Regime II (混沌泥淖態) 與 Regime IV (結構封頂危機態) 由定義上不會產生
-    已建立部位，呼叫端不應傳入。
+    已建立部位；Regime V (破位追空態) 產生的是空頭部位，由 SHORT_ENTRY 情境
+    自行處理，不走本狀態機。呼叫端不應傳入這三者。
+
+    ⚠️ 下方路徑一的 `pyramided` 一次性加碼**刻意只認 `REGIME_I_LEFT_CATCH`**。
+    III-B 標記的部位不會、也不該觸發它：路徑一的語意是「左側接刀倉進化為右側
+    動能倉」的狀態切換，而 III-B 本來就已經是右側倉。III-B 部位的順勢加碼由
+    `pyramid_add.py` 的 PYRAMID_ADD 情境負責（可重複觸發，語意不同）。
 
     `entry_bar_low` 為標記當下最近一根已收盤 15m K 棒的低點，供切換路徑 3
     的「下破進場 K 棒低點」判定使用 (見

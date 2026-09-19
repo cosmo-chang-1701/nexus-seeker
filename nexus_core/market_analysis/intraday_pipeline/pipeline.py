@@ -334,6 +334,20 @@ class IntradayScanPipeline:
             except Exception as cache_err:
                 logger.warning(f"[{hb_symbol}] UOA 快取寫回失敗: {cache_err}")
 
+            # 同一份資料另存一份**可回看的歷史**：上面的 kv_cache 是
+            # ON CONFLICT DO UPDATE 的 upsert，每輪覆蓋前一輪，結構上無法回答
+            # 「最近 5 個交易日有沒有出現過機構買盤」。右側條件四的 Regime III-B
+            # 時間窗 (見 opportunity_cost.py::_confirm_entry_condition4_uoa_dte)
+            # 需要歷史，故另寫 uoa_history。兩者共用同一份 hb_uoa_list，
+            # 不產生任何額外的期權鏈抓取成本。
+            try:
+                from database.uoa_history import save_uoa_observations
+                from market_analysis.evaluation_recorder import current_bar_ts
+
+                await save_uoa_observations(hb_symbol, current_bar_ts(), hb_uoa_list)
+            except Exception as hist_err:
+                logger.warning(f"[{hb_symbol}] UOA 歷史寫入失敗: {hist_err}")
+
         embed = create_watchlist_signal_embed(
             symbol=hb_symbol,
             option_guidance=option_guidance,

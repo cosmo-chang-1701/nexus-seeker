@@ -64,7 +64,7 @@ flowchart TB
 
     subgraph Strategies_Layer["1. 交易策略與進出場體系 (strategies/)"]
         direction TB
-        S01["5-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
+        S01["6-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
         S02["右側動能突破進場六重鐵律<br/>(02_right_side_momentum_ironclad.md)"]
         S03["左側均值回歸接刀六重鐵律<br/>(03_left_side_mean_reversion_ironclad.md)"]
         S04["動態轉倉 10 大情境狀態機與 2025 回測<br/>(04_dynamic_rollover_state_machine.md)"]
@@ -117,7 +117,7 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 5-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
+| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 6-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 02 | [`02_right_side_momentum_ironclad.md`](strategies/02_right_side_momentum_ironclad.md) | 右側動能突破進場六重鐵律 | 15m 實體陽線放量 1.5x, 站穩 VWAP, 底牆 $K < \text{Spot}$, 主力買盤 DTE $\ge 7$ | `market_analysis/dynamic_rollover/opportunity_cost.py` |
 | 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge$ 動態門檻 | `market_analysis/dynamic_rollover/left_side_entry.py` |
 | 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 10 大情境全景狀態機與 2025 全量回測 | 涵蓋 10 大情境（含順勢金字塔加碼 `PYRAMID_ADD`）, 2025 NVDA/SPY/GLD 全量回測實證 (MDD 降 18.1%, 勝率 79.4%), 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |

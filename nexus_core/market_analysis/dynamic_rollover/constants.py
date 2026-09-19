@@ -117,6 +117,13 @@ _ENTRY_UOA_MIN_RATIO: float = (
 _ENTRY_UOA_MIN_NOTIONAL_USD: float = (
     200_000.0  # 條件四：驅動進場的主力 UOA 買盤最低權利金名目金額要求
 )
+# 條件四的時間窗放寬：**僅 Regime III-B 趨勢延續路徑**套用。Regime III (突破態)
+# 維持「評估當下必須存在」的嚴格語意，不放寬（保護既有行為）。
+# 物理意義：突破那一瞬間機構掃單與價格同步發生，要求同時存在是合理的；趨勢的
+# 續航段卻是縮量、陰陽交錯的，機構的跨週期買盤早在啟動日就已佈完，再要求「此刻
+# 還有一筆」等於要求主力每 15 分鐘重新表態一次——這正是 handoff.md §1.3 診斷出的
+# 「事件式進場」病灶。回看窗以**交易日**計（非日曆日），避開週末與假日。
+_ENTRY_UOA_LOOKBACK_DAYS: int = 5
 _ENTRY_CANDIDATE_MIN_DTE: int = (
     1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
 )
@@ -394,6 +401,21 @@ _REGIME_I_PUT_WALL_UPPER_PCT: float = 0.015
 _REGIME_III_SUPPORT_WALL_MAX_DIST_PCT: float = 0.05
 _REGIME_III_RSI_MIN: float = 55.0
 _REGIME_III_VOLUME_SURGE_MULT: float = 1.5
+# Regime III-B 趨勢延續態 (regime_classifier.py，判定優先序緊接在 Regime III 之後)。
+# 與 _REGIME_III_* 刻意分開命名：Regime III 回答「突破是否『正在發生』」(事件式)，
+# III-B 回答「趨勢是否『仍然成立』」(狀態式)，兩者語意不同，數值必須能各自獨立調整。
+# 本組刻意**不含**放量倍數與陽線要求——那正是事件式判定的兩項特徵，若保留即退化
+# 回 Regime III，本路徑失去存在意義 (handoff.md §1.3)。
+_REGIME_III_B_LOOKBACK_BARS: int = 6  # 「持續站穩結構」的回看已收盤 15m K 棒根數
+_REGIME_III_B_MIN_HELD_BARS: int = (
+    5  # 上述 6 根中至少須有幾根收盤同時站穩 Gamma Flip 與 Session VWAP
+)
+# 5/6 容差是本路徑的關鍵設計：趨勢中允許出現 1 根跌破 VWAP 的洗盤針。要求 6/6 會
+# 退化回「特定瞬間」的事件式判定，與 Regime III 無異。
+_REGIME_III_B_RSI_MIN: float = 50.0  # 動能仍在多方 (以 50 為多空軸)
+_REGIME_III_B_RSI_MAX: float = (
+    78.0  # 上限防在超買頂部追高；刻意低於 80 的傳統超買線，留一段緩衝
+)
 # Regime IV 結構封頂／危機態 (最優先判定，全面鎖定態)
 # Regime III/IV 的 Call Wall 空間門檻同樣改由 room_threshold.py 公式 A 推導，
 # 常數已退役（政策不變：路由層與進場確認層仍各自獨立呼叫，共用的是演算法而非旋鈕）。

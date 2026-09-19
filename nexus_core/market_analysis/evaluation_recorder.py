@@ -147,6 +147,19 @@ def _append(row: dict[str, Any]) -> None:
     _BUFFER.append({k: _clean(v) for k, v in row.items()})
 
 
+# 會放行「多頭新開倉」的 Regime。新增這類 Regime 時**必須**同步加進來，
+# 否則它會被記成 direction=None / decision=0——前向蒐集資料裡看起來像「評估過
+# 但拒絕」，而 `calibration forward-report` 正是依 decision 分組統計勝率的
+# (forward_log.py::build_forward_report)。漏加等於讓新路徑的校準資料靜默歸零。
+_LONG_ENTRY_REGIMES: frozenset[str] = frozenset(
+    {
+        "REGIME_I_LEFT_CATCH",
+        "REGIME_III_RIGHT_MOMENTUM",
+        "REGIME_III_B_TREND_CONTINUATION",
+    }
+)
+
+
 def _walls(gex_profile_data: Any) -> dict[str, Optional[float]]:
     if not isinstance(gex_profile_data, Mapping):
         return {"call_wall": None, "put_wall": None, "net_gex": None}
@@ -174,18 +187,9 @@ def record_regime_classification(
             "regime": regime,
             "direction": "SHORT"
             if regime == "REGIME_V_BREAKDOWN_CHASE"
-            else (
-                "LONG"
-                if regime in ("REGIME_I_LEFT_CATCH", "REGIME_III_RIGHT_MOMENTUM")
-                else None
-            ),
+            else ("LONG" if regime in _LONG_ENTRY_REGIMES else None),
             "decision": 1
-            if regime
-            in (
-                "REGIME_I_LEFT_CATCH",
-                "REGIME_III_RIGHT_MOMENTUM",
-                "REGIME_V_BREAKDOWN_CHASE",
-            )
+            if regime in _LONG_ENTRY_REGIMES or regime == "REGIME_V_BREAKDOWN_CHASE"
             else 0,
             "spot": _num(spot),
             "session_vwap": _num(session_vwap),

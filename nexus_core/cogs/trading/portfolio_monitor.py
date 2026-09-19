@@ -20,7 +20,10 @@ from market_analysis.dynamic_rollover import (
     CORE_DEFENSE_ETF_SYMBOLS,
     ShortCandidateInput,
 )
-from market_analysis.dynamic_rollover.models import TradingStrategyMode
+from market_analysis.dynamic_rollover.models import (
+    DynamicRegime,
+    TradingStrategyMode,
+)
 from market_analysis.dynamic_rollover.constants import (
     _TRANSITION_PATH1_VWAP_VOLUME_MULT,
 )
@@ -1398,6 +1401,15 @@ class PortfolioMonitorCog(commands.Cog):
                         is_pyramid_add_dry_run = (
                             scenario == "PYRAMID_ADD" and config.PYRAMID_ADD_DRY_RUN
                         )
+                        # Regime III-B 是**跨情境**的乾跑閘門：它放寬的是進場
+                        # 判定，而由它確認出來的指令會同時出現在 OPPORTUNITY_COST
+                        # 與 CORE_DEPLOYMENT 兩個 scenario 底下。因此這道閘門
+                        # 必須以 entry_regime 為鍵，不能比照上面兩道用 scenario。
+                        is_regime_iii_b_dry_run = (
+                            ins.get("entry_regime")
+                            == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
+                            and config.REGIME_III_B_DRY_RUN
+                        )
                         if (
                             (
                                 instrument_type == "OPTIONS"
@@ -1405,12 +1417,15 @@ class PortfolioMonitorCog(commands.Cog):
                             )
                             or is_short_entry_dry_run
                             or is_pyramid_add_dry_run
+                            or is_regime_iii_b_dry_run
                         ):
                             dry_run_tag = (
                                 "ShortEntry"
                                 if is_short_entry_dry_run
                                 else "PyramidAdd"
                                 if is_pyramid_add_dry_run
+                                else "RegimeIIIB"
+                                if is_regime_iii_b_dry_run
                                 else "OptionsRollover"
                             )
                             logger.info(

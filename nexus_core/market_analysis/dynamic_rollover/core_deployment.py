@@ -48,6 +48,7 @@ class _CoreDeploymentMixin:
             target_spot: float,
             df_15m: Optional[Any] = None,
             session_vwap: Optional[float] = None,
+            trend_continuation: bool = False,
         ) -> Tuple[bool, str, Optional[str]]: ...
 
     async def evaluate_core_deployment(
@@ -112,7 +113,13 @@ class _CoreDeploymentMixin:
         # Scenario 2 算好的結果，直接沿用，跳過下方的重新確認。
         candidate_entry_confirmed: Optional[bool] = None
         candidate_entry_reason: str = ""
+        # 沿用 Scenario 2 判定出的 Regime，掛在本情境產生的指令上。派發端的
+        # REGIME_III_B_DRY_RUN 閘門是依 instruction["entry_regime"] 判斷的——
+        # 本情境若不帶這個欄位，由 Regime III-B 確認出來的核心資金部署指令會
+        # 繞過乾跑閘門直接推播給使用者。
+        candidate_entry_regime: Optional[str] = None
         if precomputed_entry_confirmation is not None:
+            candidate_entry_regime = precomputed_entry_confirmation.entry_regime
             if precomputed_entry_confirmation.direction == "SHORT":
                 candidate_entry_confirmed = False
                 candidate_entry_reason = (
@@ -286,6 +293,7 @@ class _CoreDeploymentMixin:
                     "cash_impact": cash_impact_opportunity,
                     "limit_price": target_spot if target_spot > 0 else None,
                     "instrument_type": "SPOT",
+                    "entry_regime": candidate_entry_regime,
                 }
             )
 

@@ -16,6 +16,10 @@ from .constants import (
     _REGIME_I_PUT_WALL_UPPER_PCT,
     _REGIME_I_RSI_MAX,
     _REGIME_I_VWAP_ATR_MULT,
+    _REGIME_III_B_LOOKBACK_BARS,
+    _REGIME_III_B_MIN_HELD_BARS,
+    _REGIME_III_B_RSI_MAX,
+    _REGIME_III_B_RSI_MIN,
     _REGIME_III_RSI_MIN,
     _REGIME_III_VOLUME_SURGE_MULT,
     _REGIME_IV_VTS_BACKWARDATION_RATIO,
@@ -24,7 +28,11 @@ from .constants import (
 )
 from .models import DynamicRegime, RegimeMarketData
 from .short_side_entry import _find_next_negative_gex_peak
-from .structural_signals import _scan_gex_walls, _scan_resistance_wall_above_spot
+from .structural_signals import (
+    _scan_gex_walls,
+    _scan_resistance_wall_above_spot,
+    count_structure_held_bars,
+)
 
 
 async def classify_dynamic_regime(
@@ -97,6 +105,16 @@ async def _classify_dynamic_regime_impl(
     put_wall = float(gex_profile_data.get("put_wall", 0.0) or 0.0)
     call_wall = float(gex_profile_data.get("call_wall", 0.0) or 0.0)
     gex_profile = gex_profile_data.get("gex_profile")
+    # 全鏈 Net GEX：Regime III-B 條件二「做市商未翻負」需要。解析順序比照
+    # opportunity_cost.py 條件一的既有 fallback——優先用上游算好的純量，缺失或
+    # NaN 時才從 gex_profile 逐檔加總，兩者皆不可得時為 NaN（III-B 隨之
+    # fail-safe 不成立，絕不以 0.0 冒充「已知為非負」）。
+    net_gex = float(gex_profile_data.get("net_gex", float("nan")) or float("nan"))
+    if math.isnan(net_gex) and isinstance(gex_profile, dict):
+        try:
+            net_gex = sum(float(v) for v in gex_profile.values())
+        except (TypeError, ValueError):
+            net_gex = float("nan")
     gamma_flip = estimate_symbol_gamma_flip(
         gex_profile if isinstance(gex_profile, dict) else {}, target_spot
     )
@@ -389,7 +407,56 @@ async def _classify_dynamic_regime_impl(
             DynamicRegime.REGIME_III_RIGHT_MOMENTUM,
             f"結構突破伽馬擠壓確認：Spot ${target_spot:.2f} > Gamma Flip ${gamma_flip:.2f} "
             f"且站穩 VWAP ${session_vwap:.2f}，RSI={rsi_val:.1f}，放量突破",
-            RegimeMarketData(df_15m=df_15m, session_vwap=session_vwap, rsi_15m=rsi_val),
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
+        )
+
+    # --- Regime III-B：右側趨勢延續態（必須排在 Regime III 之後）---
+    # Regime III 問「突破是否正在發生」，III-B 問「趨勢是否仍然成立」。突破當下
+    # 兩者都會成立，歸類為 III 是刻意的：它帶著更強的進場證據，且 III-B 的 UOA
+    # 時間窗放寬不應套用在突破態上。
+    # 條件一刻意**不要求**放量與實體陽線——那正是事件式判定的兩項特徵，保留即
+    # 退化回 Regime III。趨勢的續航段是縮量、陰陽交錯的（handoff.md §1.3）。
+    held_bars, held_window, held_same_session = count_structure_held_bars(
+        df_confirmed, gamma_flip, session_vwap
+    )
+    is_trend_structure_held = (
+        held_same_session
+        and held_window >= _REGIME_III_B_LOOKBACK_BARS
+        and held_bars >= _REGIME_III_B_MIN_HELD_BARS
+    )
+    is_regime_iii_b = (
+        is_trend_structure_held
+        and gamma_flip > 0
+        and session_vwap > 0
+        and not math.isnan(net_gex)
+        and net_gex > 0.0
+        and call_wall_room_pct is not None
+        and call_wall_room_pct >= room.threshold_pct
+        and support_buffer is not None
+        and support_buffer.passed
+        and not math.isnan(rsi_val)
+        and _REGIME_III_B_RSI_MIN < rsi_val < _REGIME_III_B_RSI_MAX
+    )
+    if is_regime_iii_b:
+        target_label = "晴空萬里有效目標" if eff_target.is_blue_sky else "Call Wall"
+        return (
+            DynamicRegime.REGIME_III_B_TREND_CONTINUATION,
+            f"趨勢延續確認：近 {held_window} 根已收盤 15m K 棒有 {held_bars} 根同時站穩 "
+            f"Gamma Flip ${gamma_flip:.2f} 與 VWAP ${session_vwap:.2f}"
+            f"（門檻 {_REGIME_III_B_MIN_HELD_BARS}/{_REGIME_III_B_LOOKBACK_BARS}），"
+            f"Net GEX {net_gex:+,.0f} 仍為正，RSI={rsi_val:.1f}；"
+            f"{target_label} ${eff_target.target:.2f} 尚有 {call_wall_room_pct:.2%} 空間",
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
         )
 
     # --- Regime I：左側接刀態 ---

@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import sys
+from typing import Any
 
 # 將 nexus_core 根目錄加入 sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -85,6 +86,7 @@ def generate_markdown_report(
         "TRANSITION_ENGINE": "情境八: 狀態切換引擎 (左側接刀進化為右側動能)",
         "SHORT_ENTRY": "情境九: 做空進場訊號 (Regime V 破位追空)",
         "REGIME_III_MOMENTUM": "自選股分析中心: 右側動能突破開倉 (REGIME_III)",
+        "REGIME_III_B_TREND_CONT": "自選股分析中心: 右側趨勢延續開倉 (REGIME_III-B)",
         "REGIME_I_CATCH": "自選股分析中心: 左側極端超跌接刀開倉 (REGIME_I)",
     }
 
@@ -163,6 +165,21 @@ def generate_markdown_report(
 | **已實現勝率 (Win Rate)** | **{metrics.win_rate*100:.1f}%** | N/A | 高勝率階梯出場護航 |
 | **獲利因子 (Profit Factor)** | **{metrics.profit_factor:.2f}** | N/A | {pf_comparison} |
 
+### 1.1 減碼 Buy & Hold 對照組 (首要 KPI)
+
+裸 B&H 對照會同時誤判「單純減碼」與「單純加槓桿」。本組以年化波動比推回有效曝險
+w = (策略年化波動 / B&H 年化波動)，對照組為 w x B&H + (1-w) x 無風險利率(4.5%)，
+回答的是**這套引擎是否創造 alpha，還是只是在降低曝險**。
+
+| 對照度量 | 數值 |
+| :--- | :---: |
+| 有效曝險 $w$ (年化波動比) | **{metrics.scaled_benchmark_weight*100:.1f}%** |
+| 減碼 B&H 總報酬 | **{metrics.scaled_benchmark_total_return*100:+.2f}%** |
+| 減碼 B&H 最大回撤 (線性縮放估計) | **{metrics.scaled_benchmark_max_drawdown*100:.2f}%** |
+| **超額報酬 vs 減碼 B&H** | **{metrics.excess_return_vs_scaled*100:+.2f} pp** |
+
+> 此列為負，代表引擎的全部「優勢」都來自降低曝險，而非選時或選股。
+
 ---
 
 ## 2. 動態轉倉 9 大情境在 2025 全年的觸發頻次與貢獻統計
@@ -234,6 +251,90 @@ def generate_markdown_report(
     return report
 
 
+def _run_ab_compare(args: argparse.Namespace) -> None:
+    """A/B 對比：同一組參數各跑一次 (Regime III-B 關閉 / 開啟)。
+
+    handoff.md §4.4 把這份對比訂為 III-B 進 production 的硬性前置條件：放寬進場
+    必然提高交易頻率與摩擦成本，必須證明扣除 0.3% 往返成本後仍有正向 alpha。
+
+    判讀時的兩個已知侷限，摘要中會一併印出，不要略過：
+      1. 本回測只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m。
+      2. 回測引擎**沒有 UOA 條件**，因此完全量測不到條件四 5 日回看窗放寬的效果；
+         真實 production 的觸發頻率必然高於此處。
+    """
+    base_path = Path(args.report_path)
+    results: dict[str, tuple[Any, Any, Path]] = {}
+
+    for label, enabled in (("baseline", False), ("iii_b", True)):
+        print("\n" + "=" * 75)
+        print(
+            f" 🔬 A/B 對比 [{label}] — Regime III-B "
+            f"{'啟用' if enabled else '關閉 (基準線)'}｜模式: {args.mode.upper()}"
+        )
+        print("=" * 75)
+        engine = RolloverBacktestEngine2025(
+            initial_capital=args.initial_capital,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            mode=args.mode,
+            enable_trend_continuation=enabled,
+        )
+        engine.run_simulation()
+        metrics = engine.calculate_metrics()
+        out_path = base_path.with_name(
+            f"{base_path.stem}_{args.mode}_{label}{base_path.suffix}"
+        )
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(generate_markdown_report(engine, metrics), encoding="utf-8")
+        results[label] = (engine, metrics, out_path)
+        logger.info(f"✅ [{label}] 報告已輸出至: {out_path.resolve()}")
+
+    _, base_m, base_out = results["baseline"]
+    _, b_m, b_out = results["iii_b"]
+
+    def _delta(a: float, b: float) -> str:
+        return f"{(b - a) * 100:+.2f} pp"
+
+    summary = f"""# Regime III-B A/B 對比摘要【模式: {args.mode}】
+
+> 基準線報告: `{base_out.name}`
+> III-B 報告: `{b_out.name}`
+
+| 指標 | 基準線 (III-B 關閉) | III-B 啟用 | 差異 |
+| :--- | :---: | :---: | :---: |
+| 總報酬率 | {base_m.total_return * 100:+.2f}% | {b_m.total_return * 100:+.2f}% | {_delta(base_m.total_return, b_m.total_return)} |
+| **超額報酬 vs 減碼 B&H** | **{base_m.excess_return_vs_scaled * 100:+.2f} pp** | **{b_m.excess_return_vs_scaled * 100:+.2f} pp** | {_delta(base_m.excess_return_vs_scaled, b_m.excess_return_vs_scaled)} |
+| 最大回撤 | {base_m.max_drawdown * 100:.2f}% | {b_m.max_drawdown * 100:.2f}% | {_delta(base_m.max_drawdown, b_m.max_drawdown)} |
+| 夏普比率 | {base_m.sharpe_ratio:.2f} | {b_m.sharpe_ratio:.2f} | {b_m.sharpe_ratio - base_m.sharpe_ratio:+.2f} |
+| 卡瑪比率 | {base_m.calmar_ratio:.2f} | {b_m.calmar_ratio:.2f} | {b_m.calmar_ratio - base_m.calmar_ratio:+.2f} |
+| 年化波動 | {base_m.annualized_volatility * 100:.2f}% | {b_m.annualized_volatility * 100:.2f}% | {_delta(base_m.annualized_volatility, b_m.annualized_volatility)} |
+| 總交易筆數 | {base_m.total_trades} | {b_m.total_trades} | {b_m.total_trades - base_m.total_trades:+d} |
+| 已實現勝率 | {base_m.win_rate * 100:.1f}% | {b_m.win_rate * 100:.1f}% | {_delta(base_m.win_rate, b_m.win_rate)} |
+| 獲利因子 | {base_m.profit_factor:.2f} | {b_m.profit_factor:.2f} | {b_m.profit_factor - base_m.profit_factor:+.2f} |
+
+## 放行判準 (handoff.md §4.4 / docs/architecture/05 §5.8)
+
+1. **「超額報酬 vs 減碼 B&H」該列的差異必須為正。** 總報酬上升但這一列下降，代表
+   III-B 只是把曝險加回去，沒有創造 alpha——那用調高 `max_satellite_budget_pct`
+   就能達成，不需要一條新的進場路徑。
+2. 勝率下降是可接受的（高勝率本來就不是 KPI，見 §6.1）；獲利因子與卡瑪下降則不是。
+3. **先看第 2 節的情境觸發次數，再看本表。** 本回測的衛星進場機會在結構上就極少
+   （只有 2 個衛星標的，且只在「該標的目前無多頭部位 + 現金高於儲備」時才評估開倉），
+   2025 全年右側開倉合計僅個位數。III-B 觸發次數若是個位數，本表的任何差異都在
+   雜訊範圍內，**不足以構成放行或否決的證據**——結論只能是「本回測無法判定」。
+4. 本回測**未實作 UOA 條件**，量測不到條件四 5 日回看窗的放寬效果；1h K 線也只能
+   以 4 根代理 6 根 15m。兩者都讓此處的觸發頻率**低估** production 的實際值，
+   判讀時請把結論往保守方向折扣。
+5. 無論本表多漂亮，`REGIME_III_B_DRY_RUN` 仍須維持 `true` 直到累積足量前向紀錄
+   （放寬門檻屬「激進方向調整」，依 docs/architecture/05 §5.8 的不對稱原則，
+   離線回測不足以背書）。
+"""
+    summary_path = base_path.with_name(f"{base_path.stem}_{args.mode}_ab_summary.md")
+    summary_path.write_text(summary, encoding="utf-8")
+    print("\n" + summary)
+    logger.info(f"✅ A/B 對比摘要已輸出至: {summary_path.resolve()}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="2025 年動態轉倉回測執行器")
     parser.add_argument(
@@ -265,7 +366,26 @@ def main() -> None:
         "--start-date", type=str, default="2025-01-02", help="回測起始日"
     )
     parser.add_argument("--end-date", type=str, default="2025-12-30", help="回測結束日")
+    parser.add_argument(
+        "--enable-trend-continuation",
+        action="store_true",
+        default=False,
+        help=("啟用 Regime III-B 趨勢延續進場路徑 (handoff.md §4)。預設關閉＝基準線。"),
+    )
+    parser.add_argument(
+        "--ab-compare",
+        action="store_true",
+        default=False,
+        help=(
+            "A/B 對比模式：同一組參數各跑一次 (III-B 關閉/開啟)，輸出兩份報告與"
+            "一份差異摘要。handoff.md §4.4 要求 III-B 上線前必須通過此對比。"
+        ),
+    )
     args = parser.parse_args()
+
+    if args.ab_compare:
+        _run_ab_compare(args)
+        return
 
     print("\n" + "=" * 75)
     print(
@@ -281,6 +401,7 @@ def main() -> None:
         start_date=args.start_date,
         end_date=args.end_date,
         mode=args.mode,
+        enable_trend_continuation=args.enable_trend_continuation,
     )
 
     logger.info("開始執行回測模擬迴圈...")

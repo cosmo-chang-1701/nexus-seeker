@@ -34,6 +34,10 @@ _DYNAMIC_ENTRY_REGIME_CHOICES = [
         name="動態調整・Regime III 右側動能 (順勢突破)",
         value="REGIME_III_RIGHT_MOMENTUM",
     ),
+    app_commands.Choice(
+        name="動態調整・Regime III-B 右側趨勢延續 (非突破瞬間)",
+        value="REGIME_III_B_TREND_CONTINUATION",
+    ),
 ]
 
 

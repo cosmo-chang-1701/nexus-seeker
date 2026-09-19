@@ -138,7 +138,7 @@ class EntryConfirmation(NamedTuple):
 
 
 class DynamicRegime(str, Enum):
-    """動態調整模式的 5 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
+    """動態調整模式的 6 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
 
     判定優先序（非 enum 宣告序）：
 
@@ -147,10 +147,16 @@ class DynamicRegime(str, Enum):
            系統性流動性危機下做空同樣會被劇烈軋空，不是安全的方向。
         2. Regime V  破位追空態
         3. Regime IV 的**個股結構封頂**分支 (Call Wall 空間不足 / STO 封頂)
-        4. Regime III → Regime I → Regime II
+        4. Regime III → Regime III-B → Regime I → Regime II
 
     第 2 與第 3 的先後是刻意的：個股結構封頂與破位追空的條件可以同時成立
     (壓頂 + 跌破底牆)，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
+
+    Regime III-B 緊接在 Regime III 之後、且**必須**在其之後：兩者都是多頭右側
+    路徑，III 是「突破正在發生」的事件式判定 (放量 + 實體陽線 + RSI > 55)，
+    III-B 是「趨勢仍然成立」的狀態式判定 (近 6 根已收盤 K 棒至少 5 根站穩結構)。
+    突破當下兩者都會成立，此時應歸類為 III——它帶著更強的進場證據，且 III-B 的
+    UOA 時間窗放寬不應套用在突破態上。
     """
 
     REGIME_I_LEFT_CATCH = "REGIME_I_LEFT_CATCH"  # 左側接刀態：極端負乖離吸籌
@@ -160,6 +166,10 @@ class DynamicRegime(str, Enum):
     REGIME_III_RIGHT_MOMENTUM = (
         "REGIME_III_RIGHT_MOMENTUM"  # 右側動能態：結構突破伽馬擠壓
     )
+    # 右側趨勢延續態：已在趨勢中、非突破瞬間。路由至右側六重鐵律，但條件一改判
+    # 「持續站穩」、條件四改為 _ENTRY_UOA_LOOKBACK_DAYS 交易日回看窗。
+    # 乾跑期間由 config.REGIME_III_B_DRY_RUN 在派發端攔截，不推播只記稽核。
+    REGIME_III_B_TREND_CONTINUATION = "REGIME_III_B_TREND_CONTINUATION"
     REGIME_IV_STRUCTURAL_CAP_CRISIS = (
         "REGIME_IV_STRUCTURAL_CAP_CRISIS"  # 結構封頂／危機態：強制鎖定
     )
