@@ -138,7 +138,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 ### 平台工程與使用者體驗 (`docs/platform/`)
 - Analyst Agent 報告排程（盤前財報、盤後綜合結算）→ [`01_analyst_agent_reporting.md`](docs/platform/01_analyst_agent_reporting.md)
 - 委託單管理與遙測定價對齊引擎 → [`02_order_management_and_telemetry.md`](docs/platform/02_order_management_and_telemetry.md)
-- 互動設定與通知偏好中心（4 模組 13 頻道）→ [`03_notification_center.md`](docs/platform/03_notification_center.md)
+- 互動設定與通知偏好中心（4 模組 17 頻道）→ [`03_notification_center.md`](docs/platform/03_notification_center.md)
 - 事件日曆架構與宏觀事件翻譯引擎 → [`04_calendar_translation_engine.md`](docs/platform/04_calendar_translation_engine.md)
 - Embed 渲染架構（`NexusEmbed`、輸出集中化）與 DM 佇列投遞層 → [`05_embed_architecture_and_dm_queue.md`](docs/platform/05_embed_architecture_and_dm_queue.md)
 - 個股 15 分鐘價量突破警報系統 → [`06_price_volume_alert_system.md`](docs/platform/06_price_volume_alert_system.md)
@@ -212,6 +212,8 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/watchlist.py` — Database CRUD operations for user watchlist symbols (100% deterministic rule-based zero-LLM architecture)
 - `nexus_core/database/migrations/v039_add_notification_toggles.py` — migration registering the user_notification_settings table in SQLite
 - `nexus_core/tests/unit/test_db_write_centralization.py` — AST 掃描強制「單一寫入者」不變式：除 `database/connection.py` 與 `database/core.py` 外，不得出現 `sqlite3.connect`、`conn.commit()`，或把連線當成 context manager 使用
+- `nexus_core/database/migrations/v078_backfill_advisory_entry_signal.py` — migration 以 `heartbeat_symbol_deep` 回填 `advisory_entry_signal`（比照 `v070`），避免已靜音盤中推播的使用者在進場顧問上線後被自動訂閱
+- `nexus_core/tests/unit/test_kv_cache_dedup_whitelist.py` — AST 掃描強制：`save_kv_cache(f"…", True/1)` 形態的每日去重旗標，其鍵前綴必須登記於 `database/cache.py::_KV_CACHE_DEDUP_KEY_PREFIXES`（否則旗標永久堆積）；`_PENDING_WRITERS` 豁免尚未實作寫入點的前綴，實作後須移除
 - `nexus_core/tests/unit/test_left_side_entry.py` — unit tests for the left-side six-rule entry gate (per-condition pass/fail/fail-safe, candle-pattern primitive, confirmed-bar guard)
 - `nexus_core/tests/unit/test_regime_classifier.py` — unit tests for the 6-regime classifier boundaries, the Regime V vs Regime IV priority split, and its fail-safe default to Regime II
 - `nexus_core/tests/unit/test_regime_iii_b_trend_continuation.py` — Regime III-B 趨勢延續路徑：分類優先序（III 必須壓過 III-B）、5/6 容差、同一交易時段約束、條件一／條件四兩項放寬（含「同一份資料在嚴格模式下必須不通過」的對照測項）、前向蒐集 direction/decision、跨情境乾跑閘門

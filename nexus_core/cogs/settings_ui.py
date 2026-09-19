@@ -42,6 +42,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
             "heartbeat_watchlist": "📡 自選股 15 分鐘批次量化雷達 (整批標的掃描總覽)",
             "heartbeat_symbol_deep": "🧱 個股 30 分鐘深度戰場心跳 (含微觀結構、Skew 與 UOA 巨鯨)",
             "telemetry_orders": "🌌 待成交掛單實時對齊與撤退線",
+            "advisory_entry_signal": "🎯 自選標的進場顧問 (六重鐵律通過時推播進場價 / 停損 / 目標)",
         },
     },
     "defense": {
@@ -53,6 +54,7 @@ TRADING_MODULES: Dict[str, Dict[str, Any]] = {
             "defense_margin_call": "🚨 槓桿與保證金強制平倉警報 (帳戶生存等級)",
             "defense_fundamental_thesis": "📜 SEC 財報自動掃描與護城河破滅警報",
             "defense_macro_tail_risk": "🦇 VIX 期限結構倒掛 (VTS >= 1.0) 與重大事件防護",
+            "advisory_core_levels": "🧭 B&H 持倉位階顧問 (僅告知目標區與結構失效，不建議減碼)",
         },
     },
     "alpha": {
