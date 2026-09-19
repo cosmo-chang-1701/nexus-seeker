@@ -190,6 +190,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_time.py` — NYSE 行事曆 helper。`get_trading_days_ago_utc(n)` 回傳「往回第 n 個**已開盤**交易日」的 UTC 時戳，供 UOA 回看窗等時間窗過濾使用；以日曆日回看會讓同一個「N 日窗」在週末／連假前後代表的樣本量相差近一倍
 - `nexus_core/market_analysis/atr_utils.py` — 共用 ATR helper：`fetch_atr_15m()`／`compute_atr_15m_from_df()`／`compute_atr_14_from_daily_df()`／`fetch_atr_1d()`（後者刻意不 `force_refresh`，日線 ATR 盤中幾乎不動）
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
+- `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` — 自選標的進場顧問核心：`evaluate_entry_advice()` 以與 `/x` 進場鐵律頁籤相同的策略／Regime 分派表做六重鐵律確認並附進場／停損／目標／盈虧比，結果以 `(strategy:symbol, 15m bar)` 記憶（鍵必含 strategy）。由 `pipeline.py::_dispatch_entry_advisor_alert` 以獨立頻道 `advisory_entry_signal` 推播（**不**新增 `scenario`、不覆寫 `tactical`、不受 `enable_analyst_agent` 約束）。⚠️ 呼叫點必須在 `engine_enabled` 的 `continue` 之前；三個乾跑旗標（`WATCHLIST_ADVISOR_DRY_RUN`／`REGIME_III_B_DRY_RUN`／`SHORT_ENTRY_DRY_RUN`）由派發函式自行檢查，乾跑**不寫**去重旗標
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
 - `nexus_core/market_analysis/sentiment/` — Dedicated submodules (`iv_metrics`, `max_pain`, `options_flow`, `uoa_detector`, `history_storage`, `cache`, `skew_taxonomy`)
@@ -233,6 +234,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
 - `nexus_core/tests/unit/test_edge_detection_sentiment.py` — unit tests for Edge Detection, Reddit sentiment classification, VWBP, and dual-tab layout
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
+- `nexus_core/tests/unit/test_watchlist_advisor.py` — 自選標的進場顧問：`scenario` Literal 不變、呼叫點在 `engine_enabled` 之前、非 green／通知關閉／乾跑皆不推播且不燒去重旗標、Regime 升級不被去重、radar 保鮮／過期走 Semaphore、四種策略分派與跨使用者記憶化
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
 - `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment

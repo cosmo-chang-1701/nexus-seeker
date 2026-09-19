@@ -108,6 +108,13 @@ PYRAMID_ADD_DRY_RUN = get_env_or_secret("PYRAMID_ADD_DRY_RUN", "true").lower() =
 REGIME_III_B_DRY_RUN = (
     get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
 )
+# 自選標的進場顧問 dry-run (預設開啟)：只寫 log 與前向紀錄、不推播 DM。
+# 觸發頻率未經觀察，依 docs/architecture/05 §5.8 的不對稱原則，
+# 「新增推播路徑」一律需要一週觀察期才能翻轉為 false。乾跑期間**不寫**去重旗標，
+# 否則正式開啟當天所有標的都已被當日旗標鎖住。
+WATCHLIST_ADVISOR_DRY_RUN = (
+    get_env_or_secret("WATCHLIST_ADVISOR_DRY_RUN", "true").lower() == "true"
+)
 # Regime／進場鐵律評估紀錄的前向蒐集 (market_analysis/evaluation_recorder.py)。
 # GEX 相關門檻無法回測，這是唯一的校準資料來源，預設開啟 (~260 列/日)。
 ENABLE_REGIME_EVALUATION_LOG = (

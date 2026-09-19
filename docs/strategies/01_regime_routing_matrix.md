@@ -208,6 +208,7 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：公開入口 `classify_dynamic_regime()`（分類後寫入前向蒐集紀錄）與分類主體 `_classify_dynamic_regime_impl()`；`RegimeMarketData.rsi_15m` 供做空凱利先驗沿用
+- `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`：**自選標的進場顧問**對 Regime 分類與三套進場鐵律的消費端——`evaluate_entry_advice()` 與 `/x` 進場鐵律頁籤（`cogs/unified_terminal/symbol_view.py`）使用同一份策略／Regime 分派表，由 30 分鐘深度心跳以獨立通知頻道 `advisory_entry_signal` 推播（見 [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) §5.4）。Regime III-B 與 Regime V／`SHORT_SIDE` 的確認分別受 `REGIME_III_B_DRY_RUN`／`SHORT_ENTRY_DRY_RUN` 約束，且前向蒐集 `source="WATCHLIST_ADVISOR"`
 - `nexus_core/market_analysis/evaluation_recorder.py`：Regime 分類與進場鐵律評估的前向蒐集（見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md)）
 - `nexus_core/market_analysis/dynamic_rollover/models.py`：枚舉 `DynamicRegime`（含 `REGIME_III_B_TREND_CONTINUATION`）, `TradingStrategyMode` 及資料載體 `RegimeMarketData`
 - `nexus_core/tests/unit/test_regime_iii_b_trend_continuation.py`：Regime III-B 的分類優先序、$5/6$ 容差、同時段約束、條件一／條件四放寬與乾跑閘門測試
