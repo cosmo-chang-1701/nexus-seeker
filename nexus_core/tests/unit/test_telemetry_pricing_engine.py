@@ -44,7 +44,7 @@ async def test_iv_rank_fuse_suppresses_price_up(caplog: Any, db_conn: Any):  # t
             iv_rank=1.0,  # 100%
             max_pain_price=437.50,
             prev_max_pain=437.50,
-            skew_percentile=0.98,
+            skew_percentile_pct=98.0,
             put_call_ratio=1.0,
             order_side="SELL",
         )
@@ -80,7 +80,7 @@ async def test_max_pain_expected_move_clamp(db_conn: Any):  # type: ignore
         iv_rank=0.50,
         max_pain_price=437.50,
         prev_max_pain=437.50,
-        skew_percentile=0.98,
+        skew_percentile_pct=98.0,
         put_call_ratio=1.0,
         order_side="SELL",
     )
@@ -118,7 +118,7 @@ async def test_no_alignment_needed_when_clamp_not_above_current(db_conn: Any):  
         iv_rank=0.50,
         max_pain_price=437.50,
         prev_max_pain=437.50,
-        skew_percentile=0.98,
+        skew_percentile_pct=98.0,
         put_call_ratio=1.0,
         order_side="SELL",
     )
@@ -158,7 +158,7 @@ async def test_recent_clear_position_suppresses_buy_alignment(db_conn: Any):  # 
         iv_rank=0.30,
         max_pain_price=230.0,
         prev_max_pain=230.0,
-        skew_percentile=0.98,
+        skew_percentile_pct=98.0,
         put_call_ratio=1.0,
     )
 
@@ -191,7 +191,7 @@ async def test_data_contamination_raises_and_aborts(db_conn: Any):  # type: igno
             iv_rank=0.4,
             max_pain_price=430.0,
             prev_max_pain=430.0,
-            skew_percentile=0.98,
+            skew_percentile_pct=98.0,
             put_call_ratio=1.0,
             cache_price=401.0,
             live_price=444.94,
@@ -223,7 +223,7 @@ async def test_deep_sea_buy_relock_returns_suppressed_decision(db_conn: Any):  #
         iv_rank=0.4,
         max_pain_price=430.0,
         prev_max_pain=430.0,
-        skew_percentile=0.98,
+        skew_percentile_pct=98.0,
         put_call_ratio=1.0,
         cache_price=444.8,
         live_price=444.94,
@@ -262,7 +262,7 @@ async def test_pure_stock_sovereign_gate_returns_suppressed_decision(db_conn: An
         iv_rank=0.4,
         max_pain_price=430.0,
         prev_max_pain=430.0,
-        skew_percentile=0.5,
+        skew_percentile_pct=50.0,
         put_call_ratio=1.0,
         cache_price=444.8,
         live_price=444.94,
@@ -302,7 +302,7 @@ async def test_uoa_macro_alignment_triggers_defensive_suppression(db_conn: Any):
         iv_rank=0.4,
         max_pain_price=430.0,
         prev_max_pain=430.0,
-        skew_percentile=0.5,
+        skew_percentile_pct=50.0,
         put_call_ratio=1.0,
         cache_price=444.8,
         live_price=444.94,

@@ -122,35 +122,45 @@ class IVContext:
         )
 
 
+# 週預期波幅的跨式到期日選擇範圍（日曆日）。下限排除 0-DTE／1-DTE：到期前幾小時
+# 的跨式只剩日內 Gamma，無法以時間平方根外推成一週。
+_STRADDLE_EM_MIN_DTE = 2
+_STRADDLE_EM_TARGET_DTE = 7
+_STRADDLE_EM_MAX_DTE = 14
+
+
 async def _calculate_straddle_implied_em(
     symbol: str, spot_price: float, force_live: bool = False
 ) -> float | None:
-    """以 ATM Straddle 權利金總和計算預期區間。
+    """以 ATM Straddle 權利金總和計算週預期區間 (1σ)。
 
-    公式: Expected Move ≈ ATM Straddle Price × 0.85
-    此為業界標準的 1-sigma 近似法，直接反映造市商對短期波動的定價。
+    公式: EM_week = Straddle × √(π/2) × √(7 / DTE)，DTE 取最接近 7 天的到期日。
     """
     try:
         expiries = await market_data_service.get_all_option_expiries(symbol)
         if not expiries:
             return None
 
-        # 選擇最近且尚未到期的到期日
+        # 到期日選擇 (D-03)：在 [_STRADDLE_EM_MIN_DTE, _STRADDLE_EM_MAX_DTE] 內取 DTE
+        # 最接近 7 天的一檔，讓 √(7/DTE) 時間縮放趨近 1。
+        # 舊實作取「最近一檔」：週五盤中常選到 0-DTE，只剩幾小時的跨式被當成
+        # 1 天再乘 √7 放大，權利金裡只剩日內 Gamma 與殘餘時間價值，週 EM 被系統性
+        # 低估。找不到合格到期日時回傳 None，由呼叫端退回 IV 公式。
         today_dt = datetime.now().date()
-        target_expiry = None
-        target_dte = 1
+        candidates: list[tuple[int, str]] = []
         for exp in expiries:
             try:
                 exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                dte = (exp_dt - today_dt).days
-                if dte >= 0 and dte <= 14:
-                    target_expiry = exp
-                    target_dte = max(1, dte)
-                    break
             except ValueError:
                 continue
-        if target_expiry is None:
+            dte = (exp_dt - today_dt).days
+            if _STRADDLE_EM_MIN_DTE <= dte <= _STRADDLE_EM_MAX_DTE:
+                candidates.append((dte, exp))
+        if not candidates:
             return None
+        target_dte, target_expiry = min(
+            candidates, key=lambda c: (abs(c[0] - _STRADDLE_EM_TARGET_DTE), c[0])
+        )
 
         chain = await market_data_service.get_option_chain(
             symbol, target_expiry, force_live=force_live

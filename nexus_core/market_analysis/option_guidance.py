@@ -121,6 +121,9 @@ def derive_watchlist_option_guidance(
             )
 
     # 確保取得適合 the 買賣點價位 (如未提供，則以默認資金參數在線計算)
+    # scale_atr_to_15m=True 與 intraday_pipeline 的主路徑一致：自選標的的防洗盤
+    # 緩衝是 15 分鐘尺度，日線 ATR 須除以 √26 (D-01)，否則後備路徑算出的
+    # 買點會比主路徑低約 5 倍 ATR₁₅ₘ。
     if has_position and suitable_sell_price is None:
         sig = calculate_dynamic_trading_signals(
             metrics,
@@ -128,6 +131,7 @@ def derive_watchlist_option_guidance(
             has_position=True,
             capital=100000.0,
             risk_limit=15.0,
+            scale_atr_to_15m=True,
         )
         suitable_sell_price = sig.get("suitable_sell_price", metrics.current_price)
     elif not has_position and suitable_buy_price is None:
@@ -137,6 +141,7 @@ def derive_watchlist_option_guidance(
             has_position=False,
             capital=100000.0,
             risk_limit=15.0,
+            scale_atr_to_15m=True,
         )
         suitable_buy_price = sig.get("suitable_buy_price", metrics.current_price)
 

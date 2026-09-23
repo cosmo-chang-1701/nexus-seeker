@@ -172,6 +172,36 @@ def render_markdown(results: dict[str, Any]) -> str:
                     f"| {_fmt(e['timeout_rate'])} | {_fmt(e['median_fwd_ret_5d'])} "
                     f"| {e['status']} |"
                 )
+    studies = (forward or {}).get("threshold_studies") or {}
+    if studies:
+        lines += ["", "### 門檻前向驗證 (docs §5.13)", ""]
+        for name, title in (
+            ("wall_depth_ratio", "牆體深度比四分位 (D-04)"),
+            ("skew_percentile", "Skew 分位區間"),
+        ):
+            data = studies.get(name)
+            lines.append(f"**{title}**")
+            lines.append("")
+            if data is None or isinstance(data, str):
+                lines += [f"- {data or '無資料'}", ""]
+                continue
+            groups: list[tuple[str, Any]] = (
+                list(data.items()) if isinstance(data, dict) else [("", data)]
+            )
+            for group, rows in groups:
+                if group:
+                    lines.append(f"- 母體來源 `{group}`")
+                lines += [
+                    "",
+                    "| 區間 | n | 勝率 | 逆向先觸及 | 狀態 |",
+                    "|---|---|---|---|---|",
+                ]
+                for r in rows:
+                    lines.append(
+                        f"| {r['bucket']} | {r['n']} | {_fmt(r['win_rate'])} "
+                        f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
+                    )
+                lines.append("")
     lines += [
         "",
         "## 限制與警語",
@@ -213,3 +243,15 @@ def write_report(
         json.dumps(_jsonable(manifest), ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return target
+
+
+def write_study_report(out_dir: Path, name: str, result: dict[str, Any]) -> Path:
+    """研究型子命令 (micro-report / skew-proxy) 的輸出：{out_dir}/calibration/{name}_{stamp}/results.json。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    target = resolve_output_dir(out_dir, f"{name}_{stamp}")
+    target.mkdir(parents=True, exist_ok=True)
+    path = target / "results.json"
+    path.write_text(
+        json.dumps(_jsonable(result), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return path

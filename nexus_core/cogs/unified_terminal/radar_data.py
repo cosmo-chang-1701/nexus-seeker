@@ -4,6 +4,10 @@ import asyncio
 import logging
 import math
 from typing import Any, Optional
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_DIVERGENCE_HIGH_PERCENTILE,
+    SKEW_DIVERGENCE_LOW_PERCENTILE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -258,7 +262,7 @@ class RadarDataMixin:
 
         from market_analysis.sentiment.history_storage import (
             get_last_stored_sentiment,
-            get_indicator_percentile,
+            get_indicator_percentile_detail,
             get_last_stored_iv,
         )
         from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
@@ -292,27 +296,35 @@ class RadarDataMixin:
 
         avg_vol_20d = radar_cache.get("avg_vol_20d", 0.0)
         rvol = (current_volume / avg_vol_20d) if avg_vol_20d > 0 else 0.0
+        # 20 日平均成交額：薄牆門檻依此正規化 (gex_wall_depth.thin_wall_threshold)
+        adv_dollar_20d = (
+            float(avg_vol_20d) * float(price) if avg_vol_20d > 0 and price > 0 else None
+        )
 
         mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
 
         # 讀取真實 Skew 與分位點
-        # 分位需要足夠樣本，樣本不足時 get_indicator_percentile 回傳 None；
+        # 分位需要足夠樣本，樣本不足時百分位為 None；
         # 此時視同「沒有可用的真實 Skew」，往下走既有的快取/中性回退路徑。
         stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
-        stored_percentile = (
-            get_indicator_percentile(sym, SKEW_INDICATOR, stored_skew)
+        stored_pct = (
+            get_indicator_percentile_detail(sym, SKEW_INDICATOR, stored_skew)
             if stored_skew is not None
             else None
         )
+        stored_percentile = stored_pct.percentile if stored_pct else None
         skew_val: Optional[float] = None
         skew_percentile: Optional[float] = None
+        # 母體來源 (CANONICAL / INTRADAY_FALLBACK)，供前向蒐集分組；
+        # 走快取或中性回退時來源未知。
+        skew_percentile_source: Optional[str] = None
         if stored_skew is not None:
             skew_val = stored_skew
-            skew_percentile = (
-                stored_percentile
-                if stored_percentile is not None
-                else radar_cache.get("skew_percentile")
-            )
+            if stored_percentile is not None and stored_pct is not None:
+                skew_percentile = stored_percentile
+                skew_percentile_source = stored_pct.source
+            else:
+                skew_percentile = radar_cache.get("skew_percentile")
         elif "skew" in radar_cache:
             raw_skew = radar_cache.get("skew")
             skew_val = float(raw_skew) if raw_skew is not None else None
@@ -437,6 +449,7 @@ class RadarDataMixin:
             "radar_cache": radar_cache,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
+            "skew_percentile_source": skew_percentile_source,
             "volume_pcr": volume_pcr,
             "oi_pcr": oi_pcr,
             "positive_gex_below": pos_gex_below,
@@ -506,6 +519,7 @@ class RadarDataMixin:
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
                 "gamma_flip": gamma_flip,
+                "adv_dollar_20d": adv_dollar_20d,
                 "_is_stale_cache": gex_is_stale,
             },
             "vp_data": {
@@ -629,6 +643,11 @@ class RadarDataMixin:
         skew_val = skew_data.get("skew") if isinstance(skew_data, dict) else None
         skew_percentile = (
             skew_data.get("skew_percentile") if isinstance(skew_data, dict) else None
+        )
+        skew_percentile_source = (
+            skew_data.get("skew_percentile_source")
+            if isinstance(skew_data, dict)
+            else None
         )
 
         volume_pcr = (
@@ -833,6 +852,7 @@ class RadarDataMixin:
             "expected_move_context": em_context,
             "skew": skew_val,
             "skew_percentile": skew_percentile,
+            "skew_percentile_source": skew_percentile_source,
             "volume_pcr": volume_pcr,
             "oi_pcr": oi_pcr,
             "positive_gex_below": pos_gex_below,
@@ -860,6 +880,11 @@ class RadarDataMixin:
                 "positive_gex_below": pos_gex_below,
                 "overhead_neg_gex_swamp": overhead_neg_swamp,
                 "gamma_flip": gamma_flip,
+                "adv_dollar_20d": (
+                    vol_data["avg_volume_20"] * price
+                    if vol_data.get("avg_volume_20", 0.0) > 0 and price > 0
+                    else None
+                ),
                 "_is_stale_cache": bool(gex_data.get("_is_stale_cache", False))
                 if isinstance(gex_data, dict)
                 else False,
@@ -953,10 +978,13 @@ class RadarDataMixin:
                 # skew_percentile 可能為 None（樣本不足/期權鏈抓取失敗）；
                 # 分位缺失時這兩個極端旗標一律 False（fail-safe，不憑空觸發）。
                 "is_divergence": skew_percentile is not None
-                and skew_percentile > 85.0
+                and skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE
                 and is_mom_positive,
                 "is_skew_extreme": skew_percentile is not None
-                and (skew_percentile > 85.0 or skew_percentile < 15.0),
+                and (
+                    skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE
+                    or skew_percentile < SKEW_DIVERGENCE_LOW_PERCENTILE
+                ),
                 "hvn_price": (vp_data or {}).get("hvn", 0.0),
                 "lvn_price": (vp_data or {}).get("lvn", 0.0),
                 "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),

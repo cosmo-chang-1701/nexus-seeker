@@ -77,6 +77,21 @@ def _room_absolute_floor_pct() -> float:
     return float(_ROOM_ABSOLUTE_FLOOR_PCT)
 
 
+def _gex_wall_min_depth_ratio() -> float:
+    from market_analysis.gex_wall_depth import GEX_WALL_MIN_DEPTH_RATIO
+
+    return float(GEX_WALL_MIN_DEPTH_RATIO)
+
+
+def _skew_threshold_getter(attr: str) -> Callable[[], float]:
+    def _get() -> float:
+        from market_analysis.sentiment import skew_taxonomy
+
+        return float(getattr(skew_taxonomy, attr))
+
+    return _get
+
+
 VIX_TIER_KEYS: tuple[str, ...] = (
     "dormant",
     "caution",
@@ -134,8 +149,28 @@ def _build_registry() -> tuple[CalibratableParameter, ...]:
                 getter=_room_absolute_floor_pct,
                 description="空間門檻絕對底線 (風險政策，只報告不提案)",
             ),
+            CalibratableParameter(
+                name="GEX_WALL_MIN_DEPTH_RATIO",
+                code_path="market_analysis/gex_wall_depth.py::GEX_WALL_MIN_DEPTH_RATIO",
+                getter=_gex_wall_min_depth_ratio,
+                description="薄牆門檻：每 1% 避險名目 ÷ 20 日平均成交額 (micro-report 守住率驗證)",
+            ),
         ]
     )
+    for attr, desc in (
+        ("SKEW_TRIPLE_CONFLUENCE_PERCENTILE", "三重結構性風險合流的 Skew 分位"),
+        ("SKEW_HIGH_DEFENSE_PERCENTILE", "防洗盤處置 / Skew Divergence Gate 分位"),
+        ("SKEW_DIVERGENCE_HIGH_PERCENTILE", "SQZ 微觀背離偽突破 / 結構性背離上緣"),
+        ("SKEW_DIVERGENCE_LOW_PERCENTILE", "結構性背離下緣"),
+    ):
+        params.append(
+            CalibratableParameter(
+                name=attr,
+                code_path=f"market_analysis/sentiment/skew_taxonomy.py::{attr}",
+                getter=_skew_threshold_getter(attr),
+                description=f"{desc} (skew-proxy 先驗 + 日級母體前向蒐集)",
+            )
+        )
     return tuple(params)
 
 

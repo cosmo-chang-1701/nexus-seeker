@@ -60,15 +60,15 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 ### In `cogs/trading/`
 
 - `regime_outcome_labeler` — **03:30 ET** (leader-only, `is_memory_safe()` gated; back-fills forward price paths for `regime_evaluation_log` rows once 5 sessions have elapsed, then applies retention — see `services/regime_outcome_labeler.py`. Kept separate from the 03:00 job because it does per-symbol network fetches)
-- `kv_cache_dedup_purge` — **03:00 ET** (off-peak; deletes stale one-shot daily anti-spam dedup flags in `kv_cache` — see `database.cache.purge_stale_kv_cache_dedup_keys` — past a 3-day retention window; scoped to a whitelist of known dedup-only key prefixes so permanent caches/config are never touched)。同一個任務另負責 `uoa_history` 的 10 天保留期清理（`database.uoa_history.purge_stale_uoa_history`）與過期合約歸檔
+- `kv_cache_dedup_purge` — **03:00 ET** (off-peak; deletes stale one-shot daily anti-spam dedup flags in `kv_cache` — see `database.cache.purge_stale_kv_cache_dedup_keys` — past a 3-day retention window; scoped to a whitelist of known dedup-only key prefixes so permanent caches/config are never touched)。同一個任務另負責 `uoa_history` 的 10 個交易日保留期清理（`database.uoa_history.purge_stale_uoa_history`）、過期合約歸檔，以及 `sentiment_history`（60 交易日）／`sentiment_daily_canonical`（約 260 交易日）的保留期清理
 - `fundamental_filing_scan` — **08:00 ET** (holdings-only, skips non-trading days)
 - `daily_reddit_update` — **08:30 ET**
-- `pre_market_risk_monitor` — **08:45 ET** (staggered pre-warming of quant metrics, IV, Max Pain & Squeeze before 09:00 Analyst Agent)
+- `pre_market_risk_monitor` — **08:45 ET** (staggered pre-warming of quant metrics, IV, Max Pain & Squeeze before 09:00 Analyst Agent; first back-fills the previous trading day's `sentiment_daily_canonical` snapshot if the 16:15 run was missed)
 - `dynamic_market_scanner` — **every 15 minutes (:00, :15, :30 & :45) during market hours**
 - `wti_oil_monitor` — **every 30 minutes (24/7, 00:00–06:00 ET quiet hours)**
 - `price_volume_alert_monitor` — **every 15 minutes during market hours** (with `Semaphore(3)` concurrent K-line bar retrieval)
 - `monitor_real_portfolio_task` — **every 15 minutes (:05, :20, :35 & :50) during market hours** (staggered 5 minutes after dynamic scanner to consume shared in-memory radar cache)
-- `dynamic_after_market_report` — **16:15 ET**
+- `dynamic_after_market_report` — **16:15 ET** (maintenance, plus the daily `sentiment_daily_canonical` snapshot — see `market_analysis/sentiment/canonical_history.py`)
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
 
 ### In `cogs/calendar.py`
@@ -174,7 +174,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/migrations/v070_split_heartbeat_symbol_deep.py` — migration backfilling `heartbeat_symbol_deep` from each user's existing `heartbeat_watchlist` value when the two heartbeat channels were split, so anyone who had muted the shared toggle is not silently re-subscribed by the new key's `True` default
 - `nexus_core/database/migrations/v072_remove_margin_buying_power.py` — migration dropping deprecated `option_buying_power` and `margin_used` manual reference columns from `user_settings`
 - `nexus_core/database/migrations/v074_add_previous_put_wall.py` — migration adding `market_cache.put_wall` / `previous_put_wall`, the mirror of `v069`'s call-wall pair. Without it the short-side TP2 "支撐牆向下遷移 >= 3%" branch is permanently dormant and silently falls back to the 1.5% break test
-- `nexus_core/database/uoa_history.py` — UOA 歷史存取層。`kv_cache` 的 `uoa_{SYMBOL}` 是 upsert、只留最新快照，結構上無法回看；右側條件四的 Regime III-B 時間窗需要歷史，故另立 `uoa_history`。寫入掛在 15 分鐘心跳既有的 UOA 計算之後（零額外期權鏈抓取），保留期 10 天由 03:00 ET 排程清理
+- `nexus_core/database/uoa_history.py` — UOA 歷史存取層。`kv_cache` 的 `uoa_{SYMBOL}` 是 upsert、只留最新快照，結構上無法回看；右側條件四的 Regime III-B 時間窗需要歷史，故另立 `uoa_history`。寫入掛在 15 分鐘心跳既有的 UOA 計算之後（零額外期權鏈抓取），保留期 10 個交易日由 03:00 ET 排程清理
 - `nexus_core/database/migrations/v077_add_uoa_history.py` — migration 建立 `uoa_history`；去重鍵為 (symbol, 15m bar, expiry, strike, type, action)，避免多使用者共用標的時同一事實被重複記錄
 - `nexus_core/database/migrations/v075_add_regime_evaluation_log.py` — migration adding `regime_evaluation_log` (every regime / entry-gate evaluation with the GEX numbers it actually used; no `user_id`, deduped per symbol/evaluator/source/15m bar) and `regime_evaluation_outcome` (direction-neutral forward path labels). GEX-dependent thresholds cannot be backtested because every GEX cache is an upsert — this is the only calibration data source for them
 - `nexus_core/database/regime_evaluation_log.py` — access layer for the two tables above (single batched writes through `connection.py`)
@@ -182,10 +182,11 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
 - `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
-- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
+- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/margin.py` — 全資產類別保證金模型（`calculate_option_margin` 名稱沿用歷史）。空頭選擇權走既有公式，空頭**現貨**走 Reg-T 初始保證金（市值 × 50%）。⚠️ 其輸出經 `total_margin_used` 匯總成 `portfolio_heat`，是「是否允許開新倉」的主要煞車——任何一種空頭部位若在此回傳 0.0，該煞車對它就完全失效
+- `nexus_core/market_analysis/gex_wall_depth.py` — 薄牆門檻（D-04）的 stdlib 葉模組：`thin_wall_threshold(adv) = max(500k, GEX_WALL_MIN_DEPTH_RATIO × ADV₂₀ × 100)`。GEX 原始值是每 100% 價格變動的尺度，固定 500k 對大型股形同虛設；正規化項只會讓門檻變嚴（小型股仍以 500k 為下限）。成交額經雷達資料的 `gex_profile_data["adv_dollar_20d"]` 傳入，缺值時行為與改版前相同。`index_microstructure.py` 重新匯出這些名稱
 - `nexus_core/market_analysis/room_threshold.py` — **單一權威**的動態自適應波動率空間門檻實作（公式 A 方向性空間門檻／公式 B 牆體緩衝雙邊界／公式 C 破位追空次級節點空間／公式 D `resolve_effective_target()` 晴空萬里有效目標天花板，供 Regime IV 封頂判定、右側條件三、`PYRAMID_ADD` 條件四三處共用同一天花板定義）。刻意只依賴 stdlib 的葉模組（比照 `sentiment/skew_taxonomy.py`），故可同時被 `dynamic_rollover/`、`gamma_squeeze_engine.py` 與 `cogs/embed_builders/` 匯入而不產生循環相依。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫，`constants.py` 的「路由層與進場確認層門檻不合併」政策不被破壞
 - `nexus_core/market_time.py` — NYSE 行事曆 helper。`get_trading_days_ago_utc(n)` 回傳「往回第 n 個**已開盤**交易日」的 UTC 時戳，供 UOA 回看窗等時間窗過濾使用；以日曆日回看會讓同一個「N 日窗」在週末／連假前後代表的樣本量相差近一倍
 - `nexus_core/market_analysis/atr_utils.py` — 共用 ATR helper：`fetch_atr_15m()`／`compute_atr_15m_from_df()`／`compute_atr_14_from_daily_df()`／`fetch_atr_1d()`（後者刻意不 `force_refresh`，日線 ATR 盤中幾乎不動）
@@ -194,7 +195,9 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
 - `nexus_core/market_analysis/sentiment_engine.py` — Facade entrypoint for skew / UOA / IV stack
 - `nexus_core/market_analysis/sentiment/` — Dedicated submodules (`iv_metrics`, `max_pain`, `options_flow`, `uoa_detector`, `history_storage`, `cache`, `skew_taxonomy`)
-- `nexus_core/market_analysis/sentiment/skew_taxonomy.py` — leaf module (stdlib-only, so it can be imported from both `sentiment` and `intraday_pipeline` without a cycle) holding the single source of truth for the Skew history-indicator key (`SKEW_D25`), the 80/20 classification thresholds, and the two extreme state strings
+- `nexus_core/market_analysis/sentiment/canonical_history.py` — Skew / PCR 百分位的日級規範母體（`sentiment_daily_canonical`，≤252 交易日）。`resample_daily_close()` 是唯一的重採樣定義（交易日盤中最後一筆觀測，半日市以 13:00 ET 為界），v080 回填、16:15 ET 收盤快照與 08:45 ET 補寫三處共用；純 DB、不抓網路、`INSERT OR IGNORE` 冪等。未滿 20 個交易日時 `history_storage.get_indicator_percentile_detail()` 退回舊的 500 列高頻池。⚠️ 母體切換沒有改變任何門檻數值，新門檻需走 `calibration/`
+- `nexus_core/database/migrations/v080_add_sentiment_daily_canonical.py` — migration 建立 `sentiment_daily_canonical`（及 `sentiment_history.timestamp` 索引），以 Python 從 `sentiment_history` 回填（SQLite `date()` 不支援 IANA 時區）。舊 `SKEW` 序列刻意**不**映射進 `SKEW_D25`；回填失敗只記錄、不中斷 migration
+- `nexus_core/market_analysis/sentiment/skew_taxonomy.py` — leaf module (stdlib-only, so it can be imported from both `sentiment` and `intraday_pipeline` without a cycle) holding the single source of truth for the Skew history-indicator key (`SKEW_D25`), the 80/20 classification thresholds, the downstream gate thresholds (`SKEW_DIVERGENCE_*` 85/15, `SKEW_HIGH_DEFENSE_PERCENTILE` 90, `SKEW_TRIPLE_CONFLUENCE_PERCENTILE` 98), `ensure_percentile_pct()` (0~100 contract guard — deliberately no 0~1 auto-rescaling, which would flip the bullish tail into a bearish extreme), and the two extreme state strings
 - `nexus_core/market_analysis/telemetry_pricing_engine.py` — central alignment alert pipeline and decision gating logic (stale-lock, deep sea gap limits, pure stock gate, UOA squeeze classification)
 - `nexus_core/risk_engine/nro.py` — WatchlistRiskController translating technical status to SDDM tactical routes (SHIELD, SPEAR, STANDBY)
 - `nexus_core/formatters/execution_embeds.py` — embeds formatter separating execution decision view logic
@@ -238,6 +241,8 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_watchlist_advisor.py` — 自選標的進場顧問：`scenario` Literal 不變、呼叫點在 `engine_enabled` 之前、非 green／通知關閉／乾跑皆不推播且不燒去重旗標、Regime 升級不被去重、radar 保鮮／過期走 Semaphore、四種策略分派與跨使用者記憶化
 - `nexus_core/tests/unit/test_advisory_mode.py` — B&H 持倉顧問模式：顧問 SPOT 持倉遍歷全部 SL/TP/比例控管路徑後不得產生 `LIQUIDATE`／`REDUCE`（`RolloverInstruction.action` 為純 `str`，mypy 攔不到，此為唯一防護）、轉換規則（結構失效告知／目標區摺疊／丟棄項）、機會成本與逃頂減碼跳過顧問持倉但 `MARGIN_DEFENSE` 不受影響、`PYRAMID_ADD` 顧問模式下仍為指令、三態解析（帳戶層 `portfolio_mode` 每使用者只讀一次 + 單檔 `advisory_only` 覆寫）、派發端 `advisory_core_levels` 通知與 `advisory_exit_` 去重、`portfolio_mode='COMMAND'` 預設逐位元不變回歸測試
+- `nexus_core/tests/unit/test_calibration_microstructure.py` — D-03 週 EM 到期日選擇（排除 0/1-DTE、取最接近 7 DTE、無合格到期日回 None）、D-04 成交額正規化薄牆門檻（大型股變嚴、小型股不低於 500k、缺成交額回退）、edge GEX 公式複刻、^SKEW 代理分位無前視偏差、前向蒐集校準特徵
+- `nexus_core/tests/unit/test_canonical_resampling.py` — 日級規範母體：重採樣（盤前盤後／週末／半日市／舊 `SKEW` 排除）、midrank 與 IQR 下限、規範母體優先與高頻池回退、`as_of_date` 無前視偏差、收盤快照冪等、v080 回填、0~100 百分位契約、門檻數值不變回歸、UOA／`sentiment_history` 交易日保留期
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
 - `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment
@@ -411,6 +416,15 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 # forward-collection report against a copied production snapshot (never the live DB):
 #   on the VPS: sqlite3 data/nexus_data.db ".backup /tmp/snapshot.db"; copy it to nexus_core/.calibration_cache/
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration forward-report
+```
+
+Microstructure / Skew calibration studies (D-03 weekly EM expiry, D-04 wall depth, Skew thresholds). `micro-snapshot` should run once per trading day after the close so the wall-hold labels accumulate; `micro-report` labels only snapshots whose 5-session window has elapsed. Criteria: `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.13.
+
+```bash
+cd nexus_core
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration micro-snapshot --max-symbols 200
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration skew-proxy
 ```
 
 What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9; the analogous observation queries and pass/tighten/reject thresholds for flipping `WATCHLIST_ADVISOR_DRY_RUN` are in §5.11.

@@ -98,3 +98,32 @@ class DataStore:
         (self.cache_dir / "manifest.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+
+# ---------------------------------------------------------------------------
+# 研究型快取 (micro-snapshot / skew-proxy)：逐日累積的原始觀測
+# ---------------------------------------------------------------------------
+
+
+def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> int:
+    """覆寫一個 JSONL 快取檔，回傳寫入筆數。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8",
+    )
+    return len(rows)
+
+
+def read_jsonl_dir(directory: Path, pattern: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for p in sorted(Path(directory).glob(pattern)):
+        for line in p.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                rows.append(json.loads(line))
+    return rows
+
+
+def save_frame(path: Path, df: pd.DataFrame) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path)

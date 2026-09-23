@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy}"""
 
 import argparse
 import asyncio
@@ -17,7 +17,18 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
         prog="python -m calibration",
         description="回測校準工具 (只產出報告，不修改程式碼)",
     )
-    parser.add_argument("command", choices=["fetch", "run", "forward-report", "all"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "fetch",
+            "run",
+            "forward-report",
+            "all",
+            "micro-snapshot",
+            "micro-report",
+            "skew-proxy",
+        ],
+    )
     parser.add_argument(
         "--universe", default="", help="逗號分隔標的清單；留空則自動組成"
     )
@@ -59,6 +70,9 @@ async def _main(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
+    if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
+        return _run_study(args, cfg)
+
     store = DataStore(cfg.cache_dir)
     symbols = (
         [s.strip().upper() for s in args.universe.split(",") if s.strip()]
@@ -100,6 +114,37 @@ async def _main(args: argparse.Namespace) -> int:
         forward=forward,
     )
     target = report.write_report(cfg, results, {"symbols": symbols})
+    print(f"報告已輸出：{target}")
+    return 0
+
+
+def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
+    """微結構 (D-03/D-04) 與 Skew 代理研究。只寫快取與報告，不寫 DB。"""
+    if args.command == "micro-snapshot":
+        from calibration.microstructure import run_snapshot
+        from calibration.universe import build_universe
+
+        symbols = (
+            [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+            if args.universe
+            else build_universe(cfg.max_symbols)
+        )
+        target = run_snapshot(symbols, Path(cfg.cache_dir))
+        print(f"快照已寫入：{target}")
+        return 0
+
+    if args.command == "micro-report":
+        from calibration.microstructure import build_micro_report
+
+        result = build_micro_report(Path(cfg.cache_dir))
+    else:
+        from calibration.skew_proxy import run_skew_proxy
+
+        result = run_skew_proxy(Path(cfg.cache_dir))
+
+    from calibration.report import write_study_report
+
+    target = write_study_report(Path(cfg.out_dir), args.command, result)
     print(f"報告已輸出：{target}")
     return 0
 

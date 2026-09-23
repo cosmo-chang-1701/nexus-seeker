@@ -120,7 +120,7 @@ def get_trading_day_elapsed_fraction(min_fraction: float = 0.05) -> float:
         return 1.0
 
 
-def get_trading_days_ago_utc(n_trading_days: int) -> str:
+def get_trading_days_ago_utc(n_trading_days: int, for_purge: bool = False) -> str:
     """回傳「往回數第 `n_trading_days` 個交易日的開盤時刻」之 UTC 字串
     (`'%Y-%m-%d %H:%M:%S'`)，供 SQLite 以 `observed_at >= ?` 做時間窗過濾。
 
@@ -133,6 +133,10 @@ def get_trading_days_ago_utc(n_trading_days: int) -> str:
     行事曆查詢失敗時 fail-safe 回退為 `n_trading_days` 個**日曆日**前——這個
     方向是保守的（日曆日窗必然短於或等於同數量的交易日窗），寧可少撈到歷史
     紀錄而讓條件四維持嚴格，也不要因為行事曆異常而意外放寬進場門檻。
+
+    `for_purge=True` 供保留期清理使用，fallback 方向必須反過來：清理的截止點
+    越早越安全（寧可少刪），因此退回同樣足以涵蓋連假的 `n * 2 + 10` 日曆日長窗，
+    而不是會提前誤刪的 `n` 日曆日短窗。
     """
     now_ny = datetime.now(ny_tz)
     n = max(1, int(n_trading_days))
@@ -157,6 +161,69 @@ def get_trading_days_ago_utc(n_trading_days: int) -> str:
     except Exception as e:
         logger.warning(f"NYSE 行事曆回看 {n} 個交易日失敗，退回日曆日: {e}")
 
-    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime(
+    fallback_days = (n * 2 + 10) if for_purge else n
+    return (datetime.now(timezone.utc) - timedelta(days=fallback_days)).strftime(
         "%Y-%m-%d %H:%M:%S"
     )
+
+
+def get_last_completed_trading_date(as_of: datetime | None = None) -> str:
+    """回傳最近一個**已收盤**交易日的美東日期 (`'YYYY-MM-DD'`)。
+
+    收盤時刻取自 NYSE 行事曆（半日市為 13:00 ET），所以收盤後呼叫會回傳當天，
+    盤前或盤中呼叫則回傳前一個交易日，週末與國定假日會自動跳過。`as_of` 若為
+    naive datetime，視為美東時間。
+
+    行事曆查詢失敗時，fail-safe 退回「前一個平日」：只能跳過週末、無法辨識
+    國定假日，但呼叫端（canonical 日級快照補寫）對一個沒有盤中資料的日期只會
+    寫入 0 筆，不會產生錯誤資料。
+    """
+    if as_of is None:
+        now_ny = datetime.now(ny_tz)
+    elif as_of.tzinfo is None:
+        now_ny = as_of.replace(tzinfo=ny_tz)
+    else:
+        now_ny = as_of.astimezone(ny_tz)
+
+    try:
+        start = now_ny.date() - timedelta(days=20)
+        schedule = nyse_calendar.schedule(start_date=start, end_date=now_ny.date())
+        if not schedule.empty:
+            completed = [
+                c
+                for c in schedule["market_close"]
+                if c.tz_convert(ny_tz).to_pydatetime() <= now_ny
+            ]
+            if completed:
+                return str(completed[-1].tz_convert(ny_tz).strftime("%Y-%m-%d"))
+    except Exception as e:
+        logger.warning(f"取得最近已收盤交易日失敗，退回前一個平日: {e}")
+
+    fallback = now_ny.date() - timedelta(days=1)
+    while fallback.weekday() >= 5:
+        fallback -= timedelta(days=1)
+    return fallback.strftime("%Y-%m-%d")
+
+
+def get_session_bounds_utc(
+    start_date: Any, end_date: Any
+) -> dict[str, tuple[str, str]]:
+    """回傳區間內每個 NYSE 交易日的 `{美東日期: (開盤 UTC, 收盤 UTC)}`。
+
+    時間字串格式為 `'%Y-%m-%d %H:%M:%S'`，與 SQLite `CURRENT_TIMESTAMP` 相同，
+    可以直接做字串比較。非交易日不會出現在結果中；半日市的收盤時刻為實際的
+    13:00 ET。行事曆查詢失敗時直接拋出例外——呼叫端寧可放棄這次重採樣，也不要
+    用猜的交易時段寫入規範歷史。
+    """
+    schedule = nyse_calendar.schedule(start_date=start_date, end_date=end_date)
+    bounds: dict[str, tuple[str, str]] = {}
+    fmt = "%Y-%m-%d %H:%M:%S"
+    for _, row in schedule.iterrows():
+        market_open = row["market_open"]
+        market_close = row["market_close"]
+        trade_date = market_open.tz_convert(ny_tz).strftime("%Y-%m-%d")
+        bounds[trade_date] = (
+            market_open.tz_convert(timezone.utc).strftime(fmt),
+            market_close.tz_convert(timezone.utc).strftime(fmt),
+        )
+    return bounds

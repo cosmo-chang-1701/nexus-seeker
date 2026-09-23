@@ -153,7 +153,110 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
         ]
     report["magnitudes"] = magnitudes
     report["exit_tiers"] = build_exit_tier_breakdown(df)
+    report["threshold_studies"] = build_threshold_studies(entries)
     return report
+
+
+# Skew 分位分組邊界：對應 skew_taxonomy 的現行門檻 (15 / 85 / 90 / 98)，
+# 讓每一組恰好是「某個閘門會不會觸發」的區間。
+_SKEW_BUCKETS: tuple[tuple[float, float, str], ...] = (
+    (0.0, 15.0, "<15"),
+    (15.0, 85.0, "15-85"),
+    (85.0, 90.0, "85-90"),
+    (90.0, 98.0, "90-98"),
+    (98.0, 100.01, ">=98"),
+)
+
+
+def _features(df: pd.DataFrame) -> pd.DataFrame:
+    """把 features_json 展開成欄位；無法解析的列留空。"""
+    if "features_json" not in df.columns or df.empty:
+        return pd.DataFrame(index=df.index)
+    parsed: list[dict[str, Any]] = []
+    for raw in df["features_json"]:
+        try:
+            obj = json.loads(raw) if isinstance(raw, str) else {}
+        except ValueError:
+            obj = {}
+        parsed.append(obj if isinstance(obj, dict) else {})
+    return pd.DataFrame(parsed, index=df.index)
+
+
+def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for label, g in frame.groupby(key, observed=True, sort=True):
+        n = int(len(g))
+        out.append(
+            {
+                "bucket": str(label),
+                "n": n,
+                "win_rate": float(g["win"].mean()),
+                "adverse_rate": float((g["outcome"] == -1).mean()),
+                "status": "OK"
+                if n >= FORWARD_MIN_ROWS
+                else f"資料累積中 ({n}/{FORWARD_MIN_ROWS})",
+            }
+        )
+    return out
+
+
+def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
+    """D-04 牆體深度比與 Skew 分位門檻的前向驗證 (docs §5.13)。
+
+    - `wall_depth_ratio`：support_gex × 0.01 ÷ adv_dollar_20d 的四分位 × 勝率。
+      只取 REGIME_CLASSIFIER 與進場閘門，EXIT_* 已由呼叫端排除。
+    - `skew_percentile`：依現行門檻區間分組，並分開日級母體 (`CANONICAL`) 與
+      高頻回退池——兩者的分位語意不同，混在一起無法判讀。
+    """
+    feats = _features(entries)
+    result: dict[str, Any] = {}
+
+    if {"support_gex", "adv_dollar_20d"}.issubset(feats.columns):
+        sg = pd.to_numeric(feats["support_gex"], errors="coerce")
+        adv = pd.to_numeric(feats["adv_dollar_20d"], errors="coerce")
+        ratio = (sg * 0.01 / adv).where((sg > 0) & (adv > 0))
+        frame = pd.DataFrame(
+            {"x": ratio, "win": entries["win"], "outcome": entries["outcome"]}
+        ).dropna()
+        if len(frame) < FORWARD_MIN_ROWS:
+            result["wall_depth_ratio"] = f"資料累積中 ({len(frame)}/{FORWARD_MIN_ROWS})"
+        else:
+            frame["q"] = pd.qcut(frame["x"], 4, duplicates="drop")
+            result["wall_depth_ratio"] = _bucket_rows(frame, "q")
+    else:
+        result["wall_depth_ratio"] = (
+            "資料累積中 (尚無 support_gex / adv_dollar_20d 欄位)"
+        )
+
+    if "skew_percentile" in feats.columns:
+        pct = pd.to_numeric(feats["skew_percentile"], errors="coerce")
+        source = (
+            feats["skew_percentile_source"].fillna("UNKNOWN")
+            if "skew_percentile_source" in feats.columns
+            else pd.Series(["UNKNOWN"] * len(feats), index=feats.index)
+        )
+        frame = pd.DataFrame(
+            {
+                "x": pct,
+                "source": source,
+                "win": entries["win"],
+                "outcome": entries["outcome"],
+            }
+        ).dropna(subset=["x"])
+        by_source: dict[str, Any] = {}
+        for src, g in frame.groupby("source"):
+            g = g.copy()
+            g["bucket"] = pd.cut(
+                g["x"],
+                bins=[b[0] for b in _SKEW_BUCKETS] + [_SKEW_BUCKETS[-1][1]],
+                labels=[b[2] for b in _SKEW_BUCKETS],
+                right=False,
+            )
+            by_source[str(src)] = _bucket_rows(g.dropna(subset=["bucket"]), "bucket")
+        result["skew_percentile"] = by_source or "資料累積中 (尚無 skew_percentile)"
+    else:
+        result["skew_percentile"] = "資料累積中 (尚無 skew_percentile 欄位)"
+    return result
 
 
 def _is_advisory(features_json: Any) -> bool:

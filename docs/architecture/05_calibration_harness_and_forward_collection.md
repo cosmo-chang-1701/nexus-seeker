@@ -460,12 +460,50 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 `SELECT action, COUNT(DISTINCT date(created_at)) FROM rollover_audit_log WHERE scenario = 'MACRO_TOP_ESCAPE_DEFENSE' GROUP BY action;`
 （`BUY_PROTECTIVE_PUT` = WATCH）。
 
+### 5.13 微結構與 Skew 門檻校準研究 (`micro-snapshot` / `micro-report` / `skew-proxy`)
+
+GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取全是 upsert，歷史期權鏈與個股 25-Delta Skew 歷史都拿不到。這三個子命令在開發機上取得替代資料，只寫 `.calibration_cache/` 與 `reports/calibration/`，不寫 DB、不改程式碼。
+
+| 子命令 | 資料 | 用途 |
+|---|---|---|
+| `micro-snapshot` | 標的池的最近到期日期權鏈（與 edge 相同公式重算 GEX：Yahoo 預設頁＝最近一檔、$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
+| `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註） |
+| `skew-proxy` | CBOE ^SKEW × SPY 日線（2000 年起） | 以「日級、252 交易日、只用過去資料的 midrank」計算分位，統計各門檻的觸發率、5 日報酬（bootstrap CI）與 5 日內跌幅 > 3% 的機率 |
+
+執行方式與其他子命令相同（`python -m calibration micro-snapshot --max-symbols 200`、`micro-report`、`skew-proxy`，容器內執行參數見 `AGENTS.md` 的 Testing 段落）。標的池為 watchlist ∪ 固定流動性清單，讀取 watchlist 時 `NEXUS_DB_NAME` 應指向複製的快照。
+
+**前向蒐集新欄位**：`regime_evaluation_log.features_json` 於 `REGIME_CLASSIFIER` 與右側／左側進場閘門紀錄中加入 `support_wall`、`support_gex`（現價下方淨 GEX 最大正值，不套薄牆門檻）、`put_wall_gex`、`adv_dollar_20d`，以及閘門紀錄的 `skew_percentile`、`skew_percentile_source`（`CANONICAL`／`INTRADAY_FALLBACK`，雷達快速路徑可能為空，可由 `sentiment_daily_canonical` 在該日之前的筆數離線推回）。有了這些欄位，production 資料就能以事後走勢驗證牆體深度比與 Skew 門檻。
+
+**基準結果（2026-09-22 單日快照，106 檔；^SKEW 2000-01 ~ 2026-09，6,586 個交易日）**：
+
+- **D-03 週 EM**：以 1-DTE 推算的週 EM 中位數比直接量測的約 7-DTE 高 26%、3-DTE 高 20%，4–14 DTE 約 5%。已改為取最接近 7 DTE 的到期日（見 `valuation_pricing/02_expected_move_and_max_pain.md`）。
+- **D-04 牆體深度比**：94 面支撐牆的深度比中位數約 $1.6\times10^{-4}$，p10 約 $10^{-6}$；$< 10^{-5}$ 的牆幾乎都距現價 8–66%。舊 500k 絕對門檻通過率 81.9%，新門檻 76.6%。差異全部落在 ADV \$500M–\$5B 組（84.3% → 74.5%，剔除 ORCL／CRM／XOM／COST 等遠處薄牆）；ADV > \$5B 與 < \$500M 兩組不變。
+- **Skew 門檻（指數層級代理）**：日級母體下 ≥98 分位的觸發率為 4.9%（連續觸發算一次則為 146 段），高於「2%」的直覺值，因為分位序列有趨勢。高分位日之後 SPY 的 5 日跌幅 > 3% 機率（≥98：10.3%、≥90：9.9%、≥85：9.4%）**不高於**基準的 11.6%，5 日報酬 CI 都與基準重疊；反而低分位日（≤5：18.4%）的下跌風險較高（低 SKEW 常與高 VIX 的恐慌期重疊）。**結論：代理資料不支持 handoff 提議的 97.5／88／82 調降**（調降只會增加觸發、沒有預測力依據），現行門檻維持不變；是否調整以個股日級母體的前向蒐集資料為準。
+
+**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出兩張表：
+- 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
+- Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
+
+每組 $n < 100$ 時標示「資料累積中」。EXIT_* 紀錄不納入（其勝率語意與進場相反）。
+
+**上線檢查清單**（部署 v080 與本節功能時）：
+1. 部署前先備份 production DB：03:00 ET 的保留期清理首次執行時會刪除 60 個交易日以前的 `sentiment_history`，刪除後無法復原（v080 回填在 migration 階段執行，順序上不受影響）。
+2. 部署後以 `.backup` 取得快照，確認 `sentiment_daily_canonical` 回填了多少標的、每標的多少個交易日；回填 0 筆代表舊資料都落在盤外時段或只有舊 `SKEW` 序列，屬預期情形，由每日排程累積。
+3. 次一交易日確認 16:15 ET 的 `📸 [Canonical 日級快照]` 與 08:45 ET 的補寫日誌都有出現。
+4. 開發機每個交易日收盤後執行一次 `micro-snapshot`（可用 cron 或 Claude Code `/schedule`），缺一天只會少一個樣本日，不影響其他日的標註。
+
+**判讀準則**：
+- `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
+- Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy`）
+  - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 快照、守住率標註（§5.13）
+  - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
   - `nexus_core/calibration/pipeline.py`：`fetch_all()`、`process_symbol()`、`run_event_study()`
   - `nexus_core/calibration/features.py`、`nexus_core/calibration/events.py`：特徵與事件偵測（`scanner_signal()` 複製版）
   - `nexus_core/calibration/labeling.py`、`nexus_core/calibration/stats.py`：方向化標註與統計
@@ -486,4 +524,4 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
 - **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`

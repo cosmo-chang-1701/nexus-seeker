@@ -109,16 +109,16 @@ async def resolve_telemetry_pricing(
     except Exception as e:
         logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
 
-    # 3. Resolve skew
-    skew_val = 0.5
+    # 3. Resolve skew (0~100 百分位量綱)
+    skew_val = 50.0
     try:
         skew_metrics = await SentimentEngine.calculate_skew(symbol)
         if skew_metrics and "skew" in skew_metrics:
             skew = float(skew_metrics["skew"])
             if skew > 5.0:
-                skew_val = 0.98
+                skew_val = 98.0
             elif skew < -2.0:
-                skew_val = 0.02
+                skew_val = 2.0
     except Exception as e:
         logger.warning(f"Error calculating skew for {symbol}: {e}")
 
@@ -149,7 +149,7 @@ async def resolve_telemetry_pricing(
         hist_iv=hist_iv,
         max_pain=spot_price,
         prev_max_pain=spot_price,
-        skew_percentile=skew_val,
+        skew_percentile_pct=skew_val,
         prev_close=prev_close,
         base_quantity=base_quantity,
     )
@@ -266,7 +266,7 @@ async def apply_telemetry_to_orders(
                     iv_rank=0.50,
                     max_pain_price=100.0,
                     prev_max_pain=100.0,
-                    skew_percentile=0.98,
+                    skew_percentile_pct=98.0,
                     put_call_ratio=1.0,
                     prev_close=float(
                         cache_price if cache_price > 0.0 else current_price
@@ -417,10 +417,10 @@ async def build_telemetry_alignment_items(
                 else None
             )
             skew_per_for_decision = (
-                float(skew_per / 100.0)
+                float(skew_per)
                 if skew_metrics
                 and (skew_per := skew_metrics.get("skew_percentile")) is not None
-                else 0.50
+                else 50.0
             )
 
             decision = await generate_alignment_decision(
@@ -435,7 +435,7 @@ async def build_telemetry_alignment_items(
                 iv_rank=iv_rank_for_decision,
                 max_pain_price=max_pain_price if max_pain_price > 0.0 else None,
                 prev_max_pain=max_pain_price if max_pain_price > 0.0 else 0.0,
-                skew_percentile=skew_per_for_decision,
+                skew_percentile_pct=skew_per_for_decision,
                 put_call_ratio=1.0,
                 prev_close=float(cache_price if cache_price > 0.0 else current_price),
                 cache_price=cache_price,

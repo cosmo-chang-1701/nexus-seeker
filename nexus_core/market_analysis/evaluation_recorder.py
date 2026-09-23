@@ -170,6 +170,55 @@ def _walls(gex_profile_data: Any) -> dict[str, Optional[float]]:
     }
 
 
+def _support_wall(
+    gex_profile_data: Any, spot: float
+) -> tuple[Optional[float], Optional[float]]:
+    """現價下方淨 GEX 最大正值 (與 structural_signals 的支撐牆候選定義相同，不套薄牆門檻)。"""
+    if not isinstance(gex_profile_data, Mapping) or not spot or spot <= 0:
+        return None, None
+    profile = gex_profile_data.get("gex_profile")
+    if not isinstance(profile, Mapping):
+        return None, None
+    best_k: Optional[float] = None
+    best_v = 0.0
+    for k, v in profile.items():
+        try:
+            strike, val = float(k), float(v)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(strike) and math.isfinite(val)):
+            continue
+        if (
+            strike < spot
+            and not math.isclose(strike, spot, abs_tol=1e-4)
+            and val > best_v
+        ):
+            best_k, best_v = strike, val
+    return best_k, (best_v if best_k is not None else None)
+
+
+def calibration_features(
+    gex_profile_data: Any,
+    spot: float,
+    candidate_radar: Optional[Mapping[str, Any]] = None,
+) -> dict[str, Any]:
+    """校準用特徵 (寫入 features_json)。
+
+    - 牆體深度 (D-04)：支撐牆的原始 GEX 值與 20 日平均成交額 (雷達資料有提供時)，
+      供離線計算深度比 × 事後守住率。
+    - Skew 分位與其母體來源：日級規範母體上線後，新門檻只能以這些紀錄驗證。
+    """
+    strike, gex = _support_wall(gex_profile_data, spot)
+    feats: dict[str, Any] = {"support_wall": strike, "support_gex": gex}
+    if isinstance(gex_profile_data, Mapping):
+        feats["put_wall_gex"] = _num(gex_profile_data.get("put_wall_gex"))
+        feats["adv_dollar_20d"] = _num(gex_profile_data.get("adv_dollar_20d"))
+    if candidate_radar:
+        feats["skew_percentile"] = _num(candidate_radar.get("skew_percentile"))
+        feats["skew_percentile_source"] = candidate_radar.get("skew_percentile_source")
+    return feats
+
+
 def record_regime_classification(
     symbol: str,
     spot: float,
@@ -196,6 +245,7 @@ def record_regime_classification(
             "atr_15m": _num(atr_15m),
             "rsi_15m": _clean(float(rsi_15m)) if rsi_15m is not None else None,
             "reason_digest": reason,
+            "features_json": calibration_features(gex_profile_data, spot),
         }
         row.update(_walls(gex_profile_data))
         _append(row)
@@ -266,7 +316,9 @@ def record_gate_reason(
             "reason_digest": reason,
         }
         if candidate_radar:
-            row.update(_walls(candidate_radar.get("gex_profile_data")))
+            gex_data = candidate_radar.get("gex_profile_data")
+            row.update(_walls(gex_data))
+            row["features_json"] = calibration_features(gex_data, spot, candidate_radar)
             iv = candidate_radar.get("iv_metrics")
             if isinstance(iv, Mapping):
                 row["ivr"] = _num(iv.get("iv_rank"))

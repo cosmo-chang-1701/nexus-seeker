@@ -55,6 +55,18 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.warning(f"financials_cache 清理失敗: {e}")
 
+        # 情緒指標日級規範快照：把今天的盤中最後一筆觀測寫入 252 交易日母體。
+        # 純 DB 重採樣、不抓網路（收盤後期權鏈報價不可靠）；半日市以行事曆的
+        # 實際收盤時刻為界，因此 16:15 單一時點即可涵蓋。
+        try:
+            from market_analysis.sentiment.canonical_history import (
+                snapshot_trading_day,
+            )
+
+            await snapshot_trading_day(today.strftime("%Y-%m-%d"))
+        except Exception as e:
+            logger.error(f"情緒指標日級快照失敗: {e}")
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()

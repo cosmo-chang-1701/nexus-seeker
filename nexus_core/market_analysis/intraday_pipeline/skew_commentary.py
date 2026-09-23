@@ -5,6 +5,9 @@ from typing import Any, Optional
 from market_analysis.sentiment.skew_taxonomy import (
     SKEW_BULLISH_PERCENTILE,
     SKEW_DEFENSIVE_PERCENTILE,
+    SKEW_DIVERGENCE_HIGH_PERCENTILE,
+    SKEW_DIVERGENCE_LOW_PERCENTILE,
+    SKEW_HIGH_DEFENSE_PERCENTILE,
     SKEW_STATE_BULLISH,
     SKEW_STATE_DEFENSIVE,
 )
@@ -173,8 +176,8 @@ def build_watchlist_skew_rule_commentary(
     # [0.35, 0.4) 這 0.05 寬的窗。這個順序也與 evaluation.py 對同一組
     # 條件的判定結果一致（同一封 embed 不該自相矛盾）。
     if pcr is not None and (
-        (skew_percentile > 85.0 and 0.0 < pcr < 0.4)
-        or (skew_percentile < 15.0 and pcr > 1.5)
+        (skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE and 0.0 < pcr < 0.4)
+        or (skew_percentile < SKEW_DIVERGENCE_LOW_PERCENTILE and pcr > 1.5)
     ):
         return _format_skew_commentary(
             _SKEW_BADGE_DIVERGENCE, _SKEW_PCR_DIVERGENCE_WARNING, metrics, tactical
@@ -182,7 +185,7 @@ def build_watchlist_skew_rule_commentary(
 
     # Absolute tail-risk routes
     # Left-Tail Explosion (Put Panic)
-    if skew_percentile > 90.0:
+    if skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
         if iv_rank is None:
             # IVR 缺失時不再靜默落入下一支：收租與否本來就取決於 IV 是否膨脹，
             # 沒有 IVR 就沒有判斷依據，據實揭露並取防禦側。
