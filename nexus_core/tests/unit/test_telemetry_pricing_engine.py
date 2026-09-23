@@ -342,3 +342,103 @@ def test_resolve_skew_percentile_pct_prefers_real_percentile() -> None:
     assert resolve_skew_percentile_pct(None) == 50.0
     # 越界分位視為中性
     assert resolve_skew_percentile_pct({"skew_percentile": 150.0}) == 50.0
+
+
+@pytest.mark.asyncio
+async def test_apply_fallback_uses_live_market_inputs(db_conn: Any) -> None:
+    """一鍵套用在沒有記憶體／快取建議時，以即時資料重算，不再使用固定假值。
+
+    舊版後備路徑寫死 IV 0.55、IV Rank 0.50、Max Pain 100、Skew 98、PCR 1.0；
+    現在必須與 /telemetry_alert 共用同一份輸入。移動停損單不做價格對齊。
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from services.order_telemetry_service import apply_telemetry_to_orders
+
+    orders = [
+        {
+            "id": 1,
+            "symbol": "AAPL",
+            "order_type": "LIMIT",
+            "limit_price": 100.0,
+            "stop_price": 0.0,
+            "trailing_value": 0.0,
+            "quantity": 10,
+            "side": "BUY",
+        },
+        {
+            "id": 2,
+            "symbol": "AAPL",
+            "order_type": "TRAILING_STOP_PCT",
+            "limit_price": 0.0,
+            "stop_price": 0.0,
+            "trailing_value": 5.0,
+            "quantity": 10,
+            "side": "SELL",
+        },
+    ]
+    iv_metrics = MagicMock(current_iv=0.22, iv_rank=35.0)
+    decision = MagicMock(suggested_price=99.0, suggested_qty=10)
+    mock_decision = AsyncMock(return_value=decision)
+
+    with (
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "services.order_telemetry_service.fetch_cache_and_live_price",
+            new=AsyncMock(return_value=(100.5, 101.0)),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new=AsyncMock(return_value=iv_metrics),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new=AsyncMock(return_value={"skew": 6.0, "skew_percentile": 40.0}),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new=AsyncMock(return_value={"max_pain": 97.0}),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+            new=AsyncMock(return_value={"volume_pcr": 1.8}),
+        ),
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_earnings",
+            new=AsyncMock(return_value=None),
+        ),
+        patch(
+            "services.calendar_service.calendar_service.get_high_impact_events",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "market_analysis.telemetry_pricing_engine.generate_alignment_decision",
+            new=mock_decision,
+        ),
+        patch("database.orders.update_active_order_price") as mock_update,
+    ):
+        updated, _ = await apply_telemetry_to_orders(
+            user_id=7,
+            orders=orders,
+            suggestions={},
+            holding_type="PURE_STOCK_100X",
+            holding_map={},
+        )
+
+    # 只有限價單被重算與更新；移動停損單略過
+    assert mock_decision.await_count == 1
+    assert updated == 1
+    mock_update.assert_called_once_with(1, 99.0, 10)
+
+    call = mock_decision.await_args
+    assert call is not None
+    kwargs = call.kwargs
+    assert kwargs["iv"] == pytest.approx(0.22)
+    assert kwargs["iv_rank"] == pytest.approx(0.35)
+    assert kwargs["max_pain_price"] == 97.0
+    assert kwargs["skew_percentile_pct"] == 40.0
+    assert kwargs["put_call_ratio"] == 1.8

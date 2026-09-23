@@ -50,7 +50,24 @@
 
 **後續觀察**：改用真實分位後，尾端防禦的觸發頻率會重新分布（高波動小型股大幅減少、大型股偶爾觸發）。上線後留意 `[⚠️ 尾端風險防禦]` 日誌的標的分布；若某些標的長期停在高頻回退池（`skew_percentile_source = INTRADAY_FALLBACK`），其分位語意與日級母體不同，觸發頻率會偏高。
 
-⚠️ 一鍵套用的後備重算（無記憶體與快取建議時）其餘參數仍是固定假值（IV 0.55、IV Rank 0.50、Max Pain 100），算出的價格只能維持基本行為，不應視為精確建議。
+### 4.2 對齊決策的市場輸入：兩條路徑共用
+`/telemetry_alert` 與一鍵套用的後備重算（記憶體與 10 分鐘快取中都沒有建議時），都經 `_fetch_alignment_market_inputs()` 並行抓取同一份即時資料再呼叫 `generate_alignment_decision()`：
+
+| 參數 | 來源 | 缺值時 |
+|---|---|---|
+| `iv` / `hist_iv` | `fetch_and_calculate_iv_metrics().current_iv`，`hist_iv = iv / 1.1` | 0.35 |
+| `iv_rank` | `iv_rank / 100`（0~1） | `None`（引擎視為 1.0，保守抑制上調） |
+| `max_pain_price` / `prev_max_pain` | `calculate_max_pain()`；過期、斷路或缺值時歸零 | 0（不參與定價） |
+| `skew_percentile_pct` | `resolve_skew_percentile_pct()`（§4.1） | 50 |
+| `put_call_ratio` | `calculate_pcr()["volume_pcr"]` | 1.0（不觸發 Skew/PCR 恐慌折價） |
+| `uoa_array` | `detect_uoa()` | 空清單 |
+| `macro_event_dates` | 14 天內高影響宏觀事件 + 該標的財報日 | 空集合 |
+
+後備路徑跳過移動停損單（`TRAILING_STOP_USD`／`TRAILING_STOP_PCT`）：`trailing_value` 不是掛單價格，與 `/telemetry_alert` 的排除規則一致。
+
+改版前的後備路徑使用固定假值（IV 0.55、IV Rank 0.50、Max Pain 100、Skew 98、PCR 1.0，且沒有宏觀事件日期），並會對移動停損單的 `trailing_value` 做價格重算；兩條路徑的 PCR 也都寫死為 1.0。
+
+**後續觀察**：PCR 改為真實值後，`/telemetry_alert` 的 Pillar 3（Skew $> 90$ 且 PCR $> 1.5$ 時建議價打 9 折）開始可能觸發，改版前 PCR 恆為 1.0、這條分支從未觸發過。上線後留意 `Skew/PCR 極端恐慌` 理由出現的頻率與標的。
 
 ## 5. 核心程式碼檔案路徑關聯
 

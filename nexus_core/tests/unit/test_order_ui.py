@@ -503,6 +503,9 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
         new=AsyncMock(return_value=[]),
     ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new=AsyncMock(return_value={"volume_pcr": 1.0}),
+    ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),
     ), patch(
@@ -951,6 +954,9 @@ async def test_telemetry_alert_ignores_stale_max_pain(
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
         new=AsyncMock(return_value=[]),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new=AsyncMock(return_value={"volume_pcr": 1.0}),
     ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),
