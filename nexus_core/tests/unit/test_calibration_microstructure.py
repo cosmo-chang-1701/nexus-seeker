@@ -247,3 +247,118 @@ def test_forward_threshold_studies_without_features_reports_accumulating() -> No
     )
     assert "資料累積中" in str(studies["wall_depth_ratio"])
     assert "資料累積中" in str(studies["skew_percentile"])
+
+
+def test_snapshot_skip_reason_guards_schedule(tmp_path: Any) -> None:
+    from zoneinfo import ZoneInfo
+
+    from calibration.microstructure import snapshot_skip_reason
+
+    ny = ZoneInfo("America/New_York")
+    # 週六
+    assert "不是交易日" in str(
+        snapshot_skip_reason(tmp_path, datetime(2026, 9, 26, 18, 0, tzinfo=ny))
+    )
+    # 感恩節
+    assert "不是交易日" in str(
+        snapshot_skip_reason(tmp_path, datetime(2026, 11, 26, 18, 0, tzinfo=ny))
+    )
+    # 交易日盤中
+    assert "尚未收盤" in str(
+        snapshot_skip_reason(tmp_path, datetime(2026, 9, 23, 15, 0, tzinfo=ny))
+    )
+    # 半日市 13:00 收盤後可以執行
+    assert (
+        snapshot_skip_reason(tmp_path, datetime(2026, 11, 27, 13, 30, tzinfo=ny))
+        is None
+    )
+    # 收盤後可以執行；當天快照已存在則略過
+    after_close = datetime(2026, 9, 23, 18, 0, tzinfo=ny)
+    assert snapshot_skip_reason(tmp_path, after_close) is None
+    (tmp_path / "microstructure").mkdir()
+    (tmp_path / "microstructure" / "snapshot_2026-09-23.jsonl").write_text("")
+    assert "已存在" in str(snapshot_skip_reason(tmp_path, after_close))
+
+
+@pytest.mark.asyncio
+async def test_snapshot_symbol_fetches_full_chain_via_market_data_service() -> None:
+    """快照經 market_data_service (edge 代理) 抓取，且期權鏈不裁減履約價。"""
+    from calibration.microstructure import snapshot_symbol
+
+    today = datetime(2026, 9, 21).date()
+    hist = pd.DataFrame(
+        {
+            "Open": [100.0] * 30,
+            "High": [101.0] * 30,
+            "Low": [99.0] * 30,
+            "Close": [100.0] * 30,
+            "Volume": [1_000_000.0] * 30,
+        }
+    )
+    chain = _Chain(3.0)
+    chain.calls["openInterest"] = [500]
+    chain.calls["impliedVolatility"] = [0.3]
+    chain.puts["openInterest"] = [500]
+    chain.puts["impliedVolatility"] = [0.3]
+    get_chain = AsyncMock(return_value=chain)
+
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new=AsyncMock(return_value=hist),
+        ),
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            # 當天到期 (DTE=0) 的合約已結算，不得拿來算 GEX
+            new=AsyncMock(return_value=["2026-09-21", "2026-09-28", "2026-10-30"]),
+        ),
+        patch("services.market_data_service.get_option_chain", new=get_chain),
+        patch("calibration.microstructure.asyncio.sleep", new=AsyncMock()),
+    ):
+        rec = await snapshot_symbol("TEST", today)
+
+    assert rec is not None
+    assert rec["adv_dollar_20d"] == pytest.approx(1e8)
+    assert rec["nearest_dte"] == 7
+    assert [e["expiry"] for e in rec["em"]] == ["2026-09-28"]
+    # 30 DTE 的到期日超出 EM 範圍且 GEX 已算出，不應再抓
+    assert get_chain.await_count == 1
+    assert get_chain.await_args is not None
+    assert get_chain.await_args.kwargs.get("prune_pct", "missing") is None
+
+
+@pytest.mark.asyncio
+async def test_snapshot_symbol_drops_chain_with_zero_open_interest() -> None:
+    """Yahoo 夜間重置時段的期權鏈 (未平倉量全為 0) 不寫入快照。"""
+    from calibration.microstructure import snapshot_symbol
+
+    hist = pd.DataFrame(
+        {
+            "Open": [100.0] * 30,
+            "High": [101.0] * 30,
+            "Low": [99.0] * 30,
+            "Close": [100.0] * 30,
+            "Volume": [1_000_000.0] * 30,
+        }
+    )
+    chain = _Chain(3.0)
+    for frame in (chain.calls, chain.puts):
+        frame["openInterest"] = [0]
+        frame["impliedVolatility"] = [1e-5]
+
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new=AsyncMock(return_value=hist),
+        ),
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new=AsyncMock(return_value=["2026-09-28"]),
+        ),
+        patch(
+            "services.market_data_service.get_option_chain",
+            new=AsyncMock(return_value=chain),
+        ),
+        patch("calibration.microstructure.asyncio.sleep", new=AsyncMock()),
+    ):
+        assert await snapshot_symbol("TEST", datetime(2026, 9, 21).date()) is None

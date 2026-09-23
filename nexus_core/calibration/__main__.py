@@ -38,6 +38,11 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument("--out", default=None, help="報告輸出根目錄")
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--force", action="store_true", help="略過記憶體安全檢查")
+    parser.add_argument(
+        "--any-time",
+        action="store_true",
+        help="micro-snapshot：略過「交易日收盤後、當天尚無快照」的排程保護",
+    )
     return parser.parse_args(argv)
 
 
@@ -71,7 +76,7 @@ async def _main(args: argparse.Namespace) -> int:
             )
             return 2
     if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
-        return _run_study(args, cfg)
+        return await _run_study(args, cfg)
 
     store = DataStore(cfg.cache_dir)
     symbols = (
@@ -118,18 +123,24 @@ async def _main(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
+async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
     """微結構 (D-03/D-04) 與 Skew 代理研究。只寫快取與報告，不寫 DB。"""
     if args.command == "micro-snapshot":
-        from calibration.microstructure import run_snapshot
+        from calibration.microstructure import run_snapshot, snapshot_skip_reason
         from calibration.universe import build_universe
+
+        if not args.any_time:
+            reason = snapshot_skip_reason(Path(cfg.cache_dir))
+            if reason:
+                print(f"略過快照：{reason}")
+                return 0
 
         symbols = (
             [s.strip().upper() for s in args.universe.split(",") if s.strip()]
             if args.universe
             else build_universe(cfg.max_symbols)
         )
-        target = run_snapshot(symbols, Path(cfg.cache_dir))
+        target = await run_snapshot(symbols, Path(cfg.cache_dir))
         print(f"快照已寫入：{target}")
         return 0
 

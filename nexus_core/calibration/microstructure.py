@@ -3,7 +3,7 @@
 為什麼需要自己蒐集：production 的 GEX 快取全是 upsert，歷史期權鏈也拿不到，
 所以「牆體深度 vs 事後是否守住」無法回測，只能從今天起逐日累積。
 
-- `micro-snapshot`：對標的池抓取期權鏈，用與 `nexus_edge_scraper/gex_scraper.py`
+- `micro-snapshot`：經 `market_data_service`（edge 代理 → 本地 yfinance）對標的池抓取期權鏈，用與 `nexus_edge_scraper/gex_scraper.py`
   相同的公式重算 GEX 剖面（Yahoo 預設頁面＝最近到期日、t 下限 2 天、|Δ|<0.02
   雜訊過濾、`OI × 100 × Γ × S²`），並記錄 20 日平均成交額、各到期日推算的週 EM。
   每天一個 JSONL 檔，建議每個交易日收盤後執行一次。
@@ -13,12 +13,13 @@
 只寫 `cache_dir` 與報告目錄，不寫資料庫、不改程式碼。
 """
 
+import asyncio
 import logging
 import math
 import statistics
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -217,11 +218,17 @@ def _straddle_em(chain: Any, spot: float, dte: int) -> Optional[dict[str, Any]]:
     }
 
 
-def snapshot_symbol(symbol: str, today: date) -> Optional[dict[str, Any]]:
-    import yfinance as yf
+async def snapshot_symbol(symbol: str, today: date) -> Optional[dict[str, Any]]:
+    """抓取一檔標的的日線與期權鏈並計算快照。
 
-    tk = yf.Ticker(symbol)
-    hist = tk.history(period="3mo", interval="1d", auto_adjust=False)
+    經 `services.market_data_service` 抓取，與 bot 同樣走三階降級（edge 快照 →
+    edge 即時抓取 → 本地 yfinance），因此可以在資料中心 IP 被 Yahoo 封鎖的
+    VPS 上執行。期權鏈刻意不裁減履約價 (`prune_pct=None`)：GEX 牆與雜訊過濾
+    需要完整期權鏈。
+    """
+    from services import market_data_service as mds
+
+    hist = await mds.get_history_df(symbol, period="3mo", interval="1d")
     if hist is not None and not hist.empty:
         # 盤中或剛收盤時最後一列可能尚未完成 (Close/Volume 為 NaN)
         hist = hist.dropna(subset=["Close", "High", "Low", "Volume"])
@@ -237,22 +244,29 @@ def snapshot_symbol(symbol: str, today: date) -> Optional[dict[str, Any]]:
     )
     atr_1d = float(tr.iloc[-14:].mean())
 
-    expiries = list(tk.options or [])
+    expiries = list(await mds.get_all_option_expiries(symbol) or [])
     if not expiries:
         return None
 
     em_rows: list[dict[str, Any]] = []
     gex: Optional[dict[str, Any]] = None
     nearest_dte: Optional[int] = None
-    for i, exp in enumerate(expiries):
-        dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
-        if dte < 0:
+    for exp in sorted(expiries):
+        try:
+            dte = (datetime.strptime(exp, "%Y-%m-%d").date() - today).days
+        except ValueError:
+            continue
+        # 快照在收盤後執行：當天到期 (DTE=0) 的合約已經結算，未平倉量歸零或
+        # 失真，拿它算 GEX 牆沒有意義，一律從下一檔開始。
+        if dte < 1:
             continue
         if dte > _EM_MAX_DTE and gex is not None:
             break
-        chain = tk.option_chain(exp)
+        chain = await mds.get_option_chain(symbol, exp, prune_pct=None)
+        if chain is None:
+            continue
         if gex is None:
-            # Yahoo 期權頁的預設到期日＝最近一檔，與 edge 一致
+            # 最近一檔未到期的到期日，對應 edge 抓取 Yahoo 期權頁預設表格的行為
             gex = compute_gex_profile(_chain_contracts(chain, dte), spot)
             nearest_dte = dte
         if dte <= _EM_MAX_DTE:
@@ -260,9 +274,16 @@ def snapshot_symbol(symbol: str, today: date) -> Optional[dict[str, Any]]:
             if em:
                 em["expiry"] = exp
                 em_rows.append(em)
-        time.sleep(0.3)
+        await asyncio.sleep(0.3)
 
     if gex is None:
+        return None
+    if gex["n_contracts"] == 0:
+        # Yahoo 約在美東午夜到開盤前重置期權鏈 (未平倉量歸 0、IV 1e-5)；
+        # 這個時段抓到的資料不能當成當日收盤的牆體結構，整檔不寫入。
+        logger.warning(
+            f"[micro-snapshot] {symbol} 期權鏈未平倉量全為 0 (Yahoo 夜間重置時段？)，略過"
+        )
         return None
     return {
         "date": today.isoformat(),
@@ -282,7 +303,32 @@ def _today_ny() -> date:
     return datetime.now(ZoneInfo("America/New_York")).date()
 
 
-def run_snapshot(
+def snapshot_skip_reason(
+    cache_dir: Path, now_ny: Optional[datetime] = None
+) -> Optional[str]:
+    """排程執行前的保護：回傳略過原因，可以執行時回傳 None。
+
+    - 美東當天不是 NYSE 交易日（週末、國定假日）
+    - 當天尚未收盤（半日市以 13:00 ET 為界）：盤中的期權鏈與日線都還沒定案
+    - 當天的快照已存在：cron 重試或手動重跑時不重複抓取
+    """
+    import market_time
+
+    now = now_ny or datetime.now(market_time.ny_tz)
+    day = now.date()
+    bounds = market_time.get_session_bounds_utc(day, day)
+    if day.isoformat() not in bounds:
+        return f"{day.isoformat()} 不是交易日"
+    close_utc = datetime.strptime(bounds[day.isoformat()][1], "%Y-%m-%d %H:%M:%S")
+    if now.astimezone(timezone.utc).replace(tzinfo=None) < close_utc:
+        return f"{day.isoformat()} 尚未收盤"
+    target = Path(cache_dir) / SNAPSHOT_SUBDIR / f"snapshot_{day.isoformat()}.jsonl"
+    if target.exists():
+        return f"{target.name} 已存在"
+    return None
+
+
+async def run_snapshot(
     symbols: list[str], cache_dir: Path, today: Optional[date] = None
 ) -> Path:
     # DTE 以美東日期計算；開發機若在其他時區，date.today() 會多算或少算一天
@@ -292,13 +338,13 @@ def run_snapshot(
     records: list[dict[str, Any]] = []
     for sym in symbols:
         try:
-            rec = snapshot_symbol(sym, today)
+            rec = await snapshot_symbol(sym, today)
         except Exception as e:
             logger.warning(f"[micro-snapshot] {sym} 失敗: {e}")
             rec = None
         if rec:
             records.append(rec)
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
     ok = write_jsonl(target, records)
     logger.info(f"[micro-snapshot] {ok}/{len(symbols)} 檔寫入 {target}")
     return target

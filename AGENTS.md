@@ -444,6 +444,7 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
 - production release flow is tag-driven (`v*`)
 - pre-commit hooks run ruff lint/format, strict mypy, and general quality checks
 - pre-push hooks run semgrep and dockerized tests (core-test and scraper-test)
+- `scripts/droplet/micro_snapshot_cron.sh` — host-side cron job on the Droplet that runs `python -m calibration micro-snapshot` once per trading day after the close, using the production image in a separate memory-capped `docker run` (never `docker exec` into the bot container) and the edge proxy (`TUNNEL_URL` read from the running service's swarm secret). Snapshots stay in `/opt/nexus-calibration/` on the Droplet and are **not** committed: the repo is public and snapshots contain watchlist tickers. Sync them back with `rsync <droplet>:/opt/nexus-calibration/microstructure/ nexus_core/.calibration_cache/microstructure/` before running `micro-report` on a dev machine
 
 ---
 

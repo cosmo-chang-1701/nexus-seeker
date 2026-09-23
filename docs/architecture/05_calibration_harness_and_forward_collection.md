@@ -466,11 +466,17 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 
 | 子命令 | 資料 | 用途 |
 |---|---|---|
-| `micro-snapshot` | 標的池的最近到期日期權鏈（與 edge 相同公式重算 GEX：Yahoo 預設頁＝最近一檔、$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
+| `micro-snapshot` | 標的池最近一檔**未到期**（DTE ≥ 1）的期權鏈（與 edge 相同公式重算 GEX：$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM。經 `market_data_service` 抓取（edge 快照 → edge 即時 → 本地 yfinance），期權鏈不裁減履約價 | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
 | `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註） |
 | `skew-proxy` | CBOE ^SKEW × SPY 日線（2000 年起） | 以「日級、252 交易日、只用過去資料的 midrank」計算分位，統計各門檻的觸發率、5 日報酬（bootstrap CI）與 5 日內跌幅 > 3% 的機率 |
 
 執行方式與其他子命令相同（`python -m calibration micro-snapshot --max-symbols 200`、`micro-report`、`skew-proxy`，容器內執行參數見 `AGENTS.md` 的 Testing 段落）。標的池為 watchlist ∪ 固定流動性清單，讀取 watchlist 時 `NEXUS_DB_NAME` 應指向複製的快照。
+
+**`micro-snapshot` 的排程保護**（`snapshot_skip_reason()`，`--any-time` 可略過）：美東當天不是 NYSE 交易日、尚未收盤（半日市以 13:00 ET 為界），或當天快照已存在時直接結束，因此 cron 可以在週一至週五固定時間執行、重跑也安全。另有兩道資料品質保護：
+- 當天到期（DTE = 0）的合約在收盤後已結算，不用來算 GEX 牆。
+- 期權鏈未平倉量全為 0 的標的不寫入。Yahoo 約在美東午夜到開盤前重置期權鏈（未平倉量歸 0、IV 1e-5），這個時段的資料不代表當日收盤的牆體結構；排程必須在美東當天午夜前完成。
+
+**Droplet 常駐排程**：`scripts/droplet/micro_snapshot_cron.sh` 以 production 映像檔、獨立的 `docker run`（限制 400MB、可用記憶體不足 500MB 時跳過）執行，經 edge 代理避開 Yahoo 對資料中心 IP 的封鎖，快照留在 Droplet 的 `/opt/nexus-calibration/`，不進版控（repo 為公開，快照含 watchlist 標的代號）。實測單次峰值約 245MB。報告在開發機產生：`micro-report` 的事後日線標註直接呼叫 yfinance，需先把快照同步回開發機。
 
 **前向蒐集新欄位**：`regime_evaluation_log.features_json` 於 `REGIME_CLASSIFIER` 與右側／左側進場閘門紀錄中加入 `support_wall`、`support_gex`（現價下方淨 GEX 最大正值，不套薄牆門檻）、`put_wall_gex`、`adv_dollar_20d`，以及閘門紀錄的 `skew_percentile`、`skew_percentile_source`（`CANONICAL`／`INTRADAY_FALLBACK`，雷達快速路徑可能為空，可由 `sentiment_daily_canonical` 在該日之前的筆數離線推回）。有了這些欄位，production 資料就能以事後走勢驗證牆體深度比與 Skew 門檻。
 
@@ -490,7 +496,7 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 1. 部署前先備份 production DB：03:00 ET 的保留期清理首次執行時會刪除 60 個交易日以前的 `sentiment_history`，刪除後無法復原（v080 回填在 migration 階段執行，順序上不受影響）。
 2. 部署後以 `.backup` 取得快照，確認 `sentiment_daily_canonical` 回填了多少標的、每標的多少個交易日；回填 0 筆代表舊資料都落在盤外時段或只有舊 `SKEW` 序列，屬預期情形，由每日排程累積。
 3. 次一交易日確認 16:15 ET 的 `📸 [Canonical 日級快照]` 與 08:45 ET 的補寫日誌都有出現。
-4. 開發機每個交易日收盤後執行一次 `micro-snapshot`（可用 cron 或 Claude Code `/schedule`），缺一天只會少一個樣本日，不影響其他日的標註。
+4. 在 Droplet 安裝 `scripts/droplet/micro_snapshot_cron.sh`（安裝步驟見腳本開頭註解），確認 `/opt/nexus-calibration/cron.log` 在第一個交易日收盤後出現「快照已寫入」。缺一天只會少一個樣本日，不影響其他日的標註。
 
 **判讀準則**：
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
