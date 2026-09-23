@@ -33,10 +33,11 @@ _INSERT_SQL = (
     f"VALUES ({', '.join('?' for _ in UOA_COLUMNS)})"
 )
 
-# 保留 10 天：涵蓋 _ENTRY_UOA_LOOKBACK_DAYS = 5 個交易日的回看窗，外加週末與
-# 連續假日的緩衝。刻意不設更長——本表的唯一消費者是 5 日回看窗，多留的資料
-# 對 1GB VPS 只有成本沒有價值。
-_RETENTION_DAYS = 10
+# 保留 10 個**交易日**：涵蓋 _ENTRY_UOA_LOOKBACK_DAYS = 5 個交易日的回看窗並留
+# 一倍緩衝。以交易日計算，與回看窗 (`market_time.get_trading_days_ago_utc`) 使用
+# 同一把尺——日曆日保留期只能靠「多留幾天」去猜連假長度。刻意不設更長：本表的
+# 唯一消費者是 5 日回看窗，多留的資料對 1GB VPS 只有成本沒有價值。
+_RETENTION_TRADING_DAYS = 10
 
 
 def _dict_factory(cursor: sqlite3.Cursor, row: tuple) -> dict[str, Any]:
@@ -135,16 +136,20 @@ def get_recent_uoa(
             conn.close()
 
 
-async def purge_stale_uoa_history(retention_days: int = _RETENTION_DAYS) -> int:
-    """保留期清理，由 03:00 ET 離峰排程呼叫。回傳實際刪除的列數。"""
+async def purge_stale_uoa_history(
+    retention_trading_days: int = _RETENTION_TRADING_DAYS,
+) -> int:
+    """保留期清理，由 03:00 ET 離峰排程呼叫。回傳實際刪除的列數。
+
+    截止點為往回第 `retention_trading_days` 個交易日的開盤時刻；行事曆查詢失敗時
+    `for_purge=True` 會退回較長的日曆窗，寧可少刪。
+    """
     try:
+        from market_time import get_trading_days_ago_utc
+
+        cutoff_utc = get_trading_days_ago_utc(retention_trading_days, for_purge=True)
         counts = await execute_write_many_async(
-            [
-                (
-                    "DELETE FROM uoa_history WHERE observed_at < datetime('now', ?)",
-                    (f"-{int(retention_days)} days",),
-                )
-            ]
+            [("DELETE FROM uoa_history WHERE observed_at < ?", (cutoff_utc,))]
         )
         return max(0, int(counts[0])) if counts else 0
     except Exception as e:

@@ -2,6 +2,7 @@ from typing import Any
 import logging
 import sqlite3  # noqa: F401
 import asyncio
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -123,38 +124,41 @@ _MIN_PERCENTILE_SAMPLES = 20
 _PERCENTILE_WINDOW_ROWS = 500
 
 
-def get_indicator_percentile_with_sample_size(
-    symbol: str,
-    indicator: str,
-    current_value: float,
-    min_samples: int = _MIN_PERCENTILE_SAMPLES,
-) -> tuple[Optional[float], int]:
-    """回傳 (百分位, 實際樣本數)；樣本不足或查詢失敗時百分位為 None。
+@dataclass(frozen=True)
+class PercentileResult:
+    """百分位查詢結果與其母體來源。
 
-    同值採 midrank（`count_less + 0.5 * count_equal`）而非嚴格 `<`：舊實作在
-    「所有樣本相等」（行情停滯或資料源卡住）時會塌陷成 0.0%，與真正的極端低位
-    無法區分。midrank 讓這種情況回到 50.0%，語意正確。
+    `source`：
+      - `"CANONICAL"`：日級規範母體（`sentiment_daily_canonical`，≤252 交易日）。
+      - `"INTRADAY_FALLBACK"`：規範母體未滿 `CANONICAL_MIN_SAMPLES`，退回高頻池
+        （最近 500 列 `sentiment_history`），語意與改版前完全相同。
+      - `"NONE"`：兩者皆樣本不足或查詢失敗。
+    `robust_z` / `is_canonical` 只在規範母體下有值，目前僅供顯示與前向蒐集參考，
+    不作為任何閘門條件。
     """
-    try:
-        from database.connection import get_read_connection
 
-        conn = get_read_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT value, date(timestamp) FROM sentiment_history
-            WHERE symbol = ? AND indicator = ?
-            ORDER BY timestamp DESC LIMIT ?
-        """,
-            (symbol, indicator, _PERCENTILE_WINDOW_ROWS),
-        )
-        rows = cursor.fetchall()
-        conn.close()
-        values = [row[0] for row in rows]
-        unique_dates = {row[1] for row in rows if len(row) > 1 and row[1]}
-    except Exception as e:
-        logger.warning(f"[{symbol}] 讀取 {indicator} 歷史分位失敗: {e}")
-        return None, 0
+    percentile: Optional[float]
+    sample_size: int
+    source: str
+    robust_z: Optional[float] = None
+    is_canonical: bool = False
+
+
+def _intraday_percentile(
+    cursor: Any, symbol: str, indicator: str, current_value: float, min_samples: int
+) -> tuple[Optional[float], int]:
+    """高頻池（最近 `_PERCENTILE_WINDOW_ROWS` 列）的 midrank 百分位。"""
+    cursor.execute(
+        """
+        SELECT value, date(timestamp) FROM sentiment_history
+        WHERE symbol = ? AND indicator = ?
+        ORDER BY timestamp DESC LIMIT ?
+    """,
+        (symbol, indicator, _PERCENTILE_WINDOW_ROWS),
+    )
+    rows = cursor.fetchall()
+    values = [row[0] for row in rows]
+    unique_dates = {row[1] for row in rows if len(row) > 1 and row[1]}
 
     sample_size = len(values)
     if sample_size < min_samples:
@@ -175,6 +179,113 @@ def get_indicator_percentile_with_sample_size(
     count_equal = sum(1 for v in values if v == current_value)
     percentile = (count_less + 0.5 * count_equal) / sample_size * 100
     return percentile, sample_size
+
+
+def get_indicator_percentile_detail(
+    symbol: str,
+    indicator: str,
+    current_value: float,
+    min_samples: int = _MIN_PERCENTILE_SAMPLES,
+    as_of_date: Optional[str] = None,
+) -> PercentileResult:
+    """先以日級規範母體計算百分位，樣本不足時退回高頻池。
+
+    兩個查詢共用同一條讀取連線。`as_of_date`（美東 `'YYYY-MM-DD'`，預設為今天）
+    之後的規範值不納入母體，避免前視偏差。
+    """
+    from .canonical_history import (
+        CANONICAL_INDICATORS,
+        compute_canonical_stats,
+        query_canonical_values,
+        today_ny_str,
+    )
+
+    try:
+        from database.connection import get_read_connection
+
+        conn = get_read_connection()
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 {indicator} 歷史分位失敗: {e}")
+        return PercentileResult(None, 0, "NONE")
+
+    try:
+        cursor = conn.cursor()
+        if indicator in CANONICAL_INDICATORS:
+            try:
+                values = query_canonical_values(
+                    cursor, symbol, indicator, as_of_date or today_ny_str()
+                )
+                stats = compute_canonical_stats(values, current_value, indicator)
+                if stats.percentile is not None:
+                    return PercentileResult(
+                        stats.percentile,
+                        stats.sample_size,
+                        "CANONICAL",
+                        stats.robust_z,
+                        stats.is_canonical,
+                    )
+            except Exception as e:
+                # 規範母體讀取失敗不影響既有路徑，退回高頻池。
+                logger.warning(f"[{symbol}] 讀取 {indicator} 規範母體失敗: {e}")
+
+        percentile, sample_size = _intraday_percentile(
+            cursor, symbol, indicator, current_value, min_samples
+        )
+        return PercentileResult(
+            percentile,
+            sample_size,
+            "INTRADAY_FALLBACK" if percentile is not None else "NONE",
+        )
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 {indicator} 歷史分位失敗: {e}")
+        return PercentileResult(None, 0, "NONE")
+    finally:
+        conn.close()
+
+
+def get_indicator_percentile_with_sample_size(
+    symbol: str,
+    indicator: str,
+    current_value: float,
+    min_samples: int = _MIN_PERCENTILE_SAMPLES,
+) -> tuple[Optional[float], int]:
+    """回傳 (百分位, 實際樣本數)；樣本不足或查詢失敗時百分位為 None。
+
+    同值採 midrank（`count_less + 0.5 * count_equal`）而非嚴格 `<`：舊實作在
+    「所有樣本相等」（行情停滯或資料源卡住）時會塌陷成 0.0%，與真正的極端低位
+    無法區分。midrank 讓這種情況回到 50.0%，語意正確。
+
+    母體來源見 `get_indicator_percentile_detail()`。
+    """
+    result = get_indicator_percentile_detail(
+        symbol, indicator, current_value, min_samples=min_samples
+    )
+    return result.percentile, result.sample_size
+
+
+# sentiment_history 保留期（交易日）。本表原本沒有任何清理、無限增長。
+# 百分位母體已改為日級規範表，本表只剩兩個用途：規範母體未滿 20 個交易日時的
+# 高頻回退池（最近 500 列），以及收盤快照／隔日補寫所需的前一交易日盤中觀測。
+# 60 個交易日對兩者都綽綽有餘。
+SENTIMENT_HISTORY_RETENTION_TRADING_DAYS = 60
+
+
+async def purge_stale_sentiment_history(
+    retention_trading_days: int = SENTIMENT_HISTORY_RETENTION_TRADING_DAYS,
+) -> int:
+    """保留期清理，由 03:00 ET 離峰排程呼叫。回傳實際刪除的列數。"""
+    try:
+        from database.connection import execute_write_rowcount_async
+        from market_time import get_trading_days_ago_utc
+
+        cutoff_utc = get_trading_days_ago_utc(retention_trading_days, for_purge=True)
+        purged = await execute_write_rowcount_async(
+            "DELETE FROM sentiment_history WHERE timestamp < ?", (cutoff_utc,)
+        )
+        return max(0, int(purged))
+    except Exception as e:
+        logger.error(f"sentiment_history 保留期清理失敗: {e}")
+        return 0
 
 
 def get_indicator_percentile(

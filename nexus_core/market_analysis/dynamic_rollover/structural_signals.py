@@ -91,10 +91,8 @@ def _scan_gex_walls(
     support_wall/support_gex 維持 0.0，等同「未偵測到支撐牆」。此為刻意的
     保守設計：避免轉倉引擎的結構性破位判定/停損錨點信任一面隨時可能被打穿的
     薄紙牆。"""
-    from market_analysis.index_microstructure import (
-        GEX_THIN_WALL_THRESHOLD,
-        classify_gex_wall,
-    )
+    from market_analysis.gex_wall_depth import thin_wall_threshold
+    from market_analysis.index_microstructure import classify_gex_wall
 
     support_wall: float = 0.0
     resistance_wall: float = 0.0
@@ -138,7 +136,9 @@ def _scan_gex_walls(
             val,
             max_positive_support,
             is_heavy_otm_call=False,
-            min_effective_gex=GEX_THIN_WALL_THRESHOLD,
+            min_effective_gex=thin_wall_threshold(
+                gex_profile_data.get("adv_dollar_20d")
+            ),
         )
         if (
             wall_type == "SUPPORT_GEX_WALL"
@@ -181,7 +181,7 @@ def _scan_resistance_wall_above_spot(
 
     回傳 ``(resistance_wall, resistance_gex)``。
     """
-    from market_analysis.index_microstructure import GEX_THIN_WALL_THRESHOLD
+    from market_analysis.gex_wall_depth import thin_wall_threshold
 
     if spot <= 0 or not (
         isinstance(gex_profile_data, dict)
@@ -210,7 +210,7 @@ def _scan_resistance_wall_above_spot(
             best_gex = val_flt
             best_strike = strike_flt
 
-    if best_gex < GEX_THIN_WALL_THRESHOLD:
+    if best_gex < thin_wall_threshold(gex_profile_data.get("adv_dollar_20d")):
         return 0.0, 0.0
     return best_strike, best_gex
 

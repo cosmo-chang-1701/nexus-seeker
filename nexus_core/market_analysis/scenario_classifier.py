@@ -1,6 +1,8 @@
 from enum import Enum
 from typing import Optional
 
+from market_analysis.gex_wall_depth import thin_wall_threshold
+
 from market_analysis.gamma_cliff_confirmation import is_below_gamma_defense_line
 
 
@@ -86,7 +88,12 @@ def classify_market_scenario(
     # [ Step 1: 體質檢查 ] ──現價是否 > Gamma Flip？
     if price > gamma_flip:
         # --- YES (正 Gamma/平穩) 允許進行均值回歸與逢低加碼 ---
-        is_solid_wall = pw_gex is None or abs(pw_gex) >= 500_000.0
+        adv_dollar = (
+            price * float(avg_volume_20)
+            if avg_volume_20 and avg_volume_20 > 0
+            else None
+        )
+        is_solid_wall = pw_gex is None or abs(pw_gex) >= thin_wall_threshold(adv_dollar)
 
         # [ 巨鯨護航共振 ]
         # 點位驗證: K棒高低點回測 PutWall (GEX 正 Gamma 牆確立且非單薄紙牆)

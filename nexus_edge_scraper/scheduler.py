@@ -20,7 +20,7 @@ Playwright/yfinance 抓取的行為。
 快取，不影響正確性，維持 edge 端一貫的輕量風格。
 """
 
-from typing import Optional
+from typing import Any, Optional
 import asyncio
 import logging
 import math
@@ -32,7 +32,12 @@ from playwright.async_api import Browser, async_playwright
 
 import database
 from gex_scraper import scrape_symbol_gex_core
-from yf_api import fetch_nearest_option_chain
+from yf_api import (
+    fetch_last_close,
+    fetch_nearest_option_chain,
+    fetch_option_chain_dict,
+    fetch_option_expiries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,16 @@ POLL_JITTER_SECONDS = (
 POLL_ROTATION_CYCLES = 6
 MAX_CONCURRENCY = 2
 PRUNE_AFTER_HOURS = 48
+
+# 收盤後 EM 快照 (D-03 週預期波幅校準)：美東平日 16:20~20:00 之間每天一次。
+# 16:20 讓收盤價與期權鏈定案；20:00 之前結束，避開 Yahoo 約在美東午夜到開盤前
+# 重置期權鏈 (未平倉量歸 0、IV 1e-5) 的時段。不處理國定假日 (edge 維持輕量、
+# 不引入 NYSE 行事曆)：假日記錄到的是前一交易日的資料，由 nexus_core 的離線
+# 報告以 NYSE 行事曆濾除。
+EM_SNAPSHOT_WINDOW_MINUTES = (16 * 60 + 20, 20 * 60)
+EM_SNAPSHOT_MIN_DTE = 1
+EM_SNAPSHOT_MAX_DTE = 14
+EM_SNAPSHOT_MAX_EXPIRIES = 6
 
 _task: Optional["asyncio.Task[None]"] = None
 _poll_cursor = 0
@@ -69,6 +84,148 @@ def _is_us_market_hours() -> bool:
         return False
     minutes = now_ny.hour * 60 + now_ny.minute
     return 9 * 60 + 30 <= minutes <= 16 * 60
+
+
+def _now_ny() -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return datetime.now(ZoneInfo("America/New_York"))
+
+
+def _is_em_snapshot_window(now_ny: Optional[datetime] = None) -> bool:
+    now = now_ny or _now_ny()
+    if now.weekday() >= 5:
+        return False
+    minutes = now.hour * 60 + now.minute
+    return EM_SNAPSHOT_WINDOW_MINUTES[0] <= minutes <= EM_SNAPSHOT_WINDOW_MINUTES[1]
+
+
+def _mid(row: dict[str, Any]) -> float:
+    """(bid+ask)/2；報價缺失時退回 lastPrice。與 nexus_core iv_metrics 的定義一致。"""
+
+    def _num(key: str) -> float:
+        try:
+            value = float(row.get(key) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+        return value if math.isfinite(value) else 0.0
+
+    bid, ask = _num("bid"), _num("ask")
+    if bid > 0 and ask > 0:
+        return (bid + ask) / 2.0
+    return _num("lastPrice")
+
+
+def compute_atm_straddle(
+    calls: list[dict[str, Any]], puts: list[dict[str, Any]], spot: float
+) -> Optional[tuple[float, float, float]]:
+    """取最接近現價、Call 與 Put 都有報價的履約價，回傳 (strike, call_mid, put_mid)。"""
+    if spot <= 0:
+        return None
+    call_by_strike: dict[float, float] = {}
+    for row in calls:
+        try:
+            call_by_strike[float(row["strike"])] = _mid(row)
+        except (KeyError, TypeError, ValueError):
+            continue
+    put_by_strike: dict[float, float] = {}
+    for row in puts:
+        try:
+            put_by_strike[float(row["strike"])] = _mid(row)
+        except (KeyError, TypeError, ValueError):
+            continue
+    common = [
+        k
+        for k in call_by_strike
+        if k in put_by_strike and call_by_strike[k] > 0 and put_by_strike[k] > 0
+    ]
+    if not common:
+        return None
+    strike = min(common, key=lambda k: abs(k - spot))
+    return strike, call_by_strike[strike], put_by_strike[strike]
+
+
+async def _snapshot_symbol_em(
+    symbol: str, trade_date: str, sem: "asyncio.Semaphore"
+) -> list[dict[str, Any]]:
+    from datetime import date as _date
+
+    async with sem:
+        try:
+            spot = await fetch_last_close(symbol)
+            if not spot or spot <= 0:
+                return []
+            expiries = await fetch_option_expiries(symbol)
+            today = _date.fromisoformat(trade_date)
+            targets: list[tuple[str, int]] = []
+            for exp in sorted(expiries):
+                try:
+                    dte = (_date.fromisoformat(exp) - today).days
+                except ValueError:
+                    continue
+                if EM_SNAPSHOT_MIN_DTE <= dte <= EM_SNAPSHOT_MAX_DTE:
+                    targets.append((exp, dte))
+            rows: list[dict[str, Any]] = []
+            for exp, dte in targets[:EM_SNAPSHOT_MAX_EXPIRIES]:
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+                chain = await fetch_option_chain_dict(symbol, exp)
+                if not chain:
+                    continue
+                atm = compute_atm_straddle(
+                    chain.get("calls", []), chain.get("puts", []), spot
+                )
+                if atm is None:
+                    continue
+                strike, call_mid, put_mid = atm
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "expiry": exp,
+                        "dte": dte,
+                        "spot": spot,
+                        "strike": strike,
+                        "call_mid": call_mid,
+                        "put_mid": put_mid,
+                    }
+                )
+            return rows
+        except Exception as e:
+            logger.warning(f"[{symbol}] 收盤後 EM 快照抓取失敗: {e}")
+            return []
+
+
+_last_em_snapshot_date: Optional[str] = None
+
+
+async def record_em_snapshot_once(now_ny: Optional[datetime] = None) -> int:
+    """收盤後 EM 快照：每個美東日期最多成功執行一次，回傳寫入列數。
+
+    以 DB 檢查 (has_em_snapshot) 為準，服務重啟後不會重複抓取；模組層級旗標只是
+    省去每輪都查一次 DB。沒有抓到任何資料時不設旗標，下一輪 (5 分鐘後) 會重試。
+    """
+    global _last_em_snapshot_date
+    trade_date = (now_ny or _now_ny()).strftime("%Y-%m-%d")
+    if _last_em_snapshot_date == trade_date:
+        return 0
+    if await asyncio.to_thread(database.has_em_snapshot, trade_date):
+        _last_em_snapshot_date = trade_date
+        return 0
+
+    symbols = await asyncio.to_thread(database.get_tracked_symbols)
+    if not symbols:
+        return 0
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+    results = await asyncio.gather(
+        *(_snapshot_symbol_em(sym, trade_date, sem) for sym in symbols)
+    )
+    rows = [row for batch in results for row in batch]
+    written = await asyncio.to_thread(database.save_em_snapshot, trade_date, rows)
+    if written:
+        _last_em_snapshot_date = trade_date
+    logger.info(
+        f"[em_snapshot] {trade_date}：{len(symbols)} 檔標的，寫入 {written} 筆到期日跨式"
+    )
+    return int(written)
 
 
 async def _poll_symbol(symbol: str, browser: Browser, sem: "asyncio.Semaphore") -> None:
@@ -129,9 +286,12 @@ async def _maybe_prune_gex_history() -> None:
         return
     try:
         removed = await asyncio.to_thread(database.prune_gex_history)
+        removed_em = await asyncio.to_thread(database.prune_em_history)
         _last_history_prune_date = today
-        if removed:
-            logger.info(f"已清除 {removed} 筆超過保留期的 GEX 快照歷史")
+        if removed or removed_em:
+            logger.info(
+                f"已清除超過保留期的歷史：GEX 快照 {removed} 筆、EM 快照 {removed_em} 筆"
+            )
     except Exception as e:
         logger.warning(f"GEX 快照歷史保留期清理失敗: {e}")
 
@@ -195,6 +355,8 @@ async def _loop() -> None:
         try:
             if _is_us_market_hours():
                 await poll_once()
+            elif _is_em_snapshot_window():
+                await record_em_snapshot_once()
         except Exception as e:
             logger.error(f"背景輪詢迴圈執行失敗: {e}", exc_info=True)
         await asyncio.sleep(

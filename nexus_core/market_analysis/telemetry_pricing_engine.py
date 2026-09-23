@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Optional
 
 from database.cache import save_kv_cache
+from market_analysis.sentiment.skew_taxonomy import ensure_percentile_pct
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +228,7 @@ async def generate_alignment_decision(
     iv_rank: Optional[float],
     max_pain_price: Optional[float],
     prev_max_pain: float = 0.0,
-    skew_percentile: float = 0.5,
+    skew_percentile_pct: float = 50.0,
     put_call_ratio: float = 1.0,
     days_to_expiration: float = 7.0,
     prev_close: float = 0.0,
@@ -245,9 +246,11 @@ async def generate_alignment_decision(
     """Central alignment alert pipeline with stale-lock, fortress relock and sovereign gating.
 
     Returns None when suppressed unless ``emit_suppressed_decision=True``.
+    ``skew_percentile_pct`` is the Skew percentile on the 0~100 scale.
     """
 
     symbol = symbol.upper()
+    skew_percentile_pct = ensure_percentile_pct(skew_percentile_pct, symbol)
     current_order_price = float(current_order_price or 0.0)
     spot_price = float(spot_price or 0.0)
     original_qty = max(1, int(round(float(original_qty or 1))))
@@ -430,7 +433,7 @@ async def generate_alignment_decision(
         hist_iv=hist_iv,
         max_pain=float(max_pain_price or 0.0),
         prev_max_pain=prev_max_pain,
-        skew_percentile=skew_percentile,
+        skew_percentile_pct=skew_percentile_pct,
         days_to_expiration=days_to_expiration,
         prev_close=prev_close,
         base_quantity=original_qty,
@@ -460,16 +463,16 @@ async def generate_alignment_decision(
         return None
 
     # Pillar 3: Skew & PCR inverse sentiment correction (only meaningful for PRICE_UP)
-    if is_price_up and skew_percentile > 0.90 and put_call_ratio > 1.5:
+    if is_price_up and skew_percentile_pct > 90.0 and put_call_ratio > 1.5:
         suggested_price = round(float(suggested_price) * 0.90, 2)
         reasons.append(
-            f"Skew/PCR 極端恐慌 (Skew {skew_percentile*100:.1f}%, PCR {put_call_ratio:.2f}) 結構折價 10%"
+            f"Skew/PCR 極端恐慌 (Skew {skew_percentile_pct:.1f}%, PCR {put_call_ratio:.2f}) 結構折價 10%"
         )
 
-    if is_price_up and skew_percentile < 0.10:
+    if is_price_up and skew_percentile_pct < 10.0:
         sizing_multiplier = min(sizing_multiplier, 0.75)
         reasons.append(
-            f"Skew 低位崩壞 (Skew {skew_percentile*100:.1f}%) 觸發尾端風險控倉 75%"
+            f"Skew 低位崩壞 (Skew {skew_percentile_pct:.1f}%) 觸發尾端風險控倉 75%"
         )
 
     # Recompute suggested qty after Pillar 3 sizing constraint.
@@ -558,7 +561,7 @@ async def generate_alignment_decision(
             "reasons": decision.reasons,
             "iv_rank": effective_iv_rank,
             "max_pain_price": max_pain_price,
-            "skew_percentile": skew_percentile,
+            "skew_percentile": skew_percentile_pct,
             "put_call_ratio": put_call_ratio,
         },
     )

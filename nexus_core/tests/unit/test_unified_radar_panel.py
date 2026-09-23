@@ -10,6 +10,7 @@ sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 sys.path.append(os.getcwd())
 
 from cogs.unified_terminal.cog import UnifiedTerminalCog
+from market_analysis.sentiment.history_storage import PercentileResult
 from cogs.unified_terminal.radar_view import UnifiedRadarView, FilterParamsModal
 from cogs.unified_terminal.batch_scan_view import (
     BatchScanPaginatedView,
@@ -705,14 +706,15 @@ async def test_fetch_sym_radar_data_fast_retains_stored_skew_when_percentile_non
             return_value=-0.35,
         ),
         patch(
-            "market_analysis.sentiment.history_storage.get_indicator_percentile",
-            return_value=None,
+            "market_analysis.sentiment.history_storage.get_indicator_percentile_detail",
+            return_value=PercentileResult(None, 0, "NONE"),
         ),
     ):
         data = await cog._fetch_sym_radar_data_fast_raw("NVDA")
         assert data["symbol"] == "NVDA"
         assert data["skew"] == -0.35
         assert data["skew_percentile"] is None
+        assert data["skew_percentile_source"] is None
 
 
 @pytest.mark.asyncio

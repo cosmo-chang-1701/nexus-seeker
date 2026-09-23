@@ -8,7 +8,11 @@
 `intraday_pipeline` ↔ `sentiment` 之間出現循環匯入。
 """
 
+import logging
+import math
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 
 # Skew 的歷史序列命名空間。
@@ -23,6 +27,47 @@ SKEW_INDICATOR = "SKEW_D25"
 # 正值 = Put 較貴 = 左偏 = 下檔避險需求；負值 = Call 較貴 = 右偏 = 追漲需求。
 SKEW_DEFENSIVE_PERCENTILE = 80.0
 SKEW_BULLISH_PERCENTILE = 20.0
+
+# 下游閘門共用的 Skew 分位門檻（0~100 量綱）。原本以數字字面值散落在
+# evaluation / skew_commentary / 各 embed / ExecutionRouter，同一個概念在不同
+# 檔案各寫一次，改一處就漂移。數值為改版前的現值；百分位母體已改為日級規範
+# 母體（見 canonical_history.py），新門檻需以 calibration/ 前向蒐集資料審核後
+# 再調整，不在此憑推論修改。
+# - 結構性背離（Skew 高分位 + PCR 極低、或 Skew 低分位 + PCR 極高）與
+#   SQZ 微觀背離偽突破閘門的上下緣
+SKEW_DIVERGENCE_HIGH_PERCENTILE = 85.0
+SKEW_DIVERGENCE_LOW_PERCENTILE = 15.0
+# - 左尾避險需求極高（防洗盤處置 / Skew Divergence Gate）
+SKEW_HIGH_DEFENSE_PERCENTILE = 90.0
+# - 三重結構性風險合流的 Skew 條件
+SKEW_TRIPLE_CONFLUENCE_PERCENTILE = 98.0
+
+# 百分位缺失或越界時的中性值：落在所有尾端門檻之外，不觸發任何防禦動作。
+SKEW_NEUTRAL_PERCENTILE = 50.0
+
+
+def ensure_percentile_pct(value: Optional[float], context: str = "") -> float:
+    """驗證 Skew 百分位為 0~100 量綱；缺失、非有限值或越界時回傳中性值 50.0。
+
+    全系統的 Skew 百分位一律是 0~100。刻意**不**猜測「0~1 小數形式」並自動
+    乘以 100：在 0~100 量綱下，0~1% 正是合法的最低分位（看漲極端），自動放大
+    會把它翻轉成看跌極端。量綱錯誤只能由呼叫端修正，這裡只負責攔截越界值並
+    fail-open，不讓它觸發尾端防禦。
+    """
+    if value is None:
+        return SKEW_NEUTRAL_PERCENTILE
+    try:
+        fval = float(value)
+    except (TypeError, ValueError):
+        fval = float("nan")
+    if not math.isfinite(fval) or fval < 0.0 or fval > 100.0:
+        logger.error(
+            f"Skew 百分位越界 ({value!r}{f', {context}' if context else ''})，"
+            f"預期 0~100，改用中性值 {SKEW_NEUTRAL_PERCENTILE}。"
+        )
+        return SKEW_NEUTRAL_PERCENTILE
+    return fval
+
 
 SKEW_STATE_DEFENSIVE = (
     "⚠️ 市場下行保護需求極高，隱含避險情緒升溫（機構大舉購入 Put 保險）"

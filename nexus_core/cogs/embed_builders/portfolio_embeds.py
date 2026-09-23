@@ -27,6 +27,13 @@ from cogs.embed_builders._embed_helpers import (
     _chunk_ansi_table,
     _truncate_with_boundary,
 )
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_BULLISH_PERCENTILE,
+    SKEW_DEFENSIVE_PERCENTILE,
+    SKEW_DIVERGENCE_HIGH_PERCENTILE,
+    SKEW_DIVERGENCE_LOW_PERCENTILE,
+    SKEW_HIGH_DEFENSE_PERCENTILE,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -776,13 +783,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     # 防止盤前(0.0) 觸發背離誤報
     if skew_percentile is not None and pcr_val_for_div is not None:
-        if skew_percentile > 85.0 and 0.0 < pcr_val_for_div < 0.4:
+        if (
+            skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE
+            and 0.0 < pcr_val_for_div < 0.4
+        ):
             is_structural_divergence = True
             divergence_level = "High Divergence"
-        elif skew_percentile < 15.0 and pcr_val_for_div > 1.5:
+        elif skew_percentile < SKEW_DIVERGENCE_LOW_PERCENTILE and pcr_val_for_div > 1.5:
             is_structural_divergence = True
             divergence_level = "High Divergence"
-        elif dp_val > 0.0 and skew_percentile > 90.0:
+        elif dp_val > 0.0 and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
             is_structural_divergence = True
             divergence_level = "Warning"
         elif dp_val < -3.0 and iv_rank_val is not None and iv_rank_val < 15.0:
@@ -804,7 +814,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
     elif (
         skew_percentile is not None
-        and skew_percentile > 80
+        and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
         and (
             "樂觀" in str(reddit_score)
             or "🚀" in str(reddit_score)
@@ -815,7 +825,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         action = "建立保護性賣權或減碼"
     elif (
         skew_percentile is not None
-        and skew_percentile < 20
+        and skew_percentile < SKEW_BULLISH_PERCENTILE
         and (
             "悲觀" in str(reddit_score)
             or "💀" in str(reddit_score)
@@ -827,7 +837,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     skew_color = (
         "\u001b[1;35m"
-        if skew_percentile is not None and skew_percentile > 80
+        if skew_percentile is not None and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
         else "\u001b[1;36m"
     )
     sentiment_color = (
@@ -853,7 +863,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         " Option Skew (期權偏斜)",
         f" └─ Skew 值: {skew_color}{skew_val_str}\u001b[0m (分位點: {skew_color}{skew_per_str}\u001b[0m)",
     ]
-    if skew_percentile is not None and skew_percentile > 90:
+    if skew_percentile is not None and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
         edge_lines.append(
             "    \u001b[1;33m⚠️ 市場下行保護需求極高，隱含避險情緒升溫。\u001b[0m"
         )

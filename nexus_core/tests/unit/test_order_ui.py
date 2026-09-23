@@ -87,7 +87,7 @@ async def test_calculate_telemetry_pricing_engine() -> None:
         hist_iv=0.3,
         max_pain=120.0,  # 上移
         prev_max_pain=100.0,  # 原有
-        skew_percentile=0.5,
+        skew_percentile_pct=50.0,
     )
     assert price_pain == 120.0  # 100 * (120/100)
     assert qty_pain == 1
@@ -102,7 +102,7 @@ async def test_calculate_telemetry_pricing_engine() -> None:
         hist_iv=0.3,  # 低歷史 IV
         max_pain=100.0,
         prev_max_pain=100.0,
-        skew_percentile=0.5,
+        skew_percentile_pct=50.0,
     )
     assert price_spike == 97.0  # 100 * 0.97
     assert qty_spike == 1
@@ -117,7 +117,7 @@ async def test_calculate_telemetry_pricing_engine() -> None:
         hist_iv=0.3,
         max_pain=100.0,
         prev_max_pain=100.0,
-        skew_percentile=0.5,
+        skew_percentile_pct=50.0,
     )
     assert price_round == 99.25  # 100 - 0.75
     assert qty_round == 1
@@ -132,7 +132,7 @@ async def test_calculate_telemetry_pricing_engine() -> None:
         hist_iv=0.3,
         max_pain=120.0,
         prev_max_pain=120.0,
-        skew_percentile=0.98,  # 觸發極端偏斜
+        skew_percentile_pct=98.0,  # 觸發極端偏斜
         base_quantity=100,
     )
     # spot_price (120.0) 偏近 1.5% -> 因為 spot_price <= price (120.0 == 120.0), 所以 price = 120.0 * 1.015 = 121.8
@@ -503,6 +503,9 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
         new=AsyncMock(return_value=[]),
     ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new=AsyncMock(return_value={"volume_pcr": 1.0}),
+    ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),
     ), patch(
@@ -744,7 +747,7 @@ async def test_dynamic_order_modal_telemetry_fallback(  # type: ignore
         hist_iv: Any,
         max_pain: Any,
         prev_max_pain: Any,
-        skew_percentile: Any,
+        skew_percentile_pct: Any,
         prev_close: Any,
         base_quantity: Any,
     ):
@@ -849,7 +852,7 @@ async def test_add_order_slash_command_telemetry(  # type: ignore
         hist_iv: Any,
         max_pain: Any,
         prev_max_pain: Any,
-        skew_percentile: Any,
+        skew_percentile_pct: Any,
         prev_close: Any,
         base_quantity: Any,
     ):
@@ -951,6 +954,9 @@ async def test_telemetry_alert_ignores_stale_max_pain(
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
         new=AsyncMock(return_value=[]),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new=AsyncMock(return_value={"volume_pcr": 1.0}),
     ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),

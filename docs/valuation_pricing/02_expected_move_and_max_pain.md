@@ -27,22 +27,26 @@
 ### 2.1 雙軌融合預期波幅計算模型
 
 #### 1. ATM 跨式期權隱含波幅 (Straddle-Implied EM)
-抓取距離當前最接近且尚未到期的期權合約（$\text{Target DTE} \in [0, 14]$），鎖定最接近現價 $S$ 之 ATM Call 與 Put：
+在 $\text{DTE} \in [2, 14]$（日曆日）的到期日中，選取 DTE 最接近 7 天的一檔（同距取較短者），鎖定最接近現價 $S$ 之 ATM Call 與 Put：
+$$\text{Target DTE} = \arg\min_{d \in [2, 14]} \left(|d - 7|, d\right)$$
 $$\text{Mid}_{\text{Call}} = \frac{\text{Bid}_C + \text{Ask}_C}{2}, \quad \text{Mid}_{\text{Put}} = \frac{\text{Bid}_P + \text{Ask}_P}{2}$$
 $$\text{Straddle Price} = \text{Mid}_{\text{Call}} + \text{Mid}_{\text{Put}}$$
 
-依據業界標準 0.85 經驗因子（對應常態分佈 1-Sigma 積分比率），並依據實際 DTE 平移至每週 7 天基準：
-$$\text{EM}_{\text{straddle}} = (\text{Straddle Price} \times 0.85) \times \sqrt{\frac{7.0}{\max(7.0, \text{Target DTE})}}$$
+ATM 跨式權利金約為 $\sqrt{2/\pi}\, S \sigma \sqrt{t} \approx 0.798\, S\sigma\sqrt{t}$（平均絕對離差），乘上 $\sqrt{\pi/2} \approx 1.2533$ 還原為 1-Sigma，再依實際 DTE 平移至每週 7 天基準：
+$$\text{EM}_{\text{straddle}} = \text{Straddle Price} \times \sqrt{\frac{\pi}{2}} \times \sqrt{\frac{7.0}{\text{Target DTE}}}$$
 
-**關鍵物理約束**：分母採用 $\max(7.0, \text{Target DTE})$，防止在 DTE < 7（例如 0–1 DTE 或包含財報等事件性跳躍）時，被平方根除法錯誤放大（Event-Jump Extrapolation Failure）。不足的天數方差後續透過 BSM 30 天期 IV 自動補足。
+**關鍵物理約束（到期日選擇）**：
+- **排除 0-DTE／1-DTE**：到期前幾小時的跨式只剩日內 Gamma 與殘餘時間價值，無法以時間平方根外推成一週。舊實作取「最近一檔」並把 DTE 鉗制為 1，週五盤中會選到 0-DTE，再乘 $\sqrt{7}$ 放大，週 EM 被系統性低估。
+- **取最接近 7 天**：讓 $\sqrt{7/\text{DTE}}$ 趨近 1，縮放誤差最小。`calibration micro-snapshot`（2026-09-22，106 檔）量測到的偏差：以 1-DTE 推算的週 EM 中位數比直接量測的約 7-DTE 高 26%，3-DTE 高 20%（日曆日縮放把 3 個交易日當成 3/7 週）；4–14 DTE 的中位數偏差約 5%。
+- **找不到合格到期日**（例如只剩 0/1-DTE）時回傳 `None`，由下方融合機制退回 IV 公式。
 
 #### 2. BSM 波動率預期波幅 (IV-Derived EM)
 根據 Black-Scholes-Merton 模型的擴散假設，7 天期週波動幅度公式為：
 $$\text{EM}_{\text{iv}} = S \times \sigma_{\text{IV}} \times \sqrt{\frac{7.0}{365.0}}$$
 
-#### 3. 動態取大與三階保底融合機制
-綜合跨式期權與全鏈 IV，取兩者之最大值作為最終每週預期波幅：
-$$\text{EM}_{\text{weekly}} = \begin{cases} \max(\text{EM}_{\text{straddle}}, \text{EM}_{\text{iv}}), & \text{若兩者皆有效} \\ \text{EM}_{\text{straddle}}, & \text{若僅 Straddle 有效} \\ \text{EM}_{\text{iv}}, & \text{若僅 IV 有效} \\ S \times \max(\text{HV}_{20}, 0.15) \times \sqrt{\frac{7.0}{365.0}}, & \text{若均失效 (降級至 20日歷史波動率)} \\ S \times 0.15 \times \sqrt{\frac{7.0}{365.0}}, & \text{終極保底 (15% 年化波動率底線)} \end{cases}$$
+#### 3. 市場定價優先與三階保底融合機制
+跨式權利金是真實的市場定價，有效時優先採用；否則依序降級：
+$$\text{EM}_{\text{weekly}} = \begin{cases} \text{EM}_{\text{straddle}}, & \text{若 Straddle 有效} \\ \text{EM}_{\text{iv}}, & \text{若僅 IV 有效} \\ S \times \max(\text{HV}_{20}, 0.15) \times \sqrt{\frac{7.0}{365.0}}, & \text{若均失效 (降級至 20日歷史波動率)} \\ S \times 0.15 \times \sqrt{\frac{7.0}{365.0}}, & \text{終極保底 (15% 年化波動率底線)} \end{cases}$$
 
 #### 4. EM 邊界軌道與標準化 Z-Score
 以參考基準價 $S_{\text{ref}}$ 建立對稱軌道：
@@ -121,7 +125,8 @@ flowchart TD
 | `cooldown_seconds` | `30.0` 秒 | 短時間內防止高頻重複計算的冷卻窗口 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `circuit_breaker_threshold` | `0.30` ($30.0\%$) | 痛點與現價偏離逾 30% 判定數據污染，啟動自癒斷路 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `max_expiry_days` | `30` 天 | 痛點與波幅計算嚴格限制在 30 天內合約，逾期阻斷 | `nexus_core/market_analysis/sentiment/max_pain.py` |
-| `straddle_sigma_factor` | `0.85` | ATM Straddle 轉化為 1-Sigma 預期波幅的標準常數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
+| `straddle_sigma_factor` | $\sqrt{\pi/2} \approx 1.2533$ | ATM Straddle（平均絕對離差）還原為 1-Sigma 預期波幅的係數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
+| `_STRADDLE_EM_MIN_DTE` / `_STRADDLE_EM_TARGET_DTE` / `_STRADDLE_EM_MAX_DTE` | `2` / `7` / `14` 天 | 跨式到期日選擇範圍與目標：排除 0/1-DTE，取最接近一週者 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `weekly_days_baseline` | `7.0` 天 | 預期波幅時間標準化週基準天數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `near_dte_dev_limit` | `8.0%` | 0–1 DTE 末日合約偏離觸發磁吸的百分比門檻 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `far_dte_dev_limit` | `10.0%` | 2–14 DTE 次週合約正偏離觸發下行壓制的百分比門檻 | `nexus_core/cogs/embed_builders/market_embeds.py` |
@@ -141,10 +146,13 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 ```
 一旦觸發，系統將 `max_pain` 設為 `None`，向資料庫寫入 `circuit_breaker_triggered = 1`，並發起非同步背景任務清除受污染的本地快取，防止錯誤數據持久化。
 
-### 5.2 0-DTE 事件跳躍平方根除法失真防護 (Event-Jump Extrapolation Guard)
-在計算 ATM Straddle EM 時，若合約當日即將到期（$\text{DTE} \to 0$），若機械式套用 $\sqrt{7 / \text{DTE}}$，分母趨近於零將導致波幅被成倍放大至天文數字。因此在 `iv_metrics.py:197` 中強制採用：
-$$\sqrt{\frac{7.0}{\max(7.0, \text{Target DTE})}}$$
-小於 7 天的合約僅保留當前跨式期權實質定價，絕不進行外推膨脹。
+### 5.2 0-DTE 時間縮放失真防護 (Expiry Selection Guard)
+到期當天的跨式只剩幾小時的日內 Gamma 與殘餘時間價值，無論分母怎麼鉗制，都無法用 $\sqrt{7/\text{DTE}}$ 外推成一週。防護方式是**不選它**：`_calculate_straddle_implied_em()` 只在 $\text{DTE} \in [2, 14]$ 中選取最接近 7 天的到期日；沒有合格到期日時回傳 `None`，由 §2.1 的融合機制退回 IV 公式。
+
+**後續觀察事項**：
+- **資料來源**：edge 在每個交易日收盤後（美東 16:20～20:00）記錄 DTE 1～14 各到期日的價平跨式（`em_snapshot_history`），`calibration micro-report` 的「週EM相對7DTE直接量測之比值」即由此計算。
+- **3-DTE 的殘餘偏差**：縮放用的是日曆日。當最接近 7 天的到期日只有 3 DTE（例如週二看週五），$\sqrt{7/3}$ 把 3 個日曆日（可能只含 2~3 個交易日）當成 3/7 週，2026-09-22 的快照量測到中位數偏高約 20%。若 `calibration micro-report` 的「週EM相對7DTE直接量測之比值」在 DTE 4–14 組持續偏離 1.0 超過 ±10%，再評估改用交易日縮放 $\sqrt{5 / \text{交易日數}}$。
+- **退回 IV 公式的頻率**：只剩 0/1-DTE 的標的（多為週選流動性差的小型股）會退回 $S \sigma \sqrt{7/365}$；若 `[Straddle-Implied EM]` 日誌在自選標的中大量缺席，檢查到期日清單是否只含週選。
 
 ### 5.3 買賣價差過大與零成交量防護 (Wide Bid-Ask Spread Guard)
 若 ATM 期權無有效成交價且未提供 Bid/Ask 報價（`call_mid <= 0` 且 `put_mid <= 0`），系統自動跳過 Straddle 計算，平滑切換至 BSM 公式與歷史波動率降級管線，確保不拋出未捕捉異常。

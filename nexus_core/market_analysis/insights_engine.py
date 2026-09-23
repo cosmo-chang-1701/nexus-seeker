@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Tuple, Optional
 
+from market_analysis.gex_wall_depth import thin_wall_threshold
+
 
 @dataclass
 class RiskInsightsContext:
@@ -26,6 +28,7 @@ class RiskInsightsContext:
     positive_gex_below: Optional[float] = None
     overhead_neg_gex_swamp: Optional[Tuple[float, float]] = None
     put_wall_gex: Optional[float] = None
+    adv_dollar_20d: Optional[float] = None
 
 
 class InsightsEngine:
@@ -49,7 +52,7 @@ class InsightsEngine:
         # 案例 3：RCAT 薄弱紙牆判定 (無做市商深度)
         if (
             context.put_wall_gex is not None
-            and abs(context.put_wall_gex) < 500_000.0
+            and abs(context.put_wall_gex) < thin_wall_threshold(context.adv_dollar_20d)
             and context.put_wall > 0
         ):
             dmp_label = "[⚠️ 薄弱紙牆]"

@@ -21,6 +21,7 @@ from cogs.embed_builders._core import (
     format_cache_age_suffix,
 )
 from database.market_cache import get_market_cache
+from market_analysis.gex_wall_depth import thin_wall_threshold
 
 
 def _classify_watchlist_cache_tag(
@@ -302,6 +303,7 @@ def create_watchlist_signal_embed(
 
     call_wall_gex = None
     put_wall_gex = None
+    adv_dollar_20d = None
     if symbol_gex and isinstance(symbol_gex, dict):
         if not gex_callwall:
             gex_callwall = symbol_gex.get("call_wall")
@@ -309,6 +311,7 @@ def create_watchlist_signal_embed(
             gex_putwall = symbol_gex.get("put_wall")
         call_wall_gex = symbol_gex.get("call_wall_gex")
         put_wall_gex = symbol_gex.get("put_wall_gex")
+        adv_dollar_20d = symbol_gex.get("adv_dollar_20d")
 
     # Extract IV metrics
     earnings_loading = False
@@ -570,9 +573,10 @@ def create_watchlist_signal_embed(
         else None
     )
     cw_dist_str = f"{cw_dist:+.2f}%" if cw_dist is not None else "--%"
+    thin_wall_limit = thin_wall_threshold(adv_dollar_20d)
     abs_cw_gex = abs(float(call_wall_gex)) if call_wall_gex is not None else None
     cw_tag = (
-        f" [{'厚' if abs_cw_gex >= 500_000 else '薄'}]"
+        f" [{'厚' if abs_cw_gex >= thin_wall_limit else '薄'}]"
         if abs_cw_gex is not None
         else ""
     )
@@ -583,7 +587,7 @@ def create_watchlist_signal_embed(
     gex_dist_str = f"{gex_dist:+.2f}%" if gex_dist is not None else "--%"
     abs_pw_gex = abs(float(put_wall_gex)) if put_wall_gex is not None else None
     pw_tag = (
-        f" [{'厚' if abs_pw_gex >= 500_000 else '薄'}]"
+        f" [{'厚' if abs_pw_gex >= thin_wall_limit else '薄'}]"
         if abs_pw_gex is not None
         else ""
     )

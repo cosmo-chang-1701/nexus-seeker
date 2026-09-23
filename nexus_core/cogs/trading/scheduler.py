@@ -133,7 +133,7 @@ class SchedulerCog(commands.Cog):
             logger.error(f"過期合約歸檔失敗: {e}")
 
         # UOA 歷史保留期清理：右側條件四的 Regime III-B 時間窗只回看 5 個交易日，
-        # 本表保留 10 天已含假日緩衝，再久對 1GB VPS 只有成本沒有價值。
+        # 本表保留 10 個交易日，再久對 1GB VPS 只有成本沒有價值。
         try:
             from database.uoa_history import purge_stale_uoa_history
 
@@ -141,6 +141,25 @@ class SchedulerCog(commands.Cog):
             logger.info(f"🧹 [UOA 歷史清理] 已清除 {purged_uoa} 筆過期紀錄。")
         except Exception as e:
             logger.error(f"uoa_history 保留期清理失敗: {e}")
+
+        # 情緒指標保留期清理：高頻日誌保留 60 個交易日，日級規範母體保留約一年
+        # (見 market_analysis/sentiment/canonical_history.py)。
+        try:
+            from market_analysis.sentiment.canonical_history import (
+                purge_stale_canonical_history,
+            )
+            from market_analysis.sentiment.history_storage import (
+                purge_stale_sentiment_history,
+            )
+
+            purged_hf = await purge_stale_sentiment_history()
+            purged_daily = await purge_stale_canonical_history()
+            logger.info(
+                f"🧹 [情緒歷史清理] sentiment_history 清除 {purged_hf} 筆、"
+                f"sentiment_daily_canonical 清除 {purged_daily} 筆。"
+            )
+        except Exception as e:
+            logger.error(f"情緒歷史保留期清理失敗: {e}")
 
         # WAL checkpoint + 查詢計畫統計更新：WAL 檔會因長時間重疊的讀取連線而
         # 無法自動回收，kv_cache 又每 15 分鐘大量改寫，統計資訊需定期更新。

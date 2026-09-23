@@ -50,7 +50,8 @@ def _apply_connection_pragmas(
     由 `database/core.py::run_migrations()` 於啟動時設定一次即可。熱路徑（例如
     雷達掃描）每個標的會開關數十條連線，省下這條語句是實質收益。
     """
-    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query
+    # PRAGMA 無法參數化；數值經 int() 強制轉型，非外部輸入。
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
     conn.execute(f"PRAGMA busy_timeout={int(timeout_ms)};")
     conn.execute("PRAGMA synchronous=NORMAL;")
     return conn
@@ -69,6 +70,25 @@ def get_read_connection() -> sqlite3.Connection:
     （未帶 `mode=ro`），命名為 read 是表達用途而非強制。
     """
     return connect_db()
+
+
+def connect_external_readonly(
+    path: str, timeout_ms: int = _BUSY_TIMEOUT_MS
+) -> sqlite3.Connection:
+    """以唯讀模式 (`mode=ro`) 開啟**非**本程序資料庫的 SQLite 檔案。
+
+    供離線工具讀取從其他服務複製來的資料庫（例如 calibration 讀取 edge 的
+    `edge_cache.db`）。唯讀模式在 SQLite 層就拒絕寫入，因此不會與寫入佇列競爭，
+    也不需要經過寫入入口。
+    """
+    from pathlib import Path
+
+    uri = f"{Path(path).resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=timeout_ms / 1000.0)
+    # PRAGMA 無法參數化；數值經 int() 強制轉型，非外部輸入。
+    # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+    conn.execute(f"PRAGMA busy_timeout={int(timeout_ms)};")
+    return conn
 
 
 class _WriteTask(NamedTuple):

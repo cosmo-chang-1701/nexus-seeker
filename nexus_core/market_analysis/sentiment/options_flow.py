@@ -1,6 +1,7 @@
 from .history_storage import (
+    PercentileResult,
     get_last_stored_sentiment,
-    get_indicator_percentile_with_sample_size,
+    get_indicator_percentile_detail,
     save_sentiment_history,
 )
 from .skew_taxonomy import SKEW_INDICATOR, classify_skew_state
@@ -87,6 +88,19 @@ def _select_contract_near_target_delta(
     return best_row, best_abs_delta
 
 
+def _percentile_source_fields(pct: PercentileResult) -> Dict[str, Any]:
+    """百分位的母體來源欄位（`CANONICAL` 日級母體 / `INTRADAY_FALLBACK` 高頻池）。
+
+    `skew_robust_z` / `skew_is_canonical` 目前僅供顯示與前向蒐集參考，
+    不作為任何閘門條件。
+    """
+    return {
+        "skew_percentile_source": pct.source,
+        "skew_robust_z": pct.robust_z,
+        "skew_is_canonical": pct.is_canonical,
+    }
+
+
 async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any]:
     """計算期權偏斜 (Option Skew)。
 
@@ -101,9 +115,8 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
     def _get_skew_fallback(reason: str) -> Dict[str, Any]:
         last_skew = get_last_stored_sentiment(symbol, SKEW_INDICATOR)
         if last_skew is not None:
-            skew_percentile, sample_size = get_indicator_percentile_with_sample_size(
-                symbol, SKEW_INDICATOR, last_skew
-            )
+            pct = get_indicator_percentile_detail(symbol, SKEW_INDICATOR, last_skew)
+            skew_percentile, sample_size = pct.percentile, pct.sample_size
             state = f"{classify_skew_state(last_skew, skew_percentile)} [歷史快取]"
             percentile_text = (
                 f"{skew_percentile:.1f}%" if skew_percentile is not None else "N/A"
@@ -121,6 +134,7 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
                     else None
                 ),
                 "skew_sample_size": sample_size,
+                **_percentile_source_fields(pct),
                 "state": state,
                 "expiry": "CACHE",
                 "is_fallback": True,
@@ -204,9 +218,8 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
 
         # 儲存到資料庫以便後續計算百分位
         await save_sentiment_history(symbol, SKEW_INDICATOR, skew_val)
-        skew_percentile, sample_size = get_indicator_percentile_with_sample_size(
-            symbol, SKEW_INDICATOR, skew_val
-        )
+        pct = get_indicator_percentile_detail(symbol, SKEW_INDICATOR, skew_val)
+        skew_percentile, sample_size = pct.percentile, pct.sample_size
 
         return {
             "symbol": symbol,
@@ -217,6 +230,7 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
                 else None
             ),
             "skew_sample_size": sample_size,
+            **_percentile_source_fields(pct),
             "iv_put": round(iv_put, 4),
             "iv_call": round(iv_call, 4),
             "call_delta": round(call_delta, 4),

@@ -12,6 +12,10 @@ from cogs.embed_builders._embed_helpers import (
     add_reddit_field,
     _add_ansi_field_safely,
 )
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_BULLISH_PERCENTILE,
+    SKEW_DEFENSIVE_PERCENTILE,
+)
 
 
 def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
@@ -95,7 +99,7 @@ def create_media_sentiment_embed(
 
     skew_color = (
         "\u001b[1;35m"
-        if skew_percentile is not None and skew_percentile > 80.0
+        if skew_percentile is not None and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
         else "\u001b[1;36m"
     )
     pcr_color = (
@@ -110,8 +114,12 @@ def create_media_sentiment_embed(
     pcr_val_str = f"{pcr_val:.2f}" if pcr_val is not None else "--"
     greeks_line = f" └─ Skew 值: {skew_color}{skew_val_str}\u001b[0m (分位: {skew_color}{skew_per_str}\u001b[0m) | Volume PCR: {pcr_color}{pcr_val_str}\u001b[0m"
 
-    is_skew_high = skew_percentile is not None and skew_percentile > 80.0
-    is_skew_low = skew_percentile is not None and skew_percentile < 20.0
+    is_skew_high = (
+        skew_percentile is not None and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
+    )
+    is_skew_low = (
+        skew_percentile is not None and skew_percentile < SKEW_BULLISH_PERCENTILE
+    )
     is_whale_bullish = "🟢" in str(poly_summary_raw) or "看多" in str(poly_summary_raw)
     is_whale_bearish = "🔴" in str(poly_summary_raw) or "偏空" in str(poly_summary_raw)
 

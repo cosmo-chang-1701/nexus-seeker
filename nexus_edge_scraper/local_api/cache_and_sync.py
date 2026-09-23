@@ -104,6 +104,46 @@ async def get_cached_gex_history(
         return {"status": "error", "message": str(e)}
 
 
+@router.get("/api/v1/cache/history/symbols")
+async def get_history_symbols() -> dict[str, Any]:
+    """列出有 GEX 或 EM 快照歷史的標的，供 nexus_core 離線校準工具決定讀取範圍。"""
+    try:
+        symbols = await asyncio.to_thread(database.list_history_symbols)
+        return {"status": "success", "data": symbols}
+    except Exception as e:
+        logger.warning(f"讀取歷史標的清單失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
+@router.get("/api/v1/cache/em/history/{symbol}")
+async def get_cached_em_history(
+    symbol: str,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int = 500,
+) -> dict[str, Any]:
+    """讀取收盤後 EM 快照歷史 (每交易日 × 到期日一筆)，供 nexus_core 離線校準。
+
+    分頁以交易日為單位：頁面滿載時丟棄最後一個交易日 (可能只讀到一部分到期日)，
+    `next_since` 即為該交易日，下一頁會完整讀回。
+    """
+    try:
+        rows = await asyncio.to_thread(
+            database.get_em_history, symbol, since, until, limit
+        )
+        next_since = None
+        if rows and len(rows) >= max(1, min(limit, 500)):
+            last_date = rows[-1]["trade_date"]
+            trimmed = [r for r in rows if r["trade_date"] != last_date]
+            if trimmed:
+                rows = trimmed
+                next_since = last_date
+        return {"status": "success", "data": rows, "next_since": next_since}
+    except Exception as e:
+        logger.warning(f"[{symbol}] 讀取 EM 快照歷史失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @router.get("/api/v1/cache/options/{symbol}/chain")
 async def get_cached_option_chain(
     symbol: str, expiry: str | None = None

@@ -8,6 +8,12 @@ between DynamicOrderModal.on_submit() and OrderUICog.add_order().
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
+
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_NEUTRAL_PERCENTILE,
+    ensure_percentile_pct,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,38 @@ def resolve_holding_type_and_rows(
     if any((t[2] is not None) for t in trades):
         return "COMPLEX_OPTIONS", holding_map
     return "LEVERAGED_MARGIN", holding_map
+
+
+def resolve_skew_percentile_pct(skew_metrics: Any) -> float:
+    """把 `calculate_skew()` 的回傳值轉成遙測定價用的 Skew 百分位 (0~100)。
+
+    優先順序：
+    1. 真實分位 `skew_percentile`：該標的相對於自己歷史的位置 (日級規範母體，
+       樣本不足時為高頻回退池)，與對齊警報路徑使用同一個值。
+    2. 分位缺失 (樣本不足、抓取失敗) 時退回原始 Skew 絕對值的粗略換算：
+       > 5 個百分點視為 98、< -2 視為 2。這是改版前的判定方式，只作為後備，
+       避免資料缺失時比改版前更寬鬆。
+    3. 兩者皆無時回傳中性 50，不觸發尾端防禦。
+    """
+    if not isinstance(skew_metrics, dict):
+        return SKEW_NEUTRAL_PERCENTILE
+    pct = skew_metrics.get("skew_percentile")
+    if pct is not None:
+        try:
+            return ensure_percentile_pct(float(pct), "skew_percentile")
+        except (TypeError, ValueError):
+            pass
+    raw = skew_metrics.get("skew")
+    if raw is not None:
+        try:
+            skew = float(raw)
+        except (TypeError, ValueError):
+            return SKEW_NEUTRAL_PERCENTILE
+        if skew > 5.0:
+            return 98.0
+        if skew < -2.0:
+            return 2.0
+    return SKEW_NEUTRAL_PERCENTILE
 
 
 async def resolve_telemetry_pricing(
@@ -109,16 +147,12 @@ async def resolve_telemetry_pricing(
     except Exception as e:
         logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
 
-    # 3. Resolve skew
-    skew_val = 0.5
+    # 3. Resolve skew (0~100 百分位量綱，見 resolve_skew_percentile_pct)
+    skew_val = SKEW_NEUTRAL_PERCENTILE
     try:
-        skew_metrics = await SentimentEngine.calculate_skew(symbol)
-        if skew_metrics and "skew" in skew_metrics:
-            skew = float(skew_metrics["skew"])
-            if skew > 5.0:
-                skew_val = 0.98
-            elif skew < -2.0:
-                skew_val = 0.02
+        skew_val = resolve_skew_percentile_pct(
+            await SentimentEngine.calculate_skew(symbol)
+        )
     except Exception as e:
         logger.warning(f"Error calculating skew for {symbol}: {e}")
 
@@ -149,7 +183,7 @@ async def resolve_telemetry_pricing(
         hist_iv=hist_iv,
         max_pain=spot_price,
         prev_max_pain=spot_price,
-        skew_percentile=skew_val,
+        skew_percentile_pct=skew_val,
         prev_close=prev_close,
         base_quantity=base_quantity,
     )
@@ -197,6 +231,8 @@ async def apply_telemetry_to_orders(
 
     updated_count = 0
     details: list[str] = []
+    # 只有在需要後備重算時才抓取 (大多數情況使用記憶體或快取中的建議)
+    macro_event_dates: set[str] | None = None
 
     for order in orders:
         order_id = int(order["id"])
@@ -244,14 +280,28 @@ async def apply_telemetry_to_orders(
                         f"price={optimal_price}, qty={optimal_qty}"
                     )
 
-        # 3. 若以上皆無，則後備使用原有的 Mock 參數重算以維持基本行為
+        # 3. 若以上皆無，以即時市場資料重新計算 (與 /telemetry_alert 同一份輸入)
         if optimal_price is None or optimal_qty is None:
+            # 移動停損的 trailing_value 不是掛單價格，不適用價格對齊
+            # (/telemetry_alert 同樣排除)；沒有建議就不動它。
+            if str(order.get("order_type") or "").upper() in (
+                "TRAILING_STOP_USD",
+                "TRAILING_STOP_PCT",
+            ):
+                continue
+
             cache_price, live_price = await fetch_cache_and_live_price(symbol)
             if live_price <= 0.0:
                 continue
 
             holding_row = holding_map.get(symbol.upper(), {})
             holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
+
+            if macro_event_dates is None:
+                macro_event_dates = await collect_macro_event_dates()
+            inputs = await _fetch_alignment_market_inputs(
+                symbol.upper(), macro_event_dates
+            )
 
             try:
                 decision = await generate_alignment_decision(
@@ -261,13 +311,6 @@ async def apply_telemetry_to_orders(
                     current_order_price=float(current_price),
                     spot_price=float(live_price),
                     original_qty=original_qty,
-                    iv=0.55,
-                    hist_iv=0.35,
-                    iv_rank=0.50,
-                    max_pain_price=100.0,
-                    prev_max_pain=100.0,
-                    skew_percentile=0.98,
-                    put_call_ratio=1.0,
                     prev_close=float(
                         cache_price if cache_price > 0.0 else current_price
                     ),
@@ -276,6 +319,8 @@ async def apply_telemetry_to_orders(
                     order_side=str(order.get("side") or "BUY"),
                     holding_type=holding_type,
                     holding_shares=holding_shares,
+                    macro_event_dates=set(macro_event_dates),
+                    **inputs["decision_kwargs"],
                 )
             except DataContaminationException:
                 continue
@@ -286,7 +331,7 @@ async def apply_telemetry_to_orders(
             optimal_price = float(decision.suggested_price)
             optimal_qty = int(decision.suggested_qty)
             logger.info(
-                f"一鍵套用：重新計算後備建議 (order_id={order_id}, symbol={symbol}): "
+                f"一鍵套用：以即時資料重新計算建議 (order_id={order_id}, symbol={symbol}): "
                 f"price={optimal_price}, qty={optimal_qty}"
             )
 
@@ -307,6 +352,124 @@ async def apply_telemetry_to_orders(
     return updated_count, details
 
 
+async def collect_macro_event_dates(days: int = 14) -> set[str]:
+    """近期高影響宏觀事件的日期 (ISO)，供對齊決策的事件窗口防護使用。"""
+    from services.calendar_service import calendar_service
+
+    dates: set[str] = set()
+    try:
+        events = await calendar_service.get_high_impact_events(days=days)
+    except Exception as e:
+        logger.warning(f"Error fetching macro events for telemetry: {e}")
+        return dates
+    for event in events:
+        try:
+            event_date = datetime.fromisoformat(
+                str(event.time).replace("Z", "+00:00")
+            ).date()
+            dates.add(event_date.isoformat())
+        except ValueError:
+            continue
+    return dates
+
+
+async def _fetch_alignment_market_inputs(
+    symbol: str, macro_event_dates: set[str]
+) -> dict[str, Any]:
+    """抓齊一檔標的的即時市場資料，組成 `generate_alignment_decision` 的參數。
+
+    `/telemetry_alert` 與一鍵套用的後備重算共用，確保兩者用同一份真實資料
+    計算 (舊版後備路徑使用固定假值：IV 0.55、IV Rank 0.50、Max Pain 100、
+    Skew 98)。財報日會被加入 `macro_event_dates` (就地修改)。
+
+    回傳 `{"decision_kwargs": {...}, "iv_metrics", "skew_metrics",
+    "max_pain_price"}`；原始物件供呼叫端渲染 embed 使用。
+    """
+    from market_analysis.sentiment_engine import SentimentEngine
+    from services.calendar_service import calendar_service
+
+    (
+        iv_metrics,
+        skew_metrics,
+        max_pain_metrics,
+        uoa_list,
+        pcr_metrics,
+        earnings_event,
+    ) = await asyncio.gather(
+        SentimentEngine.fetch_and_calculate_iv_metrics(symbol),
+        SentimentEngine.calculate_skew(symbol),
+        SentimentEngine.calculate_max_pain(symbol),
+        SentimentEngine.detect_uoa(symbol),
+        SentimentEngine.calculate_pcr(symbol),
+        calendar_service.get_symbol_earnings(symbol),
+    )
+    if earnings_event is not None and earnings_event.date:
+        macro_event_dates.add(earnings_event.date)
+
+    # Safeguard: If Max Pain is marked as stale, avoid using it in critical pricing calculations
+    max_pain_metrics = max_pain_metrics if isinstance(max_pain_metrics, dict) else {}
+    is_mp_stale = (
+        max_pain_metrics.get("is_stale", False)
+        or (max_pain_metrics.get("data_status") == "Stale")
+        or max_pain_metrics.get("max_pain") is None
+        or max_pain_metrics.get("circuit_breaker_triggered", False)
+    )
+    if is_mp_stale:
+        logger.warning(
+            f"[{symbol}] Max Pain data is stale or invalid, resetting max_pain_price to 0.0 to prevent pricing calculation errors."
+        )
+        max_pain_price = 0.0
+    else:
+        max_pain_price = float(max_pain_metrics.get("max_pain", 0.0) or 0.0)
+
+    uoa_payload = [
+        {
+            "expiration_date": str(item.get("expiry", "")),
+            "strike": float(item.get("strike", 0.0) or 0.0),
+            "option_type": str(item.get("type", "")),
+            "volume_to_oi_ratio": float(item.get("ratio", 0.0) or 0.0),
+        }
+        for item in (uoa_list or [])
+        if isinstance(item, dict)
+    ]
+
+    iv_val = (
+        float(iv_metrics.current_iv or 0.0)
+        if iv_metrics and iv_metrics.current_iv is not None
+        else 0.35
+    )
+    iv_rank = (
+        float(iv_metrics.iv_rank / 100.0)
+        if iv_metrics and iv_metrics.iv_rank is not None
+        else None
+    )
+    # 成交量 PCR；缺值時以中性 1.0 代替 (不觸發 Skew/PCR 恐慌折價)
+    put_call_ratio = 1.0
+    if isinstance(pcr_metrics, dict):
+        raw_pcr = pcr_metrics.get("volume_pcr")
+        try:
+            if raw_pcr is not None and float(raw_pcr) > 0:
+                put_call_ratio = float(raw_pcr)
+        except (TypeError, ValueError):
+            pass
+
+    return {
+        "decision_kwargs": {
+            "iv": iv_val,
+            "hist_iv": max(iv_val / 1.1, 0.0001),
+            "iv_rank": iv_rank,
+            "max_pain_price": max_pain_price if max_pain_price > 0.0 else None,
+            "prev_max_pain": max_pain_price if max_pain_price > 0.0 else 0.0,
+            "skew_percentile_pct": resolve_skew_percentile_pct(skew_metrics),
+            "put_call_ratio": put_call_ratio,
+            "uoa_array": uoa_payload,
+        },
+        "iv_metrics": iv_metrics,
+        "skew_metrics": skew_metrics,
+        "max_pain_price": max_pain_price,
+    }
+
+
 async def build_telemetry_alignment_items(
     user_id: int,
     orders: list[dict],
@@ -325,8 +488,6 @@ async def build_telemetry_alignment_items(
         DataContaminationException,
         generate_alignment_decision,
     )
-    from market_analysis.sentiment_engine import SentimentEngine
-    from services.calendar_service import calendar_service
 
     alignment_items: list[dict] = []
     truncated = False
@@ -361,68 +522,15 @@ async def build_telemetry_alignment_items(
         if live_price <= 0.0:
             live_price = float(current_price)
 
-        (
-            iv_metrics,
-            skew_metrics,
-            max_pain_metrics,
-            uoa_list,
-            earnings_event,
-        ) = await asyncio.gather(
-            SentimentEngine.fetch_and_calculate_iv_metrics(symbol),
-            SentimentEngine.calculate_skew(symbol),
-            SentimentEngine.calculate_max_pain(symbol),
-            SentimentEngine.detect_uoa(symbol),
-            calendar_service.get_symbol_earnings(symbol),
-        )
-        if earnings_event is not None and earnings_event.date:
-            macro_event_dates.add(earnings_event.date)
-
-        # Safeguard: If Max Pain is marked as stale, avoid using it in critical pricing calculations
-        is_mp_stale = (
-            max_pain_metrics.get("is_stale", False)
-            or (max_pain_metrics.get("data_status") == "Stale")
-            or max_pain_metrics.get("max_pain") is None
-            or max_pain_metrics.get("circuit_breaker_triggered", False)
-        )
-        if is_mp_stale:
-            logger.warning(
-                f"[{symbol}] Max Pain data is stale or invalid, resetting max_pain_price to 0.0 to prevent pricing calculation errors."
-            )
-            max_pain_price = 0.0
-        else:
-            max_pain_price = float(max_pain_metrics.get("max_pain", 0.0) or 0.0)
-
-        uoa_payload = [
-            {
-                "expiration_date": str(item.get("expiry", "")),
-                "strike": float(item.get("strike", 0.0) or 0.0),
-                "option_type": str(item.get("type", "")),
-                "volume_to_oi_ratio": float(item.get("ratio", 0.0) or 0.0),
-            }
-            for item in uoa_list
-        ]
+        inputs = await _fetch_alignment_market_inputs(symbol, macro_event_dates)
+        iv_metrics = inputs["iv_metrics"]
+        skew_metrics = inputs["skew_metrics"]
+        max_pain_price = inputs["max_pain_price"]
 
         holding_row = holding_map.get(symbol, {})
         holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
 
         try:
-            iv_val_for_decision = (
-                float(iv_metrics.current_iv or 0.0)
-                if iv_metrics and iv_metrics.current_iv is not None
-                else 0.35
-            )
-            iv_rank_for_decision = (
-                float(iv_metrics.iv_rank / 100.0)
-                if iv_metrics and iv_metrics.iv_rank is not None
-                else None
-            )
-            skew_per_for_decision = (
-                float(skew_per / 100.0)
-                if skew_metrics
-                and (skew_per := skew_metrics.get("skew_percentile")) is not None
-                else 0.50
-            )
-
             decision = await generate_alignment_decision(
                 user_id=user_id,
                 order_id=int(o["id"]),
@@ -430,22 +538,15 @@ async def build_telemetry_alignment_items(
                 current_order_price=float(current_price),
                 spot_price=float(live_price),
                 original_qty=original_qty,
-                iv=iv_val_for_decision,
-                hist_iv=max(iv_val_for_decision / 1.1, 0.0001),
-                iv_rank=iv_rank_for_decision,
-                max_pain_price=max_pain_price if max_pain_price > 0.0 else None,
-                prev_max_pain=max_pain_price if max_pain_price > 0.0 else 0.0,
-                skew_percentile=skew_per_for_decision,
-                put_call_ratio=1.0,
                 prev_close=float(cache_price if cache_price > 0.0 else current_price),
                 cache_price=cache_price,
                 live_price=live_price,
                 order_side=str(o.get("side") or "BUY"),
                 holding_type=holding_type,
                 holding_shares=holding_shares,
-                uoa_array=uoa_payload,
                 macro_event_dates=set(macro_event_dates),
                 emit_suppressed_decision=True,
+                **inputs["decision_kwargs"],
             )
         except DataContaminationException:
             decision = None

@@ -148,7 +148,8 @@ flowchart TD
      是它目前唯一的消費者。
    兩者共用同一份 `detect_uoa()` 結果，**不產生任何額外的期權鏈抓取成本**。
    `uoa_history` 只落地條件四判定用得到的欄位（不含 delta/iv/bid/ask），
-   保留 10 天，由 03:00 ET 離峰排程清理。
+   保留 10 個**交易日**（以 `get_trading_days_ago_utc(10, for_purge=True)` 計算截止點，
+   與回看窗用同一把尺；行事曆查詢失敗時退回較長的日曆窗，寧可少刪），由 03:00 ET 離峰排程清理。
    ⚠️ `detect_uoa()` 只回傳名目價值**前 5 大**（`uoa_detector.py`），
    因此 `uoa_history` 繼承同一個截斷——它記錄的是「最顯著的機構活動」，
    不是完整的 UOA 全集。

@@ -39,6 +39,12 @@ from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 # 完全失效。同一理由在 `services/market_data_service/quote.py` 也有記載；省下的
 # 只是一次 sys.modules 字典查詢，不值得換掉一個全套件共用的 patch 介面。
 import database
+from market_analysis.gex_wall_depth import thin_wall_threshold
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_DIVERGENCE_HIGH_PERCENTILE,
+    SKEW_HIGH_DEFENSE_PERCENTILE,
+    SKEW_TRIPLE_CONFLUENCE_PERCENTILE,
+)
 
 _UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
@@ -771,6 +777,11 @@ def build_radar_scan_embed(
                 if r.get("put_wall_gex") is not None
                 else None
             )
+            _gpd = r.get("gex_profile_data")
+            adv_dollar_20d = (
+                _gpd.get("adv_dollar_20d") if isinstance(_gpd, dict) else None
+            )
+            thin_wall_limit = thin_wall_threshold(adv_dollar_20d)
             vp_dict = r.get("vp_data")
             lvn_p = (
                 _safe_float(vp_dict.get("lvn")) if isinstance(vp_dict, dict) else 0.0
@@ -806,6 +817,7 @@ def build_radar_scan_embed(
                 positive_gex_below=pos_gex_below,
                 overhead_neg_gex_swamp=overhead_neg_swamp,
                 put_wall_gex=pw_gex_val,
+                adv_dollar_20d=adv_dollar_20d,
             )
 
             override_dmp, override_status, suggestion = (
@@ -976,7 +988,7 @@ def build_radar_scan_embed(
             skew_raw = r.get("skew_percentile")
             skew_percentile_val = float(skew_raw) if skew_raw is not None else 50.0
 
-            if sqz_mom > 0 and skew_percentile_val > 85.0:
+            if sqz_mom > 0 and skew_percentile_val > SKEW_DIVERGENCE_HIGH_PERCENTILE:
                 status_label = "🚫 偽突破 (嚴禁單腿看多)"
                 embed.color = 0xE74C3C
                 insights.append(
@@ -1056,7 +1068,11 @@ def build_radar_scan_embed(
                 )
 
             # 案例 3：RCAT 薄弱紙牆 (無做市商深度)
-            if pw_gex_val is not None and abs(pw_gex_val) < 500_000.0 and put_wall > 0:
+            if (
+                pw_gex_val is not None
+                and abs(pw_gex_val) < thin_wall_limit
+                and put_wall > 0
+            ):
                 insights.append(
                     f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{abs(pw_gex_val) / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
                 )
@@ -1103,7 +1119,7 @@ def build_radar_scan_embed(
             # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
             if p_wall > 0:
-                if pw_gex_val is not None and abs(pw_gex_val) < 500_000.0:
+                if pw_gex_val is not None and abs(pw_gex_val) < thin_wall_limit:
                     p_wall_str = f"${p_wall:.1f}(薄)"
                 else:
                     p_wall_str = f"${p_wall:.1f}"
@@ -1313,7 +1329,7 @@ def build_radar_scan_embed(
             ):
                 tactical_adv = f"⚠️ ${put_wall:.1f} 僅單薄紙牆，無做市商深度"
             elif (
-                skew_percentile_val >= 98.0
+                skew_percentile_val >= SKEW_TRIPLE_CONFLUENCE_PERCENTILE
                 and mp_gravity_strong_down
                 and not has_dte7_institutional_buy_support
             ):
@@ -1324,7 +1340,7 @@ def build_radar_scan_embed(
                 insights.append(
                     f"• 🚨 {sym}: Skew 避險分位 {skew_percentile_val:.0f}% 極端背離，疊加 Max Pain 向下引力，且無 DTE≥7 機構買盤護航，結構性風險合流。"
                 )
-            elif skew_percentile_val > 90.0:
+            elif skew_percentile_val > SKEW_HIGH_DEFENSE_PERCENTILE:
                 tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
             elif z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"

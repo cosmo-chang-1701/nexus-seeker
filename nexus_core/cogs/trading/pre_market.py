@@ -44,6 +44,22 @@ class PreMarketCog(commands.Cog):
             return
 
         logger.info("Starting pre_market_risk_monitor task.")
+
+        # 補寫前一交易日的情緒指標日級快照：昨天 16:15 若因重啟、部署或 leader
+        # 切換而漏跑，這裡以同一個冪等函式補上（已存在的列不會被覆寫）。必須在
+        # 預熱之前執行——預熱會寫入今天的盤前觀測，雖然不影響昨天的時段篩選，
+        # 但先補寫可讓預熱讀到的百分位母體包含昨天。
+        try:
+            from market_analysis.sentiment.canonical_history import (
+                snapshot_trading_day,
+            )
+
+            await snapshot_trading_day(
+                market_time.get_last_completed_trading_date(), source="SELF_HEAL"
+            )
+        except Exception as e:
+            logger.error(f"情緒指標日級快照補寫失敗: {e}")
+
         try:
             asyncio.create_task(self._pre_warm_all_targets())
         except Exception as e:

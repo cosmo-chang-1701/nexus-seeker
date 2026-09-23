@@ -1,6 +1,8 @@
 import math
 import logging
 
+from market_analysis.sentiment.skew_taxonomy import ensure_percentile_pct
+
 logger = logging.getLogger(__name__)
 
 
@@ -12,19 +14,21 @@ async def calculate_telemetry_price(
     hist_iv: float,
     max_pain: float,
     prev_max_pain: float,
-    skew_percentile: float,
+    skew_percentile_pct: float,
     days_to_expiration: float = 7.0,
     prev_close: float = 0.0,
     base_quantity: float | int = 1,
 ) -> tuple[float, int, list[str]]:
     """
     計算最佳「左側現股捕獸夾」遙測訂價，並將倉位控管動態連結至極端期權流指標。
+    `skew_percentile_pct` 為 0~100 量綱的 Skew 百分位。
     回傳: (最佳價格, 最佳股數, 決策日誌列表)
     """
     price = base_price
     logs = []
     symbol = symbol.upper()
     sizing_multiplier = 1.0
+    skew_percentile_pct = ensure_percentile_pct(skew_percentile_pct, symbol)
 
     # 1. 期權籌碼引力面 (Option Flow & Gravity)
     # 最大痛點位移
@@ -36,7 +40,7 @@ async def calculate_telemetry_price(
         )
 
     # 期權偏斜與情緒背離
-    if skew_percentile < 0.05 or skew_percentile > 0.95:
+    if skew_percentile_pct < 5.0 or skew_percentile_pct > 95.0:
         # 將價格調整至現價的 1.5% 處以捕捉恐慌/軋空盤影線
         if spot_price > price:
             price = spot_price * 0.985
@@ -46,7 +50,7 @@ async def calculate_telemetry_price(
         # 連結優化：將分配預算減至 75%，防止激進攔截時資金過快枯竭
         sizing_multiplier = 0.75
         logs.append(
-            f"[⚠️ 尾端風險防禦] 偵測到期權偏斜極端尾端風險 (百分位數 {skew_percentile*100:.1f}%)。"
+            f"[⚠️ 尾端風險防禦] 偵測到期權偏斜極端尾端風險 (百分位數 {skew_percentile_pct:.1f}%)。"
             f"已將掛單價格微調至更接近現價 (${price:.2f})，且將掛單數量打 75 折以防禦尾部風險，保護資產流動性。"
         )
 

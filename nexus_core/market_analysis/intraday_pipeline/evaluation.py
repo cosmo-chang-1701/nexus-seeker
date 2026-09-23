@@ -8,6 +8,11 @@ import pandas as pd
 
 from models.schemas import WatchlistEvaluation, WatchlistTacticalPlan
 from risk_engine.nro import WatchlistRiskController
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_DIVERGENCE_HIGH_PERCENTILE,
+    SKEW_DIVERGENCE_LOW_PERCENTILE,
+    SKEW_HIGH_DEFENSE_PERCENTILE,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -290,8 +295,14 @@ async def evaluate_watchlist_symbol(
         metrics.skew_percentile is not None
         and metrics.pcr is not None
         and (
-            (metrics.skew_percentile > 85.0 and 0.0 < metrics.pcr < 0.4)
-            or (metrics.skew_percentile < 15.0 and metrics.pcr > 1.5)
+            (
+                metrics.skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE
+                and 0.0 < metrics.pcr < 0.4
+            )
+            or (
+                metrics.skew_percentile < SKEW_DIVERGENCE_LOW_PERCENTILE
+                and metrics.pcr > 1.5
+            )
         )
     ):
         tactical = _apply_tactical_gate(
@@ -306,7 +317,10 @@ async def evaluate_watchlist_symbol(
         )
 
     # Skew Divergence Gate (機構避險背離/尾部風險警戒)
-    if metrics.skew_percentile is not None and metrics.skew_percentile > 90.0:
+    if (
+        metrics.skew_percentile is not None
+        and metrics.skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE
+    ):
         # 冷啟動保護 (ISSUE-2.2)：若樣本數不足 60 筆，抑制最高等級資金撤退，避免新標的誤觸帳戶清算
         skew_samples = getattr(metrics, "skew_sample_size", None)
         is_sample_mature = skew_samples is None or skew_samples >= 60

@@ -40,6 +40,19 @@ async def fetch_option_chain_dict(symbol: str, expiry: str) -> Optional[Dict[str
     return await asyncio.to_thread(_fetch)
 
 
+async def fetch_last_close(symbol: str) -> Optional[float]:
+    """最近一個完整交易日的收盤價 (收盤後呼叫即為當日收盤)。背景執行緒執行。"""
+
+    def _fetch() -> Optional[float]:
+        df = yf.Ticker(symbol).history(period="5d", interval="1d")
+        if df is None or df.empty:
+            return None
+        closes = df["Close"].dropna()
+        return float(closes.iloc[-1]) if not closes.empty else None
+
+    return await asyncio.to_thread(_fetch)
+
+
 async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
     """一次性取得最近到期日的期權鏈與到期日字串。
 

@@ -4,6 +4,14 @@ import time
 import config
 from typing import Dict, Optional
 
+# 薄牆門檻定義見 gex_wall_depth.py（stdlib 葉模組，避免循環匯入）；此處重新匯出
+# 以維持既有匯入路徑 (`from market_analysis.index_microstructure import ...`)。
+from market_analysis.gex_wall_depth import (  # noqa: F401
+    GEX_THIN_WALL_THRESHOLD,
+    GEX_WALL_MIN_DEPTH_RATIO,
+    thin_wall_threshold,
+)
+
 from services.bounded_cache import BoundedCache
 
 logger = logging.getLogger(__name__)
@@ -567,14 +575,14 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
     )
 
 
-GEX_THIN_WALL_THRESHOLD: float = 500_000.0
-
-
 def is_gex_wall_effective(
-    wall_gex: float, threshold: float = GEX_THIN_WALL_THRESHOLD
+    wall_gex: float,
+    threshold: Optional[float] = None,
+    adv_dollar_20d: Optional[float] = None,
 ) -> bool:
     """判定 GEX 牆體是否具備實質做市商深度（非單薄紙牆）。"""
-    return abs(wall_gex) >= threshold
+    limit = threshold if threshold is not None else thin_wall_threshold(adv_dollar_20d)
+    return abs(wall_gex) >= limit
 
 
 def find_overhead_negative_gex_swamp(

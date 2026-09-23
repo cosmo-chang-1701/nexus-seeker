@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy}"""
 
 import argparse
 import asyncio
@@ -17,7 +17,18 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
         prog="python -m calibration",
         description="回測校準工具 (只產出報告，不修改程式碼)",
     )
-    parser.add_argument("command", choices=["fetch", "run", "forward-report", "all"])
+    parser.add_argument(
+        "command",
+        choices=[
+            "fetch",
+            "run",
+            "forward-report",
+            "all",
+            "micro-snapshot",
+            "micro-report",
+            "skew-proxy",
+        ],
+    )
     parser.add_argument(
         "--universe", default="", help="逗號分隔標的清單；留空則自動組成"
     )
@@ -27,6 +38,22 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument("--out", default=None, help="報告輸出根目錄")
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--force", action="store_true", help="略過記憶體安全檢查")
+    parser.add_argument(
+        "--source",
+        choices=["edge", "snapshot"],
+        default="edge",
+        help="micro-report 的資料來源：edge 前向蒐集歷史 (預設) 或 micro-snapshot 快取",
+    )
+    parser.add_argument(
+        "--edge-db",
+        default=None,
+        help="micro-report --source edge：直接讀取複製來的 edge_cache.db；未指定時經 TUNNEL_URL 讀取",
+    )
+    parser.add_argument(
+        "--any-time",
+        action="store_true",
+        help="micro-snapshot：略過「交易日收盤後、當天尚無快照」的排程保護",
+    )
     return parser.parse_args(argv)
 
 
@@ -59,6 +86,9 @@ async def _main(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
+    if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
+        return await _run_study(args, cfg)
+
     store = DataStore(cfg.cache_dir)
     symbols = (
         [s.strip().upper() for s in args.universe.split(",") if s.strip()]
@@ -100,6 +130,67 @@ async def _main(args: argparse.Namespace) -> int:
         forward=forward,
     )
     target = report.write_report(cfg, results, {"symbols": symbols})
+    print(f"報告已輸出：{target}")
+    return 0
+
+
+async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
+    """微結構 (D-03/D-04) 與 Skew 代理研究。只寫快取與報告，不寫 DB。"""
+    if args.command == "micro-snapshot":
+        from calibration.microstructure import run_snapshot, snapshot_skip_reason
+        from calibration.universe import build_universe
+
+        if not args.any_time:
+            reason = snapshot_skip_reason(Path(cfg.cache_dir))
+            if reason:
+                print(f"略過快照：{reason}")
+                return 0
+
+        symbols = (
+            [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+            if args.universe
+            else build_universe(cfg.max_symbols)
+        )
+        target = await run_snapshot(symbols, Path(cfg.cache_dir))
+        print(f"快照已寫入：{target}")
+        return 0
+
+    if args.command == "micro-report":
+        from calibration.microstructure import build_micro_report
+
+        snapshots = None
+        if args.source == "edge":
+            from calibration.edge_history import EdgeHistorySource, build_edge_snapshots
+
+            if args.edge_db:
+                source = EdgeHistorySource(db_path=Path(args.edge_db))
+            else:
+                from config import TUNNEL_URL
+
+                if not TUNNEL_URL:
+                    print(
+                        "未設定 TUNNEL_URL：請提供 --edge-db <edge_cache.db>，"
+                        "或改用 --source snapshot",
+                        file=sys.stderr,
+                    )
+                    return 2
+                source = EdgeHistorySource(base_url=str(TUNNEL_URL))
+            edge_symbols: Optional[list[str]] = (
+                [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+                if args.universe
+                else None
+            )
+            snapshots = build_edge_snapshots(source, edge_symbols)
+        result = build_micro_report(Path(cfg.cache_dir), snapshots=snapshots)
+        result["source"] = args.source
+    else:
+        from calibration.skew_proxy import run_skew_proxy
+
+        result = run_skew_proxy(Path(cfg.cache_dir))
+
+    from calibration.report import write_study_report
+
+    target = write_study_report(Path(cfg.out_dir), args.command, result)
     print(f"報告已輸出：{target}")
     return 0
 
