@@ -310,6 +310,7 @@ flowchart TD
 8. **`PYRAMID_ADD` 條件二不變式禁止放寬**：`ratchet_stop >= avg_cost` 是加碼機制與盲目攤平的唯一分界。任一資料缺失導致無法判定的條件（NetGEX 未知、`ratchet_stop` 缺失視為 $0$）一律 fail-closed 不加碼，因為本情境是**承擔新曝險**的決策，與既有部位「是否該出場」的 fail-open 慣例刻意不同。
 9. **`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 的插入位置**：`PYRAMID_ADD` 評估插入 `check_satellite_rebalancing_impl` 的 per-asset 迴圈中、`TRANSITION_ENGINE` 之後、SL/TP 階梯計算之前，重用同一輪已算好的 `spot`／`session_vwap`／`gamma_flip`／`net_gex` 等 metrics，避免重複抓取；條件四的 60 日高點抓取延遲至條件一~三皆通過後才發動，條件八的宏觀逃頂評分延遲至條件一~四皆通過後才發動（後者由呼叫端提供一個每位使用者記憶化一次的 async callable，避免對每個持倉重複計算）。
 10. **`PYRAMID_ADD` 曝險超限降量而非拒絕**：條件七超過 `profile.max_satellite_budget_pct` 時，以剩餘預算重新反推可加碼股數上限（`binding_constraint = "EXPOSURE_CAP"`），不足 1 股才拒絕，與 `short_entry_sizing.py` 既有的曝險上限降量邏輯一致。
+11. **顧問模式（B&H 持倉）跨情境一致性**：`portfolio_mode == "ADVISORY"`（或單檔 `advisory_only` 覆寫）的多頭現貨持倉，在情境二（`OPPORTUNITY_COST`，不作為賣出端）、情境三（`SATELLITE_REBALANCE`，指令摺疊為位階告知或丟棄）、情境六（`MACRO_TOP_ESCAPE_DEFENSE`，ELEVATED/CRITICAL 跳過減碼）皆一致跳過或轉換，唯獨情境四（`MARGIN_DEFENSE`，帳戶生存線）不受影響。轉換規則、丟棄項與唯一防護（`RolloverInstruction.action` 為純 `str`）詳見 [`05_dual_track_anti_washout_stop_loss.md`](05_dual_track_anti_washout_stop_loss.md) §3.1／§5.9。`PYRAMID_ADD`（情境十）刻意**不**受顧問模式影響：加碼是新增曝險而非減碼，與 B&H 策略相容。
 
 ---
 

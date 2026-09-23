@@ -40,6 +40,14 @@ _DYNAMIC_ENTRY_REGIME_CHOICES = [
     ),
 ]
 
+# 顧問模式單檔覆寫 (三態)：FOLLOW=跟隨帳戶 /settings 的 portfolio_mode (寫入 None)、
+# ADVISORY=強制顧問 (True)、COMMAND=強制指令 (False)。
+_ADVISORY_MODE_CHOICES = [
+    app_commands.Choice(name="跟隨帳戶設定 (/settings 持倉管理模式)", value="FOLLOW"),
+    app_commands.Choice(name="顧問模式 (僅告知位階，不建議減碼換股)", value="ADVISORY"),
+    app_commands.Choice(name="指令模式 (輸出減碼/換股建議)", value="COMMAND"),
+]
+
 
 class TerminalCog(commands.Cog):
     """
@@ -319,6 +327,7 @@ class TerminalCog(commands.Cog):
         boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
         acquired_at="建倉日期 (YYYY-MM-DD)，供動態轉倉引擎估算長/短期資本利得稅率區間；留空則預設為今天 (選填)",
         dynamic_entry_regime="標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立，供狀態切換引擎 (加碼/停損上移/防禦性平倉) 接管 (選填)",
+        advisory_mode="此檔的停利停損輸出語意：顧問 (僅告知位階、不建議減碼換股) / 指令 / 跟隨帳戶 /settings 設定 (選填)",
     )
     @app_commands.choices(
         asset_class=[
@@ -326,6 +335,7 @@ class TerminalCog(commands.Cog):
             app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
         ],
         dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
+        advisory_mode=_ADVISORY_MODE_CHOICES,
     )
     async def add_holding(
         self,
@@ -339,6 +349,7 @@ class TerminalCog(commands.Cog):
         boxx_allocation_pct: Optional[float] = None,
         acquired_at: Optional[str] = None,
         dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
+        advisory_mode: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await holdings.add_holding_impl(
             interaction,
@@ -351,6 +362,7 @@ class TerminalCog(commands.Cog):
             boxx_allocation_pct,
             acquired_at,
             dynamic_entry_regime,
+            advisory_mode,
         )
 
     @app_commands.command(
@@ -367,6 +379,7 @@ class TerminalCog(commands.Cog):
         boxx_allocation_pct="核心資金部署觸發時，優先轉入 BOXX 防禦的判定閾值 (0-100，≥50 優先防禦轉入 BOXX；留空則由系統依當前總經數據自動評估建議值，選填)",
         acquired_at="建倉日期 (YYYY-MM-DD)，用於回填校正實際開倉日以利長/短期資本利得稅務提醒 (選填)",
         dynamic_entry_regime="事後標記/重新標記此部位是依交易策略「動態調整」引擎的哪個 Regime 建立 (選填)",
+        advisory_mode="此檔的停利停損輸出語意：顧問 (僅告知位階、不建議減碼換股) / 指令 / 跟隨帳戶 /settings 設定 (選填)",
     )
     @app_commands.choices(
         asset_class=[
@@ -374,6 +387,7 @@ class TerminalCog(commands.Cog):
             app_commands.Choice(name="SATELLITE (衛星戰術資產)", value="SATELLITE"),
         ],
         dynamic_entry_regime=_DYNAMIC_ENTRY_REGIME_CHOICES,
+        advisory_mode=_ADVISORY_MODE_CHOICES,
     )
     async def edit_holding(
         self,
@@ -387,6 +401,7 @@ class TerminalCog(commands.Cog):
         boxx_allocation_pct: Optional[float] = None,
         acquired_at: Optional[str] = None,
         dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
+        advisory_mode: Optional[app_commands.Choice[str]] = None,
     ) -> Any:
         return await holdings.edit_holding_impl(
             interaction,
@@ -399,6 +414,7 @@ class TerminalCog(commands.Cog):
             boxx_allocation_pct,
             acquired_at,
             dynamic_entry_regime,
+            advisory_mode,
         )
 
     @app_commands.command(

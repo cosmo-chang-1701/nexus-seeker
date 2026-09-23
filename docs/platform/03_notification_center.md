@@ -16,6 +16,7 @@
 - `enable_vtr`、`enable_psq_watchlist`、`monthly_expense`、`tax_reserve_rate`、`cash_reserve`
 - `trading_strategy`（`RIGHT_SIDE` / `LEFT_SIDE` / `SHORT_SIDE` / `DYNAMIC`，遷移 `v068`，預設 `RIGHT_SIDE`）——詳見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)。這是第一個既非布林開關、也非自由文字數值欄位的設定，因此 `AccountSettingsView.on_select_callback()` 新增了**第三分支**：一個固定 4 選項的 `TradingStrategySelectView`，直接寫入資料庫並導回父視圖，不經過 Modal（仿照 `ui/watchlist_tags.py` 的 Select 子類作法）。
   - `SHORT_SIDE`（做空交易）是後續新增的第四個值。因該欄位是 `TEXT DEFAULT 'RIGHT_SIDE'` 且無 `CHECK` 約束，新增 enum 值**不需要**新的 migration。選單描述文字刻意標明方向（「做多・逆勢均值回歸」／「做空・結構破位追空」），避免使用者把「左側」誤讀為「做空」——左側本質仍是做多。
+- `portfolio_mode`（`COMMAND` / `ADVISORY`，遷移 `v079`，預設 `COMMAND`）——持倉停利停損輸出語意的帳戶層開關，詳見 [`../strategies/05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1。比照 `risk_appetite` 的既有 Select 範式（`PortfolioModeSelectView`，固定 2 選項、直接寫入 DB、不經 Modal）。單檔可用 `/edit_holding advisory_mode` 三態覆寫（`FOLLOW`/`ADVISORY`/`COMMAND`，存於 `assets.metadata.advisory_only`）。
 - 也整合了**自選股標籤系統**：允許使用者透過互動下拉選單與 Modal，為自選股資產附加自訂分類標籤（如 `TECH`、`CORE`，`ui/watchlist_tags.py`）。此標籤引擎也完整暴露於 `/list_watch` 指令輸出中，透過在地化的「🏷️ 原地編輯標籤」捷徑按鈕，實現自動重建並替換原始 Discord 視圖的無縫、類 SPA 編輯體驗。
 
 ### 2.2 通知偏好（`/notif_settings`）
@@ -78,12 +79,13 @@ self.update_settings._callback = compat_callback
 
 ## 6. 核心程式碼檔案路徑關聯
 
-- `nexus_core/cogs/settings_ui.py`：`AccountSettingsView`、`AccountSettingsModal`、`TradingStrategySelectView`
+- `nexus_core/cogs/settings_ui.py`：`AccountSettingsView`、`AccountSettingsModal`、`TradingStrategySelectView`、`PortfolioModeSelectView`
 - `nexus_core/cogs/terminal.py`：`/settings`、`/notif_settings` 指令入口
 - `nexus_core/ui/watchlist_tags.py`：自選股標籤系統
 - `nexus_core/database/migrations/v068_add_trading_strategy.py`：`trading_strategy` 欄位遷移
 - `nexus_core/database/migrations/v061_consolidate_notification_settings.py`：通知偏好 4 模組頻道整併遷移（當時為 13 頻道）
 - `nexus_core/database/migrations/v078_backfill_advisory_entry_signal.py`：以 `heartbeat_symbol_deep` 回填 `advisory_entry_signal`
+- `nexus_core/database/migrations/v079_add_portfolio_mode.py`：`portfolio_mode` 欄位遷移
 - `nexus_core/database/cache.py`：`_KV_CACHE_DEDUP_KEY_PREFIXES` 每日去重旗標清理白名單
 - `nexus_core/tests/unit/test_kv_cache_dedup_whitelist.py`：AST 掃描強制新增去重旗標必須登記白名單
 - `nexus_core/tests/unit/test_settings_interactive.py`：互動設定視圖與 Modal 單元測試

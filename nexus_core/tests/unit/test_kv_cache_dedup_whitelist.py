@@ -33,10 +33,10 @@ _SCAN_DIRS = (
 
 _EXCLUDED_PARTS = {"build", "venv", "__pycache__", "migrations"}
 
-# 已登記於白名單、但寫入點尚未實作的前綴（B&H 顧問出場，
-# 見 handoff_watchlist_advisor.md 階段 B）。實作落地後必須從此處移除，
+# 已登記於白名單、但寫入點尚未實作的前綴。實作落地後必須從此處移除，
 # test_pending_writers_are_removed_once_implemented 會強制這一點。
-_PENDING_WRITERS: frozenset[str] = frozenset({"advisory_exit_"})
+# （advisory_entry_ 由階段 A、advisory_exit_ 由階段 B 落地，目前無待實作項目。）
+_PENDING_WRITERS: frozenset[str] = frozenset()
 
 
 def _iter_source_files() -> Iterator[tuple[str, pathlib.Path]]:

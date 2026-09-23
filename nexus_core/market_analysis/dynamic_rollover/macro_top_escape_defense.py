@@ -2,6 +2,7 @@ import math
 from typing import Any, Dict, List, Optional
 
 from . import logger
+from .advisory_mode import is_advisory_asset
 from ._shared import (
     format_cash_impact,
     format_illiquidity_warning,
@@ -266,6 +267,9 @@ async def evaluate_macro_top_escape_defense_impl(
             or symbol in CORE_DEFENSE_ETF_SYMBOLS
             or (symbol, asset_class) in flagged
             or quantity == 0
+            # 顧問模式 (B&H) 持倉不接受 ELEVATED/CRITICAL 的防禦性減碼；WATCH 級
+            # 保護性 Put 是組合層級 (SPY)、在此迴圈之前已回傳，不受影響。
+            or is_advisory_asset(asset)
         ):
             continue
 

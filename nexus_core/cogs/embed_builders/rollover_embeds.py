@@ -1103,6 +1103,60 @@ def create_protective_put_embed(
     return embed
 
 
+def create_advisory_levels_embed(
+    symbol: str,
+    reason: str,
+    advisory_plan: Optional[Mapping[str, Any]] = None,
+    exit_tier: Optional[str] = None,
+) -> discord.Embed:
+    """
+    產生顧問模式 (B&H 持倉) 的「位階告知」專屬 Embed。
+
+    刻意不重用 create_dynamic_rollover_embed：顧問指令 `sell_ratio` 恆為 0.0，
+    通用 embed 的 is_hold 判定會渲染成「安全續抱、無需任何手動操作」並附上一鍵
+    執行按鈕，與「告知位階、決定權在使用者」的語意矛盾。本 embed **不**附加
+    RolloverActionView/ManualOverrideView，也不含任何賣出動作欄位。
+    """
+    plan: Mapping[str, Any] = advisory_plan or {}
+    kind = plan.get("kind")
+    is_structure = kind == "STRUCTURE_FAILURE"
+    emoji = "⚠️" if is_structure else "🎯"
+    headline = "結構失效告知" if is_structure else "已抵達目標區"
+    embed = NexusEmbed(
+        title=f"{emoji} 持倉位階顧問・{headline}: {symbol}",
+        color=discord.Color.orange() if is_structure else discord.Color.blue(),
+    )
+
+    safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
+    embed.description = (
+        "**🧭【顧問模式：僅告知位階，不建議任何買賣動作】**" f"\n\n{safe_reason}"
+    )
+
+    spot = float(plan.get("spot") or 0.0)
+    level_lines = ["```ansi", " 📍 位階資訊", " ----------------------------------"]
+    if spot > 0:
+        level_lines.append(f" ├─ 現價: ${spot:,.2f}")
+    stop_loss = plan.get("stop_loss")
+    if stop_loss:
+        level_lines.append(f" ├─ 結構停損線: ${float(stop_loss):,.2f}")
+    call_wall = plan.get("call_wall")
+    if call_wall:
+        level_lines.append(f" ├─ Call Wall: ${float(call_wall):,.2f}")
+    target = plan.get("target")
+    if target:
+        sky = "（ATR 外推）" if plan.get("is_blue_sky") else ""
+        level_lines.append(f" ├─ 有效目標: ${float(target):,.2f}{sky}")
+    level_lines.append(f" └─ 觸發分層: {exit_tier or 'N/A'}")
+    level_lines.append("```")
+    embed.add_field(name="📍 位階資訊", value="\n".join(level_lines), inline=False)
+
+    embed.set_footer(
+        text="Nexus Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
+        "單檔可用 /edit_holding advisory_mode 覆寫)"
+    )
+    return embed
+
+
 _LOW_CONFIDENCE_THRESHOLD = 0.5
 
 

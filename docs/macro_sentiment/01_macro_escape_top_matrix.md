@@ -165,8 +165,8 @@ flowchart TD
     DeltaCheck -- 否 --> EndReport
     DeltaCheck -- 是 --> BuyPut["🛡️ 買 SPY 保護性 Put<br/>對沖 30% Beta 加權 Delta<br/>Delta≈-0.275, DTE 30-60<br/>標記 trade_category=HEDGE"]
 
-    TierAction -- ELEVATED --> Trim25["衛星持倉減碼 25% 轉入 BOXX"]
-    TierAction -- CRITICAL --> Trim50["衛星持倉減碼 50% 轉入 BOXX"]
+    TierAction -- ELEVATED --> Trim25["衛星持倉減碼 25% 轉入 BOXX<br/>(顧問模式持倉跳過，不受影響)"]
+    TierAction -- CRITICAL --> Trim50["衛星持倉減碼 50% 轉入 BOXX<br/>(顧問模式持倉跳過，不受影響)"]
 
     NormalTier --> EndReport
     BuyPut --> EndReport([結束])
@@ -216,6 +216,7 @@ flowchart TD
 ### 5.3 減碼執行衝突隔離（Conflict Isolation）
 - 在 `dynamic_rollover` 排程派發器中，情境 6 刻意排在最後順序（3 → 2 → 5 → 4 → 6）。
 - 若某檔標的已在情境 2（機會成本轉倉）、情境 3（Call Wall 亢奮獲利鎖定）、情境 4（流動性危機停損）或情境 5（核心配置超額）被標記處理，情境 6 自動將該標的加入 `already_flagged_symbols` 跳過，嚴禁對同一標的下發相互矛盾的指令。ELEVATED／CRITICAL 的 TRIM 分支沿用此隔離機制；WATCH 的 PROTECTIVE_PUT 分支是組合層級的單一建議、不逐一針對個別持倉，不受 `already_flagged_symbols` 篩選。
+- **顧問模式（B&H 持倉）**：ELEVATED／CRITICAL 的 TRIM 迴圈（`macro_top_escape_defense.py`）對標記為顧問模式的持倉（`advisory_only == True`，見 [`05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1）直接跳過，不產生任何減碼指令——防禦性減碼與 Buy & Hold 策略直接衝突。WATCH 級保護性 Put 是組合層級的單一建議（固定標的 `SPY`），不逐一針對個別持倉，因此不受此排除影響、顧問模式持倉照常受益。
 
 ### 5.4 WATCH 級 `trade_category` 誤標的下游後果
 若買進的保護性 Put 未以 `trade_category = "HEDGE"` 登錄，`hedging._sum_hedge_only_delta` 會把它排除在「可解除的對沖曝險」之外，視為一筆刻意建立的方向性部位。後果不僅是統計失真：當多頭共振訊號出現、對沖建議引擎判斷「有對沖可解除」時，會反過來建議使用者**平掉自己剛買的保護**——這與 [`06_brinson_performance_attribution.md`](../risk_portfolio/06_brinson_performance_attribution.md) §5.3 記載的 `suggest_hedge_unlock()` 早期誤把「組合總 Delta < 0」等同於「有對沖掛著」是同一類錯誤。

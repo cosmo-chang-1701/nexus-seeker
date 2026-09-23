@@ -6,6 +6,7 @@ from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
 from . import logger
 from ._shared import format_cash_impact
+from .advisory_mode import build_advisory_instruction, is_advisory_asset
 from .constants import (
     _ANTI_WASHOUT_EXTREME_ATR_MULT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
@@ -1912,17 +1913,26 @@ async def check_satellite_rebalancing_impl(
                 )
 
                 default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
-                rebalance_instructions.append(
-                    _net_and_build_rebalance_instruction(
-                        engine,
-                        symbol,
-                        quantity,
-                        report,
-                        default_sell_ratio,
-                        asset_class,
-                        asset_id=asset.get("asset_id"),
-                    )
+                tier_instruction = _net_and_build_rebalance_instruction(
+                    engine,
+                    symbol,
+                    quantity,
+                    report,
+                    default_sell_ratio,
+                    asset_class,
+                    asset_id=asset.get("asset_id"),
                 )
+                # 顧問模式 (B&H)：把減碼/換股指令轉為位階告知或丟棄。轉換必須在
+                # 迴圈內完成（指令上沒有 spot/call wall），且 `continue` 照舊執行，
+                # 避免被丟棄的部位掉進下方比例控管而重新產生 REDUCE。
+                if is_advisory_asset(asset):
+                    advisory_instruction = await build_advisory_instruction(
+                        tier_instruction, asset, metrics, stop_loss_gate
+                    )
+                    if advisory_instruction is not None:
+                        rebalance_instructions.append(advisory_instruction)
+                else:
+                    rebalance_instructions.append(tier_instruction)
                 continue  # 已經處理，不需進行後續常規再平衡
 
             # ----------------------------------------------------
@@ -1959,16 +1969,24 @@ async def check_satellite_rebalancing_impl(
                     if report["final_action"] != "LIQUIDATE"
                     else 1.0
                 )
-                rebalance_instructions.append(
-                    _net_and_build_rebalance_instruction(
-                        engine,
-                        symbol,
-                        quantity,
-                        report,
-                        default_sell_ratio,
-                        asset_class,
-                        asset_id=asset.get("asset_id"),
-                    )
+                control_instruction = _net_and_build_rebalance_instruction(
+                    engine,
+                    symbol,
+                    quantity,
+                    report,
+                    default_sell_ratio,
+                    asset_class,
+                    asset_id=asset.get("asset_id"),
                 )
+                if is_advisory_asset(asset):
+                    # 比例控管的 REDUCE (exit_tier=None) 對 B&H 是雜訊 → 丟棄；
+                    # 若此路徑因 SL 階梯升級為 LIQUIDATE，則依 exit_tier 處置。
+                    advisory_instruction = await build_advisory_instruction(
+                        control_instruction, asset, metrics, stop_loss_gate
+                    )
+                    if advisory_instruction is not None:
+                        rebalance_instructions.append(advisory_instruction)
+                else:
+                    rebalance_instructions.append(control_instruction)
 
     return rebalance_instructions

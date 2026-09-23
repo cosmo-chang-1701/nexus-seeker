@@ -238,6 +238,25 @@ class PyramidAddPlan(TypedDict):
     pyramid_count_after: int
 
 
+class AdvisoryPlan(TypedDict, total=False):
+    """顧問模式 (portfolio_mode=ADVISORY / advisory_only) 的位階資訊 (advisory_mode.py 產出)。
+
+    顧問指令 (`action == "ADVISORY"`) 只告知位階，不攜帶任何賣出動作：
+    `sell_ratio` 恆為 0.0、`target_core` 恆為 ""。
+
+    kind:
+      * ``STRUCTURE_FAILURE`` — 結構失效 (SL-結構失效／極端瞬時停損)，附 `stop_loss`。
+      * ``TARGET_REACHED`` — 已抵達目標區 (TP1~TP3 摺疊)，附 `call_wall`／`target`。
+    """
+
+    kind: Literal["STRUCTURE_FAILURE", "TARGET_REACHED"]
+    spot: float
+    stop_loss: Optional[float]
+    call_wall: Optional[float]
+    target: Optional[float]
+    is_blue_sky: bool
+
+
 class _RolloverInstructionRequired(TypedDict):
     symbol: str
     action: str
@@ -330,3 +349,7 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     short_entry_plan: Optional[ShortEntryPlan]
     # PYRAMID_ADD 情境專屬：加碼股數／風險預算／停損距離倉位計算結果。
     pyramid_add_plan: Optional[PyramidAddPlan]
+    # 顧問模式專屬：`action == "ADVISORY"` 指令攜帶的位階資訊。⚠️ `action` 是純 str
+    # 而非 Literal，新增 "ADVISORY" 值時 mypy 不會提示任何未處理的消費端分支，
+    # 唯一的防護是 tests/unit/test_advisory_mode.py 的參數化不變式測試。
+    advisory_plan: Optional[AdvisoryPlan]

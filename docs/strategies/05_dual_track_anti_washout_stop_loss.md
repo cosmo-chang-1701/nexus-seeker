@@ -10,6 +10,7 @@ Nexus Seeker 的**雙軌防洗盤動態停損與出場決策矩陣**（`anti_was
    - **軌道二（極端瞬時熔斷線，Track 2）**：錨定底牆下方 3.0 倍 ATR。此為現貨與期權皆適用的最後黑天鵝熔斷防線，現價即時貫穿**立即市價清倉**，無視 15 分鐘收盤等待，果斷阻斷突發極端踩踏與流動性真空滑步。
 2. **微觀結構多維出場決策矩陣**：
    摒棄二元獲利了結，整合做市商阻力初探（TP1）、阻力擴展與遷移（TP2）、趨勢終局平倉（TP3）三階止盈，以及結構失效、做市商狀態翻轉、主力對沖、動態保本四階止損，實現科學的階梯式分批獲利回收與風險鎖死。
+3. **顧問模式（Advisory Mode）**：矩陣本身對「減碼／換股」與「持有」的判定不變，但對標記為顧問模式的 Buy & Hold 持倉，輸出語意由**指令**改為**告知**——只呈現位階（已抵達目標區／結構已失效），不建議任何買賣動作，決定權交還使用者。詳見 §3 決策流程與 §5.9。
 
 ---
 
@@ -187,6 +188,19 @@ flowchart TD
     StepReduce -- 否 --> ActHold["維持現狀: HOLD<br/>做市商正 Gamma 護城河完好"]
 ```
 
+### 3.1 顧問模式後置轉換（B&H 持倉）
+
+矩陣產出 `ActTP1`/`ActTP2`/`ActTP3`/`ActSL1`（SL-結構失效）/`ActTrack2`（軌道二極端瞬時停損）/`ActReduce` 這六個分支後，若該持倉為**顧問模式**（帳戶層 `user_settings.portfolio_mode == "ADVISORY"`，或單檔 `assets.metadata.advisory_only` 三態覆寫；解析與轉換皆在 `advisory_only == True` 且為多頭現貨時才生效，空頭現貨與選擇權一律維持指令模式），指令會依 `exit_tier` 再轉換一次，**不**改動矩陣本身的判定邏輯：
+
+| 觸發分支 / `exit_tier` | 顧問模式處置 |
+| :--- | :--- |
+| `ActSL1`（SL-結構失效）、`ActTrack2`（軌道二極端瞬時停損） | 轉為 `ADVISORY`「結構失效告知」：附現價與結構停損線，`sell_ratio` 恆 `0.0`、`target_core` 恆 `""` |
+| `ActTP1` / `ActTP2` / `ActTP3` | 摺疊為單一 `ADVISORY`「已抵達目標區」告知：附現價、Call Wall 與 `resolve_effective_target()`（見 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 D）算出的有效目標 |
+| `ActTP1Exempt`（TP1 趨勢豁免）、`ActSL4`（SL-動態保本）、灰階 `ActHold`、淨額扣抵後降為 `HOLD` | **丟棄**（不推播）。此三者皆為 `HOLD` 且可能攜帶 `dynamic_state_patch`（棘輪停損）；丟棄意味該棘輪不再提交，代價僅是停損維持在較寬鬆的結構位，對 B&H 是可接受的取捨 |
+| `ActReduce`（常規比例控管）、`ActSL2`（SL-狀態翻轉）、`ActSL3`（SL-主力對沖） | **丟棄**，視為對 B&H 策略而言的戰術性雜訊 |
+
+轉換後的指令仍計入去重（`advisory_exit_{user}_{symbol}_{exit_tier}_{date}`），走獨立通知頻道 `advisory_core_levels`，且**不**附加 `RolloverActionView` 一鍵執行按鈕。`MARGIN_DEFENSE`（保證金強制平倉）為帳戶生存線，不受此轉換影響。
+
 ---
 
 ## 4. 關鍵具名常數與物理約束
@@ -243,6 +257,18 @@ flowchart TD
    - **外層閘門必須把「已豁免」本身視為需要處理的訊號**：`check_satellite_rebalancing_impl` 在真正產出報告前有一道獨立閘門（`tp_tier is not None or sl_tier is not None or ...`）。TP1 豁免的觸發門檻（牆遷移 $\ge 1\%$）明顯早於 SL-動態保本（進度 $\ge 50\%$），兩者皆為 `None` 的 $1\%\sim3\%$ 灰帶——正是本機制最想保護的區間——若閘門不額外納入「TP1 已豁免」訊號，整個報告產生流程會被跳過，棘輪停損算出來也永遠傳不到派發端。閘門現已納入此訊號。
    - 三者皆有專屬回歸測試鎖定，見 `nexus_core/tests/unit/test_tp1_trend_exemption.py`（§6）。
 
+9. **顧問模式的轉換發生在迴圈內、而非回傳前後置過濾**：初版設計曾考慮在
+   `check_satellite_rebalancing_impl` 回傳前統一過濾，但 `RolloverInstruction`
+   本身不攜帶 spot／Call Wall，回傳前已無法為 TP 摺疊算出目標價；且若在回傳前
+   整批丟棄，該標的會不再被 `already_flagged` 集合壓制，導致機會成本轉倉
+   （`opportunity_cost.py`）或逃頂 ELEVATED/CRITICAL 減碼（`macro_top_escape_defense.py`）
+   對同一檔顧問持倉重新發出 LIQUIDATE。因此轉換改在 `anti_washout.py` 的兩個
+   append 點（TP/SL 分層路徑、常規比例控管路徑）就地完成，且這兩個情境的迴圈
+   也各自加上 `is_advisory_asset()` 跳過。`RolloverInstruction.action` 是純
+   `str` 而非 `Literal`，新增 `"ADVISORY"` 值 mypy 不會提示任何未處理分支，
+   唯一防護是 `test_advisory_mode.py` 的參數化不變式測試（顧問持倉遍歷全部
+   SL/TP/比例控管路徑後輸出中不得出現 `LIQUIDATE`／`REDUCE`）。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -263,3 +289,11 @@ flowchart TD
   - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_evaluate_microstructure_tp_ladder()`（四元組回傳、豁免分支）、`_apply_decision_matrix()`（TP1 豁免與 SL-動態保本合併呈現分支）、`check_satellite_rebalancing_impl()`（`previous_call_wall` 補齊、外層閘門納入豁免訊號、`asset_id`／`dynamic_state_patch` 一路傳遞）
   - `nexus_core/market_analysis/dynamic_rollover/models.py`：`RolloverInstruction.dynamic_state_patch`／`asset_id`（狀態延後提交，沿用 `transition_engine.py` 既有機制）
   - `nexus_core/tests/unit/test_tp1_trend_exemption.py`：七項條件測試 + `previous_call_wall` 補齊、狀態延後提交、灰帶情境端到端回歸測試
+- **顧問模式（見 §3.1／§5.9）**：
+  - `nexus_core/market_analysis/dynamic_rollover/advisory_mode.py`：`is_advisory_asset()`、`build_advisory_instruction()`（唯一轉換邏輯，葉模組）
+  - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：TP/SL 分層與常規比例控管兩個 append 點的轉換掛載
+  - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` / `macro_top_escape_defense.py`：顧問持倉跳過（`is_advisory_asset()`）
+  - `nexus_core/database/migrations/v079_add_portfolio_mode.py`：`user_settings.portfolio_mode`（預設 `COMMAND`）
+  - `nexus_core/cogs/trading/portfolio_monitor.py`：帳戶層 `portfolio_mode` 每使用者讀取一次、單檔 `advisory_only` 三態解析、`advisory_core_levels` 通知頻道與 `advisory_exit_` 去重鍵
+  - `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_advisory_levels_embed()`
+  - `nexus_core/tests/unit/test_advisory_mode.py`：顧問模式不變式、轉換規則、三態解析、派發回歸測試

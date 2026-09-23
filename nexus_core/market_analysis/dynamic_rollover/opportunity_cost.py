@@ -15,6 +15,7 @@ from market_analysis.room_threshold import (
 )
 
 from . import logger
+from .advisory_mode import is_advisory_asset
 from ._shared import (
     format_cash_impact,
     format_illiquidity_warning,
@@ -1520,6 +1521,10 @@ class _OpportunityCostMixin:
         for asset in portfolio_assets:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "SATELLITE":
+                continue
+            # 顧問模式 (B&H) 持倉不作為「賣 A 買 B」的賣出端：轉倉換股與其
+            # 策略直接衝突，只告知位階（見 advisory_mode.py）。
+            if is_advisory_asset(asset):
                 continue
             instrument_class = str(
                 asset.get("instrument_type", asset.get("asset_type", "SPOT"))

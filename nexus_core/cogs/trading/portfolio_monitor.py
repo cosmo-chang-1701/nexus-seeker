@@ -35,6 +35,7 @@ from cogs.embed_builder import (
     create_option_defense_alert_embed,
 )
 from cogs.embed_builders.rollover_embeds import (
+    create_advisory_levels_embed,
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
@@ -699,6 +700,27 @@ class PortfolioMonitorCog(commands.Cog):
                         sym, radar_cache_map.get(sym)
                     )
 
+                # 顧問模式 (B&H)：帳戶層 portfolio_mode 每位使用者只讀一次
+                # (不在持倉迴圈內逐檔讀 DB)，讀取失敗一律視為 COMMAND (現行行為)。
+                portfolio_mode_by_user: Dict[int, str] = {}
+
+                async def _portfolio_mode_for(uid: int) -> str:
+                    if uid not in portfolio_mode_by_user:
+                        try:
+                            ctx = await asyncio.to_thread(
+                                database.get_full_user_context, uid
+                            )
+                            portfolio_mode_by_user[uid] = str(
+                                getattr(ctx, "portfolio_mode", "COMMAND")
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[AdvisoryMode] 讀取 portfolio_mode 失敗 (UID: {uid})，"
+                                f"視為 COMMAND: {e}"
+                            )
+                            portfolio_mode_by_user[uid] = "COMMAND"
+                    return portfolio_mode_by_user[uid]
+
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
@@ -786,6 +808,17 @@ class PortfolioMonitorCog(commands.Cog):
                         asset_entry["target_allocation_pct"] = h.get(
                             "target_allocation_pct"
                         )
+                    # 顧問模式三態解析：單檔 advisory_only (None=跟隨帳戶、
+                    # True=顧問、False=指令)。⚠️ 不可用 `or` (會吃掉顯式 False)。
+                    # 僅為 True 時才寫入 key，預設 (COMMAND、未覆寫) 下 asset_entry
+                    # 與改動前逐位元相同；比較一律用 == "ADVISORY"。
+                    per_holding_advisory = h.get("advisory_only")
+                    if per_holding_advisory is None:
+                        per_holding_advisory = (
+                            await _portfolio_mode_for(u_id)
+                        ) == "ADVISORY"
+                    if per_holding_advisory is True:
+                        asset_entry["advisory_only"] = True
                     user_assets.setdefault(u_id, []).append(asset_entry)
 
                 # 🚀 期權部位併入動態轉倉評估迴圈 (Feature Flag)。此機制與
@@ -1191,7 +1224,12 @@ class PortfolioMonitorCog(commands.Cog):
                         # 系統性保證金風控紅線警報一併關閉。
                         # SHORT_ENTRY 是進場訊號而非持倉防禦，走 Alpha 策略頻道；
                         # focus / mute_intraday 預設關閉該頻道，校準前較安全。
-                        if scenario == "MARGIN_DEFENSE":
+                        is_advisory_ins = ins.get("action") == "ADVISORY"
+                        if is_advisory_ins:
+                            # 顧問模式位階告知：獨立頻道，不受 defense_option_rollover
+                            # 開關牽動 (使用者可只關轉倉指令、保留位階告知)。
+                            notif_key = "advisory_core_levels"
+                        elif scenario == "MARGIN_DEFENSE":
                             notif_key = "defense_margin_call"
                         elif scenario == "SHORT_ENTRY":
                             notif_key = "alpha_market_signals"
@@ -1211,6 +1249,13 @@ class PortfolioMonitorCog(commands.Cog):
                             f"rollover_alert_{u_id}_{ins['symbol']}_"
                             f"{instrument_type}_{scenario}_{action}_{today_str}"
                         )
+                        if is_advisory_ins:
+                            # 以 exit_tier 為鍵：同日從 TP1 升級為 TP2、或由目標區
+                            # 轉為結構失效，都是新的位階事件，應再發一次。
+                            dedup_key = (
+                                f"advisory_exit_{u_id}_{ins['symbol']}_"
+                                f"{ins.get('exit_tier') or 'NA'}_{today_str}"
+                            )
                         if scenario == "COVERED_CALL_PROFIT_LOCK":
                             # 同一標的可能同時存在多筆不同履約價/到期日/類型的賣方
                             # 期權，通用 dedup_key 僅以 (symbol, action) 區分會讓
@@ -1237,7 +1282,7 @@ class PortfolioMonitorCog(commands.Cog):
                         # 有效數值時（例如 Scenario 2/4 尚未接上定價邏輯）才
                         # 退回 "Market" 泛用字串。
                         limit_price_val = ins.get("limit_price")
-                        if ins["action"] == "HOLD":
+                        if ins["action"] in ("HOLD", "ADVISORY"):
                             suggested_price = "N/A (維持現狀)"
                         elif scenario == "SHORT_ENTRY" and limit_price_val:
                             suggested_price = (
@@ -1249,7 +1294,17 @@ class PortfolioMonitorCog(commands.Cog):
                             suggested_price = "Market"
 
                         short_plan = ins.get("short_entry_plan")
-                        if scenario == "SHORT_ENTRY" and short_plan is not None:
+                        if is_advisory_ins:
+                            # 顧問模式位階告知：sell_ratio 恆 0.0，通用轉倉 embed 會
+                            # 渲染成「安全續抱」並附一鍵執行 View，語意矛盾，故獨立
+                            # 渲染且**不**設 _view。
+                            embed = create_advisory_levels_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                advisory_plan=ins.get("advisory_plan"),
+                                exit_tier=ins.get("exit_tier"),
+                            )
+                        elif scenario == "SHORT_ENTRY" and short_plan is not None:
                             # 做空進場訊號：沒有「賣出來源 → 買進目標」的轉倉框架，
                             # 通用 embed 會以 BTO/Buy Shares 渲染，方向完全相反；
                             # RolloverActionView 試算的是 BUY 股數，同樣不適用，
