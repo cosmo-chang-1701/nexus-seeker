@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 import database
+from services.notification_dispatcher import is_channel_enabled, notify
 from cogs.embed_builder import create_hedge_alert_embed
 from database.user_settings import get_full_user_context
 from services import market_data_service
@@ -177,10 +178,15 @@ class HedgeMonitorService:
         if abs(adj_delta) > 50:
             instr_text = "⚠️ [緊急對沖指令] " + instr_text
 
-        # 4. LLM Narration
-        narration = await self._generate_narration(
-            user_id, metrics.model_dump(), adj_delta, vix_level
-        )
+        # 4. LLM Narration —— 頻道關閉時不呼叫 LLM（推播不會送出，敘述無人閱讀）。
+        #    下方的 VTR 對沖紀錄與 hedge_alerts 仍照常寫入：它們餵給 Brinson 歸因，
+        #    不應因使用者靜音通知而出現缺口。
+        if await is_channel_enabled(user_id, "defense_macro_tail_risk"):
+            narration = await self._generate_narration(
+                user_id, metrics.model_dump(), adj_delta, vix_level
+            )
+        else:
+            narration = "（通知已關閉，未生成 AI 敘述）"
 
         # 5. Polymarket Snapshot mechanism
         poly_snapshot = None
@@ -239,10 +245,10 @@ class HedgeMonitorService:
         prompt = f"""
         當前市場 VIX 急升至 {vix:.2f}。
         用戶組合數據：
-        - 淨 Delta 曝險: {metrics['total_beta_delta']:.2f}
+        - 淨 Delta 曝險: {metrics["total_beta_delta"]:.2f}
         - 調整後 Delta (考慮 Vanna): {adj_delta:.2f}
-        - Vega 曝險: {metrics['total_vega']:.2f}
-        - Vanna 曝險: {metrics['total_vanna']:.2f}
+        - Vega 曝險: {metrics["total_vega"]:.2f}
+        - Vanna 曝險: {metrics["total_vanna"]:.2f}
 
         請以資深風險控管主管 (CRO) 的口吻，用繁體中文解釋為什麼需要對沖。
         說明 IV 上升對當前部位的具體威脅（特別是隱含 Delta 的擴張）。
@@ -308,9 +314,7 @@ class HedgeMonitorService:
         alert_id: Any,
         poly_snapshot: Any = None,
     ):
-        import database
-
-        if not database.is_notification_enabled(user_id, "defense_macro_tail_risk"):
+        if not await is_channel_enabled(user_id, "defense_macro_tail_risk"):
             logger.info(
                 f"使用者 {user_id} 已關閉 defense_macro_tail_risk，略過組合對沖警報。"
             )
@@ -331,4 +335,4 @@ class HedgeMonitorService:
             alert_id=alert_id,
             poly_snapshot=poly_snapshot,
         )
-        await self.bot.queue_dm(user_id, embed=embed)
+        await notify(self.bot, user_id, "defense_macro_tail_risk", embed=embed)

@@ -1,3 +1,4 @@
+import discord
 from typing import Any, Dict
 from models.execution import ExecutionDecision
 
@@ -48,7 +49,7 @@ def build_execution_embed(decision: ExecutionDecision) -> dict:
                 "name": "🕸️ [Grid Spacing]",
                 "value": (
                     f"基準價格：`${params.base_price:,.2f}`\n"
-                    f"動態步長：`{params.dynamic_step_percent*100:.2f}%`"
+                    f"動態步長：`{params.dynamic_step_percent * 100:.2f}%`"
                 ),
                 "inline": True,
             }
@@ -60,7 +61,7 @@ def build_execution_embed(decision: ExecutionDecision) -> dict:
             {
                 "name": "⚖️ [Position Sizing / Risk Caps]",
                 "value": (
-                    f"凱利建議：`{sizing.kelly_percentage*100:.2f}%`\n"
+                    f"凱利建議：`{sizing.kelly_percentage * 100:.2f}%`\n"
                     f"最大分配：`${sizing.max_capital_allocation:,.0f}`\n"
                     f"Theta 限制：`-${sizing.max_theta_exposure:,.2f}/日`"
                 ),
@@ -84,3 +85,13 @@ def build_execution_embed(decision: ExecutionDecision) -> dict:
         )
 
     return embed
+
+
+def build_execution_discord_embed(decision: ExecutionDecision) -> discord.Embed:
+    """`build_execution_embed()` 的 `discord.Embed` 版本，供私訊佇列使用。
+
+    `bot.queue_dm()` 需要 `discord.Embed`（會呼叫 `.to_dict()` 與拆分超長 embed）；
+    過去 NRO 掃描直接把 dict 傳進去，入列時拋出 AttributeError，被掃描外層的
+    try/except 吞掉，連帶中斷同一輪後續所有使用者的掃描推播。
+    """
+    return discord.Embed.from_dict(build_execution_embed(decision))

@@ -12,6 +12,7 @@ from datetime import datetime
 
 import database
 import market_time
+from services.notification_dispatcher import notify, notify_many
 
 logger = logging.getLogger(__name__)
 
@@ -164,8 +165,7 @@ async def dispatch_watchlist_heartbeat(
                 embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
                 if not isinstance(embeds, list):
                     embeds = [embeds]
-                for embed in embeds:
-                    await bot.queue_dm(uid, embed=embed)
+                await notify_many(bot, uid, "heartbeat_watchlist", embeds)
 
                 # --- Scenario Alert Logic ---
                 from market_analysis.scenario_classifier import (
@@ -266,23 +266,25 @@ async def dispatch_watchlist_heartbeat(
                         cache_key = (
                             f"scenario_alert_{uid}_{symbol}_{today_str}_{scenario.name}"
                         )
-                        if not await asyncio.to_thread(
-                            database.get_kv_cache, cache_key
-                        ):
-                            alert_embed = create_scenario_alert_embed(
-                                symbol=symbol,
-                                scenario=scenario,
-                                price=price,
-                                put_wall=put_wall,
-                                call_wall=call_wall,
-                                gamma_flip=gamma_flip,
-                                ivr=iv_rank,
-                                hvn=hvn,
-                                lvn=lvn,
-                                skew_percentile=skew_percentile,
-                            )
-                            await bot.queue_dm(uid, embed=alert_embed)
-                            await database.save_kv_cache(cache_key, True)
+                        alert_embed = create_scenario_alert_embed(
+                            symbol=symbol,
+                            scenario=scenario,
+                            price=price,
+                            put_wall=put_wall,
+                            call_wall=call_wall,
+                            gamma_flip=gamma_flip,
+                            ivr=iv_rank,
+                            hvn=hvn,
+                            lvn=lvn,
+                            skew_percentile=skew_percentile,
+                        )
+                        await notify(
+                            bot,
+                            uid,
+                            "heartbeat_watchlist",
+                            embed=alert_embed,
+                            dedup_key=cache_key,
+                        )
                 # ----------------------------
         except Exception as user_err:
             logger.error(

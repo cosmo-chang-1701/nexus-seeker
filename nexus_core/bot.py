@@ -615,18 +615,19 @@ class NexusBot(commands.Bot):
                 await asyncio.sleep(0.2)
 
     async def notify_all_users(self, message: Any):  # type: ignore
-        """一次將所有訊息排入背景寄發列隊 (優化為非阻塞)"""
+        """將機器人啟動 / 關閉廣播排入背景寄發列隊（受 system_lifecycle 頻道控制）"""
         if not self._is_leader_instance:
             return
         try:
             from database.user_settings import get_all_user_ids
+            from services.notification_dispatcher import notify
 
             user_ids = await asyncio.to_thread(get_all_user_ids)
 
             count = 0
             for user_id in user_ids:
-                await self.queue_dm(user_id, message=message)
-                count += 1
+                if await notify(self, user_id, "system_lifecycle", message=message):
+                    count += 1
             logger.info(f"已將啟動通知排入 {count} 位用戶的發送列隊。")
         except Exception as e:
             logger.error(f"通知所有用戶時出錯: {e}")

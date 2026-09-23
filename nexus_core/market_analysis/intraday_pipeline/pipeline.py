@@ -430,9 +430,16 @@ class IntradayScanPipeline:
                 create_gamma_squeeze_alert_embed,
             )
 
+            from services.notification_dispatcher import notify
+
             embed = create_gamma_squeeze_alert_embed(output)
-            await self.bot.queue_dm(user_id, embed=embed)
-            await database.save_kv_cache(cache_key, True)
+            await notify(
+                self.bot,
+                user_id,
+                "alpha_market_signals",
+                embed=embed,
+                dedup_key=cache_key,
+            )
         except Exception as e:
             logger.warning(
                 f"[{ticker}] Gamma Squeeze SPEAR 警報派發失敗 (uid={user_id}): {e}"
@@ -593,8 +600,15 @@ class IntradayScanPipeline:
                 target=advice.target,
                 rr_ratio=advice.rr_ratio,
             )
-            await self.bot.queue_dm(user_id, embed=embed)
-            await database.save_kv_cache(cache_key, True)
+            from services.notification_dispatcher import notify
+
+            await notify(
+                self.bot,
+                user_id,
+                "advisory_entry_signal",
+                embed=embed,
+                dedup_key=cache_key,
+            )
         except Exception as e:
             logger.warning(f"[{ticker}] 進場顧問派發失敗 (uid={user_id}): {e}")
 
@@ -725,11 +739,13 @@ class IntradayScanPipeline:
                                 # 這條深度心跳有自己的通知通道，與 15 分鐘批次
                                 # 雷達 (cogs/trading/heartbeat.py 的
                                 # heartbeat_watchlist) 分開控制。
-                                hb_enabled = database.is_notification_enabled(
-                                    uid, "heartbeat_symbol_deep"
-                                )
+                                # 一次讀取整份設定（走每使用者快取），不再對同一個
+                                # 開關各讀一次 is_notification_enabled 與完整 dict
                                 notif_settings = (
                                     database.get_user_notification_settings(uid)
+                                )
+                                hb_enabled = notif_settings.get(
+                                    "heartbeat_symbol_deep", True
                                 )
 
                                 if hb_enabled:
@@ -740,8 +756,14 @@ class IntradayScanPipeline:
                                         deployed_tactical_value=user_tactical_exposure,
                                     )
                                     if embed is not None:
-                                        await self.bot.queue_dm(
+                                        from services.notification_dispatcher import (
+                                            notify,
+                                        )
+
+                                        await notify(
+                                            self.bot,
                                             uid,
+                                            "heartbeat_symbol_deep",
                                             embed=embed,
                                         )
                                 else:

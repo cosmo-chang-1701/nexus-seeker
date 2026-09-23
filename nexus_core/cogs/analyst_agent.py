@@ -3,7 +3,6 @@
 Business logic for each report domain lives in the runner sub-modules under
 ``market_analysis/analyst_runners/``.  This cog owns:
   - Task loop scheduling (pre-market, intraday, post-market)
-  - dispatch_report  : generic multi-user embed broadcast
   - dispatch_pre_market_briefing : orchestrates macro + earnings embed delivery
   - dispatch_post_market_intelligence : orchestrates sector + LLM post-market delivery
 """
@@ -25,7 +24,7 @@ from market_time import (
     get_sleep_seconds,
 )
 from services.llm_service import generate_analyst_report, is_memory_safe
-from cogs.embed_builder import split_embed_by_fields
+from services.notification_dispatcher import notify, notify_many
 
 # ── Runner sub-modules ────────────────────────────────────────────────────────
 from market_analysis.analyst_runners import macro_runner
@@ -78,7 +77,7 @@ class AnalystAgent(commands.Cog):
             target = get_next_market_target_time("open", offset_minutes=-30)
             sleep_secs = get_sleep_seconds(target)
             logger.info(
-                f"🤖 [Analyst Pre-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)"
+                f"🤖 [Analyst Pre-Market] 下次執行時間: {target} (倒數 {sleep_secs / 3600:.2f} 小時)"
             )
             await asyncio.sleep(sleep_secs)
 
@@ -103,7 +102,7 @@ class AnalystAgent(commands.Cog):
             target = get_next_market_target_time("close", offset_minutes=15)
             sleep_secs = get_sleep_seconds(target)
             logger.info(
-                f"🤖 [Analyst Post-Market] 下次執行時間: {target} (倒數 {sleep_secs/3600:.2f} 小時)"
+                f"🤖 [Analyst Post-Market] 下次執行時間: {target} (倒數 {sleep_secs / 3600:.2f} 小時)"
             )
             await asyncio.sleep(sleep_secs)
 
@@ -119,33 +118,6 @@ class AnalystAgent(commands.Cog):
                 logger.error(f"Analyst Post-Market loop error: {e}")
 
             await asyncio.sleep(60)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # Generic broadcast
-    # ──────────────────────────────────────────────────────────────────────────
-
-    async def dispatch_report(
-        self, report_content: discord.Embed, notification_key: str | None = None
-    ) -> Any:
-        """Broadcast an embed to all users who have the given notification key enabled."""
-        report_embeds = split_embed_by_fields(report_content)
-        user_ids = database.get_all_user_ids()
-        dispatched_count = 0
-        for uid in user_ids:
-            if notification_key and not database.is_notification_enabled(
-                uid, notification_key
-            ):
-                logger.info(
-                    f"使用者 {uid} 已關閉 {notification_key} 訂閱，略過本次推送。"
-                )
-                continue
-            try:
-                for embed in report_embeds:
-                    await self.bot.queue_dm(uid, embed=embed)
-                    dispatched_count += 1
-            except Exception as e:
-                logger.error(f"Failed to dispatch report to {uid}: {e}")
-        logger.info(f"Dispatched report to {dispatched_count} users.")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Pre-market briefing
@@ -216,13 +188,13 @@ class AnalystAgent(commands.Cog):
                 scanned_symbols=u_data["scanned_symbols"],
                 warning_days=warning_days,
             )
-            await self.bot.queue_dm(uid, embed=embed)
+            await notify(self.bot, uid, "briefing_pre_market", embed=embed)
 
             # FOMC 逃頂窗口
             try:
                 fomc_embed = await self.run_fomc_escape_window_analysis(uid)
                 if fomc_embed:
-                    await self.bot.queue_dm(uid, embed=fomc_embed)
+                    await notify(self.bot, uid, "briefing_pre_market", embed=fomc_embed)
             except Exception as e:
                 logger.error(f"推送宏觀逃頂窗口 Embed 失敗: {e}")
 
@@ -348,8 +320,7 @@ class AnalystAgent(commands.Cog):
                 sectors_data=sector_rotation_data["sectors"],
                 ai_commentary=ai_commentary,
             )
-            for emb in embeds:
-                await self.bot.queue_dm(uid, embed=emb)
+            await notify_many(self.bot, uid, "briefing_post_market", embeds)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Runner wrappers — thin delegates to runner sub-modules

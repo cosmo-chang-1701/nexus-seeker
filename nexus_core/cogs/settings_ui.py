@@ -1,9 +1,10 @@
 import asyncio
-from typing import Any, Dict
+from typing import Any
 import discord
 import logging
 
 import database
+from database.notification_channels import TRADING_MODULES as TRADING_MODULES
 from cogs.embed_builder import (
     create_error_embed,
     create_info_embed,
@@ -14,60 +15,10 @@ from cogs.embed_builder import (
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# 🔔 使用者自訂通知開關 UI (Notification Toggles UI)
-# ============================================================================
-
-# ============================================================================
 # 🔔 使用者自訂通知開關 UI (4 大戰術維度中控台)
 # ============================================================================
-
-TRADING_MODULES: Dict[str, Dict[str, Any]] = {
-    "briefings": {
-        "title": "📋 定時戰報與覆盤",
-        "description": "每日盤前宏觀自選、盤後 AI 深度覆盤與週五 VTR 績效週報。",
-        "items": {
-            "briefing_pre_market": "🌅 盤前綜合戰報 (09:00 ET)",
-            "briefing_post_market": "📋 盤後 AI 深度覆盤 (16:15 ET)",
-            "briefing_weekly_vtr": "📈 虛擬交易室 (VTR) 績效週報 (週五 17:05 ET)",
-        },
-    },
-    "telemetry": {
-        "title": "📡 盤中自選與掛單遙測",
-        "description": "盤中主動推送自選股量化雷達、個股深度心跳與掛單對齊。",
-        "items": {
-            # 兩則心跳是獨立的推播路徑、頻率也不同，因此各自一個開關：
-            # heartbeat_watchlist 走 cogs/trading/heartbeat.py 的 :00/:15/:30/:45
-            # 批次雷達；heartbeat_symbol_deep 走 IntradayScanPipeline 的 30 分鐘
-            # 單標的深度快照。過去共用一個 key，標籤還誤寫成 30 分鐘。
-            "heartbeat_watchlist": "📡 自選股 15 分鐘批次量化雷達 (整批標的掃描總覽)",
-            "heartbeat_symbol_deep": "🧱 個股 30 分鐘深度戰場心跳 (含微觀結構、Skew 與 UOA 巨鯨)",
-            "telemetry_orders": "🌌 待成交掛單實時對齊與撤退線",
-            "advisory_entry_signal": "🎯 自選標的進場顧問 (六重鐵律通過時推播進場價 / 停損 / 目標)",
-        },
-    },
-    "defense": {
-        "title": "🛡️ 持倉風控與極端防禦",
-        "description": "即時監控持倉負 Gamma、DITM 獲利鎖定、動態轉倉與黑天鵝。",
-        "items": {
-            "defense_portfolio_risk": "🆘 持倉負 Gamma 斷層、DITM 獲利鎖定與保證金警戒",
-            "defense_option_rollover": "🔄 動態轉倉、套牢股票備兌解套與衛星再平衡",
-            "defense_margin_call": "🚨 槓桿與保證金強制平倉警報 (帳戶生存等級)",
-            "defense_fundamental_thesis": "📜 SEC 財報自動掃描與護城河破滅警報 (B&H 持倉的主要出場訊號，建議保持開啟)",
-            "defense_macro_tail_risk": "🦇 VIX 期限結構倒掛 (VTS >= 1.0) 與重大事件防護",
-            "advisory_core_levels": "🧭 B&H 持倉位階顧問 (僅告知目標區與結構失效，不建議減碼)",
-        },
-    },
-    "alpha": {
-        "title": "🎯 Alpha 策略與情報",
-        "description": "即時捕捉 Nexus 量化 Alpha 機會、Polymarket 巨鯨與原油異動。",
-        "items": {
-            "alpha_market_signals": "✨ Nexus 戴維斯雙擊 (DDP) 與波動率優勢 (廉價期權)",
-            "alpha_polymarket": "🐳 Polymarket 巨鯨異動與預測機率突變 (Delta 閃崩/暴拉)",
-            "alpha_wti_oil": "🛢️ WTI 原油價格警報 (閾值突破與劇烈波動)",
-            "alpha_price_volume_watch": "📊 個股 15 分鐘價量突破警報 (自訂目標價與放量倍數)",
-        },
-    },
-}
+# 模組分組與標籤由 database/notification_channels.py 的註冊表衍生（單一真實來源），
+# TRADING_MODULES 由此重新匯出以相容既有呼叫者。
 
 
 class NotificationSettingsView(discord.ui.View):

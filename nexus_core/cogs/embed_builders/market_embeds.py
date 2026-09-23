@@ -374,17 +374,11 @@ def build_radar_scan_embed(
     建構持倉/掛單/期權標的的批次掃描量化與情緒彙總 Embed 列表。
     為防止 Discord embed description 超過 4096 個字元限制，每頁最多顯示 10 個標的。
     """
-    try:
-        from database.notifications import get_user_notification_settings
-
-        settings = get_user_notification_settings(user_id)
-    except Exception:
-        settings = {}
-
-    show_macro = settings.get("defense_macro_tail_risk", True)
-    show_alpha = settings.get("alpha_market_signals", True)
-    show_defense = settings.get("defense_portfolio_risk", True)
-
+    # 通知頻道只決定「推不推」，不決定「雷達內容顯示什麼」。過去這裡依
+    # defense_macro_tail_risk / alpha_market_signals / defense_portfolio_risk 三個開關
+    # 以 emoji 子字串刪減洞察行（例如任何含 🚨 的行都會被刪），使用者關掉某類推播後
+    # 雷達內容也被靜默閹割，且 slash command 的手動掃描同樣受影響。雷達的推播與否
+    # 由呼叫端以 heartbeat_watchlist 頻道控制。
     title_map = {
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
         "ORDERS": "待成交掛單批次量化雷達 (Pending Orders)",
@@ -429,14 +423,10 @@ def build_radar_scan_embed(
         # 讀取全域快取指標 (TED Spread & GEX Flip)
         macro_ansi_header = []
         try:
-            if show_macro:
-                from database.cache import get_kv_cache
+            from database.cache import get_kv_cache
 
-                gex_flip = get_kv_cache("macro_spy_gamma_flip")
-                ted_spread = get_kv_cache("macro_ted_spread")
-            else:
-                gex_flip = None
-                ted_spread = None
+            gex_flip = get_kv_cache("macro_spy_gamma_flip")
+            ted_spread = get_kv_cache("macro_ted_spread")
 
             if gex_flip is not None or ted_spread is not None:
                 gex_val = None
@@ -1454,25 +1444,6 @@ def build_radar_scan_embed(
             md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
-
-        if not show_alpha:
-            insights = [
-                msg
-                for msg in insights
-                if "🚀" not in msg
-                and "✨" not in msg
-                and "⏱️" not in msg
-                and "UOA" not in msg
-            ]
-        if not show_defense:
-            insights = [
-                msg
-                for msg in insights
-                if "🚨" not in msg
-                and "🛡️" not in msg
-                and "⚠️" not in msg
-                and "🆘" not in msg
-            ]
 
         safe_insights: List[str] = []
         cur_insights_len = 0

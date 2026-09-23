@@ -77,15 +77,18 @@ def mock_vwap_and_confirmed_bar() -> Any:
 
     函式（非 session）作用域的理由與上方 `mock_fetch_symbol_gex_metrics`
     相同：確保任何模組需要以同名 fixture 覆寫時真正生效。"""
-    with patch(
-        "market_analysis.vwap_utils.fetch_session_vwap",
-        new_callable=AsyncMock,
-        return_value=0.0,
-    ) as mock_vwap, patch(
-        "market_analysis.price_volume_alert.get_confirmed_15m_bar",
-        new_callable=AsyncMock,
-        return_value=None,
-    ) as mock_bar:
+    with (
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=0.0,
+        ) as mock_vwap,
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+            return_value=None,
+        ) as mock_bar,
+    ):
         yield mock_vwap, mock_bar
 
 
@@ -145,6 +148,15 @@ def clean_db(db_conn: Any):  # type: ignore
     except Exception:
         pass
 
+    # 通知設定快取是模組層級狀態；測試會以 db_conn 直接寫入 / 清空資料表，
+    # 必須同步清除，否則前一個測試的設定會殘留在快取中
+    try:
+        from database.notifications import clear_notification_settings_cache
+
+        clear_notification_settings_cache()
+    except Exception:
+        pass
+
     # 前向蒐集記錄器是模組層級緩衝區，避免跨測試殘留
     try:
         from market_analysis.evaluation_recorder import clear_buffer
@@ -188,11 +200,12 @@ def mock_interaction() -> Any:
 
 @pytest.fixture
 def mock_market_data() -> Any:
-    with patch(
-        "services.market_data_service.get_quote", autospec=True
-    ) as mock_price, patch(
-        "services.market_data_service.get_history_df", autospec=True
-    ) as mock_hist:
+    with (
+        patch("services.market_data_service.get_quote", autospec=True) as mock_price,
+        patch(
+            "services.market_data_service.get_history_df", autospec=True
+        ) as mock_hist,
+    ):
         mock_price.return_value = {"c": 150.0}
         yield mock_price, mock_hist
 

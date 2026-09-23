@@ -341,7 +341,11 @@ class SchedulerCog(commands.Cog):
                             vix=vix_val,
                             trigger_reason=trigger_reason,
                         )
-                        await self.bot.queue_dm(uid, embed=embed)
+                        from services.notification_dispatcher import notify
+
+                        await notify(
+                            self.bot, uid, "defense_macro_tail_risk", embed=embed
+                        )
                         await database.save_kv_cache(cooldown_key, 1)
                         logger.warning(
                             f"🦇 [黑天鵝/尾部風險警報已發送] 使用者: {uid}, 原因: {trigger_reason}"

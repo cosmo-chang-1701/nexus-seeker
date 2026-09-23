@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 from discord.ext import commands
 
 import database
+from services.notification_dispatcher import is_channel_enabled, notify, notify_many
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert
 from cogs.embed_builder import (
@@ -71,6 +72,10 @@ class MarketScanCog(commands.Cog):
             if not is_auto and triggered_by:
                 await triggered_by.send("🔍 **開始掃描標的...**")
 
+            # 自動掃描每日每標的只推一次：DDP 由季度財報驅動、IV 優勢在盤中也鮮少
+            # 翻轉，過去條件成立期間每 15 分鐘重發同一則 embed。管理員強制掃描不去重。
+            today_str = datetime.now(ny_tz).strftime("%Y%m%d")
+
             # 🚀 1. 執行 DDP 掃描 (Davis Double Play)
             all_watchlists = database.get_all_watchlist()
             symbols_all = sorted(list(set(row[1] for row in all_watchlists)))
@@ -84,7 +89,7 @@ class MarketScanCog(commands.Cog):
 
                     for uid, watch_sym, _ in all_watchlists:
                         if watch_sym == sym:
-                            if not database.is_notification_enabled(
+                            if not await is_channel_enabled(
                                 uid, "alpha_market_signals"
                             ):
                                 continue
@@ -92,14 +97,25 @@ class MarketScanCog(commands.Cog):
                             if await self._should_send_alert(
                                 uid, sym, ctx.option_alert_mode
                             ):
-                                await self.bot.queue_dm(uid, embed=embed)
+                                await notify(
+                                    self.bot,
+                                    uid,
+                                    "alpha_market_signals",
+                                    embed=embed,
+                                    dedup_key=(
+                                        f"ddp_alert_{uid}_{sym}_{today_str}"
+                                        if is_auto
+                                        else None
+                                    ),
+                                )
 
                     await self.trading_service.ddp_inspector.record_signal(report)
 
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
             for uid in uids:
-                if not database.is_notification_enabled(uid, "alpha_market_signals"):
+                # 先查開關再掃描：IV 掃描本身要抓期權鏈，關閉的使用者不必付這個成本
+                if not await is_channel_enabled(uid, "alpha_market_signals"):
                     continue
                 user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
@@ -113,7 +129,18 @@ class MarketScanCog(commands.Cog):
                         from cogs.embed_builder import create_volatility_embed
 
                         embed = create_volatility_embed(report)
-                        await self.bot.queue_dm(uid, embed=embed)
+                        strategy = report.get("strategy", "IV")
+                        await notify(
+                            self.bot,
+                            uid,
+                            "alpha_market_signals",
+                            embed=embed,
+                            dedup_key=(
+                                f"iv_alert_{uid}_{report['symbol']}_{strategy}_{today_str}"
+                                if is_auto
+                                else None
+                            ),
+                        )
 
             # 🚀 3. 執行標準 NRO 掃描
             user_results = await self.trading_service.run_market_scan(
@@ -183,11 +210,14 @@ class MarketScanCog(commands.Cog):
                             exec_decision = data.get("execution_decision")
                             if exec_decision:
                                 from formatters.execution_embeds import (
-                                    build_execution_embed,
+                                    build_execution_discord_embed,
                                 )
 
-                                await self.bot.queue_dm(
-                                    uid, embed=build_execution_embed(exec_decision)
+                                await notify(
+                                    self.bot,
+                                    uid,
+                                    "alpha_option_scan",
+                                    embed=build_execution_discord_embed(exec_decision),
                                 )
 
                         if is_auto:
@@ -203,32 +233,37 @@ class MarketScanCog(commands.Cog):
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
 
-                if valid_alerts:
+                if valid_alerts and await is_channel_enabled(uid, "alpha_option_scan"):
                     title = (
                         "📡 **【盤中動態掃描】NRO 風控已介入判定：**"
                         if is_auto
                         else "⚡ **【管理員強制掃描】風險模擬結果：**"
                     )
-                    await self.bot.queue_dm(
-                        uid,
-                        embed=create_info_embed(title="掃描通知", message=title),
-                    )
+                    scan_embeds = [create_info_embed(title="掃描通知", message=title)]
                     user_capital = user_context.capital
                     for data in valid_alerts:
-                        if data.get("alert_type") == "PSQ":
-                            from cogs.embed_builder import create_psq_embed
+                        # 單則組裝失敗只略過該則，不影響同批其他警報
+                        try:
+                            if data.get("alert_type") == "PSQ":
+                                from cogs.embed_builder import create_psq_embed
 
-                            await self.bot.queue_dm(uid, embed=create_psq_embed(data))
-                        else:
-                            await self.bot.queue_dm(
-                                uid, embed=create_scan_embed(data, user_capital)
-                            )
-
-                            rehedge_info = data.get("rehedge_info")
-                            if rehedge_info:
-                                await self.bot.queue_dm(
-                                    uid, embed=create_rehedge_embed(rehedge_info)
+                                scan_embeds.append(create_psq_embed(data))
+                            else:
+                                scan_embeds.append(
+                                    create_scan_embed(data, user_capital)
                                 )
+
+                                rehedge_info = data.get("rehedge_info")
+                                if rehedge_info:
+                                    scan_embeds.append(
+                                        create_rehedge_embed(rehedge_info)
+                                    )
+                        except Exception as build_err:
+                            logger.error(
+                                f"掃描警報 embed 組裝失敗 "
+                                f"(uid={uid}, symbol={data.get('symbol')}): {build_err}"
+                            )
+                    await notify_many(self.bot, uid, "alpha_option_scan", scan_embeds)
 
             self._update_macro_state(user_results)
 

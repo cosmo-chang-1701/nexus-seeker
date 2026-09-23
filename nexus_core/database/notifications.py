@@ -1,12 +1,19 @@
 from typing import Any
 import json
 import logging
+import threading
+import time
 from typing import List, Tuple, Optional
 
 from database.connection import (
     execute_write,
     execute_write_many,
     get_read_connection,
+)
+from database.notification_channels import (
+    ALL_NOTIFICATION_KEYS as ALL_NOTIFICATION_KEYS,
+    DEFAULT_NOTIFICATION_SETTINGS as DEFAULT_NOTIFICATION_SETTINGS,
+    PRESET_PROFILES as PRESET_PROFILES,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,38 +91,10 @@ def get_pending_count() -> int:
 
 
 # ============================================================================
-# 🔔 使用者自訂通知開關 (10 大戰術整合頻道)
+# 🔔 使用者自訂通知開關
 # ============================================================================
-
-ALL_NOTIFICATION_KEYS: list[str] = [
-    # 1. 📋 定時戰報與覆盤 (Scheduled Reports)
-    "briefing_pre_market",
-    "briefing_post_market",
-    "briefing_weekly_vtr",
-    # 2. 📡 盤中自選與掛單遙測 (Intraday Telemetry)
-    # heartbeat_watchlist  → 15 分鐘批次量化雷達 (cogs/trading/heartbeat.py)
-    # heartbeat_symbol_deep → 30 分鐘個股深度戰場心跳 (IntradayScanPipeline)
-    # 兩者是完全獨立的推播路徑，過去共用同一個 key、無法分別靜音。
-    "heartbeat_watchlist",
-    "heartbeat_symbol_deep",
-    "telemetry_orders",
-    # advisory_entry_signal → 自選標的進場顧問（獨立於上述兩則心跳的推播路徑，
-    # 六重鐵律通過時才推播進場價 / 停損 / 目標）
-    "advisory_entry_signal",
-    # 3. 🛡️ 持倉風控與防禦 (Portfolio & Risk Defense)
-    "defense_portfolio_risk",
-    "defense_option_rollover",
-    "defense_margin_call",
-    "defense_fundamental_thesis",
-    "defense_macro_tail_risk",
-    # advisory_core_levels → B&H 持倉位階顧問（僅告知目標區與結構失效，不建議減碼）
-    "advisory_core_levels",
-    # 4. 🎯 Alpha 策略與情報 (Alpha & Intelligence)
-    "alpha_market_signals",
-    "alpha_polymarket",
-    "alpha_wti_oil",
-    "alpha_price_volume_watch",
-]
+# 頻道定義（key、分組、標籤、預設值、預設情境）的單一真實來源是
+# database/notification_channels.py；以下名稱為相容既有呼叫者而重新匯出。
 
 # 舊版 Key 映射字典，確保向下相容
 LEGACY_KEY_ALIASES: dict[str, str] = {
@@ -148,64 +127,56 @@ LEGACY_KEY_ALIASES: dict[str, str] = {
     "radar_risk_defenses": "defense_portfolio_risk",
 }
 
-# 預設通知狀態：大多數維持預設開啟
-DEFAULT_NOTIFICATION_SETTINGS: dict[str, bool] = {
-    key: True for key in ALL_NOTIFICATION_KEYS
-}
 
-# 戰術預設情境設定檔 (Presets)
-PRESET_PROFILES: dict[str, dict[str, bool]] = {
-    "all_on": {key: True for key in ALL_NOTIFICATION_KEYS},
-    "all_off": {key: False for key in ALL_NOTIFICATION_KEYS},
-    "focus": {
-        "briefing_pre_market": True,
-        "briefing_post_market": True,
-        "briefing_weekly_vtr": True,
-        "heartbeat_watchlist": False,
-        "heartbeat_symbol_deep": False,
-        "telemetry_orders": True,
-        # 進場顧問只在六重鐵律通過時才推播，正是「精準交易」要的高信號訊號
-        "advisory_entry_signal": True,
-        "defense_portfolio_risk": True,
-        "defense_option_rollover": True,
-        # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
-        # 任何情境下皆不可靜音
-        "defense_margin_call": True,
-        "defense_fundamental_thesis": True,
-        "defense_macro_tail_risk": True,
-        "advisory_core_levels": True,
-        "alpha_market_signals": False,
-        # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於「Alpha 雜訊」
-        "alpha_polymarket": True,
-        "alpha_wti_oil": True,
-        "alpha_price_volume_watch": False,
-    },
-    "mute_intraday": {
-        "briefing_pre_market": True,
-        "briefing_post_market": True,
-        "briefing_weekly_vtr": True,
-        "heartbeat_watchlist": False,
-        "heartbeat_symbol_deep": False,
-        "telemetry_orders": False,
-        # 進場顧問屬盤中節奏的推播，盤中靜音模式下關閉
-        "advisory_entry_signal": False,
-        "defense_portfolio_risk": True,
-        "defense_option_rollover": False,
-        # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
-        # 任何情境下皆不可靜音
-        "defense_margin_call": True,
-        # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊
-        "defense_fundamental_thesis": True,
-        "defense_macro_tail_risk": True,
-        # 持倉位階顧問屬持倉防禦等級的資訊，不受盤中頻率影響，盤中靜音模式下維持開啟
-        "advisory_core_levels": True,
-        "alpha_market_signals": False,
-        # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於盤中雜訊
-        "alpha_polymarket": True,
-        "alpha_wti_oil": True,
-        "alpha_price_volume_watch": False,
-    },
-}
+# ---------------------------------------------------------------------------
+# 每使用者設定快取
+# ---------------------------------------------------------------------------
+# 推播熱路徑以「使用者 × 標的」為單位查詢開關（價量警報每個 watch、深度心跳每個
+# 非綠燈標的、動態轉倉每條指令），每次都開一條同步 SQLite 連線且跑在 event loop 上。
+# 同一位使用者的設定在一個排程週期內幾乎不會變，因此快取整份設定 dict：
+# - 本程序內的任何寫入（單項 / 全開全關 / 預設情境）都會立即失效該使用者的快取；
+# - TTL 只用來涵蓋「其他程序寫入」（藍綠部署期間兩個容器並存）這種罕見情形。
+_SETTINGS_CACHE_TTL_SECONDS = 60.0
+_settings_cache: dict[int, tuple[float, dict[str, bool]]] = {}
+_settings_cache_lock = threading.Lock()
+
+
+def clear_notification_settings_cache(user_id: Optional[int] = None) -> None:
+    """清除設定快取（`user_id` 為 None 時全部清除；測試與寫入路徑使用）。"""
+    with _settings_cache_lock:
+        if user_id is None:
+            _settings_cache.clear()
+        else:
+            _settings_cache.pop(user_id, None)
+
+
+def _cache_get(user_id: int) -> Optional[dict[str, bool]]:
+    with _settings_cache_lock:
+        hit = _settings_cache.get(user_id)
+        if hit is None:
+            return None
+        expires_at, settings = hit
+        if time.monotonic() >= expires_at:
+            _settings_cache.pop(user_id, None)
+            return None
+        return settings.copy()
+
+
+def _cache_put(user_id: int, settings: dict[str, bool]) -> None:
+    with _settings_cache_lock:
+        _settings_cache[user_id] = (
+            time.monotonic() + _SETTINGS_CACHE_TTL_SECONDS,
+            settings.copy(),
+        )
+
+
+def _merge_rows(rows: list[tuple[str, int]]) -> dict[str, bool]:
+    settings = DEFAULT_NOTIFICATION_SETTINGS.copy()
+    for raw_key, val in rows:
+        resolved = _resolve_key(raw_key)
+        if resolved in settings:
+            settings[resolved] = bool(val)
+    return settings
 
 
 _UPSERT_NOTIFICATION_SETTING_SQL = """
@@ -222,7 +193,9 @@ def _resolve_key(key: str) -> str:
 
 def get_user_notification_settings(user_id: int) -> dict[str, bool]:
     """獲取使用者的所有通知開啟狀態（預設由 DEFAULT_NOTIFICATION_SETTINGS 決定）"""
-    settings = DEFAULT_NOTIFICATION_SETTINGS.copy()
+    cached = _cache_get(user_id)
+    if cached is not None:
+        return cached
     conn = None
     try:
         conn = get_read_connection()
@@ -235,17 +208,61 @@ def get_user_notification_settings(user_id: int) -> dict[str, bool]:
         """,
             (user_id,),
         )
-        rows = cursor.fetchall()
-        for raw_key, val in rows:
-            resolved = _resolve_key(raw_key)
-            if resolved in settings:
-                settings[resolved] = bool(val)
+        settings = _merge_rows(cursor.fetchall())
     except Exception as e:
         logger.error(f"讀取使用者通知設定失敗 (UID: {user_id}): {e}")
+        # 讀取失敗不寫入快取，下次仍會重試
+        return DEFAULT_NOTIFICATION_SETTINGS.copy()
     finally:
         if conn:
             conn.close()
+    _cache_put(user_id, settings)
     return settings
+
+
+def get_notification_settings_many(user_ids: list[int]) -> dict[int, dict[str, bool]]:
+    """以單一連線、單一 `IN (...)` 查詢取齊多位使用者的通知設定並填入快取。
+
+    供每輪排程開頭預熱使用，取代迴圈內逐一開連線（比照 `cache.get_kv_cache_many()`）。
+    """
+    result: dict[int, dict[str, bool]] = {}
+    missing: list[int] = []
+    for uid in dict.fromkeys(user_ids):
+        cached = _cache_get(uid)
+        if cached is not None:
+            result[uid] = cached
+        else:
+            missing.append(uid)
+    if not missing:
+        return result
+    conn = None
+    try:
+        conn = get_read_connection()
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in missing)
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        cursor.execute(
+            "SELECT user_id, notification_key, enabled "
+            "FROM user_notification_settings "
+            f"WHERE user_id IN ({placeholders})",
+            missing,
+        )
+        rows_by_user: dict[int, list[tuple[str, int]]] = {uid: [] for uid in missing}
+        for uid, key, val in cursor.fetchall():
+            rows_by_user.setdefault(uid, []).append((key, val))
+    except Exception as e:
+        logger.error(f"批次讀取通知設定失敗: {e}")
+        for uid in missing:
+            result[uid] = DEFAULT_NOTIFICATION_SETTINGS.copy()
+        return result
+    finally:
+        if conn:
+            conn.close()
+    for uid in missing:
+        settings = _merge_rows(rows_by_user.get(uid, []))
+        _cache_put(uid, settings)
+        result[uid] = settings
+    return result
 
 
 def set_user_notification_setting(user_id: int, key: str, enabled: bool) -> Any:
@@ -263,6 +280,9 @@ def set_user_notification_setting(user_id: int, key: str, enabled: bool) -> Any:
         logger.error(
             f"儲存使用者通知設定失敗 (UID: {user_id}, Key: {resolved_key}): {e}"
         )
+    finally:
+        # 寫入完成後才失效：若在寫入前失效，期間的讀取會把舊值重新快取
+        clear_notification_settings_cache(user_id)
 
 
 def set_all_user_notification_settings(user_id: int, enabled: bool) -> Any:
@@ -282,6 +302,8 @@ def set_all_user_notification_settings(user_id: int, enabled: bool) -> Any:
         )
     except Exception as e:
         logger.error(f"一鍵更新所有通知設定失敗 (UID: {user_id}): {e}")
+    finally:
+        clear_notification_settings_cache(user_id)
 
 
 def apply_preset_settings(user_id: int, preset_name: str) -> dict[str, bool]:
@@ -305,31 +327,16 @@ def apply_preset_settings(user_id: int, preset_name: str) -> dict[str, bool]:
         )
     except Exception as e:
         logger.error(f"套用預設模式 {preset_name} 失敗 (UID: {user_id}): {e}")
+    finally:
+        clear_notification_settings_cache(user_id)
     return get_user_notification_settings(user_id)
 
 
 def is_notification_enabled(user_id: int, key: str) -> bool:
-    """快速檢查特定通知是否開啟（自動支援舊 key 別名重定向）"""
+    """快速檢查特定通知是否開啟（自動支援舊 key 別名重定向；讀取走每使用者快取）"""
     resolved_key = _resolve_key(key)
     if resolved_key not in ALL_NOTIFICATION_KEYS:
         return True
-    conn = None
-    try:
-        conn = get_read_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT enabled FROM user_notification_settings
-            WHERE user_id = ? AND notification_key = ?
-        """,
-            (user_id, resolved_key),
-        )
-        row = cursor.fetchone()
-        if row is not None:
-            return bool(row[0])
-    except Exception as e:
-        logger.error(f"檢查通知狀態失敗 (UID: {user_id}, Key: {resolved_key}): {e}")
-    finally:
-        if conn:
-            conn.close()
-    return DEFAULT_NOTIFICATION_SETTINGS.get(resolved_key, True)
+    return get_user_notification_settings(user_id).get(
+        resolved_key, DEFAULT_NOTIFICATION_SETTINGS.get(resolved_key, True)
+    )
