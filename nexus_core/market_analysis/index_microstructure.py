@@ -693,6 +693,10 @@ def detect_uoa_sto_call_physical_cap(
             continue
         if "STO" not in str(entry.get("action", "")):
             continue
+        # 價差組合的賣出腿是價差的獲利上限，不是機構獨立封頂
+        # (uoa_telemetry.annotate_spread_structures)
+        if entry.get("spread_role") == "SHORT_LEG":
+            continue
         strike = float(entry.get("strike", 0.0) or 0.0)
         ratio = float(entry.get("ratio", 0.0) or 0.0)
         if strike > position_ref and ratio > ratio_threshold:

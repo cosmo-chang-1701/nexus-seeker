@@ -7,11 +7,35 @@ from datetime import date, datetime
 from typing import Dict, Any, List, Tuple
 import market_time
 from services import market_data_service
-from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
+from market_analysis.uoa_telemetry import (
+    UOATradeInput,
+    annotate_spread_structures,
+    classify_uoa_trade,
+)
+from services.bounded_cache import BoundedCache
 from market_analysis.greeks import calculate_greeks
 
 
 logger = logging.getLogger(__name__)
+
+# 合約首次被偵測為 UOA 時的現價錨點：{(symbol, expiry, strike, type, 美東日期):
+# (spot, "HH:MM")}。期權鏈的 volume 是全日累積量，同一筆大單會在每次 /x 或心跳
+# 被重新分類；若每次都拿**當下**現價判定價內外，股價大漲後原本的「價外投機」
+# 會被事後改寫成「價內吸籌」。以首次偵測當下的現價判定才符合下單時的真實語意。
+# 程序重啟即重置（重啟後以重啟當下為首次偵測），屬可接受的降級。
+_uoa_spot_anchor: BoundedCache = BoundedCache(max_size=2000)
+
+
+def _anchor_spot(
+    symbol: str, expiry: str, strike: float, opt_type: str, spot: float
+) -> tuple[float, str]:
+    now_ny = datetime.now(market_time.ny_tz)
+    key = (symbol, expiry, round(strike, 4), str(opt_type).upper(), now_ny.date())
+    anchored = _uoa_spot_anchor.get(key)
+    if anchored is None:
+        anchored = (spot, now_ny.strftime("%H:%M"))
+        _uoa_spot_anchor[key] = anchored
+    return anchored
 
 
 async def _fetch_and_combine_chains(
@@ -243,7 +267,22 @@ def _process_uoa_candidate_rows(
             symbol=symbol,
         )
 
-        result = classify_uoa_trade(trade_input, current_price=spot_price, delta=d_val)
+        anchor_spot, anchor_time = _anchor_spot(
+            symbol, exp, strike, opt_type, spot_price
+        )
+        class_delta = d_val
+        if anchor_spot != spot_price and iv_val > 0.02:
+            class_delta = calculate_greeks(
+                opt_type.lower(), anchor_spot, strike, t_years, iv_val, 0.0
+            ).get("delta", d_val)
+        result = classify_uoa_trade(
+            trade_input, current_price=anchor_spot, delta=class_delta
+        )
+        intent_text = result.intent
+        if spot_price > 0 and abs(anchor_spot - spot_price) / spot_price > 0.001:
+            intent_text += (
+                f"（價內外判定基準：首次偵測 {anchor_time} 現價 ${anchor_spot:.2f}）"
+            )
         paced_ratio = (
             result.ratio / trading_day_elapsed_fraction
             if trading_day_elapsed_fraction > 0
@@ -269,7 +308,8 @@ def _process_uoa_candidate_rows(
                 "bid_price": result.bid_price,
                 "ask_price": result.ask_price,
                 "action": result.action,
-                "intent": result.intent,
+                "intent": intent_text,
+                "classified_spot": anchor_spot,
                 "iv": round(iv_val, 4),
                 "trade_type": trade_type,
                 "oi_change_net": oi_change_net,
@@ -328,6 +368,8 @@ async def detect_uoa(
                 )
             )
 
+        # 價差配對必須在截斷前五大之前做，否則另一腿可能已被截掉
+        annotate_spread_structures(uoa_list)
         # 依權利金金額（名目價值）降序排列，取前 5 大，更能反映真實機構資金規模
         return sorted(uoa_list, key=lambda x: x["notional_value"], reverse=True)[:5]
 
@@ -447,6 +489,7 @@ async def detect_uoa_with_physical_caps(
                         }
                     )
 
+        annotate_spread_structures(uoa_list)
         top5_uoa_list = sorted(
             uoa_list, key=lambda x: x["notional_value"], reverse=True
         )[:5]

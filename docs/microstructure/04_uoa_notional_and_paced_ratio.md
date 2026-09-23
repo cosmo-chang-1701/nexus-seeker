@@ -122,6 +122,9 @@ flowchart TD
 | `min_fraction` | `0.05` ($5\%$) | 開盤時段進度正規化分母下限鉗制值（約開盤 20 分鐘） | `nexus_core/market_time.py` |
 | `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 右側進場條件四認可之主力最低名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD` | `$500,000.0` | SL-主力對沖單筆 PUT BTO 最低名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `UOA_ATM_BAND_PCT` | `0.025` ($2.5\%$) | 履約價距現價不足此比例一律判為平價 (ATM) 方向性博弈 | `nexus_core/market_analysis/uoa_telemetry.py` |
+| `UOA_DEEP_ITM_MIN_DELTA` | `0.80` | 「ITM 機構主力吸籌」要求的最低 $|\Delta|$；未達者為 `ITM_Directional` | `nexus_core/market_analysis/uoa_telemetry.py` |
+| `SPREAD_VOLUME_RATIO_TOL` | `0.25` | BTO／STO 兩腿成交量相差在 ±25% 內才配對為價差組合 | `nexus_core/market_analysis/uoa_telemetry.py` |
 
 ---
 
@@ -154,12 +157,21 @@ flowchart TD
    因此 `uoa_history` 繼承同一個截斷——它記錄的是「最顯著的機構活動」，
    不是完整的 UOA 全集。
 
+5. **意圖語義的四道防線**（`uoa_telemetry.py` / `uoa_detector.py`）：
+   - **價內外分級**：`check_uoa_moneyness()` 先以 `UOA_ATM_BAND_PCT` 劃出平價帶，再以 Delta 區分深價內吸籌與淺價內方向性押注。距現價 < 2.5% 的末日合約 Delta 約 0.4~0.65，是高槓桿方向性博弈，不是鎖定高 Delta 的吸籌。
+   - **STO 只有價外才是牆**：「物理封頂天花板／支撐地板」只適用於賣出**價外**合約；價內 STO CALL 是備兌鎖利或多方平倉，價內 STO PUT 是空方平倉，文案據實改寫。進場閘門 `detect_uoa_sto_call_physical_cap()` 原本就以 `strike > ref` 約束，行為不變。
+   - **價差配對**：`annotate_spread_structures()` 在截斷前 5 大**之前**，把同到期日、同類型、成交量 1:1（容差 `SPREAD_VOLUME_RATIO_TOL`，可由近而遠累加多腿）的 BTO／STO 腿標記為垂直價差或多腿組合。賣出腿標 `spread_role="SHORT_LEG"`，代表價差獲利上限，`detect_uoa_sto_call_physical_cap()` 不再把它計為物理封頂。
+   - **首次偵測現價錨點**：期權鏈的 volume 是全日累積量，同一筆大單會被反覆重新分類。`_uoa_spot_anchor`（`BoundedCache`，鍵含美東日期）記錄合約首次成為 UOA 時的現價，價內外一律以該錨點判定，避免股價大漲後把原本的價外投機「事後改寫」為價內吸籌；錨點與現價不同時意圖文案會註明判定基準。程序重啟即重置，屬可接受的降級。
+6. **無套利下界**：`sanitize_option_trade_price()` 剔除低於內含價值（容差 $\max(0.05, 0.5\%\times\text{內含})$）的 `lastPrice`——那是現價大幅移動之前的舊成交。先退回當下 bid/ask 中價（方向分類隨之歸為 MIDPOINT），中價也不合理則剔除該合約。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 15 分鐘心跳寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）
 - `nexus_core/database/migrations/v077_add_uoa_history.py`：`uoa_history` 資料表與去重索引定義
 - `nexus_core/market_time.py`：回看窗基準點 `get_trading_days_ago_utc()`（NYSE 行事曆，只計入已開盤的交易日）
 
+- `nexus_core/market_analysis/uoa_telemetry.py`：`check_uoa_moneyness()`、`classify_uoa_trade()`、`annotate_spread_structures()`
+- `nexus_core/market_analysis/intraday_consistency.py`：`sanitize_option_trade_price()`
 - `nexus_core/market_analysis/sentiment/uoa_detector.py`：
   - 候選列向量篩選：`_select_uoa_candidate_rows()`（第 85–107 行）
   - 核心處理與時段正規化：`_process_uoa_candidate_rows()`（第 109–282 行）
