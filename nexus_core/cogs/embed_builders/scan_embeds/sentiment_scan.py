@@ -64,12 +64,12 @@ def _format_uoa_field(uoa_data: list) -> str:
                 if opt_type.upper() == "CALL":
                     intent = (
                         f"🛡️ {symbol_tag}機構在 {strike_tag} 開倉賣出 {vol_tag} 口"
-                        f" CALL (OI={oi_tag})，物理封頂鎖死上方天花板"
+                        f" CALL (OI={oi_tag})，舊版快取缺少價內外資訊，無法判定是否構成天花板"
                     )
                 else:
                     intent = (
                         f"🛡️ {symbol_tag}機構在 {strike_tag} 開倉賣出 {vol_tag} 口"
-                        f" PUT (OI={oi_tag})，強力構築下行支撐地板"
+                        f" PUT (OI={oi_tag})，舊版快取缺少價內外資訊，無法判定是否構成地板"
                     )
             trade = UOATradeResult(
                 expiry=expiry,

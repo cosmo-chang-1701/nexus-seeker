@@ -67,17 +67,38 @@ def _pad_string(s: str, width: int, align: str = "left") -> str:
         return s + " " * pad_len
 
 
-def check_uoa_moneyness(is_call: bool, strike: float, current_price: float) -> str:
-    """精確判定 UOA 交易的內外值屬性"""
-    if is_call and strike > current_price:
+# 履約價距現價不足此比例一律視為平價 (ATM)：末日／週選在這個距離內的 Delta 約
+# 0.4~0.65，是高槓桿方向性博弈，不是鎖定高 Delta 的長線深價內吸籌。
+UOA_ATM_BAND_PCT = 0.025
+# 「深價內機構吸籌」要求的最低 |Delta|。
+UOA_DEEP_ITM_MIN_DELTA = 0.80
+
+
+def check_uoa_moneyness(
+    is_call: bool,
+    strike: float,
+    current_price: float,
+    delta: Optional[float] = None,
+) -> str:
+    """判定 UOA 合約的價內外屬性。
+
+    回傳值：
+      * ``ATM``：距現價 < UOA_ATM_BAND_PCT；
+      * ``OTM_Speculation``：價外；
+      * ``ITM_Whale_Accumulation``：深價內（|Δ| >= UOA_DEEP_ITM_MIN_DELTA；無 Delta
+        可用時沿用舊定義，凡價內且落在 ATM 帶外即屬之）；
+      * ``ITM_Directional``：價內但 |Δ| 未達深價內門檻——方向性押注，非吸籌。
+    """
+    if current_price <= 0 or strike == current_price:
+        return "ATM"
+    if abs(strike - current_price) / current_price < UOA_ATM_BAND_PCT:
+        return "ATM"
+    is_itm = strike < current_price if is_call else strike > current_price
+    if not is_itm:
         return "OTM_Speculation"
-    if is_call and strike < current_price:
-        return "ITM_Whale_Accumulation"
-    if not is_call and strike < current_price:
-        return "OTM_Speculation"
-    if not is_call and strike > current_price:
-        return "ITM_Whale_Accumulation"
-    return "ATM"
+    if delta is not None and delta != 0.0 and abs(delta) < UOA_DEEP_ITM_MIN_DELTA:
+        return "ITM_Directional"
+    return "ITM_Whale_Accumulation"
 
 
 def classify_uoa_trade(
@@ -141,7 +162,10 @@ def classify_uoa_trade(
     use_moneyness = current_price is not None and current_price > 0
     moneyness = "UNKNOWN"
     if use_moneyness and current_price is not None:
-        moneyness = check_uoa_moneyness(is_call, trade.strike_price, current_price)
+        moneyness = check_uoa_moneyness(
+            is_call, trade.strike_price, current_price, delta
+        )
+    delta_tag = f", Δ={delta:+.2f}" if delta is not None and delta != 0.0 else ""
 
     if action == "🟢 買入開倉 (BTO - Ask)":
         if is_call:
@@ -153,7 +177,17 @@ def classify_uoa_trade(
             elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
                 intent = (
                     f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 CALL "
-                    f"(DTE={dte}, OI={oi_str})，屬 ITM 機構主力吸籌建倉 (ITM_Whale_Accumulation)"
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ITM 機構主力吸籌建倉 (ITM_Whale_Accumulation)"
+                )
+            elif use_moneyness and moneyness == "ATM":
+                intent = (
+                    f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口平價 CALL "
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看漲博弈"
+                )
+            elif use_moneyness and moneyness == "ITM_Directional":
+                intent = (
+                    f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口淺價內 CALL "
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬方向性看漲買盤（Delta 未達深價內吸籌門檻）"
                 )
             else:
                 if dte <= 3:
@@ -175,7 +209,17 @@ def classify_uoa_trade(
             elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
                 intent = (
                     f"📉 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 PUT "
-                    f"(DTE={dte}, OI={oi_str})，屬 ITM 機構主力避險建倉 (ITM_Whale_Accumulation)"
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ITM 機構主力避險建倉 (ITM_Whale_Accumulation)"
+                )
+            elif use_moneyness and moneyness == "ATM":
+                intent = (
+                    f"⚠️ {ticker_tag}在 {strike_str} 買入 {volume_str} 口平價 PUT "
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看跌博弈"
+                )
+            elif use_moneyness and moneyness == "ITM_Directional":
+                intent = (
+                    f"📉 {ticker_tag}在 {strike_str} 買入 {volume_str} 口淺價內 PUT "
+                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬方向性看跌買盤（Delta 未達深價內門檻）"
                 )
             else:
                 if dte <= 3:
@@ -190,7 +234,36 @@ def classify_uoa_trade(
                     )
 
     elif action == "🔴 賣出開倉 (STO - Bid)":
-        if is_call:
+        # 「物理天花板／地板」只適用於價外賣單：在現價下方賣出價內 CALL 是備兌
+        # 鎖利或多頭平倉，不可能阻礙股價上漲；PUT 同理。
+        is_itm_sto = use_moneyness and moneyness in (
+            "ITM_Whale_Accumulation",
+            "ITM_Directional",
+        )
+        is_atm_sto = use_moneyness and moneyness == "ATM"
+        if is_call and is_itm_sto:
+            intent = (
+                f"🔒 {ticker_tag}在 {strike_str} 賣出 {volume_str} 口價內 CALL"
+                f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，屬現貨多頭備兌鎖利／多方平倉，"
+                "不構成上方天花板"
+            )
+        elif is_call and is_atm_sto:
+            intent = (
+                f"🛡️ {ticker_tag}在 {strike_str} 賣出 {volume_str} 口平價 CALL"
+                f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，短線壓制現價附近波動，非遠端封頂"
+            )
+        elif not is_call and is_itm_sto:
+            intent = (
+                f"🔓 {ticker_tag}在 {strike_str} 賣出 {volume_str} 口價內 PUT"
+                f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，屬空方平倉或合成部位，"
+                "不構成下方支撐地板"
+            )
+        elif not is_call and is_atm_sto:
+            intent = (
+                f"🛡️ {ticker_tag}在 {strike_str} 賣出 {volume_str} 口平價 PUT"
+                f" (DTE={dte}, OI={oi_str}, 佔比={ratio_str})，短線承接現價附近賣壓，非遠端地板"
+            )
+        elif is_call:
             if ratio >= 2.0:
                 intent = (
                     f"🛡️ {ticker_tag}機構在 {strike_str} 巨額開倉賣出 {volume_str} 口 CALL"
@@ -323,3 +396,125 @@ def generate_uoa_ascii_table(trades: List[UOATradeResult]) -> str:
     # 組合整張表格
     table_lines = [header_str, sep_line] + formatted_rows
     return "\n".join(table_lines)
+
+
+# 兩腿成交量相差在此比例內才視為同一組價差（1:1 配對）。
+SPREAD_VOLUME_RATIO_TOL = 0.25
+
+
+def _leg_volume(entry: dict) -> float:
+    try:
+        return float(entry.get("volume", 0) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _match_side(short_leg: dict, side: list[dict]) -> list[dict]:
+    """在單側 (履約價較低或較高) 找出與賣出腿 1:1 對應的買入腿。
+
+    先找成交量相當的單一腿（取最近履約價），找不到再由近而遠累加多腿，
+    例如賣出 $1100 CALL 5.4 萬口對應 $1070~$1080 三檔合計 5.7 萬口。
+    """
+    vs = _leg_volume(short_leg)
+    if vs <= 0 or not side:
+        return []
+    k = float(short_leg.get("strike", 0.0))
+    by_distance = sorted(side, key=lambda e: abs(float(e.get("strike", 0.0)) - k))
+    for leg in by_distance:
+        if abs(_leg_volume(leg) / vs - 1.0) <= SPREAD_VOLUME_RATIO_TOL:
+            return [leg]
+    # 由近而遠的前綴中，取成交量最接近 1:1 且落在容差內者
+    best: list[dict] = []
+    best_err = SPREAD_VOLUME_RATIO_TOL
+    total = 0.0
+    for i, leg in enumerate(by_distance):
+        total += _leg_volume(leg)
+        err = abs(total / vs - 1.0)
+        if err <= best_err:
+            best, best_err = by_distance[: i + 1], err
+        if total > vs * (1.0 + SPREAD_VOLUME_RATIO_TOL):
+            break
+    return best
+
+
+def _strikes_label(legs: list[dict]) -> str:
+    strikes = sorted(float(e.get("strike", 0.0)) for e in legs)
+    if len(strikes) == 1:
+        return f"${strikes[0]:g}"
+    return f"${strikes[0]:g}~${strikes[-1]:g}"
+
+
+def annotate_spread_structures(entries: list[dict]) -> None:
+    """把同到期日、同類型、成交量 1:1 對應的 BTO／STO 腿標記為價差組合（就地修改）。
+
+    逐合約分類會把「買 $1800C / 賣 $1850C」拆成一筆吸籌加一筆封頂，但兩腿合起來
+    是一張牛市價差：賣出腿代表價差的獲利上限（多方目標價），不是機構獨立封頂。
+    被配對的賣出腿標記 ``spread_role="SHORT_LEG"``，`detect_uoa_sto_call_physical_cap`
+    據此不再把它當成物理封頂。
+    """
+    groups: dict[tuple[str, str], list[dict]] = {}
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        key = (str(e.get("expiry", "")), str(e.get("type", "")).upper())
+        groups.setdefault(key, []).append(e)
+
+    for (_, opt_type), legs in groups.items():
+        is_call = opt_type == "CALL"
+        shorts = sorted(
+            (e for e in legs if "STO" in str(e.get("action", ""))),
+            key=_leg_volume,
+            reverse=True,
+        )
+        for short_leg in shorts:
+            longs = [
+                e
+                for e in legs
+                if "BTO" in str(e.get("action", "")) and not e.get("spread_role")
+            ]
+            k = float(short_leg.get("strike", 0.0))
+            below = _match_side(
+                short_leg, [e for e in longs if float(e.get("strike", 0.0)) < k]
+            )
+            above = _match_side(
+                short_leg, [e for e in longs if float(e.get("strike", 0.0)) > k]
+            )
+            if not below and not above:
+                continue
+
+            short_tag = f"${k:g}"
+            if below and above:
+                label = (
+                    f"多腿組合（買 {_strikes_label(below)}、{_strikes_label(above)}"
+                    f" ／賣 {short_tag} {opt_type}）"
+                )
+                matched = below + above
+            elif below:
+                # 買低賣高：CALL 為牛市借方價差；PUT 為牛市貸方價差
+                name = (
+                    "牛市價差 (Bull Call Spread)"
+                    if is_call
+                    else "牛市價差 (Bull Put Spread)"
+                )
+                label = f"{name} {_strikes_label(below)}/{short_tag}"
+                matched = below
+            else:
+                name = (
+                    "熊市價差 (Bear Call Spread)"
+                    if is_call
+                    else "熊市價差 (Bear Put Spread)"
+                )
+                label = f"{name} {short_tag}/{_strikes_label(above)}"
+                matched = above
+
+            short_leg["spread_role"] = "SHORT_LEG"
+            short_leg["spread_label"] = label
+            intent = str(short_leg.get("intent", ""))
+            head = intent.rsplit("，", 1)[0] if "，" in intent else intent
+            short_leg["intent"] = (
+                f"{head}，🔗 屬{label}的賣出腿，代表價差獲利上限而非機構獨立封頂"
+            )
+            for leg in matched:
+                leg["spread_role"] = "LONG_LEG"
+                leg["spread_label"] = label
+                leg["intent"] = f"{leg.get('intent', '')}｜🔗 屬{label}的買入腿"

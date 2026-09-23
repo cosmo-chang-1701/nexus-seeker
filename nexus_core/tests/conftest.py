@@ -204,3 +204,14 @@ def mock_llm() -> Any:
     ) as mock_report:
         mock_report.return_value = "Mocked LLM Report"
         yield mock_report
+
+
+@pytest.fixture(autouse=True)
+def reset_uoa_spot_anchor() -> Any:
+    """UOA 首次偵測現價錨點是模組層級快取；每個測試前後清空，避免前一個測試
+    的錨點（同標的／同合約、不同現價）改寫下一個測試的價內外判定。"""
+    from market_analysis.sentiment.uoa_detector import _uoa_spot_anchor
+
+    _uoa_spot_anchor.clear()
+    yield
+    _uoa_spot_anchor.clear()
