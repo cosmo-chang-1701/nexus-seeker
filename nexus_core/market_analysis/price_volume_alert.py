@@ -18,6 +18,7 @@ from typing import Optional
 
 import pandas as pd
 
+import config
 import market_time
 from database.price_volume_watch import WatchDirection
 from services import market_data_service
@@ -83,8 +84,84 @@ def trim_to_confirmed_15m_bars(
     return df_15m.iloc[: confirmed_pos + 1]
 
 
+def get_confirmed_15m_bar_from_stream(symbol: str) -> Optional[Confirmed15mBar]:
+    """由 Alpaca 串流取得最近一根已收盤的 15 分 K（IEX 成交量）；條件不足回傳 None。
+
+    只有當該時窗全程資料完整、且前面有 `_VOLUME_LOOKBACK_BARS` 根連續 15 分 K 時
+    才回傳（見 `services/alpaca_stream_service.py` 的 coverage 不變式）。
+    `bar_time` 轉為 tz-naive 美東時間，與 yfinance 路徑的語意一致。
+    """
+    try:
+        from services.alpaca_stream_service import get_stream_service
+
+        service = get_stream_service()
+        if service is None:
+            return None
+        result = service.get_confirmed_15m_bar(symbol, _VOLUME_LOOKBACK_BARS)
+    except Exception as e:
+        logger.warning(f"[{symbol}] Alpaca 串流 15m K 棒取得失敗: {e}")
+        return None
+    if result is None:
+        return None
+    bar, avg_volume = result
+    return Confirmed15mBar(
+        symbol=symbol,
+        bar_time=bar.start.astimezone(market_time.ny_tz).replace(tzinfo=None),
+        close=bar.close,
+        volume=bar.volume,
+        avg_volume=avg_volume,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+    )
+
+
+def _is_large_cap_stream_symbol(symbol: str) -> bool:
+    from services.alpaca_stream_service import to_stream_symbol
+
+    return to_stream_symbol(symbol) in config.ALPACA_LARGE_CAP_SYMBOLS
+
+
 async def get_confirmed_15m_bar(symbol: str) -> Optional[Confirmed15mBar]:
-    """抓取並回傳某標的最近一根已收盤的 15 分鐘 K 棒資料。
+    """回傳某標的最近一根已收盤的 15 分鐘 K 棒（資料來源分派）。
+
+    IEX 成交量只佔全市場 2~3%，對中小型股的放量倍數雜訊極大，會直接改變警報
+    觸發行為，因此：
+      * `ALPACA_PV_ALERT_LIVE=false`（預設，影子模式）：一律以 yfinance 判定；
+        串流也有結果時只記錄兩者差異，供上線前比對。
+      * `ALPACA_PV_ALERT_LIVE=true`：只有大型股白名單改用串流結果，其餘照舊。
+    串流沒有結果時一律退回 yfinance。
+    """
+    stream_bar = get_confirmed_15m_bar_from_stream(symbol)
+    if (
+        stream_bar is not None
+        and config.ALPACA_PV_ALERT_LIVE
+        and _is_large_cap_stream_symbol(symbol)
+    ):
+        return stream_bar
+
+    yf_bar = await _get_confirmed_15m_bar_yfinance(symbol)
+    if stream_bar is not None and yf_bar is not None:
+        _log_stream_shadow_diff(stream_bar, yf_bar)
+    return yf_bar
+
+
+def _log_stream_shadow_diff(
+    stream_bar: Confirmed15mBar, yf_bar: Confirmed15mBar
+) -> None:
+    def _ratio(b: Confirmed15mBar) -> float:
+        return b.volume / b.avg_volume if b.avg_volume > 0 else 0.0
+
+    logger.info(
+        f"📊 [價量影子比對] {yf_bar.symbol} "
+        f"yf=({yf_bar.bar_time:%m-%d %H:%M} C={yf_bar.close:.2f} x{_ratio(yf_bar):.2f}) "
+        f"stream=({stream_bar.bar_time:%m-%d %H:%M} C={stream_bar.close:.2f} "
+        f"x{_ratio(stream_bar):.2f})"
+    )
+
+
+async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mBar]:
+    """抓取並回傳某標的最近一根已收盤的 15 分鐘 K 棒資料（yfinance）。
 
     強制繞過 `get_history_df` 的 6 小時快取 (`force_refresh=True`)，因為
     15 分鐘週期的排程掃描若沿用該快取，會在 6 小時內重複拿到同一份

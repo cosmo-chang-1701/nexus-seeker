@@ -308,3 +308,4 @@ graph LR
 | [`platform/04_calendar_translation_engine.md`](platform/04_calendar_translation_engine.md) | 事件日曆共用閘道、150+ 總經事件中英對照與聯準會官員演講解析引擎 |
 | [`platform/05_embed_architecture_and_dm_queue.md`](platform/05_embed_architecture_and_dm_queue.md) | Embed 輸出集中化規範、`NexusEmbed` 視覺一致性、持久化 DM 佇列投遞層 |
 | [`platform/06_price_volume_alert_system.md`](platform/06_price_volume_alert_system.md) | 個股 15 分鐘價量突破警報系統、K 棒完整性防呆、雙模警報支援 |
+| [`platform/07_alpaca_realtime_stream.md`](platform/07_alpaca_realtime_stream.md) | Alpaca 即時 1 分 K 串流：動態訂閱、Forward Fill、資料完整性不變式、`get_quote` Tier 0 與價量警報影子模式 |

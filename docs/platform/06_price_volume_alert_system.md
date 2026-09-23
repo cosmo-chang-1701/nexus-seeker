@@ -14,6 +14,17 @@
 - **`trim_to_confirmed_15m_bars(df)` 是唯一的截斷定義來源**，抽取出來讓 `get_confirmed_15m_bar` 與 `dynamic_rollover` 左側進場閘門／盤勢分類器無法互相漂移。它回傳截斷至最後一根已收盤 K 棒的資料框（若剩餘 K 棒數不足以計算 20 根均量基準，或索引非 datetime 型別，則回傳 `None`——寧可失效也不假設「已收盤」）。對於*縮量*類條件（如左側進場閘門的縮量窒息 `volume <= 0.7× avg`）尤其危險：一根才進行 2 分鐘的 K 棒只累積了一小部分成交量，若誤用未收盤 K 棒，該子條件在大多數時間都會被誤判為真。
 - **放量門檻**：比較已收盤 K 棒的成交量與前 20 根 K 棒（`_VOLUME_LOOKBACK_BARS`）的均量，呼應 `opportunity_cost.py` 進場確認邏輯已使用的 20 根回看窗（該路徑使用 1.2 倍門檻，本功能預設使用者可調整的 1.5 倍門檻）。
 
+### 2.1 資料來源分派（yfinance／Alpaca 串流）
+
+`get_confirmed_15m_bar()` 是唯一的分派點，排程器不需要知道資料來自哪裡。當 Alpaca 即時串流（見 [`07_alpaca_realtime_stream.md`](07_alpaca_realtime_stream.md)）啟用時，`get_confirmed_15m_bar_from_stream()` 會以串流的 1 分 K 聚合出同一語意的已收盤 15 分 K（`bar_time` 為 tz-naive 美東時間，與 yfinance 相同）：
+
+| `ALPACA_PV_ALERT_LIVE` | 大型股白名單 | 其他標的 |
+|---|---|---|
+| `false`（預設，影子模式） | yfinance 判定；串流有結果時以 `📊 [價量影子比對]` 記錄兩者的收盤價與放量倍數 | 同左 |
+| `true` | 串流結果判定（串流回傳 `None` 時退回 yfinance） | yfinance 判定 |
+
+串流量能只來自 IEX 單一交易所（約佔全市場 2~3%），中小型股多數分鐘沒有 IEX 成交，放量倍數雜訊極大，因此即使開啟 live 模式也只信任大型股白名單（`config.ALPACA_LARGE_CAP_SYMBOLS`）。串流的 20 根均量基準與當根量能同為 IEX 來源，比例語意自洽，但與 yfinance（全市場量）的倍數不可直接互換——翻轉前請以影子比對紀錄確認觸發分佈。
+
 ## 3. 門檻比對與純價格警報支援（`evaluate_watch_trigger`）
 
 刻意與 K 棒抓取邏輯分離，讓多位監控同一標的的使用者共用同一次 yfinance 呼叫：
@@ -43,7 +54,7 @@
 
 ## 7. 核心程式碼檔案路徑關聯
 
-- `nexus_core/market_analysis/price_volume_alert.py`：`get_confirmed_15m_bar()`, `trim_to_confirmed_15m_bars()`, `evaluate_watch_trigger()`
+- `nexus_core/market_analysis/price_volume_alert.py`：`get_confirmed_15m_bar()`（資料來源分派）, `get_confirmed_15m_bar_from_stream()`, `trim_to_confirmed_15m_bars()`, `evaluate_watch_trigger()`
 - `nexus_core/database/price_volume_watch.py`：`price_volume_watches` 表 CRUD，`upsert_watch()`, `get_all_watches()`
 - `nexus_core/cogs/trading/price_volume_alert_monitor.py`：15 分鐘排程器，KV Cache 防重複發送
 - `nexus_core/database/migrations/v063_add_price_volume_watches.py`：`price_volume_watches` 表註冊遷移

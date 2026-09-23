@@ -239,6 +239,25 @@ async def get_quote(symbol: str, allow_stale: bool = False) -> Dict[str, Any]:
     )
 
 
+def _get_stream_quote(symbol: str) -> Optional[Dict[str, Any]]:
+    """Tier 0：Alpaca 串流的分鐘級現價（僅盤中、資料新鮮且完整時）；否則 None。
+
+    `pc` 是官方日線昨收而非上一根分 K 收盤——`intraday_pipeline/metrics.py`、
+    `sentiment/iv_metrics.py`、`order_telemetry_service.py` 都把 `pc` 當昨收使用。
+    延遲 import：`services → bot` 的反向相依會造成循環 import，故經模組層級 registry 取得。
+    """
+    try:
+        from services.alpaca_stream_service import get_stream_service
+
+        service = get_stream_service()
+        if service is None:
+            return None
+        return service.get_quote_snapshot(symbol)
+    except Exception as e:
+        logger.warning(f"[{symbol}] Alpaca 串流報價檢查失敗，改走 Finnhub: {e}")
+        return None
+
+
 async def _fetch_quote_uncached(
     symbol: str, allow_stale: bool, now: float
 ) -> Dict[str, Any]:
@@ -261,6 +280,10 @@ async def _fetch_quote_uncached(
     async def _fetch() -> Any:
         if symbol.startswith("^") or symbol == "VIX" or symbol.endswith("=F"):
             return await _get_yfinance_quote(symbol)
+
+        stream_quote = _get_stream_quote(symbol)
+        if stream_quote is not None:
+            return stream_quote
 
         if is_finnhub_rate_limited():
             logger.warning(

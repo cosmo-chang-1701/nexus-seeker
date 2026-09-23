@@ -87,6 +87,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - memory manager start/stop
 - hedge monitor start/stop
 - polymarket service start/stop
+- Alpaca 即時 1 分 K 串流 start/stop（leader-only，預設關閉）
 
 ---
 
@@ -142,6 +143,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - 事件日曆架構與宏觀事件翻譯引擎 → [`04_calendar_translation_engine.md`](docs/platform/04_calendar_translation_engine.md)
 - Embed 渲染架構（`NexusEmbed`、輸出集中化）與 DM 佇列投遞層 → [`05_embed_architecture_and_dm_queue.md`](docs/platform/05_embed_architecture_and_dm_queue.md)
 - 個股 15 分鐘價量突破警報系統 → [`06_price_volume_alert_system.md`](docs/platform/06_price_volume_alert_system.md)
+- Alpaca 即時 1 分 K 串流（動態訂閱、Forward Fill、資料完整性不變式、`get_quote` Tier 0、價量警報影子模式）→ [`07_alpaca_realtime_stream.md`](docs/platform/07_alpaca_realtime_stream.md)
 
 ---
 
@@ -190,6 +192,9 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/room_threshold.py` — **單一權威**的動態自適應波動率空間門檻實作（公式 A 方向性空間門檻／公式 B 牆體緩衝雙邊界／公式 C 破位追空次級節點空間／公式 D `resolve_effective_target()` 晴空萬里有效目標天花板，供 Regime IV 封頂判定、右側條件三、`PYRAMID_ADD` 條件四三處共用同一天花板定義）。刻意只依賴 stdlib 的葉模組（比照 `sentiment/skew_taxonomy.py`），故可同時被 `dynamic_rollover/`、`gamma_squeeze_engine.py` 與 `cogs/embed_builders/` 匯入而不產生循環相依。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫，`constants.py` 的「路由層與進場確認層門檻不合併」政策不被破壞
 - `nexus_core/market_time.py` — NYSE 行事曆 helper。`get_trading_days_ago_utc(n)` 回傳「往回第 n 個**已開盤**交易日」的 UTC 時戳，供 UOA 回看窗等時間窗過濾使用；以日曆日回看會讓同一個「N 日窗」在週末／連假前後代表的樣本量相差近一倍
 - `nexus_core/market_analysis/atr_utils.py` — 共用 ATR helper：`fetch_atr_15m()`／`compute_atr_15m_from_df()`／`compute_atr_14_from_daily_df()`／`fetch_atr_1d()`（後者刻意不 `force_refresh`，日線 ATR 盤中幾乎不動）
+- `nexus_core/services/alpaca_stream_service.py` — Alpaca 即時 1 分 K 串流（leader-only、`ENABLE_ALPACA_STREAM` 預設關閉）。訂閱前 30 檔（持倉 → 白名單內價量監測 → 其餘依前一交易日 IEX 成交筆數，`rank_symbols()`），每 15 分鐘比對差異；下游經模組層級 registry `get_stream_service()` 取得（**不要**在 `services/` 內 `import bot`）。⚠️ 串流資料只在 `complete_since` 涵蓋的區間內可用——斷線即清空，重連後以 REST 回補；`get_quote_snapshot()` 的 `pc` 是官方日線昨收，絕不能是上一分鐘收盤
+- `nexus_core/market_analysis/stream_bars.py` — 串流的純 stdlib 計算葉模組：Forward Fill（不跨越開盤、缺口 > 30 分鐘不補）、`SessionStats`（開盤錨定 VWAP、只計真實 K 棒）、15 分 K 聚合、分鐘級技術指標
+- `nexus_core/tests/unit/test_stream_bars.py` / `test_alpaca_stream_service.py` — Forward Fill／VWAP／聚合；認證才算連線、錯誤碼 402/405/406、盤前盤後丟棄、訂閱優先序與差異、Tier 0 的 `pc` 為昨收與新鮮度／完整性閘門、15 分 K 寬限期與覆蓋不足時回 None、REST 回補合併
 - `nexus_core/market_analysis/intraday_pipeline.py` — watchlist evaluation, option-plan logic, intraday engine helpers
 - `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` — 自選標的進場顧問核心：`evaluate_entry_advice()` 以與 `/x` 進場鐵律頁籤相同的策略／Regime 分派表做六重鐵律確認並附進場／停損／目標／盈虧比，結果以 `(strategy:symbol, 15m bar)` 記憶（鍵必含 strategy）。由 `pipeline.py::_dispatch_entry_advisor_alert` 以獨立頻道 `advisory_entry_signal` 推播（**不**新增 `scenario`、不覆寫 `tactical`、不受 `enable_analyst_agent` 約束）。⚠️ 呼叫點必須在 `engine_enabled` 的 `continue` 之前；三個乾跑旗標（`WATCHLIST_ADVISOR_DRY_RUN`／`REGIME_III_B_DRY_RUN`／`SHORT_ENTRY_DRY_RUN`）由派發函式自行檢查，乾跑**不寫**去重旗標
 - `nexus_core/market_analysis/index_microstructure.py` — market regime determination (SHORT_GAMMA_CRITICAL) using VIX, VIX3M, and zero-gamma line GEX
