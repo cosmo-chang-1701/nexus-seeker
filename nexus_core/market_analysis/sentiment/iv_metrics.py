@@ -19,6 +19,10 @@ from .cache import _iv_cache, _IV_CACHE_TTL
 
 logger = logging.getLogger(__name__)
 _TERM_STRUCTURE_MIN_IV = 0.01
+# 即時 IV 與跨式反推 IV 相差超過此倍數即視為尺度錯誤（非期限結構差異）。
+# 財報週的週度 IV 可達 30D IV 的 2~3 倍，屬正常事件溢價；實盤曾見的
+# `ticker.info["impliedVolatility"]` 異常值則落在 4.6~13 倍。
+_IV_STRADDLE_SCALE_MISMATCH = 4.0
 
 
 class IVContext:
@@ -219,6 +223,35 @@ async def _calculate_straddle_implied_em(
         return None
 
 
+def _select_term_expiries(
+    expiries: list[str], today_dt: Any
+) -> tuple[str | None, str | None]:
+    """期限結構的近月／遠月到期日選取（單一定義，財報溢價判讀共用）。
+
+    期限結構取樣約束 (ISS-09)：近月強制要求 5 <= DTE <= 20，過濾 0-DTE/1-DTE
+    微觀噪聲與假倒掛；遠月 21 <= DTE <= 60。
+    """
+    near_expiry: str | None = None
+    far_expiry: str | None = None
+    for exp in expiries:
+        try:
+            days = (datetime.strptime(exp, "%Y-%m-%d").date() - today_dt).days
+        except ValueError:
+            continue
+        if 5 <= days <= 20 and not near_expiry:
+            near_expiry = exp
+        elif 21 <= days <= 60 and not far_expiry:
+            far_expiry = exp
+    return near_expiry, far_expiry
+
+
+def straddle_implied_annual_iv(em_weekly: float, spot: float) -> float | None:
+    """由週度 1σ 跨式 EM 反推年化 IV（與 em_from_iv 的 √(7/365) 同一換算）。"""
+    if em_weekly <= 0 or spot <= 0:
+        return None
+    return em_weekly / (spot * math.sqrt(7.0 / 365.0))
+
+
 async def _calculate_iv_term_structure(
     symbol: str, spot_price: float, force_live: bool = False
 ) -> tuple[str | None, float | None]:
@@ -234,21 +267,7 @@ async def _calculate_iv_term_structure(
         if not expiries:
             return None, None
 
-        today_dt = datetime.now().date()
-        near_expiry = None
-        far_expiry = None
-
-        for exp in expiries:
-            try:
-                exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                days = (exp_dt - today_dt).days
-                # 期限結構取樣約束 (ISS-09)：近月強制要求 5 <= DTE <= 20，過濾 0-DTE/1-DTE 微觀噪聲與假倒掛；遠月 21 <= DTE <= 60
-                if 5 <= days <= 20 and not near_expiry:
-                    near_expiry = exp
-                elif 21 <= days <= 60 and not far_expiry:
-                    far_expiry = exp
-            except ValueError:
-                continue
+        near_expiry, far_expiry = _select_term_expiries(expiries, datetime.now().date())
 
         if not near_expiry or not far_expiry:
             return None, None
@@ -474,6 +493,35 @@ async def fetch_and_calculate_iv_metrics(
         if not current_iv or math.isnan(current_iv) or current_iv <= 0:
             raise ValueError(f"無法獲取 {symbol} 的 IV，且歷史波動率數據不足")
 
+        # 跨式 EM 與期限結構提前到寫入 DB 之前：跨式反推 IV 用來攔截尺度錯誤的
+        # 即時 IV，錯誤值一旦寫入 historical_iv 就會永久污染 IV Rank 母體。
+        straddle_em, (term_status, term_ratio) = await asyncio.gather(
+            _calculate_straddle_implied_em(
+                symbol, spot_price, force_live=force_refresh
+            ),
+            _calculate_iv_term_structure(symbol, spot_price, force_live=force_refresh),
+        )
+        straddle_iv = (
+            straddle_implied_annual_iv(straddle_em, spot_price)
+            if straddle_em and straddle_em > 0
+            else None
+        )
+        iv_scale_corrected = False
+        if (
+            iv_source == "LIVE_IV"
+            and straddle_iv is not None
+            and (
+                current_iv * _IV_STRADDLE_SCALE_MISMATCH < straddle_iv
+                or current_iv > straddle_iv * _IV_STRADDLE_SCALE_MISMATCH
+            )
+        ):
+            logger.warning(
+                f"[{symbol}] 即時 IV {current_iv:.4f} 與跨式反推 IV {straddle_iv:.4f} "
+                f"相差超過 {_IV_STRADDLE_SCALE_MISMATCH:.0f} 倍，判定為尺度錯誤，改用跨式反推值"
+            )
+            current_iv = straddle_iv
+            iv_scale_corrected = True
+
         # 3. 儲存至 database historical_iv (儲存原始 IV，防範閉市期間重複乘算與歷史數據污染)
         today_str = datetime.now().strftime("%Y-%m-%d")
         await save_historical_iv(symbol, current_iv, today_str)
@@ -481,6 +529,7 @@ async def fetch_and_calculate_iv_metrics(
         has_earnings_event = False
         has_macro_event = False
         event_loading_applied = False
+        earnings_date_str: str | None = None
 
         try:
             from database.calendar_cache import (
@@ -498,6 +547,7 @@ async def fetch_and_calculate_iv_metrics(
                     ).date()
                     if today_dt <= earn_date <= today_dt + timedelta(days=14):
                         has_earnings_event = True
+                        earnings_date_str = earn_date.isoformat()
                 except Exception:
                     pass
 
@@ -520,6 +570,21 @@ async def fetch_and_calculate_iv_metrics(
                     break
         except Exception:
             pass
+
+        # 財報日是否落在期限結構近月到期日之後：若是，近月合約本來就不含財報
+        # 溢價，Contango 與「臨近財報」並存並不矛盾，呈現層需據此改寫文案。
+        earnings_after_near_term = False
+        if earnings_date_str and term_status is not None:
+            try:
+                near_expiry, _ = _select_term_expiries(
+                    await market_data_service.get_all_option_expiries(symbol) or [],
+                    datetime.now().date(),
+                )
+                earnings_after_near_term = bool(
+                    near_expiry and earnings_date_str > near_expiry
+                )
+            except Exception as e:
+                logger.debug(f"[{symbol}] 財報日與近月到期日比對失敗: {e}")
 
         # Apply Event Loading Factor (1.4x) if fallback used and event near
         if iv_source in ["STORED_IV", "HV_PROXY"]:
@@ -604,13 +669,6 @@ async def fetch_and_calculate_iv_metrics(
             else 0.0
         )
 
-        straddle_em, (term_status, term_ratio) = await asyncio.gather(
-            _calculate_straddle_implied_em(
-                symbol, spot_price, force_live=force_refresh
-            ),
-            _calculate_iv_term_structure(symbol, spot_price, force_live=force_refresh),
-        )
-
         if straddle_em and straddle_em > 0:
             # 優先採用真實期權市場定價之 Straddle 預期波動 (ISS-11)
             expected_move_weekly = straddle_em
@@ -661,6 +719,10 @@ async def fetch_and_calculate_iv_metrics(
             iv_term_structure_status=term_status,
             term_structure_ratio=term_ratio,
             event_loading_applied=event_loading_applied,
+            straddle_implied_iv=straddle_iv,
+            iv_scale_corrected=iv_scale_corrected,
+            earnings_date=earnings_date_str,
+            earnings_after_near_term=earnings_after_near_term,
         )
 
         # 12. 寫入快取

@@ -965,8 +965,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             except Exception:
                 pass
 
+        def _iv_attr(name: str, default: Any = None) -> Any:
+            if isinstance(iv_data, dict):
+                return iv_data.get(name, default)
+            return getattr(iv_data, name, default)
+
+        earnings_date_val = _iv_attr("earnings_date")
+        earnings_tag = f" {str(earnings_date_val)[5:10]}" if earnings_date_val else ""
         if earnings_loading:
-            status_tw = "⚠️ 臨近財報/快取波動率可能低估"
+            if iv_source in ["STORED_IV", "HV_PROXY"]:
+                status_tw = "⚠️ 臨近財報/快取波動率可能低估"
+            elif _iv_attr("earnings_after_near_term", False):
+                # 近月到期日早於財報：近月 IV 本就不含事件溢價，Contango 不代表
+                # 市場忽視財報，只是期限結構量不到它。
+                status_tw = (
+                    f"⚠️ 臨近財報{earnings_tag}（晚於近月到期，期限結構未含事件溢價）"
+                )
+            else:
+                status_tw = f"⚠️ 臨近財報{earnings_tag}（近月 IV 含事件溢價）"
         elif macro_loading:
             status_tw = "⚠️ 臨近總經大事件/快取波動率已校正"
 
@@ -1061,7 +1077,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     elif status_str == "Contango":
                         term_prefix = "✅ 正價差 (Contango)"
                     else:
-                        term_prefix = "⚖️ 正常 (Normal)"
+                        # 0.95~1.05 為刻意的死區：近遠月 IV 大致持平，方向不具意義
+                        term_prefix = "⚖️ 持平 (Flat, 0.95~1.05)"
                     iv_lines.append(f" └─ {term_prefix} (近遠月比: {ratio_val:.2f})")
                 except (ValueError, TypeError):
                     iv_lines.append(" └─ --")
@@ -1091,6 +1108,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     f"±${round(safe_em_weekly, 2):.2f}"
                     if safe_em_weekly is not None
                     else "--"
+                )
+            straddle_iv_num = _to_float_or_none(_iv_attr("straddle_implied_iv"))
+            if straddle_iv_num is not None and straddle_iv_num > 0:
+                # EM 優先採跨式定價，與上方 IV 並非同源；並列揭露反推 IV，避免
+                # 使用者拿「IV × √t」去驗算 EM 時誤以為兩者數量級斷層。
+                em_note = f"跨式定價，隱含 IV {straddle_iv_num * 100:.1f}%"
+            if _iv_attr("iv_scale_corrected", False):
+                iv_lines.append(
+                    " ⚠️ 原始 IV 與跨式定價相差 >4 倍（資料源尺度錯誤），已改用跨式反推值"
                 )
             if earnings_loading or macro_loading:
                 iv_lines.extend(
@@ -1632,17 +1658,47 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         if sqz_vix_label != "NORMAL":
             if sqz_vix_label == "OVEREXTENDED_RISK":
-                sqz_lines.append(" ⚠️ VIX 標記: 低波過度延伸風險，謹慎追多")
+                # 觸發條件是**大盤** VIX < 15（psq_engine.py），不是個股 IV
+                sqz_lines.append(
+                    " ⚠️ VIX 標記: 大盤低波 (VIX<15) 過度延伸風險，謹慎追多"
+                )
             elif sqz_vix_label == "HIGH_CONVICTION_RECOVERY":
                 sqz_lines.append(" 🔥 VIX 標記: 高波動期高確信反彈訊號")
 
         # Dynamic timeframe volatility regime evaluation
-        iv_val_num = _to_float(current_iv, default=0.0) * 100
-        iv_rank_num = _to_float(iv_rank, default=0.0)
+        # IV Rank 缺失（樣本不足）時必須維持「未知」，不可補 0 當成低波。
+        sqz_iv_pct = _to_float_or_none(current_iv)
+        iv_val_num = sqz_iv_pct * 100 if sqz_iv_pct is not None else None
+        iv_rank_known = _to_float_or_none(iv_rank)
 
-        if iv_rank_num > 50.0 or iv_val_num > 80.0:
-            sqz_vix_note = "極端高波環境 (IVR > 50%)，提防劇烈洗盤，建議縮小部位或使用期權賣方策略保護。"
-        elif iv_rank_num < 30.0 and abs(sqz_momentum) < 0.5:
+        high_vol_reasons: List[str] = []
+        if iv_rank_known is not None and iv_rank_known > 50.0:
+            high_vol_reasons.append(f"IVR {iv_rank_known:.0f}%")
+        if iv_val_num is not None and iv_val_num > 80.0:
+            high_vol_reasons.append(f"IV {iv_val_num:.0f}%")
+
+        if high_vol_reasons:
+            # 賣方建議必須服從風控：VIX 戰情階梯禁用 STO 時不得在同一張卡片
+            # 上建議賣方策略（兩者結論互斥）。
+            _kelly = data.get("kelly_sizing")
+            _kelly_warnings = [
+                str(w) for w in (getattr(_kelly, "warnings", None) or [])
+            ]
+            sto_locked = any("STO 禁用" in w for w in _kelly_warnings)
+            hedge_advice = (
+                "建議縮小部位（賣方策略目前受風控禁用）"
+                if sto_locked
+                else "建議縮小部位或使用期權賣方策略保護"
+            )
+            sqz_vix_note = (
+                f"極端高波環境 ({' / '.join(high_vol_reasons)})，提防劇烈洗盤，"
+                f"{hedge_advice}。"
+            )
+        elif (
+            iv_rank_known is not None
+            and iv_rank_known < 30.0
+            and abs(sqz_momentum) < 0.5
+        ):
             sqz_vix_note = "低波期，建議以日K/4H為主，忽略30m雜訊"
         else:
             sqz_vix_note = ""

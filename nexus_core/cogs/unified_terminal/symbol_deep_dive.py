@@ -346,7 +346,10 @@ class SymbolDeepDiveMixin:
             if isinstance(iv_metrics, dict)
             else getattr(iv_metrics, "iv_rank", None)
         )
-        result["iv_rank"] = _safe_float(iv_rank_raw, 0.0)
+        # 樣本不足時保留 None（未知）；補 0.0 會讓下游把它當成「極低 IVR」
+        result["iv_rank"] = (
+            _safe_float(iv_rank_raw, 0.0) if iv_rank_raw is not None else None
+        )
         raw_em_context = await SentimentEngine.get_expected_move(
             symbol, quote=quote, iv_metrics=iv_metrics
         )

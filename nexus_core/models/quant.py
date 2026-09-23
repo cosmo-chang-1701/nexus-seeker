@@ -107,3 +107,10 @@ class IVMetrics(BaseModel):
     # 只在即時 IV 缺失、改用 STORED_IV / HV_PROXY 且 14 天內有財報或總經事件時為
     # True。呈現層據此揭露「已套用事件加載」，而不是靠 iv_source 反推。
     event_loading_applied: bool = False
+    # 由週度跨式 EM 反推的年化 IV；與 current_iv 並列揭露，讓 EM 的定價來源可驗證。
+    straddle_implied_iv: float | None = None
+    # current_iv 與跨式反推值相差超過 4 倍（尺度錯誤）而被改用跨式反推值。
+    iv_scale_corrected: bool = False
+    # 14 天內財報日（ISO），以及它是否晚於期限結構的近月到期日（近月不含財報溢價）。
+    earnings_date: str | None = None
+    earnings_after_near_term: bool = False

@@ -982,15 +982,21 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
         inline=True,
     )
 
-    iv_rank = data.get("iv_rank", 0.0)
-    ivr_label = (
-        "🔥 高 IVR"
-        if iv_rank >= 50
-        else ("⚡ 中 IVR" if iv_rank >= 30 else "🧊 低 IVR")
-    )
+    iv_rank_raw = data.get("iv_rank")
+    # 歷史 IV 樣本不足時 iv_rank 為 None：顯示「未知」，不可當成 0% 低 IVR
+    if isinstance(iv_rank_raw, (int, float)):
+        iv_rank = float(iv_rank_raw)
+        ivr_label = (
+            "🔥 高 IVR"
+            if iv_rank >= 50
+            else ("⚡ 中 IVR" if iv_rank >= 30 else "🧊 低 IVR")
+        )
+        ivr_value = f"`{iv_rank:.1f}%` {ivr_label}"
+    else:
+        ivr_value = "`--%` ⏳ 樣本積累中"
     embed.add_field(
         name="📉 IV Rank\u2800\u2800\u2800\u2800",
-        value=f"`{iv_rank:.1f}%` {ivr_label}\n\u200b",
+        value=f"{ivr_value}\n\u200b",
         inline=True,
     )
 

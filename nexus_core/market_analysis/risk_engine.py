@@ -413,7 +413,7 @@ def optimize_position_risk(
             return OptimizationResult(
                 suggested_contracts=0,
                 exposure_pct=0.0,
-                warnings=["VIX Dormant: STO 禁用"],
+                warnings=["VIX Dormant: STO 禁用（大盤 VIX < 15）"],
             )
         # --------------------------------------------------------
 
