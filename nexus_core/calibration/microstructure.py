@@ -440,10 +440,15 @@ def label_wall_holds(
     return labeled
 
 
-def build_micro_report(cache_dir: Path, horizon_days: int = 5) -> dict[str, Any]:
-    snaps = load_snapshots(cache_dir)
+def build_micro_report(
+    cache_dir: Path,
+    horizon_days: int = 5,
+    snapshots: Optional[list[dict[str, Any]]] = None,
+) -> dict[str, Any]:
+    """`snapshots` 未提供時讀取 micro-snapshot 的快取；edge 來源由呼叫端先轉好傳入。"""
+    snaps = snapshots if snapshots is not None else load_snapshots(cache_dir)
     if not snaps:
-        return {"status": "尚無快照，請先執行 micro-snapshot", "n_snapshots": 0}
+        return {"status": "尚無快照資料", "n_snapshots": 0}
 
     from market_analysis.gex_wall_depth import thin_wall_threshold
 

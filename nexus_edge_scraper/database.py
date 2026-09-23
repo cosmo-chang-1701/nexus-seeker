@@ -122,6 +122,25 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_gex_hist_captured
                 ON gex_snapshot_history(captured_at);
 
+            -- 週預期波幅校準 (D-03)：每個交易日收盤後記錄一次各到期日
+            -- (DTE 1~14) 的價平跨式。不同 DTE 推算的週 EM 互相比對，可以量測
+            -- nexus_core 以 √(7/DTE) 縮放時的偏差。
+            CREATE TABLE IF NOT EXISTS em_snapshot_history (
+                symbol TEXT NOT NULL,
+                trade_date TEXT NOT NULL,
+                expiry TEXT NOT NULL,
+                dte INTEGER NOT NULL,
+                spot REAL NOT NULL,
+                strike REAL NOT NULL,
+                call_mid REAL NOT NULL,
+                put_mid REAL NOT NULL,
+                captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (symbol, trade_date, expiry)
+            ) WITHOUT ROWID;
+
+            CREATE INDEX IF NOT EXISTS idx_em_hist_trade_date
+                ON em_snapshot_history(trade_date);
+
             CREATE TABLE IF NOT EXISTS option_chain_snapshot (
                 symbol TEXT NOT NULL,
                 expiry TEXT NOT NULL,
@@ -320,6 +339,109 @@ def prune_gex_history(retention_days: int = GEX_HISTORY_RETENTION_DAYS) -> int:
     try:
         cursor = conn.execute(
             "DELETE FROM gex_snapshot_history WHERE captured_at < datetime('now', ?)",
+            (f"-{int(retention_days)} days",),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def list_history_symbols() -> list[str]:
+    """有 GEX 快照歷史或 EM 快照歷史的標的 (離線校準工具用來決定要讀哪些標的)。"""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT symbol FROM gex_snapshot_history
+            UNION
+            SELECT symbol FROM em_snapshot_history
+            ORDER BY symbol
+            """
+        )
+        return [row[0] for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def save_em_snapshot(trade_date: str, rows: list[dict[str, Any]]) -> int:
+    """寫入一個交易日的 EM 快照；同一 (symbol, trade_date, expiry) 只保留第一筆。
+
+    `rows` 每筆需含 symbol / expiry / dte / spot / strike / call_mid / put_mid。
+    """
+    if not rows:
+        return 0
+    conn = _get_connection()
+    try:
+        cursor = conn.executemany(
+            """
+            INSERT OR IGNORE INTO em_snapshot_history
+                (symbol, trade_date, expiry, dte, spot, strike, call_mid, put_mid)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    str(r["symbol"]).upper(),
+                    trade_date,
+                    str(r["expiry"]),
+                    int(r["dte"]),
+                    float(r["spot"]),
+                    float(r["strike"]),
+                    float(r["call_mid"]),
+                    float(r["put_mid"]),
+                )
+                for r in rows
+            ],
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def has_em_snapshot(trade_date: str) -> bool:
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "SELECT 1 FROM em_snapshot_history WHERE trade_date = ? LIMIT 1",
+            (trade_date,),
+        )
+        return cursor.fetchone() is not None
+    finally:
+        conn.close()
+
+
+def get_em_history(
+    symbol: str,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = _GEX_HISTORY_MAX_LIMIT,
+) -> list[dict[str, Any]]:
+    """依 (trade_date, expiry) 升冪讀取 EM 快照 (since 含、until 不含，比較 trade_date)。"""
+    limit = max(1, min(int(limit), _GEX_HISTORY_MAX_LIMIT))
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT symbol, trade_date, expiry, dte, spot, strike, call_mid, put_mid
+            FROM em_snapshot_history
+            WHERE symbol = ?
+              AND (? IS NULL OR trade_date >= ?)
+              AND (? IS NULL OR trade_date < ?)
+            ORDER BY trade_date ASC, expiry ASC LIMIT ?
+            """,
+            (symbol.upper(), since, since, until, until, limit),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def prune_em_history(retention_days: int = GEX_HISTORY_RETENTION_DAYS) -> int:
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM em_snapshot_history WHERE captured_at < datetime('now', ?)",
             (f"-{int(retention_days)} days",),
         )
         conn.commit()

@@ -150,6 +150,7 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 到期當天的跨式只剩幾小時的日內 Gamma 與殘餘時間價值，無論分母怎麼鉗制，都無法用 $\sqrt{7/\text{DTE}}$ 外推成一週。防護方式是**不選它**：`_calculate_straddle_implied_em()` 只在 $\text{DTE} \in [2, 14]$ 中選取最接近 7 天的到期日；沒有合格到期日時回傳 `None`，由 §2.1 的融合機制退回 IV 公式。
 
 **後續觀察事項**：
+- **資料來源**：edge 在每個交易日收盤後（美東 16:20～20:00）記錄 DTE 1～14 各到期日的價平跨式（`em_snapshot_history`），`calibration micro-report` 的「週EM相對7DTE直接量測之比值」即由此計算。
 - **3-DTE 的殘餘偏差**：縮放用的是日曆日。當最接近 7 天的到期日只有 3 DTE（例如週二看週五），$\sqrt{7/3}$ 把 3 個日曆日（可能只含 2~3 個交易日）當成 3/7 週，2026-09-22 的快照量測到中位數偏高約 20%。若 `calibration micro-report` 的「週EM相對7DTE直接量測之比值」在 DTE 4–14 組持續偏離 1.0 超過 ±10%，再評估改用交易日縮放 $\sqrt{5 / \text{交易日數}}$。
 - **退回 IV 公式的頻率**：只剩 0/1-DTE 的標的（多為週選流動性差的小型股）會退回 $S \sigma \sqrt{7/365}$；若 `[Straddle-Implied EM]` 日誌在自選標的中大量缺席，檢查到期日清單是否只含週選。
 

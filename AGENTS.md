@@ -182,7 +182,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
 - `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
-- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
+- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/margin.py` — 全資產類別保證金模型（`calculate_option_margin` 名稱沿用歷史）。空頭選擇權走既有公式，空頭**現貨**走 Reg-T 初始保證金（市值 × 50%）。⚠️ 其輸出經 `total_margin_used` 匯總成 `portfolio_heat`，是「是否允許開新倉」的主要煞車——任何一種空頭部位若在此回傳 0.0，該煞車對它就完全失效
@@ -241,6 +241,8 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/tests/unit/test_intraday_pipeline.py` — heartbeat and phase-B gating tests
 - `nexus_core/tests/unit/test_watchlist_advisor.py` — 自選標的進場顧問：`scenario` Literal 不變、呼叫點在 `engine_enabled` 之前、非 green／通知關閉／乾跑皆不推播且不燒去重旗標、Regime 升級不被去重、radar 保鮮／過期走 Semaphore、四種策略分派與跨使用者記憶化
 - `nexus_core/tests/unit/test_advisory_mode.py` — B&H 持倉顧問模式：顧問 SPOT 持倉遍歷全部 SL/TP/比例控管路徑後不得產生 `LIQUIDATE`／`REDUCE`（`RolloverInstruction.action` 為純 `str`，mypy 攔不到，此為唯一防護）、轉換規則（結構失效告知／目標區摺疊／丟棄項）、機會成本與逃頂減碼跳過顧問持倉但 `MARGIN_DEFENSE` 不受影響、`PYRAMID_ADD` 顧問模式下仍為指令、三態解析（帳戶層 `portfolio_mode` 每使用者只讀一次 + 單檔 `advisory_only` 覆寫）、派發端 `advisory_core_levels` 通知與 `advisory_exit_` 去重、`portfolio_mode='COMMAND'` 預設逐位元不變回歸測試
+- `nexus_core/tests/unit/test_calibration_edge_history.py` — edge GEX／EM 歷史轉換：每日取盤中最後一個分桶（盤外、半日市收盤後、國定假日濾除）、淨 GEX 支撐牆、成交額／ATR 無前視偏差、以 edge schema 的 DB 檔端到端轉換
+- `nexus_edge_scraper/tests/test_em_snapshot.py` — edge 收盤後 EM 快照：資料表首筆為準、時間窗、每日只執行一次（重啟以 DB 為準）、零寫入時重試、端點以交易日分頁
 - `nexus_core/tests/unit/test_calibration_microstructure.py` — D-03 週 EM 到期日選擇（排除 0/1-DTE、取最接近 7 DTE、無合格到期日回 None）、D-04 成交額正規化薄牆門檻（大型股變嚴、小型股不低於 500k、缺成交額回退）、edge GEX 公式複刻、^SKEW 代理分位無前視偏差、前向蒐集校準特徵
 - `nexus_core/tests/unit/test_canonical_resampling.py` — 日級規範母體：重採樣（盤前盤後／週末／半日市／舊 `SKEW` 排除）、midrank 與 IQR 下限、規範母體優先與高頻池回退、`as_of_date` 無前視偏差、收盤快照冪等、v080 回填、0~100 百分位契約、門檻數值不變回歸、UOA／`sentiment_history` 交易日保留期
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
@@ -418,12 +420,13 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration forward-report
 ```
 
-Microstructure / Skew calibration studies (D-03 weekly EM expiry, D-04 wall depth, Skew thresholds). `micro-snapshot` should run once per trading day after the close so the wall-hold labels accumulate; `micro-report` labels only snapshots whose 5-session window has elapsed. Criteria: `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.13.
+Microstructure / Skew calibration studies (D-03 weekly EM expiry, D-04 wall depth, Skew thresholds). `micro-report` reads edge's forward-collected history by default (`--source edge`, via `TUNNEL_URL` or `--edge-db <copied edge_cache.db>`); `micro-snapshot` is an optional ad-hoc dev-machine measurement. Wall-hold labels are only assigned once a date's 5-session window has elapsed. Criteria: `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.13.
 
 ```bash
 cd nexus_core
-docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration micro-snapshot --max-symbols 200
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report
+# or, from a copy of the edge DB placed in nexus_core/.calibration_cache/:
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report --edge-db /app/.calibration_cache/edge_cache.db
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration skew-proxy
 ```
 
@@ -444,7 +447,7 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
 - production release flow is tag-driven (`v*`)
 - pre-commit hooks run ruff lint/format, strict mypy, and general quality checks
 - pre-push hooks run semgrep and dockerized tests (core-test and scraper-test)
-- `scripts/droplet/micro_snapshot_cron.sh` — host-side cron job on the Droplet that runs `python -m calibration micro-snapshot` once per trading day after the close, using the production image in a separate memory-capped `docker run` (never `docker exec` into the bot container) and the edge proxy (`TUNNEL_URL` read from the running service's swarm secret). Snapshots stay in `/opt/nexus-calibration/` on the Droplet and are **not** committed: the repo is public and snapshots contain watchlist tickers. Sync them back with `rsync <droplet>:/opt/nexus-calibration/microstructure/ nexus_core/.calibration_cache/microstructure/` before running `micro-report` on a dev machine
+- The Droplet runs **only** the Discord bot. Calibration data collection (GEX history every 15 min during market hours, post-close weekly-EM straddles) runs in `nexus_edge_scraper`'s scheduler; reports are produced on a dev machine with `python -m calibration micro-report` (reads edge via `TUNNEL_URL` or a copied `edge_cache.db` with `--edge-db`). Do not add calibration jobs to the Droplet
 
 ---
 

@@ -133,7 +133,7 @@ flowchart TD
 
 4. **牆體深度比門檻的後續觀察事項**：
    `GEX_WALL_MIN_DEPTH_RATIO = 1e-5` 只依據單日（2026-09-22，94 面支撐牆）的橫斷面分布決定，**尚未**以事後守住率驗證。需要觀察：
-   - **守住率 × 深度四分位**：開發機每個交易日收盤後執行 `calibration micro-snapshot`，累積 $\ge 20$ 個快照日後看 `micro-report`。每組至少 30 次 tested 才下結論：若 Q1（最淺）與 Q2 的守住率相近，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。
+   - **守住率 × 深度四分位**：`calibration micro-report` 直接讀取 edge 盤中累積的 `gex_snapshot_history`（每個交易日取收盤前最後一個 15 分鐘分桶），不需另外排程抓取；可標註的日期達 $\ge 20$ 個後判讀。每組至少 30 次 tested 才下結論：若 Q1（最淺）與 Q2 的守住率相近，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。
    - **production 前向驗證**：`regime_evaluation_log.features_json` 記錄了 `support_gex` 與 `adv_dollar_20d`，`calibration forward-report` 的「牆體深度比四分位」表以事後走勢分組，每組 $n \ge 100$ 後可與 `micro-report` 交叉確認。
    - **觸發面變化**：改版後 ADV \$500M–\$5B 的標的通過率由 84% 降到 75%（ORCL、CRM、XOM、COST 等遠處薄牆被剔除）。右側條件二、做空條件二與 Regime 分類都依賴這道門檻，上線後留意這類標的的 `ENTRY_RIGHT` 通過率是否明顯下降。
 5. **edge GEX 只涵蓋最近一檔到期日（已知結構限制）**：

@@ -39,6 +39,17 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument("--cache-dir", default=None)
     parser.add_argument("--force", action="store_true", help="略過記憶體安全檢查")
     parser.add_argument(
+        "--source",
+        choices=["edge", "snapshot"],
+        default="edge",
+        help="micro-report 的資料來源：edge 前向蒐集歷史 (預設) 或 micro-snapshot 快取",
+    )
+    parser.add_argument(
+        "--edge-db",
+        default=None,
+        help="micro-report --source edge：直接讀取複製來的 edge_cache.db；未指定時經 TUNNEL_URL 讀取",
+    )
+    parser.add_argument(
         "--any-time",
         action="store_true",
         help="micro-snapshot：略過「交易日收盤後、當天尚無快照」的排程保護",
@@ -147,7 +158,31 @@ async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
     if args.command == "micro-report":
         from calibration.microstructure import build_micro_report
 
-        result = build_micro_report(Path(cfg.cache_dir))
+        snapshots = None
+        if args.source == "edge":
+            from calibration.edge_history import EdgeHistorySource, build_edge_snapshots
+
+            if args.edge_db:
+                source = EdgeHistorySource(db_path=Path(args.edge_db))
+            else:
+                from config import TUNNEL_URL
+
+                if not TUNNEL_URL:
+                    print(
+                        "未設定 TUNNEL_URL：請提供 --edge-db <edge_cache.db>，"
+                        "或改用 --source snapshot",
+                        file=sys.stderr,
+                    )
+                    return 2
+                source = EdgeHistorySource(base_url=str(TUNNEL_URL))
+            edge_symbols: Optional[list[str]] = (
+                [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+                if args.universe
+                else None
+            )
+            snapshots = build_edge_snapshots(source, edge_symbols)
+        result = build_micro_report(Path(cfg.cache_dir), snapshots=snapshots)
+        result["source"] = args.source
     else:
         from calibration.skew_proxy import run_skew_proxy
 

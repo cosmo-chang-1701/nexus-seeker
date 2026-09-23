@@ -476,7 +476,16 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 - 當天到期（DTE = 0）的合約在收盤後已結算，不用來算 GEX 牆。
 - 期權鏈未平倉量全為 0 的標的不寫入。Yahoo 約在美東午夜到開盤前重置期權鏈（未平倉量歸 0、IV 1e-5），這個時段的資料不代表當日收盤的牆體結構；排程必須在美東當天午夜前完成。
 
-**Droplet 常駐排程**：`scripts/droplet/micro_snapshot_cron.sh` 以 production 映像檔、獨立的 `docker run`（限制 400MB、可用記憶體不足 500MB 時跳過）執行，經 edge 代理避開 Yahoo 對資料中心 IP 的封鎖，快照留在 Droplet 的 `/opt/nexus-calibration/`，不進版控（repo 為公開，快照含 watchlist 標的代號）。實測單次峰值約 245MB。報告在開發機產生：`micro-report` 的事後日線標註直接呼叫 yfinance，需先把快照同步回開發機。
+**資料來源的分工**：Droplet 只執行 Discord bot，不跑任何校準任務（1GB RAM，且 Yahoo 封鎖資料中心 IP）。校準資料一律由 edge 服務蒐集：
+
+| 資料 | 蒐集者 | 內容 |
+|---|---|---|
+| `gex_snapshot_history` | edge 盤中輪詢（每 15 分鐘一個分桶） | bot 實際使用的 GEX 剖面（現價 ±25% 內的履約價）、現價、淨 GEX、Call／Put Wall。保留 180 天 |
+| `em_snapshot_history` | edge 收盤後任務 `record_em_snapshot_once()`，美東平日 16:20～20:00 之間每天一次 | 追蹤標的在 DTE 1～14 各到期日（最多 6 檔）的價平跨式：取 Call 與 Put 都有報價、最接近收盤價的共同履約價，mid 定義與 core 相同。每個 (標的, 交易日, 到期日) 只保留第一筆；以 DB 判斷當天是否已完成，服務重啟不重抓；完全沒抓到資料時 5 分鐘後重試。保留 180 天 |
+
+edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日與盤外的紀錄由 `calibration/edge_history.py` 依 NYSE 行事曆濾除。時間窗在美東 20:00 結束，避開 Yahoo 的夜間重置。
+
+**`micro-report --source edge`（預設）**：經 `TUNNEL_URL` 呼叫 edge 的 `/api/v1/cache/history/symbols`、`/api/v1/cache/gex/history/{symbol}`、`/api/v1/cache/em/history/{symbol}`（皆分頁讀完），或以 `--edge-db` 直接讀取從 edge 主機複製來的 `edge_cache.db`（以 `connect_external_readonly()` 唯讀開啟）。每個標的、每個交易日取盤中最後一個 15 分鐘分桶作為當日收盤的牆體結構，支撐牆取現價下方淨 GEX 最大正值；20 日平均成交額與 ATR 以快照日當天（含）之前的日線計算，無前視偏差。由於 edge 的 GEX 歷史自前向蒐集上線起就在累積，報告不必從零開始等待，已走完 5 個交易日觀察期的日期可以直接標註守住率。`--source snapshot` 讀取 `micro-snapshot` 的快取，保留給開發機臨時量測使用。
 
 **前向蒐集新欄位**：`regime_evaluation_log.features_json` 於 `REGIME_CLASSIFIER` 與右側／左側進場閘門紀錄中加入 `support_wall`、`support_gex`（現價下方淨 GEX 最大正值，不套薄牆門檻）、`put_wall_gex`、`adv_dollar_20d`，以及閘門紀錄的 `skew_percentile`、`skew_percentile_source`（`CANONICAL`／`INTRADAY_FALLBACK`，雷達快速路徑可能為空，可由 `sentiment_daily_canonical` 在該日之前的筆數離線推回）。有了這些欄位，production 資料就能以事後走勢驗證牆體深度比與 Skew 門檻。
 
@@ -496,7 +505,7 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 1. 部署前先備份 production DB：03:00 ET 的保留期清理首次執行時會刪除 60 個交易日以前的 `sentiment_history`，刪除後無法復原（v080 回填在 migration 階段執行，順序上不受影響）。
 2. 部署後以 `.backup` 取得快照，確認 `sentiment_daily_canonical` 回填了多少標的、每標的多少個交易日；回填 0 筆代表舊資料都落在盤外時段或只有舊 `SKEW` 序列，屬預期情形，由每日排程累積。
 3. 次一交易日確認 16:15 ET 的 `📸 [Canonical 日級快照]` 與 08:45 ET 的補寫日誌都有出現。
-4. 在 Droplet 安裝 `scripts/droplet/micro_snapshot_cron.sh`（安裝步驟見腳本開頭註解），確認 `/opt/nexus-calibration/cron.log` 在第一個交易日收盤後出現「快照已寫入」。缺一天只會少一個樣本日，不影響其他日的標註。
+4. 部署新版 edge 後，第一個交易日收盤後確認 edge 日誌出現 `[em_snapshot] … 寫入 N 筆到期日跨式`。edge 離線的日子不會有 EM 與 GEX 歷史，只會少樣本，不影響其他日的標註。
 
 **判讀準則**：
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
@@ -508,7 +517,8 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 
 - **離線事件研究** (`nexus_core/calibration/`)
   - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy`）
-  - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 快照、守住率標註（§5.13）
+  - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
+  - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
   - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
   - `nexus_core/calibration/pipeline.py`：`fetch_all()`、`process_symbol()`、`run_event_study()`
   - `nexus_core/calibration/features.py`、`nexus_core/calibration/events.py`：特徵與事件偵測（`scanner_signal()` 複製版）
@@ -529,5 +539,5 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
   - `nexus_core/services/regime_outcome_labeler.py`：事後走勢標註
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
-- **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`、`em_snapshot_history`）、`nexus_edge_scraper/scheduler.py`（盤中 GEX 輪詢、收盤後 `record_em_snapshot_once()`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
