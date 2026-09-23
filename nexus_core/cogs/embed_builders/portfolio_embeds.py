@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
-from market_analysis.index_microstructure import estimate_symbol_gamma_flip
+from market_analysis.index_microstructure import (
+    analyze_local_gamma_regime,
+    estimate_symbol_gamma_flip,
+)
 from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     evaluate_wall_buffer,
@@ -1256,6 +1259,33 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         put_items = [
                             f"PutWall: ${put_wall_float:.2f}{put_reanchor_note}"
                         ]
+                        # edge 的 PutWall 取「Put 端 Gamma 最大」的履約價，熱力圖畫的
+                        # 卻是淨 GEX；兩者不同源。PutWall 處淨 GEX 為負代表做市商在那
+                        # 裡要跟著賣現貨避險（助跌），不是支撐——據實揭露，並另列最近
+                        # 的淨 GEX 正支撐。僅影響呈現，引擎閘門仍以 edge PutWall 為準。
+                        put_wall_net = _safe_gex(put_wall_float)
+                        if put_wall_net < 0:
+                            put_items.append(
+                                f"⚠ 該履約價淨 GEX -{abs(put_wall_net)/1000:.0f}K 為負"
+                                "（Put 端 Gamma 最大 ≠ 淨支撐，實為助跌區）"
+                            )
+                        if effective_c_val > 0:
+                            net_supp, _, _, _ = _scan_gex_walls(
+                                symbol, gex_data, spot=effective_c_val
+                            )
+                            if (
+                                net_supp > 0
+                                and not math.isclose(
+                                    net_supp, put_wall_float, abs_tol=1e-4
+                                )
+                                and (net_supp > put_wall_float or put_wall_net < 0)
+                            ):
+                                net_supp_pct = (
+                                    (effective_c_val - net_supp) / effective_c_val * 100
+                                )
+                                put_items.append(
+                                    f"最近淨 GEX 支撐: ${net_supp:.2f} (↓{net_supp_pct:.2f}%)"
+                                )
                         _pw_atr_15m: float = 0.0
 
                         if effective_c_val > 0:
@@ -1293,6 +1323,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             )
                             # 已把 degrade_reason 內嵌進文案的分支不再重複輸出
                             put_degrade_inline = False
+                            # 判定量的是停損距離（牆 − 0.5×ATR₁₅ₘ），不是牆距；兩者
+                            # 並列，避免「7.46% 被判 > 8%」這種看似比較式寫反的誤讀。
+                            stop_dist_tag = (
+                                f"｜停損距離 {put_buffer_eval.buffer_pct * 100:.2f}%"
+                                if put_buffer_eval.min_pct is not None
+                                else ""
+                            )
                             if put_buffer_pct < 0 and not is_put_zero:
                                 put_space_flag = " ⚠️ [數據異常：PutWall已高於現價]"
                                 put_items.append(
@@ -1302,7 +1339,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             elif put_buffer_eval.state == "SWEET_SPOT":
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}% ✅ 進場甜蜜點"
+                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag} ✅ 進場甜蜜點"
                                 )
                             elif put_buffer_eval.state == "TOO_TIGHT":
                                 # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
@@ -1321,12 +1358,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     put_degrade_inline = True
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
+                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}\n │  {_note}"
                                 )
                             else:
                                 if put_buffer_eval.max_pct is not None:
                                     _note = (
-                                        f"⚠ 過寬 (> 絕對上限 "
+                                        f"⚠ 停損距離過寬 (> 絕對上限 "
                                         f"{put_buffer_eval.max_pct * 100:.2f}%)，停損距離過遠"
                                     )
                                 else:
@@ -1337,7 +1374,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     put_degrade_inline = True
                                 put_items.append(
                                     f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%\n │  {_note}"
+                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}\n │  {_note}"
                                 )
 
                             # 降級一律揭露，不限於判定不利時：門檻／邊界本身是
@@ -1457,7 +1494,26 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 has_callwall = True
                                 call_reanchored = True
 
-                    if has_callwall and effective_c_val > 0:
+                    call_vacuum = (
+                        has_callwall
+                        and effective_c_val > 0
+                        and call_wall_float < effective_c_val
+                        and not math.isclose(
+                            call_wall_float, effective_c_val, abs_tol=1e-4
+                        )
+                    )
+                    if call_vacuum:
+                        # 重錨也找不到現價上方的正 GEX 牆：上方全是負 Gamma。舊牆
+                        # 已被突破，不再是壓力；照印舊牆加「數據異常」只會誤導。
+                        _append_tree_block(
+                            gex_lines,
+                            "🚧 上檔壓力",
+                            [
+                                "CallWall: -- 上方無正 Gamma 牆（負 Gamma 真空，助漲助跌）",
+                                f"原 CallWall ${call_wall_float:.2f} 已被突破，不再構成壓力",
+                            ],
+                        )
+                    elif has_callwall and effective_c_val > 0:
                         call_wall_depth = _safe_gex(call_wall_float)
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
@@ -1565,6 +1621,43 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         )
                     else:
                         regime_items.append("Gamma Flip: -- (無法估算)")
+
+                    local_regime = analyze_local_gamma_regime(gex_prof, effective_c_val)
+                    if local_regime is not None:
+                        total_long = (
+                            net_gex_float is not None and net_gex_float > 50000.0
+                        )
+                        total_short = (
+                            net_gex_float is not None and net_gex_float < -50000.0
+                        )
+                        local_label = (
+                            "🔴 SHORT_GAMMA"
+                            if local_regime.is_short_gamma
+                            else "🟢 LONG_GAMMA"
+                        )
+                        conflict = (total_long and local_regime.is_short_gamma) or (
+                            total_short and not local_regime.is_short_gamma
+                        )
+                        if conflict:
+                            local_note = (
+                                "（與全鏈體制相反：現價已落入負 Gamma 區，單邊擴散風險）"
+                                if local_regime.is_short_gamma
+                                else "（與全鏈體制相反：現價附近仍有正 Gamma 緩衝）"
+                            )
+                        else:
+                            local_note = ""
+                        regime_items.append(
+                            f"局部體制 (現價處): {local_label}{local_note}"
+                        )
+                        if local_regime.flip_strike > 0 and gamma_flip_val <= 0:
+                            side_note = (
+                                "以上轉負 Gamma"
+                                if local_regime.flip_side == "SHORT_ABOVE"
+                                else "以下轉負 Gamma"
+                            )
+                            regime_items.append(
+                                f"局部 Gamma 翻轉線 ≈ ${local_regime.flip_strike:.2f}（{side_note}）"
+                            )
 
                     _append_tree_block(gex_lines, "⚙️ 體制判讀", regime_items)
 

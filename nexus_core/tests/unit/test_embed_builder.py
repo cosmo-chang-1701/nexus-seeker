@@ -3454,16 +3454,16 @@ def test_create_tactical_symbol_embed_putwall_buffer_three_states() -> None:
     assert "❌ 過窄 (< 2.5×ATR₁₅ₘ = 2.50%)，易遭掃損" in too_tight
 
     sweet = _build(95.9)  # 停損 95.4 -> 停損距離 4.6%，落在 [2.5%, 8%]
-    assert "距現價空間 (下行緩衝): ↓4.10% ✅ 進場甜蜜點" in sweet
+    assert "距現價空間 (下行緩衝): ↓4.10%｜停損距離 4.60% ✅ 進場甜蜜點" in sweet
 
     too_wide = _build(91.0)  # 停損 90.5 -> 停損距離 9.5% > 絕對上界 8%
-    assert "⚠ 過寬 (> 絕對上限 8.00%)，停損距離過遠" in too_wide
+    assert "⚠ 停損距離過寬 (> 絕對上限 8.00%)，停損距離過遠" in too_wide
 
 
 def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spot() -> (
     None
 ):
-    """CallWall 低於現價（防禦性資料異常情境）應標示異常，而非誤判為「空間不足」。"""
+    """CallWall 低於現價且重錨找不到上方正 GEX 牆 → 顯示負 Gamma 真空，而非舊牆加異常紅字。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3480,7 +3480,9 @@ def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spo
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "距現價空間: ↓5.00% ⚠️ [數據異常：CallWall已低於現價]" in desc
+    assert "上方無正 Gamma 牆（負 Gamma 真空，助漲助跌）" in desc
+    assert "原 CallWall $95.00 已被突破，不再構成壓力" in desc
+    assert "數據異常：CallWall已低於現價" not in desc
 
 
 def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_spot() -> (
