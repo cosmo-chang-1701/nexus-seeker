@@ -76,5 +76,4 @@ nexus_core/.calibration_cache/
 nexus_core/reports/
 
 # 施工交接文件（非規格書，完工後即可刪除，不進版控）
-handoff.md
 handoff_watchlist_advisor.md

@@ -23,6 +23,64 @@ logging.basicConfig(
 logger = logging.getLogger("backtest_2025")
 
 
+def _pct(value: Any) -> str:
+    return f"{value * 100:.1f}%" if value is not None else "—"
+
+
+def render_feature_flags(engine: RolloverBacktestEngine2025) -> str:
+    flags = {
+        "Regime III-B 趨勢延續": engine.enable_trend_continuation,
+        "1A TP1 趨勢豁免": engine.enable_tp1_trend_exempt,
+        "1B PYRAMID_ADD": engine.enable_pyramid_add,
+        "3 逃頂三級階梯": engine.enable_escape_tiers,
+    }
+    return "、".join(f"{k}={'開' if v else '關'}" for k, v in flags.items())
+
+
+def render_exit_tier_section(engine: RolloverBacktestEngine2025) -> str:
+    """出場分層洗盤率 (handoff.md §5.4)：production 前向蒐集累積足量前的離線先行版。"""
+    rows = engine.summarize_exit_events()
+    lines = [
+        "## 6. 出場分層洗盤率 (handoff.md §5.4 離線先行)",
+        "",
+        "每筆出場分層觸發後，以 production 共用的前向路徑定義"
+        "（`market_analysis/outcome_labeling.py`，±1.5×ATR₁D 先觸及，5 個交易日內）標註。"
+        "平倉類分層：**訊號正確**＝價格先向下觸及、**洗盤**＝先向上觸及（被掃出後回到原方向）。"
+        "`TP1_TREND_EXEMPT` 為續抱訊號，方向相反。",
+        "",
+        "| 分層 | n | 訊號正確 | 洗盤 | 逾時 | 5 日報酬中位數 |",
+        "| :--- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for r in rows:
+        lines.append(
+            f"| `{r['tier']}` | {r['n']} | {_pct(r['correct_rate'])} | {_pct(r['washout_rate'])} "
+            f"| {_pct(r['timeout_rate'])} | {_pct(r['median_fwd_ret_5d'])} |"
+        )
+    if not rows:
+        lines.append("| (無觸發) | 0 | — | — | — | — |")
+    lines += [
+        "",
+        "**判讀限制**：",
+        "- 本複刻只有 SL1（依停損是否已上推至成本之上拆成 `SL_STRUCTURAL` 與 "
+        "`SL_BREAKEVEN_STOP`）與 SL2；**沒有 SL3 主力對沖**（無 UOA 資料）。",
+        "- 牆體、Net GEX 皆為價格代理（10 日高低點、SMA20），與 production 的真實 GEX 牆不同。",
+        "- 2 個衛星標的 × 1 年的樣本量通常只有個位數到十幾筆，只能用來排定前向資料的觀察優先序，"
+        "不可據以調整任何常數——調參仍以 `forward-report` 的 `EXIT_*` 分組為準。",
+    ]
+    if engine.enable_escape_tiers or engine.enable_pyramid_add:
+        hist = engine.escape_tier_history
+        lines += [
+            "",
+            "### 逃頂分級代理觸發天數",
+            "",
+            f"- WATCH {hist.get('WATCH', 0)} 天、ELEVATED {hist.get('ELEVATED', 0)} 天、"
+            f"CRITICAL {hist.get('CRITICAL', 0)} 天",
+            "- 代理輸入：VTS=VIX/VIX3M、大盤負 Gamma=SPY 開盤<SMA20、衛星亢奮廣度；"
+            "Fear & Greed 與 FedWatch 無歷史資料恆不計分，觸發頻率低估 production。",
+        ]
+    return "\n".join(lines)
+
+
 def generate_markdown_report(
     engine: RolloverBacktestEngine2025, metrics: BacktestMetrics
 ) -> str:
@@ -81,10 +139,11 @@ def generate_markdown_report(
         "OPPORTUNITY_COST": "情境二: 機會成本轉倉 (NVDA ↔ GLD 動能輪動)",
         "SATELLITE_REBALANCE": "情境三: 雙軌防洗盤微觀結構出場 (SL1-4 / TP1-3)",
         "MARGIN_DEFENSE": "情境四: 保證金與槓桿防禦 (VIX 危機清倉)",
-        "MACRO_TOP_ESCAPE_DEFENSE": "情境六: 宏觀逃頂前瞻防禦 (危機減碼 25%)",
+        "MACRO_TOP_ESCAPE_DEFENSE": "情境六: 宏觀逃頂前瞻防禦 (減碼 / 保護性 Put)",
         "COVERED_CALL_PROFIT_LOCK": "情境七: 賣方期權時間價值停利 (Covered Call 增強)",
         "TRANSITION_ENGINE": "情境八: 狀態切換引擎 (左側接刀進化為右側動能)",
         "SHORT_ENTRY": "情境九: 做空進場訊號 (Regime V 破位追空)",
+        "PYRAMID_ADD": "情境十: 順勢金字塔加碼 (PYRAMID_ADD)",
         "REGIME_III_MOMENTUM": "自選股分析中心: 右側動能突破開倉 (REGIME_III)",
         "REGIME_III_B_TREND_CONT": "自選股分析中心: 右側趨勢延續開倉 (REGIME_III-B)",
         "REGIME_I_CATCH": "自選股分析中心: 左側極端超跌接刀開倉 (REGIME_I)",
@@ -138,6 +197,7 @@ def generate_markdown_report(
 
 > **回測區間**: 2025-01-02 至 2025-12-30 (共 249 個交易日 / 1,731 根小時 K 線)
 > **回測模式**: **{mode_title}**
+> **功能開關**: {render_feature_flags(engine)}
 > **資產組合架構**:
 > - **Alpha (個股動能)**: **NVDA** (初始 {engine.alpha_target_weight:.0%}, ${nav_start * engine.alpha_target_weight:,.0f})
 > - **Beta (核心指數)**: **SPY** (初始 {engine.core_target_weight:.0%}, ${nav_start * engine.core_target_weight:,.0f})
@@ -248,28 +308,66 @@ w = (策略年化波動 / B&H 年化波動)，對照組為 w x B&H + (1-w) x 無
 *回測引擎版本: `RolloverBacktestEngine2025 v1.0`*
 *驗證環境: Docker container (Python 3.12, pandas 2.2, pandas-ta 0.3)*
 """
-    return report
+    return report + "\n" + render_exit_tier_section(engine) + "\n"
+
+
+# --ab-feature 對應的開關組合：(報告標籤, 顯示名稱, 引擎關鍵字參數)
+_AB_FEATURES: dict[str, tuple[str, str, dict[str, bool]]] = {
+    "iii_b": (
+        "iii_b",
+        "Regime III-B",
+        {"enable_trend_continuation": True},
+    ),
+    "tp1_exempt": (
+        "tp1_exempt",
+        "1A TP1 趨勢豁免",
+        {"enable_tp1_trend_exempt": True},
+    ),
+    "pyramid": (
+        "pyramid",
+        "1B PYRAMID_ADD",
+        {"enable_pyramid_add": True},
+    ),
+    "escape_tiers": (
+        "escape_tiers",
+        "3 逃頂三級階梯",
+        {"enable_escape_tiers": True},
+    ),
+    "stage_1_3": (
+        "stage_1_3",
+        "1A + 1B + 3 合併",
+        {
+            "enable_tp1_trend_exempt": True,
+            "enable_pyramid_add": True,
+            "enable_escape_tiers": True,
+        },
+    ),
+}
 
 
 def _run_ab_compare(args: argparse.Namespace) -> None:
-    """A/B 對比：同一組參數各跑一次 (Regime III-B 關閉 / 開啟)。
+    """A/B 對比：同一組參數、同一版程式碼各跑一次 (功能關閉 / 開啟)。
 
-    handoff.md §4.4 把這份對比訂為 III-B 進 production 的硬性前置條件：放寬進場
-    必然提高交易頻率與摩擦成本，必須證明扣除 0.3% 往返成本後仍有正向 alpha。
+    `--ab-feature` 選擇要對照的功能 (見 `_AB_FEATURES`)。回測引擎是 production
+    的獨立複刻，跨 commit 對照量不到未被複刻的功能 (handoff.md §9 待辦 4)，
+    因此一律在同一 HEAD 上以開關比較。
 
-    判讀時的兩個已知侷限，摘要中會一併印出，不要略過：
+    III-B 判讀時的兩個已知侷限，摘要中會一併印出，不要略過：
       1. 本回測只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m。
       2. 回測引擎**沒有 UOA 條件**，因此完全量測不到條件四 5 日回看窗放寬的效果；
          真實 production 的觸發頻率必然高於此處。
     """
+    feature_key: str = args.ab_feature
+    label, feature_name, feature_kwargs = _AB_FEATURES[feature_key]
     base_path = Path(args.report_path)
     results: dict[str, tuple[Any, Any, Path]] = {}
 
-    for label, enabled in (("baseline", False), ("iii_b", True)):
+    no_features: dict[str, bool] = {}
+    for run_label, kwargs in (("baseline", no_features), (label, feature_kwargs)):
         print("\n" + "=" * 75)
         print(
-            f" 🔬 A/B 對比 [{label}] — Regime III-B "
-            f"{'啟用' if enabled else '關閉 (基準線)'}｜模式: {args.mode.upper()}"
+            f" 🔬 A/B 對比 [{run_label}] — {feature_name} "
+            f"{'啟用' if kwargs else '關閉 (基準線)'}｜模式: {args.mode.upper()}"
         )
         print("=" * 75)
         engine = RolloverBacktestEngine2025(
@@ -277,30 +375,54 @@ def _run_ab_compare(args: argparse.Namespace) -> None:
             start_date=args.start_date,
             end_date=args.end_date,
             mode=args.mode,
-            enable_trend_continuation=enabled,
+            enable_trend_continuation=kwargs.get("enable_trend_continuation", False),
+            enable_tp1_trend_exempt=kwargs.get("enable_tp1_trend_exempt", False),
+            enable_pyramid_add=kwargs.get("enable_pyramid_add", False),
+            enable_escape_tiers=kwargs.get("enable_escape_tiers", False),
         )
         engine.run_simulation()
         metrics = engine.calculate_metrics()
         out_path = base_path.with_name(
-            f"{base_path.stem}_{args.mode}_{label}{base_path.suffix}"
+            f"{base_path.stem}_{args.mode}_{run_label}{base_path.suffix}"
         )
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(generate_markdown_report(engine, metrics), encoding="utf-8")
-        results[label] = (engine, metrics, out_path)
-        logger.info(f"✅ [{label}] 報告已輸出至: {out_path.resolve()}")
+        results[run_label] = (engine, metrics, out_path)
+        logger.info(f"✅ [{run_label}] 報告已輸出至: {out_path.resolve()}")
 
     _, base_m, base_out = results["baseline"]
-    _, b_m, b_out = results["iii_b"]
+    _, b_m, b_out = results[label]
 
     def _delta(a: float, b: float) -> str:
         return f"{(b - a) * 100:+.2f} pp"
 
-    summary = f"""# Regime III-B A/B 對比摘要【模式: {args.mode}】
+    def _count(m: BacktestMetrics, scenario: str) -> int:
+        return int(m.scenario_stats.get(scenario, {}).get("count", 0))
+
+    scenario_rows = "\n".join(
+        f"| {sc} | {_count(base_m, sc)} | {_count(b_m, sc)} | "
+        f"{_count(b_m, sc) - _count(base_m, sc):+d} |"
+        for sc in (
+            "SATELLITE_REBALANCE",
+            "PYRAMID_ADD",
+            "MACRO_TOP_ESCAPE_DEFENSE",
+            "REGIME_III_MOMENTUM",
+            "REGIME_III_B_TREND_CONT",
+        )
+    )
+
+    criteria = (
+        _III_B_CRITERIA
+        if feature_key == "iii_b"
+        else _GENERIC_CRITERIA.format(feature_name=feature_name)
+    )
+
+    summary = f"""# {feature_name} A/B 對比摘要【模式: {args.mode}】
 
 > 基準線報告: `{base_out.name}`
-> III-B 報告: `{b_out.name}`
+> {feature_name} 報告: `{b_out.name}`
 
-| 指標 | 基準線 (III-B 關閉) | III-B 啟用 | 差異 |
+| 指標 | 基準線 ({feature_name} 關閉) | {feature_name} 啟用 | 差異 |
 | :--- | :---: | :---: | :---: |
 | 總報酬率 | {base_m.total_return * 100:+.2f}% | {b_m.total_return * 100:+.2f}% | {_delta(base_m.total_return, b_m.total_return)} |
 | **超額報酬 vs 減碼 B&H** | **{base_m.excess_return_vs_scaled * 100:+.2f} pp** | **{b_m.excess_return_vs_scaled * 100:+.2f} pp** | {_delta(base_m.excess_return_vs_scaled, b_m.excess_return_vs_scaled)} |
@@ -312,13 +434,28 @@ def _run_ab_compare(args: argparse.Namespace) -> None:
 | 已實現勝率 | {base_m.win_rate * 100:.1f}% | {b_m.win_rate * 100:.1f}% | {_delta(base_m.win_rate, b_m.win_rate)} |
 | 獲利因子 | {base_m.profit_factor:.2f} | {b_m.profit_factor:.2f} | {b_m.profit_factor - base_m.profit_factor:+.2f} |
 
-## 放行判準 (handoff.md §4.4 / docs/architecture/05 §5.8)
+## 情境觸發次數
+
+| 情境 | 基準線 | {feature_name} 啟用 | 差異 |
+| :--- | ---: | ---: | ---: |
+{scenario_rows}
+
+{criteria}"""
+    summary_path = base_path.with_name(
+        f"{base_path.stem}_{args.mode}_{label}_ab_summary.md"
+    )
+    summary_path.write_text(summary, encoding="utf-8")
+    print("\n" + summary)
+    logger.info(f"✅ A/B 對比摘要已輸出至: {summary_path.resolve()}")
+
+
+_III_B_CRITERIA = """## 放行判準 (handoff.md §4.4 / docs/architecture/05 §5.8)
 
 1. **「超額報酬 vs 減碼 B&H」該列的差異必須為正。** 總報酬上升但這一列下降，代表
    III-B 只是把曝險加回去，沒有創造 alpha——那用調高 `max_satellite_budget_pct`
    就能達成，不需要一條新的進場路徑。
 2. 勝率下降是可接受的（高勝率本來就不是 KPI，見 §6.1）；獲利因子與卡瑪下降則不是。
-3. **先看第 2 節的情境觸發次數，再看本表。** 本回測的衛星進場機會在結構上就極少
+3. **先看上方「情境觸發次數」，再看本表。** 本回測的衛星進場機會在結構上就極少
    （只有 2 個衛星標的，且只在「該標的目前無多頭部位 + 現金高於儲備」時才評估開倉），
    2025 全年右側開倉合計僅個位數。III-B 觸發次數若是個位數，本表的任何差異都在
    雜訊範圍內，**不足以構成放行或否決的證據**——結論只能是「本回測無法判定」。
@@ -329,10 +466,18 @@ def _run_ab_compare(args: argparse.Namespace) -> None:
    （放寬門檻屬「激進方向調整」，依 docs/architecture/05 §5.8 的不對稱原則，
    離線回測不足以背書）。
 """
-    summary_path = base_path.with_name(f"{base_path.stem}_{args.mode}_ab_summary.md")
-    summary_path.write_text(summary, encoding="utf-8")
-    print("\n" + summary)
-    logger.info(f"✅ A/B 對比摘要已輸出至: {summary_path.resolve()}")
+
+_GENERIC_CRITERIA = """## 判讀準則 (handoff.md §6.1 / §6.3)
+
+1. **「超額報酬 vs 減碼 B&H」該列的差異必須為正**，否則 {feature_name} 只是在改變
+   曝險，沒有創造 alpha。
+2. 勝率不是 KPI；看獲利因子、卡瑪與最大回撤是否同步改善或至少不惡化。
+3. **先看「情境觸發次數」**：新增的觸發若是個位數，本表的差異在雜訊範圍內，
+   結論只能是「本回測無法判定」，不可用來背書也不可用來否決。
+4. 本回測以價格代理 GEX 牆、Net GEX 與逃頂評分（Fear & Greed、FedWatch 恆不計分），
+   各功能的觸發條件與 production 並不完全相同；結論只用於排定前向資料的觀察重點，
+   production 的 `*_DRY_RUN` 翻轉仍以前向紀錄為準 (docs/architecture/05 §5.8)。
+"""
 
 
 def main() -> None:
@@ -373,12 +518,40 @@ def main() -> None:
         help=("啟用 Regime III-B 趨勢延續進場路徑 (handoff.md §4)。預設關閉＝基準線。"),
     )
     parser.add_argument(
+        "--enable-tp1-trend-exempt",
+        action="store_true",
+        default=False,
+        help="啟用階段 1A TP1 趨勢豁免複刻 (handoff.md §3.1)。預設關閉＝基準線。",
+    )
+    parser.add_argument(
+        "--enable-pyramid-add",
+        action="store_true",
+        default=False,
+        help="啟用階段 1B PYRAMID_ADD 順勢加碼複刻 (handoff.md §3.2)。預設關閉。",
+    )
+    parser.add_argument(
+        "--enable-escape-tiers",
+        action="store_true",
+        default=False,
+        help=(
+            "啟用階段 3 逃頂三級階梯複刻 (WATCH 保護性 Put / ELEVATED / CRITICAL，"
+            "handoff.md §5)，取代基準線的 VIX>=28 單級減碼。預設關閉。"
+        ),
+    )
+    parser.add_argument(
+        "--ab-feature",
+        type=str,
+        choices=sorted(_AB_FEATURES),
+        default="iii_b",
+        help="--ab-compare 要對照的功能 (預設 iii_b)。stage_1_3 = 1A+1B+3 合併。",
+    )
+    parser.add_argument(
         "--ab-compare",
         action="store_true",
         default=False,
         help=(
-            "A/B 對比模式：同一組參數各跑一次 (III-B 關閉/開啟)，輸出兩份報告與"
-            "一份差異摘要。handoff.md §4.4 要求 III-B 上線前必須通過此對比。"
+            "A/B 對比模式：同一組參數、同一版程式碼各跑一次 (--ab-feature 指定的"
+            "功能關閉/開啟)，輸出兩份報告與一份差異摘要。"
         ),
     )
     args = parser.parse_args()
@@ -402,6 +575,9 @@ def main() -> None:
         end_date=args.end_date,
         mode=args.mode,
         enable_trend_continuation=args.enable_trend_continuation,
+        enable_tp1_trend_exempt=args.enable_tp1_trend_exempt,
+        enable_pyramid_add=args.enable_pyramid_add,
+        enable_escape_tiers=args.enable_escape_tiers,
     )
 
     logger.info("開始執行回測模擬迴圈...")

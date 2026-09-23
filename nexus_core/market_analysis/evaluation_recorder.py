@@ -275,6 +275,80 @@ def record_gate_reason(
         logger.debug(f"[EvalRecorder] gate 記錄失敗: {e}")
 
 
+# 本輪「不出場、改抬棘輪停損」的分層：訊號押注的是**續抱**，方向與部位相同。
+# 其餘分層 (SL 平倉、TP 減碼、極端熔斷、IV 驟降) 押注的是**離場**，方向與部位相反。
+HOLD_EXIT_TIERS: frozenset[str] = frozenset(
+    {"SL_TRAILING_BREAKEVEN", "TP1_TREND_EXEMPT"}
+)
+
+
+def exit_evaluator_name(tier: str, position_side: str) -> str:
+    """出場分層的 evaluator 名稱。
+
+    每個分層、每個部位方向各自獨立：去重鍵 (symbol, evaluator, source, bar_ts)
+    不含 user_id，若共用單一 evaluator，同一根 K 棒上不同使用者的不同分層
+    (例如 A 觸發 SL-結構失效、B 觸發 SL-動態保本) 會互相覆蓋。分開之後，
+    被合併的只剩「同一標的、同一分層、同一方向」——那是同一個事實。
+    """
+    suffix = "_SHORT" if position_side == "SHORT" else ""
+    return f"EXIT_{tier}{suffix}"
+
+
+def record_exit_signal(
+    symbol: str,
+    tier: str,
+    position_side: str,
+    metrics: Mapping[str, Any],
+    stop_level: Optional[float] = None,
+    advisory: bool = False,
+    asset_class: Optional[str] = None,
+) -> None:
+    """記錄微觀結構出場決策矩陣的分層觸發 (handoff §5.4 SL 分層檢討的資料來源)。
+
+    記錄的是引擎的**原始訊號**，而非推播結果：顧問模式 (B&H) 會把多數分層
+    丟棄或改寫為位階告知，但要評估的是「這一層的訊號本身準不準」，所以轉換
+    之前就記錄，並以 `advisory` 旗標讓報告端分開統計。
+
+    `direction` 是訊號押注的方向 (見 `HOLD_EXIT_TIERS`)，讓前向報告沿用
+    「win = 訊號方向先觸及有利帶」的單一語意：多頭部位的 SL 平倉 direction=SHORT，
+    其 win 代表出場後價格確實下跌 (出場正確)，loss 即為被洗盤掃出。
+    停損價刻意不放進 `stop_price` 欄位——那一欄由 labeler 的 `plan_outcome`
+    依 direction 解讀為進場計畫的停損，對出場訊號語意不符。
+    """
+    try:
+        side = "SHORT" if position_side == "SHORT" else "LONG"
+        opposite = "LONG" if side == "SHORT" else "SHORT"
+        _append(
+            {
+                "symbol": symbol.upper(),
+                "evaluator": exit_evaluator_name(tier, side),
+                "direction": side if tier in HOLD_EXIT_TIERS else opposite,
+                "sub_mode": tier,
+                "decision": 1,
+                "spot": _num(metrics.get("spot_price")),
+                "gamma_flip": _num(metrics.get("gamma_flip")),
+                "call_wall": _num(metrics.get("call_wall")),
+                "put_wall": _num(metrics.get("put_wall")),
+                "resistance_wall": _num(metrics.get("resistance_wall")),
+                "net_gex": _num(metrics.get("net_gex")),
+                "session_vwap": _num(metrics.get("session_vwap")),
+                "atr_15m": _num(metrics.get("atr_15m")),
+                "ivr": _num(metrics.get("ivr")),
+                "features_json": {
+                    "position_side": side,
+                    "advisory": bool(advisory),
+                    "asset_class": asset_class,
+                    "avg_cost": _num(metrics.get("avg_cost")),
+                    "stop_level": _num(stop_level),
+                    "ratchet_stop": _num(metrics.get("ratchet_stop")),
+                    "support_wall": _num(metrics.get("support_wall")),
+                },
+            }
+        )
+    except Exception as e:
+        logger.debug(f"[EvalRecorder] exit 記錄失敗: {e}")
+
+
 def pending_count() -> int:
     return len(_BUFFER)
 

@@ -16,8 +16,9 @@
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 import math
+from statistics import NormalDist
 from pathlib import Path
 from typing import Any, Optional
 
@@ -45,6 +46,15 @@ from market_analysis.dynamic_rollover.constants import (
     _MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT,
     _MICROSTRUCTURE_SL_NET_GEX_THRESHOLD,
     _MACRO_TOP_ESCAPE_TRIM_RATIO,
+    _MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO,
+    _MACRO_TOP_ESCAPE_PUT_DTE_MAX,
+    _MACRO_TOP_ESCAPE_PUT_DTE_MIN,
+    _MACRO_TOP_ESCAPE_PUT_TARGET_DELTA,
+    _PYRAMID_COOLDOWN_BARS,
+    _PYRAMID_MAX_ADDS,
+    _PYRAMID_PROFIT_THRESHOLD_PCT,
+    _TP1_TREND_EXEMPT_MIGRATION_PCT,
+    _WATCH_TIER_HEDGE_RATIO,
 )
 from market_analysis.dynamic_rollover.models import (
     RolloverScenario,
@@ -58,7 +68,9 @@ from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     compute_reference_stop,
     evaluate_wall_buffer,
+    resolve_effective_target,
 )
+from market_analysis.outcome_labeling import directional_touch, label_forward_path
 
 
 # --- Regime III-B 趨勢延續態的 1h 代理常數 ---
@@ -511,6 +523,61 @@ class Portfolio:
         return record
 
 
+# --- 階段 3 WATCH 級 Protective Put 複刻 (enable_escape_tiers) ---------------
+# 回測沒有歷史期權鏈，以 BSM 定價、VIX 當 SPY 隱含波動率代理。合約參數沿用
+# production 常數 (Delta / DTE 區間)，其餘為回測專屬的具名假設。
+_HEDGE_PUT_DTE_DAYS: int = (
+    _MACRO_TOP_ESCAPE_PUT_DTE_MIN + _MACRO_TOP_ESCAPE_PUT_DTE_MAX
+) // 2
+_HEDGE_PUT_ROLL_OUT_DTE_DAYS: int = 21  # 剩餘天數低於此值即平倉 (避開 Theta 加速區)
+_HEDGE_PUT_SLIPPAGE_PCT: float = 0.02  # 單邊權利金滑價 (指數期權價差代理)
+_HEDGE_RISK_FREE_RATE: float = 0.045
+_BETA_LOOKBACK_DAYS: int = 60
+_ESCAPE_TIER_COOLDOWN_DAYS: int = 10  # 沿用既有單一事件窗口 10 日去重
+_NORMAL_DIST = NormalDist()
+
+
+def _bsm_put_price(spot: float, strike: float, t_years: float, sigma: float) -> float:
+    if spot <= 0 or strike <= 0:
+        return 0.0
+    if t_years <= 0 or sigma <= 0:
+        return max(strike - spot, 0.0)
+    r = _HEDGE_RISK_FREE_RATE
+    vol_t = sigma * math.sqrt(t_years)
+    d1 = (math.log(spot / strike) + (r + 0.5 * sigma * sigma) * t_years) / vol_t
+    d2 = d1 - vol_t
+    return float(
+        strike * math.exp(-r * t_years) * _NORMAL_DIST.cdf(-d2)
+        - spot * _NORMAL_DIST.cdf(-d1)
+    )
+
+
+def _strike_for_put_delta(
+    spot: float, target_delta: float, t_years: float, sigma: float
+) -> float:
+    """解出 BSM Put Delta = target_delta 的履約價 (Put Delta = N(d1) − 1)。"""
+    d1 = _NORMAL_DIST.inv_cdf(1.0 + target_delta)
+    r = _HEDGE_RISK_FREE_RATE
+    vol_t = sigma * math.sqrt(t_years)
+    return float(spot * math.exp(-(d1 * vol_t - (r + 0.5 * sigma * sigma) * t_years)))
+
+
+@dataclass
+class HedgePut:
+    """回測中唯一的一筆 SPY 保護性 Put (同時最多持有一筆)。"""
+
+    strike: float
+    expiry: date
+    contracts: int
+    entry_premium: float  # 每股權利金 (含滑價)
+    entry_date: str
+    mark: float = 0.0  # 每股最新估值
+
+    @property
+    def value(self) -> float:
+        return self.mark * 100.0 * self.contracts
+
+
 class RolloverBacktestEngine2025:
     """2025 全年度動態轉倉引擎回測核心。"""
 
@@ -522,11 +589,27 @@ class RolloverBacktestEngine2025:
         end_date: str = "2025-12-30",
         mode: str = "aggressive",
         enable_trend_continuation: bool = False,
+        enable_tp1_trend_exempt: bool = False,
+        enable_pyramid_add: bool = False,
+        enable_escape_tiers: bool = False,
     ) -> None:
         self.mode: str = mode.lower()
         # Regime III-B 趨勢延續進場路徑 (handoff.md §4)。預設關閉＝基準線，
         # 開啟後才加入第二條多頭進場路徑，供 §4.4 強制要求的 A/B 對比使用。
         self.enable_trend_continuation: bool = enable_trend_continuation
+        # 階段 1A／1B／3 的複刻開關 (handoff.md §9 待辦 4)。本引擎是 production
+        # 的獨立複刻，這三項功能上線時並未同步進來；跨 commit 對照因此量不到它們，
+        # 必須在同一版程式碼上以開關做 A/B。三者預設關閉＝上線前的回測行為。
+        self.enable_tp1_trend_exempt: bool = enable_tp1_trend_exempt
+        self.enable_pyramid_add: bool = enable_pyramid_add
+        self.enable_escape_tiers: bool = enable_escape_tiers
+        # 出場分層事件 (handoff.md §5.4 SL 分層檢討)。純觀測，不影響任何決策；
+        # 回測結束後由 label_exit_events() 以 production 共用的前向路徑定義標註。
+        self.exit_events: list[dict[str, Any]] = list()
+        self._bar_counter: int = 0
+        self.active_hedge: Optional[HedgePut] = None
+        self.escape_tier_history: dict[str, int] = dict()
+        self.last_escape_tier_date: dict[str, date] = dict()
         self.cache_dir: Path = (
             cache_dir
             if cache_dir is not None
@@ -547,6 +630,7 @@ class RolloverBacktestEngine2025:
         self.alpha_symbol: str = "NVDA"
         self.other_symbol: str = "GLD"
         self.vix_symbol: str = "^VIX"
+        self.vix3m_symbol: str = "^VIX3M"
 
         # 模式參數調配 (進攻型 vs 防禦型)
         if self.mode == "aggressive":
@@ -617,6 +701,13 @@ class RolloverBacktestEngine2025:
                     raise RuntimeError(f"缺失 {sym} 1h 歷史資料")
                 self.hourly_data[sym] = h
                 self.hourly_feat[sym] = hourly_features(h, self.daily_feat[sym])
+
+        # VTS (VIX / VIX3M) 只供逃頂分級代理使用；缺資料時該因子不計分。
+        if self.enable_escape_tiers or self.enable_pyramid_add:
+            v3 = self.store.load("1d", self.vix3m_symbol)
+            if v3 is not None and not v3.empty:
+                self.daily_data[self.vix3m_symbol] = v3
+                self.daily_feat[self.vix3m_symbol] = daily_features(v3)
 
         # 篩選出 2025 年交易日
         spy_dfeat = self.daily_feat[self.core_symbol]
@@ -845,6 +936,8 @@ class RolloverBacktestEngine2025:
                 self.other_symbol: gld_open,
             }
             morning_nav = self.portfolio.get_total_nav(current_prices)
+            if self.active_hedge is not None:
+                morning_nav += self.active_hedge.value
 
             # 計算各標的日線 PSQ 與 EV Proxy
             # NVDA & GLD 動能與 EV
@@ -979,7 +1072,22 @@ class RolloverBacktestEngine2025:
             # 3. 情境六: MACRO_TOP_ESCAPE_DEFENSE (宏觀逃頂防禦減碼 25%)
             # -------------------------------------------------------------
             # 當 VIX 嚴重倒掛或恐慌/亢奮合流，進行 25% 防禦性減碼至現金 (單一危機事件窗口僅觸發一次，防範連環削皮)
-            if vix_prev >= 28.0:
+            # 逃頂分級 (production evaluate_macro_top_escape_score 的代理輸入)。
+            # 只有開啟分級或 PYRAMID_ADD (條件八) 時才計算，基準線零額外成本。
+            macro_tier = "NORMAL"
+            if self.enable_escape_tiers or self.enable_pyramid_add:
+                macro_tier = self._resolve_escape_tier(
+                    current_date, current_prices, spy_gamma_flip
+                )
+            if macro_tier != "NORMAL":
+                self.escape_tier_history[macro_tier] = (
+                    self.escape_tier_history.get(macro_tier, 0) + 1
+                )
+            if self.enable_escape_tiers:
+                self._apply_escape_tier(
+                    macro_tier, current_date, current_prices, vix_prev, date_str
+                )
+            elif vix_prev >= 28.0:
                 is_escape_cd = (
                     self.last_macro_escape_date is not None
                     and (current_date - self.last_macro_escape_date).days < 10
@@ -1313,6 +1421,7 @@ class RolloverBacktestEngine2025:
             num_bars = min(len(spy_hours), len(nvda_hours), len(gld_hours))
 
             for b_idx in range(num_bars):
+                self._bar_counter += 1
                 nvda_bar = nvda_hours.iloc[b_idx]
                 gld_bar = gld_hours.iloc[b_idx]
 
@@ -1670,6 +1779,16 @@ class RolloverBacktestEngine2025:
 
                     # SL1: 結構失效 (跌破 stop_loss)
                     if spot_val < pos.stop_loss and pos.stop_loss > 0:
+                        # 停損已被 SL4／Transition 上推至成本之上時，觸發的其實是
+                        # 保本停損而非原始結構停損——兩者的洗盤率要分開看。
+                        self._log_exit_event(
+                            sat_sym,
+                            "SL_BREAKEVEN_STOP"
+                            if pos.stop_loss >= pos.avg_cost
+                            else "SL_STRUCTURAL",
+                            bar,
+                            spot_val,
+                        )
                         self.portfolio.sell(
                             symbol=sat_sym,
                             price=spot_val,
@@ -1687,6 +1806,7 @@ class RolloverBacktestEngine2025:
                         net_gex_val <= _MICROSTRUCTURE_SL_NET_GEX_THRESHOLD
                         and pos.return_pct < -0.02
                     ):
+                        self._log_exit_event(sat_sym, "SL_REGIME_FLIP", bar, spot_val)
                         self.portfolio.sell(
                             symbol=sat_sym,
                             price=spot_val,
@@ -1722,8 +1842,24 @@ class RolloverBacktestEngine2025:
                     is_tp1 = (not pos.tp1_triggered) and (
                         spot_val >= cw_val * _MICROSTRUCTURE_TP1_CALLWALL_PCT
                     )
+                    # 1A TP1 趨勢豁免 (production anti_washout.py)：牆仍在上移 +
+                    # 正 Gamma + 站上 VWAP 時不減碼，改抬停損至 anchor_base。
+                    # TP2/TP3 優先序不受影響 (只在單純 TP1 時才評估豁免)。
+                    if (
+                        self.enable_tp1_trend_exempt
+                        and is_tp1
+                        and not is_tp2
+                        and not is_tp3
+                        and self._is_tp1_trend_exempt(
+                            sat_sym, current_date, bar, spot_val, net_gex_val
+                        )
+                    ):
+                        is_tp1 = False
+                        pos.stop_loss = max(pos.stop_loss, pos.anchor_base)
+                        self._log_exit_event(sat_sym, "TP1_TREND_EXEMPT", bar, spot_val)
 
                     if is_tp3:
+                        self._log_exit_event(sat_sym, "TP3", bar, spot_val)
                         pos.tp3_triggered = True
                         self.portfolio.sell(
                             symbol=sat_sym,
@@ -1735,6 +1871,7 @@ class RolloverBacktestEngine2025:
                             date_str=date_str,
                         )
                     elif is_tp2:
+                        self._log_exit_event(sat_sym, "TP2", bar, spot_val)
                         pos.tp2_triggered = True
                         self.portfolio.sell(
                             symbol=sat_sym,
@@ -1746,6 +1883,7 @@ class RolloverBacktestEngine2025:
                             date_str=date_str,
                         )
                     elif is_tp1:
+                        self._log_exit_event(sat_sym, "TP1", bar, spot_val)
                         pos.tp1_triggered = True
                         self.portfolio.sell(
                             symbol=sat_sym,
@@ -1755,6 +1893,24 @@ class RolloverBacktestEngine2025:
                             reason=f"🎯 TP1 阻力初探：現價 ${spot_val:.2f} 達阻力牆 ${cw_val:.2f} 之 {_MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%}，平倉 {self.tp1_ratio:.0%}",
                             timestamp=ts_str,
                             date_str=date_str,
+                        )
+                    elif self.enable_pyramid_add:
+                        self._try_pyramid_add(
+                            sat_sym,
+                            current_date,
+                            pos,
+                            bar,
+                            spot_val,
+                            cw_val,
+                            pw_val,
+                            gf_val,
+                            atr_15m_val,
+                            net_gex_val,
+                            morning_nav,
+                            vix_prev,
+                            macro_tier,
+                            ts_str,
+                            date_str,
                         )
 
             # -----------------------------------------------------------------
@@ -1782,6 +1938,8 @@ class RolloverBacktestEngine2025:
                 self.other_symbol: gld_close,
             }
             daily_nav = self.portfolio.get_total_nav(close_prices)
+            if self.active_hedge is not None:
+                daily_nav += self._mark_hedge(current_date, spy_close, date_str)
 
             # 基準投組合約價值
             bench_spy_val = self.benchmark_shares[self.core_symbol] * spy_close
@@ -1845,6 +2003,430 @@ class RolloverBacktestEngine2025:
                     benchmark_daily_return=bench_ret,
                 )
             )
+
+    # ------------------------------------------------------------------
+    # 階段 1A／1B／3 複刻與出場分層事件 (handoff.md §9 待辦 3、4)
+    # ------------------------------------------------------------------
+    def _prior_row(
+        self, symbol: str, current_date: date, lag: int = 1
+    ) -> Optional[pd.Series]:
+        """第 lag 個前一交易日的日線列 (lag=1 等同 _get_daily_proxy_row)。"""
+        f = self.daily_feat.get(symbol)
+        if f is None:
+            return None
+        prior = f[f["date"] < current_date]
+        if len(prior) < lag:
+            return None
+        return prior.iloc[-lag]
+
+    def _close_on(self, symbol: str, current_date: date) -> Optional[float]:
+        f = self.daily_feat.get(symbol)
+        if f is None:
+            return None
+        rows = f[f["date"] == current_date]
+        return float(rows["close"].iloc[0]) if not rows.empty else None
+
+    def _resolve_escape_tier(
+        self,
+        current_date: date,
+        current_prices: dict[str, float],
+        spy_gamma_flip: float,
+    ) -> str:
+        """以 production 評分函式計算逃頂分級，輸入全為前一日已知資訊的代理：
+
+        - VTS = VIX / VIX3M (前一日收盤)；缺 VIX3M 時以 0.88 (正價差) 代入＝不計分
+        - 大盤負 Gamma = SPY 開盤 < SMA20 (與本引擎 MARGIN_DEFENSE 同一代理)
+        - 衛星亢奮廣度 = 多頭衛星中開盤已達 10 日高點 × TP1 比例的比例
+        - Fear & Greed、FedWatch 無歷史資料，以中性值代入＝這兩個因子恆不計分
+
+        因此代理分數上限為 3 (CRITICAL 需要三個可觀測因子同時成立)，觸發頻率
+        必然低估 production——報告中必須揭露。
+        """
+        from market_analysis.index_microstructure import (
+            evaluate_macro_top_escape_score,
+        )
+
+        vix_prev = self._get_vix_prev(current_date)
+        v3_row = self._prior_row(self.vix3m_symbol, current_date)
+        vix3m_prev = float(v3_row["close"]) if v3_row is not None else 0.0
+        vts_ratio = vix_prev / vix3m_prev if vix3m_prev > 0 else 0.88
+
+        spy_open = current_prices.get(self.core_symbol, 0.0)
+        is_negative_gamma = spy_open > 0 and spy_open < spy_gamma_flip
+
+        longs = [
+            sym
+            for sym in (self.alpha_symbol, self.other_symbol)
+            if self.portfolio.has_long(sym)
+        ]
+        euphoria_ratio: Optional[float] = None
+        if longs:
+            hits = 0
+            for sym in longs:
+                row = self._prior_row(sym, current_date)
+                if (
+                    row is not None
+                    and current_prices.get(sym, 0.0)
+                    >= float(row["high10"]) * _MICROSTRUCTURE_TP1_CALLWALL_PCT
+                ):
+                    hits += 1
+            euphoria_ratio = hits / len(longs)
+
+        _score, tier, _title, _factors = evaluate_macro_top_escape_score(
+            vts_ratio=vts_ratio,
+            fear_greed=48.0,
+            prob=None,
+            is_negative_gamma=is_negative_gamma,
+            satellite_euphoria_ratio=euphoria_ratio,
+        )
+        return str(tier)
+
+    def _apply_escape_tier(
+        self,
+        tier: str,
+        current_date: date,
+        current_prices: dict[str, float],
+        vix_prev: float,
+        date_str: str,
+    ) -> None:
+        """階段 3 三級階梯：WATCH 買 SPY 保護性 Put、ELEVATED 減碼 25%、CRITICAL
+        減碼 50%。每一級各自沿用 10 日單一事件窗口去重 (升級不被較低級的冷卻擋住)。"""
+        if tier == "NORMAL":
+            return
+        last = self.last_escape_tier_date.get(tier)
+        if last is not None and (current_date - last).days < _ESCAPE_TIER_COOLDOWN_DAYS:
+            return
+        if tier == "WATCH":
+            if self._open_watch_hedge(current_date, current_prices, vix_prev, date_str):
+                self.last_escape_tier_date[tier] = current_date
+            return
+        ratio = (
+            _MACRO_TOP_ESCAPE_TRIM_RATIO
+            if tier == "CRITICAL"
+            else _MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO
+        )
+        trimmed = False
+        for sat_sym in (self.alpha_symbol, self.other_symbol):
+            if self.portfolio.has_long(sat_sym):
+                self.portfolio.sell(
+                    symbol=sat_sym,
+                    price=current_prices[sat_sym],
+                    ratio=ratio,
+                    scenario=RolloverScenario.MACRO_TOP_ESCAPE_DEFENSE.value,
+                    reason=f"🛡️ 逃頂分級 {tier}：衛星減碼 {ratio:.0%} 增持防禦現金",
+                    timestamp=f"{date_str} 09:30:00",
+                    date_str=date_str,
+                )
+                trimmed = True
+        if trimmed:
+            self.last_escape_tier_date[tier] = current_date
+
+    def _beta_vs_spy(self, symbol: str, current_date: date) -> float:
+        if symbol == self.core_symbol:
+            return 1.0
+        a = self.daily_feat[symbol]
+        b = self.daily_feat[self.core_symbol]
+        ra = a[a["date"] < current_date].set_index("date")["close"].pct_change()
+        rb = b[b["date"] < current_date].set_index("date")["close"].pct_change()
+        joined = (
+            pd.concat([ra, rb], axis=1, join="inner").dropna().tail(_BETA_LOOKBACK_DAYS)
+        )
+        if len(joined) < 20:
+            return 1.0
+        var_b = float(joined.iloc[:, 1].var())
+        if var_b <= 0:
+            return 1.0
+        return float(joined.iloc[:, 0].cov(joined.iloc[:, 1]) / var_b)
+
+    def _open_watch_hedge(
+        self,
+        current_date: date,
+        current_prices: dict[str, float],
+        vix_prev: float,
+        date_str: str,
+    ) -> bool:
+        """WATCH 級：Q_put = ceil(Δβ × ρ / (|Δput| × 100))，Δβ 以 SPY 股數等值計。"""
+        if self.active_hedge is not None:
+            return False
+        spy_price = current_prices.get(self.core_symbol, 0.0)
+        if spy_price <= 0:
+            return False
+        weighted_delta = 0.0
+        for sym, pos in self.portfolio.positions.items():
+            if pos.side != "LONG" or pos.shares <= 0:
+                continue
+            price = current_prices.get(sym, pos.current_price)
+            weighted_delta += (
+                pos.shares * price * self._beta_vs_spy(sym, current_date) / spy_price
+            )
+        if weighted_delta <= 0:
+            return False
+        contracts = math.ceil(
+            weighted_delta
+            * _WATCH_TIER_HEDGE_RATIO
+            / (abs(_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA) * 100.0)
+        )
+        sigma = max(vix_prev, 1.0) / 100.0
+        t_years = _HEDGE_PUT_DTE_DAYS / 365.0
+        strike = _strike_for_put_delta(
+            spy_price, _MACRO_TOP_ESCAPE_PUT_TARGET_DELTA, t_years, sigma
+        )
+        premium = _bsm_put_price(spy_price, strike, t_years, sigma) * (
+            1.0 + _HEDGE_PUT_SLIPPAGE_PCT
+        )
+        cost = premium * 100.0 * contracts
+        if contracts < 1 or premium <= 0 or cost > max(0.0, self.portfolio.cash):
+            return False
+        self.portfolio.cash -= cost
+        self.active_hedge = HedgePut(
+            strike=strike,
+            expiry=current_date + timedelta(days=_HEDGE_PUT_DTE_DAYS),
+            contracts=contracts,
+            entry_premium=premium,
+            entry_date=date_str,
+            mark=premium,
+        )
+        self.portfolio.trades.append(
+            TradeRecord(
+                timestamp=f"{date_str} 09:30:00",
+                date=date_str,
+                symbol="SPY_PUT",
+                action="BUY",
+                shares=float(contracts * 100),
+                price=premium,
+                notional=cost,
+                fee=0.0,
+                scenario=RolloverScenario.MACRO_TOP_ESCAPE_DEFENSE.value,
+                reason=(
+                    f"🛡️ 逃頂分級 WATCH：買入 {contracts} 口 SPY "
+                    f"${strike:.0f} Put ({_HEDGE_PUT_DTE_DAYS}DTE, "
+                    f"Δ≈{_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA:.3f})，保留 100% 上檔曝險"
+                ),
+            )
+        )
+        return True
+
+    def _mark_hedge(self, current_date: date, spy_close: float, date_str: str) -> float:
+        """收盤估值；剩餘天數低於 _HEDGE_PUT_ROLL_OUT_DTE_DAYS 即平倉。回傳估值
+        (已平倉則為 0.0，權利金回收已入現金)。"""
+        hedge = self.active_hedge
+        if hedge is None:
+            return 0.0
+        vix_close = self._close_on(self.vix_symbol, current_date) or self._get_vix_prev(
+            current_date
+        )
+        days_left = (hedge.expiry - current_date).days
+        hedge.mark = _bsm_put_price(
+            spy_close, hedge.strike, max(days_left, 0) / 365.0, vix_close / 100.0
+        )
+        if days_left > _HEDGE_PUT_ROLL_OUT_DTE_DAYS:
+            return hedge.value
+        exit_price = hedge.mark * (1.0 - _HEDGE_PUT_SLIPPAGE_PCT)
+        proceeds = exit_price * 100.0 * hedge.contracts
+        self.portfolio.cash += proceeds
+        self.portfolio.trades.append(
+            TradeRecord(
+                timestamp=f"{date_str} 16:00:00",
+                date=date_str,
+                symbol="SPY_PUT",
+                action="SELL",
+                shares=float(hedge.contracts * 100),
+                price=exit_price,
+                notional=proceeds,
+                fee=0.0,
+                scenario=RolloverScenario.MACRO_TOP_ESCAPE_DEFENSE.value,
+                reason=f"🛡️ 保護性 Put 剩餘 {days_left} 天，平倉避開 Theta 加速區",
+                realized_pnl=proceeds - hedge.entry_premium * 100.0 * hedge.contracts,
+            )
+        )
+        self.active_hedge = None
+        return 0.0
+
+    def _is_tp1_trend_exempt(
+        self,
+        symbol: str,
+        current_date: date,
+        bar: pd.Series,
+        spot: float,
+        net_gex_proxy: float,
+    ) -> bool:
+        """1A 豁免條件的代理：牆 = 10 日高點 (本引擎 TP 階梯既有的 Call Wall 代理)，
+        遷移以「昨日 vs 前日」的 10 日高點比較 (皆為已收盤資訊，無前視)。"""
+        cur = self._prior_row(symbol, current_date, lag=1)
+        prev = self._prior_row(symbol, current_date, lag=2)
+        if cur is None or prev is None:
+            return False
+        wall_now = float(cur["high10"])
+        wall_prev = float(prev["high10"])
+        if wall_prev <= 0:
+            return False
+        migration = (wall_now - wall_prev) / wall_prev
+        session_vwap = float(bar["session_vwap"])
+        return (
+            migration >= _TP1_TREND_EXEMPT_MIGRATION_PCT
+            and net_gex_proxy > 0.0
+            and session_vwap > 0.0
+            and spot > session_vwap
+        )
+
+    def _try_pyramid_add(
+        self,
+        symbol: str,
+        current_date: date,
+        pos: Position,
+        bar: pd.Series,
+        spot: float,
+        call_wall: float,
+        put_wall: float,
+        gamma_flip: float,
+        atr_15m: float,
+        net_gex_proxy: float,
+        nav: float,
+        vix_prev: float,
+        macro_tier: str,
+        ts_str: str,
+        date_str: str,
+    ) -> None:
+        """1B PYRAMID_ADD 八項條件 (production pyramid_add.py) 的複刻。倉位直接呼叫
+        production 的 compute_pyramid_add_sizing，冷卻以 1h K 棒換算 (8 根 15m =
+        2 根 1h)。"""
+        if pos.avg_cost <= 0 or spot <= 0:
+            return
+        # 條件一：獲利門檻
+        if (spot - pos.avg_cost) / pos.avg_cost < _PYRAMID_PROFIT_THRESHOLD_PCT:
+            return
+        # 條件二：停損已在成本之上 (不變式，不得放寬)
+        if pos.stop_loss < pos.avg_cost:
+            return
+        # 條件三：趨勢結構完好
+        session_vwap = float(bar["session_vwap"])
+        if not (
+            session_vwap > 0
+            and spot > session_vwap
+            and gamma_flip > 0
+            and spot > gamma_flip
+            and net_gex_proxy > 0.0
+        ):
+            return
+        # 條件五：次數上限
+        count = int(pos.dynamic_state.get("pyramid_count", 0))
+        if count >= _PYRAMID_MAX_ADDS:
+            return
+        # 條件六：冷卻 (15m bar 數換算為 1h bar)
+        last_bar = pos.dynamic_state.get("last_pyramid_bar")
+        cooldown_1h = max(1, math.ceil(_PYRAMID_COOLDOWN_BARS / 4))
+        if last_bar is not None and self._bar_counter - int(last_bar) < cooldown_1h:
+            return
+        # 條件四：晴空萬里有效目標天花板空間
+        row = self._prior_row(symbol, current_date)
+        high_60d = float(row["high60"]) if row is not None else 0.0
+        atr_1d = float(bar["atr14_prev"])
+        eff = resolve_effective_target(spot, call_wall, high_60d, atr_1d)
+        room = compute_dynamic_room_threshold(
+            spot, put_wall, atr_15m, atr_1d, direction="LONG"
+        )
+        room_pct = (eff.target - spot) / spot if eff.target > 0 else 0.0
+        if room_pct < room.threshold_pct:
+            return
+        # 條件八：非逃頂警戒
+        if macro_tier != "NORMAL":
+            return
+
+        from market_analysis.dynamic_rollover.pyramid_add import (
+            compute_pyramid_add_sizing,
+        )
+
+        rsi = float(bar["rsi"]) if pd.notna(bar["rsi"]) else None
+        sizing = compute_pyramid_add_sizing(
+            spot, pos.stop_loss, nav, None, vix_prev, rsi
+        )
+        qty = sizing.share_qty
+        # 條件七：加碼後曝險不得超過單筆衛星預算上限，超過則降量
+        remaining = nav * self.max_satellite_budget_pct - abs(pos.current_value)
+        if remaining <= 0:
+            return
+        qty = min(qty, int(math.floor(remaining / spot)))
+        if qty < 1:
+            return
+        record = self.portfolio.buy(
+            symbol=symbol,
+            asset_class="SATELLITE",
+            price=spot,
+            notional=qty * spot,
+            scenario="PYRAMID_ADD",
+            reason=(
+                f"📈 順勢金字塔加碼第 {count + 1}/{_PYRAMID_MAX_ADDS} 次：{qty} 股 "
+                f"(風險預算 ${sizing.risk_budget_usd:,.0f} ÷ 停損距離 "
+                f"${spot - pos.stop_loss:.2f})"
+            ),
+            timestamp=ts_str,
+            date_str=date_str,
+        )
+        if record is not None:
+            pos.dynamic_state["pyramid_count"] = count + 1
+            pos.dynamic_state["last_pyramid_bar"] = self._bar_counter
+
+    def _log_exit_event(
+        self, symbol: str, tier: str, bar: pd.Series, spot: float
+    ) -> None:
+        self.exit_events.append(
+            {
+                "symbol": symbol,
+                "tier": tier,
+                "ts": bar.name,
+                "spot": float(spot),
+                "atr_1d": float(bar["atr14_prev"]),
+            }
+        )
+
+    def label_exit_events(self) -> list[dict[str, Any]]:
+        """以 production 的前向路徑定義 (outcome_labeling.py，±1.5×ATR₁D 先觸及)
+        標註每筆出場分層事件。方向語意與 evaluation_recorder.record_exit_signal
+        一致：平倉類押注 SHORT (outcome=+1 出場正確、−1 被洗盤)，抬停損類押注 LONG。"""
+        from market_analysis.evaluation_recorder import HOLD_EXIT_TIERS
+
+        labeled: list[dict[str, Any]] = list()
+        for ev in self.exit_events:
+            bars = self.hourly_data.get(ev["symbol"])
+            if bars is None:
+                continue
+            label = label_forward_path(
+                bars, pd.Timestamp(ev["ts"]).to_pydatetime(), ev["spot"], ev["atr_1d"]
+            )
+            if label is None:
+                continue
+            touch = next(t.touch for t in label.touches if abs(t.k - 1.5) < 1e-9)
+            direction = "LONG" if ev["tier"] in HOLD_EXIT_TIERS else "SHORT"
+            labeled.append(
+                {
+                    **ev,
+                    "direction": direction,
+                    "outcome": directional_touch(touch, direction),
+                    "fwd_ret_5d": label.fwd_ret_5d,
+                }
+            )
+        return labeled
+
+    def summarize_exit_events(self) -> list[dict[str, Any]]:
+        """依分層彙總：n、訊號正確率、洗盤率、逾時率、5 日報酬中位數。"""
+        rows = self.label_exit_events()
+        tiers = sorted({r["tier"] for r in rows})
+        out: list[dict[str, Any]] = list()
+        for tier in tiers:
+            grp = [r for r in rows if r["tier"] == tier]
+            n = len(grp)
+            fwd = [r["fwd_ret_5d"] for r in grp if r["fwd_ret_5d"] is not None]
+            out.append(
+                {
+                    "tier": tier,
+                    "n": n,
+                    "correct_rate": sum(r["outcome"] == 1 for r in grp) / n,
+                    "washout_rate": sum(r["outcome"] == -1 for r in grp) / n,
+                    "timeout_rate": sum(r["outcome"] == 0 for r in grp) / n,
+                    "median_fwd_ret_5d": float(np.median(fwd)) if fwd else None,
+                }
+            )
+        return out
 
     def calculate_metrics(self) -> BacktestMetrics:
         """計算完備的量化指標與基準對比。"""

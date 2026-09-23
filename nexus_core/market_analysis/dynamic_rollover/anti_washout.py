@@ -1358,6 +1358,36 @@ class _AntiWashoutMixin:
         }
 
 
+def _record_exit_tier(
+    symbol: str,
+    report: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    quantity: float,
+    asset: Mapping[str, Any],
+    asset_class: str,
+    stop_loss_gate: float,
+) -> None:
+    """把本輪觸發的出場分層送進前向蒐集 (evaluation_recorder)，供 SL 分層
+    洗盤率檢討使用。必須在顧問模式轉換**之前**呼叫——評估對象是引擎訊號本身，
+    被顧問模式丟棄的分層同樣要記錄 (以 advisory 旗標區分)。
+    未觸發分層 (exit_tier=None，含常規比例控管 REDUCE) 不記錄。"""
+    tier = report.get("exit_tier")
+    if not tier:
+        return
+    from market_analysis.evaluation_recorder import record_exit_signal
+
+    new_stop = report.get("new_ratchet_stop")
+    record_exit_signal(
+        symbol,
+        str(tier),
+        "SHORT" if quantity < 0 else "LONG",
+        metrics,
+        stop_level=float(new_stop) if new_stop is not None else stop_loss_gate,
+        advisory=is_advisory_asset(asset),
+        asset_class=asset_class,
+    )
+
+
 def _net_and_build_rebalance_instruction(
     engine: Any,
     symbol: str,
@@ -1912,6 +1942,15 @@ async def check_satellite_rebalancing_impl(
                     tp1_ratio=risk_profile.tp1_ratio,
                 )
 
+                _record_exit_tier(
+                    symbol,
+                    report,
+                    metrics,
+                    quantity,
+                    asset,
+                    asset_class,
+                    stop_loss_gate,
+                )
                 default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
                 tier_instruction = _net_and_build_rebalance_instruction(
                     engine,
@@ -1964,6 +2003,15 @@ async def check_satellite_rebalancing_impl(
                     tp1_ratio=risk_profile.tp1_ratio,
                 )
 
+                _record_exit_tier(
+                    symbol,
+                    report,
+                    metrics,
+                    quantity,
+                    asset,
+                    asset_class,
+                    stop_loss_gate,
+                )
                 default_sell_ratio = (
                     round(sell_ratio, 2)
                     if report["final_action"] != "LIQUIDATE"

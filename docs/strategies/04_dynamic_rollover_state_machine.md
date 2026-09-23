@@ -173,6 +173,30 @@ $$\text{Qty} = \min\Big(\Big\lfloor \frac{\text{Capital} \times \min(0.5\%,\ f_{
 - **`COVERED_CALL_PROFIT_LOCK`（情境五/七，觸發 35 次，已實現損益 +$1,502.66）**：在 SPY 核心部位升值觸及阻力牆時每週賣出虛值 Covered Call 覆蓋，創造穩定的權利金現金流。
 - **`TRANSITION_ENGINE`（情境八，觸發 2 次，100% 成功進化）**：GLD 於 Put Wall 超跌接刀建倉後，帶量站穩 VWAP 與 Gamma Flip 觸發演化狀態機，停損上推至保本點消除本金承險，隨後在 TP2 與 TP3 高位停利。
 
+#### 2.10.4 判讀：引擎被「減碼 B&H」支配，勝率不再是 KPI
+
+上表的高勝率與低回撤**不代表引擎創造了 alpha**。進攻型年化波動 10.81% 只有 B&H 的 53.8%，等於平均只承擔約 54% 的曝險。拿同等曝險的「54% B&H + 46% 現金（$R_f = 4.5\%$）」當對照組：
+
+$$
+R \approx 0.54 \times 27.77\% + 0.46 \times 4.5\% \approx 17.07\%, \qquad
+\text{MDD} \approx 0.54 \times 16.80\% \approx 9.07\%, \qquad
+\text{Sharpe} \approx \frac{17.07 - 4.5}{10.81} \approx 1.16
+$$
+
+報酬、回撤、Sharpe 三項都優於進攻型（16.64% / 11.81% / 1.14）——整套情境引擎被「單純減碼持有」**Pareto 支配**。83.9% 的勝率是反覆砍獲利部位造成的低賺賠比副產品，不是優勢。後續的曝險遞增三件套（TP1 趨勢豁免、§2.11 `PYRAMID_ADD`、晴空萬里天花板）與 Regime III-B 都是為了讓部位曝險在趨勢中能夠**遞增**，而非持續遞減；任何「再加一道風控閘門」方向的提案都會讓問題惡化。
+
+**策略績效 KPI（依重要性排序）**：
+
+| 指標 | 定義 | 目標 |
+| :--- | :--- | :--- |
+| **超額報酬 vs 減碼 B&H** | $R_{\text{strategy}} - R_{\text{同等年化波動的 B\&H + 現金}}$ | **> 0**（回答「是創造 alpha，還是只是降低曝險」） |
+| 超額報酬 vs B&H | $R_{\text{strategy}} - R_{\text{B\&H}}$ | > 0 |
+| 卡瑪比率 | CAGR / MDD | > 1.68（B&H 水準） |
+| 賺賠比 | 平均獲利 / 平均虧損 | > 1.5 |
+| 交易頻率 | 全年調度筆數 | 150–250 |
+
+每份回測報告都必須附上「超額報酬 vs 減碼 B&H」對照組（`BacktestMetrics.excess_return_vs_scaled`），各功能以 `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature <功能>` 在同一版程式碼上對照；判讀準則與 2026-09 的結果見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8／§5.12。**已實現勝率僅作描述，不得作為優化目標。**
+
 ### 2.11 情境十：順勢金字塔加碼 (`PYRAMID_ADD`)
 
 讓右側進場的獲利部位在趨勢延續時**加碼**，而非只能減碼——直接對症 §2.10 揭露的「曝險單調遞減、沒有遞增路徑」問題。與情境八 `TRANSITION_ENGINE` 的 `OPEN_PYRAMID`（Regime 演化驅動的一次性狀態切換，`state["pyramided"]` 旗標保證只觸發一次）刻意分離：本情境是「任何右側獲利倉在趨勢延續時的例行加碼」，可重複觸發至 $\text{\_PYRAMID\_MAX\_ADDS} = 2$ 次；兩者最終皆路由到同一個 `action == "OPEN_PYRAMID"` 下游派發分支，靠 `scenario` 欄位區分文案與資料。
@@ -281,7 +305,7 @@ flowchart TD
 | `_PYRAMID_COOLDOWN_BARS` | `8`（15m bar，即 2 小時） | `PYRAMID_ADD` 條件六：加碼冷卻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_PYRAMID_ACCOUNT_RISK_PCT` | `0.005` ($0.5\%$) | `PYRAMID_ADD` 單筆加碼帳戶風險上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_PYRAMID_KELLY_SCALE` / `_PYRAMID_KELLY_CAP` | `0.5` / `0.01` | `PYRAMID_ADD` 凱利分數縮放與上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `PYRAMID_ADD_DRY_RUN` | `true` | `PYRAMID_ADD` 只寫稽核紀錄不推播 | `nexus_core/config.py` |
+| `PYRAMID_ADD_DRY_RUN` | `true` | `PYRAMID_ADD` 只寫稽核紀錄不推播；翻轉判準見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 F | `nexus_core/config.py` |
 | `REGIME_III_B_DRY_RUN` | `true` | 由 Regime III-B（右側趨勢延續態）確認出的指令只寫稽核紀錄不推播。⚠️ 本閘門以指令的 `entry_regime` 欄位為鍵，**不是** `scenario`——III-B 放寬的是進場判定，由它確認的指令會同時出現在 `OPPORTUNITY_COST` 與 `CORE_DEPLOYMENT` 兩個情境下 | `nexus_core/config.py` |
 | BOXX 常規清算上限 | `180` 股 (換算 $\$21{,}000$) | `/stress_test` 計算 BOXX 應急套現額度之股數硬上限 | `nexus_core/cogs/unified_terminal/cog.py` |
 | 實體提領紅線 | `$13,000` | `/stress_test` 判定 `is_critical` 時額外揭露之提領額度警戒線 | `nexus_core/cogs/embed_builders/scan_embeds/risk_stress_test.py` |

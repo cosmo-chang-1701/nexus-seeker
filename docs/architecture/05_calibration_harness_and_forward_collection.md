@@ -236,10 +236,31 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 1. `ENTRY_RIGHT_B` 且 `decision = 1` 的已標註紀錄 $\ge 100$ 筆、橫跨 $\ge 30$ 個交易日。該路徑刻意使用**獨立的 evaluator 名稱**（而非沿用 `ENTRY_RIGHT`）：`regime_evaluation_log` 的去重鍵為 `(symbol, evaluator, source, bar_ts)`，同名會讓同一根 K 棒的嚴格／放寬兩套判定互相覆蓋，A/B 分離統計即不可能。
 2. `ENTRY_RIGHT_B` 的期望值**高於同期 `ENTRY_RIGHT`**。只贏過零不夠——若放寬後的期望值低於嚴格版，代表多出來的那些進場機會是負向的。
-3. `scripts/run_rollover_backtest_2025.py --ab-compare` 的「超額報酬 vs 減碼 B&H」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
+3. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature iii_b` 的「超額報酬 vs 減碼 B&H」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
+
+**2026-09-19 A/B 結果：無法判定，條件 3 視為尚未成立。**
+
+| 模式 | 右側開倉（基準 → III-B） | 超額報酬 vs 減碼 B&H | 獲利因子 |
+| :--- | :--- | :---: | :---: |
+| aggressive | III 5 次 → III 4 + III-B 1 次（總數不變） | −4.14 → −4.04 pp（**+0.09 pp**） | 1.85 → 1.88 |
+| defensive | III 3 次 → III 1 + III-B 3 次（+1 次） | −1.76 → −1.92 pp（**−0.16 pp**） | 3.28 → 3.48 |
+
+- 樣本是個位數；aggressive 的 III-B 並未新增進場，而是比 Regime III 早一根觸發、**取代**了原本的進場。
+- 兩個模式方向相反，只看 aggressive 宣稱通過屬於挑選結果。
+- 唯一值得記下的訊號是兩個模式的獲利因子都上升（defensive 勝率下降而獲利因子上升），符合「賺賠比改善」的期待形狀，但 n=1~3 只能列為待前向資料驗證的假設。
+- 階段 2 是在階段 0／1／3 上線同日提交的（2026-09-18），原本「觀察 4 週前向資料後才開工」的節奏未被遵循。程式碼先行是刻意取捨（乾跑旗標使其對使用者零行為變化），但**上列四項判準一項都不放寬**。
+
+**F. 開啟順勢金字塔加碼推播（`PYRAMID_ADD_DRY_RUN` 改為 `false`）**，須同時成立：
+
+1. 乾跑期累積 $\ge 20$ 個獨立加碼事件。**資料來源是 `rollover_audit_log`（`scenario = 'PYRAMID_ADD'`），不是 `regime_evaluation_log`**——本情境沒有接前向蒐集記錄器，`forward-report` 看不到它，也沒有自動標註。
+2. 計數以「同一部位的首次觸發」為單位，而非列數。乾跑時推播被抑制，`dynamic_state_patch` 依設計不會提交（`pyramid_count`／`last_pyramid_at` 永不前進），因此同一部位只要條件持續成立，每個交易日都會被每日去重鍵放行一次、重複入列；次數上限與冷卻在乾跑期**觀察不到**。
+3. 以人工比對每個事件之後 5 個交易日的走勢：加碼價位之後先觸及原停損（`ratchet_stop`）的比例，必須低於「風險預算 ÷ 停損距離」模型隱含的損益兩平勝率。條件二不變式保證原始部位無本金風險，所以要驗證的只有**新增那一筆**的期望值。
+4. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature pyramid` 兩個模式的「超額報酬 vs 減碼 B&H」差異皆不為負（2026-09-23：aggressive **+5.31 pp**／defensive +0.02 pp，加碼僅 4／2 次，屬個位數樣本，見 §5.12，不能單獨構成證據）。
+
+> 若 1~3 項因人工比對成本過高而難以持續，應先把 `PYRAMID_ADD` 接上 `evaluation_recorder`（比照 §5.12 的 `EXIT_*`），讓 03:30 labeler 自動標註，而不是降低門檻。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
@@ -379,6 +400,66 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 **上線閘門**：`pytest tests` 全綠 + 嚴格 mypy 全綠 + `verify_docs_integrity.py`
 全綠 + 乾跑滿一週後依上表主判準人工（Opus）判讀。
 
+
+### 5.12 出場分層前向蒐集 (`EXIT_*`) 與回測功能開關
+
+**為什麼需要**：`SATELLITE_REBALANCE` 在 2025 回測的勝率只有 54.2%，代表結構性停損有近半數可能是被洗盤掃出。
+要找出是哪一層在製造假訊號，必須分層統計「觸發後的走勢」。但 `regime_evaluation_log` 原本只記錄 Regime 分類與
+進場鐵律，**從未記錄出場分層**；`rollover_audit_log` 也只存 scenario/action，沒有分層、現價與停損價，且只記已推播的指令。
+
+**前向記錄點**：`anti_washout.py::check_satellite_rebalancing_impl` 在 `_generate_rule_based_rebalance_report()`
+決定 `exit_tier` 之後、**顧問模式轉換之前**呼叫 `_record_exit_tier()` → `evaluation_recorder.record_exit_signal()`。
+記錄的是引擎的原始訊號而非推播結果：B&H 顧問持倉的分層多半被丟棄或改寫為位階告知，但要評估的是訊號本身準不準，
+因此照樣記錄，並在 `features_json.advisory` 標記。
+
+| 欄位 | 內容 | 理由 |
+| :--- | :--- | :--- |
+| `evaluator` | `EXIT_<tier>`，空頭部位加 `_SHORT` 後綴 | 去重鍵不含 user_id；共用 evaluator 會讓同一根 K 棒不同使用者的不同分層互相覆蓋 |
+| `direction` | 平倉類分層＝與部位**相反**；`SL_TRAILING_BREAKEVEN`／`TP1_TREND_EXEMPT`＝與部位**相同** | `direction` 是「訊號押注方向」，讓 `forward-report` 的 win 維持「訊號正確」單一語意 |
+| `sub_mode` | 分層名稱 | 便於 SQL 篩選 |
+| `stop_price` | **刻意留空**，停損價放 `features_json.stop_level` | labeler 的 `plan_outcome` 會把 `stop_price` 當進場計畫的停損解讀，對出場訊號語意不符 |
+| `decision` | 恆為 1 | 只記錄觸發事件，不記錄未觸發 |
+
+`forward-report` 新增「出場分層洗盤率」表（`forward_log.py::build_exit_tier_breakdown`），依 evaluator × 顧問旗標分組：
+**訊號正確率**（先觸及訊號方向的 1.5×ATR₁D 帶）、**洗盤率**（反向先觸及）、逾時率、5 日報酬中位數。
+`EXIT_*` 列會從 GEX 量值四分位分析中排除（win 的語意與進場相反，混入會失真）。
+
+**判讀準則**：
+1. 同一分層、`advisory=否` 的已標註紀錄 $\ge 100$ 筆前，只能用來排定觀察優先序，不得調整 SL 常數。
+2. 洗盤率顯著高於訊號正確率（Wilson 區間不重疊）的分層，才列為候選調整對象；調整走 `calibration/` 報告 → 人工審核 → PR。
+3. 被顧問模式丟棄的分層 (`advisory=是`) 不影響任何使用者，其統計只用來佐證同一分層在指令持倉上的結論。
+
+**回測功能開關（離線先行）**：`backtest_engine_2025.py` 是 production 的獨立複刻，階段 1A／1B／3 上線時沒有同步進來，
+因此**跨 commit 對照量不到它們**——舊版與新版回測引擎唯一的差異是 `_MACRO_TOP_ESCAPE_TRIM_RATIO`（0.25 → 0.50，
+回測以 VIX ≥ 28 代理 CRITICAL）。現改為在同一版程式碼上以開關做 A/B：
+
+| CLI 旗標 | 複刻內容 | 代理與限制 |
+| :--- | :--- | :--- |
+| `--enable-tp1-trend-exempt` | TP1 前評估豁免；豁免時不減碼、停損上推至 anchor_base | 牆遷移＝昨日 vs 前日的 10 日高點 |
+| `--enable-pyramid-add` | 八項條件；倉位直接呼叫 production `compute_pyramid_add_sizing()` | 冷卻 8 根 15m 換算為 2 根 1h |
+| `--enable-escape-tiers` | 以 production `evaluate_macro_top_escape_score()` 分級，取代 VIX ≥ 28 單級減碼；WATCH 以 BSM 定價買 SPY Put | VTS＝VIX/VIX3M、負 Gamma＝SPY 開盤 < SMA20；Fear & Greed 與 FedWatch 無歷史資料恆不計分 |
+| `--ab-compare --ab-feature {iii_b,tp1_exempt,pyramid,escape_tiers,stage_1_3}` | 同一版程式碼各跑一次（關／開），輸出兩份報告與摘要 | — |
+
+開關全關時與改動前的引擎逐位元相同（施工時以 HEAD 版引擎對照兩種模式的逐日 NAV 與全部交易紀錄驗證）。
+每份回測報告另附「出場分層洗盤率」段落，是前向資料足量前的離線先行版（只有 SL1／SL2，沒有 SL3 主力對沖）。
+
+**2026-09-23 A/B 結果**（超額報酬 vs 減碼 B&H 的差異；括號內為該功能新增的觸發次數）：
+
+| 功能 | aggressive | defensive | 判讀 |
+| :--- | :---: | :---: | :--- |
+| 1A TP1 趨勢豁免 | −0.05 pp（豁免 3 次） | −0.10 pp（豁免 3 次） | 個位數觸發，無法判定 |
+| 1B PYRAMID_ADD | **+5.31 pp**（加碼 4 次） | +0.02 pp（加碼 2 次） | 方向正向但仍是個位數觸發，無法背書；是前向觀察的第一優先 |
+| 3 逃頂三級階梯 | −1.99 pp（MDD −3.54 pp） | −0.94 pp（MDD −1.71 pp） | 代理過鬆：WATCH 全年 122–137 天成立，買了 13 次 Put、權利金淨損約 $4–5k；CRITICAL 從未觸發 |
+| 1A + 1B + 3 合併 | +1.57 pp | −1.60 pp | 由 1B 與 3 的交互作用主導 |
+
+逃頂分級的負向結果主要反映**代理**的問題而非 production 設計：回測的負 Gamma 代理（SPY < SMA20）遠比 production 的
+`SHORT_GAMMA_CRITICAL` 寬鬆，而 Fear & Greed 恆不計分又讓「過熱」訊號缺席，逃頂評分在回測中退化成「回檔偵測」。
+但它指出一個 production 需要監看的風險：**若 WATCH 在 production 的成立天數也接近一半，保護性 Put 的權利金會持續流失**。
+逃頂分級本身沒有被前向蒐集（`regime_evaluation_log.macro_regime` 欄位目前無任何寫入端），上線後以已推播指令的稽核紀錄
+追蹤各級動作的實際發生天數（只涵蓋送達的指令，被通知開關或去重抑制者不在內）：
+`SELECT action, COUNT(DISTINCT date(created_at)) FROM rollover_audit_log WHERE scenario = 'MACRO_TOP_ESCAPE_DEFENSE' GROUP BY action;`
+（`BUY_PROTECTIVE_PUT` = WATCH）。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -393,15 +474,16 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
   - `nexus_core/calibration/forward_log.py`：前向蒐集報告
   - `nexus_core/calibration/report.py`：報告輸出與路徑限制
   - `nexus_core/calibration/backtest_engine_2025.py`：2025 全年度多資產動態轉倉回測引擎
-  - `nexus_core/scripts/run_rollover_backtest_2025.py`：回測執行入口腳本（`--enable-trend-continuation` 啟用 Regime III-B；`--ab-compare` 一次跑出基準線／III-B 兩份報告與差異摘要）
+  - `nexus_core/scripts/run_rollover_backtest_2025.py`：回測執行入口腳本（`--enable-trend-continuation`／`--enable-tp1-trend-exempt`／`--enable-pyramid-add`／`--enable-escape-tiers` 啟用各功能複刻；`--ab-compare --ab-feature <功能>` 在同一版程式碼上跑出基準線／啟用兩份報告與差異摘要，見 §5.12）
   - `nexus_core/reports/report_2025_rollover.md`：2025 全量回測報告
 - **共用標註**：`nexus_core/market_analysis/outcome_labeling.py`
 - **前向蒐集 (core)**
-  - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器。`_LONG_ENTRY_REGIMES` 是「會放行多頭新開倉」的 Regime 白名單——新增這類 Regime 時必須同步加入，否則它會被記成 `direction=None` / `decision=0`，該路徑的校準資料靜默歸零
+  - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器。`_LONG_ENTRY_REGIMES` 是「會放行多頭新開倉」的 Regime 白名單——新增這類 Regime 時必須同步加入，否則它會被記成 `direction=None` / `decision=0`，該路徑的校準資料靜默歸零。`record_exit_signal()`／`HOLD_EXIT_TIERS` 為出場分層記錄（§5.12）
+  - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_record_exit_tier()` 出場分層記錄點（顧問模式轉換之前）
   - `nexus_core/database/migrations/v075_add_regime_evaluation_log.py`：資料表定義
   - `nexus_core/database/regime_evaluation_log.py`：存取層
   - `nexus_core/services/regime_outcome_labeler.py`：事後走勢標註
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
 - **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`

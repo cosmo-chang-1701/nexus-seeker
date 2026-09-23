@@ -297,3 +297,7 @@ flowchart TD
   - `nexus_core/cogs/trading/portfolio_monitor.py`：帳戶層 `portfolio_mode` 每使用者讀取一次、單檔 `advisory_only` 三態解析、`advisory_core_levels` 通知頻道與 `advisory_exit_` 去重鍵
   - `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_advisory_levels_embed()`
   - `nexus_core/tests/unit/test_advisory_mode.py`：顧問模式不變式、轉換規則、三態解析、派發回歸測試
+- **出場分層前向蒐集（SL 分層洗盤率檢討，見 `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.12）**：
+  - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_record_exit_tier()`，於 `exit_tier` 決定之後、顧問模式轉換之前記錄原始分層訊號（純觀測，不影響任何裁決）
+  - `nexus_core/market_analysis/evaluation_recorder.py`：`record_exit_signal()`（evaluator `EXIT_<tier>[_SHORT]`，`direction` 為訊號押注方向）
+  - `nexus_core/tests/unit/test_exit_tier_forward_collection.py`：記錄語意、顧問持倉仍記錄、指令輸出逐位元不變

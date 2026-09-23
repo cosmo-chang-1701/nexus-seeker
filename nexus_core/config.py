@@ -98,8 +98,9 @@ OPTIONS_ROLLOVER_DRY_RUN = (
 # 觸發分佈合理後再關閉。
 SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() == "true"
 # PYRAMID_ADD 順勢加碼 dry-run (預設開啟)：只寫入稽核軌跡、不推播 DM。加碼
-# 倉位模型與 VIX 乘數皆未經回測校準，累積至少 20 筆前向樣本並經
-# `calibration forward-report` 檢視後，才由人工決定翻轉。
+# 倉位模型與 VIX 乘數皆未經回測校準，累積至少 20 個獨立加碼事件並依
+# docs/architecture/05 §5.8 F 檢視後，才由人工決定翻轉。注意本情境的前向
+# 資料在 rollover_audit_log，不在 forward-report 的 regime_evaluation_log。
 PYRAMID_ADD_DRY_RUN = get_env_or_secret("PYRAMID_ADD_DRY_RUN", "true").lower() == "true"
 # Regime III-B 趨勢延續進場路徑 dry-run (預設開啟)：由 III-B 確認的機會成本轉倉／
 # 核心資金部署指令只寫稽核軌跡、不推播 DM。本路徑刻意放寬右側條件一與條件四，

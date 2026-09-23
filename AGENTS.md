@@ -229,7 +229,8 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/tests/unit/test_blue_sky_ceiling.py` — `resolve_effective_target()` (room_threshold.py 公式 D) degradation paths, near-high triggering, and the deliberate fail-open exception for missing `high_60d`
 - `nexus_core/tests/unit/test_kelly_priors.py` / `test_trade_intent_gates.py` — direction-aware Kelly priors and the intent-aware Stage 1 / VTR VIX gates
 - `nexus_core/tests/unit/test_regime_evaluation_forward_collection.py` / `test_outcome_labeling.py` — v075 schema, recorder, labeler job and the shared labeling definition
-- `nexus_core/tests/unit/test_calibration_*.py` — calibration harness on synthetic data (scanner replica parity, no look-ahead, guardrails, deterministic offline run with a socket guard)
+- `nexus_core/tests/unit/test_exit_tier_forward_collection.py` — 出場分層前向蒐集（`EXIT_*` evaluator）：記錄在顧問模式轉換之前、`direction` 為訊號押注方向、加上記錄點後指令輸出逐位元不變、`forward-report` 洗盤率分組
+- `nexus_core/tests/unit/test_calibration_*.py` — calibration harness on synthetic data (scanner replica parity, no look-ahead, guardrails, deterministic offline run with a socket guard)；`test_calibration_backtest_feature_flags.py` 覆蓋 2025 回測複刻的 1A／1B／逃頂分級開關（PYRAMID_ADD 條件二不變式為最高優先測項）
 - `nexus_core/tests/unit/test_transition_engine.py` — unit tests for the four transition paths, entry-bar-low capture, and the anti_washout coordination/Track-2 universality guards
 - `nexus_core/tests/unit/test_wti_alert.py` — unit tests for WTI crude oil price alert system, technicals, and embed rendering
 - `nexus_core/tests/unit/test_fundamental_filing_monitor.py` — unit tests for the automated daily SEC filing scanner (dedup cursor, is_broken dispatch gating, per-user notification toggle, multi-holder symbol dedup)
