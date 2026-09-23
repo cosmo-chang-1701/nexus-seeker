@@ -5,6 +5,7 @@ import sqlite3  # noqa: F401
 import asyncio
 from datetime import date, datetime
 from typing import Dict, Any, List, Tuple
+from market_analysis.intraday_consistency import sanitize_option_trade_price
 import market_time
 from services import market_data_service
 from market_analysis.uoa_telemetry import UOATradeInput, classify_uoa_trade
@@ -169,6 +170,27 @@ def _process_uoa_candidate_rows(
                 )
             )
         )
+
+        # 風控檢驗 1.5：無套利下界。lastPrice 可能是現價大幅移動之前的舊成交，
+        # 權利金低於內含價值時改用當下中價（方向分類隨之歸為 MIDPOINT），
+        # 中價也不合理則剔除——舊成交價同時會污染名目金額與 BTO/STO 判定。
+        row_bid = float(row["bid"]) if "bid" in row and pd.notna(row["bid"]) else 0.0
+        row_ask = float(row["ask"]) if "ask" in row and pd.notna(row["ask"]) else 0.0
+        sane_price = sanitize_option_trade_price(
+            trade_price,
+            row_bid,
+            row_ask,
+            strike,
+            spot_price,
+            str(opt_type).upper() == "CALL",
+        )
+        if sane_price is None:
+            logger.warning(
+                f"[{symbol}] 合約 {exp} {opt_type} {strike} 成交價 {trade_price:.2f} "
+                f"低於內含價值且無合理報價，疑為過時成交，予以剔除。"
+            )
+            continue
+        trade_price = sane_price
 
         # 風控檢驗 2：非指數虛擬名義價值過濾與 UOA 門檻 (一般標的 >= $50k，極端高波 IV > 80% 標的動態提升至 >= $250k 且成交量 >= 1000 口以過濾散戶雜訊)
         nominal_val = vol * trade_price * 100.0
@@ -418,6 +440,18 @@ async def detect_uoa_with_physical_caps(
                     and float(row["lastPrice"]) > 0
                     else ((bid_p + ask_p) / 2.0 if ask_p > 0 else (ask_p or bid_p))
                 )
+
+                sane_cap_price = sanitize_option_trade_price(
+                    trade_price,
+                    bid_p,
+                    ask_p,
+                    strike,
+                    spot_price,
+                    str(opt_type).upper() == "CALL",
+                )
+                if sane_cap_price is None:
+                    continue
+                trade_price = sane_cap_price
 
                 cap_trade_input = UOATradeInput(
                     expiry=exp,
