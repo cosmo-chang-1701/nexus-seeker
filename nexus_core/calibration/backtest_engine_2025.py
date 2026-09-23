@@ -71,6 +71,13 @@ from market_analysis.room_threshold import (
     resolve_effective_target,
 )
 from market_analysis.outcome_labeling import directional_touch, label_forward_path
+from market_analysis.downside_risk import (
+    annualized_downside_deviation,
+    historical_var_cvar,
+    max_drawdown,
+    sharpe_ratio,
+    sortino_ratio,
+)
 
 
 # --- Regime III-B 趨勢延續態的 1h 代理常數 ---
@@ -183,22 +190,36 @@ class BacktestMetrics:
     benchmark_cagr: float
     annualized_volatility: float
     benchmark_volatility: float
-    sharpe_ratio: float
-    benchmark_sharpe: float
+    # --- 判讀指標（依重要性）：Sortino 為主，MDD 與 VaR / CVaR 為輔 ---
+    # 定義一律來自 market_analysis/downside_risk.py（單一權威）。
     sortino_ratio: float
     benchmark_sortino: float
+    annualized_downside_deviation: float
+    benchmark_downside_deviation: float
     max_drawdown: float
     benchmark_max_drawdown: float
-    calmar_ratio: float
-    benchmark_calmar: float
+    # 1 日歷史模擬 VaR95 / CVaR95（正值損失比例）；樣本不足時為 0.0
+    var_95: float
+    cvar_95: float
+    benchmark_var_95: float
+    benchmark_cvar_95: float
     # 減碼 B&H 對照組 (docs/architecture/05 §6.1 指定的最重要 KPI)：以「與本策略
-    # 同等年化波動的 B&H + 現金」為基準。回答的是「這套引擎創造 alpha，還是只是在
-    # 降低曝險」——高勝率但年化波動只有 B&H 一半的策略，報酬本來就該低於 B&H，
-    # 拿裸 B&H 比較會同時誤判它變好或變壞。
+    # 同等**下行差**的 B&H + 現金」為基準。回答的是「這套引擎創造 alpha，還是只是在
+    # 降低曝險」——下行風險只有 B&H 一半的策略，報酬本來就該低於 B&H，拿裸 B&H
+    # 比較會同時誤判它變好或變壞。
     scaled_benchmark_weight: float
     scaled_benchmark_total_return: float
     scaled_benchmark_max_drawdown: float
     excess_return_vs_scaled: float
+    # --- 描述性指標：只出現在回測報告，不作任何判讀或優化目標 ---
+    # Sharpe 對上下行波動一視同仁，會把「砍獲利部位」誤判為風險改善；以總波動
+    # 對齊的減碼對照組是它的同類建構，一併降為描述欄位。
+    sharpe_ratio: float
+    benchmark_sharpe: float
+    calmar_ratio: float
+    benchmark_calmar: float
+    vol_scaled_benchmark_weight: float
+    excess_return_vs_vol_scaled: float
     win_rate: float
     profit_factor: float
     total_trades: int
@@ -1285,7 +1306,7 @@ class RolloverBacktestEngine2025:
                         price=nvda_open,
                         ratio=rot_ratio,
                         scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                        reason=f"NVDA 動能衰竭 (PSQ={nvda_psq:.0f}) 轉倉至突破標的 GLD (PSQ={gld_psq:.0f}, ΔEV=+{ev_spread_gld*100:.1f}%)",
+                        reason=f"NVDA 動能衰竭 (PSQ={nvda_psq:.0f}) 轉倉至突破標的 GLD (PSQ={gld_psq:.0f}, ΔEV=+{ev_spread_gld * 100:.1f}%)",
                         timestamp=f"{date_str} 09:30:00",
                         date_str=date_str,
                     )
@@ -1362,7 +1383,7 @@ class RolloverBacktestEngine2025:
                         price=gld_open,
                         ratio=rot_ratio,
                         scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                        reason=f"GLD 動能衰竭 (PSQ={gld_psq:.0f}) 轉倉至突破標的 NVDA (PSQ={nvda_psq:.0f}, ΔEV=+{ev_spread_nvda*100:.1f}%)",
+                        reason=f"GLD 動能衰竭 (PSQ={gld_psq:.0f}) 轉倉至突破標的 NVDA (PSQ={nvda_psq:.0f}, ΔEV=+{ev_spread_nvda * 100:.1f}%)",
                         timestamp=f"{date_str} 09:30:00",
                         date_str=date_str,
                     )
@@ -2463,41 +2484,27 @@ class RolloverBacktestEngine2025:
             else 0.0
         )
 
-        # 無風險利率 (2025 年以 4.5% 為基準)
+        # 無風險利率 (2025 年以 4.5% 為基準)；同時作為 Sortino 的 MAR，使分子
+        # (CAGR − rf) 與分母 (低於 rf 的下行差) 以同一條基準線衡量。
         rf = 0.045
-        sharpe = (cagr - rf) / vol if vol > 0 else 0.0
-        bench_sharpe = (bench_cagr - rf) / bench_vol if bench_vol > 0 else 0.0
 
-        # 下行波動率與 Sortino
-        downside_rets = ret_arr[ret_arr < 0]
-        downside_vol = (
-            float(np.sqrt(np.mean(downside_rets**2)) * np.sqrt(252))
-            if len(downside_rets) > 0
-            else 1e-4
-        )
-        sortino = (cagr - rf) / downside_vol if downside_vol > 0 else 0.0
-
-        bench_downside = bench_ret_arr[bench_ret_arr < 0]
-        bench_downside_vol = (
-            float(np.sqrt(np.mean(bench_downside**2)) * np.sqrt(252))
-            if len(bench_downside) > 0
-            else 1e-4
-        )
-        bench_sortino = (
-            (bench_cagr - rf) / bench_downside_vol if bench_downside_vol > 0 else 0.0
-        )
+        # 判讀主指標：Sortino（下行差以 MAR 為界、分母為全樣本數）
+        downside_dev = annualized_downside_deviation(ret_arr, rf)
+        bench_downside_dev = annualized_downside_deviation(bench_ret_arr, rf)
+        sortino = sortino_ratio(ret_arr, rf, annual_return=cagr)
+        bench_sortino = sortino_ratio(bench_ret_arr, rf, annual_return=bench_cagr)
 
         # 最大回撤 (MDD)
-        cummax_nav = np.maximum.accumulate(np.array(navs))
-        drawdowns = (cummax_nav - np.array(navs)) / cummax_nav
-        max_dd = float(np.max(drawdowns)) if len(drawdowns) > 0 else 0.0
+        max_dd = max_drawdown(navs).max_drawdown
+        bench_max_dd = max_drawdown(bench_navs).max_drawdown
 
-        cummax_bench = np.maximum.accumulate(np.array(bench_navs))
-        bench_drawdowns = (cummax_bench - np.array(bench_navs)) / cummax_bench
-        bench_max_dd = (
-            float(np.max(bench_drawdowns)) if len(bench_drawdowns) > 0 else 0.0
-        )
+        # 1 日歷史模擬 VaR95 / CVaR95
+        tail = historical_var_cvar(ret_arr)
+        bench_tail = historical_var_cvar(bench_ret_arr)
 
+        # 描述性指標（不作判讀）
+        sharpe = sharpe_ratio(ret_arr, rf, annual_return=cagr)
+        bench_sharpe = sharpe_ratio(bench_ret_arr, rf, annual_return=bench_cagr)
         calmar = cagr / max_dd if max_dd > 0 else 0.0
         bench_calmar = bench_cagr / bench_max_dd if bench_max_dd > 0 else 0.0
 
@@ -2567,16 +2574,26 @@ class RolloverBacktestEngine2025:
                 benchmark_monthly_returns[m_str] = float(b_ret)
 
         # --- 減碼 B&H 對照組 (docs/architecture/05 §6.1 的首要 KPI) ---
-        # 以年化波動比推回「有效曝險」w，對照組 = w × B&H + (1−w) × 無風險利率。
-        # 為什麼需要它：策略年化波動若只有 B&H 的一半，報酬低於 B&H 是必然的，
+        # 以下行差比推回「有效曝險」w，對照組 = w × B&H + (1−w) × 無風險利率。
+        # 為什麼需要它：策略下行風險若只有 B&H 的一半，報酬低於 B&H 是必然的，
         # 拿裸 B&H 比較會把「單純減碼」誤讀成「策略變差」，也會把「單純加槓桿」
-        # 誤讀成「策略變好」。w 夾在 [0, 1]：本引擎不使用槓桿，w > 1 只會是
-        # 波動估計的雜訊，放行會讓對照組憑空虛增。
-        scaled_w = min(1.0, max(0.0, vol / bench_vol)) if bench_vol > 0 else 0.0
-        scaled_total_return = (
-            scaled_w * bench_total_return + (1.0 - scaled_w) * rf * years
+        # 誤讀成「策略變好」。
+        # 為什麼以下行差（MAR = rf）而非總波動對齊：混合組合的超額報酬恰為
+        # w × (B&H − rf)，其下行差精確等於 w × B&H 下行差，因此對照組與策略承擔
+        # 完全相同的 Sortino 分母；以總波動對齊則會把策略「砍掉的上行波動」也算成
+        # 降低的風險，替對照組多扣曝險。w 夾在 [0, 1]：本引擎不使用槓桿，w > 1 只會是
+        # 估計雜訊，放行會讓對照組憑空虛增。
+        def _scaled_return(w: float) -> float:
+            return w * bench_total_return + (1.0 - w) * rf * years
+
+        scaled_w = (
+            min(1.0, max(0.0, downside_dev / bench_downside_dev))
+            if bench_downside_dev > 0
+            else 0.0
         )
+        scaled_total_return = _scaled_return(scaled_w)
         scaled_max_dd = scaled_w * bench_max_dd
+        vol_scaled_w = min(1.0, max(0.0, vol / bench_vol)) if bench_vol > 0 else 0.0
 
         return BacktestMetrics(
             total_return=total_return,
@@ -2585,18 +2602,26 @@ class RolloverBacktestEngine2025:
             benchmark_cagr=bench_cagr,
             annualized_volatility=vol,
             benchmark_volatility=bench_vol,
-            sharpe_ratio=sharpe,
-            benchmark_sharpe=bench_sharpe,
             sortino_ratio=sortino,
             benchmark_sortino=bench_sortino,
+            annualized_downside_deviation=downside_dev,
+            benchmark_downside_deviation=bench_downside_dev,
             max_drawdown=max_dd,
             benchmark_max_drawdown=bench_max_dd,
-            calmar_ratio=calmar,
-            benchmark_calmar=bench_calmar,
+            var_95=tail.var if tail else 0.0,
+            cvar_95=tail.cvar if tail else 0.0,
+            benchmark_var_95=bench_tail.var if bench_tail else 0.0,
+            benchmark_cvar_95=bench_tail.cvar if bench_tail else 0.0,
             scaled_benchmark_weight=scaled_w,
             scaled_benchmark_total_return=scaled_total_return,
             scaled_benchmark_max_drawdown=scaled_max_dd,
             excess_return_vs_scaled=total_return - scaled_total_return,
+            sharpe_ratio=sharpe,
+            benchmark_sharpe=bench_sharpe,
+            calmar_ratio=calmar,
+            benchmark_calmar=bench_calmar,
+            vol_scaled_benchmark_weight=vol_scaled_w,
+            excess_return_vs_vol_scaled=total_return - _scaled_return(vol_scaled_w),
             win_rate=win_rate,
             profit_factor=profit_factor,
             total_trades=len(self.portfolio.trades),

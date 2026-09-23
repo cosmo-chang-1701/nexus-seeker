@@ -519,9 +519,10 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 #
 # 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻／核心資金部署比例三處的
 # 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
-# calibration/backtest_engine_2025.py 已驗證的 aggressive 模式
-# (docs/strategies/04_dynamic_rollover_state_machine.md §2.10：報酬/MDD/Sharpe
-# 三項皆優於 DEFENSIVE，對 Buy & Hold 亦無明顯取捨)。
+# calibration/backtest_engine_2025.py 的 aggressive 模式。⚠️ 採用依據「報酬/MDD/
+# Sharpe 三項皆優於 DEFENSIVE」來自早期引擎；2026-09-23 以 Sortino 為主的判準
+# 重跑後 DEFENSIVE (1.45) 優於 AGGRESSIVE (1.13)
+# (docs/strategies/04_dynamic_rollover_state_machine.md §2.10.1)，數值待人工決策。
 #
 # 本模組刻意維持 stdlib-only 葉模組性質 (比照 room_threshold.py /
 # skew_taxonomy.py)，不額外建立新檔案。

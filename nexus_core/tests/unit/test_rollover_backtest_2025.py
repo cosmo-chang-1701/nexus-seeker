@@ -302,6 +302,28 @@ def test_full_backtest_simulation_end_to_end(
     assert metrics.max_drawdown >= 0.0, "max_drawdown 必須 >= 0"
     assert metrics.benchmark_max_drawdown >= 0.0, "benchmark_max_drawdown 必須 >= 0"
 
+    # --- 判讀指標：Sortino / VaR / CVaR 皆有限，CVaR 不小於 VaR ---
+    for value in (
+        metrics.sortino_ratio,
+        metrics.benchmark_sortino,
+        metrics.var_95,
+        metrics.cvar_95,
+        metrics.benchmark_var_95,
+        metrics.benchmark_cvar_95,
+    ):
+        assert math.isfinite(value)
+    assert metrics.cvar_95 >= metrics.var_95 >= 0.0
+    assert metrics.benchmark_cvar_95 >= metrics.benchmark_var_95 >= 0.0
+
+    # --- 減碼 B&H 對照組以下行差對齊（Sortino 一致），而非總波動 ---
+    if metrics.benchmark_downside_deviation > 0:
+        expected_w = min(
+            1.0,
+            metrics.annualized_downside_deviation
+            / metrics.benchmark_downside_deviation,
+        )
+        assert metrics.scaled_benchmark_weight == pytest.approx(expected_w)
+
 
 def test_portfolio_short_and_long_mutual_exclusion_and_nav_valuation() -> None:
     """測試多空互斥防護、做空保證金扣抵與空頭部位每日盯市 (Mark-to-Market) 淨值計算。"""
