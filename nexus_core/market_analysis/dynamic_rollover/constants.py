@@ -1,3 +1,5 @@
+from typing import NamedTuple, Optional
+
 # _compute_structural_breakdown_signals 每 30 分鐘週期會被 Scenario 3
 # (check_satellite_rebalancing) 與 Scenario 4 (evaluate_margin_defense) 對同一批
 # portfolio_assets 各呼叫一次，對同一標的重跑一次完整 GEX 逐履約價掃描屬重複運算。
@@ -115,6 +117,13 @@ _ENTRY_UOA_MIN_RATIO: float = (
 _ENTRY_UOA_MIN_NOTIONAL_USD: float = (
     200_000.0  # 條件四：驅動進場的主力 UOA 買盤最低權利金名目金額要求
 )
+# 條件四的時間窗放寬：**僅 Regime III-B 趨勢延續路徑**套用。Regime III (突破態)
+# 維持「評估當下必須存在」的嚴格語意，不放寬（保護既有行為）。
+# 物理意義：突破那一瞬間機構掃單與價格同步發生，要求同時存在是合理的；趨勢的
+# 續航段卻是縮量、陰陽交錯的，機構的跨週期買盤早在啟動日就已佈完，再要求「此刻
+# 還有一筆」等於要求主力每 15 分鐘重新表態一次——這正是 handoff.md §1.3 診斷出的
+# 「事件式進場」病灶。回看窗以**交易日**計（非日曆日），避開週末與假日。
+_ENTRY_UOA_LOOKBACK_DAYS: int = 5
 _ENTRY_CANDIDATE_MIN_DTE: int = (
     1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
 )
@@ -153,14 +162,46 @@ _EARNINGS_PRE_EVENT_BUFFER_DAYS: int = (
 )
 
 # --- 邏輯 (6)：宏觀逃頂前瞻防禦 (evaluate_macro_top_escape_defense) 具名常數 ---
-# 校準基準：Scenario 3 (反應式，個股結構已破) 用 90%；Scenario 4 (反應式，系統性
-# regime + 保證金壓力已雙重確認) 用 100%；本情境是純粹的「領先訊號」(組合式機率
-# 評分，尚無任何個股結構真正破位)，假陽性風險明顯高於前兩者，故 25% 明顯保守，
-# 只做風險曝險的部分削減，不強迫在可能誤判的訊號上全額出場。
-_MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.25
-# 對應 evaluate_macro_top_escape_score() (index_microstructure.py) 的分級輸出，
-# 僅最高分級 (CRITICAL，>= 3 項因子同時觸發) 才會啟動本情境的實際減碼動作。
-_MACRO_TOP_ESCAPE_MIN_TIER: str = "CRITICAL"
+# 三級階梯化：WATCH (前哨) 買保護性 Put 不賣股，ELEVATED (警戒) 與 CRITICAL
+# (確認) 才實際減碼——三者共用同一組 evaluate_macro_top_escape_score() 分級輸出，
+# 差別只在動作強度。校準基準：Scenario 3 (反應式，個股結構已破) 用 90%；
+# Scenario 4 (反應式，系統性 regime + 保證金壓力已雙重確認) 用 100%；本情境即使
+# 是三級中最果斷的 CRITICAL，仍是「領先訊號」(組合式機率評分，尚無任何個股結構
+# 真正破位)，假陽性風險明顯高於前兩者，故上限仍遠低於它們。
+#
+# ⚠️ _MACRO_TOP_ESCAPE_TRIM_RATIO 由 calibration/backtest_engine_2025.py 直接
+# 匯入以維持回測與生產環境的參數一致性 (scanner replica parity)，其 2025 回測
+# 引擎目前僅複製 CRITICAL 單一分級的行為 (無 WATCH/ELEVATED 分支)，改動本值會
+# 直接反映在下次回測執行的 CRITICAL 分支結果中，這是刻意保留的行為，非孤兒常數。
+_MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.50  # CRITICAL：既有 WATCH/ELEVATED 已各自
+# 承擔前哨與初階防禦，CRITICAL 應對應更果斷的動作，由既有的 25% 提高至 50%，
+# 否則三級階梯只是把同一個 25% 拆成三次發送。
+_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO: float = 0.25  # ELEVATED：沿用原本唯一的
+# CRITICAL 減碼比例，作為介於 WATCH 與新版 CRITICAL 之間的中繼防禦強度。
+
+# tier -> (trim_ratio, action_kind)。trim_ratio 僅 TRIM 動作有意義，
+# PROTECTIVE_PUT 恆為 0.0（不賣股，改買保護）。NORMAL 未列於表中，代表無動作
+# （既有 `tier not in _MACRO_TOP_ESCAPE_TIER_ACTIONS` 短路判斷）。
+_MACRO_TOP_ESCAPE_TIER_ACTIONS: dict[str, tuple[float, str]] = {
+    "WATCH": (0.00, "PROTECTIVE_PUT"),
+    "ELEVATED": (_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO, "TRIM"),
+    "CRITICAL": (_MACRO_TOP_ESCAPE_TRIM_RATIO, "TRIM"),
+}
+
+# --- WATCH 級 Protective Put 分支具名常數 ---
+# 保留 100% 上檔曝險（不減碼），只付出權利金成本買保護——與 ELEVATED/CRITICAL
+# 的「放棄上檔換取下檔保護」策略互補，回答的是「前哨階段還不確定要不要砍倉時，
+# 如何先鎖住下檔」。
+_MACRO_TOP_ESCAPE_HEDGE_SYMBOL: str = (
+    "SPY"  # 大盤 ETF 而非個股：逃頂訊號是系統性的，指數 Put 的流動性與價差優於
+    # 個股。沿用 market_analysis/hedging.py 既有以 SPY 作為組合對沖代理的慣例。
+)
+_WATCH_TIER_HEDGE_RATIO: float = 0.30  # 對沖比例：對沖 30% 的組合方向性曝險
+_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA: float = (
+    -0.275  # 建議合約 Delta 中位數 (-0.25 ~ -0.30)，成本效率與保護力的平衡點
+)
+_MACRO_TOP_ESCAPE_PUT_DTE_MIN: int = 30  # 建議 DTE 下限：涵蓋典型宏觀事件窗
+_MACRO_TOP_ESCAPE_PUT_DTE_MAX: int = 60  # 建議 DTE 上限：避開近月 Theta 加速區
 
 # --- DTE 三態狀態機 (structural_signals.py::evaluate_option_dte_tier) 具名常數 ---
 # 僅對 OPTIONS 部位有意義。與既有 _ENTRY_UOA_MIN_DTE(7)/_ENTRY_CANDIDATE_MIN_DTE(1)
@@ -263,6 +304,13 @@ _MICROSTRUCTURE_TP1_CALLWALL_PCT: float = (
     0.995  # TP1-阻力初探：現價 >= Call Wall 此比例即視為觸及阻力
 )
 _MICROSTRUCTURE_TP1_RATIO: float = 0.5  # TP1 執行比例 (50%)
+_TP1_TREND_EXEMPT_MIGRATION_PCT: float = (
+    0.01  # TP1 趨勢豁免：Call Wall 向上遷移 >= 此比例（且 NetGEX>0、Spot>VWAP）
+    # 時暫緩 TP1 減碼，改為抬升棘輪停損。刻意低於下方
+    # _MICROSTRUCTURE_TP2_WALL_MIGRATION_PCT (3%)：兩者回答不同問題——3% 是
+    # 「牆大幅擴展、值得主動鎖利」(TP2)，1% 是「牆還在動、不該減碼」(TP1 豁免)。
+    # 中間 1%~3% 的灰帶即為「不 TP1、也不 TP2」的續抱區，是趨勢延伸的主戰場。
+)
 _MICROSTRUCTURE_TP2_WALL_BREAK_PCT: float = (
     0.015  # TP2-空間擴展：穿越 Call Wall 幅度門檻
 )
@@ -353,6 +401,21 @@ _REGIME_I_PUT_WALL_UPPER_PCT: float = 0.015
 _REGIME_III_SUPPORT_WALL_MAX_DIST_PCT: float = 0.05
 _REGIME_III_RSI_MIN: float = 55.0
 _REGIME_III_VOLUME_SURGE_MULT: float = 1.5
+# Regime III-B 趨勢延續態 (regime_classifier.py，判定優先序緊接在 Regime III 之後)。
+# 與 _REGIME_III_* 刻意分開命名：Regime III 回答「突破是否『正在發生』」(事件式)，
+# III-B 回答「趨勢是否『仍然成立』」(狀態式)，兩者語意不同，數值必須能各自獨立調整。
+# 本組刻意**不含**放量倍數與陽線要求——那正是事件式判定的兩項特徵，若保留即退化
+# 回 Regime III，本路徑失去存在意義 (handoff.md §1.3)。
+_REGIME_III_B_LOOKBACK_BARS: int = 6  # 「持續站穩結構」的回看已收盤 15m K 棒根數
+_REGIME_III_B_MIN_HELD_BARS: int = (
+    5  # 上述 6 根中至少須有幾根收盤同時站穩 Gamma Flip 與 Session VWAP
+)
+# 5/6 容差是本路徑的關鍵設計：趨勢中允許出現 1 根跌破 VWAP 的洗盤針。要求 6/6 會
+# 退化回「特定瞬間」的事件式判定，與 Regime III 無異。
+_REGIME_III_B_RSI_MIN: float = 50.0  # 動能仍在多方 (以 50 為多空軸)
+_REGIME_III_B_RSI_MAX: float = (
+    78.0  # 上限防在超買頂部追高；刻意低於 80 的傳統超買線，留一段緩衝
+)
 # Regime IV 結構封頂／危機態 (最優先判定，全面鎖定態)
 # Regime III/IV 的 Call Wall 空間門檻同樣改由 room_threshold.py 公式 A 推導，
 # 常數已退役（政策不變：路由層與進場確認層仍各自獨立呼叫，共用的是演算法而非旋鈕）。
@@ -427,6 +490,20 @@ _SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE: int = 1
 # 每週期最多評估的做空候選數 (含 Scenario 2 預先確認的候選)。
 _SHORT_ENTRY_MAX_CANDIDATES: int = 2
 
+# --- PYRAMID_ADD 情境 (pyramid_add.py) 具名常數 ---
+# 順勢金字塔加碼：右側進場的獲利部位在趨勢延續時例行加碼，與
+# transition_engine.py 路徑一的一次性 OPEN_PYRAMID（regime 演化觸發）刻意分開
+# 命名——本組數值控制的是「可重複觸發」的加碼節奏與風險預算，語意不同。
+# ⚠️ 全部**未經歷史回測校準**，校準前一律取保守值，比照 _SHORT_ENTRY_* 慣例。
+_PYRAMID_PROFIT_THRESHOLD_PCT: float = 0.03  # 條件一：部位獲利 >= 此比例才允許加碼
+_PYRAMID_MAX_ADDS: int = 2  # 條件五：同一部位最多加碼次數，防幾何爆倉
+_PYRAMID_COOLDOWN_BARS: int = 8  # 條件六：加碼冷卻 (15m bar 數，8 根 = 2 小時)
+# 單筆加碼願意承受的最大帳戶風險。與 _SHORT_ENTRY_ACCOUNT_RISK_PCT 同值同理由
+# ——沒有「每筆風險」的使用者設定，0.5% 是保守的單筆風險上限。
+_PYRAMID_ACCOUNT_RISK_PCT: float = 0.005
+_PYRAMID_KELLY_SCALE: float = 0.5
+_PYRAMID_KELLY_CAP: float = 0.01
+
 # --- Regime V 破位追空態 (regime_classifier.py) 具名常數 ---
 # 與上方 _SHORT_ENTRY_* 刻意分開命名而不合併重用，比照 _REGIME_I_* / _REGIME_III_*
 # 與 _LEFT_ENTRY_* / _ENTRY_* 的既有分層慣例：本組是「是否進入破位追空盤勢」的
@@ -437,3 +514,59 @@ _REGIME_V_RSI_MAX: float = 45.0  # 15m RSI < 此值視為動能偏空
 # **未經歷史回測校準**。破位追空的假訊號成本高於右側動能（空頭軋空的尾部風險
 # 不對稱），上線後應優先觀察此門檻的實際觸發率與勝率再行調整。
 _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
+
+# --- 風險偏好參數化 (RiskAppetite / RiskProfile)，見 models.py::RiskAppetite ---
+#
+# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻／核心資金部署比例三處的
+# 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
+# calibration/backtest_engine_2025.py 已驗證的 aggressive 模式
+# (docs/strategies/04_dynamic_rollover_state_machine.md §2.10：報酬/MDD/Sharpe
+# 三項皆優於 DEFENSIVE，對 Buy & Hold 亦無明顯取捨)。
+#
+# 本模組刻意維持 stdlib-only 葉模組性質 (比照 room_threshold.py /
+# skew_taxonomy.py)，不額外建立新檔案。
+
+
+class RiskProfile(NamedTuple):
+    tp1_ratio: float  # anti_washout.py TP1 執行比例，取代 _MICROSTRUCTURE_TP1_RATIO
+    ev_hurdle: float  # opportunity_cost.py 機會成本轉倉 EV Spread 門檻的「基礎」
+    # 分量，取代 _EV_SPREAD_MIN_THRESHOLD。⚠️ 刻意不是
+    # _EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT 的合併值：
+    # evaluate_opportunity_cost() 的 friction_cost_pct 參數在高波動環境下會由
+    # 呼叫端動態覆寫為近價期權合約的實際 Bid-Ask 點差 (見
+    # evaluate_opportunity_cost_for_satellites)，若把往返成本併進本欄位，會讓
+    # 那組已驗證的動態摩擦成本機制在 gate 運算式裡被靜態覆蓋、失去自動放大
+    # 效果。維持「基礎門檻 + 動態摩擦成本」兩項相加的既有運算式不變，本欄位
+    # 只替換其中的基礎門檻分量。
+    rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
+    core_deploy_ratio: float  # core_deployment.py 機會分支部署比例，取代
+    # _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
+    max_satellite_budget_pct: float  # 單筆衛星預算上限，由 pyramid_add.py 條件七
+    # (加碼後總曝險不得超過此比例，超過時降量) 消費
+
+
+_RISK_PROFILES: dict[str, RiskProfile] = {
+    "DEFENSIVE": RiskProfile(
+        tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
+        ev_hurdle=_EV_SPREAD_MIN_THRESHOLD,  # 0.05，現行行為
+        rotation_cooldown_days=5,
+        core_deploy_ratio=_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,  # 0.50，現行行為
+        max_satellite_budget_pct=0.15,
+    ),
+    "AGGRESSIVE": RiskProfile(
+        tp1_ratio=0.30,
+        ev_hurdle=0.02,
+        rotation_cooldown_days=3,
+        core_deploy_ratio=0.80,
+        max_satellite_budget_pct=0.25,
+    ),
+}
+
+
+def resolve_risk_profile(appetite: Optional[str]) -> RiskProfile:
+    """依 `user_settings.risk_appetite` 的字串值解析出對應的 RiskProfile。
+
+    未知值或 None 一律回退 DEFENSIVE (fail-safe，維持現行行為)——呼叫端無需
+    自行驗證 risk_appetite 是否為合法 enum 值。
+    """
+    return _RISK_PROFILES.get((appetite or "").upper(), _RISK_PROFILES["DEFENSIVE"])

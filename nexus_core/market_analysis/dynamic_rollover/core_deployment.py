@@ -1,15 +1,17 @@
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+from database.user_settings import get_full_user_context
+
 from . import logger
 from ._shared import format_cash_impact, format_illiquidity_warning
 from .constants import (
     _BOXX_DEFENSE_THRESHOLD,
-    _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,
     _CORE_EXCESS_MIN_TRADE_PCT,
     _COVERED_CALL_MAX_DTE,
     _COVERED_CALL_MAX_LOTS,
     _COVERED_CALL_MIN_DTE,
     _COVERED_CALL_MIN_SHARES,
+    resolve_risk_profile,
 )
 from .models import EntryConfirmation, RolloverInstruction, RolloverScenario
 
@@ -31,8 +33,9 @@ class _CoreDeploymentMixin:
     - < 50：機會分支（狀態 A），需候選標的存在且通過既有的 _confirm_entry_signal
       六重鐵律（機會成本轉倉候選確認，含總經/財報安全閥與候選標的自身 DTE
       檢查）才將超額資金部署至候選標的。通過後僅動用超額資金的
-      _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO (50%) 部署，剩餘部分維持
-      現金/緩衝，不生成第二筆分流指令。
+      risk_profile.core_deploy_ratio（依使用者 risk_appetite 解析，預設 50%，
+      即 constants.py::_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO）部署，
+      剩餘部分維持現金/緩衝，不生成第二筆分流指令。
     """
 
     if TYPE_CHECKING:
@@ -45,6 +48,7 @@ class _CoreDeploymentMixin:
             target_spot: float,
             df_15m: Optional[Any] = None,
             session_vwap: Optional[float] = None,
+            trend_continuation: bool = False,
         ) -> Tuple[bool, str, Optional[str]]: ...
 
     async def evaluate_core_deployment(
@@ -81,6 +85,18 @@ class _CoreDeploymentMixin:
         if total_account_value <= 0.0:
             return instructions  # 無有效帳戶總值可供計算配置比例
 
+        # 風險偏好參數化：於入口解析一次，供下方機會分支的部署比例覆寫。
+        # BOXX 防禦分支固定 100% 部署，不受風險偏好影響。
+        try:
+            risk_profile = resolve_risk_profile(
+                get_full_user_context(user_id).risk_appetite
+            )
+        except Exception as e:
+            risk_profile = resolve_risk_profile(None)
+            logger.warning(
+                f"讀取使用者 {user_id} 風險偏好設定失敗，退回 DEFENSIVE 預設: {e}"
+            )
+
         # 候選標的是否可用，僅決定「機會分支」是否有得選；防禦分支 (轉入 BOXX)
         # 不依賴候選標的，即使沒找到高 EV 候選標的也應照樣評估。
         has_valid_candidate = candidate_symbol != "VOO" and bool(candidate_radar)
@@ -97,7 +113,13 @@ class _CoreDeploymentMixin:
         # Scenario 2 算好的結果，直接沿用，跳過下方的重新確認。
         candidate_entry_confirmed: Optional[bool] = None
         candidate_entry_reason: str = ""
+        # 沿用 Scenario 2 判定出的 Regime，掛在本情境產生的指令上。派發端的
+        # REGIME_III_B_DRY_RUN 閘門是依 instruction["entry_regime"] 判斷的——
+        # 本情境若不帶這個欄位，由 Regime III-B 確認出來的核心資金部署指令會
+        # 繞過乾跑閘門直接推播給使用者。
+        candidate_entry_regime: Optional[str] = None
         if precomputed_entry_confirmation is not None:
+            candidate_entry_regime = precomputed_entry_confirmation.entry_regime
             if precomputed_entry_confirmation.direction == "SHORT":
                 candidate_entry_confirmed = False
                 candidate_entry_reason = (
@@ -222,12 +244,11 @@ class _CoreDeploymentMixin:
             if not candidate_entry_confirmed:
                 continue
 
-            # 僅動用超額資金的 50%（_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO）
-            # 部署至候選標的；剩餘部分維持現金/緩衝，不生成第二筆分流指令。
-            # 僅本機會分支套用此比例，上方 BOXX 防禦分支仍為 100%。
-            opportunity_excess_value = (
-                excess_value * _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
-            )
+            # 僅動用超額資金的 risk_profile.core_deploy_ratio（預設 50%，即
+            # _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO）部署至候選標的；剩餘
+            # 部分維持現金/緩衝，不生成第二筆分流指令。僅本機會分支套用此比例，
+            # 上方 BOXX 防禦分支仍為 100%。
+            opportunity_excess_value = excess_value * risk_profile.core_deploy_ratio
             opportunity_sell_ratio = round(
                 min(1.0, max(0.0, opportunity_excess_value / current_value)), 4
             )
@@ -251,7 +272,7 @@ class _CoreDeploymentMixin:
                 f"{float(target_alloc):.1%}（超額 {excess_alloc:.1%}）。候選標的 "
                 f"{candidate_symbol} 已通過進場訊號六重嚴格過濾鐵律確認突破，"
                 f"建議部署超額核心資金的 "
-                f"{_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO:.0%}"
+                f"{risk_profile.core_deploy_ratio:.0%}"
                 f"（剩餘部分維持現金/緩衝）：{candidate_entry_reason}"
             )
             if illiquidity_warning:
@@ -272,6 +293,7 @@ class _CoreDeploymentMixin:
                     "cash_impact": cash_impact_opportunity,
                     "limit_price": target_spot if target_spot > 0 else None,
                     "instrument_type": "SPOT",
+                    "entry_regime": candidate_entry_regime,
                 }
             )
 

@@ -139,7 +139,7 @@ class TestShortAnchorAndStop:
 # ---------------------------------------------------------------- TP 階梯
 class TestShortTpLadder:
     def test_tp1_at_put_wall(self, engine: DynamicRolloverEngine) -> None:
-        tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=85.4)  # <= 85 × 1.005 = 85.425
         )
         assert tier == "TP1"
@@ -147,7 +147,7 @@ class TestShortTpLadder:
         assert "TP1-支撐初探" in reason
 
     def test_tp2_wall_break(self, engine: DynamicRolloverEngine) -> None:
-        tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=83.0)  # 跌穿 85 達 2.35% >= 1.5%
         )
         assert tier == "TP2"
@@ -161,7 +161,7 @@ class TestShortTpLadder:
         """破位追空剛進場：現價已跌破 Put Wall 2%（正是追空的進場條件），但距
         次級負 Gamma 節點仍遠。若仍以 Put Wall 為目標牆，部位一登錄就落在 TP2
         內，下一個 15 分鐘週期即建議回補。"""
-        tier, _ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=83.3, next_negative_node=75.0)
         )
         assert tier is None
@@ -169,12 +169,12 @@ class TestShortTpLadder:
     def test_breakdown_chase_tp_targets_next_negative_node(
         self, engine: DynamicRolloverEngine
     ) -> None:
-        tp1, _r1, reason1 = engine._evaluate_microstructure_tp_ladder(
+        tp1, _r1, reason1, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=75.3, next_negative_node=75.0)
         )
         assert tp1 == "TP1"
         assert "次級負 Gamma 節點 $75.00" in reason1
-        tp2, _r2, reason2 = engine._evaluate_microstructure_tp_ladder(
+        tp2, _r2, reason2, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=73.5, next_negative_node=75.0)  # 跌穿 2%
         )
         assert tp2 == "TP2"
@@ -184,7 +184,7 @@ class TestShortTpLadder:
         self, engine: DynamicRolloverEngine
     ) -> None:
         """節點缺失 (0.0) 時維持原行為：以 Put Wall 為目標牆。"""
-        tier, _ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=83.0, next_negative_node=0.0)
         )
         assert tier == "TP2"
@@ -192,7 +192,7 @@ class TestShortTpLadder:
 
     def test_tp2_wall_migrated_down(self, engine: DynamicRolloverEngine) -> None:
         """做市商支撐牆向下遷移 >= 3% 且現價跌穿舊底牆 -> 釋放下行空間。"""
-        tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=88.0, put_wall=87.0, previous_put_wall=95.0)
         )
         assert tier == "TP2"
@@ -203,7 +203,7 @@ class TestShortTpLadder:
         self, engine: DynamicRolloverEngine
     ) -> None:
         """牆已下移但現價尚未跌穿舊底牆時，破位未成立，不得觸發 TP2。"""
-        tier, _ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=96.0, put_wall=87.0, previous_put_wall=95.0)
         )
         assert tier is None
@@ -212,7 +212,7 @@ class TestShortTpLadder:
         self, engine: DynamicRolloverEngine
     ) -> None:
         """遷移幅度未達 3% (95 -> 93，僅 2.1%) 時，不觸發遷移判定。"""
-        tier, _ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=94.0, put_wall=93.0, previous_put_wall=95.0)
         )
         assert tier is None
@@ -221,13 +221,13 @@ class TestShortTpLadder:
         self, engine: DynamicRolloverEngine
     ) -> None:
         """支撐牆向**上**遷移對空頭是逆風，絕不可誤觸發 TP2。"""
-        tier, _ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(spot_price=96.0, put_wall=95.0, previous_put_wall=85.0)
         )
         assert tier is None
 
     def test_tp3_deep_negative_delta(self, engine: DynamicRolloverEngine) -> None:
-        tier, ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(delta=-0.9)
         )
         assert tier == "TP3"
@@ -236,14 +236,14 @@ class TestShortTpLadder:
 
     def test_tp3_vwap_reclaim_with_volume(self, engine: DynamicRolloverEngine) -> None:
         """空頭的趨勢耗竭訊號是 VWAP 帶量**收復**（多頭是帶量失守）。"""
-        tier, _ratio, reason = engine._evaluate_microstructure_tp_ladder(
+        tier, _ratio, reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics(vwap_reclaim_with_volume=True)
         )
         assert tier == "TP3"
         assert "15m VWAP 帶量收復" in reason
 
     def test_no_tp_when_mid_range(self, engine: DynamicRolloverEngine) -> None:
-        tier, ratio, _reason = engine._evaluate_microstructure_tp_ladder(
+        tier, ratio, _reason, _new_stop = engine._evaluate_microstructure_tp_ladder(
             _short_metrics()
         )
         assert tier is None

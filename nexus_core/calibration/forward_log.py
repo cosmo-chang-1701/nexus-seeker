@@ -11,6 +11,7 @@ regime_evaluation_outcome，分析 GEX 相關條件的實際效果。
         nexus-seeker python -m calibration forward-report
 """
 
+import json
 from typing import Any
 
 import pandas as pd
@@ -122,17 +123,25 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
         section["conditions"] = per_condition
         report["sections"].append(section)
 
-    # GEX 相關量值分佈 vs 結果 (四分位)
+    # GEX 相關量值分佈 vs 結果 (四分位)。只看進場／分類評估：EXIT_* 的 win
+    # 是「離場訊號正確」，與進場勝率語意相反，混入會讓四分位結果失真。
+    entries = df[~df["evaluator"].astype(str).str.startswith("EXIT_")]
     magnitudes: dict[str, Any] = {}
     for name, series in (
-        ("next_node_space_atr", (df["spot"] - df["next_negative_node"]) / df["atr_1d"]),
+        (
+            "next_node_space_atr",
+            (entries["spot"] - entries["next_negative_node"]) / entries["atr_1d"],
+        ),
         (
             "resistance_buffer_atr15",
-            (df["resistance_wall"] - df["spot"]) / df["atr_15m"],
+            (entries["resistance_wall"] - entries["spot"]) / entries["atr_15m"],
         ),
-        ("put_wall_dist_pct", (df["spot"] - df["put_wall"]) / df["spot"]),
+        (
+            "put_wall_dist_pct",
+            (entries["spot"] - entries["put_wall"]) / entries["spot"],
+        ),
     ):
-        valid = pd.DataFrame({"x": series, "win": df["win"]}).dropna()
+        valid = pd.DataFrame({"x": series, "win": entries["win"]}).dropna()
         valid = valid[(valid["x"] > 0) & (valid["x"] < 1e6)]
         if len(valid) < FORWARD_MIN_ROWS:
             magnitudes[name] = f"資料累積中 ({len(valid)}/{FORWARD_MIN_ROWS})"
@@ -143,4 +152,57 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
             for q, g in valid.groupby("q", observed=True)
         ]
     report["magnitudes"] = magnitudes
+    report["exit_tiers"] = build_exit_tier_breakdown(df)
     return report
+
+
+def _is_advisory(features_json: Any) -> bool:
+    if not isinstance(features_json, str):
+        return False
+    try:
+        return bool(json.loads(features_json).get("advisory"))
+    except (ValueError, AttributeError):
+        return False
+
+
+def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """出場分層洗盤率 (handoff §5.4)：EXIT_* evaluator 依分層 × 顧問旗標分組。
+
+    `direction` 已是訊號押注方向 (evaluation_recorder.record_exit_signal)，
+    因此 outcome=+1 為訊號正確 (平倉後確實朝不利部位的方向走)，outcome=-1
+    為反向先觸及——對平倉類分層即「被洗盤掃出」。顧問持倉的分層多半未推播，
+    與指令持倉分開統計，避免混入使用者未收到的樣本。
+
+    樣本未達 FORWARD_MIN_ROWS 時仍輸出比率，但以 status 標示不可據以調參。
+    """
+    if df.empty or "evaluator" not in df.columns:
+        return []
+    exits = df[df["evaluator"].astype(str).str.startswith("EXIT_")].copy()
+    if exits.empty:
+        return []
+    features = (
+        exits["features_json"]
+        if "features_json" in exits.columns
+        else pd.Series([None] * len(exits), index=exits.index)
+    )
+    exits["advisory"] = [_is_advisory(f) for f in features]
+    out: list[dict[str, Any]] = []
+    for (evaluator, advisory), grp in exits.groupby(["evaluator", "advisory"]):
+        n = int(len(grp))
+        out.append(
+            {
+                "evaluator": str(evaluator),
+                "advisory": bool(advisory),
+                "n": n,
+                "correct_rate": float((grp["outcome"] == 1).mean()),
+                "washout_rate": float((grp["outcome"] == -1).mean()),
+                "timeout_rate": float((grp["outcome"] == 0).mean()),
+                "median_fwd_ret_5d": float(grp["fwd_ret_5d"].median())
+                if "fwd_ret_5d" in grp.columns and grp["fwd_ret_5d"].notna().any()
+                else None,
+                "status": "OK"
+                if n >= FORWARD_MIN_ROWS
+                else f"資料累積中 ({n}/{FORWARD_MIN_ROWS})",
+            }
+        )
+    return out

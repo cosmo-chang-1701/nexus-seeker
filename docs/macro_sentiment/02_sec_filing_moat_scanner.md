@@ -16,6 +16,13 @@ Nexus Seeker 設計了**「每日 08:00 持倉自動掃描 ＋ 邊緣正則段�
 - **重大突發事件（Breaking Events）**：CEO/CFO 突發解職（Item 5.02）、重大重整或資產減損（Item 2.05）、重編財報（Item 4.02）或重大合約終止（Item 1.02）時之即時預警。
 - **盤前風險過濾**：於每日 08:00 ET 開盤前完成所有持倉標的掃描，結果直接存入 SQLite 快取，為盤中動態轉倉引擎（情境 1 原型假設破滅）提供零延遲判定依據。
 
+> **B&H 持倉的主要出場訊號**：掃描依 `context_type = 'HOLDING'` 涵蓋全部持倉，
+> 不區分 `asset_class` / 顧問模式（`portfolio_mode` / `advisory_only`，見
+> [`../strategies/05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1）。
+> 對 Buy & Hold 使用者而言，這是唯一未被顧問模式轉換或跳過的持倉層級出場訊號——
+> 顧問模式只改變戰術性減碼／換股的輸出語意，不改變「論點是否還成立」的判定。
+> 通知開關 `defense_fundamental_thesis` 建議保持開啟。
+
 ---
 
 ## 2. 數學模型與量化推導

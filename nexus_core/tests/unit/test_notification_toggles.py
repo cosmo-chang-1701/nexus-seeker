@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 15 大通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 17 大通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 15
+    assert len(ALL_NOTIFICATION_KEYS) == 17
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True
@@ -99,7 +99,7 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
 
 
 # 戰術預設情境模式 (all_on, all_off, focus, mute_intraday) 的完整驗證見
-# test_full_preset_assertions_all_keys（涵蓋全部 14 個 key 與全部 4 種情境）。
+# test_full_preset_assertions_all_keys（涵蓋全部 17 個 key 與全部 4 種情境）。
 
 
 @pytest.mark.asyncio
@@ -299,7 +299,7 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
 
 
 def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
-    """測試所有 14 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    """測試所有 17 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
     user_id = 888111
 
     # 1. all_on
@@ -327,6 +327,9 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     # WTI/Polymarket 為全天候情報，不屬於盤中 Alpha 雜訊，精準交易模式下維持開啟
     assert s_focus["alpha_polymarket"] is True
     assert s_focus["alpha_wti_oil"] is True
+    # 進場顧問只在六重鐵律通過時推播（高信號），精準交易模式下維持開啟
+    assert s_focus["advisory_entry_signal"] is True
+    assert s_focus["advisory_core_levels"] is True
 
     # 4. mute_intraday
     s_mute = apply_preset_settings(user_id, "mute_intraday")
@@ -347,6 +350,9 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     # WTI/Polymarket 為全天候情報，不受盤中頻率影響，盤中靜音模式下維持開啟
     assert s_mute["alpha_polymarket"] is True
     assert s_mute["alpha_wti_oil"] is True
+    # 進場顧問屬盤中節奏，靜音；持倉位階顧問屬持倉防禦等級，維持開啟
+    assert s_mute["advisory_entry_signal"] is False
+    assert s_mute["advisory_core_levels"] is True
 
 
 def test_v070_backfills_heartbeat_symbol_deep_from_watchlist(db_conn: Any) -> None:
@@ -396,3 +402,82 @@ def test_v070_backfills_heartbeat_symbol_deep_from_watchlist(db_conn: Any) -> No
     migrate_data(db_conn)
     db_conn.commit()
     assert _deep(8001)[0] == 1
+
+
+def test_preset_dicts_cover_every_notification_key() -> None:
+    """focus / mute_intraday 是手寫字典（all_on / all_off 是 comprehension 會自動涵蓋）。
+    漏補新 key 時 apply_preset_settings 不會動到它，該 preset 對新頻道的行為即未定義，
+    而逐 key 硬編碼斷言又不會失敗——這裡以結構性斷言補上這個靜默盲點。"""
+    from database.notifications import PRESET_PROFILES
+
+    for name, profile in PRESET_PROFILES.items():
+        assert set(profile) == set(
+            ALL_NOTIFICATION_KEYS
+        ), f"preset {name} 的 key 集合不一致"
+
+
+def test_notification_ui_modules_match_key_list() -> None:
+    """/notif_settings 的 TRADING_MODULES 必須與 ALL_NOTIFICATION_KEYS 完全一致，
+    否則新頻道使用者無法在 UI 上開關（或 UI 出現不存在的 key）。"""
+    from cogs.settings_ui import TRADING_MODULES
+
+    ui_keys = [k for m in TRADING_MODULES.values() for k in m["items"]]
+    assert len(ui_keys) == len(set(ui_keys)), "同一個 key 不可出現在多個模組"
+    assert set(ui_keys) == set(ALL_NOTIFICATION_KEYS)
+    assert "advisory_entry_signal" in TRADING_MODULES["telemetry"]["items"]
+    assert "advisory_core_levels" in TRADING_MODULES["defense"]["items"]
+
+
+def test_v078_module_exports_required_attributes() -> None:
+    """migration 模組缺 version / description / sql 任一者會被 get_migrations() 無聲跳過。"""
+    from database.migrations import v078_backfill_advisory_entry_signal as m
+
+    assert m.version == 78
+    assert isinstance(m.description, str) and m.description
+    assert hasattr(m, "sql")
+    from database.core import get_migrations
+
+    assert any(x["version"] == 78 for x in get_migrations())
+
+
+def test_v078_backfills_advisory_entry_signal_from_symbol_deep(db_conn: Any) -> None:
+    """已靜音個股深度心跳的使用者，不得在進場顧問上線後被自動重新訂閱。"""
+    from database.migrations.v078_backfill_advisory_entry_signal import migrate_data
+
+    cursor = db_conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)",
+        (8101, "heartbeat_symbol_deep", 0),
+    )
+    cursor.execute(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)",
+        (8102, "heartbeat_symbol_deep", 1),
+    )
+    db_conn.commit()
+
+    migrate_data(db_conn)
+    db_conn.commit()
+
+    def _row(uid: int, key: str) -> Any:
+        cursor.execute(
+            "SELECT enabled FROM user_notification_settings "
+            "WHERE user_id = ? AND notification_key = ?",
+            (uid, key),
+        )
+        return cursor.fetchone()
+
+    assert _row(8101, "advisory_entry_signal")[0] == 0, "已靜音的使用者必須保持靜音"
+    assert _row(8102, "advisory_entry_signal")[0] == 1
+    assert _row(8103, "advisory_entry_signal") is None, "從未設定者維持沿用預設值"
+    assert _row(8101, "advisory_core_levels") is None, "持倉位階顧問不回填"
+
+    # 重跑不得覆寫使用者事後手動調整過的設定
+    cursor.execute(
+        "UPDATE user_notification_settings SET enabled = 1 "
+        "WHERE user_id = ? AND notification_key = 'advisory_entry_signal'",
+        (8101,),
+    )
+    db_conn.commit()
+    migrate_data(db_conn)
+    db_conn.commit()
+    assert _row(8101, "advisory_entry_signal")[0] == 1

@@ -345,6 +345,21 @@ class SymbolHubView(discord.ui.View):
                         df_15m=regime_market_data.df_15m,
                         session_vwap=regime_market_data.session_vwap,
                     )
+                elif dynamic_regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION:
+                    # 同一套右側鐵律，條件一/四放寬（見 opportunity_cost.py::
+                    # _confirm_entry_signal 的 trend_continuation 說明）。
+                    (
+                        six_rule_passed,
+                        six_rule_reason,
+                        structure_directive,
+                    ) = await engine._confirm_entry_signal(
+                        self.symbol,
+                        self.base_data,
+                        target_spot,
+                        df_15m=regime_market_data.df_15m,
+                        session_vwap=regime_market_data.session_vwap,
+                        trend_continuation=True,
+                    )
                 elif dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                     (
                         six_rule_passed,

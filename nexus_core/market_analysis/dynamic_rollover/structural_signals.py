@@ -9,6 +9,7 @@ from .constants import (
     _MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD,
     _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO,
     _MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT,
+    _REGIME_III_B_LOOKBACK_BARS,
     _STRUCTURAL_SIGNALS_CACHE_TTL,
 )
 
@@ -419,3 +420,52 @@ async def compute_structural_breakdown_signals_impl(
         now + _STRUCTURAL_SIGNALS_CACHE_TTL,
     )
     return result
+
+
+def count_structure_held_bars(
+    df_confirmed: Optional[Any],
+    structure_level: float,
+    session_vwap: float,
+) -> Tuple[int, int, bool]:
+    """統計最近 `_REGIME_III_B_LOOKBACK_BARS` 根已收盤 15m K 棒中，有幾根收盤
+    同時站穩結構分界線與 Session VWAP。
+
+    `structure_level` 為 Gamma Flip 估算值；標的期權鏈極端單邊導致無零交叉點、
+    但全鏈 Net GEX > 0 時，呼叫端改傳條件一既有的「全域 Long Gamma 替代門檻」
+    (VWAP + 0.5 × ATR₁₅ₘ)——兩者回答的是同一個問題：做市商自穩定區的下緣在哪。
+
+    路由層 (regime_classifier) 與進場確認層 (六重鐵律條件一) 共用這個**演算法**，
+    但各自獨立呼叫、各自持有輸入，比照 constants.py 明訂的「兩層門檻不合併」政策。
+
+    回傳 `(站穩根數, 實際取到的窗口根數, 這些 K 棒是否全屬同一交易時段)`。
+
+    **為什麼要求同一交易時段**：`session_vwap` 來自 `fetch_session_vwap()`，是
+    「當前（或最近一個已結束）交易時段」的單一純量。若窗口跨越了昨日，就會拿
+    昨天的收盤價去比今天的 VWAP——那不是「持續站穩」，只是兩個不相干數字的比較。
+    盤前／開盤後不足 6 根已收盤 K 棒時，本函式回報 `same_session=False`，
+    Regime III-B 隨之 fail-safe 不成立。實務效果是 III-B 最早於 11:00 ET
+    （9:30 起第 6 根 15m K 棒收盤）才可能觸發；這對一條「趨勢延續」路徑是
+    合理的——開盤前 90 分鐘本來就還沒有「延續」可言。
+
+    ⚠️ 比較基準用的是「當下」的 Gamma Flip 與 Session VWAP 純量，而非每根 K 棒
+    當時的值。Gamma Flip 是日內幾乎不動的結構位階，這個近似可接受；VWAP 的
+    近似則因同時段約束而被限制在 90 分鐘內，偏差有界。
+    """
+    if df_confirmed is None or structure_level <= 0 or session_vwap <= 0:
+        return 0, 0, False
+    try:
+        window = df_confirmed.iloc[-_REGIME_III_B_LOOKBACK_BARS:]
+        window_len = int(len(window))
+        if window_len < _REGIME_III_B_LOOKBACK_BARS:
+            return 0, window_len, False
+        # index 為 tz-naive 美東牆鐘時間（見 AGENTS.md：get_history_df 的時區慣例），
+        # 直接取 .date() 即為交易日，不需要也不應該做任何時區轉換。
+        session_dates = {ts.date() for ts in window.index}
+        if len(session_dates) != 1:
+            return 0, window_len, False
+        threshold = max(structure_level, session_vwap)
+        held = int((window["Close"] > threshold).sum())
+        return held, window_len, True
+    except Exception as e:
+        logger.warning(f"Regime III-B 持續站穩根數統計失敗: {e}")
+        return 0, 0, False

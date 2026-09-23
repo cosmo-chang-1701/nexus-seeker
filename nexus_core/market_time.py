@@ -118,3 +118,45 @@ def get_trading_day_elapsed_fraction(min_fraction: float = 0.05) -> float:
     except Exception as e:
         logger.warning(f"計算交易時段進度失敗，回退為 1.0 (不正規化): {e}")
         return 1.0
+
+
+def get_trading_days_ago_utc(n_trading_days: int) -> str:
+    """回傳「往回數第 `n_trading_days` 個交易日的開盤時刻」之 UTC 字串
+    (`'%Y-%m-%d %H:%M:%S'`)，供 SQLite 以 `observed_at >= ?` 做時間窗過濾。
+
+    為什麼用交易日而非日曆日：UOA 只在開盤時段產生。以日曆日回看 5 天，遇到
+    週末就只剩 3 個交易日、遇到連假只剩 2 個——同一個「5 日回看窗」在一週內
+    不同日子代表的樣本量會相差近一倍，門檻等於隨機漂移。
+
+    `n_trading_days=1` 代表「今天（或最近一個交易日）開盤以來」。
+
+    行事曆查詢失敗時 fail-safe 回退為 `n_trading_days` 個**日曆日**前——這個
+    方向是保守的（日曆日窗必然短於或等於同數量的交易日窗），寧可少撈到歷史
+    紀錄而讓條件四維持嚴格，也不要因為行事曆異常而意外放寬進場門檻。
+    """
+    now_ny = datetime.now(ny_tz)
+    n = max(1, int(n_trading_days))
+    try:
+        # 往回抓足夠長的日曆窗：n 個交易日最壞情況（連假）約需 n * 2 + 10 天。
+        start = now_ny.date() - timedelta(days=n * 2 + 10)
+        schedule = nyse_calendar.schedule(start_date=start, end_date=now_ny.date())
+        if not schedule.empty:
+            opens = list(schedule["market_open"])
+            # 只保留已經開盤的交易日：盤前執行時「今天」雖在行事曆內但尚未
+            # 產生任何 UOA，把它算進回看窗會實質縮短一天。
+            elapsed = [
+                o for o in opens if o.tz_convert(ny_tz).to_pydatetime() <= now_ny
+            ]
+            if elapsed:
+                target = elapsed[-min(n, len(elapsed))]
+                return str(
+                    target.tz_convert(timezone.utc)
+                    .to_pydatetime()
+                    .strftime("%Y-%m-%d %H:%M:%S")
+                )
+    except Exception as e:
+        logger.warning(f"NYSE 行事曆回看 {n} 個交易日失敗，退回日曆日: {e}")
+
+    return (datetime.now(timezone.utc) - timedelta(days=n)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )

@@ -22,6 +22,14 @@ class RolloverScenario(str, Enum):
     # 整條下游 (PowerSqueeze > 80 門檻、Buy Shares 工具別、RolloverActionView
     # 的 BUY 數量計算) 全是多頭假設，做空確認走進去只會得到自相矛盾的指令。
     SHORT_ENTRY = "SHORT_ENTRY"
+    # 順勢金字塔加碼 (pyramid_add.py)。刻意獨立成情境、不借用 TRANSITION_ENGINE
+    # 既有的 OPEN_PYRAMID action：後者是 entry_regime 驅動的一次性狀態切換
+    # （Regime I 左側倉進化為右側動能倉，由 state["pyramided"] 旗標保證只觸發
+    # 一次），本情境是任何右側獲利倉在趨勢延續時的例行加碼（可觸發至
+    # _PYRAMID_MAX_ADDS 次）。兩者觸發源、次數上限皆不同，合併會讓路徑一的
+    # 一次性保證失效——但兩者最終都路由到同一個 action=="OPEN_PYRAMID" 下游
+    # 派發分支，必須靠 scenario 欄位區分文案與資料。
+    PYRAMID_ADD = "PYRAMID_ADD"
 
 
 class TradingStrategyMode(str, Enum):
@@ -43,6 +51,23 @@ class TradingStrategyMode(str, Enum):
     LEFT_SIDE = "LEFT_SIDE"  # 左側交易：逆勢均值回歸六重鐵律 (left_side_entry.py)
     SHORT_SIDE = "SHORT_SIDE"  # 做空交易：結構破位追空六重鐵律 (short_side_entry.py)
     DYNAMIC = "DYNAMIC"  # 動態調整：5態 Regime 分類器路由 (regime_classifier.py)
+
+
+class RiskAppetite(str, Enum):
+    """使用者 /settings 可選的風險偏好，決定 TP 階梯比例、EV 轉倉門檻與核心資金
+    部署比例要套用哪一組參數 (見 constants.py::resolve_risk_profile)。
+
+    DEFENSIVE 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化。
+    AGGRESSIVE 的數值全部來自 calibration/backtest_engine_2025.py 已驗證的
+    aggressive 模式（2025 回測顯示其報酬/MDD/Sharpe 三項皆優於 DEFENSIVE，見
+    docs/strategies/04_dynamic_rollover_state_machine.md §2.10）。
+
+    新增 enum 值不需要 migration：user_settings.risk_appetite 是
+    TEXT DEFAULT 'DEFENSIVE'，無 CHECK 約束（見 v076_add_risk_appetite.py）。
+    """
+
+    DEFENSIVE = "DEFENSIVE"
+    AGGRESSIVE = "AGGRESSIVE"
 
 
 class RegimeMarketData(NamedTuple):
@@ -113,7 +138,7 @@ class EntryConfirmation(NamedTuple):
 
 
 class DynamicRegime(str, Enum):
-    """動態調整模式的 5 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
+    """動態調整模式的 6 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
 
     判定優先序（非 enum 宣告序）：
 
@@ -122,10 +147,16 @@ class DynamicRegime(str, Enum):
            系統性流動性危機下做空同樣會被劇烈軋空，不是安全的方向。
         2. Regime V  破位追空態
         3. Regime IV 的**個股結構封頂**分支 (Call Wall 空間不足 / STO 封頂)
-        4. Regime III → Regime I → Regime II
+        4. Regime III → Regime III-B → Regime I → Regime II
 
     第 2 與第 3 的先後是刻意的：個股結構封頂與破位追空的條件可以同時成立
     (壓頂 + 跌破底牆)，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
+
+    Regime III-B 緊接在 Regime III 之後、且**必須**在其之後：兩者都是多頭右側
+    路徑，III 是「突破正在發生」的事件式判定 (放量 + 實體陽線 + RSI > 55)，
+    III-B 是「趨勢仍然成立」的狀態式判定 (近 6 根已收盤 K 棒至少 5 根站穩結構)。
+    突破當下兩者都會成立，此時應歸類為 III——它帶著更強的進場證據，且 III-B 的
+    UOA 時間窗放寬不應套用在突破態上。
     """
 
     REGIME_I_LEFT_CATCH = "REGIME_I_LEFT_CATCH"  # 左側接刀態：極端負乖離吸籌
@@ -135,6 +166,10 @@ class DynamicRegime(str, Enum):
     REGIME_III_RIGHT_MOMENTUM = (
         "REGIME_III_RIGHT_MOMENTUM"  # 右側動能態：結構突破伽馬擠壓
     )
+    # 右側趨勢延續態：已在趨勢中、非突破瞬間。路由至右側六重鐵律，但條件一改判
+    # 「持續站穩」、條件四改為 _ENTRY_UOA_LOOKBACK_DAYS 交易日回看窗。
+    # 乾跑期間由 config.REGIME_III_B_DRY_RUN 在派發端攔截，不推播只記稽核。
+    REGIME_III_B_TREND_CONTINUATION = "REGIME_III_B_TREND_CONTINUATION"
     REGIME_IV_STRUCTURAL_CAP_CRISIS = (
         "REGIME_IV_STRUCTURAL_CAP_CRISIS"  # 結構封頂／危機態：強制鎖定
     )
@@ -178,6 +213,48 @@ class ShortEntryPlan(TypedDict):
     short_vix_multiplier: float
     kelly_fraction: float
     invalidation_note: Optional[str]
+
+
+class PyramidAddPlan(TypedDict):
+    """PYRAMID_ADD 指令攜帶的加碼計畫 (pyramid_add.py 產出)。
+
+    倉位模型與 SHORT_ENTRY 的「風險預算 ÷ 停損距離」同源、方向反轉：
+    停損距離為 `spot - ratchet_stop`（棘輪停損已由條件二保證 >= avg_cost，
+    加碼因此只動用「已實現的帳面利潤」承險，不增加原始部位的本金曝險）。
+    """
+
+    entry_price: float
+    stop_price: float
+    stop_distance_usd: float
+    reward_risk_ratio: float
+    risk_budget_usd: float
+    share_qty: int
+    notional_usd: float
+    binding_constraint: str
+    vix_spot: Optional[float]
+    vix_tier_name: str
+    vix_multiplier: float
+    kelly_fraction: float
+    pyramid_count_after: int
+
+
+class AdvisoryPlan(TypedDict, total=False):
+    """顧問模式 (portfolio_mode=ADVISORY / advisory_only) 的位階資訊 (advisory_mode.py 產出)。
+
+    顧問指令 (`action == "ADVISORY"`) 只告知位階，不攜帶任何賣出動作：
+    `sell_ratio` 恆為 0.0、`target_core` 恆為 ""。
+
+    kind:
+      * ``STRUCTURE_FAILURE`` — 結構失效 (SL-結構失效／極端瞬時停損)，附 `stop_loss`。
+      * ``TARGET_REACHED`` — 已抵達目標區 (TP1~TP3 摺疊)，附 `call_wall`／`target`。
+    """
+
+    kind: Literal["STRUCTURE_FAILURE", "TARGET_REACHED"]
+    spot: float
+    stop_loss: Optional[float]
+    call_wall: Optional[float]
+    target: Optional[float]
+    is_blue_sky: bool
 
 
 class _RolloverInstructionRequired(TypedDict):
@@ -270,3 +347,9 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     dynamic_state_patch: Optional[Dict[str, Any]]
     # SHORT_ENTRY 情境專屬：進場／停損／目標價位與倉位計算結果。
     short_entry_plan: Optional[ShortEntryPlan]
+    # PYRAMID_ADD 情境專屬：加碼股數／風險預算／停損距離倉位計算結果。
+    pyramid_add_plan: Optional[PyramidAddPlan]
+    # 顧問模式專屬：`action == "ADVISORY"` 指令攜帶的位階資訊。⚠️ `action` 是純 str
+    # 而非 Literal，新增 "ADVISORY" 值時 mypy 不會提示任何未處理的消費端分支，
+    # 唯一的防護是 tests/unit/test_advisory_mode.py 的參數化不變式測試。
+    advisory_plan: Optional[AdvisoryPlan]

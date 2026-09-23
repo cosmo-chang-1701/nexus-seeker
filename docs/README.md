@@ -64,10 +64,10 @@ flowchart TB
 
     subgraph Strategies_Layer["1. 交易策略與進出場體系 (strategies/)"]
         direction TB
-        S01["5-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
+        S01["6-Regime 市場環境動態路由矩陣<br/>(01_regime_routing_matrix.md)"]
         S02["右側動能突破進場六重鐵律<br/>(02_right_side_momentum_ironclad.md)"]
         S03["左側均值回歸接刀六重鐵律<br/>(03_left_side_mean_reversion_ironclad.md)"]
-        S04["動態轉倉 9 大情境狀態機與 2025 回測<br/>(04_dynamic_rollover_state_machine.md)"]
+        S04["動態轉倉 10 大情境狀態機與 2025 回測<br/>(04_dynamic_rollover_state_machine.md)"]
         S05["雙軌防洗盤動態停損與出場決策矩陣<br/>(05_dual_track_anti_washout_stop_loss.md)"]
         S06["動態自適應波動率空間門檻<br/>(06_dynamic_adaptive_room_threshold.md)"]
         S07["做空交易六重嚴格過濾鐵律<br/>(07_short_side_breakdown_ironclad.md)"]
@@ -117,10 +117,10 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 5-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
+| 01 | [`01_regime_routing_matrix.md`](strategies/01_regime_routing_matrix.md) | 6-Regime 市場環境動態路由矩陣 | `VTS >= 1.10`, Call Wall 空間 < 動態門檻, `RegimeMarketData` 快照複用 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 02 | [`02_right_side_momentum_ironclad.md`](strategies/02_right_side_momentum_ironclad.md) | 右側動能突破進場六重鐵律 | 15m 實體陽線放量 1.5x, 站穩 VWAP, 底牆 $K < \text{Spot}$, 主力買盤 DTE $\ge 7$ | `market_analysis/dynamic_rollover/opportunity_cost.py` |
 | 03 | [`03_left_side_mean_reversion_ironclad.md`](strategies/03_left_side_mean_reversion_ironclad.md) | 左側均值回歸接刀六重鐵律 | 負乖離 $\le -1.5\text{ATR}$, RSI $\le 30$, Put Wall 密著帶 $[-1.0\%, +1.5\%]$, 回歸空間 $\ge$ 動態門檻 | `market_analysis/dynamic_rollover/left_side_entry.py` |
-| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 9 大情境全景狀態機與 2025 全量回測 | 涵蓋 9 大情境, 2025 NVDA/SPY/GLD 全量回測實證 (MDD 降 18.1%, 勝率 79.4%), 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
+| 04 | [`04_dynamic_rollover_state_machine.md`](strategies/04_dynamic_rollover_state_machine.md) | 動態轉倉 10 大情境全景狀態機與 2025 全量回測 | 涵蓋 10 大情境（含順勢金字塔加碼 `PYRAMID_ADD`）, 2025 NVDA/SPY/GLD 全量回測實證 (MDD 降 18.1%, 勝率 79.4%), 做空確認下游隔離, Delta $\ge 0.85$ 硬鎖 | `market_analysis/dynamic_rollover/` |
 | 05 | [`05_dual_track_anti_washout_stop_loss.md`](strategies/05_dual_track_anti_washout_stop_loss.md) | 雙軌防洗盤動態停損與出場決策矩陣 | 軌道一 $0.5\times\text{ATR}$ 實體 K 收盤撤退線, 軌道二 $3.0\times\text{ATR}$ 瞬時硬熔斷 | `market_analysis/dynamic_rollover/constants.py` |
 | 06 | [`06_dynamic_adaptive_room_threshold.md`](strategies/06_dynamic_adaptive_room_threshold.md) | 動態自適應波動率空間門檻 | $\max(2.2\times\text{Risk}, 1.5\times\text{ATR}_{1D}, 3.5\%)$, 停損距離雙邊界 $[2.5\times\text{ATR}_{15m}, 8\%]$ | `market_analysis/room_threshold.py` |
 | 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律與 SHORT_ENTRY 做空進場訊號 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$, 倉位 $\min(0.5\%, f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}$ ÷ 停損距離 | `market_analysis/dynamic_rollover/short_side_entry.py` |
@@ -304,7 +304,7 @@ graph LR
 |:---|:---|
 | [`platform/01_analyst_agent_reporting.md`](platform/01_analyst_agent_reporting.md) | Analyst Agent 報告排程：盤前財報／估值調整、盤後綜合風險結算、正式路徑與孤兒路徑辨識 |
 | [`platform/02_order_management_and_telemetry.md`](platform/02_order_management_and_telemetry.md) | 委託單管理資料庫與 UI、遙測定價對齊引擎三向量 |
-| [`platform/03_notification_center.md`](platform/03_notification_center.md) | 互動設定架構、4 大戰術維度 13 頻道通知偏好中心、Preset 快捷鍵 |
+| [`platform/03_notification_center.md`](platform/03_notification_center.md) | 互動設定架構、4 大戰術維度 17 頻道通知偏好中心、Preset 快捷鍵 |
 | [`platform/04_calendar_translation_engine.md`](platform/04_calendar_translation_engine.md) | 事件日曆共用閘道、150+ 總經事件中英對照與聯準會官員演講解析引擎 |
 | [`platform/05_embed_architecture_and_dm_queue.md`](platform/05_embed_architecture_and_dm_queue.md) | Embed 輸出集中化規範、`NexusEmbed` 視覺一致性、持久化 DM 佇列投遞層 |
 | [`platform/06_price_volume_alert_system.md`](platform/06_price_volume_alert_system.md) | 個股 15 分鐘價量突破警報系統、K 棒完整性防呆、雙模警報支援 |

@@ -2083,6 +2083,10 @@ def create_entry_rules_embed(
     dynamic_regime: Optional[str] = None,
     dynamic_regime_reason: Optional[str] = None,
     structure_directive: Optional[str] = None,
+    entry_price: Optional[float] = None,
+    stop_loss: Optional[float] = None,
+    target: Optional[float] = None,
+    rr_ratio: Optional[float] = None,
 ) -> discord.Embed:
     """
     建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
@@ -2103,6 +2107,10 @@ def create_entry_rules_embed(
         _derive_entry_structure_directive，左側來自 left_side_entry.py 的 IVR
         分流)。天期刻意設計為每輪重評都重算的輸出參數，而非在進場當下蓋章後
         永不更新的部位標籤。預設 None 時不渲染此欄位，向下相容既有呼叫端。
+    :param entry_price / stop_loss / target / rr_ratio: 自選標的進場顧問推播
+        (intraday_pipeline/entry_advisor.py) 附帶的價位建議。四者皆為 None (預設，
+        `/x` 頁籤的既有呼叫端) 時不渲染「價位建議」欄位；只要任一有值即渲染，
+        缺值者顯示 N/A。`rr_ratio` 為 None 代表分母 <= 0 或缺資料，不代表 0。
     """
     embed = NexusEmbed(
         title=f"🔐 {symbol} 進場鐵律檢核 (Entry Ironclad Rules)",
@@ -2112,7 +2120,7 @@ def create_entry_rules_embed(
 
     # 實際發動的是哪一套鐵律，完全由 trading_strategy + dynamic_regime 決定，
     # 不需要呼叫端額外傳參：LEFT_SIDE 走左側、SHORT_SIDE 走做空；DYNAMIC 依分類
-    # 結果路由 (Regime I 走左側、III 走右側、V 走做空、II/IV 皆不發動)；
+    # 結果路由 (Regime I 走左側、III 與 III-B 走右側、V 走做空、II/IV 皆不發動)；
     # 其餘走右側。
     if trading_strategy == "SHORT_SIDE" or (
         trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_V_BREAKDOWN_CHASE"
@@ -2130,6 +2138,14 @@ def create_entry_rules_embed(
     ):
         _effective_gate = "NONE"
         _gate_label = "本輪未發動判定"
+    elif (
+        trading_strategy == "DYNAMIC"
+        and dynamic_regime == "REGIME_III_B_TREND_CONTINUATION"
+    ):
+        # 走的是同一套右側鐵律，但條件一/四已放寬，標籤必須誠實揭露——否則使用者
+        # 看到「順勢動能突破」卻在面板上讀到「本路徑不要求放量與實體陽線」。
+        _effective_gate = "RIGHT"
+        _gate_label = "右側交易：趨勢延續 (條件一/四已放寬)"
     else:
         _effective_gate = "RIGHT"
         _gate_label = "右側交易：順勢動能突破"
@@ -2139,6 +2155,9 @@ def create_entry_rules_embed(
             "REGIME_I_LEFT_CATCH": "🩹 Regime I：左側接刀態 (極端負乖離吸籌)",
             "REGIME_II_CHAOS_STANDASIDE": "⚪ Regime II：混沌泥淖態 (全系統休眠)",
             "REGIME_III_RIGHT_MOMENTUM": "🎯 Regime III：右側動能態 (結構突破伽馬擠壓)",
+            "REGIME_III_B_TREND_CONTINUATION": (
+                "🚀 Regime III-B：右側趨勢延續態 (持續站穩結構，非突破瞬間)"
+            ),
             "REGIME_IV_STRUCTURAL_CAP_CRISIS": "🔴 Regime IV：結構封頂／危機態 (強制鎖定)",
             "REGIME_V_BREAKDOWN_CHASE": "🐻 Regime V：破位追空態 (負 Gamma 順勢助跌)",
         }.get(dynamic_regime, dynamic_regime)
@@ -2175,6 +2194,25 @@ def create_entry_rules_embed(
                 "```ansi",
                 f" ├─ {structure_directive}",
                 " └─ 天期依當下 Call Wall 空間/IVR/財報距離每輪重算，非進場時固定標籤",
+                "```",
+            ],
+        )
+
+    if any(v is not None for v in (entry_price, stop_loss, target, rr_ratio)):
+
+        def _px(v: Optional[float]) -> str:
+            return f"${v:,.2f}" if v is not None else "N/A"
+
+        _rr_text = f"{rr_ratio:.2f} : 1" if rr_ratio is not None else "N/A"
+        _add_ansi_field_safely(
+            embed,
+            "💰 價位建議 (Entry / Stop / Target)",
+            [
+                "```ansi",
+                f" ├─ 進場價: {_px(entry_price)}",
+                f" ├─ 停損價: {_px(stop_loss)}",
+                f" ├─ 目標價: {_px(target)}",
+                f" └─ 盈虧比: {_rr_text}",
                 "```",
             ],
         )

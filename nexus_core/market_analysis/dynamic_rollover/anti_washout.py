@@ -6,6 +6,7 @@ from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
 from . import logger
 from ._shared import format_cash_impact
+from .advisory_mode import build_advisory_instruction, is_advisory_asset
 from .constants import (
     _ANTI_WASHOUT_EXTREME_ATR_MULT,
     _BUYER_LOCKOUT_IVR_THRESHOLD,
@@ -26,8 +27,11 @@ from .constants import (
     _MICROSTRUCTURE_TP3_DELTA_THRESHOLD,
     _MICROSTRUCTURE_TP3_DTE_THRESHOLD,
     _MICROSTRUCTURE_TP3_RATIO,
+    _TP1_TREND_EXEMPT_MIGRATION_PCT,
+    resolve_risk_profile,
 )
 from .models import RolloverInstruction, RolloverScenario
+from .pyramid_add import evaluate_pyramid_add_impl
 from .structural_signals import (
     _detect_whale_call_bto_block,
     _resolve_canonical_anchor_base,
@@ -230,18 +234,34 @@ class _AntiWashoutMixin:
         )
 
     def _evaluate_microstructure_tp_ladder(
-        self, metrics: dict
-    ) -> Tuple[Optional[str], float, str]:
+        self,
+        metrics: dict,
+        tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO,
+        anchor_base: float = 0.0,
+    ) -> Tuple[Optional[str], float, str, Optional[float]]:
         """微觀結構出場決策矩陣 - 止盈分層 (TP1/TP2/TP3)。
 
         無狀態、每 15 分鐘重新評估、無「TP1 是否已執行過」的持久化狀態，故採
         「本輪最高已觸發層級」而非累加：優先序 TP3 > TP2 > TP1。回傳
-        (tier_name 或 None, sell_ratio, reason_text)。
+        (tier_name 或 None, sell_ratio, reason_text, new_stop_level)。
+        new_stop_level 僅 TP1 趨勢豁免（見下）會有值，語意與 SL-動態保本一致：
+        本輪不平倉，改為棘輪停損上移的候選值，供呼叫端寫入
+        `dynamic_state_patch["ratchet_stop"]`。
+
+        tp1_ratio：TP1 執行比例，預設為現行 _MICROSTRUCTURE_TP1_RATIO (50%)。
+        呼叫端 (check_satellite_rebalancing_impl) 依使用者 risk_appetite 解析出
+        的 RiskProfile.tp1_ratio 覆寫，未傳入時零行為變化。TP2/TP3 比例刻意
+        不比照參數化——階段 0 的範圍只涵蓋 handoff.md §2.5 明列的三個消費端。
+
+        anchor_base：TP1 趨勢豁免抬升棘輪停損時使用的結構錨點，語意與呼叫端
+        `_correct_wall_topology()` 算出的值相同（呼叫端負責傳入，本函式不重算）。
 
         空頭部位分流至鏡像版 `_evaluate_microstructure_tp_ladder_short()`。
         """
         if self._resolve_position_side(metrics) == "SHORT":
-            return self._evaluate_microstructure_tp_ladder_short(metrics)
+            return self._evaluate_microstructure_tp_ladder_short(
+                metrics, tp1_ratio=tp1_ratio
+            )
 
         spot = float(metrics.get("spot_price", 0.0))
         call_wall = float(metrics.get("call_wall", 0.0))
@@ -251,7 +271,7 @@ class _AntiWashoutMixin:
         dte = int(metrics.get("dte", 99))
 
         if call_wall <= 0 or spot <= 0:
-            return None, 0.0, ""
+            return None, 0.0, "", None
 
         wall_break_pct = (spot - call_wall) / call_wall
         is_tp1 = spot >= call_wall * _MICROSTRUCTURE_TP1_CALLWALL_PCT
@@ -286,6 +306,7 @@ class _AntiWashoutMixin:
                 f"🎯 **TP3-終局平倉**：{' 或 '.join(triggers)}，趨勢動能耗竭，"
                 f"消除非線性 Theta 耗損與做市商 Pinning 釘住風險，執行 "
                 f"{_MICROSTRUCTURE_TP3_RATIO:.0%} 平倉。",
+                None,
             )
         if is_tp2:
             if is_wall_migrated_up:
@@ -296,6 +317,7 @@ class _AntiWashoutMixin:
                     f"🎯 **TP2-空間擴展**：做市商阻力牆向上遷移 ${previous_call_wall:.2f} → ${call_wall:.2f} "
                     f"({migration_pct:+.1%})，現價 ${spot:.2f} 站穩舊阻力位，釋放 Gamma 空間，"
                     f"執行 {_MICROSTRUCTURE_TP2_RATIO:.0%} 平倉。",
+                    None,
                 )
             return (
                 "TP2",
@@ -304,16 +326,59 @@ class _AntiWashoutMixin:
                 f"{wall_break_pct:+.2%}（>= {_MICROSTRUCTURE_TP2_WALL_BREAK_PCT:.1%}），"
                 f"釋放 Gamma Squeeze 利潤、防範滯留回洗，執行 "
                 f"{_MICROSTRUCTURE_TP2_RATIO:.0%} 平倉。",
+                None,
             )
         if is_tp1:
+            # TP1 趨勢豁免：牆體仍在快速上移代表做市商避險上緣尚未定錨，此時
+            # 減碼等同砍獲利部位。改以「抬停損」取代「減碼」——是 handoff.md
+            # §1.2「曝險單調遞減、沒有遞增路徑」問題的直接對症修復。
+            net_gex_raw = metrics.get("net_gex")
+            net_gex: Optional[float] = (
+                float(net_gex_raw) if net_gex_raw is not None else None
+            )
+            session_vwap = float(metrics.get("session_vwap", 0.0))
+            is_wall_migrating_fast = (
+                previous_call_wall > 0
+                and (call_wall - previous_call_wall) / previous_call_wall
+                >= _TP1_TREND_EXEMPT_MIGRATION_PCT
+            )
+            trend_exempt = (
+                is_wall_migrating_fast
+                and net_gex is not None
+                and net_gex > 0.0
+                and session_vwap > 0.0
+                and spot > session_vwap
+            )
+            if trend_exempt:
+                avg_cost = float(metrics.get("avg_cost", 0.0))
+                # 只在能算出有意義的棘輪停損時才豁免；anchor_base 與 avg_cost
+                # 皆不可得時無法安全抬停損，fail-safe 退回正常 TP1 減碼——
+                # 寧可少豁免一次，也不讓部位在無停損保護下裸奔續抱。
+                stop_candidates = [v for v in (avg_cost, anchor_base) if v > 0]
+                if stop_candidates:
+                    new_stop = max(stop_candidates)
+                    migration_pct = (
+                        call_wall - previous_call_wall
+                    ) / previous_call_wall
+                    return (
+                        None,
+                        0.0,
+                        f"🛡️ **TP1-趨勢豁免**：做市商阻力牆 "
+                        f"${previous_call_wall:.2f} → ${call_wall:.2f}（{migration_pct:+.1%}）"
+                        f"快速上移、NetGEX {net_gex:+,.0f} 仍為正、現價 ${spot:.2f} 站穩 "
+                        f"Session VWAP ${session_vwap:.2f}，判定趨勢仍在延伸，暫緩 TP1 "
+                        f"{tp1_ratio:.0%} 減碼，改為棘輪停損上移至 ${new_stop:.2f}。",
+                        new_stop,
+                    )
             return (
                 "TP1",
-                _MICROSTRUCTURE_TP1_RATIO,
+                tp1_ratio,
                 f"🎯 **TP1-阻力初探**：現價 ${spot:.2f} 已達 Call Wall ${call_wall:.2f} 的 "
                 f"{_MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%}，做市商多頭避險動能竭盡，"
-                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 平倉。",
+                f"執行 {tp1_ratio:.0%} 平倉。",
+                None,
             )
-        return None, 0.0, ""
+        return None, 0.0, "", None
 
     _evaluate_microstructure_tp_tiers = _evaluate_microstructure_tp_ladder
 
@@ -514,9 +579,13 @@ class _AntiWashoutMixin:
         return (stop_loss, limit_price, extreme_stop_loss)
 
     def _evaluate_microstructure_tp_ladder_short(
-        self, metrics: dict
-    ) -> Tuple[Optional[str], float, str]:
+        self, metrics: dict, tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO
+    ) -> Tuple[Optional[str], float, str, Optional[float]]:
         """做空部位的止盈分層 (TP1/TP2/TP3)，優先序 TP3 > TP2 > TP1。
+
+        回傳 4 元組（第 4 值 `new_stop_level` 恆為 None）：僅為與多頭版
+        `_evaluate_microstructure_tp_ladder()` 的回傳型別對齊（TP1 趨勢豁免
+        目前僅適用多頭），不代表空頭已支援相同機制。
 
         完整鏡像多頭版，目標牆由 Call Wall 換成 Put Wall：
           TP1 現價跌至 Put Wall × 1.005 以內；
@@ -540,7 +609,7 @@ class _AntiWashoutMixin:
         dte = int(metrics.get("dte", 99))
 
         if put_wall <= 0 or spot <= 0:
-            return None, 0.0, ""
+            return None, 0.0, "", None
 
         next_negative_node = float(metrics.get("next_negative_node") or 0.0)
         is_chase_target = 0 < next_negative_node < put_wall and spot < put_wall
@@ -584,6 +653,7 @@ class _AntiWashoutMixin:
                 f"🎯 **TP3-終局回補**：{' 或 '.join(triggers)}，空頭動能耗竭，"
                 f"消除非線性 Theta 耗損與做市商 Pinning 釘住風險，執行 "
                 f"{_MICROSTRUCTURE_TP3_RATIO:.0%} 回補。",
+                None,
             )
         if is_tp2:
             if is_wall_migrated_down:
@@ -594,6 +664,7 @@ class _AntiWashoutMixin:
                     f"🎯 **TP2-空間擴展**：做市商支撐牆向下遷移 ${previous_put_wall:.2f} → ${put_wall:.2f} "
                     f"({migration_pct:+.1%})，現價 ${spot:.2f} 跌穿舊支撐位，釋放下行 Gamma 空間，"
                     f"執行 {_MICROSTRUCTURE_TP2_RATIO:.0%} 回補。",
+                    None,
                 )
             return (
                 "TP2",
@@ -602,16 +673,18 @@ class _AntiWashoutMixin:
                 f"{wall_break_pct:+.2%}（>= {_MICROSTRUCTURE_TP2_WALL_BREAK_PCT:.1%}），"
                 f"釋放負 Gamma 踩踏利潤、防範滯留反抽，執行 "
                 f"{_MICROSTRUCTURE_TP2_RATIO:.0%} 回補。",
+                None,
             )
         if is_tp1:
             return (
                 "TP1",
-                _MICROSTRUCTURE_TP1_RATIO,
+                tp1_ratio,
                 f"🎯 **TP1-支撐初探**：現價 ${spot:.2f} 已觸及 {target_label} 的 "
                 f"{2.0 - _MICROSTRUCTURE_TP1_CALLWALL_PCT:.1%} 範圍內，做市商空頭避險動能竭盡，"
-                f"執行 {_MICROSTRUCTURE_TP1_RATIO:.0%} 回補。",
+                f"執行 {tp1_ratio:.0%} 回補。",
+                None,
             )
-        return None, 0.0, ""
+        return None, 0.0, "", None
 
     def _evaluate_microstructure_sl_ladder_short(
         self,
@@ -812,31 +885,37 @@ class _AntiWashoutMixin:
         requested_action: str,
         target: str,
         asset_class: str,
-        tp_tier_result: Tuple[Optional[str], float, str],
+        tp_tier_result: Tuple[Optional[str], float, str, Optional[float]],
         sl_tier_result: Tuple[Optional[str], float, str, Optional[float]],
         stop_loss: float,
         anchor_base: float,
         extreme_stop_loss: float = 0.0,
-    ) -> Tuple[str, str, str, str, bool, float, Optional[str]]:
+    ) -> Tuple[str, str, str, str, bool, float, Optional[str], Optional[float]]:
         """
         微觀結構出場決策矩陣 - 統一裁決。優先序：
         TP 分層 (TP1/TP2/TP3) > Track 2 極端瞬時停損 (黑天鵝最後防線，不受本
         矩陣影響) > OPTIONS IV 驟降快速出場 (Vega/IV crush，矩陣未涵蓋的獨立
         保護) > SL 分層 (SL-結構失效/SL-狀態翻轉/SL-主力對沖 一律 100% 平倉；
-        SL-動態保本為 HOLD + 停損上移保本點) > 常規配置超額 REDUCE > HOLD。
+        SL-動態保本為 HOLD + 停損上移保本點) > TP1 趨勢豁免 (同為 HOLD + 停損
+        上移，與 SL-動態保本共用同一組呈現分支，取兩者候選停損的較高者) >
+        常規配置超額 REDUCE > HOLD。
 
         回傳 (final_action, final_target, options_strategy, system_conflict_note,
-        is_extreme_tick_breach, sell_ratio, fired_tier)。is_extreme_tick_breach
-        供呼叫端判斷是否需要將呈現層升級為最高急迫性樣式（見 rollover_embeds.py
-        的立即人工執行標記）。sell_ratio 為本次裁決實際決定的執行比例（TP1/TP2/
-        TP3 為各自的部分比例，其餘 LIQUIDATE 分支恆為 1.0，SL-動態保本/HOLD 恆為
-        0.0；REDUCE 分支的實際比例由呼叫端的常規配置超額運算另行決定，此處
-        僅填入佔位值 0.0，不影響呼叫端行為）。fired_tier 為純附加的分層識別碼
-        (供 RolloverInstruction.exit_tier 記錄用途，不影響任何裁決邏輯)。
+        is_extreme_tick_breach, sell_ratio, fired_tier, new_stop_level)。
+        is_extreme_tick_breach 供呼叫端判斷是否需要將呈現層升級為最高急迫性樣式
+        （見 rollover_embeds.py 的立即人工執行標記）。sell_ratio 為本次裁決實際
+        決定的執行比例（TP1/TP2/TP3 為各自的部分比例，其餘 LIQUIDATE 分支恆為
+        1.0，SL-動態保本/TP1 趨勢豁免/HOLD 恆為 0.0；REDUCE 分支的實際比例由
+        呼叫端的常規配置超額運算另行決定，此處僅填入佔位值 0.0，不影響呼叫端
+        行為）。fired_tier 為純附加的分層識別碼 (供 RolloverInstruction.exit_tier
+        記錄用途，不影響任何裁決邏輯)。new_stop_level 僅 SL-動態保本／TP1 趨勢
+        豁免二者之一（或同時）觸發時有值，供呼叫端寫入
+        `dynamic_state_patch["ratchet_stop"]` 供下一輪 `_compute_anti_washout_stop`
+        讀取棘輪。
         """
         spot = float(metrics.get("spot_price", 0.0))
 
-        tp_tier, tp_ratio, tp_reason = tp_tier_result
+        tp_tier, tp_ratio, tp_reason, tp_new_stop = tp_tier_result
         sl_tier, sl_ratio, sl_reason, sl_new_stop = sl_tier_result
 
         final_target = target if target else "VOO"
@@ -867,6 +946,7 @@ class _AntiWashoutMixin:
         )
 
         fired_tier: Optional[str] = None
+        new_stop_level: Optional[float] = None
 
         if tp_tier:
             final_action = "LIQUIDATE"
@@ -906,17 +986,28 @@ class _AntiWashoutMixin:
             system_conflict_note = sl_reason
             options_strategy = f"100% LIQUIDATE (轉入 {final_target})"
             fired_tier = sl_tier
-        elif sl_tier == "SL_TRAILING_BREAKEVEN":
+        elif sl_tier == "SL_TRAILING_BREAKEVEN" or tp_new_stop is not None:
+            # SL-動態保本與 TP1 趨勢豁免同屬「本輪不出場，改抬棘輪停損」的
+            # HOLD 分支，合併於此以共用同一段呈現邏輯；兩者的候選停損取較高
+            # 者（皆是保本/保護導向的下限，取高不會反過來壓低保護力道）。
             final_action = "HOLD"
             final_target = symbol
             sell_ratio = 0.0
-            system_conflict_note = sl_reason
+            stop_candidates = [v for v in (sl_new_stop, tp_new_stop) if v is not None]
+            new_stop_level = max(stop_candidates) if stop_candidates else None
+            if sl_tier == "SL_TRAILING_BREAKEVEN":
+                system_conflict_note = sl_reason
+                fired_tier = sl_tier
+                if tp_new_stop is not None:
+                    system_conflict_note += f"\n{tp_reason}"
+            else:
+                system_conflict_note = tp_reason
+                fired_tier = "TP1_TREND_EXEMPT"
             options_strategy = (
-                f"移動止盈 (保本) @ ${sl_new_stop:.2f}"
-                if sl_new_stop is not None
+                f"移動止盈 (保本) @ ${new_stop_level:.2f}"
+                if new_stop_level is not None
                 else "移動止盈 (保本)"
             )
-            fired_tier = sl_tier
         elif requested_action == "REDUCE":
             final_action = "REDUCE"
             final_target = target
@@ -941,6 +1032,7 @@ class _AntiWashoutMixin:
             is_extreme_tick_breach,
             sell_ratio,
             fired_tier,
+            new_stop_level,
         )
 
     async def _resolve_target_reference_price(self, target_core_name: str) -> float:
@@ -1026,11 +1118,16 @@ class _AntiWashoutMixin:
         active_orders: Optional[list[dict]] = None,
         position_shares: float = 0.0,
         current_value: float = 0.0,
+        tp1_ratio: float = _MICROSTRUCTURE_TP1_RATIO,
     ) -> dict:
         """
         Evaluates rebalancing rules under Gray-Scale Quantitative Framework
         and generates the strict 4-part markdown report.
         Returns a dict containing the final action, target asset, and markdown string.
+
+        tp1_ratio：透傳給 `_evaluate_microstructure_tp_ladder`，供呼叫端
+        (check_satellite_rebalancing_impl) 依使用者 risk_appetite 覆寫 TP1
+        執行比例；未傳入時為現行 _MICROSTRUCTURE_TP1_RATIO，零行為變化。
         """
         spot = float(metrics.get("spot_price", 0.0))
         ivr = float(metrics.get("ivr", 0.0))
@@ -1058,7 +1155,9 @@ class _AntiWashoutMixin:
             symbol, active_orders, stop_loss, limit_price
         )
 
-        tp_tier_result = self._evaluate_microstructure_tp_ladder(metrics)
+        tp_tier_result = self._evaluate_microstructure_tp_ladder(
+            metrics, tp1_ratio=tp1_ratio, anchor_base=anchor_base
+        )
         sl_tier_result = self._evaluate_microstructure_sl_ladder(
             metrics, anchor_base, stop_loss, asset_class
         )
@@ -1071,6 +1170,7 @@ class _AntiWashoutMixin:
             is_extreme_tick_breach,
             sell_ratio,
             fired_tier,
+            new_ratchet_stop,
         ) = self._apply_decision_matrix(
             symbol=symbol,
             metrics=metrics,
@@ -1251,7 +1351,41 @@ class _AntiWashoutMixin:
             # Discord Embed 的「建議限價 (Limit)」欄位語意上對應的是買入目標資產
             # 的委託價，兩者絕不可混用。
             "limit_price": target_entry_price,
+            # SL-動態保本／TP1 趨勢豁免抬升的棘輪停損候選值，None 代表本輪未
+            # 觸發任一者。供呼叫端 (_net_and_build_rebalance_instruction) 組裝
+            # dynamic_state_patch，供下一輪 _compute_anti_washout_stop 讀取。
+            "new_ratchet_stop": new_ratchet_stop,
         }
+
+
+def _record_exit_tier(
+    symbol: str,
+    report: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    quantity: float,
+    asset: Mapping[str, Any],
+    asset_class: str,
+    stop_loss_gate: float,
+) -> None:
+    """把本輪觸發的出場分層送進前向蒐集 (evaluation_recorder)，供 SL 分層
+    洗盤率檢討使用。必須在顧問模式轉換**之前**呼叫——評估對象是引擎訊號本身，
+    被顧問模式丟棄的分層同樣要記錄 (以 advisory 旗標區分)。
+    未觸發分層 (exit_tier=None，含常規比例控管 REDUCE) 不記錄。"""
+    tier = report.get("exit_tier")
+    if not tier:
+        return
+    from market_analysis.evaluation_recorder import record_exit_signal
+
+    new_stop = report.get("new_ratchet_stop")
+    record_exit_signal(
+        symbol,
+        str(tier),
+        "SHORT" if quantity < 0 else "LONG",
+        metrics,
+        stop_level=float(new_stop) if new_stop is not None else stop_loss_gate,
+        advisory=is_advisory_asset(asset),
+        asset_class=asset_class,
+    )
 
 
 def _net_and_build_rebalance_instruction(
@@ -1261,13 +1395,22 @@ def _net_and_build_rebalance_instruction(
     report: dict,
     default_sell_ratio: float,
     asset_class: str = "SPOT",
+    asset_id: Optional[int] = None,
 ) -> RolloverInstruction:
     """套用既有委託單淨額扣抵並組裝 instruction dict：一般清倉/灰階判定分支與
     常規比例修剪分支皆遵循「report 決定 final_action → 依情境算出預設
     sell_ratio → _net_against_existing_order 扣抵既有委託單 → 組裝 dict」的
     相同流程，僅 default_sell_ratio 的計算方式不同 (前者取決於 report 本身的
     LIQUIDATE/REDUCE 判定，後者取決於超額配置比例)，故由呼叫端各自算好
-    default_sell_ratio 後傳入，其餘完全共用。"""
+    default_sell_ratio 後傳入，其餘完全共用。
+
+    asset_id：本次評估對應的部位 ID。當 `report["new_ratchet_stop"]` 有值
+    （SL-動態保本或 TP1 趨勢豁免任一觸發）且 asset_id 可得時，一併附上
+    `dynamic_state_patch`，由派發端 (portfolio_monitor.py) 在確認送達後才呼叫
+    `set_asset_dynamic_state` 提交——沿用 transition_engine.py 既有的「狀態延後
+    提交」設計，避免推播被通知開關/dedup/DRY_RUN 抑制時，棘輪停損提前寫入卻
+    從未真正告知使用者。asset_id 缺失時（理論上不應發生，防禦性處理）略過
+    附加，不影響既有 LIQUIDATE/REDUCE/HOLD 行為。"""
     net_action = report["final_action"]
     net_sell_ratio = default_sell_ratio
     net_reason = report["markdown_report"]
@@ -1280,7 +1423,7 @@ def _net_and_build_rebalance_instruction(
         if net_sell_ratio <= 0.0:
             net_action = "HOLD"
 
-    return {
+    instruction: RolloverInstruction = {
         "symbol": symbol,
         "action": net_action,
         "sell_ratio": net_sell_ratio,
@@ -1298,6 +1441,15 @@ def _net_and_build_rebalance_instruction(
         "instrument_type": asset_class,
         "exit_tier": report.get("exit_tier"),
     }
+
+    new_ratchet_stop = report.get("new_ratchet_stop")
+    if new_ratchet_stop is not None and asset_id is not None:
+        instruction["asset_id"] = asset_id
+        instruction["dynamic_state_patch"] = {
+            "ratchet_stop": round(float(new_ratchet_stop), 2)
+        }
+
+    return instruction
 
 
 def _build_forced_settlement_instruction(
@@ -1352,10 +1504,14 @@ async def check_satellite_rebalancing_impl(
     user_id: int,
     portfolio_assets: List[Dict[str, Any]],
     total_account_value: float,
+    vix_spot: Optional[float] = None,
 ) -> List[RolloverInstruction]:
     """
     邏輯 (3): 核心與衛星比例再平衡 + 深度微觀結構與選擇權籌碼驅動
     包含勝率傾斜與雜訊避險等高階戰術。
+
+    vix_spot：供 PYRAMID_ADD (pyramid_add.py) 倉位計算使用，由呼叫端每輪次
+    抓取一次後傳入，本函式不重複抓取。
     """
     rebalance_instructions: List[RolloverInstruction] = []
 
@@ -1368,6 +1524,76 @@ async def check_satellite_rebalancing_impl(
     except Exception as e:
         logger.debug(f"無法取得 user {user_id} active_orders: {e}")
         user_orders = []
+
+    # 風險偏好參數化：於入口解析一次後往下傳，不在每個持倉迴圈內各自查表
+    # (RiskProfile 查表為純函式零 I/O，但 get_full_user_context 是一次 DB
+    # 讀取，攤在每個 SATELLITE 持倉上會製造 O(部位數) 次重複查詢)。同一次
+    # 呼叫一併取出 PYRAMID_ADD 倉位計算所需的 capital/risk_limit，避免第二次
+    # DB 讀取。
+    try:
+        user_ctx = get_full_user_context(user_id)
+        risk_appetite = user_ctx.risk_appetite
+        pyramid_capital = float(getattr(user_ctx, "capital", 0.0) or 0.0)
+        pyramid_risk_limit_pct = float(getattr(user_ctx, "risk_limit", 15.0) or 0.0)
+    except Exception as e:
+        risk_appetite = "DEFENSIVE"
+        pyramid_capital = 0.0
+        pyramid_risk_limit_pct = 15.0
+        logger.warning(
+            f"讀取使用者 {user_id} 風險偏好設定失敗，退回 DEFENSIVE 預設: {e}"
+        )
+    risk_profile = resolve_risk_profile(risk_appetite)
+
+    # PYRAMID_ADD 條件八 (macro_tier == "NORMAL") 所需的宏觀逃頂評分，於首次
+    # 真正需要時才計算並快取（多數使用者的持倉可能沒有任何符合前七項條件的
+    # 部位，此舉避免每輪次對每個使用者都白算一次）。與 Scenario 6
+    # (macro_top_escape_defense.py) 各自獨立呼叫 evaluate_macro_top_escape_score()
+    # ——兩者觸發的動作完全不同 (條件閘門 vs 防禦性減碼)，共用的是評分公式本身。
+    _macro_tier_cache: Dict[str, str] = {}
+
+    async def _resolve_macro_tier() -> str:
+        if "tier" in _macro_tier_cache:
+            return _macro_tier_cache["tier"]
+        try:
+            from market_analysis.index_microstructure import (
+                evaluate_macro_top_escape_score,
+                fetch_core_macro_metrics,
+                get_market_regime,
+            )
+            from services.market_data_service import get_vix_term_structure
+
+            regime = await get_market_regime()
+            is_negative_gamma = regime in (
+                "SHORT_GAMMA_CRITICAL",
+                "SYSTEMIC_LIQUIDITY_CRISIS",
+            )
+            vts_data = await get_vix_term_structure()
+            vts_ratio = (
+                vts_data.get("vts_ratio", 0.88)
+                if vts_data.get("is_valid", False)
+                else 0.88
+            )
+            core_metrics = await fetch_core_macro_metrics()
+            fear_greed = float(core_metrics.get("fear_greed", 48.0))
+            from database.cache import get_kv_cache
+
+            prob = get_kv_cache("macro_fedwatch_probability")
+            _, tier, _, _ = evaluate_macro_top_escape_score(
+                vts_ratio=vts_ratio,
+                fear_greed=fear_greed,
+                prob=prob,
+                is_negative_gamma=is_negative_gamma,
+                satellite_euphoria_ratio=None,
+            )
+        except Exception as e:
+            # PYRAMID_ADD 是「承擔新曝險」的決策，與其餘條件一致採 fail-closed：
+            # 宏觀評分算不出來時不得加碼，故意回傳非 NORMAL 值使條件八不通過。
+            logger.warning(
+                f"PYRAMID_ADD 條件八宏觀逃頂評分計算失敗，fail-closed 暫停加碼: {e}"
+            )
+            tier = "UNKNOWN"
+        _macro_tier_cache["tier"] = tier
+        return tier
 
     for asset in portfolio_assets:
         if asset.get("asset_class") == "SATELLITE":
@@ -1564,6 +1790,13 @@ async def check_satellite_rebalancing_impl(
                 # 空頭 TP2 的牆體遷移判定用：做市商支撐牆向下遷移。與多頭的
                 # previous_call_wall 對稱，資料來源同為呼叫端快取。
                 "previous_put_wall": float(asset.get("previous_put_wall", 0.0) or 0.0),
+                # 多頭 TP2「阻力牆向上遷移」與 TP1 趨勢豁免共用的輸入。⚠️ 此欄位
+                # 在 1A 施工前從未被填入 metrics（asset 本身早已攜帶該值，見
+                # portfolio_monitor.py 的 asset_entry 組裝），導致 TP2 牆體遷移
+                # 分支與新增的 TP1 趨勢豁免在生產路徑上恆為死碼。
+                "previous_call_wall": float(
+                    asset.get("previous_call_wall", 0.0) or 0.0
+                ),
             }
 
             # 微觀結構出場決策矩陣：TP 分層 (TP1/TP2/TP3) 與 SL 分層 (SL-結構
@@ -1572,12 +1805,18 @@ async def check_satellite_rebalancing_impl(
             # _generate_rule_based_rebalance_report 內部會再次評估以產生最終
             # 指令 (與既有 is_structural_breakdown 於外層/_apply_decision_matrix
             # 內層雙重確認的既有架構模式一致)。
-            tp_tier, _tp_ratio, _tp_reason = engine._evaluate_microstructure_tp_ladder(
-                metrics
-            )
+            #
+            # anchor_base_gate 提前至 TP 階梯評估之前算出：TP1 趨勢豁免需要它
+            # 推導棘輪停損候選值，語意與 _generate_rule_based_rebalance_report
+            # 內部「先算 anchor_base 再評 TP 階梯」的既有順序一致。
             anchor_base_gate, _res_wall_gate = engine._correct_wall_topology(metrics)
             stop_loss_gate, _limit_gate, extreme_gate = (
                 engine._compute_anti_washout_stop(anchor_base_gate, metrics)
+            )
+            tp_tier, _tp_ratio, _tp_reason, tp_new_stop_gate = (
+                engine._evaluate_microstructure_tp_ladder(
+                    metrics, anchor_base=anchor_base_gate
+                )
             )
 
             # 軌道二極端瞬時停損 (黑天鵝最後防線) 的觸發判定，定義與
@@ -1623,6 +1862,30 @@ async def check_satellite_rebalancing_impl(
                     )
                 )
 
+            # ----------------------------------------------------
+            # 情境十：PYRAMID_ADD 順勢金字塔加碼。與上方 Transition Engine
+            # 不同，不限於 dynamic_strategy_state.entry_mode=="DYNAMIC" 的
+            # 部位——任何多頭 SATELLITE 部位只要已具備條件二要求的棘輪停損
+            # （不論是透過 Transition Engine 路徑一，還是 1A 的 TP1 趨勢豁免／
+            # SL-動態保本累積而來），皆可評估加碼。函式內部條件一~三為零 I/O
+            # 快速失敗，條件四才會發動 60 日高點抓取，故對絕大多數不合格部位
+            # 成本極低。
+            # ----------------------------------------------------
+            if quantity > 0:
+                rebalance_instructions.extend(
+                    await evaluate_pyramid_add_impl(
+                        engine,
+                        user_id,
+                        asset,
+                        metrics,
+                        risk_profile,
+                        pyramid_capital,
+                        pyramid_risk_limit_pct,
+                        vix_spot,
+                        _resolve_macro_tier,
+                    )
+                )
+
             sl_tier, _sl_ratio, _sl_reason, _sl_new_stop = (
                 engine._evaluate_microstructure_sl_ladder(
                     metrics, anchor_base_gate, stop_loss_gate, asset_class
@@ -1638,11 +1901,18 @@ async def check_satellite_rebalancing_impl(
             # 閘門本就會通過；此處明確納入是防禦性寫法，避免未來若 SL 分層或
             # price_15m_close 語意調整後，出現「軌道二已觸發卻無任何指令產出」
             # 的破口。
+            #
+            # tp_new_stop_gate 一併納入閘門：TP1 趨勢豁免時 tp_tier 為 None（不
+            # 出場），若不納入，牆遷移 1%~3% 的灰帶（豁免已觸發，但 SL-動態
+            # 保本的 50% 進度門檻尚未達標）會讓 tp_tier/sl_tier 同時為 None，
+            # 整個報告產生流程被跳過——棘輪停損就算算出來也永遠傳不到派發端，
+            # 部位在這個本應受保護的區間反而裸奔。
             if (
                 tp_tier is not None
                 or sl_tier is not None
                 or is_iv_bubble
                 or is_extreme_breach_gate
+                or tp_new_stop_gate is not None
             ):
                 satellite_symbols = {
                     str(a.get("symbol", "")).upper()
@@ -1669,19 +1939,39 @@ async def check_satellite_rebalancing_impl(
                     active_orders=user_orders,
                     position_shares=quantity,
                     current_value=current_value,
+                    tp1_ratio=risk_profile.tp1_ratio,
                 )
 
-                default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
-                rebalance_instructions.append(
-                    _net_and_build_rebalance_instruction(
-                        engine,
-                        symbol,
-                        quantity,
-                        report,
-                        default_sell_ratio,
-                        asset_class,
-                    )
+                _record_exit_tier(
+                    symbol,
+                    report,
+                    metrics,
+                    quantity,
+                    asset,
+                    asset_class,
+                    stop_loss_gate,
                 )
+                default_sell_ratio = report.get("sell_ratio", 0.0) or 0.0
+                tier_instruction = _net_and_build_rebalance_instruction(
+                    engine,
+                    symbol,
+                    quantity,
+                    report,
+                    default_sell_ratio,
+                    asset_class,
+                    asset_id=asset.get("asset_id"),
+                )
+                # 顧問模式 (B&H)：把減碼/換股指令轉為位階告知或丟棄。轉換必須在
+                # 迴圈內完成（指令上沒有 spot/call wall），且 `continue` 照舊執行，
+                # 避免被丟棄的部位掉進下方比例控管而重新產生 REDUCE。
+                if is_advisory_asset(asset):
+                    advisory_instruction = await build_advisory_instruction(
+                        tier_instruction, asset, metrics, stop_loss_gate
+                    )
+                    if advisory_instruction is not None:
+                        rebalance_instructions.append(advisory_instruction)
+                else:
+                    rebalance_instructions.append(tier_instruction)
                 continue  # 已經處理，不需進行後續常規再平衡
 
             # ----------------------------------------------------
@@ -1710,22 +2000,41 @@ async def check_satellite_rebalancing_impl(
                     active_orders=user_orders,
                     position_shares=quantity,
                     current_value=current_value,
+                    tp1_ratio=risk_profile.tp1_ratio,
                 )
 
+                _record_exit_tier(
+                    symbol,
+                    report,
+                    metrics,
+                    quantity,
+                    asset,
+                    asset_class,
+                    stop_loss_gate,
+                )
                 default_sell_ratio = (
                     round(sell_ratio, 2)
                     if report["final_action"] != "LIQUIDATE"
                     else 1.0
                 )
-                rebalance_instructions.append(
-                    _net_and_build_rebalance_instruction(
-                        engine,
-                        symbol,
-                        quantity,
-                        report,
-                        default_sell_ratio,
-                        asset_class,
-                    )
+                control_instruction = _net_and_build_rebalance_instruction(
+                    engine,
+                    symbol,
+                    quantity,
+                    report,
+                    default_sell_ratio,
+                    asset_class,
+                    asset_id=asset.get("asset_id"),
                 )
+                if is_advisory_asset(asset):
+                    # 比例控管的 REDUCE (exit_tier=None) 對 B&H 是雜訊 → 丟棄；
+                    # 若此路徑因 SL 階梯升級為 LIQUIDATE，則依 exit_tier 處置。
+                    advisory_instruction = await build_advisory_instruction(
+                        control_instruction, asset, metrics, stop_loss_gate
+                    )
+                    if advisory_instruction is not None:
+                        rebalance_instructions.append(advisory_instruction)
+                else:
+                    rebalance_instructions.append(control_instruction)
 
     return rebalance_instructions

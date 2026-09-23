@@ -20,7 +20,10 @@ from market_analysis.dynamic_rollover import (
     CORE_DEFENSE_ETF_SYMBOLS,
     ShortCandidateInput,
 )
-from market_analysis.dynamic_rollover.models import TradingStrategyMode
+from market_analysis.dynamic_rollover.models import (
+    DynamicRegime,
+    TradingStrategyMode,
+)
 from market_analysis.dynamic_rollover.constants import (
     _TRANSITION_PATH1_VWAP_VOLUME_MULT,
 )
@@ -32,9 +35,11 @@ from cogs.embed_builder import (
     create_option_defense_alert_embed,
 )
 from cogs.embed_builders.rollover_embeds import (
+    create_advisory_levels_embed,
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
     create_covered_call_profit_lock_embed,
+    create_protective_put_embed,
     create_short_entry_embed,
     create_transition_pyramid_embed,
     create_transition_ratchet_embed,
@@ -695,6 +700,27 @@ class PortfolioMonitorCog(commands.Cog):
                         sym, radar_cache_map.get(sym)
                     )
 
+                # 顧問模式 (B&H)：帳戶層 portfolio_mode 每位使用者只讀一次
+                # (不在持倉迴圈內逐檔讀 DB)，讀取失敗一律視為 COMMAND (現行行為)。
+                portfolio_mode_by_user: Dict[int, str] = {}
+
+                async def _portfolio_mode_for(uid: int) -> str:
+                    if uid not in portfolio_mode_by_user:
+                        try:
+                            ctx = await asyncio.to_thread(
+                                database.get_full_user_context, uid
+                            )
+                            portfolio_mode_by_user[uid] = str(
+                                getattr(ctx, "portfolio_mode", "COMMAND")
+                            )
+                        except Exception as e:
+                            logger.warning(
+                                f"[AdvisoryMode] 讀取 portfolio_mode 失敗 (UID: {uid})，"
+                                f"視為 COMMAND: {e}"
+                            )
+                            portfolio_mode_by_user[uid] = "COMMAND"
+                    return portfolio_mode_by_user[uid]
+
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
@@ -782,6 +808,17 @@ class PortfolioMonitorCog(commands.Cog):
                         asset_entry["target_allocation_pct"] = h.get(
                             "target_allocation_pct"
                         )
+                    # 顧問模式三態解析：單檔 advisory_only (None=跟隨帳戶、
+                    # True=顧問、False=指令)。⚠️ 不可用 `or` (會吃掉顯式 False)。
+                    # 僅為 True 時才寫入 key，預設 (COMMAND、未覆寫) 下 asset_entry
+                    # 與改動前逐位元相同；比較一律用 == "ADVISORY"。
+                    per_holding_advisory = h.get("advisory_only")
+                    if per_holding_advisory is None:
+                        per_holding_advisory = (
+                            await _portfolio_mode_for(u_id)
+                        ) == "ADVISORY"
+                    if per_holding_advisory is True:
+                        asset_entry["advisory_only"] = True
                     user_assets.setdefault(u_id, []).append(asset_entry)
 
                 # 🚀 期權部位併入動態轉倉評估迴圈 (Feature Flag)。此機制與
@@ -932,12 +969,14 @@ class PortfolioMonitorCog(commands.Cog):
                         ),
                     )
                 )
-                vix_spot_for_short: Optional[float] = None
-                if short_strategy_user_ids:
-                    from services import market_data_service as _mds
+                # 現在一律抓取（不再限定 short_strategy_user_ids）：PYRAMID_ADD
+                # 的倉位計算 (pyramid_add.py) 同樣需要 VIX 即時值，且適用對象是
+                # 全體持有 SATELLITE 部位的使用者，不限於 SHORT_SIDE/DYNAMIC。
+                # get_history_df 內建快取，同一輪次重複呼叫不構成額外網路成本。
+                from services import market_data_service as _mds
 
-                    vix_spot_for_short = await _mds.get_vix_spot_strict()
-                    evaluation_recorder.set_cycle_context(vix_spot=vix_spot_for_short)
+                vix_spot_for_short = await _mds.get_vix_spot_strict()
+                evaluation_recorder.set_cycle_context(vix_spot=vix_spot_for_short)
                 all_user_ids |= short_strategy_user_ids
                 for u_id in all_user_ids:
                     portfolio_assets = user_assets.get(u_id, [])
@@ -948,7 +987,7 @@ class PortfolioMonitorCog(commands.Cog):
 
                     rebalance_instructions = (
                         await self.rollover_engine.check_satellite_rebalancing(
-                            u_id, portfolio_assets, total_val
+                            u_id, portfolio_assets, total_val, vix_spot_for_short
                         )
                     )
 
@@ -1173,6 +1212,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "COVERED_CALL_PROFIT_LOCK": "賣方期權時間價值停利 (Covered Call / CSP)",
                         "TRANSITION_ENGINE": "動態調整狀態切換引擎",
                         "SHORT_ENTRY": "做空進場訊號",
+                        "PYRAMID_ADD": "順勢加碼 (Pyramiding)",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -1184,7 +1224,12 @@ class PortfolioMonitorCog(commands.Cog):
                         # 系統性保證金風控紅線警報一併關閉。
                         # SHORT_ENTRY 是進場訊號而非持倉防禦，走 Alpha 策略頻道；
                         # focus / mute_intraday 預設關閉該頻道，校準前較安全。
-                        if scenario == "MARGIN_DEFENSE":
+                        is_advisory_ins = ins.get("action") == "ADVISORY"
+                        if is_advisory_ins:
+                            # 顧問模式位階告知：獨立頻道，不受 defense_option_rollover
+                            # 開關牽動 (使用者可只關轉倉指令、保留位階告知)。
+                            notif_key = "advisory_core_levels"
+                        elif scenario == "MARGIN_DEFENSE":
                             notif_key = "defense_margin_call"
                         elif scenario == "SHORT_ENTRY":
                             notif_key = "alpha_market_signals"
@@ -1204,6 +1249,13 @@ class PortfolioMonitorCog(commands.Cog):
                             f"rollover_alert_{u_id}_{ins['symbol']}_"
                             f"{instrument_type}_{scenario}_{action}_{today_str}"
                         )
+                        if is_advisory_ins:
+                            # 以 exit_tier 為鍵：同日從 TP1 升級為 TP2、或由目標區
+                            # 轉為結構失效，都是新的位階事件，應再發一次。
+                            dedup_key = (
+                                f"advisory_exit_{u_id}_{ins['symbol']}_"
+                                f"{ins.get('exit_tier') or 'NA'}_{today_str}"
+                            )
                         if scenario == "COVERED_CALL_PROFIT_LOCK":
                             # 同一標的可能同時存在多筆不同履約價/到期日/類型的賣方
                             # 期權，通用 dedup_key 僅以 (symbol, action) 區分會讓
@@ -1230,7 +1282,7 @@ class PortfolioMonitorCog(commands.Cog):
                         # 有效數值時（例如 Scenario 2/4 尚未接上定價邏輯）才
                         # 退回 "Market" 泛用字串。
                         limit_price_val = ins.get("limit_price")
-                        if ins["action"] == "HOLD":
+                        if ins["action"] in ("HOLD", "ADVISORY"):
                             suggested_price = "N/A (維持現狀)"
                         elif scenario == "SHORT_ENTRY" and limit_price_val:
                             suggested_price = (
@@ -1242,7 +1294,17 @@ class PortfolioMonitorCog(commands.Cog):
                             suggested_price = "Market"
 
                         short_plan = ins.get("short_entry_plan")
-                        if scenario == "SHORT_ENTRY" and short_plan is not None:
+                        if is_advisory_ins:
+                            # 顧問模式位階告知：sell_ratio 恆 0.0，通用轉倉 embed 會
+                            # 渲染成「安全續抱」並附一鍵執行 View，語意矛盾，故獨立
+                            # 渲染且**不**設 _view。
+                            embed = create_advisory_levels_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                advisory_plan=ins.get("advisory_plan"),
+                                exit_tier=ins.get("exit_tier"),
+                            )
+                        elif scenario == "SHORT_ENTRY" and short_plan is not None:
                             # 做空進場訊號：沒有「賣出來源 → 買進目標」的轉倉框架，
                             # 通用 embed 會以 BTO/Buy Shares 渲染，方向完全相反；
                             # RolloverActionView 試算的是 BUY 股數，同樣不適用，
@@ -1289,15 +1351,30 @@ class PortfolioMonitorCog(commands.Cog):
                                 ),
                             )
                         elif ins.get("action") == "OPEN_PYRAMID":
-                            # 動態調整狀態切換引擎路徑1：順勢加碼建議，非賣出
-                            # 導向框架，沒有第二個轉倉標的，理由同上不套用
-                            # 通用轉倉框架。
+                            # OPEN_PYRAMID 有兩個觸發源：動態調整狀態切換引擎
+                            # 路徑1 (TRANSITION_ENGINE，一次性 regime 演化) 與
+                            # PYRAMID_ADD (例行順勢加碼，可重複觸發)——皆為
+                            # 加碼建議，非賣出導向框架，沒有第二個轉倉標的，
+                            # 理由同上不套用通用轉倉框架，但依 scenario 分流
+                            # 文案與是否附加倉位計算欄位。
                             embed = create_transition_pyramid_embed(
                                 symbol=ins["symbol"],
                                 reason=ins["reason"],
                                 suggested_strategy=ins.get(
                                     "suggested_strategy", "新開右側動能部位"
                                 ),
+                                scenario=scenario,
+                                pyramid_add_plan=ins.get("pyramid_add_plan"),
+                            )
+                        elif ins.get("action") == "BUY_PROTECTIVE_PUT":
+                            # 宏觀逃頂前瞻防禦 WATCH 級：買保護性 Put，不賣出
+                            # 任何既有部位，沒有第二個轉倉標的，理由同上不套用
+                            # 通用轉倉框架，也不附加互動按鈕（買方合約需自行
+                            # 於券商終端下單，無法透過 RolloverActionView 試算）。
+                            embed = create_protective_put_embed(
+                                symbol=ins["symbol"],
+                                reason=ins["reason"],
+                                suggested_strategy=ins.get("suggested_strategy", ""),
                             )
                         elif ins.get("is_covered_call_profit_lock") or ins.get(
                             "is_short_option_profit_lock"
@@ -1376,13 +1453,34 @@ class PortfolioMonitorCog(commands.Cog):
                         is_short_entry_dry_run = (
                             scenario == "SHORT_ENTRY" and config.SHORT_ENTRY_DRY_RUN
                         )
+                        is_pyramid_add_dry_run = (
+                            scenario == "PYRAMID_ADD" and config.PYRAMID_ADD_DRY_RUN
+                        )
+                        # Regime III-B 是**跨情境**的乾跑閘門：它放寬的是進場
+                        # 判定，而由它確認出來的指令會同時出現在 OPPORTUNITY_COST
+                        # 與 CORE_DEPLOYMENT 兩個 scenario 底下。因此這道閘門
+                        # 必須以 entry_regime 為鍵，不能比照上面兩道用 scenario。
+                        is_regime_iii_b_dry_run = (
+                            ins.get("entry_regime")
+                            == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
+                            and config.REGIME_III_B_DRY_RUN
+                        )
                         if (
-                            instrument_type == "OPTIONS"
-                            and config.OPTIONS_ROLLOVER_DRY_RUN
-                        ) or is_short_entry_dry_run:
+                            (
+                                instrument_type == "OPTIONS"
+                                and config.OPTIONS_ROLLOVER_DRY_RUN
+                            )
+                            or is_short_entry_dry_run
+                            or is_pyramid_add_dry_run
+                            or is_regime_iii_b_dry_run
+                        ):
                             dry_run_tag = (
                                 "ShortEntry"
                                 if is_short_entry_dry_run
+                                else "PyramidAdd"
+                                if is_pyramid_add_dry_run
+                                else "RegimeIIIB"
+                                if is_regime_iii_b_dry_run
                                 else "OptionsRollover"
                             )
                             logger.info(

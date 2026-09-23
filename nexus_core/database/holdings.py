@@ -74,6 +74,8 @@ def get_user_holdings(user_id: int) -> Any:
             d["weighted_delta"] = meta.get("weighted_delta", 0.0)
             d["asset_class"] = meta.get("asset_class")
             d["max_allocation_pct"] = meta.get("max_allocation_pct")
+            # 三態：缺省/None=跟隨帳戶 portfolio_mode、True=顧問、False=指令
+            d["advisory_only"] = meta.get("advisory_only")
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
             d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")
@@ -112,6 +114,8 @@ def get_all_holdings() -> Any:
             d["avg_cost"] = meta.get("avg_cost", 0.0)
             d["asset_class"] = meta.get("asset_class")
             d["max_allocation_pct"] = meta.get("max_allocation_pct")
+            # 三態：缺省/None=跟隨帳戶 portfolio_mode、True=顧問、False=指令
+            d["advisory_only"] = meta.get("advisory_only")
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
             d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")

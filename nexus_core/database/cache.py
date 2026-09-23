@@ -26,7 +26,11 @@ _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
     "wti_alert_",
     "macro_tail_risk_alert_",
     "gamma_squeeze_alert_",
+    "advisory_entry_",
+    "advisory_exit_",
 )
+# 新增任何「每日去重旗標」寫入點時，必須同步加入上方白名單，否則旗標會永久堆積；
+# 由 tests/unit/test_kv_cache_dedup_whitelist.py 以 AST 掃描強制。
 
 
 async def save_kv_cache(key: str, value: Any) -> bool:

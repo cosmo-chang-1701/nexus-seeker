@@ -111,6 +111,22 @@ def _patch_atr_1d(value: float = 3.0) -> Any:
     )
 
 
+def _patch_high_60d(value: float = 1_000_000.0) -> Any:
+    """統一 patch `fetch_high_60d`（晴空萬里天花板公式 D 的 60 日高點輸入）。
+
+    預設值刻意遠高於本檔案任何測試用的 spot，確保既有測試（驗證裸 Call Wall
+    封頂判定）不會被動意外觸發晴空萬里擴展。若走真實路徑，`get_history_df`
+    早已被廣泛 patch 成回傳 15m fixture frame，資料量不足 61 根會被
+    `compute_high_60d_from_daily_df` fail-safe 為 0.0 —— 而 0.0 依設計會觸發
+    fail-open 擴展，反而污染這些本意是測試「無擴展」情境的既有測試。
+    """
+    return patch(
+        "market_analysis.atr_utils.fetch_high_60d",
+        new_callable=AsyncMock,
+        return_value=value,
+    )
+
+
 class TestRegimeIV:
     @pytest.mark.asyncio
     async def test_systemic_liquidity_crisis_forces_regime_iv(self) -> None:
@@ -200,6 +216,7 @@ class TestRegimeIV:
                 return_value=100.0,
             ),
             _patch_atr_1d(),
+            _patch_high_60d(),
         ):
             regime, reason, _df = await classify_dynamic_regime(
                 "TEST",
@@ -236,6 +253,7 @@ class TestRegimeIV:
                 return_value=100.0,
             ),
             _patch_atr_1d(),
+            _patch_high_60d(),
         ):
             regime, reason, _df = await classify_dynamic_regime(
                 "TEST",
@@ -377,6 +395,7 @@ class TestRegimeIV:
                 return_value=100.0,
             ),
             _patch_atr_1d(),
+            _patch_high_60d(),
         ):
             regime, reason, _df = await classify_dynamic_regime(
                 "TEST",
@@ -445,6 +464,7 @@ class TestRegimeIII:
             # fetch_atr_1d 若走真實路徑會再次呼叫 get_history_df（日線），
             # 破壞下方「不得對 candidate 重複抓取」的斷言精確性。
             _patch_atr_1d(),
+            _patch_high_60d(),
         ):
             regime, _reason, _df = await classify_dynamic_regime(
                 "TEST", 100.0, _gex_profile_iii(), [], df_15m=_BREAKOUT_DF

@@ -8,6 +8,19 @@
 1. **機會成本轉倉 (`OPPORTUNITY_COST`)**：當現有衛星部位動能衰退，系統欲調度資金轉向更具爆發力的候選標的（Candidate）時，該候選標的必須 100% 通過六重鐵律。
 2. **核心資金部署 (`CORE_DEPLOYMENT` 機會分支)**：當核心防禦資產（如 VOO）超額配置欲部署至進攻性衛星標的時，亦強制要求標的滿足六重鐵律。
 
+### 兩種進場節奏：突破態與趨勢延續態
+
+同一套六重鐵律承載兩種進場節奏，由 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) 的分類器決定套用哪一種：
+
+| 節奏 | 觸發 Regime | 條件一 | 條件四 | 條件二／三／五／六 |
+| :--- | :--- | :--- | :--- | :--- |
+| **突破態**（預設） | Regime III，以及 `RIGHT_SIDE` 策略模式的全部評估 | 放量實體陽線（§2.1） | 評估當下必須存在（§2.4） | 不變 |
+| **趨勢延續態** | Regime III-B | 持續站穩結構（§2.1.1） | 5 個交易日回看窗（§2.4.1） | **完全不變** |
+
+**只放寬進場節奏，不放寬風控**。條件二（底牆緩衝雙邊界）、條件三（非對稱空間與物理封頂）、條件五（財報／總經安全閥）、條件六（0/1 DTE 雜訊）在兩種節奏下逐字相同。放寬進場頻率是趨勢延續路徑的目的，放寬風險承擔不是。
+
+⚠️ 刻意**不另開一套「趨勢延續六重鐵律」**（相對於左側／做空各自獨立成套的作法）：條件二/三/五/六是風控，重寫一份必然隨時間漂移，這正是 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 當初把散落 7 處的固定百分比收斂成單一權威演算法所依據的同一個理由。
+
 ### 階梯過濾與短路優化哲學
 六重鐵律設計具備嚴格的計算階梯：
 - **前四項條件（條件一至四）**：純記憶體與快取內的量價微觀結構運算，不依賴耗時的外部 I/O。
@@ -43,6 +56,22 @@
      $$
      要求 15 分鐘收盤價站穩該門檻：$\text{Close}_{15m} > \text{Breakout Threshold}$。
    - 若數據缺失或 $\text{Net GEX} == 0$：Fail-Safe 判定未通過。
+
+#### 2.1.1 趨勢延續變體（Regime III-B 專用）
+
+放量與實體陽線兩項**被取代**（而非追加一條替代路徑）：
+
+$$
+\sum_{i=t-N+1}^{t} \mathbb{1}\big[\text{Close}_i > \max(\text{BreakoutThreshold},\ \text{SessionVWAP})\big] \ge \text{\_REGIME\_III\_B\_MIN\_HELD\_BARS} = 5
+$$
+
+其中 $N = \text{\_REGIME\_III\_B\_LOOKBACK\_BARS} = 6$，$\text{BreakoutThreshold}$ 沿用本條件既有的 Gamma Flip 估算值（或全域 Long Gamma 的 $\text{SessionVWAP} + 0.5 \times \text{ATR}_{15m}$ 替代門檻）。
+
+**為什麼必須取代而非追加**：放量突破與實體陽線正是「事件式進場」的兩項特徵，而 Regime III-B 的存在理由就是趨勢續航段沒有它們。若保留原判定作為必要條件，III-B 在建構上永遠通不過條件一，整條路徑將成為死碼。
+
+**兩項不放寬**：站穩結構門檻（$\text{Close}_t > \text{BreakoutThreshold}$）與站穩 Session VWAP（$\text{Close}_t > \text{SessionVWAP}$）維持原樣——它們是做市商自穩定區的定義本身，放寬等同容許在負 Gamma 區追多。
+
+**資料來源一致性**：本變體自行呼叫 `trim_to_confirmed_15m_bars()` 截斷至已收盤 K 棒。DYNAMIC 路徑透過 `RegimeMarketData.df_15m` 傳入的是**未截斷**的原始 frame（分類器只在內部持有 `df_confirmed`），盤中最後一根仍在跳動；若直接納入計數，「站穩」判定會隨每一次 tick 抖動。最後一根的收盤價判定亦改用同一份已截斷 frame，避免「站穩根數」數已收盤 K 棒而「收盤價」取自當前未成型根的自相矛盾。
 
 ### 2.2 條件二：做市商正 Gamma 底牆完好與物理約束
 進場點下方必須有實質的做市商被動買盤作為防守護甲。
@@ -85,6 +114,27 @@
    \text{Notional Value} = \text{Trade Price} \times \text{Volume} \times 100 \ge \text{\_ENTRY\_UOA\_MIN\_NOTIONAL\_USD} = \$200,000
    $$
 4. **履約價物理約束**：$\text{Strike} \ge \text{Spot}$（排除深價內實值 Call 買單，後者通常為 Delta 對沖或領息操作，非實質方向性進攻）。
+
+#### 2.4.1 趨勢延續變體：交易日回看窗（Regime III-B 專用）
+
+$$
+\text{C4}_{\text{relaxed}} = \exists\, u \in \big(\text{UOA}_{\text{live}} \cup \text{UOA}_{\text{hist}}\big) \;:\; u \text{ 滿足上述四重過濾}
+$$
+
+其中 $\text{UOA}_{\text{hist}}$ 為最近 $\text{\_ENTRY\_UOA\_LOOKBACK\_DAYS} = 5$ 個**交易日**內觀測到的 UOA 歷史紀錄。
+
+**為什麼以交易日而非日曆日計**：UOA 只在開盤時段產生。以日曆日回看 5 天，遇到週末就只剩 3 個交易日、遇到連假只剩 2 個——同一個「5 日回看窗」在一週內不同日子所代表的樣本量相差近一倍，門檻等於隨機漂移。回看基準點由 NYSE 行事曆推得，且只計入**已開盤**的交易日（盤前執行時今天雖在行事曆內卻尚未產生任何 UOA，計入會實質縮短一天）。
+
+**兩項過濾以「今天」為基準重算，而非沿用紀錄當時的值**——時間窗放寬的是「何時觀測到」，不是「現在是否仍然成立」：
+
+| 過濾項 | 重算基準 | 理由 |
+| :--- | :--- | :--- |
+| $\text{DTE} \ge 7$ | $\text{expiry} - \text{今日}$ | 5 天前的 DTE 14 合約今天只剩 9 天；若已跌破門檻就不該再算數 |
+| $\text{Strike} \ge \text{Spot}$ | **現價** | 主力當初買的價外 Call，若現價已衝過該履約價，那筆買盤已完成使命，不構成對「再往上」的背書 |
+
+兩者都是**收緊**而非放寬。
+
+**資料來源**：UOA 歷史由 15 分鐘心跳在計算完 UOA 後一併寫入 `uoa_history`（與既有的 `kv_cache` 快取共用同一份資料，零額外期權鏈抓取成本）。`kv_cache` 的 `uoa_{SYMBOL}` 是 `ON CONFLICT DO UPDATE` 的 upsert，每輪覆蓋前一輪，結構上無法回看，因此必須另立資料表。保留期 10 天（覆蓋 5 個交易日窗加上連假緩衝），由 03:00 ET 離峰排程清理。
 
 ### 2.5 條件五：二元宏觀與財報事件安全閥
 前四項通過後發動實體檢查：
@@ -151,7 +201,13 @@
 
 ```mermaid
 flowchart TD
-    Start([開始: 候選標的右側進場六重鐵律檢核]) --> C1{"條件一: 結構性突破<br/>15m 實體陽線 + 放量 1.5x<br/>站穩 VWAP + GammaFlip / Fallback?"}
+    Start([開始: 候選標的右側進場六重鐵律檢核]) --> Tempo{"進場節奏分流<br/>由 Regime 分類器決定"}
+
+    Tempo -- "Regime III 突破態<br/>(或 RIGHT_SIDE 策略模式)" --> C1{"條件一: 結構性突破<br/>15m 實體陽線 + 放量 1.5x<br/>站穩 VWAP + GammaFlip / Fallback?"}
+    Tempo -- "Regime III-B 趨勢延續態" --> C1B{"條件一(變體): 持續站穩<br/>近 6 根已收盤 K 棒至少 5 根<br/>收盤 > max(門檻, VWAP)<br/>且最後一根仍站穩兩者?"}
+
+    C1B -- 失敗 --> Fail1B[條件一❌: 趨勢結構已破壞] --> StopFail
+    C1B -- 通過 --> C2
 
     C1 -- 失敗 --> Fail1[條件一❌: 突破未確認] --> StopFail([進場未通過: 拒絕轉倉/部署])
     C1 -- 通過 --> C2{"條件二: 做市商正 Gamma 底牆<br/>Support Wall 位於現價下方 (K < Spot)?<br/>停損距離落在 [2.5 x ATR_15m, 絕對 8%] 且 GEX >= 500k?"}
@@ -162,7 +218,8 @@ flowchart TD
     C3 -- 失敗 --> Fail3[條件三❌: 上方空間受阻或存在封頂] --> StopFail
     C3 -- 通過 --> C4{"條件四: 主力跨週期買盤<br/>存在 CALL BTO: DTE >= 7<br/>Ratio >= 0.8x, 名目 >= $200k<br/>Strike >= Spot?"}
 
-    C4 -- 失敗 --> Fail4[條件四❌: 無主力跨週期買盤背書] --> StopFail
+    C4 -- "失敗 (突破態: 僅看當下快照)" --> Fail4[條件四❌: 無主力跨週期買盤背書] --> StopFail
+    C4 -. "趨勢延續態: 掃描範圍<br/>額外納入近 5 交易日 uoa_history<br/>(DTE 與 strike 以今日重算)" .-> C4Window[/UOA 時間窗放寬/]
     C4 -- 通過 --> TriggerIO[前四項全數通過: 發動實體外部 I/O]
 
     TriggerIO --> C5{"條件五: 總經與財報安全閥<br/>距離財報 > 3 天?<br/>大盤非 SHORT_GAMMA / 危機?"}
@@ -205,6 +262,8 @@ flowchart TD
 | `_ENTRY_UOA_MIN_DTE` | `7` | 主力 UOA 買盤最低到期天數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_MIN_RATIO` | `0.8` | 主力 UOA 買盤最低 Volume/OI 比值 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 主力 UOA 買盤最低權利金名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_UOA_LOOKBACK_DAYS` | `5` | **僅 Regime III-B** 套用的條件四回看窗，以**交易日**計；Regime III 維持「評估當下必須存在」 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_REGIME_III_B_LOOKBACK_BARS` / `_REGIME_III_B_MIN_HELD_BARS` | `6` / `5` | 條件一趨勢延續變體的回看窗與最低站穩根數；$5/6$ 容差允許 1 根洗盤針 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_EARNINGS_PRE_EVENT_BUFFER_DAYS` | `3` | 避開財報發布的最小安全天數緩衝 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_CANDIDATE_MIN_DTE` | `1` | 標的自身最近效期選擇權最低 DTE 要求（避開 0/1 DTE） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_ROOM_EXTENDED_PCT` | `0.10` ($10\%$) | Call Wall 空間達此值視為「延伸跑道」，建議波段天期（僅影響建議文字） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
@@ -229,7 +288,14 @@ flowchart TD
    在條件一中，若 `gamma_flip_est <= 0` 且 `effective_net_gex < 0`，系統立即終止後續判定，回報「全域 Short Gamma 泥淖，結構性空頭直接不通過」，防止在市場極端單邊下殺時誤觸發突破買進。
 5. **外部行事曆與到期日異常防呆**：
    若財報快取讀取失敗，或無法取得選擇權到期日清單，系統遵循 Fail-Closed 原則，一律判定該條件未通過，拒絕承擔未知的事件風險。
-6. **短路展示一致性保證**：
+6. **條件四回看窗的 fail-closed**：
+   `uoa_history` 讀取失敗（資料表尚未建立、查詢例外）時，條件四**退回「只看當下快照」的嚴格語意**，而不是放行。放寬門檻在資料缺失時必須收斂回原行為——這與動態空間門檻刻意選擇 fail-open（見 §5.3）方向相反，兩者的理由並不衝突：空間門檻缺資料時誤判會把正常標的鎖進危機態、連帶封鎖整個轉倉引擎（代價是漏做），而進場放寬缺資料時誤判是**在沒有證據的情況下開倉**（代價是做錯）。
+   同理，本表上線後的最初 5 個交易日內 `uoa_history` 必然尚未累積足量紀錄，條件四的實際行為與放寬前相同——這是預期中的暖機期，不是缺陷。
+7. **趨勢延續變體的同一交易時段約束**：
+   條件一變體的 6 根回看窗必須全屬同一交易日，否則 fail-safe 不通過。完整理由見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §5.3（`session_vwap` 為單一時段純量，跨日比較無意義）。實務效果是趨勢延續進場最早於 11:00 ET 才可能成立。
+8. **乾跑閘門為跨情境**：
+   `REGIME_III_B_DRY_RUN` 攔截的是**由 III-B 確認出來的指令**，而這些指令會同時出現在 `OPPORTUNITY_COST` 與 `CORE_DEPLOYMENT` 兩個情境底下。因此該閘門以指令的 `entry_regime` 欄位為鍵，而非比照 `SHORT_ENTRY_DRY_RUN` / `PYRAMID_ADD_DRY_RUN` 以 `scenario` 為鍵。核心資金部署的機會分支必須把 `entry_regime` 掛上指令，否則它產生的建議會繞過乾跑閘門直接推播。
+9. **短路展示一致性保證**：
    當前四項條件有任一項未通過時，條件五與六不會發起任何 HTTP 或資料庫查詢，但在 `reasons` 陣列中主動寫入 `條件五⏭️` 與 `條件六⏭️`，避免前端視圖只渲染四項條件造成的使用者混淆。
 
 ---
@@ -254,3 +320,8 @@ flowchart TD
 - `nexus_core/market_analysis/vwap_utils.py`：`fetch_session_vwap()`
 - `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_15m()`
 - `nexus_core/database/calendar_cache.py`：財報快取查詢 `get_cached_earnings()`
+- `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：條件一趨勢延續變體的持續站穩根數統計 `count_structure_held_bars()`（與路由層 `regime_classifier.py` 共用同一份演算法）
+- `nexus_core/database/uoa_history.py`：條件四回看窗的資料來源 `get_recent_uoa()` / 心跳寫入 `save_uoa_observations()` / 保留期清理 `purge_stale_uoa_history()`
+- `nexus_core/database/migrations/v077_add_uoa_history.py`：`uoa_history` 資料表定義（去重鍵為 symbol + 15m bar + 合約識別，避免同一事實被多次記錄）
+- `nexus_core/market_time.py`：回看窗基準點 `get_trading_days_ago_utc()`（NYSE 行事曆，只計入已開盤的交易日）
+- `nexus_core/tests/unit/test_regime_iii_b_trend_continuation.py`：條件一／條件四兩項放寬的專屬測試，含「同一份資料在嚴格模式下必須不通過」的對照測項

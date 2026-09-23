@@ -99,12 +99,17 @@ ALL_NOTIFICATION_KEYS: list[str] = [
     "heartbeat_watchlist",
     "heartbeat_symbol_deep",
     "telemetry_orders",
+    # advisory_entry_signal → 自選標的進場顧問（獨立於上述兩則心跳的推播路徑，
+    # 六重鐵律通過時才推播進場價 / 停損 / 目標）
+    "advisory_entry_signal",
     # 3. 🛡️ 持倉風控與防禦 (Portfolio & Risk Defense)
     "defense_portfolio_risk",
     "defense_option_rollover",
     "defense_margin_call",
     "defense_fundamental_thesis",
     "defense_macro_tail_risk",
+    # advisory_core_levels → B&H 持倉位階顧問（僅告知目標區與結構失效，不建議減碼）
+    "advisory_core_levels",
     # 4. 🎯 Alpha 策略與情報 (Alpha & Intelligence)
     "alpha_market_signals",
     "alpha_polymarket",
@@ -159,6 +164,8 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "heartbeat_watchlist": False,
         "heartbeat_symbol_deep": False,
         "telemetry_orders": True,
+        # 進場顧問只在六重鐵律通過時才推播，正是「精準交易」要的高信號訊號
+        "advisory_entry_signal": True,
         "defense_portfolio_risk": True,
         "defense_option_rollover": True,
         # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
@@ -166,6 +173,7 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "defense_margin_call": True,
         "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
+        "advisory_core_levels": True,
         "alpha_market_signals": False,
         # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於「Alpha 雜訊」
         "alpha_polymarket": True,
@@ -179,6 +187,8 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         "heartbeat_watchlist": False,
         "heartbeat_symbol_deep": False,
         "telemetry_orders": False,
+        # 進場顧問屬盤中節奏的推播，盤中靜音模式下關閉
+        "advisory_entry_signal": False,
         "defense_portfolio_risk": True,
         "defense_option_rollover": False,
         # 保證金強制平倉警報屬帳戶生存等級警訊，與例行轉倉建議獨立分流，
@@ -187,6 +197,8 @@ PRESET_PROFILES: dict[str, dict[str, bool]] = {
         # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊
         "defense_fundamental_thesis": True,
         "defense_macro_tail_risk": True,
+        # 持倉位階顧問屬持倉防禦等級的資訊，不受盤中頻率影響，盤中靜音模式下維持開啟
+        "advisory_core_levels": True,
         "alpha_market_signals": False,
         # WTI/Polymarket 為全天候情報，不受盤中頻率影響，不屬於盤中雜訊
         "alpha_polymarket": True,

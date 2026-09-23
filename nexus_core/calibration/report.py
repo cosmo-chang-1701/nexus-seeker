@@ -153,6 +153,25 @@ def render_markdown(results: dict[str, Any]) -> str:
                     else ""
                 )
             )
+        exit_tiers = forward.get("exit_tiers") or []
+        if exit_tiers:
+            lines += [
+                "",
+                "### 出場分層洗盤率 (EXIT_*)",
+                "",
+                "訊號正確＝平倉後價格先朝不利原部位的方向觸及 1.5×ATR₁D；"
+                "洗盤＝反向先觸及 (被掃出後價格回到原方向)。",
+                "",
+                "| evaluator | 顧問持倉 | n | 訊號正確 | 洗盤 | 逾時 | 5 日報酬中位數 | 狀態 |",
+                "|---|---|---|---|---|---|---|---|",
+            ]
+            for e in exit_tiers:
+                lines.append(
+                    f"| `{e['evaluator']}` | {'是' if e['advisory'] else '否'} | {e['n']} "
+                    f"| {_fmt(e['correct_rate'])} | {_fmt(e['washout_rate'])} "
+                    f"| {_fmt(e['timeout_rate'])} | {_fmt(e['median_fwd_ret_5d'])} "
+                    f"| {e['status']} |"
+                )
     lines += [
         "",
         "## 限制與警語",

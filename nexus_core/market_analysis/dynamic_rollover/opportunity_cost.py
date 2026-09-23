@@ -11,9 +11,11 @@ from market_analysis.index_microstructure import (
 from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     evaluate_wall_buffer,
+    resolve_effective_target,
 )
 
 from . import logger
+from .advisory_mode import is_advisory_asset
 from ._shared import (
     format_cash_impact,
     format_illiquidity_warning,
@@ -33,11 +35,14 @@ from .constants import (
     _ENTRY_IVR_SPREAD_THRESHOLD,
     _ENTRY_ROOM_EXTENDED_PCT,
     _ENTRY_UOA_CAP_RATIO_THRESHOLD,
+    _ENTRY_UOA_LOOKBACK_DAYS,
     _ENTRY_UOA_MIN_DTE,
     _ENTRY_UOA_MIN_NOTIONAL_USD,
     _ENTRY_UOA_MIN_RATIO,
     _ENTRY_VOLUME_LOOKBACK_BARS,
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
+    _REGIME_III_B_LOOKBACK_BARS,
+    _REGIME_III_B_MIN_HELD_BARS,
     _ESTIMATED_ROUND_TRIP_COST_PCT,
     _EV_SPREAD_MIN_THRESHOLD,
     _LOW_IVR_UPPER_BOUND,
@@ -48,6 +53,7 @@ from .constants import (
     _ROLLOVER_RATIO_STANDARD,
     _SHORT_CANDIDATE_MAX_PSQ,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
+    resolve_risk_profile,
 )
 from .models import (
     DynamicRegime,
@@ -57,7 +63,11 @@ from .models import (
     RolloverScenario,
     TradingStrategyMode,
 )
-from .structural_signals import _scan_gex_walls, evaluate_option_dte_tier
+from .structural_signals import (
+    _scan_gex_walls,
+    count_structure_held_bars,
+    evaluate_option_dte_tier,
+)
 
 
 # --- _confirm_entry_signal 六重進場鐵律各條件的獨立判斷函式 ---
@@ -73,9 +83,19 @@ async def _confirm_entry_condition1_breakout(
     net_gex: Optional[float] = None,
     df_15m: Optional[Any] = None,
     session_vwap: Optional[float] = None,
+    trend_continuation: bool = False,
 ) -> bool:
     """條件一：結構性右側放量突破確認 (15m 實體陽線收盤 + 放量，站穩 Gamma Flip
     估算門檻或全域 Long Gamma 替代門檻，且須站穩 Session VWAP)。
+
+    :param trend_continuation: Regime III-B 趨勢延續路徑專用。放量與實體陽線兩項
+        改判為「近 _REGIME_III_B_LOOKBACK_BARS 根已收盤 K 棒至少
+        _REGIME_III_B_MIN_HELD_BARS 根站穩結構」。**這兩項必須換掉、不能只是加一條
+        替代路徑**：放量突破與實體陽線正是「事件式進場」的兩項特徵，而 III-B 的
+        存在理由就是趨勢續航段沒有它們 (handoff.md §1.3)。若保留原判定，III-B 在
+        建構上永遠通不過條件一，整條路徑會是死碼。
+        站穩結構門檻 (Gamma Flip / 替代門檻) 與站穩 VWAP 兩項**不放寬**——它們是
+        做市商自穩定區的定義本身，放寬等於容許在負 Gamma 區追多。
 
     :param df_15m: 呼叫端 (DYNAMIC 模式下 `regime_classifier.classify_dynamic_regime`
         路由至 REGIME_III 時) 若已抓取過同一標的的 15m K 線 frame，原樣傳入以避免
@@ -236,9 +256,6 @@ async def _confirm_entry_condition1_breakout(
     is_above_vwap = (
         not math.isnan(session_vwap) and session_vwap > 0 and close_val > session_vwap
     )
-    c1_passed = (
-        is_closed_above and is_volume_surge and is_bullish_candle and is_above_vwap
-    )
     candle_tag = (
         "陽線" if is_bullish_candle else ("陰線" if close_val < open_val else "十字")
     )
@@ -246,6 +263,66 @@ async def _confirm_entry_condition1_breakout(
         f"VWAP ${session_vwap:.2f} {'站穩' if is_above_vwap else '未站穩'}"
         if session_vwap > 0
         else "VWAP 抓取失敗"
+    )
+
+    if trend_continuation:
+        # 趨勢延續分支：量能與 K 棒型態改判「持續站穩」。必須自行截斷至已收盤
+        # K 棒——上游 DYNAMIC 路徑透過 RegimeMarketData.df_15m 傳進來的是**未截斷**
+        # 的原始 frame（分類器只在內部持有 df_confirmed），盤中最後一根仍在跳動，
+        # 直接納入計數會讓「站穩」判定隨每一次 tick 抖動。
+        from market_analysis.price_volume_alert import trim_to_confirmed_15m_bars
+
+        df_confirmed_c1 = trim_to_confirmed_15m_bars(df_15m)
+        held_bars, held_window, held_same_session = count_structure_held_bars(
+            df_confirmed_c1, breakout_threshold, session_vwap
+        )
+        is_structure_held = (
+            held_same_session
+            and held_window >= _REGIME_III_B_LOOKBACK_BARS
+            and held_bars >= _REGIME_III_B_MIN_HELD_BARS
+        )
+        # 最後一根的兩項判定改用**同一份**已截斷 frame，否則「站穩根數」數的是
+        # 已收盤 K 棒、「收盤價」卻取自仍在跳動的當前根，兩者會在同一輪內互相矛盾。
+        if df_confirmed_c1 is not None and len(df_confirmed_c1) > 0:
+            last_confirmed = df_confirmed_c1.iloc[-1]
+            close_val = float(last_confirmed["Close"])
+            open_val = float(last_confirmed["Open"])
+            is_closed_above = close_val > breakout_threshold
+            is_bullish_candle = close_val > open_val
+            is_above_vwap = (
+                not math.isnan(session_vwap)
+                and session_vwap > 0
+                and close_val > session_vwap
+            )
+            candle_tag = (
+                "陽線"
+                if is_bullish_candle
+                else ("陰線" if close_val < open_val else "十字")
+            )
+            vwap_tag = (
+                f"VWAP ${session_vwap:.2f} {'站穩' if is_above_vwap else '未站穩'}"
+                if session_vwap > 0
+                else "VWAP 抓取失敗"
+            )
+        c1_passed = is_closed_above and is_above_vwap and is_structure_held
+        held_tag = (
+            f"近 {held_window} 根站穩 {held_bars}/{_REGIME_III_B_MIN_HELD_BARS}"
+            if held_same_session
+            else "已收盤 K 棒不足或跨越交易時段（fail-safe 不通過）"
+        )
+        threshold_label = (
+            "全域Long Gamma替代門檻" if is_fallback_mode else "Gamma Flip估算"
+        )
+        reasons.append(
+            f"條件一{'✅' if c1_passed else '❌'}：[趨勢延續] 15m收盤 ${close_val:.2f} "
+            f"{'>' if is_closed_above else '<='} {threshold_label} "
+            f"${breakout_threshold:.2f}，{held_tag}、{vwap_tag}"
+            f"（本路徑不要求放量與實體陽線，目前 K棒{candle_tag}）"
+        )
+        return c1_passed
+
+    c1_passed = (
+        is_closed_above and is_volume_surge and is_bullish_candle and is_above_vwap
     )
     if is_fallback_mode:
         reasons.append(
@@ -355,15 +432,21 @@ def _confirm_entry_condition3_no_physical_cap(
     put_wall: float = 0.0,
     atr_15m: float = 0.0,
     atr_1d: float = 0.0,
+    high_60d: float = 0.0,
 ) -> bool:
     """條件三：UOA 無實質物理封頂，且上方非對稱空間達動態門檻。
 
     比照分析中心 (Symbol Hub) 的 GEX CallWall 距現價空間% 判讀：不要求 Call
-    Wall 必須還在現價之上，只要帶正負號的距離 (call_wall - spot) / spot 小於
+    Wall 必須還在現價之上，只要帶正負號的距離 (eff_target - spot) / spot 小於
     門檻，即代表做市商壓制仍在——現價已觸及甚至跌破 Call Wall 時（距離為負值）
     同樣視為空間不足，而非誤判為「已站上、無封頂」。物理封頂偵測改以 Call
     Wall（而非現價）作為 strike 位置基準，並套用 _ENTRY_UOA_CAP_RATIO_THRESHOLD
     較高的 ratio 門檻，降低一般 STO 平倉/避險單被誤判為物理封頂的假警報率。
+
+    空間測距標的自裸 Call Wall 升級為「晴空萬里有效目標天花板」（見
+    market_analysis/room_threshold.py 公式 D）：標的貼近或突破 60 日高點時，
+    上方沒有存量 OI 形成有效 Call Wall，改以 60 日高點與 ATR 外推目標取代，
+    否則創新高標的必然被本條件結構性誤判為物理封頂（見 handoff.md §1.4）。
 
     非對稱空間門檻自固定 5% 升級為動態自適應波動率門檻（見
     market_analysis/room_threshold.py 公式 A）：
@@ -380,9 +463,10 @@ def _confirm_entry_condition3_no_physical_cap(
         wall_reference=call_wall if call_wall > 0 else None,
     )
 
+    eff_target = resolve_effective_target(target_spot, call_wall, high_60d, atr_1d)
     call_wall_dist_pct = (
-        (call_wall - target_spot) / target_spot
-        if call_wall > 0 and target_spot > 0
+        (eff_target.target - target_spot) / target_spot
+        if eff_target.target > 0 and target_spot > 0
         else None
     )
     room = compute_dynamic_room_threshold(
@@ -393,6 +477,9 @@ def _confirm_entry_condition3_no_physical_cap(
     )
     c3_passed = not has_physical_cap and not has_tight_call_wall
     degrade_suffix = f"｜⚠️ {room.degrade_reason}" if room.degrade_reason else ""
+    if eff_target.degrade_reason:
+        degrade_suffix += f"｜⚠️ {eff_target.degrade_reason}"
+    target_label = "晴空萬里有效目標" if eff_target.is_blue_sky else "Call Wall"
 
     if has_physical_cap:
         reasons.append(
@@ -401,26 +488,52 @@ def _confirm_entry_condition3_no_physical_cap(
         )
     elif has_tight_call_wall and call_wall_dist_pct is not None:
         reasons.append(
-            f"條件三❌：Call Wall ${call_wall:.2f} 距現價空間 "
+            f"條件三❌：{target_label} ${eff_target.target:.2f} 距現價空間 "
             f"{call_wall_dist_pct:+.2%} 不足 {room.threshold_pct:.2%} "
             f"動態非對稱空間門檻{degrade_suffix}"
         )
     else:
         reasons.append(
             f"條件三✅：上方無實質物理封頂，非對稱空間充足"
-            f"（動態門檻 {room.threshold_pct:.2%}）{degrade_suffix}"
+            f"（{target_label}，動態門檻 {room.threshold_pct:.2%}）{degrade_suffix}"
         )
     return c3_passed
 
 
 def _confirm_entry_condition4_uoa_dte(
-    uoa_list: list, target_spot: float, reasons: list
+    uoa_list: list,
+    target_spot: float,
+    reasons: list,
+    historical_uoa: Optional[list] = None,
 ) -> bool:
     """條件四：主力跨週期買盤認證與雜訊過濾 (主力 UOA BTO Call 買盤須同時滿足
     DTE >= 7、ratio (Volume/OI) >= _ENTRY_UOA_MIN_RATIO、權利金名目金額 >=
     _ENTRY_UOA_MIN_NOTIONAL_USD，且 strike >= 現價，排除深實值避險單)。uoa
-    已依權利金金額（名目價值）降序排列，逐筆掃描找出第一筆同時符合四項門檻者。"""
-    for entry in uoa_list:
+    已依權利金金額（名目價值）降序排列，逐筆掃描找出第一筆同時符合四項門檻者。
+
+    :param historical_uoa: Regime III-B 趨勢延續路徑專用的時間窗放寬。呼叫端傳入
+        最近 `_ENTRY_UOA_LOOKBACK_DAYS` 個**交易日**內觀測到的 UOA 歷史紀錄
+        (database/uoa_history.py)，與即時快照串成同一份清單後走完全相同的四重過濾。
+
+        Regime III (突破態) **不傳此參數**，維持「評估當下必須存在」的嚴格語意。
+        分流的理由：突破那一瞬間機構掃單與價格同步發生，要求同時存在是合理的；
+        趨勢的續航段卻是縮量、陰陽交錯的，機構的跨週期買盤早在啟動日就已佈完
+        (handoff.md §1.3)。
+
+        ⚠️ 兩項過濾刻意以**今天**為基準重算，而非沿用紀錄當時的值：
+        `dte` 由 `expiry` 減今日推得（5 天前的 DTE 14 合約今天只剩 9 天，若已跌破
+        門檻就不該再算數），`strike >= target_spot` 比的是**現價**（主力當初買的
+        價外 Call，若現價已衝過該履約價，那筆買盤已完成使命、不構成對「再往上」
+        的背書）。兩者都是收緊而非放寬。
+    """
+    scan_list = list(uoa_list or [])
+    lookback_count = 0
+    if historical_uoa:
+        # 即時快照排在前面：同一筆合約若同時出現在兩邊，先命中的是即時的那筆，
+        # reason 字串會顯示「當下」而非「近 N 日」，語意較精確。
+        scan_list.extend(historical_uoa)
+        lookback_count = len(historical_uoa)
+    for entry in scan_list:
         if not isinstance(entry, dict):
             continue
         if str(entry.get("type", "")).upper() != "CALL":
@@ -443,18 +556,28 @@ def _confirm_entry_condition4_uoa_dte(
         except (ValueError, TypeError):
             continue
         if dte >= _ENTRY_UOA_MIN_DTE:
+            window_tag = (
+                f"（含近 {_ENTRY_UOA_LOOKBACK_DAYS} 交易日回看窗 {lookback_count} 筆）"
+                if lookback_count
+                else ""
+            )
             reasons.append(
                 f"條件四✅：主力買盤 DTE={dte}、ratio={ratio:.2f}x OI、"
                 f"權利金 ${notional_value:,.0f} "
                 f"(符合門檻 DTE>={_ENTRY_UOA_MIN_DTE}、ratio>={_ENTRY_UOA_MIN_RATIO}、"
-                f"Premium>=${_ENTRY_UOA_MIN_NOTIONAL_USD:,.0f})"
+                f"Premium>=${_ENTRY_UOA_MIN_NOTIONAL_USD:,.0f}){window_tag}"
             )
             return True
 
+    scope_tag = (
+        f"（已含近 {_ENTRY_UOA_LOOKBACK_DAYS} 交易日回看窗 {lookback_count} 筆歷史紀錄）"
+        if lookback_count
+        else ""
+    )
     reasons.append(
         f"條件四❌：未偵測到符合門檻 (DTE>={_ENTRY_UOA_MIN_DTE}、"
         f"ratio>={_ENTRY_UOA_MIN_RATIO}、Premium>=${_ENTRY_UOA_MIN_NOTIONAL_USD:,.0f}、"
-        f"strike>=現價) 的主力 CALL BTO 買盤"
+        f"strike>=現價) 的主力 CALL BTO 買盤{scope_tag}"
     )
     return False
 
@@ -853,6 +976,7 @@ class _OpportunityCostMixin:
         target_spot: float = 0.0,
         target_put_wall: float = 0.0,
         friction_cost_pct: float = _ESTIMATED_ROUND_TRIP_COST_PCT,
+        base_ev_hurdle_pct: float = _EV_SPREAD_MIN_THRESHOLD,
     ) -> Dict[str, Any]:
         """
         邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
@@ -864,6 +988,12 @@ class _OpportunityCostMixin:
         於高波動環境下會改傳入動態計算值 (候選標的近價期權合約 Bid-Ask 點差
         推算)，確保 EV 門檻在流動性摩擦擴大時自動提高。本函式維持純運算、
         零 I/O，僅接受呼叫端已算好的數值，不在此處發動網路請求。
+
+        base_ev_hurdle_pct：EV 轉倉門檻的「基礎」分量，預設為現行
+        _EV_SPREAD_MIN_THRESHOLD (0.05)。呼叫端依使用者 risk_appetite 解析出的
+        RiskProfile.ev_hurdle 覆寫。⚠️ 刻意與 friction_cost_pct 分開、不合併成
+        單一常數：後者在高波動環境下會被動態放大，若合併會讓那組已驗證的動態
+        摩擦成本機制被靜態值覆蓋掉。
         """
         # 假設 PowerSqueeze 指標中，數值越低代表動能越弱，越高代表突破動能強烈
         holding_momentum_decaying = (
@@ -881,7 +1011,7 @@ class _OpportunityCostMixin:
         if (
             holding_momentum_decaying
             and target_breakout_ready
-            and ev_spread > (_EV_SPREAD_MIN_THRESHOLD + friction_cost_pct)
+            and ev_spread > (base_ev_hurdle_pct + friction_cost_pct)
         ):
             should_rollover = True
             if current_holding_profit_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD:
@@ -954,11 +1084,24 @@ class _OpportunityCostMixin:
         target_spot: float,
         df_15m: Optional[Any] = None,
         session_vwap: Optional[float] = None,
+        trend_continuation: bool = False,
     ) -> Tuple[bool, str, Optional[str]]:
         """
         防洗盤實戰策略：進場訊號六重嚴格過濾鐵律。六項條件必須同時成立才允許
         evaluate_opportunity_cost_for_satellites 對 candidate_symbol 實際啟動
         機會成本轉倉指令。
+
+        :param trend_continuation: 由 Regime III-B (趨勢延續態) 路由進來時為 True。
+            只放寬兩項，其餘四項逐字不變：
+              * 條件一：放量 + 實體陽線 → 「近 6 根已收盤 K 棒至少 5 根站穩結構」
+              * 條件四：UOA 由「評估當下必須存在」→ 近 _ENTRY_UOA_LOOKBACK_DAYS
+                個交易日的回看窗
+            條件二 (底牆緩衝雙邊界)、條件三 (非對稱空間 + 無物理封頂)、條件五
+            (財報/總經安全閥)、條件六 (0/1 DTE 雜訊) 完全不動——放寬進場節奏是
+            本路徑的目的，放寬風控不是。
+            前向蒐集以獨立的 evaluator 名稱 `ENTRY_RIGHT_B` 記錄，否則
+            regime_evaluation_log 的去重鍵 (symbol, evaluator, source, bar_ts)
+            會讓同一根 K 棒的 A/B 兩套判定互相覆蓋，校準時無法分離統計。
 
         Fail-safe 原則（比照 gamma_cliff_confirmation.is_gamma_cliff_confirmed）：
         任何一項條件所需資料缺失、抓取失敗或無法確認，一律判定該條件未通過
@@ -1026,6 +1169,13 @@ class _OpportunityCostMixin:
             df_15m,
             target_spot=target_spot,
         )
+        # 晴空萬里天花板 (room_threshold.py 公式 D) 所需的 60 日高點，僅供條件三
+        # 使用，刻意不併入 resolve_room_threshold_inputs 的共用回傳值——左側／
+        # 做空進場鐵律不需要這項資料，擴充該函式的回傳元組會連帶影響它們的呼叫
+        # 端與既有測試，非必要不擴大改動範圍。
+        from market_analysis.atr_utils import fetch_high_60d
+
+        high_60d_val = await fetch_high_60d(candidate_symbol)
 
         c1_passed = await _confirm_entry_condition1_breakout(
             candidate_symbol,
@@ -1035,6 +1185,7 @@ class _OpportunityCostMixin:
             net_gex=net_gex,
             df_15m=df_15m,
             session_vwap=session_vwap,
+            trend_continuation=trend_continuation,
         )
         c2_passed = _confirm_entry_condition2_support_wall(
             candidate_symbol,
@@ -1052,8 +1203,32 @@ class _OpportunityCostMixin:
             put_wall=put_wall,
             atr_15m=atr_15m_val,
             atr_1d=atr_1d_val,
+            high_60d=high_60d_val,
         )
-        c4_passed = _confirm_entry_condition4_uoa_dte(uoa_list, target_spot, reasons)
+        # Regime III-B 的 UOA 時間窗：單次執行緒外讀取（SQLite 讀取不應阻塞
+        # event loop，見 AGENTS.md）。Regime III 不走這條路徑，零額外查詢。
+        historical_uoa: Optional[list] = None
+        if trend_continuation:
+            try:
+                import market_time
+                from database.uoa_history import get_recent_uoa
+
+                since_utc = market_time.get_trading_days_ago_utc(
+                    _ENTRY_UOA_LOOKBACK_DAYS
+                )
+                historical_uoa = await asyncio.to_thread(
+                    get_recent_uoa, candidate_symbol, since_utc
+                )
+            except Exception as e:
+                # Fail-closed：讀不到歷史就退回「只看當下」的嚴格語意，而不是
+                # 放行。放寬門檻在資料缺失時必須收斂回原行為。
+                historical_uoa = None
+                logger.warning(
+                    f"[{candidate_symbol}] UOA 回看窗讀取失敗，條件四退回即時快照: {e}"
+                )
+        c4_passed = _confirm_entry_condition4_uoa_dte(
+            uoa_list, target_spot, reasons, historical_uoa=historical_uoa
+        )
         (
             c5_passed,
             days_to_earnings,
@@ -1096,7 +1271,7 @@ class _OpportunityCostMixin:
         from market_analysis.evaluation_recorder import record_gate_reason
 
         record_gate_reason(
-            "ENTRY_RIGHT",
+            "ENTRY_RIGHT_B" if trend_continuation else "ENTRY_RIGHT",
             candidate_symbol,
             target_spot,
             bool(all_passed),
@@ -1167,10 +1342,16 @@ class _OpportunityCostMixin:
         # (short_side_entry.py)，是本系統唯一的空頭方向進場路徑。DYNAMIC 先透過
         # 5-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
         # 直接判定未通過 (Regime II 混沌泥淖態/IV 結構封頂危機態)。
+        # 風險偏好參數化：與 trading_strategy 共用同一次 get_full_user_context
+        # 讀取，避免對同一使用者發動兩次幾乎相同的查詢。resolve_risk_profile 為
+        # 純函式零 I/O，未知值/讀取失敗一律回退 DEFENSIVE (零行為變化)。
         try:
-            trading_strategy = get_full_user_context(user_id).trading_strategy
+            user_ctx = get_full_user_context(user_id)
+            trading_strategy = user_ctx.trading_strategy
+            risk_profile = resolve_risk_profile(user_ctx.risk_appetite)
         except Exception as e:
             trading_strategy = TradingStrategyMode.RIGHT_SIDE.value
+            risk_profile = resolve_risk_profile(None)
             logger.warning(
                 f"[{candidate_symbol}] 讀取使用者 {user_id} 交易策略設定失敗，"
                 f"退回右側交易預設: {e}"
@@ -1226,6 +1407,24 @@ class _OpportunityCostMixin:
                     # 同一標的重複發起網路請求 (比照下方 REGIME_I 分支既有作法)。
                     df_15m=regime_market_data.df_15m,
                     session_vwap=regime_market_data.session_vwap,
+                )
+            elif regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION:
+                # 趨勢延續態：走同一套右側六重鐵律，只放寬條件一與條件四
+                # (見 _confirm_entry_signal 的 trend_continuation 說明)。刻意
+                # **不**另開一套鐵律——條件二/三/五/六是風控，重寫一份必然漂移，
+                # 正是 06_dynamic_adaptive_room_threshold.md 收斂 7 處固定百分比
+                # 時所依據的同一個理由。
+                (
+                    is_entry_confirmed,
+                    entry_reason,
+                    structure_directive,
+                ) = await self._confirm_entry_signal(
+                    candidate_symbol,
+                    candidate_radar,
+                    target_spot,
+                    df_15m=regime_market_data.df_15m,
+                    session_vwap=regime_market_data.session_vwap,
+                    trend_continuation=True,
                 )
             elif regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                 (
@@ -1323,6 +1522,10 @@ class _OpportunityCostMixin:
             symbol = str(asset.get("symbol", "")).upper()
             if asset.get("asset_class") != "SATELLITE":
                 continue
+            # 顧問模式 (B&H) 持倉不作為「賣 A 買 B」的賣出端：轉倉換股與其
+            # 策略直接衝突，只告知位階（見 advisory_mode.py）。
+            if is_advisory_asset(asset):
+                continue
             instrument_class = str(
                 asset.get("instrument_type", asset.get("asset_type", "SPOT"))
             ).upper()
@@ -1367,6 +1570,7 @@ class _OpportunityCostMixin:
                 target_spot=target_spot,
                 target_put_wall=target_put_wall,
                 friction_cost_pct=friction_cost_pct,
+                base_ev_hurdle_pct=risk_profile.ev_hurdle,
             )
             if not result["should_rollover"]:
                 continue

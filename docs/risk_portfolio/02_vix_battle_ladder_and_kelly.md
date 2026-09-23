@@ -20,6 +20,12 @@ Nexus Seeker 將此逆向哲學規格化為 **VIX 戰情階梯（VIX Battle Ladd
 ### 1.3 賣方 vs 方向性做空：同一個 VIX，相反的前提
 上述逆向哲學**只對「賣出權利金」成立**：高 VIX 等於高權利金溢價，是賣方的安全墊。對**方向性做空**（Long Put、Bear Call Spread、空頭現貨、`SHORT_SIDE`／Regime V）而言，前提正好相反——VIX $\ge 35$ 的恐慌區是投降賣壓出清、政策干預與暴力軋空最密集的時點，追空在此給出最大侵略性等於在最容易被軋的位置加碼。
 
+### 1.4 使用者風險偏好的組合層級旋鈕 (`RiskAppetite`)
+
+上述 VIX 戰情階梯與凱利先驗是**盤中即時**的單筆倉位風控，回答「這一筆現在能下多大」。`RiskAppetite`（`DEFENSIVE`／`AGGRESSIVE`）是正交的另一個旋鈕，回答「動態轉倉引擎整體要多快減碼、多快轉倉、多敢部署」，作用在 TP1 執行比例、機會成本轉倉 EV 門檻、核心資金部署比例與衛星預算上限四個組合層級參數上，兩者不互相覆寫。
+
+`DEFENSIVE` 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化；`AGGRESSIVE` 的數值全部來自 [`04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10 已驗證的 2025 回測動能進攻型模式（報酬／MDD／Sharpe 三項皆優於 Defensive）。詳細數值見 §4.4。
+
 因此系統以**交易意圖**（`classify_trade_intent()`）分流，而不是以 `"STO"`／`"BTO"` 字串分流：
 
 | 交易意圖 | 範例 | VIX 乘數 | 凱利勝率先驗 |
@@ -203,6 +209,20 @@ flowchart TD
 | `LONG` | $0.55$ | $0.45$ | $1.8$ | $0.5$ | $0.15$ | `nexus_core/market_analysis/kelly_priors.py` |
 | `SHORT` | $0.45$ | $0.40$ | $1.8$ | $0.5$ | $0.10$ | `nexus_core/market_analysis/kelly_priors.py` |
 
+### 4.4 使用者風險偏好查表 (`RiskAppetite` / `RiskProfile`)
+
+| 欄位 (`RiskProfile`) | `DEFENSIVE`（預設） | `AGGRESSIVE` | 消費端 |
+|---|---|---|---|
+| `tp1_ratio` | $0.50$（現行行為） | $0.30$ | `anti_washout.py::_evaluate_microstructure_tp_ladder` TP1 執行比例 |
+| `ev_hurdle` | $0.05$（`_EV_SPREAD_MIN_THRESHOLD`，現行行為） | $0.02$ | `opportunity_cost.py` 機會成本轉倉 EV Spread 門檻基礎分量 |
+| `rotation_cooldown_days` | $5$ | $3$ | 保留欄位，供既有輪動冷卻邏輯串接 |
+| `core_deploy_ratio` | $0.50$（現行行為） | $0.80$ | `core_deployment.py::evaluate_core_deployment` 機會分支部署比例 |
+| `max_satellite_budget_pct` | $0.15$ | $0.25$ | `pyramid_add.py` 條件七單筆衛星預算上限 |
+
+$\text{resolve\_risk\_profile}(\text{appetite})$ 對未知值或 `None` 一律 fail-safe 回退 `DEFENSIVE`（大小寫不敏感）。三個既有消費端皆在各自函式入口**解析一次後往下傳**，不在熱路徑迴圈內對每筆持倉重複查表。
+
+⚠️ `ev_hurdle` 的 `DEFENSIVE` 值刻意**不是** $\_EV\_SPREAD\_MIN\_THRESHOLD + \_ESTIMATED\_ROUND\_TRIP\_COST\_PCT$（即不含 §2.2 情境二的 $0.3\%$ 往返成本）——`opportunity_cost.py` 對近價期權合約會以實際 Bid-Ask 點差動態放大摩擦成本，若把往返成本併入本欄位的靜態基礎值，會蓋掉那個已驗證的動態機制、失去自動放大效果。
+
 ---
 
 ## 5. 邊界條件、風控熔斷與例外處理
@@ -255,7 +275,11 @@ NRO 倉位模型的 $\text{val\_adj\_unit\_delta}$ 需要知道一筆**尚未成
 
 **刻意不改**：`get_macro_risk_metrics` 的 `heat_limit = 80 \times \text{sizing\_multiplier}` 是**組合層**保證金熱度上限，不是單筆倉位，對多空部位一視同仁；`hedge_monitor_service` 的階梯跳動提醒屬資訊性通知。
 
-### 5.5 All-in 模式的宏觀修正因子繞過 (Bypass Attenuation in All-in Mode)
+### 5.5 `RiskAppetite` 未設定時的逐位元不變保證
+
+新增 `user_settings.risk_appetite` 欄位（`v076` migration，`TEXT DEFAULT 'DEFENSIVE'`，無 `CHECK` 約束）時的硬性驗收標準：**未設定或設定失敗的使用者，行為必須與改動前逐位元相同**。`resolve_risk_profile()` 讀取失敗（例如 `get_full_user_context` 例外）時三個消費端一律各自 `try/except` 回退 `resolve_risk_profile(None)` → `DEFENSIVE`，其數值與改動前的硬編碼常數完全相等，不存在「讀取失敗時退回一個新預設值」的分歧空間。`tests/unit/test_risk_appetite.py` 對三個消費端各有專屬的 `DEFENSIVE` 逐位元不變回歸測試。
+
+### 5.6 All-in 模式的宏觀修正因子繞過 (Bypass Attenuation in All-in Mode)
 在一般市場狀況下，若原油暴漲或 Skew 偏大，宏觀修正因子（$d_{\text{oil}}, d_{\text{regime}}$）會衰減風險限額。然而，當 $\text{VIX} \ge 35.0$ 時，系統判定這屬於歷史級世紀大底，此時若繼續套用原油或偏斜衰減將錯失最佳逆向建倉良機。因此 `risk_engine.py:296` 特別設計：
 ```python
 if vix_spot is not None and vix_spot >= 35.0:
@@ -283,3 +307,9 @@ if vix_spot is not None and vix_spot >= 35.0:
   - `nexus_core/services/trading_service/execution.py`: `_validate_trade_pipeline()` Stage 1
   - `nexus_core/services/trading_service/vtr.py`: `execute_vtr_auto_entry()`
   - `nexus_core/market_analysis/strategy/analyze.py`: VIX 戰情階梯閘門區段
+- **使用者風險偏好參數化** (見 §1.4／§4.4／§5.5):
+  - `nexus_core/database/migrations/v076_add_risk_appetite.py`: 新增 `user_settings.risk_appetite` 欄位
+  - `nexus_core/market_analysis/dynamic_rollover/models.py`: `RiskAppetite(str, Enum)`
+  - `nexus_core/market_analysis/dynamic_rollover/constants.py`: `RiskProfile`、`_RISK_PROFILES`、`resolve_risk_profile()`
+  - `nexus_core/cogs/settings_ui.py`: `RiskAppetiteSelectView`（比照 `TradingStrategySelectView`）
+  - `nexus_core/tests/unit/test_risk_appetite.py`: 查表函式、未知值回退、`DEFENSIVE` 逐位元不變、三消費端 threading 迴歸測試

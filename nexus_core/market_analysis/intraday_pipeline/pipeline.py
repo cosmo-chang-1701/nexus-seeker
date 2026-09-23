@@ -44,6 +44,8 @@ class IntradayScanPipeline:
         self._task: Optional[asyncio.Task] = None
         self.scan_interval_seconds = 30 * 60  # 30 minutes
         self._cached_spy_spot: float = 500.0
+        # 進場顧問 radar 補抓的併發上限 (比照 portfolio_monitor.py 的 Semaphore(3))。
+        self._radar_fetch_sem = asyncio.Semaphore(3)
 
     def start(self) -> None:
         """啟動異步監控管道"""
@@ -334,6 +336,20 @@ class IntradayScanPipeline:
             except Exception as cache_err:
                 logger.warning(f"[{hb_symbol}] UOA 快取寫回失敗: {cache_err}")
 
+            # 同一份資料另存一份**可回看的歷史**：上面的 kv_cache 是
+            # ON CONFLICT DO UPDATE 的 upsert，每輪覆蓋前一輪，結構上無法回答
+            # 「最近 5 個交易日有沒有出現過機構買盤」。右側條件四的 Regime III-B
+            # 時間窗 (見 opportunity_cost.py::_confirm_entry_condition4_uoa_dte)
+            # 需要歷史，故另寫 uoa_history。兩者共用同一份 hb_uoa_list，
+            # 不產生任何額外的期權鏈抓取成本。
+            try:
+                from database.uoa_history import save_uoa_observations
+                from market_analysis.evaluation_recorder import current_bar_ts
+
+                await save_uoa_observations(hb_symbol, current_bar_ts(), hb_uoa_list)
+            except Exception as hist_err:
+                logger.warning(f"[{hb_symbol}] UOA 歷史寫入失敗: {hist_err}")
+
         embed = create_watchlist_signal_embed(
             symbol=hb_symbol,
             option_guidance=option_guidance,
@@ -421,6 +437,166 @@ class IntradayScanPipeline:
             logger.warning(
                 f"[{ticker}] Gamma Squeeze SPEAR 警報派發失敗 (uid={user_id}): {e}"
             )
+
+    async def _resolve_candidate_radar(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """取得進場確認所需的 radar dict（quote / gex_profile_data / uoa / psq_result）。
+
+        沿用 cogs/trading/portfolio_monitor.py 的既有取得模式：優先吃 15 分鐘雷達
+        寫入的共享快取 (`bot._latest_radar_data_cache`，300 秒保鮮窗)，零額外網路；
+        未命中才經 UnifiedTerminalCog 補抓，且必須走 `self._radar_fetch_sem`。
+
+        ⚠️ 15 分鐘雷達在 :00/:15/:30/:45 寫入，而本管線以 sleep(1800) 排程會時間
+        漂移，故命中率不保證——fallback 是常態而非例外，Semaphore 不可省。
+        取不到 (cog 缺失／抓取失敗) 一律回 None，呼叫端視為本輪略過 (fail-safe)。
+        """
+        import time
+
+        from market_analysis.intraday_pipeline.entry_advisor import (
+            _RADAR_FRESH_WINDOW_SECONDS,
+        )
+
+        sym = symbol.upper()
+        shared_cache = getattr(self.bot, "_latest_radar_data_cache", {}) or {}
+        shared_time = float(getattr(self.bot, "_latest_radar_cache_time", 0.0) or 0.0)
+        if (time.time() - shared_time) < _RADAR_FRESH_WINDOW_SECONDS:
+            cached = shared_cache.get(sym)
+            if isinstance(cached, dict):
+                return cached
+
+        terminal_cog = self.bot.get_cog("UnifiedTerminalCog")
+        if terminal_cog is None:
+            return None
+        async with self._radar_fetch_sem:
+            try:
+                data = await terminal_cog._fetch_sym_radar_data_slow(sym)
+            except Exception as e:
+                logger.warning(f"[{sym}] 進場顧問 radar 補抓失敗: {e}")
+                return None
+        return data if isinstance(data, dict) else None
+
+    async def _dispatch_entry_advisor_alert(
+        self,
+        user_id: int,
+        ticker: str,
+        watchlist_eval: Optional[WatchlistEvaluation],
+        ctx: Any,
+        now_ny: datetime,
+    ) -> None:
+        """自選標的進場顧問：六重鐵律通過時，獨立推播一則進場 DM（含價位建議）。
+
+        與 30 分鐘心跳本體**完全獨立**：不新增 `scenario`、不覆寫 `tactical`、
+        不受 `engine_enabled` 約束，只受 `/notif_settings` 的
+        `advisory_entry_signal` 控制。策略分派與 `/x` 進場鐵律頁籤一致
+        (見 entry_advisor.py)。
+
+        閘門依序（便宜的先擋；**任何一道擋下都不燒去重旗標**）：
+          1. 心跳非 green（SHIELD／Backwardation／premium-harvest）→ 不進場。
+             左側收租與右側追價矛盾，防禦訊號也不該被進場訊號蓋過。
+          2. 通知頻道。
+          3. radar → 進場確認（乾跑期間照常記錄前向蒐集）。
+          4. 三個乾跑旗標：本路徑不經 portfolio_monitor 的派發迴圈，該處的乾跑
+             閘門對此完全失效，必須在此自行檢查。乾跑**不寫**去重旗標。
+          5. 每人每標的每 Regime 每日去重（III-B 升級為 III 是新的、更強的訊號）。
+
+        任何一步失敗都只記錄警告，不影響同一輪其他標的的處理。
+        """
+        try:
+            if watchlist_eval is None or watchlist_eval.tactical.alert_level != "green":
+                return
+
+            import config
+            import database
+            from market_analysis import evaluation_recorder
+            from market_analysis.dynamic_rollover.models import (
+                DynamicRegime,
+                TradingStrategyMode,
+            )
+            from market_analysis.intraday_pipeline.entry_advisor import (
+                evaluate_entry_advice,
+            )
+
+            if not database.is_notification_enabled(user_id, "advisory_entry_signal"):
+                return
+
+            strategy = (
+                str(getattr(ctx, "trading_strategy", "") or "")
+                or TradingStrategyMode.RIGHT_SIDE.value
+            )
+
+            radar = await self._resolve_candidate_radar(ticker)
+            if not radar:
+                return
+            quote = radar.get("quote")
+            spot = 0.0
+            if isinstance(quote, dict):
+                try:
+                    spot = float(quote.get("c", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    spot = 0.0
+            if spot <= 0:
+                spot = float(watchlist_eval.metrics.current_price)
+
+            # 前向蒐集：乾跑期間也照常記錄，那正是觀察期的資料來源。獨立的 source
+            # 才不會與 PORTFOLIO_MONITOR / SYMBOL_VIEW 的同 bar 紀錄互相覆蓋。
+            token = evaluation_recorder.set_evaluation_source("WATCHLIST_ADVISOR")
+            try:
+                advice = await evaluate_entry_advice(
+                    strategy,
+                    ticker,
+                    radar,
+                    spot,
+                    phase1_price=float(watchlist_eval.metrics.buy_price_phase1),
+                )
+            finally:
+                evaluation_recorder.reset_evaluation_source(token)
+
+            if not advice.passed:
+                return
+
+            is_iii_b = (
+                advice.regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
+            )
+            dry_run_tag: Optional[str] = None
+            if config.WATCHLIST_ADVISOR_DRY_RUN:
+                dry_run_tag = "WatchlistAdvisor"
+            elif is_iii_b and config.REGIME_III_B_DRY_RUN:
+                dry_run_tag = "RegimeIIIB"
+            elif advice.direction == "SHORT" and config.SHORT_ENTRY_DRY_RUN:
+                dry_run_tag = "ShortEntry"
+            if dry_run_tag is not None:
+                logger.info(
+                    f"[{dry_run_tag}][DryRun] 略過進場顧問推播 (僅記錄前向紀錄，"
+                    f"不燒去重旗標): user={user_id} symbol={ticker.upper()} "
+                    f"strategy={advice.strategy} regime={advice.regime}"
+                )
+                return
+
+            cache_key = (
+                f"advisory_entry_{user_id}_{ticker.upper()}_"
+                f"{advice.regime or advice.strategy}_{now_ny.strftime('%Y%m%d')}"
+            )
+            if database.get_kv_cache(cache_key):
+                return
+
+            from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+            embed = create_entry_rules_embed(
+                ticker.upper(),
+                advice.passed,
+                advice.reason.split(" | ") if advice.reason else [],
+                trading_strategy=advice.strategy,
+                dynamic_regime=advice.regime,
+                dynamic_regime_reason=advice.regime_reason,
+                structure_directive=advice.structure_directive,
+                entry_price=advice.entry_price,
+                stop_loss=advice.stop_loss,
+                target=advice.target,
+                rr_ratio=advice.rr_ratio,
+            )
+            await self.bot.queue_dm(user_id, embed=embed)
+            await database.save_kv_cache(cache_key, True)
+        except Exception as e:
+            logger.warning(f"[{ticker}] 進場顧問派發失敗 (uid={user_id}): {e}")
 
     async def _run_loop(self) -> None:
         while self.is_running:
@@ -572,6 +748,12 @@ class IntradayScanPipeline:
                                     logger.info(
                                         f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。"
                                     )
+                            # 進場顧問獨立於心跳本體與 Gamma Squeeze 引擎，因此必須放在
+                            # 下方 `engine_enabled` 的 continue 之前，否則預設
+                            # (enable_analyst_agent=0) 下永遠執行不到。
+                            await self._dispatch_entry_advisor_alert(
+                                uid, ticker, watchlist_eval, ctx, now_ny
+                            )
                             if not engine_enabled or account_state is None:
                                 continue
 
@@ -605,6 +787,11 @@ class IntradayScanPipeline:
                                 f"❌ IntradayScanPipeline 處理標的 {ticker} 時發生錯誤: {ticker_err}",
                                 exc_info=True,
                             )
+
+                # 進場顧問的前向蒐集紀錄於整個週期結束後一次批次寫入。
+                from market_analysis import evaluation_recorder
+
+                await evaluation_recorder.flush_evaluations()
 
                 # 4. 睡眠 30 分鐘
                 await asyncio.sleep(self.scan_interval_seconds)
