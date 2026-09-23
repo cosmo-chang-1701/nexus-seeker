@@ -191,6 +191,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/gex_wall_depth.py` — 薄牆門檻（D-04）的 stdlib 葉模組：`thin_wall_threshold(adv) = max(500k, GEX_WALL_MIN_DEPTH_RATIO × ADV₂₀ × 100)`。GEX 原始值是每 100% 價格變動的尺度，固定 500k 對大型股形同虛設；正規化項只會讓門檻變嚴（小型股仍以 500k 為下限）。成交額經雷達資料的 `gex_profile_data["adv_dollar_20d"]` 傳入，缺值時行為與改版前相同。`index_microstructure.py` 重新匯出這些名稱
 - `nexus_core/market_analysis/room_threshold.py` — **單一權威**的動態自適應波動率空間門檻實作（公式 A 方向性空間門檻／公式 B 牆體緩衝雙邊界／公式 C 破位追空次級節點空間／公式 D `resolve_effective_target()` 晴空萬里有效目標天花板，供 Regime IV 封頂判定、右側條件三、`PYRAMID_ADD` 條件四三處共用同一天花板定義）。刻意只依賴 stdlib 的葉模組（比照 `sentiment/skew_taxonomy.py`），故可同時被 `dynamic_rollover/`、`gamma_squeeze_engine.py` 與 `cogs/embed_builders/` 匯入而不產生循環相依。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫，`constants.py` 的「路由層與進場確認層門檻不合併」政策不被破壞
 - `nexus_core/market_time.py` — NYSE 行事曆 helper。`get_trading_days_ago_utc(n)` 回傳「往回第 n 個**已開盤**交易日」的 UTC 時戳，供 UOA 回看窗等時間窗過濾使用；以日曆日回看會讓同一個「N 日窗」在週末／連假前後代表的樣本量相差近一倍
+- `nexus_core/market_analysis/intraday_consistency.py` — `/x` 日內資料一致性閘門（純函式、無 I/O）：以全市場 15m K 線放寬報價日高低點（Tier 0 IEX 高低點偏窄）、VWAP 必在當日區間內、15m K 棒凍結／多根合併偵測、期權成交價無套利下界。VWAP 與區間極值須出自同一份 K 線（`vwap_utils.fetch_session_stats()`）
 - `nexus_core/market_analysis/atr_utils.py` — 共用 ATR helper：`fetch_atr_15m()`／`compute_atr_15m_from_df()`／`compute_atr_14_from_daily_df()`／`fetch_atr_1d()`（後者刻意不 `force_refresh`，日線 ATR 盤中幾乎不動）
 - `nexus_core/services/alpaca_stream_service.py` — Alpaca 即時 1 分 K 串流（leader-only、`ENABLE_ALPACA_STREAM` 預設關閉）。訂閱前 30 檔（持倉 → 白名單內價量監測 → 其餘依前一交易日 IEX 成交筆數，`rank_symbols()`），每 15 分鐘比對差異；下游經模組層級 registry `get_stream_service()` 取得（**不要**在 `services/` 內 `import bot`）。⚠️ 串流資料只在 `complete_since` 涵蓋的區間內可用——斷線即清空，重連後以 REST 回補；`get_quote_snapshot()` 的 `pc` 是官方日線昨收，絕不能是上一分鐘收盤
 - `nexus_core/market_analysis/stream_bars.py` — 串流的純 stdlib 計算葉模組：Forward Fill（不跨越開盤、缺口 > 30 分鐘不補）、`SessionStats`（開盤錨定 VWAP、只計真實 K 棒）、15 分 K 聚合、分鐘級技術指標
@@ -250,6 +251,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_edge_scraper/tests/test_em_snapshot.py` — edge 收盤後 EM 快照：資料表首筆為準、時間窗、每日只執行一次（重啟以 DB 為準）、零寫入時重試、端點以交易日分頁
 - `nexus_core/tests/unit/test_calibration_microstructure.py` — D-03 週 EM 到期日選擇（排除 0/1-DTE、取最接近 7 DTE、無合格到期日回 None）、D-04 成交額正規化薄牆門檻（大型股變嚴、小型股不低於 500k、缺成交額回退）、edge GEX 公式複刻、^SKEW 代理分位無前視偏差、前向蒐集校準特徵
 - `nexus_core/tests/unit/test_canonical_resampling.py` — 日級規範母體：重採樣（盤前盤後／週末／半日市／舊 `SKEW` 排除）、midrank 與 IQR 下限、規範母體優先與高頻池回退、`as_of_date` 無前視偏差、收盤快照冪等、v080 回填、0~100 百分位契約、門檻數值不變回歸、UOA／`sentiment_history` 交易日保留期
+- `nexus_core/tests/unit/test_intraday_consistency.py` — `/x` 日內資料一致性：VWAP／15m K 棒／日高低點不變式、K 棒凍結與多根合併偵測、期權成交價無套利下界（fixture 取自實盤回報）
 - `nexus_core/tests/unit/test_embed_builder.py` — embed contract tests
 - `nexus_core/tests/unit/test_output_centralization.py` — embed-centralization enforcement
 - `nexus_core/tests/unit/test_order_ui.py` — unit tests for order UI, active order database, and telemetry pricing alignment

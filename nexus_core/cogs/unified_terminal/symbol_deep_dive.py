@@ -15,7 +15,7 @@ from market_analysis.atr_utils import (
     fetch_atr_15m,
     fetch_atr_1d,
 )
-from market_analysis.vwap_utils import fetch_session_vwap
+from market_analysis.vwap_utils import fetch_session_stats
 from market_analysis.price_volume_alert import get_confirmed_15m_bar
 import market_math
 
@@ -88,7 +88,8 @@ class SymbolDeepDiveMixin:
         # 真的算不出來時才在那裡惰性 await（此時快取已被 df_hist_task 寫暖）。
         # atr_15m_task 走 force_refresh=True + 5d/15m 不同 key，不是冗餘，保留。
         atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
-        vwap_task = asyncio.create_task(fetch_session_vwap(symbol))
+        # VWAP 與當日區間極值出自同一份 K 線（見 intraday_consistency.py）
+        vwap_task = asyncio.create_task(fetch_session_stats(symbol))
         bar_15m_task = asyncio.create_task(get_confirmed_15m_bar(symbol))
         from services.calendar_service import calendar_service
 
@@ -182,7 +183,7 @@ class SymbolDeepDiveMixin:
             gex_profile_data,
             vp_data,
             atr_15m_data,
-            session_vwap_data,
+            session_stats_data,
             bar_15m_data,
             catalysts,
             reddit_details,
@@ -242,7 +243,10 @@ class SymbolDeepDiveMixin:
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
             "atr_15m": atr_15m_data,
-            "session_vwap": session_vwap_data,
+            "session_vwap": (
+                session_stats_data.vwap if session_stats_data is not None else 0.0
+            ),
+            "session_stats": session_stats_data,
             "bar_15m": bar_15m_data,
             "catalysts": catalysts,
         }
@@ -324,6 +328,32 @@ class SymbolDeepDiveMixin:
                 else _safe_float(result.get("price"), 0.0)
             )
 
+        # 日高低點與 VWAP／15m K 棒必須出自可相容的資料源：Tier 0 報價是 IEX
+        # 單一交易所成交，極值比全市場窄，這裡以同一份全市場 K 線放寬之。
+        from datetime import datetime as _dt
+
+        from market_analysis.intraday_consistency import (
+            assess_15m_bar,
+            is_vwap_within_range,
+            reconcile_daily_range,
+        )
+        from market_time import is_market_open, ny_tz
+
+        now_ny = _dt.now(ny_tz)
+        session_stats = data.get("session_stats")
+        if isinstance(quote, dict) and session_stats is not None:
+            quote, range_fixed = reconcile_daily_range(
+                quote,
+                session_stats.high,
+                session_stats.low,
+                session_stats.session_date,
+                now_ny.date(),
+            )
+            if range_fixed:
+                logger.info(
+                    f"[{symbol}] 報價日高低點以全市場 15m K 線校正: "
+                    f"H={quote.get('h')} L={quote.get('l')}"
+                )
         result["quote"] = quote
 
         safe_skew = skew_data if isinstance(skew_data, dict) else {}
@@ -386,7 +416,23 @@ class SymbolDeepDiveMixin:
         safe_vp = vp_data if isinstance(vp_data, dict) else {}
         result["volume_profile"] = safe_vp
         result["atr_15m"] = _safe_float(data.get("atr_15m"), 0.0)
-        result["session_vwap"] = _safe_float(data.get("session_vwap"), 0.0)
+        session_vwap_val = _safe_float(data.get("session_vwap"), 0.0)
+        safe_quote = quote if isinstance(quote, dict) else {}
+        day_high = _safe_float(safe_quote.get("h"), 0.0)
+        day_low = _safe_float(safe_quote.get("l"), 0.0)
+        if (
+            session_vwap_val > 0
+            and day_high > 0
+            and day_low > 0
+            and not is_vwap_within_range(session_vwap_val, day_high, day_low)
+        ):
+            # 放寬區間後仍在區間外 → 兩源不屬於同一時段，寧可顯示缺失也不給假錨點
+            logger.warning(
+                f"[{symbol}] Session VWAP {session_vwap_val:.2f} 超出當日區間 "
+                f"[{day_low:.2f}, {day_high:.2f}]，視為資料異常"
+            )
+            session_vwap_val = 0.0
+        result["session_vwap"] = session_vwap_val
 
         # ATR₁D 取數階梯（刻意「先用手上已有的，最後才發網路請求」）：
         #   1. 已 gather 到的日線 frame 就地純記憶體計算
@@ -451,6 +497,36 @@ class SymbolDeepDiveMixin:
                 if (v_15m is not None and sma_15m is not None and sma_15m > 0)
                 else None
             )
+
+            bar_time_raw = _extract_val("bar_time")
+            bar_time = bar_time_raw if isinstance(bar_time_raw, _dt) else None
+            assessment = assess_15m_bar(
+                bar_time,
+                h_15m,
+                l_15m,
+                v_15m,
+                now_ny=now_ny,
+                market_open=bool(is_market_open()),
+                day_high=day_high,
+                day_low=day_low,
+                session_date=(
+                    session_stats.session_date if session_stats is not None else None
+                ),
+                session_volume=(
+                    session_stats.volume if session_stats is not None else None
+                ),
+                session_bar_count=(
+                    session_stats.bar_count if session_stats is not None else 0
+                ),
+            )
+            result["bar_15m_time"] = bar_time
+            result["bar_15m_notes"] = assessment.notes
+            if assessment.is_stale or assessment.is_anomalous:
+                # 凍結或合併的 K 棒量比沒有意義，不得當成「放量突破」呈現
+                rvol = None
+                logger.warning(
+                    f"[{symbol}] 15m K 棒一致性檢查未通過: {assessment.notes}"
+                )
 
             result["open_15m"] = o_15m
             result["high_15m"] = h_15m

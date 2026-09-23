@@ -682,8 +682,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 data.get("volume_15m_sma20", data.get("avg_volume_15m"))
             )
 
+        raw_bar_notes = data.get("bar_15m_notes")
+        bar_notes: List[str] = (
+            [str(n) for n in raw_bar_notes] if isinstance(raw_bar_notes, list) else []
+        )
         rvol_raw = _to_float_or_none(data.get("rvol_15m"))
-        if rvol_raw is not None and sma20_15m is not None and sma20_15m > 0:
+        if bar_notes:
+            # 凍結／合併的 K 棒不得重算出「放量」結論（見 intraday_consistency.py）
+            rvol_val = None
+        elif rvol_raw is not None and sma20_15m is not None and sma20_15m > 0:
             rvol_val = rvol_raw
         elif vol_15m is not None and sma20_15m is not None and sma20_15m > 0:
             rvol_val = vol_15m / sma20_15m
@@ -721,7 +728,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 h_str = f"{h_15m:.2f}" if (h_15m is not None and h_15m > 0) else "--"
                 l_str = f"{l_15m:.2f}" if (l_15m is not None and l_15m > 0) else "--"
                 c_str = f"{c_15m:.2f}"
-                kline_line = f" ├─ 最新 15m K棒: 開 {o_str} | 高 {h_str} | 低 {l_str} | 收 {c_str} ({kline_type})"
+                bar_time_val = data.get("bar_15m_time")
+                bar_time_str = (
+                    f" @{bar_time_val:%H:%M}"
+                    if isinstance(bar_time_val, datetime)
+                    else ""
+                )
+                kline_line = f" ├─ 最新 15m K棒{bar_time_str}: 開 {o_str} | 高 {h_str} | 低 {l_str} | 收 {c_str} ({kline_type})"
             else:
                 kline_line = " ├─ 最新 15m K棒: -- (數據不全)"
 
@@ -734,7 +747,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             sma20_line = f" ├─ 15m 均量 (SMA20): {sma20_str} 股"
 
             # 4. 即時量比 (RVOL_15m)
-            if rvol_val is not None:
+            if bar_notes:
+                rvol_line = (
+                    " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ " + "；".join(bar_notes) + ")"
+                )
+            elif rvol_val is not None:
                 if rvol_val >= 1.5:
                     status_str = "🟢 放量突破 >= 1.5x"
                 else:
