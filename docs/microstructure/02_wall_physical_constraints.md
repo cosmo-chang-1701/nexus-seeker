@@ -161,6 +161,13 @@ flowchart TD
 7. **PutWall 與淨 GEX 不同源的揭露（呈現層）**：
    edge 的 PutWall 定義為 $\arg\max_{K<\text{Spot}} \text{PutGamma}(K)$（**只看 Put 端**），熱力圖與 `_scan_gex_walls()` 使用的是**淨** GEX。當 PutWall 履約價的淨 GEX $< 0$ 時，做市商在該處需跟著賣現貨避險（助跌），分析中心會揭露此矛盾，並另列 `_scan_gex_walls()` 的最近淨 GEX 正支撐（該支撐較 PutWall 更貼近現價時亦列出）。⚠️ 這是**僅限呈現層**的揭露：所有進場／停損閘門仍以 edge PutWall 為準，統一定義需先經 `calibration` 比對，避免 edge `gex_snapshot_history` 的校準序列在中途改變語意。
 
+   **後續觀察事項（PutWall 定義是否統一為淨 GEX，決定前不得改動閘門）**：
+   目前進場、停損與 Regime 分類讀的都是 edge 的 Put 端 PutWall（`regime_classifier.py`、`left_side_entry.py`、`short_side_entry.py`、`dynamic_rollover/_shared.py`、`anti_washout.py`、`pyramid_add.py`、`opportunity_cost.py`、`portfolio_monitor.py`、`intraday_pipeline/`）。候選方案是讓 edge 改輸出「現價下方、通過 `thin_wall_threshold()` 的**最近**淨 GEX 正牆」，與 `_scan_gex_walls()` 的定義一致。需要依序完成：
+   - **擴充 `micro-report`**：它已讀取 edge 的 `put_wall` 與 `support_wall_from_profile()`（現價下方淨 GEX **最大**正值），還要再加第三種定義「淨 GEX 最近強牆」，三者以同一個 5 交易日觀察期標註守住率並並列比較；另外統計 edge PutWall 處淨 GEX $< 0$ 的比例，量化這個矛盾實際多常發生。
+   - **production 前向驗證**：以正式環境 DB 快照跑 `calibration forward-report`，把 `ENTRY_*` 紀錄依 `features_json.put_wall_gex < 0` 與否分組，比較逆向先觸及率。
+   - **判讀準則**：可標註日期 $\ge 20$ 個、每種定義至少 30 次 tested 後才判讀。淨 GEX 定義的守住率須顯著高於 edge PutWall（bootstrap CI 不重疊）才改；否則維持現行定義，只保留呈現層揭露。
+   - **切換時的連帶工作**：edge `gex_snapshot_history.put_wall` 的語意會在改版日中途改變，必須在 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 記錄改版日期，`micro-report` 也要依日期分段，或一律由 `gex_profile` 重算；`GEX_WALL_MIN_DEPTH_RATIO`（見 [`01_gex_topology_and_walls.md`](01_gex_topology_and_walls.md) §5 第 4 點）要以新定義重新確認。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

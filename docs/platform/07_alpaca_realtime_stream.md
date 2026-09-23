@@ -75,6 +75,13 @@
 
 回傳欄位與 Finnhub `/quote` 相容：`c` 為最後真實收盤價、`pc` 為**官方昨收**（`intraday_pipeline/metrics.py`、`sentiment/iv_metrics.py`、`order_telemetry_service.py` 都把 `pc` 當昨收使用，絕不能是上一分鐘收盤）、`d`／`dp` 以 `pc` 計算、`o`／`h`／`l` 為今日 IEX 成交累計（極值可能略窄於全市場）、`t` 為最後真實 K 棒的收盤時刻。
 
+**`/x` 標的分析中心的區間校正**：IEX 的 `h`／`l` 偏窄，而 Session VWAP 與 15m K 棒來自 yfinance 全市場 K 線，直接並列會出現「VWAP 高於當日最高價」「15m K 棒低點低於全日低點」。`cogs/unified_terminal/symbol_deep_dive.py` 以 `vwap_utils.fetch_session_stats()`（VWAP 與區間極值出自同一份 K 線）呼叫 `intraday_consistency.reconcile_daily_range()` 放寬 `h`／`l`（只放寬、不收窄，K 線不屬於今日時不合併）。放寬後 VWAP 仍在區間外即視為缺失；15m K 棒落後超過 30 分鐘、極值超出當日區間或疑似多根合併時，停用量比判定並揭露原因。這只影響 `/x` 的呈現，`get_quote` 回傳給其他消費端的 `h`／`l` 不變。
+
+**後續觀察事項（上線後）**：
+- **盤中實測**：開盤一小時後各執行一次 `/x SNDK` 與 `/x DRAM`，確認日高低點涵蓋 VWAP 與 15m K 棒極值、K 棒標示時間；IV 與預期區間數量級一致、EM 旁有跨式隱含 IV（見 [`../valuation_pricing/02_expected_move_and_max_pain.md`](../valuation_pricing/02_expected_move_and_max_pain.md) §5.4）；上方全為負 GEX 時顯示負 Gamma 真空與局部體制（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5 第 4 點）。
+- **校正頻率**：統計日誌 `報價日高低點以全市場 15m K 線校正` 的出現比例。若 Tier 0 命中的標的幾乎每次都要校正，代表 IEX 高低點不適合直接給 `/x` 使用，可評估讓 `/x` 的日高低點改以全市場 K 線為主。
+- **異常 K 棒**：統計 `Session VWAP … 超出當日區間` 與 `15m K 棒一致性檢查未通過` 的頻率與標的分布。若集中在特定時段（例如開盤後第一小時），代表 yfinance 15m 資料延遲是系統性的，應評估改用串流的 `get_confirmed_15m_bar()`。
+
 ## 7. 連線與錯誤處理
 
 - 收到 `authenticated` 才視為已連線並送出訂閱。

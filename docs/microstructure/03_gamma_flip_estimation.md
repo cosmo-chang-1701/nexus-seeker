@@ -121,6 +121,12 @@ flowchart TD
    $$K^* = K_1 + \frac{0 - G_1}{G_2 - G_1}(K_2 - K_1),\quad \text{sign}(G_1) \ne \text{sign}(G_2),\ K^* \in [0.7\,\text{Spot}, 1.3\,\text{Spot}]$$
    分析中心在「⚙️ 體制判讀」加列「局部體制 (現價處)」，與全鏈體制相反時註明；閘門用的 flip 找不到交叉時，改列局部翻轉線與其方向（以上／以下轉負 Gamma）。刻意**另立函式**、不改 `estimate_symbol_gamma_flip()`：後者是右側／左側／做空進場與 Regime 分類器共用的門檻線，改動需先經 `calibration` 比對。
 
+   **後續觀察事項（閘門是否參考局部體制，決定前不得改動閘門）**：
+   - **第一步：先補記錄，不改行為**。前向蒐集目前只在 `regime_evaluation_log` 記錄 `gamma_flip`（單向定義）與全鏈 `net_gex`，沒有局部體制，無從驗證。應在 `evaluation_recorder.py` 的 `features_json` 加入 `analyze_local_gamma_regime()` 的 `local_gex`、`flip_strike`、`flip_side`，並補「加上記錄點後輸出逐位元不變」的測試（比照 `test_exit_tier_forward_collection.py`）。
+   - **分組比較**：累積後以 `calibration forward-report` 將 `ENTRY_RIGHT`／`ENTRY_LEFT`／`REGIME_CLASSIFIER` 紀錄分成「全鏈 LONG 且局部 SHORT」與「全鏈 LONG 且局部 LONG」兩組，比較事後逆向先觸及率與 ±k×ATR 路徑標註。
+   - **判讀準則**：每組 $n \ge 100$，且局部 SHORT 組的逆向先觸及率顯著較高（bootstrap CI 不重疊），才評估讓右側進場在局部負 Gamma 區降級或加嚴；否則維持 `estimate_symbol_gamma_flip()` 的單向定義。
+   - **改動時的連帶工作**：右側條件一的 `VWAP + 0.5×ATR₁₅ₘ` 替代門檻（見 §4 `Gamma Flip Fallback`）是建立在「無交叉點＝回傳 0」的語意上；若閘門改用雙向交叉，必須同步重新定義替代門檻的觸發條件。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

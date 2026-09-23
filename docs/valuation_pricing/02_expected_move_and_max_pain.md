@@ -163,6 +163,10 @@ EM 優先採跨式定價，顯示的 IV 卻來自 `yf.Ticker.info["impliedVolati
 $$\sigma_{\text{straddle}} = \frac{EM_{\text{weekly}}}{S\sqrt{7/365}}$$
 `LIVE_IV` 與 $\sigma_{\text{straddle}}$ 相差超過 `_IV_STRADDLE_SCALE_MISMATCH`（4 倍）即判為尺度錯誤，改用 $\sigma_{\text{straddle}}$ 並設 `iv_scale_corrected`；錯誤值不會寫入 DB 污染 IV Rank。4 倍門檻刻意寬於財報週 2~3 倍的正常事件溢價，實盤觀測到的錯誤值落在 4.6~13 倍。呈現層在 EM 旁並列 `straddle_implied_iv`，讓使用者驗算 EM 時不會誤判數量級。
 
+**後續觀察事項**：
+- **修正頻率**：統計日誌 `判定為尺度錯誤，改用跨式反推值` 的出現比例與標的分布。若大多數標的的盤中 IV 都被修正，代表 `yf.Ticker.info["impliedVolatility"]` 已不可用，應改以既有的加權 ATM IV（`fetch_and_calculate_iv_metrics()` 的第二條即時路徑）為主來源；屆時 `historical_iv` 的序列語意會改變，IV Rank 需標示暖機期。
+- **4 倍門檻**：若出現被修正、但人工核對後屬於正常事件溢價的案例（財報週的週度 IV 超過 30D IV 的 4 倍），需重新檢討 `_IV_STRADDLE_SCALE_MISMATCH`。
+
 ### 5.5 財報日與期限結構近月的相對位置
 「臨近財報」只代表 14 天內有財報；若財報日**晚於**期限結構近月到期日（`_select_term_expiries()` 選出的 5~20 DTE 合約），近月 IV 本就不含事件溢價，Contango 與財報警告並存並不矛盾。`earnings_after_near_term` 據此讓呈現層改寫文案；「快取波動率可能低估」只在 `STORED_IV`／`HV_PROXY` 時出現。期限結構 0.95~1.05 為刻意死區，標示為「持平 (Flat)」而非「正常」。
 
