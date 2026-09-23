@@ -1,7 +1,7 @@
 # 🌌 Nexus Seeker 量化架構與交易策略技術全景導讀
 
 > **版本**：v1.13.38 ｜ **系統核心**：Production Quant Engine ｜ **語言**：100% 繁體中文規範
-> **單一真實來源 (SSOT)**：本全景導讀與 32 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
+> **單一真實來源 (SSOT)**：本全景導讀與 33 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
 
 ---
 
@@ -9,7 +9,7 @@
 
 Nexus Seeker 是一套專為低延遲、高資訊密度美股期權風險控制與量化交易運作打造的生產級非同步架構。系統以做市商庫存對沖微觀結構為基石，深度融合 Black-Scholes-Merton 定價模型、高階希臘字母敏感度推導、事件驅動日曆防衛以及大語言模型（LLM）結構化推論輔助。
 
-本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **32 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
+本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **33 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
 
 ---
 
@@ -81,6 +81,7 @@ flowchart TB
         R04["DITM 深價內凸性防護與獲利鎖定階梯<br/>(04_ditm_convexity_profit_lock.md)"]
         R05["財務生存跑道分析與 Theta 現金流防禦<br/>(05_financial_runway_and_liquidity.md)"]
         R06["對沖績效 Brinson 歸因與動態 Tau 自我進化<br/>(06_brinson_performance_attribution.md)"]
+        R07["下行風險評估：Sortino 為主、MDD 與 VaR/CVaR 為輔<br/>(07_downside_risk_sortino_var_cvar.md)"]
     end
 
     %% 連線拓撲 (跨系統資料流)
@@ -167,6 +168,7 @@ flowchart TB
 | 19 | [`04_ditm_convexity_profit_lock.md`](risk_portfolio/04_ditm_convexity_profit_lock.md) | DITM 深價內凸性防護與獲利鎖定決策階梯 | 伊藤引理證明極限深價內 $\lim \Gamma = 0$ 凸性衰竭, DTE 7 天與 21 天轉倉/平倉狀態機 | `market_analysis/risk_engine.py` |
 | 20 | [`05_financial_runway_and_liquidity.md`](risk_portfolio/05_financial_runway_and_liquidity.md) | 財務生存跑道分析與 Theta 現金流防禦緩衝模型 | 淨月度現金消耗率, 核心生存跑道公式, $\text{Burn} \le 0$ 輸出 9999.0 天鐵血不破 | `market_analysis/pro_management.py` |
 | 21 | [`06_brinson_performance_attribution.md`](risk_portfolio/06_brinson_performance_attribution.md) | 對沖績效 Brinson 歸因分析與動態 Tau 自我進化閉環 | Alpha vs Hedge 正交分解, 對沖有效性公式, 7 日線性加權動態 Tau 自我調適閉環 | `market_analysis/hedging.py` |
+| 21b | [`07_downside_risk_sortino_var_cvar.md`](risk_portfolio/07_downside_risk_sortino_var_cvar.md) | 下行風險評估體系：索提諾比率為主判讀指標，MDD 與 VaR / CVaR 為輔；Sharpe 降為回測描述 | 全樣本分母下行差 (MAR = $R_f$), 歷史模擬 VaR95 / CVaR95 (樣本 $\ge 60$), 下行差對齊的減碼 B&H 對照組 $w = DD_{\text{策略}}/DD_{\text{B\&H}}$ | `market_analysis/downside_risk.py` |
 
 ---
 
@@ -298,7 +300,7 @@ graph LR
 
 ## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
 
-本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「32 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「33 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
 
 | 檔案 | 核心主題 |
 |:---|:---|

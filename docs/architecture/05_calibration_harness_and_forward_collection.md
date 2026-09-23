@@ -236,12 +236,12 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 1. `ENTRY_RIGHT_B` 且 `decision = 1` 的已標註紀錄 $\ge 100$ 筆、橫跨 $\ge 30$ 個交易日。該路徑刻意使用**獨立的 evaluator 名稱**（而非沿用 `ENTRY_RIGHT`）：`regime_evaluation_log` 的去重鍵為 `(symbol, evaluator, source, bar_ts)`，同名會讓同一根 K 棒的嚴格／放寬兩套判定互相覆蓋，A/B 分離統計即不可能。
 2. `ENTRY_RIGHT_B` 的期望值**高於同期 `ENTRY_RIGHT`**。只贏過零不夠——若放寬後的期望值低於嚴格版，代表多出來的那些進場機會是負向的。
-3. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature iii_b` 的「超額報酬 vs 減碼 B&H」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
+3. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature iii_b` 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
 
-**2026-09-19 A/B 結果：無法判定，條件 3 視為尚未成立。**
+**2026-09-19 A/B 結果：無法判定，條件 3 視為尚未成立。**（下表為舊判準的總波動對齊數字；2026-09-23 以 Sortino 判準重跑見 §5.12：aggressive Sortino $+0.01$、defensive $-0.02$，結論不變。）
 
 | 模式 | 右側開倉（基準 → III-B） | 超額報酬 vs 減碼 B&H | 獲利因子 |
 | :--- | :--- | :---: | :---: |
@@ -258,7 +258,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 1. 乾跑期累積 $\ge 20$ 個獨立加碼事件。**資料來源是 `rollover_audit_log`（`scenario = 'PYRAMID_ADD'`），不是 `regime_evaluation_log`**——本情境沒有接前向蒐集記錄器，`forward-report` 看不到它，也沒有自動標註。
 2. 計數以「同一部位的首次觸發」為單位，而非列數。乾跑時推播被抑制，`dynamic_state_patch` 依設計不會提交（`pyramid_count`／`last_pyramid_at` 永不前進），因此同一部位只要條件持續成立，每個交易日都會被每日去重鍵放行一次、重複入列；次數上限與冷卻在乾跑期**觀察不到**。
 3. 以人工比對每個事件之後 5 個交易日的走勢：加碼價位之後先觸及原停損（`ratchet_stop`）的比例，必須低於「風險預算 ÷ 停損距離」模型隱含的損益兩平勝率。條件二不變式保證原始部位無本金風險，所以要驗證的只有**新增那一筆**的期望值。
-4. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature pyramid` 兩個模式的「超額報酬 vs 減碼 B&H」差異皆不為負（2026-09-23：aggressive **+5.31 pp**／defensive +0.02 pp，加碼僅 4／2 次，屬個位數樣本，見 §5.12，不能單獨構成證據）。
+4. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature pyramid` 兩個模式的索提諾比率皆不下降，且「超額報酬 vs 減碼 B&H」差異皆不為負（2026-09-23：aggressive Sortino **1.13 → 1.87**、超額 **+5.45 pp**／defensive $+0.00$、+0.03 pp，加碼僅 4／2 次，屬個位數樣本，見 §5.12，不能單獨構成證據）。
 
 > 若 1~3 項因人工比對成本過高而難以持續，應先把 `PYRAMID_ADD` 接上 `evaluation_recorder`（比照 §5.12 的 `EXIT_*`），讓 03:30 labeler 自動標註，而不是降低門檻。
 
@@ -298,7 +298,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 - **回測結論**：
   - **穩健防禦型**：實現 +14.61% 總報酬率，最大回撤 13.76%（相較靜態持有基準 16.80% 降低 18.1%），已實現勝率 79.4%、獲利因子 2.43。
-  - **動能進攻型**：解鎖晴空萬里（ATH）阻力目標動態擴展（$\max(H_{60}, Spot + 3.0 \times ATR_{1D})$）、5% 現金儲備與 TP1 30% 平倉（保留 70% 衝刺破牆 TP2/TP3），總報酬提升至 **+16.64%**，最大回撤進一步降至 **11.81%**（回撤顯著降低 **29.7%**），夏普比率升至 **1.14**，已實現勝率達 **83.9%**，獲利因子暴增至 **3.77**。
+  - **動能進攻型**：解鎖晴空萬里（ATH）阻力目標動態擴展（$\max(H_{60}, Spot + 3.0 \times ATR_{1D})$）、5% 現金儲備與 TP1 30% 平倉（保留 70% 衝刺破牆 TP2/TP3），總報酬提升至 **+16.64%**，最大回撤進一步降至 **11.81%**（回撤顯著降低 **29.7%**），已實現勝率達 **83.9%**，獲利因子暴增至 **3.77**（此為引擎早期版本數字；2026-09-23 以現行程式碼與 Sortino 判準重跑：defensive Sortino 1.45、aggressive 1.13，B&H 1.73——**以 Sortino 判讀 defensive 優於 aggressive**，見 `docs/strategies/04` §2.10.1）。
 - **微觀結構驗證**：實證 2025-01-10 SL1 結構破位平倉 NVDA，成功避開隨後至 2025 年 4 月達 -37% 的深幅下殺；5 月中旬 GLD 動能衰退（PSQ=5）時資金順利輪動至突破標的 NVDA（PSQ=95, $\Delta\text{EV}=+6.5\%$），5 月下旬再次輪動回 GLD 鎖定總經牛市波段。
 - **報告產出**：全量指標與月度損益紀錄輸出於 `nexus_core/reports/report_2025_rollover.md`。
 
@@ -443,14 +443,16 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 開關全關時與改動前的引擎逐位元相同（施工時以 HEAD 版引擎對照兩種模式的逐日 NAV 與全部交易紀錄驗證）。
 每份回測報告另附「出場分層洗盤率」段落，是前向資料足量前的離線先行版（只有 SL1／SL2，沒有 SL3 主力對沖）。
 
-**2026-09-23 A/B 結果**（超額報酬 vs 減碼 B&H 的差異；括號內為該功能新增的觸發次數）：
+**2026-09-23 A/B 結果**（判讀依 Sortino 為主、超額報酬 vs 下行差對齊減碼 B&H、MDD／CVaR95 為輔；Sharpe、Calmar 不參與判讀——見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。基準線：aggressive Sortino 1.13、defensive 1.45；B&H 1.73。
 
-| 功能 | aggressive | defensive | 判讀 |
+| 功能 | aggressive：ΔSortino／Δ超額／ΔMDD／ΔCVaR95 | defensive：ΔSortino／Δ超額／ΔMDD／ΔCVaR95 | 判讀 |
 | :--- | :---: | :---: | :--- |
-| 1A TP1 趨勢豁免 | −0.05 pp（豁免 3 次） | −0.10 pp（豁免 3 次） | 個位數觸發，無法判定 |
-| 1B PYRAMID_ADD | **+5.31 pp**（加碼 4 次） | +0.02 pp（加碼 2 次） | 方向正向但仍是個位數觸發，無法背書；是前向觀察的第一優先 |
-| 3 逃頂三級階梯 | −1.99 pp（MDD −3.54 pp） | −0.94 pp（MDD −1.71 pp） | 代理過鬆：WATCH 全年 122–137 天成立，買了 13 次 Put、權利金淨損約 $4–5k；CRITICAL 從未觸發 |
-| 1A + 1B + 3 合併 | +1.57 pp | −1.60 pp | 由 1B 與 3 的交互作用主導 |
+| 1A TP1 趨勢豁免 | −0.01／−0.06 pp／0／0 | −0.02／−0.12 pp／+0.01 pp／0 | 個位數觸發，無法判定 |
+| 1B PYRAMID_ADD | **+0.74**／**+5.45 pp**／0／+0.02 pp（加碼 4 次） | +0.00／+0.03 pp／0／0（加碼 2 次） | aggressive + 1B 是**唯一在 Sortino 上超越 B&H 的組合**（1.87 > 1.73，超額 +1.01 pp）；仍是個位數觸發，是前向觀察的第一優先 |
+| 3 逃頂三級階梯 | **−0.92**／−2.39 pp／−3.54 pp／−0.63 pp | −0.05／+0.18 pp／−1.71 pp／−0.45 pp | 以截斷上行換取低回撤：MDD 與 CVaR 改善，但主指標 Sortino 下降；代理過鬆（WATCH 全年 122–137 天成立、權利金淨損約 $4–5k） |
+| 1A + 1B + 3 合併 | −0.08／+1.28 pp／−3.54 pp／−0.58 pp | −0.14／−0.84 pp／−1.71 pp／−0.21 pp | 由 1B 與 3 的交互作用主導；3 抵銷了 1B 的 Sortino 增益 |
+
+> 以舊判準（總波動對齊、Sharpe 參考）時，逃頂分級的「MDD −3.54 pp」曾被視為部分正面；在 Sortino 判準下它是本表最大的負向項，因為它主要砍掉的是上行。
 
 逃頂分級的負向結果主要反映**代理**的問題而非 production 設計：回測的負 Gamma 代理（SPY < SMA20）遠比 production 的
 `SHORT_GAMMA_CRITICAL` 寬鬆，而 Fear & Greed 恆不計分又讓「過熱」訊號缺席，逃頂評分在回測中退化成「回檔偵測」。

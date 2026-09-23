@@ -122,7 +122,7 @@ def generate_markdown_report(
         )
 
     if metrics.profit_factor > 1.0:
-        pf_comparison = f"淨獲利超越淨虧損 {(metrics.profit_factor - 1.0)*100:.0f}%"
+        pf_comparison = f"淨獲利超越淨虧損 {(metrics.profit_factor - 1.0) * 100:.0f}%"
     else:
         pf_comparison = f"獲利因子 {metrics.profit_factor:.2f}"
 
@@ -211,34 +211,49 @@ def generate_markdown_report(
 
 ## 1. 核心績效指標對比 (Performance Metrics vs Benchmark)
 
-| 績效度量指標 (Metrics) | 動態轉倉引擎 (Dynamic Rollover) | 靜態買入持有基準 (Buy & Hold 50/25/15/10) | 差異 / 優勢度量 (Alpha Edge) |
+判讀指標依重要性排序：**索提諾比率為主**，最大回撤與 VaR / CVaR 為輔（定義見
+`market_analysis/downside_risk.py`；MAR = 無風險利率 4.5%）。
+
+| 判讀指標 (Metrics) | 動態轉倉引擎 (Dynamic Rollover) | 靜態買入持有基準 (Buy & Hold 50/25/15/10) | 差異 |
 | :--- | :---: | :---: | :---: |
-| **最終帳戶淨值 (Final NAV)** | **${nav_end:,.2f}** | **${bench_end:,.2f}** | 穩健絕對增益 |
-| **全年度總報酬率 (Total Return)** | **{metrics.total_return*100:+.2f}%** | **{metrics.benchmark_total_return*100:+.2f}%** | 超額 Alpha 捕捉 |
-| **複合年化報酬率 (CAGR)** | **{metrics.cagr*100:+.2f}%** | **{metrics.benchmark_cagr*100:+.2f}%** | 年化穩健成長 |
-| **最大回撤 (Max Drawdown, MDD)** | **{metrics.max_drawdown*100:.2f}%** | **{metrics.benchmark_max_drawdown*100:.2f}%** | **回撤降低 {mdd_reduction:.1f}%** 🛡️ |
-| **夏普比率 (Sharpe Ratio, Rf=4.5%)** | **{metrics.sharpe_ratio:.2f}** | **{metrics.benchmark_sharpe:.2f}** | 風險調整後收益 |
-| **索提諾比率 (Sortino Ratio)** | **{metrics.sortino_ratio:.2f}** | **{metrics.benchmark_sortino:.2f}** | 下行風險防禦 |
-| **卡瑪比率 (Calmar Ratio, CAGR/MDD)** | **{metrics.calmar_ratio:.2f}** | **{metrics.benchmark_calmar:.2f}** | 回撤抗風險效率 |
-| **年化波動率 (Annualized Volatility)** | **{metrics.annualized_volatility*100:.2f}%** | **{metrics.benchmark_volatility*100:.2f}%** | 波動性顯著低於大盤 |
-| **總交易次數 (Total Trades)** | **{metrics.total_trades} 筆** | 0 筆 (靜態持有) | 機構級主動倉位調度 |
-| **已實現勝率 (Win Rate)** | **{metrics.win_rate*100:.1f}%** | N/A | 高勝率階梯出場護航 |
-| **獲利因子 (Profit Factor)** | **{metrics.profit_factor:.2f}** | N/A | {pf_comparison} |
+| **索提諾比率 (Sortino Ratio, MAR=4.5%)** | **{metrics.sortino_ratio:.2f}** | **{metrics.benchmark_sortino:.2f}** | {metrics.sortino_ratio - metrics.benchmark_sortino:+.2f} |
+| **最大回撤 (Max Drawdown, MDD)** | **{metrics.max_drawdown * 100:.2f}%** | **{metrics.benchmark_max_drawdown * 100:.2f}%** | 回撤降低 {mdd_reduction:.1f}% |
+| **1 日 VaR95** | **{metrics.var_95 * 100:.2f}%** | **{metrics.benchmark_var_95 * 100:.2f}%** | {(metrics.var_95 - metrics.benchmark_var_95) * 100:+.2f} pp |
+| **1 日 CVaR95 (Expected Shortfall)** | **{metrics.cvar_95 * 100:.2f}%** | **{metrics.benchmark_cvar_95 * 100:.2f}%** | {(metrics.cvar_95 - metrics.benchmark_cvar_95) * 100:+.2f} pp |
+| 年化下行差 (MAR=4.5%) | {metrics.annualized_downside_deviation * 100:.2f}% | {metrics.benchmark_downside_deviation * 100:.2f}% | |
+| 最終帳戶淨值 (Final NAV) | ${nav_end:,.2f} | ${bench_end:,.2f} | |
+| 全年度總報酬率 (Total Return) | {metrics.total_return * 100:+.2f}% | {metrics.benchmark_total_return * 100:+.2f}% | |
+| 複合年化報酬率 (CAGR) | {metrics.cagr * 100:+.2f}% | {metrics.benchmark_cagr * 100:+.2f}% | |
 
 ### 1.1 減碼 Buy & Hold 對照組 (首要 KPI)
 
-裸 B&H 對照會同時誤判「單純減碼」與「單純加槓桿」。本組以年化波動比推回有效曝險
-w = (策略年化波動 / B&H 年化波動)，對照組為 w x B&H + (1-w) x 無風險利率(4.5%)，
-回答的是**這套引擎是否創造 alpha，還是只是在降低曝險**。
+裸 B&H 對照會同時誤判「單純減碼」與「單純加槓桿」。本組以**下行差比**推回有效曝險
+w = (策略下行差 / B&H 下行差)，對照組為 w x B&H + (1-w) x 無風險利率(4.5%)，
+與策略承擔相同的 Sortino 分母，回答的是**這套引擎是否創造 alpha，還是只是在降低曝險**。
 
 | 對照度量 | 數值 |
 | :--- | :---: |
-| 有效曝險 $w$ (年化波動比) | **{metrics.scaled_benchmark_weight*100:.1f}%** |
-| 減碼 B&H 總報酬 | **{metrics.scaled_benchmark_total_return*100:+.2f}%** |
-| 減碼 B&H 最大回撤 (線性縮放估計) | **{metrics.scaled_benchmark_max_drawdown*100:.2f}%** |
-| **超額報酬 vs 減碼 B&H** | **{metrics.excess_return_vs_scaled*100:+.2f} pp** |
+| 有效曝險 $w$ (下行差比) | **{metrics.scaled_benchmark_weight * 100:.1f}%** |
+| 減碼 B&H 總報酬 | **{metrics.scaled_benchmark_total_return * 100:+.2f}%** |
+| 減碼 B&H 最大回撤 (線性縮放估計) | **{metrics.scaled_benchmark_max_drawdown * 100:.2f}%** |
+| **超額報酬 vs 減碼 B&H** | **{metrics.excess_return_vs_scaled * 100:+.2f} pp** |
 
 > 此列為負，代表引擎的全部「優勢」都來自降低曝險，而非選時或選股。
+
+### 1.2 描述性指標（不作判讀依據）
+
+夏普比率對上下行波動一視同仁，會把「砍掉獲利部位」誤判為風險改善；卡瑪比率只看單一最深回撤；
+勝率是低賺賠比的副產品。以下僅供描述，**不得作為判讀或優化目標**。
+
+| 描述性指標 | 動態轉倉引擎 | Buy & Hold |
+| :--- | :---: | :---: |
+| 夏普比率 (Sharpe, Rf=4.5%) | {metrics.sharpe_ratio:.2f} | {metrics.benchmark_sharpe:.2f} |
+| 卡瑪比率 (Calmar, CAGR/MDD) | {metrics.calmar_ratio:.2f} | {metrics.benchmark_calmar:.2f} |
+| 年化波動率 | {metrics.annualized_volatility * 100:.2f}% | {metrics.benchmark_volatility * 100:.2f}% |
+| 超額報酬 vs 總波動對齊減碼 B&H (w={metrics.vol_scaled_benchmark_weight * 100:.1f}%) | {metrics.excess_return_vs_vol_scaled * 100:+.2f} pp | |
+| 總交易次數 | {metrics.total_trades} 筆 | 0 筆 |
+| 已實現勝率 | {metrics.win_rate * 100:.1f}% | N/A |
+| 獲利因子 | {metrics.profit_factor:.2f} ({pf_comparison}) | N/A |
 
 ---
 
@@ -262,7 +277,7 @@ w = (策略年化波動 / B&H 年化波動)，對照組為 w x B&H + (1-w) x 無
 
 ### 4.1 情境三: 微觀結構雙軌防洗盤 (SL1 成功阻斷 NVDA 崩盤套牢)
 - **2025-01-10**: NVDA 於開盤後震盪跌破底牆防守線 (`$135.27 < $135.65`)，觸發 **SL1 結構失效**，強制 100% 平倉。
-- **風控價值**: 隨後 NVDA 於 2025 年 4 月一路重挫至 **$86.40 (跌幅高達 -37%)**。SL1 的果斷清倉徹底規避了後續接近 $50 美元的暴跌，保住了投資組合初始本金，使系統全年在經歷多次極端下殺時，**最大回撤嚴格控制在 {metrics.max_drawdown*100:.2f}% (相較基準的 {metrics.benchmark_max_drawdown*100:.2f}% 降低 {mdd_reduction:.1f}%)**。
+- **風控價值**: 隨後 NVDA 於 2025 年 4 月一路重挫至 **$86.40 (跌幅高達 -37%)**。SL1 的果斷清倉徹底規避了後續接近 $50 美元的暴跌，保住了投資組合初始本金，使系統全年在經歷多次極端下殺時，**最大回撤嚴格控制在 {metrics.max_drawdown * 100:.2f}% (相較基準的 {metrics.benchmark_max_drawdown * 100:.2f}% 降低 {mdd_reduction:.1f}%)**。
 
 ### 4.2 情境二: 機會成本轉倉 (NVDA ↔ GLD 跨資產動能輪動)
 - **2025-05-13**: GLD 出現動能衰竭 (PSQ=5) 同時 NVDA 形成放量突破 (PSQ=95, ΔEV=+6.5%)，順利執行機會成本轉倉買入 NVDA。
@@ -424,9 +439,17 @@ def _run_ab_compare(args: argparse.Namespace) -> None:
 
 | 指標 | 基準線 ({feature_name} 關閉) | {feature_name} 啟用 | 差異 |
 | :--- | :---: | :---: | :---: |
-| 總報酬率 | {base_m.total_return * 100:+.2f}% | {b_m.total_return * 100:+.2f}% | {_delta(base_m.total_return, b_m.total_return)} |
-| **超額報酬 vs 減碼 B&H** | **{base_m.excess_return_vs_scaled * 100:+.2f} pp** | **{b_m.excess_return_vs_scaled * 100:+.2f} pp** | {_delta(base_m.excess_return_vs_scaled, b_m.excess_return_vs_scaled)} |
+| **索提諾比率 (主)** | **{base_m.sortino_ratio:.2f}** | **{b_m.sortino_ratio:.2f}** | {b_m.sortino_ratio - base_m.sortino_ratio:+.2f} |
+| **超額報酬 vs 減碼 B&H (下行差對齊)** | **{base_m.excess_return_vs_scaled * 100:+.2f} pp** | **{b_m.excess_return_vs_scaled * 100:+.2f} pp** | {_delta(base_m.excess_return_vs_scaled, b_m.excess_return_vs_scaled)} |
 | 最大回撤 | {base_m.max_drawdown * 100:.2f}% | {b_m.max_drawdown * 100:.2f}% | {_delta(base_m.max_drawdown, b_m.max_drawdown)} |
+| 1 日 CVaR95 | {base_m.cvar_95 * 100:.2f}% | {b_m.cvar_95 * 100:.2f}% | {_delta(base_m.cvar_95, b_m.cvar_95)} |
+| 1 日 VaR95 | {base_m.var_95 * 100:.2f}% | {b_m.var_95 * 100:.2f}% | {_delta(base_m.var_95, b_m.var_95)} |
+| 總報酬率 | {base_m.total_return * 100:+.2f}% | {b_m.total_return * 100:+.2f}% | {_delta(base_m.total_return, b_m.total_return)} |
+
+描述性指標（不作判讀）：
+
+| 指標 | 基準線 ({feature_name} 關閉) | {feature_name} 啟用 | 差異 |
+| :--- | :---: | :---: | :---: |
 | 夏普比率 | {base_m.sharpe_ratio:.2f} | {b_m.sharpe_ratio:.2f} | {b_m.sharpe_ratio - base_m.sharpe_ratio:+.2f} |
 | 卡瑪比率 | {base_m.calmar_ratio:.2f} | {b_m.calmar_ratio:.2f} | {b_m.calmar_ratio - base_m.calmar_ratio:+.2f} |
 | 年化波動 | {base_m.annualized_volatility * 100:.2f}% | {b_m.annualized_volatility * 100:.2f}% | {_delta(base_m.annualized_volatility, b_m.annualized_volatility)} |
@@ -451,10 +474,11 @@ def _run_ab_compare(args: argparse.Namespace) -> None:
 
 _III_B_CRITERIA = """## 放行判準 (handoff.md §4.4 / docs/architecture/05 §5.8)
 
-1. **「超額報酬 vs 減碼 B&H」該列的差異必須為正。** 總報酬上升但這一列下降，代表
+1. **索提諾比率不得下降，且「超額報酬 vs 減碼 B&H」該列的差異必須為正。** 總報酬上升但這一列下降，代表
    III-B 只是把曝險加回去，沒有創造 alpha——那用調高 `max_satellite_budget_pct`
    就能達成，不需要一條新的進場路徑。
-2. 勝率下降是可接受的（高勝率本來就不是 KPI，見 §6.1）；獲利因子與卡瑪下降則不是。
+2. 勝率下降是可接受的（高勝率本來就不是 KPI，見 §6.1）；最大回撤與 CVaR95 惡化則不是。
+   夏普與卡瑪只作描述，不參與放行判斷。
 3. **先看上方「情境觸發次數」，再看本表。** 本回測的衛星進場機會在結構上就極少
    （只有 2 個衛星標的，且只在「該標的目前無多頭部位 + 現金高於儲備」時才評估開倉），
    2025 全年右側開倉合計僅個位數。III-B 觸發次數若是個位數，本表的任何差異都在
@@ -469,9 +493,10 @@ _III_B_CRITERIA = """## 放行判準 (handoff.md §4.4 / docs/architecture/05 §
 
 _GENERIC_CRITERIA = """## 判讀準則 (handoff.md §6.1 / §6.3)
 
-1. **「超額報酬 vs 減碼 B&H」該列的差異必須為正**，否則 {feature_name} 只是在改變
-   曝險，沒有創造 alpha。
-2. 勝率不是 KPI；看獲利因子、卡瑪與最大回撤是否同步改善或至少不惡化。
+1. **索提諾比率為主判讀指標，不得下降；「超額報酬 vs 減碼 B&H」該列的差異必須為正**，
+   否則 {feature_name} 只是在改變曝險，沒有創造 alpha。
+2. 勝率不是 KPI；看最大回撤與 CVaR95 是否同步改善或至少不惡化。夏普、卡瑪只作描述，
+   不參與判讀（夏普會把砍掉上行波動誤判為風險改善）。
 3. **先看「情境觸發次數」**：新增的觸發若是個位數，本表的差異在雜訊範圍內，
    結論只能是「本回測無法判定」，不可用來背書也不可用來否決。
 4. 本回測以價格代理 GEX 牆、Net GEX 與逃頂評分（Fear & Greed、FedWatch 恆不計分），
@@ -603,13 +628,19 @@ def main() -> None:
         f"  年化報酬率 CAGR  : {metrics.cagr * 100:+.2f}%  (基準 Buy & Hold: {metrics.benchmark_cagr * 100:+.2f}%)"
     )
     print(
-        f"  最大回撤 MDD     : {metrics.max_drawdown * 100:.2f}%   (基準 Buy & Hold: {metrics.benchmark_max_drawdown * 100:.2f}%) -> 🛡️ 回撤降低 {mdd_reduction:.1f}%"
+        f"  索提諾 Sortino   : {metrics.sortino_ratio:.2f}   (基準 Buy & Hold: {metrics.benchmark_sortino:.2f})  ← 主判讀指標"
     )
     print(
-        f"  夏普比率 Sharpe  : {metrics.sharpe_ratio:.2f}   (基準 Buy & Hold: {metrics.benchmark_sharpe:.2f})"
+        f"  最大回撤 MDD     : {metrics.max_drawdown * 100:.2f}%   (基準 Buy & Hold: {metrics.benchmark_max_drawdown * 100:.2f}%) -> 回撤降低 {mdd_reduction:.1f}%"
     )
     print(
-        f"  卡瑪比率 Calmar  : {metrics.calmar_ratio:.2f}   (基準 Buy & Hold: {metrics.benchmark_calmar:.2f})"
+        f"  1 日 CVaR95      : {metrics.cvar_95 * 100:.2f}%   (基準 Buy & Hold: {metrics.benchmark_cvar_95 * 100:.2f}%)"
+    )
+    print(
+        f"  超額 vs 減碼 B&H : {metrics.excess_return_vs_scaled * 100:+.2f} pp (下行差對齊 w={metrics.scaled_benchmark_weight * 100:.1f}%)"
+    )
+    print(
+        f"  [描述] Sharpe {metrics.sharpe_ratio:.2f} / Calmar {metrics.calmar_ratio:.2f}（不作判讀）"
     )
     print(
         f"  總交易筆數       : {metrics.total_trades} 筆 (已實現勝率: {metrics.win_rate * 100:.1f}%)"
