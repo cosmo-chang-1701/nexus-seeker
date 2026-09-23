@@ -156,6 +156,11 @@ flowchart TD
 5. **重錨失敗時的強制揭露**：
    重錨歸 $0.0$ 後，動態空間門檻的 $\text{Risk}$ 項會被自 $\max()$ 中剔除並標記 `is_degraded`。分析中心的 GEX 空間欄位**一律**輸出該降級原因，不限於「判定不利」時——空間充足的結論若建立在降級門檻上，靜默通過等於讓使用者誤以為那是完整數據下的判定（見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md) §5）。
 
+6. **CallWall 重錨失敗 = 負 Gamma 真空（呈現層）**：
+   現價已突破 edge 回傳的 CallWall、且 `_scan_resistance_wall_above_spot()` 在現價上方找不到任何通過薄牆門檻的正淨 GEX 節點時，代表上方全為負 Gamma。分析中心改顯示「上方無正 Gamma 牆（負 Gamma 真空）」並註明原 CallWall 已被突破，不再印出低於現價的舊牆加「數據異常」——那不是資料錯誤，是市場狀態。
+7. **PutWall 與淨 GEX 不同源的揭露（呈現層）**：
+   edge 的 PutWall 定義為 $\arg\max_{K<\text{Spot}} \text{PutGamma}(K)$（**只看 Put 端**），熱力圖與 `_scan_gex_walls()` 使用的是**淨** GEX。當 PutWall 履約價的淨 GEX $< 0$ 時，做市商在該處需跟著賣現貨避險（助跌），分析中心會揭露此矛盾，並另列 `_scan_gex_walls()` 的最近淨 GEX 正支撐（該支撐較 PutWall 更貼近現價時亦列出）。⚠️ 這是**僅限呈現層**的揭露：所有進場／停損閘門仍以 edge PutWall 為準，統一定義需先經 `calibration` 比對，避免 edge `gex_snapshot_history` 的校準序列在中途改變語意。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

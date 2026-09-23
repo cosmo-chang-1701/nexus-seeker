@@ -116,12 +116,18 @@ flowchart TD
 3. **資料解析例外保護**：
    若履約價或 GEX 曝險含有非法字元或為空字典，函式內部透過 `try-except` 捕獲並安全回傳 `0.0`，保證背景排程的穩健運行。
 
+4. **局部 Gamma 體制（呈現層，雙向交叉）**：
+   `estimate_symbol_gamma_flip()` 只偵測由負轉正的交叉，對「下方正 Gamma、上方負 Gamma」的鏈型一律回傳 `0.0`，而全鏈 Net GEX 為正時體制標籤仍顯示 LONG_GAMMA——現價其實已落入負 Gamma 區。`analyze_local_gamma_regime()` 以相鄰履約價線性內插求現價處淨 GEX $G(\text{Spot})$，並雙向搜尋離現價最近的零交叉：
+   $$K^* = K_1 + \frac{0 - G_1}{G_2 - G_1}(K_2 - K_1),\quad \text{sign}(G_1) \ne \text{sign}(G_2),\ K^* \in [0.7\,\text{Spot}, 1.3\,\text{Spot}]$$
+   分析中心在「⚙️ 體制判讀」加列「局部體制 (現價處)」，與全鏈體制相反時註明；閘門用的 flip 找不到交叉時，改列局部翻轉線與其方向（以上／以下轉負 Gamma）。刻意**另立函式**、不改 `estimate_symbol_gamma_flip()`：後者是右側／左側／做空進場與 Regime 分類器共用的門檻線，改動需先經 `calibration` 比對。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`：
   - 核心估算函式：`estimate_symbol_gamma_flip()`（第 768–849 行）
+  - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
   - 右側突破引用與 Fallback 替代：`_confirm_entry_condition1_breakout()`（第 55–255 行）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：

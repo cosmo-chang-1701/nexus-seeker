@@ -1,8 +1,9 @@
 import httpx
 import logging
+import math
 import time
 import config
-from typing import Dict, Optional
+from typing import Dict, NamedTuple, Optional
 
 # 薄牆門檻定義見 gex_wall_depth.py（stdlib 葉模組，避免循環匯入）；此處重新匯出
 # 以維持既有匯入路徑 (`from market_analysis.index_microstructure import ...`)。
@@ -880,6 +881,65 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     if spot > 0:
         return min(candidates, key=lambda k: abs(k - spot))
     return candidates[0]
+
+
+class LocalGammaRegime(NamedTuple):
+    """現價附近的局部 Gamma 體制（`analyze_local_gamma_regime` 的輸出）。"""
+
+    local_gex: float  # 現價處的淨 GEX（相鄰履約價線性內插）
+    is_short_gamma: bool
+    flip_strike: float  # 離現價最近的零交叉（內插值）；找不到為 0.0
+    flip_side: str  # "SHORT_ABOVE"：交叉點以上為負 Gamma；"SHORT_BELOW"；或 ""
+
+
+def analyze_local_gamma_regime(
+    gex_profile: dict, spot: float
+) -> Optional[LocalGammaRegime]:
+    """現價附近的局部 Gamma 體制與最近零交叉（雙向）。
+
+    `estimate_symbol_gamma_flip()` 只偵測「由負轉正」的交叉點、並以全鏈總和限制
+    方向，是給進場閘門用的「站上即受做市商穩定」門檻線；對「下方正 Gamma、上方
+    負 Gamma」的鏈型（現價上方已全數進入負 Gamma 區）它一律回傳 0。本函式補上
+    呈現層需要的另一個問題：**現價此刻落在正還是負 Gamma 區、最近的翻轉線在哪**。
+    刻意另立函式、不改動 `estimate_symbol_gamma_flip()`：後者的定義被十餘個進場／
+    停損閘門共用，改動需先經 calibration 比對。
+
+    交叉點以相鄰履約價 (K₁, G₁)、(K₂, G₂) 線性內插：
+        K* = K₁ + (0 − G₁)·(K₂ − K₁)/(G₂ − G₁)
+    只考慮 spot ± 30% 內的交叉。profile 無效或現價超出履約價範圍時回傳 None。
+    """
+    if not gex_profile or spot <= 0:
+        return None
+    try:
+        points = sorted((float(k), float(v)) for k, v in gex_profile.items())
+    except (ValueError, TypeError):
+        return None
+    points = [(k, v) for k, v in points if math.isfinite(k) and math.isfinite(v)]
+    if len(points) < 2 or not (points[0][0] <= spot <= points[-1][0]):
+        return None
+
+    local_gex = points[0][1]
+    for (k1, g1), (k2, g2) in zip(points, points[1:]):
+        if k1 <= spot <= k2:
+            local_gex = g1 if k2 == k1 else g1 + (g2 - g1) * (spot - k1) / (k2 - k1)
+            break
+
+    best_strike = 0.0
+    best_side = ""
+    for (k1, g1), (k2, g2) in zip(points, points[1:]):
+        if (g1 > 0 > g2) or (g1 < 0 < g2):
+            k_star = k1 + (0.0 - g1) * (k2 - k1) / (g2 - g1)
+            if not (spot * 0.7 <= k_star <= spot * 1.3):
+                continue
+            if best_strike == 0.0 or abs(k_star - spot) < abs(best_strike - spot):
+                best_strike = k_star
+                best_side = "SHORT_ABOVE" if g1 > 0 > g2 else "SHORT_BELOW"
+    return LocalGammaRegime(
+        local_gex=local_gex,
+        is_short_gamma=local_gex < 0,
+        flip_strike=best_strike,
+        flip_side=best_side,
+    )
 
 
 def evaluate_escape_window_regime(
