@@ -22,11 +22,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 19 個通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 20 個通知頻道預設值（預設全部開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 19
+    assert len(ALL_NOTIFICATION_KEYS) == 20
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = True
@@ -99,7 +99,7 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
 
 
 # 戰術預設情境模式 (all_on, all_off, focus, mute_intraday) 的完整驗證見
-# test_full_preset_assertions_all_keys（涵蓋全部 19 個 key 與全部 4 種情境）。
+# test_full_preset_assertions_all_keys（涵蓋全部 20 個 key 與全部 4 種情境）。
 
 
 @pytest.mark.asyncio
@@ -299,7 +299,7 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
 
 
 def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
-    """測試所有 19 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    """測試所有 20 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
     user_id = 888111
 
     # 1. all_on
@@ -333,6 +333,8 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     # NRO 期權掃描屬盤中 Alpha 雜訊；機器人啟停通知維持現行行為（開啟）
     assert s_focus["alpha_option_scan"] is False
     assert s_focus["system_lifecycle"] is True
+    # 投組下行風險屬帳戶生存等級的左尾防護，任何預設情境下皆維持開啟
+    assert s_focus["risk_portfolio_downside"] is True
 
     # 4. mute_intraday
     s_mute = apply_preset_settings(user_id, "mute_intraday")
@@ -358,6 +360,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
     assert s_mute["advisory_core_levels"] is True
     assert s_mute["alpha_option_scan"] is False
     assert s_mute["system_lifecycle"] is True
+    assert s_mute["risk_portfolio_downside"] is True
 
 
 def test_v070_backfills_heartbeat_symbol_deep_from_watchlist(db_conn: Any) -> None:

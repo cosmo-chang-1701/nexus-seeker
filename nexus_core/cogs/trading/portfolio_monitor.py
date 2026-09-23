@@ -1557,6 +1557,20 @@ class PortfolioMonitorCog(commands.Cog):
             except Exception as e:
                 logger.error(f"動態轉倉盤中審計錯誤: {e}")
 
+            # 📉 投組下行風險盤中回撤檢查：沿用本輪雷達快取的即時價，搭配盤前 / 收盤
+            # 建好的報酬序列，不額外抓取任何歷史資料
+            try:
+                from services.downside_risk_service import (
+                    extract_live_prices,
+                    run_intraday_downside_checks,
+                )
+
+                await run_intraday_downside_checks(
+                    self.bot, extract_live_prices(radar_cache_map)
+                )
+            except Exception as e:
+                logger.error(f"投組下行風險盤中檢查錯誤: {e}")
+
         except Exception as e:
             logger.error(f"真實持倉風險審計錯誤: {e}")
         finally:
@@ -1696,7 +1710,24 @@ class PortfolioMonitorCog(commands.Cog):
                 stats = await GhostTrader.get_vtr_performance_stats(uid)
                 if stats["total_trades"] > 0:
                     user = await self.bot.fetch_user(uid)
-                    embed = build_vtr_stats_embed(user.display_name, stats)
+                    downside_fields = None
+                    try:
+                        from cogs.embed_builders.alert_embeds.downside_alerts import (
+                            create_downside_snapshot_fields,
+                        )
+                        from services.downside_risk_service import (
+                            get_downside_snapshots,
+                        )
+
+                        simulated, realized = await get_downside_snapshots(uid)
+                        downside_fields = create_downside_snapshot_fields(
+                            simulated, realized
+                        )
+                    except Exception as e:
+                        logger.warning(f"週報下行風險快照失敗 (uid={uid}): {e}")
+                    embed = build_vtr_stats_embed(
+                        user.display_name, stats, downside_fields=downside_fields
+                    )
                     await notify(self.bot, uid, "briefing_weekly_vtr", embed=embed)
                     logger.info(f"✅ 週報已發送給用戶 {uid}")
             except Exception as e:

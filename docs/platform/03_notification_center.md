@@ -20,7 +20,7 @@
 - 也整合了**自選股標籤系統**：允許使用者透過互動下拉選單與 Modal，為自選股資產附加自訂分類標籤（如 `TECH`、`CORE`，`ui/watchlist_tags.py`）。此標籤引擎也完整暴露於 `/list_watch` 指令輸出中，透過在地化的「🏷️ 原地編輯標籤」捷徑按鈕，實現自動重建並替換原始 Discord 視圖的無縫、類 SPA 編輯體驗。
 
 ### 2.2 通知偏好（`/notif_settings`）
-以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。完整整併為 **4 大戰術維度、19 個頻道**（遷移 `v061` + WTI 警示 + `defense_fundamental_thesis` + `alpha_price_volume_watch` + 自選標的進場顧問 `advisory_entry_signal` + B&H 持倉位階顧問 `advisory_core_levels` + 原本不受任何開關控制的 `system_lifecycle` 與 `alpha_option_scan`）。頻道的 key、分組、標籤、預設值與各預設情境的開關狀態只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生：
+以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。完整整併為 **4 大戰術維度、20 個頻道**（遷移 `v061` + WTI 警示 + `defense_fundamental_thesis` + `alpha_price_volume_watch` + 自選標的進場顧問 `advisory_entry_signal` + B&H 持倉位階顧問 `advisory_core_levels` + 原本不受任何開關控制的 `system_lifecycle` 與 `alpha_option_scan`）。頻道的 key、分組、標籤、預設值與各預設情境的開關狀態只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生：
 
 - **4 大戰術模組**：
   1. `briefings`（📋 定時戰報與覆盤）：`briefing_pre_market`、`briefing_post_market`、`briefing_weekly_vtr`、`system_lifecycle`（機器人啟動／關閉廣播，過去每次部署都會無條件私訊所有使用者）
@@ -29,10 +29,11 @@
      - `heartbeat_symbol_deep` → **30 分鐘個股深度戰場心跳**（`IntradayScanPipeline` → `create_watchlist_signal_embed`）
      - `advisory_entry_signal` → **自選標的進場顧問**：獨立於上述兩則心跳的第三條推播路徑，僅在進場六重鐵律通過時推播進場價／停損／目標。去重旗標鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（含 Regime：同日由 III-B 升級為 III 是更強的新訊號，值得再發一次）。
      - 兩則心跳是完全獨立的推播路徑（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。過去共用同一個 `heartbeat_watchlist` key，無法分別靜音，而標籤還誤寫成「30 分鐘」卻同時管著 15 分鐘那條。
-  3. `defense`（🛡️ 持倉風控與極端防禦）：`defense_portfolio_risk`、`defense_option_rollover`、`defense_margin_call`、`defense_fundamental_thesis`、`defense_macro_tail_risk`、`advisory_core_levels`
+  3. `defense`（🛡️ 持倉風控與極端防禦）：`defense_portfolio_risk`、`defense_option_rollover`、`defense_margin_call`、`defense_fundamental_thesis`、`defense_macro_tail_risk`、`advisory_core_levels`、`risk_portfolio_downside`
   4. `alpha`（🎯 Alpha 策略與情報）：`alpha_market_signals`、`alpha_option_scan`、`alpha_polymarket`、`alpha_wti_oil`、`alpha_price_volume_watch`
      - `alpha_option_scan` → 15 分鐘 NRO 期權掃描的執行決策、PowerSqueeze、期權掃描卡與 Re-hedge 建議（`cogs/trading/scan.py`）。過去這一整批推播完全不受任何開關控制；`focus`／`mute_intraday` 皆關閉此頻道。
      - 動態轉倉引擎的 **`SHORT_ENTRY` 做空進場訊號**走 `alpha_market_signals`，而非 `defense_option_rollover`：它是進場訊號、不是持倉防禦。`focus` 與 `mute_intraday` 預設關閉此頻道，做空系統校準前較不易打擾使用者；另受 `SHORT_ENTRY_DRY_RUN`（預設開啟，只寫稽核紀錄）控制。其餘動態轉倉情境維持 `defense_option_rollover`，保證金強制平倉維持 `defense_margin_call`。
+  - `risk_portfolio_downside`（`defense` 模組）→ **投組下行風險**：距一年高點回撤跨越 −10% / −15% / −20% 階梯（盤中與收盤檢查），或 1 日 CVaR95 超出 `risk_limit` 推導的預算 / 尾部體制轉換（收盤檢查）。帳戶生存等級的左尾防護，`focus` 與 `mute_intraday` 皆維持開啟。去重前綴 `downside_dd_`／`downside_cvar_`；推播未送達時武裝狀態不前進。詳見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)。
   - `advisory_core_levels`（`defense` 模組）→ **B&H 持倉位階顧問**：僅告知目標區與結構失效位階、不建議減碼／換股；去重旗標鍵為 `advisory_exit_{uid}_{SYMBOL}_{EXIT_TIER}_{YYYYMMDD}`。
   - 兩個頻道的推播路徑皆已上線（`intraday_pipeline/pipeline.py::_dispatch_entry_advisor_alert`、`cogs/trading/portfolio_monitor.py` 的轉倉派發）。兩個去重旗標前綴已登記於 `database/cache.py::_KV_CACHE_DEDUP_KEY_PREFIXES`（03:00 ET 清理白名單）。
 - **動態雙層架構與預設模式**：為提供簡潔不雜亂的使用者體驗：

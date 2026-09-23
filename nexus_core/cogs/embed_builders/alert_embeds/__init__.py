@@ -9,6 +9,7 @@
 - quote_and_risk_alerts.py：即時報價與持倉風險/警報（DITM 停利、Gamma 脆弱性、
   VTR 結算、情境警報、保證金、VIX 尾部風險等）
 - market_signal_alerts.py：WTI 原油與個股價量突破警報
+- downside_alerts.py：投組下行風險警報與 Sortino / MDD / CVaR 快照欄位
 """
 
 from cogs.embed_builders.alert_embeds.option_scan import (
@@ -37,6 +38,10 @@ from cogs.embed_builders.alert_embeds.quote_and_risk_alerts import (
     create_margin_api_alert_embed,
     create_vix_tail_risk_embed,
 )
+from cogs.embed_builders.alert_embeds.downside_alerts import (
+    create_downside_snapshot_fields,
+    create_portfolio_downside_alert_embed,
+)
 from cogs.embed_builders.alert_embeds.market_signal_alerts import (
     create_wti_alert_embed,
     create_price_volume_alert_embed,
@@ -63,4 +68,6 @@ __all__ = [
     "create_wti_alert_embed",
     "create_price_volume_alert_embed",
     "create_gamma_squeeze_alert_embed",
+    "create_downside_snapshot_fields",
+    "create_portfolio_downside_alert_embed",
 ]

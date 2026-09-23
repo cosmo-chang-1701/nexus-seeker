@@ -454,6 +454,7 @@ async def refresh_portfolio_greeks(
                     s_info["div_yield"],
                 )
 
+                trade_meta.delta = round(float(greeks["delta"]), 6)
                 trade_meta.weighted_delta = round(
                     greeks["delta"] * trade_meta.quantity * 100 * weight_factor, 4
                 )

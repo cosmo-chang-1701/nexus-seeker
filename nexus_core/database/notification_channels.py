@@ -40,6 +40,7 @@ NotificationKey = Literal[
     "alpha_polymarket",
     "alpha_wti_oil",
     "alpha_price_volume_watch",
+    "risk_portfolio_downside",
 ]
 
 ModuleKey = Literal["briefings", "telemetry", "defense", "alpha"]
@@ -234,6 +235,15 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "📊 個股 15 分鐘價量突破警報 (自訂目標價與放量倍數)",
         False,
         False,
+    ),
+    # 投組下行風險（回撤階梯 / CVaR 預算）：帳戶層級的左尾防護訊號，任何預設情境
+    # 下皆維持開啟（services/downside_risk_service.py）
+    NotificationChannel(
+        "risk_portfolio_downside",
+        "defense",
+        "📉 投組下行風險 (距高點回撤階梯 / CVaR 尾部風險超出預算)",
+        True,
+        True,
     ),
 )
 
