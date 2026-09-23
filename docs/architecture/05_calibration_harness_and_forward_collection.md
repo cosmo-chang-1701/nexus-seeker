@@ -283,6 +283,104 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 ---
 
+### 5.11 自選標的進場顧問 (`WATCHLIST_ADVISOR_DRY_RUN`) 上線觀察與判讀準則
+
+本節衡量的是**投遞品質**（觸發頻率是否在可接受範圍），不是引擎的決策品質；
+判讀原則沿用 §5.8 的不對稱性——往保守方向（不放行、收緊門檻）可只憑觀察期
+資料，往激進方向（放行推播）須先確認觸發頻率落在合理區間。
+
+**陷阱一：乾跑期的去重是結構性失效的。** 乾跑期間 `save_kv_cache` 從不執行
+$\Rightarrow$ `get_kv_cache` 永遠回 `None` $\Rightarrow$ 去重不會抑制任何東西
+（與乾跑閘門和去重檢查的先後順序無關）。因此原始紀錄是「鐵律通過次數」而非
+「會送出的 DM 數」。盤中 09:30–16:00 共 13 個 30 分鐘週期，一個成立一整天的
+setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會高估 4～13 倍**，必須
+依下方查詢 1 以 (symbol, 日期, evaluator) 離線去重後再判讀。
+
+**陷阱二：不要用 `docker logs` 當主要來源。** `docker-compose.yml` 的
+`max-size: "10m"` / `max-file: "3"`（總計 30MB）會在一週內把日誌輪替掉，撈到的
+可能只剩最後一兩天。**主要來源是 `regime_evaluation_log`**（見 §6），它是結構化
+的且附帶當下實際使用的牆體／ATR／條件遮罩，可直接診斷觸發原因。
+
+**主判準（去重後的實際 DM 總量，非鐵律通過次數）**：
+
+| 去重後 DM／週（全標的加總） | 判定 |
+| :--- | :--- |
+| $\le 5$ | **放行**（`WATCHLIST_ADVISOR_DRY_RUN` 改為 `false`） |
+| $5 \sim 15$ | 收緊後再觀察一週。優先收緊條件三的空間門檻，**不要動去重鍵** |
+| $> 15$ | **不放行** |
+
+錨定依據：2025 回測三檔標的全年僅觸發右側 3 次、III-B 0 次、左側 4 次，合計
+7 次 $\Rightarrow$ 2.33 次/檔/年，外推至 88 檔約 **3.9 則／週**。該回測未實作
+UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則/週的放行線
+已含餘裕。
+
+**次要指標**：單檔觸發頻率每檔每週 0–2 次（抓「單一標的天天觸發」的異常，
+非主判準，見 [`01_dual_watchlist_pipelines.md`](01_dual_watchlist_pipelines.md)
+§5.4）；訊號後 5 日前向報酬（`source='WATCHLIST_ADVISOR'` → `forward-report`，
+見下方時間軸）；通知關閉率（`advisory_entry_signal` 是否被使用者關掉）；每輪
+管線耗時（派發掛在 `for ticker in watchlist` 內逐檔序列評估，88 檔各自發動
+六重鐵律的多次網路往返，`_resolve_candidate_radar` 的 `Semaphore(3)` 在序列
+呼叫下拿不到併發效益，應遠低於 1800 秒）。
+
+**evaluator → Regime／策略對照表**（`record_gate_reason()` 不寫 `regime` 欄位，
+但 `evaluator` 是忠實代理）：
+
+| `evaluator` | 對應 Regime／策略 |
+| :--- | :--- |
+| `ENTRY_RIGHT` | `REGIME_III_RIGHT_MOMENTUM` / `RIGHT_SIDE` |
+| `ENTRY_RIGHT_B` | `REGIME_III_B_TREND_CONTINUATION` |
+| `ENTRY_LEFT` | `REGIME_I_LEFT_CATCH` / `LEFT_SIDE` |
+| `ENTRY_SHORT` | `REGIME_V_BREAKDOWN_CHASE` / `SHORT_SIDE` |
+| `REGIME_CLASSIFIER` | 僅分類，不代表鐵律通過，查詢須排除 |
+
+> ⚠️ 上述 evaluator 同時被 `PORTFOLIO_MONITOR`（持倉監控）與 `SYMBOL_VIEW`
+> （`/x` 手動檢核）寫入，下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，
+> 混在一起算會嚴重高估。
+
+```sql
+-- 1. 主判準：去重後的實際 DM 則數
+SELECT COUNT(*) AS dm_per_week FROM (
+  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator
+  FROM regime_evaluation_log
+  WHERE source = 'WATCHLIST_ADVISOR' AND decision = 1
+    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT')
+);
+
+-- 2. 次要：單檔排行（抓「單一標的天天觸發」的異常）
+SELECT symbol, COUNT(*) AS n FROM (
+  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator
+  FROM regime_evaluation_log
+  WHERE source = 'WATCHLIST_ADVISOR' AND decision = 1
+    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT')
+) GROUP BY symbol ORDER BY n DESC LIMIT 15;
+
+-- 3. 健全性：管線確實有在跑（decision=0 的拒絕紀錄應遠多於 decision=1）
+SELECT evaluator, decision, COUNT(*) FROM regime_evaluation_log
+WHERE source = 'WATCHLIST_ADVISOR' GROUP BY 1, 2 ORDER BY 1, 2;
+
+-- 4. 健全性：乾跑期絕不可燒去重旗標，本列必須為 0
+SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
+```
+
+**部署前必做（否則整週觀察空手而回）**：在 VPS 確認 `v075` 確實套用
+（`SELECT name FROM sqlite_master WHERE name LIKE 'regime_evaluation%';` 須印出
+`regime_evaluation_log` 與 `regime_evaluation_outcome` 兩張表），
+`ENABLE_REGIME_EVALUATION_LOG` 未被關閉，且 `/notif_settings` 的
+`advisory_entry_signal` 為開啟狀態——關閉時派發在第二道閘門就 `return`，連
+前向紀錄都不會寫。
+
+**一週後判讀不了前向報酬**：`regime_outcome_labeler`（03:30 ET）要等已走完
+5 個交易日才回填走勢標註，跑滿一週只有第 1～2 天的訊號會被標註；
+`forward_log.py` 的 `FORWARD_MIN_ROWS = 100` 會讓樣本不足 100 筆的分組只印
+「資料累積中」。**這不阻塞放行決策**——放行閘門本來就只看觸發頻率（上表）；
+前向報酬是後續調參與翻轉 `REGIME_III_B_DRY_RUN` 用的，需累積一個月以上才有
+統計意義。
+
+**上線閘門**：`pytest tests` 全綠 + 嚴格 mypy 全綠 + `verify_docs_integrity.py`
+全綠 + 乾跑滿一週後依上表主判準人工（Opus）判讀。
+
+---
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)

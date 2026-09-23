@@ -166,7 +166,7 @@ flowchart TD
 - **價位沿用單一定義**：停損 `compute_reference_stop()`（牆 ∓ 0.5×ATR₁₅ₘ，**不是**心跳的 `ANTI_WASHOUT_ATR_MULT=1.5`，見 §5 ATR 消歧義）、目標 `resolve_effective_target()`（公式 D）、做空價位 `build_short_entry_levels()`；缺資料時該欄位顯示 N/A，做空價位不合法則 fail-closed 不推播。
 - **去重與乾跑**：去重鍵 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`，Regime III-B 升級為 III 是新訊號、會再發一次；任何擋下（非 green、頻道關閉、鐵律未過、乾跑）**都不寫旗標**，否則正式開啟當天所有標的都被當日旗標鎖住。
 - **前向蒐集**：評估包在 `evaluation_source("WATCHLIST_ADVISOR")`，乾跑期間照常記錄，作為觀察期的資料來源。
-- **觀察指標**：進場觸發頻率應落在每檔自選標的每週 0–2 次；超過代表門檻過鬆，須先確認去重有效再判讀。
+- **觀察指標與放行判讀**：主判準是**去重後的實際 DM 總量**而非鐵律通過次數（乾跑期間去重結構性失效，直接計數會高估 4～13 倍）；單檔每週 0–2 次僅為次要的異常偵測指標。完整的 SQL 查詢、判定門檻（$\le 5$ 放行／$5\sim15$ 收緊／$>15$ 不放行）與部署前檢查清單見 [`05_calibration_harness_and_forward_collection.md`](05_calibration_harness_and_forward_collection.md) §5.11。
 
 ---
 

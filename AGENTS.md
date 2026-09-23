@@ -412,7 +412,7 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e NEXUS_DB_NAME=/app/.calibration_cache/snapshot.db nexus-seeker python -m calibration forward-report
 ```
 
-What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9.
+What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9; the analogous observation queries and pass/tighten/reject thresholds for flipping `WATCHLIST_ADVISOR_DRY_RUN` are in §5.11.
 
 Edge scraper tests:
 
