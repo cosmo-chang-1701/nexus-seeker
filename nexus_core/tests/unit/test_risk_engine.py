@@ -445,7 +445,7 @@ def test_optimize_position_risk_dormant_allows_short_but_rejects_seller() -> Non
         0.0, -1.0, 100000.0, 500.0, 0.2, "STO_PUT", macro_dormant, vix_spot=12.0
     )
     assert res_sto.suggested_contracts == 0
-    assert "VIX Dormant: STO 禁用" in res_sto.warnings
+    assert "VIX Dormant: STO 禁用（大盤 VIX < 15）" in res_sto.warnings
 
 
 def test_optimize_position_risk_low_pcr_haircut_only_for_long_buyers() -> None:

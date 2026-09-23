@@ -128,6 +128,7 @@ flowchart TD
 | `straddle_sigma_factor` | $\sqrt{\pi/2} \approx 1.2533$ | ATM Straddle（平均絕對離差）還原為 1-Sigma 預期波幅的係數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `_STRADDLE_EM_MIN_DTE` / `_STRADDLE_EM_TARGET_DTE` / `_STRADDLE_EM_MAX_DTE` | `2` / `7` / `14` 天 | 跨式到期日選擇範圍與目標：排除 0/1-DTE，取最接近一週者 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `weekly_days_baseline` | `7.0` 天 | 預期波幅時間標準化週基準天數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
+| `_IV_STRADDLE_SCALE_MISMATCH` | `4.0` 倍 | 即時 IV 與跨式反推 IV 相差超過此倍數判定為尺度錯誤，改用跨式反推值 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `near_dte_dev_limit` | `8.0%` | 0–1 DTE 末日合約偏離觸發磁吸的百分比門檻 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `far_dte_dev_limit` | `10.0%` | 2–14 DTE 次週合約正偏離觸發下行壓制的百分比門檻 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `min_volatility_floor` | `0.15` ($15.0\%$) | 所有預期波幅計算降級失敗時的年化波動率絕對底線 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
@@ -157,12 +158,20 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 ### 5.3 買賣價差過大與零成交量防護 (Wide Bid-Ask Spread Guard)
 若 ATM 期權無有效成交價且未提供 Bid/Ask 報價（`call_mid <= 0` 且 `put_mid <= 0`），系統自動跳過 Straddle 計算，平滑切換至 BSM 公式與歷史波動率降級管線，確保不拋出未捕捉異常。
 
+### 5.4 IV 與跨式 EM 尺度交叉驗證 (Scale Mismatch Guard)
+EM 優先採跨式定價，顯示的 IV 卻來自 `yf.Ticker.info["impliedVolatility"]`，兩者互不驗證時曾出現「IV 6.9%、EM ±12%」這種 10 倍斷層。`fetch_and_calculate_iv_metrics()` 於**寫入 `historical_iv` 之前**以同一個 $\sqrt{7/365}$ 換算反推跨式隱含 IV：
+$$\sigma_{\text{straddle}} = \frac{EM_{\text{weekly}}}{S\sqrt{7/365}}$$
+`LIVE_IV` 與 $\sigma_{\text{straddle}}$ 相差超過 `_IV_STRADDLE_SCALE_MISMATCH`（4 倍）即判為尺度錯誤，改用 $\sigma_{\text{straddle}}$ 並設 `iv_scale_corrected`；錯誤值不會寫入 DB 污染 IV Rank。4 倍門檻刻意寬於財報週 2~3 倍的正常事件溢價，實盤觀測到的錯誤值落在 4.6~13 倍。呈現層在 EM 旁並列 `straddle_implied_iv`，讓使用者驗算 EM 時不會誤判數量級。
+
+### 5.5 財報日與期限結構近月的相對位置
+「臨近財報」只代表 14 天內有財報；若財報日**晚於**期限結構近月到期日（`_select_term_expiries()` 選出的 5~20 DTE 合約），近月 IV 本就不含事件溢價，Contango 與財報警告並存並不矛盾。`earnings_after_near_term` 據此讓呈現層改寫文案；「快取波動率可能低估」只在 `STORED_IV`／`HV_PROXY` 時出現。期限結構 0.95~1.05 為刻意死區，標示為「持平 (Flat)」而非「正常」。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - **預期波幅雙軌計算引擎**:
-  - `nexus_core/market_analysis/sentiment/iv_metrics.py`: `_calculate_straddle_implied_em()`, `fetch_and_calculate_iv_metrics()`
+  - `nexus_core/market_analysis/sentiment/iv_metrics.py`: `_calculate_straddle_implied_em()`, `fetch_and_calculate_iv_metrics()`, `straddle_implied_annual_iv()`, `_select_term_expiries()`
 - **最大痛點最佳化與快取斷路器**:
   - `nexus_core/market_analysis/sentiment/max_pain.py`: `_calculate_max_pain_with_weights()`, `get_unified_max_pain()`, `_calculate_max_pain_raw()`
 - **多 DTE 重力過濾與終端雷達狀態整合**:
