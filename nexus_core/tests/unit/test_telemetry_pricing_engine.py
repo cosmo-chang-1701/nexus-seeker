@@ -321,3 +321,24 @@ async def test_uoa_macro_alignment_triggers_defensive_suppression(db_conn: Any):
     assert decision is not None
     assert decision.action == "SUPPRESSED"
     assert "機構籌碼鎖定事件週" in decision.system_instruction_directive
+
+
+def test_resolve_skew_percentile_pct_prefers_real_percentile() -> None:
+    """委託單遙測的 Skew 一律優先使用真實分位，分位缺失才退回絕對值換算。"""
+    from services.order_telemetry_service import resolve_skew_percentile_pct
+
+    # 真實分位優先：原始 Skew 6.0 (> 5) 但分位只有 40 → 40，不觸發尾端防禦
+    assert resolve_skew_percentile_pct({"skew": 6.0, "skew_percentile": 40.0}) == 40.0
+    # 低 Skew 標的的歷史高點：原始 Skew 3.0 (舊判定為中性) 但分位 97 → 97
+    assert resolve_skew_percentile_pct({"skew": 3.0, "skew_percentile": 97.0}) == 97.0
+    # 0~1% 是合法的最低分位，不得被放大
+    assert resolve_skew_percentile_pct({"skew": -1.0, "skew_percentile": 0.8}) == 0.8
+    # 分位缺失：退回改版前的絕對值換算
+    assert resolve_skew_percentile_pct({"skew": 6.0, "skew_percentile": None}) == 98.0
+    assert resolve_skew_percentile_pct({"skew": -3.0}) == 2.0
+    assert resolve_skew_percentile_pct({"skew": 1.0}) == 50.0
+    # 無任何資料：中性
+    assert resolve_skew_percentile_pct({"skew": None, "skew_percentile": None}) == 50.0
+    assert resolve_skew_percentile_pct(None) == 50.0
+    # 越界分位視為中性
+    assert resolve_skew_percentile_pct({"skew_percentile": 150.0}) == 50.0

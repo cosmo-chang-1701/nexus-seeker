@@ -8,6 +8,12 @@ between DynamicOrderModal.on_submit() and OrderUICog.add_order().
 import asyncio
 import logging
 from datetime import datetime
+from typing import Any
+
+from market_analysis.sentiment.skew_taxonomy import (
+    SKEW_NEUTRAL_PERCENTILE,
+    ensure_percentile_pct,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +61,38 @@ def resolve_holding_type_and_rows(
     if any((t[2] is not None) for t in trades):
         return "COMPLEX_OPTIONS", holding_map
     return "LEVERAGED_MARGIN", holding_map
+
+
+def resolve_skew_percentile_pct(skew_metrics: Any) -> float:
+    """把 `calculate_skew()` 的回傳值轉成遙測定價用的 Skew 百分位 (0~100)。
+
+    優先順序：
+    1. 真實分位 `skew_percentile`：該標的相對於自己歷史的位置 (日級規範母體，
+       樣本不足時為高頻回退池)，與對齊警報路徑使用同一個值。
+    2. 分位缺失 (樣本不足、抓取失敗) 時退回原始 Skew 絕對值的粗略換算：
+       > 5 個百分點視為 98、< -2 視為 2。這是改版前的判定方式，只作為後備，
+       避免資料缺失時比改版前更寬鬆。
+    3. 兩者皆無時回傳中性 50，不觸發尾端防禦。
+    """
+    if not isinstance(skew_metrics, dict):
+        return SKEW_NEUTRAL_PERCENTILE
+    pct = skew_metrics.get("skew_percentile")
+    if pct is not None:
+        try:
+            return ensure_percentile_pct(float(pct), "skew_percentile")
+        except (TypeError, ValueError):
+            pass
+    raw = skew_metrics.get("skew")
+    if raw is not None:
+        try:
+            skew = float(raw)
+        except (TypeError, ValueError):
+            return SKEW_NEUTRAL_PERCENTILE
+        if skew > 5.0:
+            return 98.0
+        if skew < -2.0:
+            return 2.0
+    return SKEW_NEUTRAL_PERCENTILE
 
 
 async def resolve_telemetry_pricing(
@@ -109,16 +147,12 @@ async def resolve_telemetry_pricing(
     except Exception as e:
         logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
 
-    # 3. Resolve skew (0~100 百分位量綱)
-    skew_val = 50.0
+    # 3. Resolve skew (0~100 百分位量綱，見 resolve_skew_percentile_pct)
+    skew_val = SKEW_NEUTRAL_PERCENTILE
     try:
-        skew_metrics = await SentimentEngine.calculate_skew(symbol)
-        if skew_metrics and "skew" in skew_metrics:
-            skew = float(skew_metrics["skew"])
-            if skew > 5.0:
-                skew_val = 98.0
-            elif skew < -2.0:
-                skew_val = 2.0
+        skew_val = resolve_skew_percentile_pct(
+            await SentimentEngine.calculate_skew(symbol)
+        )
     except Exception as e:
         logger.warning(f"Error calculating skew for {symbol}: {e}")
 
@@ -253,6 +287,18 @@ async def apply_telemetry_to_orders(
             holding_row = holding_map.get(symbol.upper(), {})
             holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
 
+            # Skew 改用真實分位；舊版寫死 98，使這條後備路徑每次都觸發尾端防禦
+            # (價格收斂 1.5%、數量打 75 折)。
+            fallback_skew_pct = SKEW_NEUTRAL_PERCENTILE
+            try:
+                from market_analysis.sentiment_engine import SentimentEngine
+
+                fallback_skew_pct = resolve_skew_percentile_pct(
+                    await SentimentEngine.calculate_skew(symbol)
+                )
+            except Exception as e:
+                logger.warning(f"Error calculating skew for {symbol}: {e}")
+
             try:
                 decision = await generate_alignment_decision(
                     user_id=user_id,
@@ -266,7 +312,7 @@ async def apply_telemetry_to_orders(
                     iv_rank=0.50,
                     max_pain_price=100.0,
                     prev_max_pain=100.0,
-                    skew_percentile_pct=98.0,
+                    skew_percentile_pct=fallback_skew_pct,
                     put_call_ratio=1.0,
                     prev_close=float(
                         cache_price if cache_price > 0.0 else current_price
@@ -416,12 +462,7 @@ async def build_telemetry_alignment_items(
                 if iv_metrics and iv_metrics.iv_rank is not None
                 else None
             )
-            skew_per_for_decision = (
-                float(skew_per)
-                if skew_metrics
-                and (skew_per := skew_metrics.get("skew_percentile")) is not None
-                else 50.0
-            )
+            skew_per_for_decision = resolve_skew_percentile_pct(skew_metrics)
 
             decision = await generate_alignment_decision(
                 user_id=user_id,
