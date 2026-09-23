@@ -1447,3 +1447,88 @@ async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() ->
         # Release the remaining slots this test manually acquired.
         for _ in range(capacity - 1):
             sem.release()
+
+
+# ---------------------------------------------------------------------------
+# Alpaca 串流 Tier 0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_quote_uses_alpaca_stream_snapshot_when_available() -> None:
+    import services.market_data_service as mds
+    from services.alpaca_stream_service import get_stream_service, set_stream_service
+
+    snapshot = {"c": 101.0, "d": 1.0, "dp": 1.0, "h": 102.0, "l": 99.0,
+                "o": 100.0, "pc": 100.0, "t": int(time.time())}  # fmt: skip
+    fake = MagicMock()
+    fake.get_quote_snapshot.return_value = snapshot
+    original = get_stream_service()
+    mds.clear_quote_cache()
+    try:
+        set_stream_service(fake)
+        with patch(
+            "services.market_data_service._execute_api_call", new_callable=AsyncMock
+        ) as mock_exec_api:
+            res = await mds.get_quote("TIERZ")
+        assert res == snapshot
+        mock_exec_api.assert_not_called()
+    finally:
+        set_stream_service(original)
+        mds.clear_quote_cache()
+
+
+@pytest.mark.asyncio
+async def test_get_quote_falls_through_to_finnhub_when_stream_has_no_snapshot() -> None:
+    import services.market_data_service as mds
+    from services.alpaca_stream_service import get_stream_service, set_stream_service
+
+    fake = MagicMock()
+    fake.get_quote_snapshot.return_value = None
+    fresh = {"c": 50.0, "t": time.time() - 5}
+    original = get_stream_service()
+    mds.clear_quote_cache()
+    try:
+        set_stream_service(fake)
+        with (
+            patch(
+                "services.market_data_service.is_finnhub_rate_limited",
+                return_value=False,
+            ),
+            patch(
+                "services.market_data_service._execute_api_call",
+                new_callable=AsyncMock,
+                return_value=fresh,
+            ),
+            patch(
+                "services.market_data_service.quote.is_market_open", return_value=True
+            ),
+        ):
+            res = await mds.get_quote("TIERY")
+        assert res == fresh
+        fake.get_quote_snapshot.assert_called_once_with("TIERY")
+    finally:
+        set_stream_service(original)
+        mds.clear_quote_cache()
+
+
+@pytest.mark.asyncio
+async def test_get_quote_indices_never_consult_stream() -> None:
+    import services.market_data_service as mds
+    from services.alpaca_stream_service import get_stream_service, set_stream_service
+
+    fake = MagicMock()
+    original = get_stream_service()
+    mds.clear_quote_cache()
+    try:
+        set_stream_service(fake)
+        with patch(
+            "services.market_data_service.get_yfinance_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 20.0},
+        ):
+            await mds.get_quote("^VIX")
+        fake.get_quote_snapshot.assert_not_called()
+    finally:
+        set_stream_service(original)
+        mds.clear_quote_cache()

@@ -511,10 +511,13 @@ async def test_monitor_dispatches_and_dedups(mock_bot: Any, db_conn: Any) -> Non
 
     cog = PriceVolumeAlertMonitorCog(mock_bot)
 
-    with patch(
-        "cogs.trading.price_volume_alert_monitor.get_confirmed_15m_bar",
-        new_callable=AsyncMock,
-    ) as mock_get_bar, patch("database.is_notification_enabled", return_value=True):
+    with (
+        patch(
+            "cogs.trading.price_volume_alert_monitor.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+        ) as mock_get_bar,
+        patch("database.is_notification_enabled", return_value=True),
+    ):
         mock_get_bar.return_value = triggering_bar
 
         await cog._evaluate_price_volume_alerts()
@@ -545,10 +548,13 @@ async def test_monitor_skips_when_notification_disabled(
 
     cog = PriceVolumeAlertMonitorCog(mock_bot)
 
-    with patch(
-        "cogs.trading.price_volume_alert_monitor.get_confirmed_15m_bar",
-        new_callable=AsyncMock,
-    ) as mock_get_bar, patch("database.is_notification_enabled", return_value=False):
+    with (
+        patch(
+            "cogs.trading.price_volume_alert_monitor.get_confirmed_15m_bar",
+            new_callable=AsyncMock,
+        ) as mock_get_bar,
+        patch("database.is_notification_enabled", return_value=False),
+    ):
         mock_get_bar.return_value = triggering_bar
         await cog._evaluate_price_volume_alerts()
         mock_bot.queue_dm.assert_not_called()
@@ -604,3 +610,97 @@ def test_trim_to_confirmed_15m_bars_insufficient_bars_returns_none() -> None:
     """截斷後不足 20 根回看均量基準時回傳 None。"""
     df = _make_15m_df(last_bar_age_minutes=5.0, num_bars=21)
     assert trim_to_confirmed_15m_bars(df) is None
+
+
+# ============================================================================
+# Alpaca 串流資料來源分派 (影子模式 / live 模式)
+# ============================================================================
+
+
+def _stream_bar(symbol: str) -> Confirmed15mBar:
+    return Confirmed15mBar(
+        symbol=symbol,
+        bar_time=datetime(2026, 9, 22, 10, 0),
+        close=777.0,
+        volume=9000.0,
+        avg_volume=1000.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_shadow_mode_decides_with_yfinance_even_when_stream_has_bar() -> None:
+    df = _make_15m_df(last_bar_age_minutes=20)
+    with (
+        patch("config.ALPACA_PV_ALERT_LIVE", False),
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar_from_stream",
+            return_value=_stream_bar("AAPL"),
+        ),
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+    ):
+        mock_hist.return_value = df
+        bar = await get_confirmed_15m_bar("AAPL")
+    assert bar is not None
+    assert bar.close != 777.0
+    mock_hist.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_live_mode_uses_stream_for_large_cap_only() -> None:
+    df = _make_15m_df(last_bar_age_minutes=20)
+    with (
+        patch("config.ALPACA_PV_ALERT_LIVE", True),
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar_from_stream",
+            side_effect=lambda s: _stream_bar(s),
+        ),
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+    ):
+        mock_hist.return_value = df
+        large = await get_confirmed_15m_bar("AAPL")
+        small = await get_confirmed_15m_bar("SOFI")
+    assert large is not None and large.close == 777.0
+    assert small is not None and small.close != 777.0
+    mock_hist.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_live_mode_falls_back_to_yfinance_without_stream_bar() -> None:
+    df = _make_15m_df(last_bar_age_minutes=20)
+    with (
+        patch("config.ALPACA_PV_ALERT_LIVE", True),
+        patch(
+            "market_analysis.price_volume_alert.get_confirmed_15m_bar_from_stream",
+            return_value=None,
+        ),
+        patch(
+            "services.market_data_service.get_history_df", new_callable=AsyncMock
+        ) as mock_hist,
+    ):
+        mock_hist.return_value = df
+        bar = await get_confirmed_15m_bar("AAPL")
+    assert bar is not None and bar.close != 777.0
+
+
+def test_stream_bar_conversion_is_tz_naive_eastern() -> None:
+    from datetime import timezone
+
+    from market_analysis.price_volume_alert import get_confirmed_15m_bar_from_stream
+    from market_analysis.stream_bars import Bar15m
+
+    start = datetime(2026, 9, 22, 14, 0, tzinfo=timezone.utc)
+    fake = MagicMock()
+    fake.get_confirmed_15m_bar.return_value = (
+        Bar15m(start=start, open=1.0, high=2.0, low=0.5, close=1.5, volume=300.0),
+        100.0,
+    )
+    with patch("services.alpaca_stream_service.get_stream_service", return_value=fake):
+        bar = get_confirmed_15m_bar_from_stream("AAPL")
+    assert bar is not None
+    assert bar.bar_time == datetime(2026, 9, 22, 10, 0)
+    assert bar.bar_time.tzinfo is None
+    assert (bar.volume, bar.avg_volume, bar.close) == (300.0, 100.0, 1.5)

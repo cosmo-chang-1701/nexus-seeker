@@ -238,6 +238,17 @@ class NexusBot(commands.Bot):
             logger.error(f"❌ 建立 Polymarket 服務失敗: {e}")
 
         try:
+            from services.alpaca_stream_service import (
+                AlpacaStreamService,
+                set_stream_service,
+            )
+
+            self.alpaca_stream = AlpacaStreamService(self)
+            set_stream_service(self.alpaca_stream)
+        except Exception as e:
+            logger.error(f"❌ 建立 Alpaca 串流服務失敗: {e}")
+
+        try:
             synced = await self.tree.sync()
             logger.info(f"✅ 成功同步 {len(synced)} 個 Slash Commands")
         except Exception as e:
@@ -380,6 +391,12 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ 啟動 Polymarket 服務失敗: {e}")
 
+        try:
+            if hasattr(self, "alpaca_stream"):
+                self.alpaca_stream.start()
+        except Exception as e:
+            logger.error(f"❌ 啟動 Alpaca 串流服務失敗: {e}")
+
     def _stop_leader_services(self) -> None:
         if not self._leader_services_started:
             return
@@ -400,6 +417,12 @@ class NexusBot(commands.Bot):
         try:
             if hasattr(self, "polymarket_service"):
                 self.polymarket_service.stop()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "alpaca_stream"):
+                self.alpaca_stream.stop()
         except Exception:
             pass
 

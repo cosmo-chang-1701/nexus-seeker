@@ -122,6 +122,34 @@ ENABLE_REGIME_EVALUATION_LOG = (
     get_env_or_secret("ENABLE_REGIME_EVALUATION_LOG", "true").lower() == "true"
 )
 
+# ---------------------------------------------------------------------------
+# Alpaca 即時 1 分 K 串流 (services/alpaca_stream_service.py，leader-only)
+# 預設關閉；需同時設定金鑰才會連線。免費 Basic 方案只有 IEX 資料源 (約佔全市場
+# 成交量 2~3%)，且 WebSocket 同時訂閱上限約 30 檔。
+ALPACA_API_KEY = get_env_or_secret("ALPACA_API_KEY", "")
+ALPACA_API_SECRET = get_env_or_secret("ALPACA_API_SECRET", "")
+ALPACA_DATA_FEED = str(get_env_or_secret("ALPACA_DATA_FEED", "iex")).lower()
+ENABLE_ALPACA_STREAM = (
+    get_env_or_secret("ENABLE_ALPACA_STREAM", "false").lower() == "true"
+)
+# 只有白名單內的標的被視為「IEX 成交量足以代表全市場」的大型股 (StreamTier)。
+ALPACA_LARGE_CAP_SYMBOLS: frozenset[str] = frozenset(
+    {
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA",
+        "SPY", "QQQ", "IWM", "AMD", "NFLX", "AVGO", "SMCI", "COIN",
+    }
+)  # fmt: skip
+ALPACA_MAX_FFILL_MINUTES: int = 30  # 缺口超過此分鐘數視為停牌／跨日，不補齊
+ALPACA_MAX_STREAM_SYMBOLS: int = int(get_env_or_secret("ALPACA_MAX_STREAM_SYMBOLS", 30))
+ALPACA_MAX_BUFFER_BARS: int = 200  # 每檔保留的 1 分 K 根數 (約 3.3 小時)
+# get_quote Tier 0：最後一根「真實成交」1 分 K 的收盤時刻距今超過此秒數即不採用
+ALPACA_TIER0_MAX_AGE_SECONDS: int = 90
+# 15 分鐘價量警報改用串流 15 分 K 的開關 (預設 false = 影子模式：照舊以 yfinance
+# 判定，只記錄兩者差異)。開啟後也只有 ALPACA_LARGE_CAP_SYMBOLS 會改走串流。
+ALPACA_PV_ALERT_LIVE = (
+    get_env_or_secret("ALPACA_PV_ALERT_LIVE", "false").lower() == "true"
+)
+
 # 策略目標 Delta 參數
 TARGET_DELTAS = {"STO_PUT": -0.20, "STO_CALL": 0.20, "BTO_PUT": -0.50, "BTO_CALL": 0.50}
 

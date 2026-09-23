@@ -97,12 +97,17 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           TUNNEL_URL: ${{ secrets.TUNNEL_URL }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          # Alpaca 即時串流總開關：GitHub Variables (非 Secret)，未設定時為 false，
+          # 部署新版本不會自動在正式環境開啟串流。
+          ENABLE_ALPACA_STREAM: ${{ vars.ENABLE_ALPACA_STREAM || 'false' }}
           GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
         with:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
           key: ${{ secrets.DIGITALOCEAN_SSH_KEY }}
-          envs: SERVICE_NAME,DEPLOY_VERSION,IMAGE_TAG,REGISTRY,IMAGE_NAME,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,GHCR_TOKEN
+          envs: SERVICE_NAME,DEPLOY_VERSION,IMAGE_TAG,REGISTRY,IMAGE_NAME,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,ALPACA_API_KEY,ALPACA_API_SECRET,ENABLE_ALPACA_STREAM,GHCR_TOKEN
           script: |
             # 初始化環境變數
             DEPLOY_VERSION="${{ needs.build-and-push.outputs.deploy_version }}"
@@ -137,6 +142,8 @@ jobs:
               ["API_KEY"]="$API_KEY"
               ["TUNNEL_URL"]="$TUNNEL_URL"
               ["FINNHUB_API_KEY"]="$FINNHUB_API_KEY"
+              ["ALPACA_API_KEY"]="$ALPACA_API_KEY"
+              ["ALPACA_API_SECRET"]="$ALPACA_API_SECRET"
             )
 
             # 取得現有服務掛載的祕密資訊 (用於精確移除舊版本)
@@ -180,6 +187,7 @@ jobs:
                 --mount-add type=volume,source=nexus-data,target=/app/data \
                 --env-add DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 --env-add TZ=America/New_York \
+                --env-add ENABLE_ALPACA_STREAM="$ENABLE_ALPACA_STREAM" \
                 $SECRET_UPDATE_FLAGS \
                 "$SERVICE_NAME"
             else
@@ -199,6 +207,7 @@ jobs:
                 --update-delay 5s \
                 --update-order start-first \
                 --env TZ=America/New_York \
+                --env ENABLE_ALPACA_STREAM="$ENABLE_ALPACA_STREAM" \
                 --env DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 $INIT_SECRET_FLAGS \
                 "$FULL_IMAGE"
