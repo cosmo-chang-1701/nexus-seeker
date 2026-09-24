@@ -157,6 +157,16 @@ def clean_db(db_conn: Any):  # type: ignore
     except Exception:
         pass
 
+    # 通知送達記錄器同為模組層級緩衝區
+    try:
+        from services.notification_dispatch_recorder import (
+            clear_buffer as clear_dispatch_buffer,
+        )
+
+        clear_dispatch_buffer()
+    except Exception:
+        pass
+
     # 前向蒐集記錄器是模組層級緩衝區，避免跨測試殘留
     try:
         from market_analysis.evaluation_recorder import clear_buffer

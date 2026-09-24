@@ -28,6 +28,7 @@ import discord
 
 import database
 from database.notification_channels import NotificationKey
+from services.notification_dispatch_recorder import DispatchRecord, record_dispatch
 
 logger = logging.getLogger(__name__)
 
@@ -45,12 +46,17 @@ async def notify(
     embed: Optional[discord.Embed] = None,
     message: Optional[str] = None,
     dedup_key: Optional[str] = None,
+    record: Optional[DispatchRecord] = None,
 ) -> bool:
     """依頻道開關與去重旗標推播一則私訊，回傳是否實際入列。
 
     `dedup_key` 為每日一次性去重旗標的完整鍵；其前綴必須登記於
     `database/cache.py::_KV_CACHE_DEDUP_KEY_PREFIXES`（由
     `tests/unit/test_kv_cache_dedup_whitelist.py` 強制），否則旗標會永久堆積。
+
+    `record` 為可行動通知的反事實描述；只在實際入列後交給
+    `services/notification_dispatch_recorder.record_dispatch()`，供 03:30 ET 標註
+    「照做 vs 持有」的 Sortino / MDD / CVaR 差異。
     """
     if not await is_channel_enabled(user_id, channel):
         return False
@@ -64,6 +70,8 @@ async def notify(
         await bot.queue_dm(user_id, message=message, embed=embed)
     if dedup_key is not None:
         await database.save_kv_cache(dedup_key, True)
+    if record is not None:
+        record_dispatch(bot, user_id, channel, record)
     return True
 
 
@@ -74,6 +82,7 @@ async def notify_many(
     embeds: Sequence[discord.Embed],
     *,
     dedup_key: Optional[str] = None,
+    record: Optional[DispatchRecord] = None,
 ) -> bool:
     """同一則通知由多個 embed 組成（例如分頁雷達）時使用：開關與去重只判斷一次。"""
     if not embeds:
@@ -88,4 +97,6 @@ async def notify_many(
         await bot.queue_dm(user_id, embed=embed)
     if dedup_key is not None:
         await database.save_kv_cache(dedup_key, True)
+    if record is not None:
+        record_dispatch(bot, user_id, channel, record)
     return True
