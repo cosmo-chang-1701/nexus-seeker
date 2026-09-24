@@ -5,9 +5,13 @@
 白名單前綴清除。新增去重旗標卻忘了加白名單，旗標就會永久堆積；既有的
 test_background_perf_optimization.py 只驗證 purge 對兩個寫死前綴的行為，偵測不到這種漏加。
 
-偵測規則：`save_kv_cache(key, value)` 的 `value` 為常數 True / 1（去重旗標的簽名：
-值永遠不會被讀取消費），且 `key` 為 f-string，或為函式內以 f-string 賦值的變數
-（同一名稱可能有多個分支賦值，全部納入）。純字串字面量的鍵（如
+偵測規則（兩種寫入形態）：
+1. `save_kv_cache(key, value)` 的 `value` 為常數 True / 1（去重旗標的簽名：值永遠不會被
+   讀取消費）；
+2. 任何呼叫的 `dedup_key=` 關鍵字引數（`services/notification_dispatcher.notify()` /
+   `notify_many()` 會在入列後以此鍵寫入去重旗標）。
+兩者的 `key` 為 f-string、條件式 f-string（`f"..." if cond else None`），或為函式內以
+上述形式賦值的變數（同一名稱可能有多個分支賦值，全部納入）。純字串字面量的鍵（如
 `macro_gex_is_fallback`）是永久快取，不在偵測範圍。
 """
 
@@ -77,6 +81,13 @@ def _call_name(func: ast.expr) -> Optional[str]:
     return None
 
 
+def _key_candidates(node: ast.expr) -> list[ast.expr]:
+    """條件式 `a if cond else b` 展開為兩個候選。"""
+    if isinstance(node, ast.IfExp):
+        return _key_candidates(node.body) + _key_candidates(node.orelse)
+    return [node]
+
+
 def _collect_dedup_writers() -> list[tuple[str, int, str]]:
     """回傳 (相對路徑, 行號, 前綴) — 每個去重旗標寫入點的鍵前綴。"""
     found: list[tuple[str, int, str]] = []
@@ -92,21 +103,28 @@ def _collect_dedup_writers() -> list[tuple[str, int, str]]:
                         if isinstance(t, ast.Name):
                             assigns.setdefault(t.id, []).append(n.value)
             for n in ast.walk(fn):
-                if not (
-                    isinstance(n, ast.Call)
-                    and _call_name(n.func) == "save_kv_cache"
+                if not isinstance(n, ast.Call):
+                    continue
+                keys: list[ast.expr] = []
+                if (
+                    _call_name(n.func) == "save_kv_cache"
                     and len(n.args) >= 2
                     and _is_flag_value(n.args[1])
                 ):
-                    continue
-                key = n.args[0]
-                candidates = (
-                    assigns.get(key.id, []) if isinstance(key, ast.Name) else [key]
-                )
-                for expr in candidates:
-                    prefix = _leading_literal(expr)
-                    if prefix:
-                        found.append((rel, n.lineno, prefix))
+                    keys.append(n.args[0])
+                keys.extend(kw.value for kw in n.keywords if kw.arg == "dedup_key")
+                for key in keys:
+                    for cand in _key_candidates(key):
+                        exprs = (
+                            assigns.get(cand.id, [])
+                            if isinstance(cand, ast.Name)
+                            else [cand]
+                        )
+                        for expr in exprs:
+                            for leaf in _key_candidates(expr):
+                                prefix = _leading_literal(leaf)
+                                if prefix:
+                                    found.append((rel, n.lineno, prefix))
     # 巢狀函式會被外層 ast.walk 重複走訪，去重後回傳
     return sorted(set(found))
 

@@ -13,6 +13,7 @@ from discord.ext import commands, tasks
 
 import database
 import market_time
+from services.notification_dispatcher import notify
 from database.price_volume_watch import PriceVolumeWatch, get_all_watches
 from market_analysis.price_volume_alert import (
     Confirmed15mBar,
@@ -100,7 +101,9 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
 
             try:
                 embed = create_price_volume_alert_embed(watch, bar)
-                await self.bot.queue_dm(watch.user_id, embed=embed)
+                await notify(
+                    self.bot, watch.user_id, "alpha_price_volume_watch", embed=embed
+                )
                 await database.save_kv_cache(cache_key, 1)
 
                 logger.warning(

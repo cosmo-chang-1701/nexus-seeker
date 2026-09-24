@@ -14,6 +14,8 @@ from discord.ext import tasks, commands
 import config
 import database
 import market_time
+from database.notification_channels import NotificationKey
+from services.notification_dispatcher import is_channel_enabled, notify
 from services.trading_service import TradingService
 from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
@@ -457,26 +459,45 @@ class PortfolioMonitorCog(commands.Cog):
         try:
             risk_events = await self.trading_service.audit_real_portfolio_risk()
 
+            # 三類事件在條件成立期間每 15 分鐘都會重新產生，過去沒有任何去重，
+            # 同一則警報一天可重發數十次。改為每日一次（PROFIT_LOCK 以標的 + DTE
+            # 區分不同到期日的合約）。
+            risk_today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
             for event in risk_events:
                 uid = event["uid"]
                 if event["type"] == "PROFIT_LOCK":
-                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
-                        embed = create_profit_lock_alert_embed(event)
-                        await self.bot.queue_dm(uid, embed=embed)
+                    await notify(
+                        self.bot,
+                        uid,
+                        "defense_portfolio_risk",
+                        embed=create_profit_lock_alert_embed(event),
+                        dedup_key=(
+                            f"profit_lock_alert_{uid}_{event.get('symbol')}_"
+                            f"{event.get('dte')}_{risk_today_str}"
+                        ),
+                    )
 
                 elif event["type"] == "GAMMA_FRAGILITY":
-                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
-                        embed = create_gamma_fragility_embed(event)
-                        await self.bot.queue_dm(uid, embed=embed)
+                    await notify(
+                        self.bot,
+                        uid,
+                        "defense_portfolio_risk",
+                        embed=create_gamma_fragility_embed(event),
+                        dedup_key=f"gamma_fragility_alert_{uid}_{risk_today_str}",
+                    )
 
                 elif event["type"] == "MARGIN_API":
-                    if database.is_notification_enabled(uid, "defense_portfolio_risk"):
-                        from cogs.embed_builders.alert_embeds import (
-                            create_margin_api_alert_embed,
-                        )
+                    from cogs.embed_builders.alert_embeds import (
+                        create_margin_api_alert_embed,
+                    )
 
-                        embed = create_margin_api_alert_embed(event["ratio"])
-                        await self.bot.queue_dm(uid, embed=embed)
+                    await notify(
+                        self.bot,
+                        uid,
+                        "defense_portfolio_risk",
+                        embed=create_margin_api_alert_embed(event["ratio"]),
+                        dedup_key=f"margin_api_alert_{uid}_{risk_today_str}",
+                    )
 
             import asyncio
             from database.holdings import get_all_holdings
@@ -676,14 +697,20 @@ class PortfolioMonitorCog(commands.Cog):
                                 )
                                 continue
 
+                        # 先查開關再抓期權鏈：關閉的使用者不必付推薦計算的成本
+                        if not await is_channel_enabled(
+                            u_id, "defense_option_rollover"
+                        ):
+                            continue
                         res = await recommend_covered_calls(u_id, sym)
                         if res and res.get("recommendations"):
-                            if database.is_notification_enabled(
-                                u_id, "defense_option_rollover"
-                            ):
-                                embed = create_covered_call_unlock_embed(res)
-                                await self.bot.queue_dm(u_id, embed=embed)
-                                await database.save_kv_cache(cc_unlock_cache_key, 1)
+                            await notify(
+                                self.bot,
+                                u_id,
+                                "defense_option_rollover",
+                                embed=create_covered_call_unlock_embed(res),
+                                dedup_key=cc_unlock_cache_key,
+                            )
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
 
@@ -1225,6 +1252,7 @@ class PortfolioMonitorCog(commands.Cog):
                         # SHORT_ENTRY 是進場訊號而非持倉防禦，走 Alpha 策略頻道；
                         # focus / mute_intraday 預設關閉該頻道，校準前較安全。
                         is_advisory_ins = ins.get("action") == "ADVISORY"
+                        notif_key: NotificationKey
                         if is_advisory_ins:
                             # 顧問模式位階告知：獨立頻道，不受 defense_option_rollover
                             # 開關牽動 (使用者可只關轉倉指令、保留位階告知)。
@@ -1235,7 +1263,7 @@ class PortfolioMonitorCog(commands.Cog):
                             notif_key = "alpha_market_signals"
                         else:
                             notif_key = "defense_option_rollover"
-                        if not database.is_notification_enabled(u_id, notif_key):
+                        if not await is_channel_enabled(u_id, notif_key):
                             continue
 
                         action = ins.get("action", "UNKNOWN")
@@ -1490,8 +1518,9 @@ class PortfolioMonitorCog(commands.Cog):
                             )
                             _delivered = False
                         else:
-                            await self.bot.queue_dm(u_id, embed=embed)
-                            _delivered = True
+                            _delivered = await notify(
+                                self.bot, u_id, notif_key, embed=embed
+                            )
                         await database.save_kv_cache(dedup_key, 1)
 
                         # 動態調整狀態切換引擎的一次性狀態 (pyramided / lockout)
@@ -1591,7 +1620,7 @@ class PortfolioMonitorCog(commands.Cog):
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
-                    if database.is_notification_enabled(uid, "defense_option_rollover"):
+                    if await is_channel_enabled(uid, "defense_option_rollover"):
                         embed = create_option_defense_alert_embed(
                             is_live=False,
                             symbol=trade_info.get("symbol", "N/A"),
@@ -1604,9 +1633,11 @@ class PortfolioMonitorCog(commands.Cog):
                             exit_reason=exit_reason,
                             hedge=hedge,
                         )
-                        await self.bot.queue_dm(uid, embed=embed)
+                        await notify(
+                            self.bot, uid, "defense_option_rollover", embed=embed
+                        )
                 else:
-                    if database.is_notification_enabled(uid, "defense_option_rollover"):
+                    if await is_channel_enabled(uid, "defense_option_rollover"):
                         status_icon = (
                             "🔄" if trade_info.get("status") == "ROLLED" else "🔴"
                         )
@@ -1615,8 +1646,10 @@ class PortfolioMonitorCog(commands.Cog):
                             if trade_info.get("status") == "ROLLED"
                             else "已自動平倉 (Closed)"
                         )
-                        await self.bot.queue_dm(
+                        await notify(
+                            self.bot,
                             uid,
+                            "defense_option_rollover",
                             embed=create_option_defense_alert_embed(
                                 is_live=False,
                                 symbol=trade_info.get("symbol", "N/A"),
@@ -1658,13 +1691,13 @@ class PortfolioMonitorCog(commands.Cog):
 
         for uid in unique_users:
             try:
-                if not database.is_notification_enabled(uid, "briefing_weekly_vtr"):
+                if not await is_channel_enabled(uid, "briefing_weekly_vtr"):
                     continue
                 stats = await GhostTrader.get_vtr_performance_stats(uid)
                 if stats["total_trades"] > 0:
                     user = await self.bot.fetch_user(uid)
                     embed = build_vtr_stats_embed(user.display_name, stats)
-                    await self.bot.queue_dm(uid, embed=embed)
+                    await notify(self.bot, uid, "briefing_weekly_vtr", embed=embed)
                     logger.info(f"✅ 週報已發送給用戶 {uid}")
             except Exception as e:
                 logger.error(f"發送週報給 {uid} 失敗: {e}")

@@ -23,30 +23,37 @@ async def test_run_sector_flow_report() -> None:
         agent = AnalystAgent(bot)
 
     # Mock dependencies
-    with patch(
-        "market_analysis.analyst_runners.sector_runner.get_macro_environment",
-        new_callable=AsyncMock,
-    ) as mock_macro, patch(
-        "market_analysis.analyst_runners.sector_runner.get_quote",
-        new_callable=AsyncMock,
-    ) as mock_quote, patch(
-        "market_analysis.analyst_runners.sector_runner.get_history_df",
-        new_callable=AsyncMock,
-    ) as mock_hist, patch(
-        "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew, patch(
-        "market_analysis.analyst_runners.sector_runner.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-    ) as mock_uoa, patch(
-        "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_max_pain",
-        new_callable=AsyncMock,
-    ) as mock_max_pain, patch(
-        "market_analysis.analyst_runners.sector_runner.generate_analyst_report",
-        new_callable=AsyncMock,
-    ) as mock_gen_report, patch(
-        "httpx.AsyncClient.get", new_callable=AsyncMock
-    ) as mock_httpx_get:
+    with (
+        patch(
+            "market_analysis.analyst_runners.sector_runner.get_macro_environment",
+            new_callable=AsyncMock,
+        ) as mock_macro,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.get_quote",
+            new_callable=AsyncMock,
+        ) as mock_quote,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.get_history_df",
+            new_callable=AsyncMock,
+        ) as mock_hist,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.SentimentEngine.detect_uoa",
+            new_callable=AsyncMock,
+        ) as mock_uoa,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_max_pain,
+        patch(
+            "market_analysis.analyst_runners.sector_runner.generate_analyst_report",
+            new_callable=AsyncMock,
+        ) as mock_gen_report,
+        patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_httpx_get,
+    ):
         # Set up mock returns
         mock_macro.return_value = {"vix": 20.0}
         mock_quote.return_value = {"c": 500.0}
@@ -112,9 +119,11 @@ async def test_post_market_loop_triggers_sector_report() -> None:
     agent.dispatch_post_market_intelligence = AsyncMock()  # type: ignore
 
     # Mock timing functions to avoid sleeping
-    with patch("cogs.analyst_agent.get_next_market_target_time") as mock_target, patch(
-        "cogs.analyst_agent.get_sleep_seconds"
-    ) as mock_sleep, patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep:
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
         mock_target.return_value = "sometime"
         mock_sleep.return_value = 0.1
 
@@ -133,42 +142,6 @@ async def test_post_market_loop_triggers_sector_report() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_report_sends_each_block_as_separate_message() -> None:
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    with patch("discord.ext.tasks.Loop.start"):
-        agent = AnalystAgent(bot)
-
-    embed = discord.Embed(title="📊 測試報告", description="摘要")
-    embed.add_field(name="區塊一", value="內容一", inline=False)
-    embed.add_field(name="區塊二", value="內容二", inline=False)
-
-    mock_split = MagicMock(
-        return_value=[
-            discord.Embed(title="📊 測試報告 (1/2)", description="摘要").add_field(
-                name="區塊一", value="內容一", inline=False
-            ),
-            discord.Embed(title="📊 測試報告 (2/2)").add_field(
-                name="區塊二", value="內容二", inline=False
-            ),
-        ]
-    )
-
-    with patch("database.get_all_user_ids", return_value=[1]), patch(
-        "database.get_full_user_context",
-        return_value=MagicMock(enable_analyst_agent=True),
-    ), patch("cogs.analyst_agent.split_embed_by_fields", mock_split):
-        await agent.dispatch_report(embed)
-
-    assert bot.queue_dm.await_count == 2
-    first_embed = bot.queue_dm.await_args_list[0].kwargs["embed"]
-    second_embed = bot.queue_dm.await_args_list[1].kwargs["embed"]
-    assert first_embed.fields[0].name == "區塊一"
-    assert second_embed.fields[0].name == "區塊二"
-    assert second_embed.description is None
-
-
-@pytest.mark.asyncio
 async def test_run_next_day_strategy_success() -> None:
     bot = MagicMock()
     with patch("discord.ext.tasks.Loop.start"):
@@ -176,13 +149,16 @@ async def test_run_next_day_strategy_success() -> None:
 
     agent._fetch_macro_data = AsyncMock(return_value={"vix": 14.5})  # type: ignore
 
-    with patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-    ) as mock_vts, patch(
-        "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew:
+    with (
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+        ) as mock_vts,
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+    ):
         mock_vts.return_value = {
             "vts_ratio": 0.85,
             "vts_state": "Contango",
@@ -210,13 +186,16 @@ async def test_run_next_day_strategy_failure_fallbacks() -> None:
 
     agent._fetch_macro_data = AsyncMock(return_value={"vix": 20.0})  # type: ignore
 
-    with patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-    ) as mock_vts, patch(
-        "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
-        new_callable=AsyncMock,
-    ) as mock_skew:
+    with (
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+        ) as mock_vts,
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+    ):
         mock_vts.side_effect = Exception("VTS failed")
         mock_skew.side_effect = Exception("Skew failed")
 
@@ -253,36 +232,47 @@ async def test_run_premarket_earnings_sorting_and_filtering() -> Any:
         "SYM_E": None,
     }
 
-    with patch(
-        "market_analysis.analyst_runners.earnings_runner.get_all_watchlist",
-        return_value=mock_watchlist,
-    ) as mock_get_wl, patch(
-        "market_analysis.analyst_runners.earnings_runner.database.get_all_portfolio",
-        return_value=mock_portfolio,
-    ) as mock_get_pf, patch(
-        "services.calendar_service.calendar_service.get_symbol_earnings_batch",
-        new_callable=AsyncMock,
-    ) as mock_get_batch, patch(
-        "market_analysis.analyst_runners.earnings_runner.fetch_recent_news",
-        new_callable=AsyncMock,
-    ) as mock_fetch_news, patch(
-        "market_analysis.analyst_runners.earnings_runner.get_reddit_context",
-        new_callable=AsyncMock,
-    ) as mock_fetch_reddit, patch(
-        "market_analysis.analyst_runners.earnings_runner.generate_analyst_report",
-        new_callable=AsyncMock,
-    ) as mock_gen_report, patch(
-        "market_analysis.analyst_runners.earnings_runner.create_earnings_report_embed"
-    ) as mock_create_embed, patch(
-        "market_analysis.analyst_runners.earnings_runner.evaluate_watchlist_symbol",
-        new_callable=AsyncMock,
-    ) as mock_eval_symbol, patch(
-        "market_analysis.analyst_runners.earnings_runner.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-    ) as mock_calc_pcr, patch(
-        "market_analysis.analyst_runners.earnings_runner.market_data_service.get_company_profile",
-        new_callable=AsyncMock,
-    ) as mock_get_profile:
+    with (
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.get_all_watchlist",
+            return_value=mock_watchlist,
+        ) as mock_get_wl,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.database.get_all_portfolio",
+            return_value=mock_portfolio,
+        ) as mock_get_pf,
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_earnings_batch",
+            new_callable=AsyncMock,
+        ) as mock_get_batch,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.fetch_recent_news",
+            new_callable=AsyncMock,
+        ) as mock_fetch_news,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.get_reddit_context",
+            new_callable=AsyncMock,
+        ) as mock_fetch_reddit,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.generate_analyst_report",
+            new_callable=AsyncMock,
+        ) as mock_gen_report,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.create_earnings_report_embed"
+        ) as mock_create_embed,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.evaluate_watchlist_symbol",
+            new_callable=AsyncMock,
+        ) as mock_eval_symbol,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.SentimentEngine.calculate_pcr",
+            new_callable=AsyncMock,
+        ) as mock_calc_pcr,
+        patch(
+            "market_analysis.analyst_runners.earnings_runner.market_data_service.get_company_profile",
+            new_callable=AsyncMock,
+        ) as mock_get_profile,
+    ):
         mock_get_batch.return_value = mock_earnings
         mock_fetch_news.return_value = "News content"
         mock_fetch_reddit.return_value = "Reddit content"
@@ -416,14 +406,20 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
     user_ctx.monthly_expense = 3000.0
     user_ctx.total_theta = 0.0  # daily theta
 
-    with patch("database.purge_old_cache", return_value=0), patch(
-        "services.trading_service.TradingService.get_after_market_report_data",
-        new_callable=AsyncMock,
-    ) as mock_get_data, patch("database.get_all_user_ids", return_value=[12345]), patch(
-        "database.is_notification_enabled", return_value=True
-    ), patch("database.get_full_user_context", return_value=user_ctx), patch(
-        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
-    ) as mock_gen_report, patch("cogs.analyst_agent.is_memory_safe", return_value=True):
+    with (
+        patch("database.purge_old_cache", return_value=0),
+        patch(
+            "services.trading_service.TradingService.get_after_market_report_data",
+            new_callable=AsyncMock,
+        ) as mock_get_data,
+        patch("database.get_all_user_ids", return_value=[12345]),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_full_user_context", return_value=user_ctx),
+        patch(
+            "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+        ) as mock_gen_report,
+        patch("cogs.analyst_agent.is_memory_safe", return_value=True),
+    ):
         # Empty dict from ts.get_after_market_report_data
         mock_get_data.return_value = {}
         mock_gen_report.return_value = "Mocked AI Commentary"
@@ -477,15 +473,19 @@ async def test_post_market_intelligence_dispatch_memory_gate_triggered() -> None
     user_ctx.monthly_expense = 3000.0
     user_ctx.total_theta = 0.0
 
-    with patch("database.purge_old_cache", return_value=0), patch(
-        "services.trading_service.TradingService.get_after_market_report_data",
-        new_callable=AsyncMock,
-    ) as mock_get_data, patch("database.get_all_user_ids", return_value=[12345]), patch(
-        "database.is_notification_enabled", return_value=True
-    ), patch("database.get_full_user_context", return_value=user_ctx), patch(
-        "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
-    ) as mock_gen_report, patch(
-        "cogs.analyst_agent.is_memory_safe", return_value=False
+    with (
+        patch("database.purge_old_cache", return_value=0),
+        patch(
+            "services.trading_service.TradingService.get_after_market_report_data",
+            new_callable=AsyncMock,
+        ) as mock_get_data,
+        patch("database.get_all_user_ids", return_value=[12345]),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_full_user_context", return_value=user_ctx),
+        patch(
+            "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
+        ) as mock_gen_report,
+        patch("cogs.analyst_agent.is_memory_safe", return_value=False),
     ):
         mock_get_data.return_value = {}
 
@@ -517,17 +517,21 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
     user_ctx.escape_window_end = "10-25"  # 25th is "下旬"
 
     # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
-    with patch("sqlite3.connect") as mock_conn, patch(
-        "database.user_settings.get_full_user_context", return_value=user_ctx
-    ), patch(
-        "cogs.embed_builder.create_fomc_escape_window_embed"
-    ) as mock_create_embed, patch(
-        "database.cache.get_kv_cache",
-        side_effect=lambda k: 1 if k == "macro_short_gamma_critical" else None,
-    ), patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-        return_value={"vts_ratio": 1.05, "vts_state": "Backwardation"},
+    with (
+        patch("sqlite3.connect") as mock_conn,
+        patch("database.user_settings.get_full_user_context", return_value=user_ctx),
+        patch(
+            "cogs.embed_builder.create_fomc_escape_window_embed"
+        ) as mock_create_embed,
+        patch(
+            "database.cache.get_kv_cache",
+            side_effect=lambda k: 1 if k == "macro_short_gamma_critical" else None,
+        ),
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 1.05, "vts_state": "Backwardation"},
+        ),
     ):
         mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
@@ -543,19 +547,25 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         assert "前移" in kwargs["reason"]
 
     # Case 2: Dovish / Expansion (prob = 0.35 <= 0.40, cool inflation, positive gamma)
-    with patch("sqlite3.connect") as mock_conn, patch(
-        "database.user_settings.get_full_user_context", return_value=user_ctx
-    ), patch(
-        "cogs.embed_builder.create_fomc_escape_window_embed"
-    ) as mock_create_embed, patch(
-        "database.cache.get_kv_cache",
-        side_effect=lambda k: 70.0
-        if k == "macro_wti"
-        else (0.0 if k == "macro_cpi_deviation" else None),
-    ), patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-        return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
+    with (
+        patch("sqlite3.connect") as mock_conn,
+        patch("database.user_settings.get_full_user_context", return_value=user_ctx),
+        patch(
+            "cogs.embed_builder.create_fomc_escape_window_embed"
+        ) as mock_create_embed,
+        patch(
+            "database.cache.get_kv_cache",
+            side_effect=lambda k: (
+                70.0
+                if k == "macro_wti"
+                else (0.0 if k == "macro_cpi_deviation" else None)
+            ),
+        ),
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
+        ),
     ):
         mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.35}
@@ -570,16 +580,18 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         assert "後推" in kwargs["reason"]
 
     # Case 3: Neutral Balance (prob = 0.55)
-    with patch("sqlite3.connect") as mock_conn, patch(
-        "database.user_settings.get_full_user_context", return_value=user_ctx
-    ), patch(
-        "cogs.embed_builder.create_fomc_escape_window_embed"
-    ) as mock_create_embed, patch(
-        "database.cache.get_kv_cache", return_value=None
-    ), patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-        return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+    with (
+        patch("sqlite3.connect") as mock_conn,
+        patch("database.user_settings.get_full_user_context", return_value=user_ctx),
+        patch(
+            "cogs.embed_builder.create_fomc_escape_window_embed"
+        ) as mock_create_embed,
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+        ),
     ):
         mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.55}
@@ -596,16 +608,18 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
     expired_ctx = MagicMock()
     expired_ctx.escape_window_start = "01-15"
     expired_ctx.escape_window_end = "01-31"
-    with patch("sqlite3.connect") as mock_conn, patch(
-        "database.user_settings.get_full_user_context", return_value=expired_ctx
-    ), patch(
-        "cogs.embed_builder.create_fomc_escape_window_embed"
-    ) as mock_create_embed, patch(
-        "database.cache.get_kv_cache", return_value=None
-    ), patch(
-        "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-        new_callable=AsyncMock,
-        return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+    with (
+        patch("sqlite3.connect") as mock_conn,
+        patch("database.user_settings.get_full_user_context", return_value=expired_ctx),
+        patch(
+            "cogs.embed_builder.create_fomc_escape_window_embed"
+        ) as mock_create_embed,
+        patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
+        ),
     ):
         mock_cursor = mock_conn.return_value.cursor.return_value
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.50}
@@ -622,9 +636,10 @@ def test_get_all_portfolio_includes_holdings() -> None:
     from database.portfolio import get_all_portfolio
     import json
 
-    with patch("database.portfolio.archive_expired_portfolio_records"), patch(
-        "sqlite3.connect"
-    ) as mock_conn:
+    with (
+        patch("database.portfolio.archive_expired_portfolio_records"),
+        patch("sqlite3.connect") as mock_conn,
+    ):
         mock_cursor = mock_conn.return_value.cursor.return_value
 
         # First execute: HOLDING

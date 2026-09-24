@@ -15,6 +15,7 @@ from discord.ext import tasks, commands
 
 import database
 import market_time
+from services.notification_dispatcher import notify
 from services.trading_service import TradingService
 from cogs.embed_builder import create_portfolio_report_embed
 
@@ -161,8 +162,7 @@ class AfterMarketCog(commands.Cog):
                 continue
 
             try:
-                if database.is_notification_enabled(uid, "briefing_post_market"):
-                    await self.bot.queue_dm(uid, embed=embed)
+                if await notify(self.bot, uid, "briefing_post_market", embed=embed):
                     stats["users_queued"] += 1
                     logger.info(f"盤後風險結算報告已排入 DM 佇列，uid={uid}")
                 else:

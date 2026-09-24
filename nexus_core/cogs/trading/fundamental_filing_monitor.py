@@ -21,6 +21,7 @@ from discord.ext import tasks, commands
 
 import database
 import market_time
+from services.notification_dispatcher import notify
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -174,7 +175,7 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
                 user_id, "defense_fundamental_thesis"
             ):
                 continue
-            await self.bot.queue_dm(user_id, embed=embed)
+            await notify(self.bot, user_id, "defense_fundamental_thesis", embed=embed)
             logger.warning(
                 f"📜 [SEC 財報掃描] 偵測到 {symbol} 基本面假設破滅，已通知使用者 {user_id}"
             )

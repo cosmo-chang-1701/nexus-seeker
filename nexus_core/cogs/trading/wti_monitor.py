@@ -14,6 +14,7 @@ from discord.ext import commands, tasks
 import database
 from database.wti_config import get_wti_config
 import market_time
+from services.notification_dispatcher import notify
 from market_analysis.wti_analysis import (
     WtiAlertType,
     analyze_wti,
@@ -156,7 +157,7 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
                     )
 
                     embed = create_wti_alert_embed(analysis)
-                    await self.bot.queue_dm(uid, embed=embed)
+                    await notify(self.bot, uid, "alpha_wti_oil", embed=embed)
                     await database.save_kv_cache(cache_key, 1)
 
                     logger.warning(

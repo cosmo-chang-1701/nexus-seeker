@@ -64,10 +64,12 @@ class ScannerCommandsCog(commands.Cog):
     )
     async def iv_scan(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=False)
-        all_watchlists = database.get_all_watchlist()
-        uids = sorted(list(set(row[0] for row in all_watchlists)))
+        # 只掃描呼叫者自己的觀察清單。過去會掃描所有使用者並私訊給其他人，
+        # 且無管理員檢查——任何人執行一次就會對全體使用者發送未受開關控制的 DM。
+        uid = interaction.user.id
+        user_watch = [row[1] for row in database.get_all_watchlist() if row[0] == uid]
 
-        if not uids:
+        if not user_watch:
             await interaction.followup.send(
                 embed=create_info_embed(
                     "觀察清單", "📭 觀察清單為空，無法執行 IV 掃描。"
@@ -76,21 +78,12 @@ class ScannerCommandsCog(commands.Cog):
             return
 
         found_any = False
-        for uid in uids:
-            user_watch = [row[1] for row in all_watchlists if row[0] == uid]
-            results = await self.trading_service.run_iv_opportunity_scan(
-                user_watch, uid
-            )
+        results = await self.trading_service.run_iv_opportunity_scan(user_watch, uid)
+        for report in results:
+            from cogs.embed_builder import create_volatility_embed
 
-            for report in results:
-                from cogs.embed_builder import create_volatility_embed
-
-                embed = create_volatility_embed(report)
-                if interaction.user.id == uid:
-                    await interaction.followup.send(embed=embed)
-                else:
-                    await self.bot.queue_dm(uid, embed=embed)
-                found_any = True
+            await interaction.followup.send(embed=create_volatility_embed(report))
+            found_any = True
 
         if not found_any:
             await interaction.followup.send(

@@ -9,6 +9,7 @@
 
 import discord
 from cogs.embed_builders._core import NexusEmbed
+from database.notification_channels import ALL_NOTIFICATION_KEYS
 
 from datetime import datetime, timezone
 
@@ -19,7 +20,7 @@ def create_notification_settings_embed(module_fields: list) -> discord.Embed:
         title="🌌 Nexus Seeker ｜ 戰術通知管理中樞 (4 大戰術維度)",
         description=(
             "點擊下方選單切換模組設定，或直接點擊快捷情境按鈕：\n"
-            "• **🛡️ 戰備全開**：開啟所有 13 項風控與戰報頻道\n"
+            f"• **🛡️ 戰備全開**：開啟全部 {len(ALL_NOTIFICATION_KEYS)} 個通知頻道\n"
             "• **🎯 精準交易**：保留定時戰報、持倉防禦與全天候情報 (WTI/Polymarket)，"
             "僅關閉盤中自選心跳與 Alpha 雜訊\n"
             "• **🔕 盤中靜音**：僅關閉盤中高頻雜訊，保留戰報、保證金警戒、"

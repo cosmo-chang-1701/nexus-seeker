@@ -12,6 +12,7 @@ from database.user_settings import get_all_user_ids
 import market_time
 
 from services.market_data_service import BoundedCache, get_quote
+from services.notification_dispatcher import is_channel_enabled, notify_many
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
@@ -191,11 +192,18 @@ class EventMonitor:
 
         for uid in user_ids:
             try:
+                # 0. 先查開關：關閉的使用者不抓事件、也不標記去重。過去是先把事件標記為
+                #    「已提醒」、到 _send_event_alert 才查開關，靜音期間的事件因此永久
+                #    遺失——使用者重新開啟後也不會收到仍在 48 小時內的事件。
+                if not await is_channel_enabled(uid, "defense_macro_tail_risk"):
+                    continue
+
                 # 1. Fetch events affecting this user
                 events = await calendar_service.get_portfolio_events(uid, days=3)
 
                 # 2. Filter for events within the next 48 hours that haven't been alerted
                 critical_events = []
+                pending_keys: list[str] = []
                 for e in events:
                     if not (0 < e.tte_hours < 48.0):
                         continue
@@ -214,25 +222,30 @@ class EventMonitor:
 
                     if alert_key not in self._alerted_cache:
                         critical_events.append(e)
-                        self._alerted_cache[alert_key] = datetime.now()
+                        pending_keys.append(alert_key)
 
-                if critical_events:
-                    await self._send_event_alert(uid, critical_events)
+                # 只有實際入列後才標記，避免送出失敗的事件被當成已提醒
+                if critical_events and await self._send_event_alert(
+                    uid, critical_events
+                ):
+                    now = datetime.now()
+                    for alert_key in pending_keys:
+                        self._alerted_cache[alert_key] = now
 
             except Exception as e:
                 logger.error(f"Error checking events for user {uid}: {e}")
 
-    async def _send_event_alert(self, user_id: int, events: List[Any]) -> Any:
+    async def _send_event_alert(self, user_id: int, events: List[Any]) -> bool:
         """
         Send a proactive hedging alert based on upcoming events.
-        """
-        import database
 
-        if not database.is_notification_enabled(user_id, "defense_macro_tail_risk"):
+        回傳是否實際入列（頻道關閉時為 False）。
+        """
+        if not await is_channel_enabled(user_id, "defense_macro_tail_risk"):
             logger.info(
                 f"使用者 {user_id} 已關閉 defense_macro_tail_risk，略過經濟/財報事件警報。"
             )
-            return
+            return False
         user_context = await asyncio.to_thread(get_full_user_context, user_id)
         try:
             spy_quote = await get_quote("SPY")
@@ -249,8 +262,9 @@ class EventMonitor:
             _build_event_alert_payload(event, risk_snapshot) for event in events
         ]
         embeds = create_proactive_event_alert_embed(event_payloads)
-        for embed in embeds:
-            await self.bot.queue_dm(user_id, embed=embed)
+        return await notify_many(
+            self.bot, user_id, "defense_macro_tail_risk", list(embeds)
+        )
 
 
 # Helper to start the monitor

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from cogs.embed_builder import create_polymarket_whale_alert_embed
 from database.user_settings import get_full_user_context, get_all_user_ids
 from database.notifications import is_notification_enabled
+from services.notification_dispatcher import is_channel_enabled, notify
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
 from services.bounded_cache import BoundedCache
@@ -881,14 +882,31 @@ class PolymarketService:
                         create_polymarket_prob_shift_embed,
                     )
 
+                    # 每個市場結果每日每方向只推一次：過去 websocket 每筆成交只要
+                    # 相對上一筆偏移 > 15 點就推，劇烈震盪時同一市場可連發數十則。
+                    shift_dir = "UP" if price > old_price else "DOWN"
+                    shift_day = datetime.datetime.now(datetime.timezone.utc).strftime(
+                        "%Y%m%d"
+                    )
                     uids = get_all_user_ids()
                     for uid in uids:
                         if is_notification_enabled(uid, "alpha_polymarket"):
                             embed = create_polymarket_prob_shift_embed(
                                 market_desc, old_price, price
                             )
-                            # 使用 asyncio.create_task 避免阻塞
-                            asyncio.create_task(self.bot.queue_dm(uid, embed=embed))
+                            # 使用 asyncio.create_task 避免阻塞 websocket 處理
+                            asyncio.create_task(
+                                notify(
+                                    self.bot,
+                                    uid,
+                                    "alpha_polymarket",
+                                    embed=embed,
+                                    dedup_key=(
+                                        f"poly_prob_shift_{uid}_{asset_id}_"
+                                        f"{shift_dir}_{shift_day}"
+                                    ),
+                                )
+                            )
 
             self._last_prices[asset_id] = price
 
@@ -978,6 +996,11 @@ class PolymarketService:
                 if not (meets_dynamic and meets_static):
                     continue
 
+                # 先查開關再生成 LLM 摘要：過去是摘要生成後才在 _push_notification
+                # 內查開關，關閉的使用者也會觸發一次 LLM 呼叫
+                if not await is_channel_enabled(uid, "alpha_polymarket"):
+                    continue
+
                 current_summary = "（未啟用 AI 分析）"
                 if context.polymarket_use_llm:
                     if summary_cache is None:
@@ -1012,9 +1035,7 @@ class PolymarketService:
         """
         封裝 Discord Embed (專業分析師格式) 並排入私訊佇列
         """
-        import database
-
-        if not database.is_notification_enabled(user_id, "alpha_polymarket"):
+        if not await is_channel_enabled(user_id, "alpha_polymarket"):
             logger.info(f"使用者 {user_id} 已關閉 alpha_polymarket，略過巨鯨交易警報。")
             return
         details = self._resolve_trade_details(trade, market_info)
@@ -1041,7 +1062,7 @@ class PolymarketService:
             uoa_correlation=uoa_correlation,
         )
 
-        await self.bot.queue_dm(user_id, embed=embed)
+        await notify(self.bot, user_id, "alpha_polymarket", embed=embed)
 
     async def _fetch_all_active_asset_ids(self) -> List[str]:
         """

@@ -6,6 +6,7 @@ cogs/trading/telemetry.py
 
 from typing import Any
 import asyncio
+import hashlib
 import logging
 from datetime import datetime
 
@@ -13,6 +14,7 @@ from discord.ext import tasks, commands
 
 import database
 import market_time
+from services.notification_dispatcher import notify_many
 from cogs.embed_builder import create_telemetry_alignment_embeds
 
 logger = logging.getLogger(__name__)
@@ -117,8 +119,28 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
             include_apply_button_hint=False,
             scheduled_mode=True,
         )
-        for embed in embeds:
-            await bot.queue_dm(uid, embed=embed)
+        # 同一組建議（掛單 × 建議價 × 建議量）當日只推一次；過去條件成立期間
+        # 每 30 分鐘重發相同內容。建議價或量一有變動就是新的簽章、正常推播。
+        signature = hashlib.sha256(
+            repr(
+                sorted(
+                    (
+                        str(item.get("order_id", item.get("symbol", ""))),
+                        round(float(item["suggested_price"]), 2),
+                        int(item["suggested_qty"]),
+                    )
+                    for item in filtered_items
+                )
+            ).encode("utf-8")
+        ).hexdigest()[:12]
+        today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
+        await notify_many(
+            bot,
+            uid,
+            "telemetry_orders",
+            embeds,
+            dedup_key=f"telemetry_align_{uid}_{today_str}_{signature}",
+        )
 
 
 async def setup(bot: Any) -> None:

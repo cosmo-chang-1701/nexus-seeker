@@ -28,6 +28,13 @@ _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
     "gamma_squeeze_alert_",
     "advisory_entry_",
     "advisory_exit_",
+    "ddp_alert_",
+    "iv_alert_",
+    "profit_lock_alert_",
+    "gamma_fragility_alert_",
+    "margin_api_alert_",
+    "telemetry_align_",
+    "poly_prob_shift_",
 )
 # 新增任何「每日去重旗標」寫入點時，必須同步加入上方白名單，否則旗標會永久堆積；
 # 由 tests/unit/test_kv_cache_dedup_whitelist.py 以 AST 掃描強制。
