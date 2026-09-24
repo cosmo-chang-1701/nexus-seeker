@@ -33,7 +33,8 @@ def create_notification_settings_embed(
             "• **🎯 精準交易**：只關閉雜訊類頻道（自選雷達、Alpha 掃描、做空訊號等）\n"
             "• **🔕 盤中靜音**：再關閉所有盤中節奏的推播，保留每日 / 每週 / 全天候頻道\n"
             f"• **🛡️ 戰備全開**：開啟全部 {len(ALL_NOTIFICATION_KEYS)} 個頻道\n"
-            "🛡️ 左尾防護的頻道任何預設情境都不會關閉，只能逐項手動關。"
+            "🛡️ 左尾防護的頻道任何預設情境都不會關閉，只能逐項手動關。\n"
+            "情報與戰報類頻道收在「⚙️ 進階」，預設情境仍會一併套用。"
         ),
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
