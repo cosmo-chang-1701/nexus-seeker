@@ -445,29 +445,23 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
 
 
 @pytest.mark.asyncio
-# slow：本測試未 mock `gather_sector_rotation_data`，會對板塊 ETF 發出真實網路請求，
-# 在 Docker 內實測約 260 秒（佔全量序列執行時間七成）。待補 mock 後可移除此標記。
-@pytest.mark.slow
 async def test_post_market_intelligence_dispatch_memory_gate_triggered() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     with patch("discord.ext.tasks.Loop.start"):
         agent = AnalystAgent(bot)
 
-    with patch.object(
-        agent,
-        "run_market_open_liquidity",
-        new_callable=AsyncMock,
+    # Mock gather_sector_rotation_data（未 mock 時會對板塊 ETF 發出真實網路請求）
+    agent.gather_sector_rotation_data = AsyncMock(  # type: ignore
         return_value={
             "sectors": [],
             "vix": 15.0,
             "vix_tier_name": "NORMAL",
             "spy_price": 500.0,
             "poly_events": [],
-            "spy_max_pain": 490.0,
-        },
-    ):
-        pass
+            "spy_max_pain": {"max_pain": 490.0},
+        }
+    )
 
     user_ctx = MagicMock()
     user_ctx.enable_analyst_agent = True
