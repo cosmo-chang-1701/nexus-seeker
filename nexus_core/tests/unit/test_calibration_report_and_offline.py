@@ -54,6 +54,7 @@ def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_offline_run_is_deterministic_and_network_free(
     tmp_path: Path, no_network: None
 ) -> None:

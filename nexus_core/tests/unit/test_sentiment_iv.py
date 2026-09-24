@@ -50,6 +50,7 @@ async def test_save_and_get_last_stored_iv() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_fetch_and_calculate_iv_metrics_success() -> None:
     """Test fetch_and_calculate_iv_metrics when yfinance successfully returns impliedVolatility."""
     symbol = "TEST_SUCCESS"
@@ -356,6 +357,7 @@ async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade() -> None
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_iv_rank_and_percentile_math() -> None:
     """Explicitly verify IV Rank and IV Percentile calculations with specific test values."""
     symbol = "TEST_MATH"
@@ -576,6 +578,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_degraded() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_market_opens() -> (
     None
 ):

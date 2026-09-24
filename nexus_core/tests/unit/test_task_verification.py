@@ -32,6 +32,7 @@ def test_task1_spy_delta_calculation() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_task2_warmup_idempotency() -> None:
     """驗證 Task 2: 快取預熱冪等性"""
     bot = MagicMock()

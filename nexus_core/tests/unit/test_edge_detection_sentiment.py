@@ -132,6 +132,7 @@ async def test_llm_sentiment_evaluation(
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_batch_feed_dispatching_for_nvda_and_tsla() -> None:
     """驗證單次 Feed 請求中，NVDA 與 TSLA 貼文能被精準分派至各自的摘要。"""
     from services.reddit_service import get_reddit_context_batch

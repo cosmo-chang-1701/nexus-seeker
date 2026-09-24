@@ -38,4 +38,5 @@ jobs:
       run: |
         cd nexus_core
         cp .env.example .env
-        docker compose run --rm nexus-seeker python -m pytest tests -p no:cacheprovider
+        # 全量（不帶 -m 篩選）；xdist worker 數受 mem_limit 850m 限制，見 scripts/docker_test.sh
+        docker compose run --rm nexus-seeker python -m pytest tests -n 2 --dist loadfile -p no:cacheprovider

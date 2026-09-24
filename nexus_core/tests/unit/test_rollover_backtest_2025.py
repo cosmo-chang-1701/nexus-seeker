@@ -269,6 +269,7 @@ def test_microstructure_exit_matrix_sl1_and_tp() -> None:
     assert "TEST" not in portfolio.positions
 
 
+@pytest.mark.slow
 def test_full_backtest_simulation_end_to_end(
     engine_with_synthetic_data: RolloverBacktestEngine2025,
 ) -> None:

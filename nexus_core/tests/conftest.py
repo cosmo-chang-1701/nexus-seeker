@@ -1,5 +1,6 @@
 from typing import Any
 import os
+from pathlib import Path
 import pytest
 import sqlite3
 from unittest.mock import AsyncMock, patch
@@ -25,6 +26,21 @@ def _patched_connect(database: Any, *args, **kwargs):  # type: ignore
 
 
 sqlite3.connect = _patched_connect
+
+_INTEGRATION_DIR = Path(__file__).parent / "integration"
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """自動把 `tests/integration/` 底下的測試標記為 `integration`。
+
+    pre-push 快速子集以 `-m "not slow and not integration"` 排除它們；CI 仍跑全量。
+    以目錄判定而非要求每個檔案手寫 `pytestmark`，新增的整合測試不會漏標。"""
+    integration_marker = pytest.mark.integration
+    for item in items:
+        if _INTEGRATION_DIR in item.path.parents:
+            item.add_marker(integration_marker)
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -204,6 +204,7 @@ def test_evaluate_opportunity_cost_aggressive_hurdle_triggers_earlier(
 )
 @patch("database.market_cache.get_market_cache")
 @patch("market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context")
+@pytest.mark.slow
 async def test_evaluate_opportunity_cost_for_satellites_threads_risk_profile_ev_hurdle(
     mock_get_user: MagicMock,
     mock_cache: MagicMock,

@@ -32,6 +32,7 @@ dependencies = [
     "pytest-asyncio>=0.23.0",
     "pytest-mock>=3.12.0",
     "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.5",
     "mypy>=1.8.0",
 ]
 
@@ -85,6 +86,12 @@ pythonpath = ["."]
 python_files = "test_*.py"
 python_classes = "Test*"
 python_functions = "test_*"
+# --strict-markers：拼錯的 marker 直接報錯，而不是讓測試無聲地溜出 `-m` 篩選。
+addopts = "--strict-markers"
+markers = [
+    "slow: 單檔累計約 3 秒以上或單一測試 1 秒以上；pre-push 快速子集會排除，CI 全量仍會執行",
+    "integration: tests/integration/ 下的測試（由 tests/conftest.py 自動標記）；pre-push 快速子集會排除",
+]
 filterwarnings = [
     "ignore::DeprecationWarning",
     "ignore::PendingDeprecationWarning",

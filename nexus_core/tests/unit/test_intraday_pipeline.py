@@ -265,6 +265,7 @@ def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
     intraday_pipeline: Any,
 ) -> None:
@@ -326,6 +327,7 @@ async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     intraday_pipeline: Any,
 ) -> None:
@@ -766,6 +768,7 @@ def test_skew_commentary_without_tactical_stays_backward_compatible() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ignore
     from datetime import datetime
     from zoneinfo import ZoneInfo

@@ -445,6 +445,9 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
 
 
 @pytest.mark.asyncio
+# slow：本測試未 mock `gather_sector_rotation_data`，會對板塊 ETF 發出真實網路請求，
+# 在 Docker 內實測約 260 秒（佔全量序列執行時間七成）。待補 mock 後可移除此標記。
+@pytest.mark.slow
 async def test_post_market_intelligence_dispatch_memory_gate_triggered() -> None:
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
