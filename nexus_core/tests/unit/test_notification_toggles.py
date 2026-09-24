@@ -1,6 +1,7 @@
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock
+from database.notification_channels import TRADING_MODULES
 from database.notifications import (
     get_user_notification_settings,
     set_user_notification_setting,
@@ -8,7 +9,9 @@ from database.notifications import (
     apply_preset_settings,
     is_notification_enabled,
     ALL_NOTIFICATION_KEYS,
+    DEFAULT_NOTIFICATION_SETTINGS,
     LEGACY_KEY_ALIASES,
+    set_user_notification_settings_bulk,
 )
 
 
@@ -22,14 +25,14 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 19 個通知頻道預設值（預設全部開啟）"""
+    """測試全新用戶 28 個通知頻道預設值（除機器人啟停通知外預設開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 19
+    assert len(ALL_NOTIFICATION_KEYS) == 28
 
     for key in ALL_NOTIFICATION_KEYS:
-        expected = True
+        expected = key != "system_lifecycle"
         assert settings[key] is expected
         assert is_notification_enabled(user_id, key) is expected
 
@@ -49,8 +52,7 @@ def test_toggle_single_setting(db_conn: Any):  # type: ignore
     for key in ALL_NOTIFICATION_KEYS:
         if key == target_key:
             continue
-        expected = True
-        assert settings[key] is expected
+        assert settings[key] is DEFAULT_NOTIFICATION_SETTINGS[key]
 
     # 2. 切換回開啟 (True)
     set_user_notification_setting(user_id, target_key, True)
@@ -73,6 +75,12 @@ def test_legacy_key_aliases(db_conn: Any):  # type: ignore
     set_user_notification_setting(user_id, "ddp_alert", True)
     assert is_notification_enabled(user_id, "alpha_market_signals") is True
     assert is_notification_enabled(user_id, "volatility_alert") is True
+
+    # defense_portfolio_risk 已於 v081 拆解，舊 key 與其舊別名解析到拆分後的頻道
+    set_user_notification_setting(user_id, "defense_portfolio_risk", False)
+    assert is_notification_enabled(user_id, "defense_gamma_fragility") is False
+    assert LEGACY_KEY_ALIASES["profit_lock_alert"] == "trim_profit_lock"
+    assert LEGACY_KEY_ALIASES["margin_and_api_alert"] == "defense_margin_call"
 
     # 驗證所有別名都有映射到新 key
     for old_k, new_k in LEGACY_KEY_ALIASES.items():
@@ -98,20 +106,20 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
         assert is_notification_enabled(user_id, key) is True
 
 
-# 戰術預設情境模式 (all_on, all_off, focus, mute_intraday) 的完整驗證見
-# test_full_preset_assertions_all_keys（涵蓋全部 19 個 key 與全部 4 種情境）。
+# 預設情境 (all_on, all_off, bh_defense, focus, mute_intraday) 的完整驗證見
+# test_full_preset_assertions_all_keys 與 test_presets_preserve_legacy_behaviour。
 
 
 @pytest.mark.asyncio
 async def test_notification_settings_view_structure(db_conn: Any):  # type: ignore
-    """測試 NotificationSettingsView 4 大模組結構與一鍵本區全部開啟/關閉的反應"""
+    """6 模組選單、多選 Select 與本區全關的反應"""
     from cogs.settings_ui import NotificationSettingsView
 
     user_id = 999444
 
     view = NotificationSettingsView(user_id)
-    # 預期包含 1 個 Select (Category), 1 個 Select (Toggles), 2 個本區按鈕, 3 個 Preset 按鈕
-    assert len(view.children) == 7
+    # 1 個模組選單、1 個多選、2 個本區按鈕、4 個預設情境按鈕
+    assert len(view.children) == 8
 
     category_select = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_category"
@@ -120,29 +128,32 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
         c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
     )
 
-    # 4 大分類
-    assert len(category_select.options) == 4  # type: ignore
+    assert len(category_select.options) == 6  # type: ignore
+    # Discord 限制：每個 Select 最多 25 個選項
+    for mod in TRADING_MODULES.values():
+        assert len(mod["items"]) <= 25
 
-    # 預設模組為 briefings (4 項：盤前、盤後、VTR 週報、機器人啟停通知)
-    assert len(module_select.options) == 4  # type: ignore
-    assert module_select.options[0].label.startswith("🟢")  # type: ignore
+    # 預設模組為左尾防護（7 項），多選且可全不選，預設選取＝目前開啟
+    assert view.current_module == "left_tail"
+    assert len(module_select.options) == 7  # type: ignore
+    assert module_select.min_values == 0  # type: ignore
+    assert module_select.max_values == 7  # type: ignore
+    assert all(o.default for o in module_select.options)  # type: ignore
 
-    # 模擬點擊「關閉本區所有設定」按鈕
     mock_interaction = AsyncMock()
     mock_interaction.user.id = user_id
     mock_interaction.response.edit_message = AsyncMock()
     await view.on_disable_module(mock_interaction)
 
-    # 驗證狀態皆關閉且 View 重新載入，下拉選單前綴變為 🔴
     module_select_new = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
     )
-    assert module_select_new.options[0].label.startswith("🔴")  # type: ignore
+    assert not any(o.default for o in module_select_new.options)  # type: ignore
 
 
 @pytest.mark.asyncio
 async def test_notification_settings_view_preset_buttons(db_conn: Any):  # type: ignore
-    """測試 NotificationSettingsView 點擊 Preset 按鈕之反應"""
+    """測試 NotificationSettingsView 點擊預設情境按鈕之反應"""
     from cogs.settings_ui import NotificationSettingsView
 
     user_id = 999555
@@ -152,19 +163,41 @@ async def test_notification_settings_view_preset_buttons(db_conn: Any):  # type:
     mock_interaction.user.id = user_id
     mock_interaction.response.edit_message = AsyncMock()
 
-    # 點擊「🎯 精準交易」
     await view.on_preset_focus(mock_interaction)
     assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
-    assert is_notification_enabled(user_id, "defense_portfolio_risk") is True
+    assert is_notification_enabled(user_id, "defense_gamma_fragility") is True
 
-    # 點擊「🔕 盤中靜音」
     await view.on_preset_mute_intraday(mock_interaction)
     assert is_notification_enabled(user_id, "telemetry_orders") is False
 
-    # 點擊「🛡️ 戰備全開」
+    await view.on_preset_bh_defense(mock_interaction)
+    assert is_notification_enabled(user_id, "defense_option_rollover") is False
+    assert is_notification_enabled(user_id, "entry_pyramid_add") is True
+
     await view.on_preset_all_on(mock_interaction)
     assert is_notification_enabled(user_id, "heartbeat_watchlist") is True
     assert is_notification_enabled(user_id, "alpha_market_signals") is True
+
+
+@pytest.mark.asyncio
+async def test_bh_defense_button_marked_recommended_for_advisory_accounts(
+    db_conn: Any,
+) -> None:
+    import database
+    from cogs.settings_ui import NotificationSettingsView
+
+    def _label(view: Any) -> str:
+        btn = next(
+            c
+            for c in view.children
+            if getattr(c, "custom_id", None) == "btn_preset_bh_defense"
+        )
+        return str(btn.label)
+
+    assert "建議" not in _label(NotificationSettingsView(999556))
+
+    database.upsert_user_config(999557, portfolio_mode="ADVISORY")
+    assert "建議" in _label(NotificationSettingsView(999557))
 
 
 @pytest.mark.asyncio
@@ -207,7 +240,7 @@ async def test_account_settings_polymarket_configuration(db_conn: Any):  # type:
 
 @pytest.mark.asyncio
 async def test_category_navigation_and_embed_marker(db_conn: Any):  # type: ignore
-    """測試 NotificationSettingsView 在 4 大戰術維度之間切換導航與 Embed 標記反應"""
+    """測試 NotificationSettingsView 在 6 個模組之間切換導航與 Embed 標記反應"""
     from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
 
     user_id = 999777
@@ -239,37 +272,48 @@ async def test_category_navigation_and_embed_marker(db_conn: Any):  # type: igno
 
 @pytest.mark.asyncio
 async def test_toggle_select_callback_interaction(db_conn: Any):  # type: ignore
-    """測試 NotificationSettingsView 透過 on_select_callback 進行單項開關切換"""
+    """多選送出：本模組勾選者開啟、未勾選者關閉，其他模組不受影響"""
     from cogs.settings_ui import NotificationSettingsView
 
     user_id = 999888
     view = NotificationSettingsView(user_id)
 
-    # 切換到 telemetry 維度
     mock_nav = AsyncMock()
     mock_nav.user.id = user_id
-    mock_nav.data = {"values": ["telemetry"]}
+    mock_nav.data = {"values": ["intel_intraday"]}
     mock_nav.response.edit_message = AsyncMock()
     await view.on_category_select(mock_nav)
 
-    # 切換 heartbeat_watchlist (預設 True -> 變為 False)
-    mock_toggle = AsyncMock()
-    mock_toggle.user.id = user_id
-    mock_toggle.data = {"values": ["heartbeat_watchlist"]}
-    mock_toggle.response.edit_message = AsyncMock()
-
-    await view.on_select_callback(mock_toggle)
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
+    # 只勾選 telemetry_orders → 本模組其餘頻道關閉
+    mock_submit = AsyncMock()
+    mock_submit.user.id = user_id
+    mock_submit.data = {"values": ["telemetry_orders"]}
+    mock_submit.response.edit_message = AsyncMock()
+    await view.on_select_callback(mock_submit)
     assert is_notification_enabled(user_id, "telemetry_orders") is True
+    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
+    assert is_notification_enabled(user_id, "alpha_option_scan") is False
+    # 其他模組不受影響
+    assert is_notification_enabled(user_id, "defense_margin_call") is True
 
-    # 再次切換 heartbeat_watchlist (變回 True)
-    await view.on_select_callback(mock_toggle)
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is True
+    # 全不勾選 → 本模組全部關閉
+    mock_submit.data = {"values": []}
+    await view.on_select_callback(mock_submit)
+    assert is_notification_enabled(user_id, "telemetry_orders") is False
+
+
+def test_bulk_setter_is_single_transaction_and_resolves_aliases(db_conn: Any) -> None:
+    set_user_notification_settings_bulk(
+        999889,
+        {"profit_lock_alert": False, "unknown_key": False, "alpha_wti_oil": False},
+    )
+    assert is_notification_enabled(999889, "trim_profit_lock") is False
+    assert is_notification_enabled(999889, "alpha_wti_oil") is False
 
 
 @pytest.mark.asyncio
 async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  # type: ignore
-    """測試 4 大戰術維度各自執行本區開啟/關閉時的獨立性與精確性"""
+    """測試 6 個模組各自執行本區開啟/關閉時的獨立性與精確性"""
     from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
 
     user_id = 999999
@@ -298,66 +342,162 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
             assert is_notification_enabled(user_id, item_key) is True
 
 
+# v081 之前（PR2 時點）focus / mute_intraday 對既有頻道的值。重整後這些頻道的結果必須
+# 不變；差異只允許出現在 _ALLOWED_DIFFS 列明的項目。
+_LEGACY_PRESETS: dict[str, dict[str, bool]] = {
+    "focus": {
+        "briefing_pre_market": True,
+        "briefing_post_market": True,
+        "briefing_weekly_vtr": True,
+        "system_lifecycle": True,
+        "heartbeat_watchlist": False,
+        "heartbeat_symbol_deep": False,
+        "telemetry_orders": True,
+        "advisory_entry_signal": True,
+        "defense_option_rollover": True,
+        "defense_margin_call": True,
+        "defense_fundamental_thesis": True,
+        "defense_macro_tail_risk": True,
+        "advisory_core_levels": True,
+        "alpha_market_signals": False,
+        "alpha_option_scan": False,
+        "alpha_polymarket": True,
+        "alpha_wti_oil": True,
+        "alpha_price_volume_watch": False,
+    },
+    "mute_intraday": {
+        "briefing_pre_market": True,
+        "briefing_post_market": True,
+        "briefing_weekly_vtr": True,
+        "system_lifecycle": True,
+        "heartbeat_watchlist": False,
+        "heartbeat_symbol_deep": False,
+        "telemetry_orders": False,
+        "advisory_entry_signal": False,
+        "defense_option_rollover": False,
+        "defense_margin_call": True,
+        "defense_fundamental_thesis": True,
+        "defense_macro_tail_risk": True,
+        "advisory_core_levels": True,
+        "alpha_market_signals": False,
+        "alpha_option_scan": False,
+        "alpha_polymarket": True,
+        "alpha_wti_oil": True,
+        "alpha_price_volume_watch": False,
+    },
+}
+
+# 允許的差異：system_lifecycle 是 PR2 才新增的頻道，重整後歸為雜訊（機器人啟停通知
+# 不屬於「精準交易」或「盤中靜音」想保留的內容）。
+_ALLOWED_DIFFS: dict[tuple[str, str], bool] = {
+    ("focus", "system_lifecycle"): False,
+    ("mute_intraday", "system_lifecycle"): False,
+}
+
+
+def test_presets_preserve_legacy_behaviour() -> None:
+    from database.notification_channels import PRESET_PROFILES
+
+    for preset, legacy in _LEGACY_PRESETS.items():
+        for key, old_value in legacy.items():
+            expected = _ALLOWED_DIFFS.get((preset, key), old_value)
+            assert PRESET_PROFILES[preset][key] is expected, (preset, key)
+
+
+def test_preset_immune_channels_are_on_in_every_preset() -> None:
+    from database.notification_channels import CHANNELS, PRESET_PROFILES
+
+    immune = [c.key for c in CHANNELS if c.preset_immune]
+    assert set(immune) == {
+        "defense_margin_call",
+        "defense_fundamental_thesis",
+        "defense_macro_tail_risk",
+        "defense_event_calendar",
+        "defense_hedge_advice",
+        "defense_structure_break",
+        "defense_gamma_fragility",
+    }
+    for name, profile in PRESET_PROFILES.items():
+        for key in immune:
+            assert profile[key] is True, (name, key)
+
+
 def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
-    """測試所有 19 個 Key 在 4 大預設情境 (all_on, all_off, focus, mute_intraday) 下的完整狀態"""
+    """所有頻道在 5 種預設情境下的完整狀態（新頻道逐一列明）"""
     user_id = 888111
 
-    # 1. all_on
     s_all_on = apply_preset_settings(user_id, "all_on")
     assert all(s_all_on[k] is True for k in ALL_NOTIFICATION_KEYS)
 
-    # 2. all_off
+    # all_off 也不會關閉左尾防護
     s_all_off = apply_preset_settings(user_id, "all_off")
-    assert all(s_all_off[k] is False for k in ALL_NOTIFICATION_KEYS)
+    assert s_all_off["defense_margin_call"] is True
+    assert s_all_off["defense_structure_break"] is True
+    assert s_all_off["alpha_wti_oil"] is False
+    assert s_all_off["defense_option_rollover"] is False
 
-    # 3. focus
     s_focus = apply_preset_settings(user_id, "focus")
-    assert s_focus["briefing_pre_market"] is True
-    assert s_focus["briefing_post_market"] is True
-    assert s_focus["briefing_weekly_vtr"] is True
-    assert s_focus["heartbeat_watchlist"] is False
-    assert s_focus["heartbeat_symbol_deep"] is False
-    assert s_focus["telemetry_orders"] is True
-    assert s_focus["defense_portfolio_risk"] is True
-    assert s_focus["defense_option_rollover"] is True
-    assert s_focus["defense_margin_call"] is True
-    assert s_focus["defense_fundamental_thesis"] is True
-    assert s_focus["defense_macro_tail_risk"] is True
-    assert s_focus["alpha_market_signals"] is False
-    # WTI/Polymarket 為全天候情報，不屬於盤中 Alpha 雜訊，精準交易模式下維持開啟
-    assert s_focus["alpha_polymarket"] is True
-    assert s_focus["alpha_wti_oil"] is True
-    # 進場顧問只在六重鐵律通過時推播（高信號），精準交易模式下維持開啟
-    assert s_focus["advisory_entry_signal"] is True
-    assert s_focus["advisory_core_levels"] is True
-    # NRO 期權掃描屬盤中 Alpha 雜訊；機器人啟停通知維持現行行為（開啟）
-    assert s_focus["alpha_option_scan"] is False
-    assert s_focus["system_lifecycle"] is True
+    for key, expected in {
+        "defense_event_calendar": True,
+        "defense_hedge_advice": True,
+        "defense_structure_break": True,
+        "defense_gamma_fragility": True,
+        "entry_pyramid_add": True,
+        "alpha_short_entry": False,
+        "trim_covered_call": True,
+        "trim_profit_lock": True,
+        "intel_market_scenario": False,
+        "vtr_virtual_trades": False,
+    }.items():
+        assert s_focus[key] is expected, key
 
-    # 4. mute_intraday
     s_mute = apply_preset_settings(user_id, "mute_intraday")
-    assert s_mute["briefing_pre_market"] is True
-    assert s_mute["briefing_post_market"] is True
-    assert s_mute["briefing_weekly_vtr"] is True
-    assert s_mute["heartbeat_watchlist"] is False
-    assert s_mute["heartbeat_symbol_deep"] is False
-    assert s_mute["telemetry_orders"] is False
-    assert s_mute["defense_portfolio_risk"] is True
-    assert s_mute["defense_option_rollover"] is False
-    # 保證金強制平倉警報屬帳戶生存等級警訊，任何情境下皆不可被靜音
-    assert s_mute["defense_margin_call"] is True
-    # 每日僅 08:00 ET 盤前觸發一次的高信號護城河警報，不屬於盤中雜訊，盤中靜音模式下維持開啟
-    assert s_mute["defense_fundamental_thesis"] is True
-    assert s_mute["defense_macro_tail_risk"] is True
-    assert s_mute["alpha_market_signals"] is False
-    # WTI/Polymarket 為全天候情報，不受盤中頻率影響，盤中靜音模式下維持開啟
-    assert s_mute["alpha_polymarket"] is True
-    assert s_mute["alpha_wti_oil"] is True
-    # 進場顧問屬盤中節奏，靜音；持倉位階顧問屬持倉防禦等級，維持開啟
-    assert s_mute["advisory_entry_signal"] is False
-    assert s_mute["advisory_core_levels"] is True
-    assert s_mute["alpha_option_scan"] is False
-    assert s_mute["system_lifecycle"] is True
+    for key, expected in {
+        "defense_event_calendar": True,
+        "defense_hedge_advice": True,
+        "defense_structure_break": True,
+        "defense_gamma_fragility": True,
+        "entry_pyramid_add": False,
+        "alpha_short_entry": False,
+        "trim_covered_call": False,
+        "trim_profit_lock": False,
+        "intel_market_scenario": False,
+        "vtr_virtual_trades": False,
+    }.items():
+        assert s_mute[key] is expected, key
+
+    # 🧭 B&H 防守：上行削減全關、上行捕捉開（不含做空）、情報只留自訂門檻型
+    s_bh = apply_preset_settings(user_id, "bh_defense")
+    assert s_bh == {
+        "defense_margin_call": True,
+        "defense_fundamental_thesis": True,
+        "defense_macro_tail_risk": True,
+        "defense_event_calendar": True,
+        "defense_hedge_advice": True,
+        "defense_structure_break": True,
+        "defense_gamma_fragility": True,
+        "advisory_entry_signal": True,
+        "entry_pyramid_add": True,
+        "alpha_short_entry": False,
+        "defense_option_rollover": False,
+        "trim_covered_call": False,
+        "trim_profit_lock": False,
+        "advisory_core_levels": False,
+        "heartbeat_watchlist": False,
+        "heartbeat_symbol_deep": False,
+        "intel_market_scenario": False,
+        "telemetry_orders": False,
+        "alpha_market_signals": False,
+        "alpha_option_scan": False,
+        "alpha_price_volume_watch": True,
+        "alpha_polymarket": False,
+        "alpha_wti_oil": True,
+        "briefing_pre_market": True,
+        "briefing_post_market": True,
+        "briefing_weekly_vtr": True,
+        "vtr_virtual_trades": False,
+        "system_lifecycle": False,
+    }
 
 
 def test_v070_backfills_heartbeat_symbol_deep_from_watchlist(db_conn: Any) -> None:
@@ -429,8 +569,8 @@ def test_notification_ui_modules_match_key_list() -> None:
     ui_keys = [k for m in TRADING_MODULES.values() for k in m["items"]]
     assert len(ui_keys) == len(set(ui_keys)), "同一個 key 不可出現在多個模組"
     assert set(ui_keys) == set(ALL_NOTIFICATION_KEYS)
-    assert "advisory_entry_signal" in TRADING_MODULES["telemetry"]["items"]
-    assert "advisory_core_levels" in TRADING_MODULES["defense"]["items"]
+    assert "advisory_entry_signal" in TRADING_MODULES["upside_capture"]["items"]
+    assert "advisory_core_levels" in TRADING_MODULES["upside_trim"]["items"]
 
 
 def test_v078_module_exports_required_attributes() -> None:
@@ -486,3 +626,88 @@ def test_v078_backfills_advisory_entry_signal_from_symbol_deep(db_conn: Any) -> 
     migrate_data(db_conn)
     db_conn.commit()
     assert _row(8101, "advisory_entry_signal")[0] == 1
+
+
+def test_v081_module_exports_required_attributes() -> None:
+    from database.core import get_migrations
+    from database.migrations import v081_split_notification_channels as m
+
+    assert m.version == 81
+    assert isinstance(m.description, str) and m.description
+    assert hasattr(m, "sql")
+    assert any(x["version"] == 81 for x in get_migrations())
+
+
+def test_v081_parent_map_matches_registry() -> None:
+    """遷移的凍結對照表必須與註冊表的 parent_key 一致（新增子頻道時兩邊都要更新）。"""
+    from database.migrations.v081_split_notification_channels import (
+        _CHILD_TO_PARENT,
+    )
+    from database.notification_channels import CHANNELS
+
+    registry = {c.key: c.parent_key for c in CHANNELS if c.parent_key}
+    assert dict(_CHILD_TO_PARENT) == registry
+
+
+def test_v081_backfills_children_from_parents(db_conn: Any) -> None:
+    from database.migrations.v081_split_notification_channels import migrate_data
+
+    cursor = db_conn.cursor()
+    rows = [
+        (8201, "defense_option_rollover", 0),
+        (8201, "defense_portfolio_risk", 0),
+        (8201, "alpha_market_signals", 0),
+        (8201, "heartbeat_watchlist", 0),
+        (8201, "defense_macro_tail_risk", 0),
+        (8202, "defense_option_rollover", 1),
+        (8202, "defense_portfolio_risk", 1),
+    ]
+    cursor.executemany(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)", rows
+    )
+    db_conn.commit()
+
+    migrate_data(db_conn)
+    db_conn.commit()
+
+    def _row(uid: int, key: str) -> Any:
+        cursor.execute(
+            "SELECT enabled FROM user_notification_settings "
+            "WHERE user_id = ? AND notification_key = ?",
+            (uid, key),
+        )
+        return cursor.fetchone()
+
+    # 已靜音母頻道的使用者，子頻道維持靜音
+    for child in (
+        "defense_structure_break",
+        "entry_pyramid_add",
+        "trim_covered_call",
+        "vtr_virtual_trades",
+        "defense_gamma_fragility",
+        "trim_profit_lock",
+        "alpha_short_entry",
+        "intel_market_scenario",
+        "defense_event_calendar",
+        "defense_hedge_advice",
+    ):
+        assert _row(8201, child)[0] == 0, child
+    assert _row(8202, "entry_pyramid_add")[0] == 1
+    # 從未設定者不回填，沿用預設值
+    assert _row(8203, "entry_pyramid_add") is None
+    # MARGIN_API 併入保證金頻道但不回填
+    assert _row(8201, "defense_margin_call") is None
+    # 拆解後的舊頻道列被刪除
+    assert _row(8201, "defense_portfolio_risk") is None
+    assert _row(8202, "defense_portfolio_risk") is None
+
+    # 重跑冪等，且不覆寫使用者事後的調整
+    cursor.execute(
+        "UPDATE user_notification_settings SET enabled = 1 "
+        "WHERE user_id = 8201 AND notification_key = 'trim_profit_lock'"
+    )
+    db_conn.commit()
+    migrate_data(db_conn)
+    db_conn.commit()
+    assert _row(8201, "trim_profit_lock")[0] == 1
+    assert _row(8201, "defense_gamma_fragility")[0] == 0

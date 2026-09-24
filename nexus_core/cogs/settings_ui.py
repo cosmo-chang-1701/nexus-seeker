@@ -4,7 +4,10 @@ import discord
 import logging
 
 import database
-from database.notification_channels import TRADING_MODULES as TRADING_MODULES
+from database.notification_channels import (
+    TRADING_MODULES as TRADING_MODULES,
+    channel_status_tags,
+)
 from cogs.embed_builder import (
     create_error_embed,
     create_info_embed,
@@ -15,38 +18,54 @@ from cogs.embed_builder import (
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# 🔔 使用者自訂通知開關 UI (4 大戰術維度中控台)
+# 🔔 使用者自訂通知開關 UI (依對投組下行風險的影響分為 6 個模組)
 # ============================================================================
-# 模組分組與標籤由 database/notification_channels.py 的註冊表衍生（單一真實來源），
-# TRADING_MODULES 由此重新匯出以相容既有呼叫者。
+# 模組分組、標籤與預設情境由 database/notification_channels.py 的註冊表衍生
+# （單一真實來源），TRADING_MODULES 由此重新匯出以相容既有呼叫者。
+
+_DEFAULT_MODULE = "left_tail"
+
+# (preset 名稱, 按鈕標籤, 樣式)。bh_defense 在 portfolio_mode='ADVISORY' 時標「建議」。
+_PRESET_BUTTONS: tuple[tuple[str, str, discord.ButtonStyle], ...] = (
+    ("bh_defense", "🧭 B&H 防守", discord.ButtonStyle.primary),
+    ("focus", "🎯 精準交易", discord.ButtonStyle.secondary),
+    ("mute_intraday", "🔕 盤中靜音", discord.ButtonStyle.secondary),
+    ("all_on", "🛡️ 戰備全開", discord.ButtonStyle.secondary),
+)
+
+
+def _is_advisory_account(user_id: int) -> bool:
+    try:
+        ctx = database.get_full_user_context(user_id)
+        return str(getattr(ctx, "portfolio_mode", "COMMAND")) == "ADVISORY"
+    except Exception:
+        return False
 
 
 class NotificationSettingsView(discord.ui.View):
     def __init__(self, user_id: int) -> None:
         super().__init__(timeout=180)
         self.user_id = user_id
-        self.current_module = "briefings"
+        self.current_module = _DEFAULT_MODULE
+        self.is_advisory_account = _is_advisory_account(user_id)
         self.refresh_items()
 
     def refresh_items(self) -> None:
         self.clear_items()
         settings = database.get_user_notification_settings(self.user_id)
 
-        # 1. 模組分類導航選單 (Category Selector - Row 0)
-        category_options = []
-        for mod_key, mod_data in TRADING_MODULES.items():
-            is_selected = mod_key == self.current_module
-            category_options.append(
-                discord.SelectOption(
-                    label=mod_data["title"],
-                    value=mod_key,
-                    description=mod_data["description"][:100],
-                    default=is_selected,
-                )
+        # Row 0：模組選單
+        category_options = [
+            discord.SelectOption(
+                label=mod_data["title"],
+                value=mod_key,
+                description=mod_data["description"][:100],
+                default=mod_key == self.current_module,
             )
-
+            for mod_key, mod_data in TRADING_MODULES.items()
+        ]
         category_select = discord.ui.Select(  # type: ignore
-            placeholder="請選擇戰術模組...",
+            placeholder="請選擇通知模組...",
             options=category_options,
             custom_id="select_category",
             row=0,
@@ -54,31 +73,32 @@ class NotificationSettingsView(discord.ui.View):
         category_select.callback = self.on_category_select  # type: ignore
         self.add_item(category_select)
 
-        # 2. 當前模組的設定開關 (Toggle Select - Row 1)
+        # Row 1：本模組頻道多選（選取＝開啟），送出一次批次寫入
         module_items = TRADING_MODULES[self.current_module]["items"]
-        toggle_options = []
-        for key, label in module_items.items():
-            state_emoji = "🟢" if settings.get(key, True) else "🔴"
-            toggle_options.append(
-                discord.SelectOption(
-                    label=f"{state_emoji} {label}",
-                    value=key,
-                    description="點擊切換開啟/關閉狀態",
-                )
+        toggle_options = [
+            discord.SelectOption(
+                label=label[:100],
+                value=key,
+                description=channel_status_tags(key),
+                default=bool(settings.get(key, True)),
             )
+            for key, label in module_items.items()
+        ]
         if toggle_options:
             toggle_select = discord.ui.Select(  # type: ignore
-                placeholder=f"設定 {TRADING_MODULES[self.current_module]['title']}...",
+                placeholder=f"勾選要開啟的 {TRADING_MODULES[self.current_module]['title']} 頻道",
                 options=toggle_options,
                 custom_id="select_toggles",
+                min_values=0,
+                max_values=len(toggle_options),
                 row=1,
             )
             toggle_select.callback = self.on_select_callback  # type: ignore
             self.add_item(toggle_select)
 
-        # 3. 本區批次按鈕 (Row 2)
+        # Row 2：本區批次
         btn_enable = discord.ui.Button(  # type: ignore
-            label="⚡ 開啟本區所有設定",
+            label="⚡ 開啟本區所有頻道",
             style=discord.ButtonStyle.green,
             custom_id="btn_enable_module",
             row=2,
@@ -87,7 +107,7 @@ class NotificationSettingsView(discord.ui.View):
         self.add_item(btn_enable)
 
         btn_disable = discord.ui.Button(  # type: ignore
-            label="💤 關閉本區所有設定",
+            label="💤 關閉本區所有頻道",
             style=discord.ButtonStyle.red,
             custom_id="btn_disable_module",
             row=2,
@@ -95,33 +115,28 @@ class NotificationSettingsView(discord.ui.View):
         btn_disable.callback = self.on_disable_module  # type: ignore
         self.add_item(btn_disable)
 
-        # 4. 全域快捷情境模式按鈕 (Preset Quick Buttons - Row 3)
-        btn_all_on = discord.ui.Button(  # type: ignore
-            label="🛡️ 戰備全開",
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_preset_all_on",
-            row=3,
-        )
-        btn_all_on.callback = self.on_preset_all_on  # type: ignore
-        self.add_item(btn_all_on)
+        # Row 3：預設情境
+        callbacks = {
+            "bh_defense": self.on_preset_bh_defense,
+            "focus": self.on_preset_focus,
+            "mute_intraday": self.on_preset_mute_intraday,
+            "all_on": self.on_preset_all_on,
+        }
+        for preset, label, style in _PRESET_BUTTONS:
+            if preset == "bh_defense" and self.is_advisory_account:
+                label = f"{label}（建議）"
+            btn = discord.ui.Button(  # type: ignore
+                label=label,
+                style=style,
+                custom_id=f"btn_preset_{preset}",
+                row=3,
+            )
+            btn.callback = callbacks[preset]  # type: ignore
+            self.add_item(btn)
 
-        btn_focus = discord.ui.Button(  # type: ignore
-            label="🎯 精準交易",
-            style=discord.ButtonStyle.primary,
-            custom_id="btn_preset_focus",
-            row=3,
-        )
-        btn_focus.callback = self.on_preset_focus  # type: ignore
-        self.add_item(btn_focus)
-
-        btn_mute = discord.ui.Button(  # type: ignore
-            label="🔕 盤中靜音",
-            style=discord.ButtonStyle.secondary,
-            custom_id="btn_preset_mute",
-            row=3,
-        )
-        btn_mute.callback = self.on_preset_mute_intraday  # type: ignore
-        self.add_item(btn_mute)
+    async def _rerender(self, interaction: discord.Interaction) -> None:
+        self.refresh_items()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
 
     async def on_category_select(self, interaction: discord.Interaction) -> Any:
         if not interaction.data or not isinstance(interaction.data, dict):
@@ -129,64 +144,54 @@ class NotificationSettingsView(discord.ui.View):
         select_values = interaction.data.get("values")
         if not select_values or not isinstance(select_values, list):
             return
-
         self.current_module = str(select_values[0])
-        self.refresh_items()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_enable_module(self, interaction: discord.Interaction) -> Any:
-        module_items = TRADING_MODULES[self.current_module]["items"]
-        for key in module_items.keys():
-            await asyncio.to_thread(
-                database.set_user_notification_setting, self.user_id, key, True
-            )
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_disable_module(self, interaction: discord.Interaction) -> Any:
-        module_items = TRADING_MODULES[self.current_module]["items"]
-        for key in module_items.keys():
-            await asyncio.to_thread(
-                database.set_user_notification_setting, self.user_id, key, False
-            )
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_preset_all_on(self, interaction: discord.Interaction) -> Any:
-        await asyncio.to_thread(database.apply_preset_settings, self.user_id, "all_on")
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_preset_focus(self, interaction: discord.Interaction) -> Any:
-        await asyncio.to_thread(database.apply_preset_settings, self.user_id, "focus")
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
-
-    async def on_preset_mute_intraday(self, interaction: discord.Interaction) -> Any:
-        await asyncio.to_thread(
-            database.apply_preset_settings, self.user_id, "mute_intraday"
-        )
-        self.refresh_items()
-        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await self._rerender(interaction)
 
     async def on_select_callback(self, interaction: discord.Interaction) -> Any:
+        """多選送出：本模組內被勾選者開啟、未勾選者關閉，單一交易寫入。"""
         if interaction.data is None or not isinstance(interaction.data, dict):
             return
-        select_values = interaction.data.get("values")
-        if not select_values or not isinstance(select_values, list):
+        raw_values = interaction.data.get("values")
+        if raw_values is None or not isinstance(raw_values, list):
             return
-
-        key = str(select_values[0])
-        settings = database.get_user_notification_settings(self.user_id)
-        current_val = settings.get(key, True)
+        selected = {str(v) for v in raw_values}
+        module_items = TRADING_MODULES[self.current_module]["items"]
+        updates = {key: key in selected for key in module_items}
         await asyncio.to_thread(
-            database.set_user_notification_setting, self.user_id, key, not current_val
+            database.set_user_notification_settings_bulk, self.user_id, updates
         )
+        await self._rerender(interaction)
 
-        self.refresh_items()
-        embed = self.build_embed()
-        await interaction.response.edit_message(embed=embed, view=self)
+    async def _set_module(self, interaction: discord.Interaction, on: bool) -> None:
+        module_items = TRADING_MODULES[self.current_module]["items"]
+        await asyncio.to_thread(
+            database.set_user_notification_settings_bulk,
+            self.user_id,
+            {key: on for key in module_items},
+        )
+        await self._rerender(interaction)
+
+    async def on_enable_module(self, interaction: discord.Interaction) -> Any:
+        await self._set_module(interaction, True)
+
+    async def on_disable_module(self, interaction: discord.Interaction) -> Any:
+        await self._set_module(interaction, False)
+
+    async def _apply_preset(self, interaction: discord.Interaction, name: str) -> None:
+        await asyncio.to_thread(database.apply_preset_settings, self.user_id, name)
+        await self._rerender(interaction)
+
+    async def on_preset_bh_defense(self, interaction: discord.Interaction) -> Any:
+        await self._apply_preset(interaction, "bh_defense")
+
+    async def on_preset_all_on(self, interaction: discord.Interaction) -> Any:
+        await self._apply_preset(interaction, "all_on")
+
+    async def on_preset_focus(self, interaction: discord.Interaction) -> Any:
+        await self._apply_preset(interaction, "focus")
+
+    async def on_preset_mute_intraday(self, interaction: discord.Interaction) -> Any:
+        await self._apply_preset(interaction, "mute_intraday")
 
     def build_embed(self) -> discord.Embed:
         settings = database.get_user_notification_settings(self.user_id)
@@ -195,13 +200,16 @@ class NotificationSettingsView(discord.ui.View):
         for mod_key, mod_data in TRADING_MODULES.items():
             lines = []
             for item_key, item_label in mod_data["items"].items():
-                status = "🟢 開啟" if settings.get(item_key, True) else "🔴 關閉"
-                lines.append(f"* {item_label}: **{status}**")
-
+                status = "🟢" if settings.get(item_key, True) else "🔴"
+                lines.append(
+                    f"{status} {item_label}\n　└ `{channel_status_tags(item_key)}`"
+                )
             marker = "🔹 " if mod_key == self.current_module else ""
             module_fields.append((f"{marker}{mod_data['title']}", "\n".join(lines)))
 
-        return create_notification_settings_embed(module_fields)
+        return create_notification_settings_embed(
+            module_fields, recommend_bh_defense=self.is_advisory_account
+        )
 
 
 # ============================================================================

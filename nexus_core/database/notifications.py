@@ -107,9 +107,13 @@ LEGACY_KEY_ALIASES: dict[str, str] = {
     "hb_execution_risk": "heartbeat_watchlist",
     "order_telemetry_alignment_alert": "telemetry_orders",
     # Portfolio & Risk Defense
-    "margin_and_api_alert": "defense_portfolio_risk",
-    "gamma_fragility_alert": "defense_portfolio_risk",
-    "profit_lock_alert": "defense_portfolio_risk",
+    # defense_portfolio_risk 於 v081 拆分：負 Gamma → defense_gamma_fragility、
+    # DITM 獲利鎖定 → trim_profit_lock、模擬保證金 → defense_margin_call。
+    # 殘留的舊列（v081 會刪除）與舊呼叫一律解析到左尾防護的 defense_gamma_fragility。
+    "defense_portfolio_risk": "defense_gamma_fragility",
+    "margin_and_api_alert": "defense_margin_call",
+    "gamma_fragility_alert": "defense_gamma_fragility",
+    "profit_lock_alert": "trim_profit_lock",
     "option_defense_alert": "defense_option_rollover",
     "deadlock_recovery_alert": "defense_option_rollover",
     "volatility_risk_alert": "defense_macro_tail_risk",
@@ -124,7 +128,7 @@ LEGACY_KEY_ALIASES: dict[str, str] = {
     # Obsolete Radar filters alias to alpha/defense
     "radar_macro_edge": "defense_macro_tail_risk",
     "radar_alpha_signals": "alpha_market_signals",
-    "radar_risk_defenses": "defense_portfolio_risk",
+    "radar_risk_defenses": "defense_gamma_fragility",
 }
 
 
@@ -282,6 +286,29 @@ def set_user_notification_setting(user_id: int, key: str, enabled: bool) -> Any:
         )
     finally:
         # 寫入完成後才失效：若在寫入前失效，期間的讀取會把舊值重新快取
+        clear_notification_settings_cache(user_id)
+
+
+def set_user_notification_settings_bulk(user_id: int, updates: dict[str, bool]) -> None:
+    """以單一交易批次寫入多個頻道開關（自動解析別名、忽略未知 key）。
+
+    `/notif_settings` 的多選送出與「本區全開 / 全關」使用；過去逐 key 各開一次寫入，
+    中途被其他寫入插隊會出現半套狀態。
+    """
+    rows: list[tuple[int, str, int]] = []
+    for key, enabled in updates.items():
+        resolved = _resolve_key(key)
+        if resolved not in ALL_NOTIFICATION_KEYS:
+            logger.warning(f"未知通知 key: {key} (resolved: {resolved})")
+            continue
+        rows.append((user_id, resolved, 1 if enabled else 0))
+    if not rows:
+        return
+    try:
+        execute_write_many([(_UPSERT_NOTIFICATION_SETTING_SQL, rows, True)])
+    except Exception as e:
+        logger.error(f"批次更新通知設定失敗 (UID: {user_id}): {e}")
+    finally:
         clear_notification_settings_cache(user_id)
 
 

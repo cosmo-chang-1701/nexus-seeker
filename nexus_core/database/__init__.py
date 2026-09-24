@@ -64,6 +64,7 @@ from .notifications import (
     apply_preset_settings,
     get_notification_settings_many,
     clear_notification_settings_cache,
+    set_user_notification_settings_bulk,
 )
 from .market_cache import (
     save_market_cache,
@@ -140,6 +141,7 @@ __all__ = [
     "apply_preset_settings",
     "get_notification_settings_many",
     "clear_notification_settings_cache",
+    "set_user_notification_settings_bulk",
     "save_market_cache",
     "get_market_cache",
     "mark_market_cache_stale",

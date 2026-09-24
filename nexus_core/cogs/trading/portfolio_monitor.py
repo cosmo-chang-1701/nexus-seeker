@@ -14,7 +14,7 @@ from discord.ext import tasks, commands
 import config
 import database
 import market_time
-from database.notification_channels import NotificationKey
+from database.notification_channels import NotificationKey, resolve_rollover_channel
 from services.notification_dispatcher import is_channel_enabled, notify
 from services.trading_service import TradingService
 from market_analysis.dynamic_rollover import (
@@ -469,7 +469,7 @@ class PortfolioMonitorCog(commands.Cog):
                     await notify(
                         self.bot,
                         uid,
-                        "defense_portfolio_risk",
+                        "trim_profit_lock",
                         embed=create_profit_lock_alert_embed(event),
                         dedup_key=(
                             f"profit_lock_alert_{uid}_{event.get('symbol')}_"
@@ -481,7 +481,7 @@ class PortfolioMonitorCog(commands.Cog):
                     await notify(
                         self.bot,
                         uid,
-                        "defense_portfolio_risk",
+                        "defense_gamma_fragility",
                         embed=create_gamma_fragility_embed(event),
                         dedup_key=f"gamma_fragility_alert_{uid}_{risk_today_str}",
                     )
@@ -494,7 +494,7 @@ class PortfolioMonitorCog(commands.Cog):
                     await notify(
                         self.bot,
                         uid,
-                        "defense_portfolio_risk",
+                        "defense_margin_call",
                         embed=create_margin_api_alert_embed(event["ratio"]),
                         dedup_key=f"margin_api_alert_{uid}_{risk_today_str}",
                     )
@@ -698,16 +698,14 @@ class PortfolioMonitorCog(commands.Cog):
                                 continue
 
                         # 先查開關再抓期權鏈：關閉的使用者不必付推薦計算的成本
-                        if not await is_channel_enabled(
-                            u_id, "defense_option_rollover"
-                        ):
+                        if not await is_channel_enabled(u_id, "trim_covered_call"):
                             continue
                         res = await recommend_covered_calls(u_id, sym)
                         if res and res.get("recommendations"):
                             await notify(
                                 self.bot,
                                 u_id,
-                                "defense_option_rollover",
+                                "trim_covered_call",
                                 embed=create_covered_call_unlock_embed(res),
                                 dedup_key=cc_unlock_cache_key,
                             )
@@ -1245,24 +1243,14 @@ class PortfolioMonitorCog(commands.Cog):
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
                     for ins in rebalance_instructions:
                         scenario = ins.get("scenario", "UNKNOWN")
-                        # 保證金強制平倉警報 (MARGIN_DEFENSE) 為帳戶生存等級警訊，
-                        # 獨立於例行轉倉建議 (Scenario 2/3) 的開關之外，避免使用者
-                        # 在 `mute_intraday` 等預設情境下靜音例行雜訊時，連帶誤將
-                        # 系統性保證金風控紅線警報一併關閉。
-                        # SHORT_ENTRY 是進場訊號而非持倉防禦，走 Alpha 策略頻道；
-                        # focus / mute_intraday 預設關閉該頻道，校準前較安全。
+                        # 頻道對照集中於 database/notification_channels.py 的
+                        # resolve_rollover_channel()：保證金防禦 → defense_margin_call；
+                        # 結構失效類 exit tier 與逃頂 → defense_structure_break（左尾防護）；
+                        # 顧問模式目標區 → advisory_core_levels；Covered Call → trim_covered_call；
+                        # 順勢加碼 / 核心部署 → entry_pyramid_add；做空 → alpha_short_entry；
+                        # 其餘停利 / 再平衡 / 換股 → defense_option_rollover（上行削減）。
                         is_advisory_ins = ins.get("action") == "ADVISORY"
-                        notif_key: NotificationKey
-                        if is_advisory_ins:
-                            # 顧問模式位階告知：獨立頻道，不受 defense_option_rollover
-                            # 開關牽動 (使用者可只關轉倉指令、保留位階告知)。
-                            notif_key = "advisory_core_levels"
-                        elif scenario == "MARGIN_DEFENSE":
-                            notif_key = "defense_margin_call"
-                        elif scenario == "SHORT_ENTRY":
-                            notif_key = "alpha_market_signals"
-                        else:
-                            notif_key = "defense_option_rollover"
+                        notif_key: NotificationKey = resolve_rollover_channel(ins)
                         if not await is_channel_enabled(u_id, notif_key):
                             continue
 
@@ -1620,7 +1608,7 @@ class PortfolioMonitorCog(commands.Cog):
                         else "已自動轉倉 (向上/向後轉倉)"
                     )
 
-                    if await is_channel_enabled(uid, "defense_option_rollover"):
+                    if await is_channel_enabled(uid, "vtr_virtual_trades"):
                         embed = create_option_defense_alert_embed(
                             is_live=False,
                             symbol=trade_info.get("symbol", "N/A"),
@@ -1633,11 +1621,9 @@ class PortfolioMonitorCog(commands.Cog):
                             exit_reason=exit_reason,
                             hedge=hedge,
                         )
-                        await notify(
-                            self.bot, uid, "defense_option_rollover", embed=embed
-                        )
+                        await notify(self.bot, uid, "vtr_virtual_trades", embed=embed)
                 else:
-                    if await is_channel_enabled(uid, "defense_option_rollover"):
+                    if await is_channel_enabled(uid, "vtr_virtual_trades"):
                         status_icon = (
                             "🔄" if trade_info.get("status") == "ROLLED" else "🔴"
                         )
@@ -1649,7 +1635,7 @@ class PortfolioMonitorCog(commands.Cog):
                         await notify(
                             self.bot,
                             uid,
-                            "defense_option_rollover",
+                            "vtr_virtual_trades",
                             embed=create_option_defense_alert_embed(
                                 is_live=False,
                                 symbol=trade_info.get("symbol", "N/A"),
