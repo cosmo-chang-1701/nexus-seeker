@@ -5,6 +5,8 @@ import logging
 
 import database
 from database.notification_channels import (
+    CHANNELS,
+    RISK_ROLE_TAGS,
     TRADING_MODULES as TRADING_MODULES,
     channel_status_tags,
 )
@@ -24,6 +26,45 @@ logger = logging.getLogger(__name__)
 # （單一真實來源），TRADING_MODULES 由此重新匯出以相容既有呼叫者。
 
 _DEFAULT_MODULE = "left_tail"
+
+# 「⚙️ 進階」收合的頻道作用：情報與戰報。它們不直接改變投組的下行風險或上行參與，
+# 預設收合以讓面板聚焦在左尾防護 / 上行捕捉 / 上行削減三個核心模組。
+_ADVANCED_RISK_ROLES: frozenset[str] = frozenset({"INTEL", "BRIEFING"})
+
+
+def _module_is_advanced(module_key: str) -> bool:
+    """模組內所有頻道的 risk_role 都屬情報或戰報時，歸入「進階」。
+
+    以註冊表的 risk_role 推導，而非寫死模組或頻道 key：註冊表新增頻道或模組時
+    分組自動跟上。
+    """
+    roles = {c.risk_role for c in CHANNELS if c.module == module_key}
+    return bool(roles) and roles <= _ADVANCED_RISK_ROLES
+
+
+ADVANCED_MODULES: tuple[str, ...] = tuple(
+    m for m in TRADING_MODULES if _module_is_advanced(m)
+)
+CORE_MODULES: tuple[str, ...] = tuple(
+    m for m in TRADING_MODULES if m not in ADVANCED_MODULES
+)
+
+
+def build_advanced_summary(settings: dict[str, bool]) -> str:
+    """收合時的一行摘要：依作用（情報 / 戰報）分別統計頻道數與開啟數。"""
+    parts: list[str] = []
+    for role in ("INTEL", "BRIEFING"):
+        keys = [
+            c.key
+            for c in CHANNELS
+            if c.risk_role == role and c.module in ADVANCED_MODULES
+        ]
+        if not keys:
+            continue
+        on = sum(1 for k in keys if settings.get(k, True))
+        parts.append(f"{RISK_ROLE_TAGS[role]} {len(keys)} 項（{on} 開啟）")
+    return "、".join(parts)
+
 
 # (preset 名稱, 按鈕標籤, 樣式)。bh_defense 在 portfolio_mode='ADVISORY' 時標「建議」。
 _PRESET_BUTTONS: tuple[tuple[str, str, discord.ButtonStyle], ...] = (
@@ -47,22 +88,27 @@ class NotificationSettingsView(discord.ui.View):
         super().__init__(timeout=180)
         self.user_id = user_id
         self.current_module = _DEFAULT_MODULE
+        # 情報與戰報模組預設收合在「⚙️ 進階」裡
+        self.show_advanced = False
         self.is_advisory_account = _is_advisory_account(user_id)
         self.refresh_items()
+
+    def visible_modules(self) -> tuple[str, ...]:
+        return CORE_MODULES + ADVANCED_MODULES if self.show_advanced else CORE_MODULES
 
     def refresh_items(self) -> None:
         self.clear_items()
         settings = database.get_user_notification_settings(self.user_id)
 
-        # Row 0：模組選單
+        # Row 0：模組選單（收合時只列核心模組）
         category_options = [
             discord.SelectOption(
-                label=mod_data["title"],
+                label=TRADING_MODULES[mod_key]["title"],
                 value=mod_key,
-                description=mod_data["description"][:100],
+                description=TRADING_MODULES[mod_key]["description"][:100],
                 default=mod_key == self.current_module,
             )
-            for mod_key, mod_data in TRADING_MODULES.items()
+            for mod_key in self.visible_modules()
         ]
         category_select = discord.ui.Select(  # type: ignore
             placeholder="請選擇通知模組...",
@@ -134,6 +180,17 @@ class NotificationSettingsView(discord.ui.View):
             btn.callback = callbacks[preset]  # type: ignore
             self.add_item(btn)
 
+        # Row 4：展開 / 收合進階（情報與戰報）
+        if ADVANCED_MODULES:
+            btn_advanced = discord.ui.Button(  # type: ignore
+                label=("⬆️ 收合進階" if self.show_advanced else "⚙️ 進階：情報與戰報"),
+                style=discord.ButtonStyle.secondary,
+                custom_id="btn_toggle_advanced",
+                row=4,
+            )
+            btn_advanced.callback = self.on_toggle_advanced  # type: ignore
+            self.add_item(btn_advanced)
+
     async def _rerender(self, interaction: discord.Interaction) -> None:
         self.refresh_items()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
@@ -145,6 +202,17 @@ class NotificationSettingsView(discord.ui.View):
         if not select_values or not isinstance(select_values, list):
             return
         self.current_module = str(select_values[0])
+        if self.current_module in ADVANCED_MODULES:
+            self.show_advanced = True
+        await self._rerender(interaction)
+
+    async def on_toggle_advanced(self, interaction: discord.Interaction) -> Any:
+        """展開時直接切到第一個進階模組；收合時若停在進階模組則回到預設模組。"""
+        self.show_advanced = not self.show_advanced
+        if self.show_advanced:
+            self.current_module = ADVANCED_MODULES[0]
+        elif self.current_module in ADVANCED_MODULES:
+            self.current_module = _DEFAULT_MODULE
         await self._rerender(interaction)
 
     async def on_select_callback(self, interaction: discord.Interaction) -> Any:
@@ -196,8 +264,9 @@ class NotificationSettingsView(discord.ui.View):
     def build_embed(self) -> discord.Embed:
         settings = database.get_user_notification_settings(self.user_id)
 
-        module_fields = []
-        for mod_key, mod_data in TRADING_MODULES.items():
+        module_fields: list[tuple[str, str]] = []
+        for mod_key in self.visible_modules():
+            mod_data = TRADING_MODULES[mod_key]
             lines = []
             for item_key, item_label in mod_data["items"].items():
                 status = "🟢" if settings.get(item_key, True) else "🔴"
@@ -206,6 +275,15 @@ class NotificationSettingsView(discord.ui.View):
                 )
             marker = "🔹 " if mod_key == self.current_module else ""
             module_fields.append((f"{marker}{mod_data['title']}", "\n".join(lines)))
+
+        if ADVANCED_MODULES and not self.show_advanced:
+            module_fields.append(
+                (
+                    "⚙️ 進階（已收合）",
+                    f"{build_advanced_summary(settings)}\n"
+                    "點擊「⚙️ 進階：情報與戰報」展開設定。",
+                )
+            )
 
         return create_notification_settings_embed(
             module_fields, recommend_bh_defense=self.is_advisory_account
