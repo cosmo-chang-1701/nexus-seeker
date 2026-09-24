@@ -405,12 +405,40 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 
 ## Testing
 
-Tests must be run from `nexus_core` inside Docker:
+Tests must be run from `nexus_core` inside Docker. `pytest-xdist` is installed; use
+`-n 2 --dist loadfile` (the worker count is bound by `mem_limit: 850m` — each worker
+holds ~330 MB, and `-n 3` already hits the limit and starts swapping, so never `-n auto`).
+After a dependency change in `pyproject.toml`, rebuild first with `docker compose build`.
 
 ```bash
 cd nexus_core
-docker compose run --rm nexus-seeker python -m pytest tests
+# full suite (what CI runs)
+docker compose run --rm nexus-seeker python -m pytest tests -n 2 --dist loadfile
+# fast subset (what the pre-push hook runs)
+docker compose run --rm nexus-seeker python -m pytest tests -m "not slow and not integration" -n 2 --dist loadfile
 ```
+
+Markers and the pre-push hook:
+
+- pytest runs with `--strict-markers`; the registered markers are `slow` and `integration`
+  (`[tool.pytest.ini_options]` in `nexus_core/pyproject.toml`).
+- Everything under `tests/integration/` is auto-marked `integration` by
+  `pytest_collection_modifyitems` in `tests/conftest.py` — no per-file marker needed.
+- **New slow tests must be marked `pytest.mark.slow`**: a single test taking ~1 s or more
+  gets `@pytest.mark.slow`; a file whose cost (~3 s or more) is spread across many tests
+  gets `pytestmark = pytest.mark.slow`. Never mark the four AST invariant tests
+  (`test_db_write_centralization.py`, `test_output_centralization.py`,
+  `test_notification_dispatch_centralization.py`, `test_kv_cache_dedup_whitelist.py`) —
+  they must stay in the fast subset.
+- `git push` runs the `core-test` hook (`scripts/docker_test.sh`): core full mypy + the
+  fast subset. `slow` / `integration` tests are gated by CI's full run.
+- `NEXUS_FULL_TESTS=1 git push` makes the hook run the full suite instead.
+- `SKIP=core-test,scraper-test,edge-mypy git push` or `git push --no-verify` skip the hooks. Use them
+  only when CI will gate the change anyway (e.g. re-pushing already-verified commits after a
+  rebase), never to get a failing change past the hook.
+- Edge scraper coverage on push is path-triggered: `scraper-test` (edge pytest) and
+  `edge-mypy` (`scripts/docker_edge_mypy.sh`, full mypy inside the edge image with all
+  runtime deps) only run when `nexus_edge_scraper/` changes.
 
 Useful focused runs:
 
@@ -471,7 +499,7 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
 - `nexus_edge_scraper/docker-compose.yml` defines the optional edge scraper + cloudflared sidecar
 - production release flow is tag-driven (`v*`)
 - pre-commit hooks run ruff lint/format, strict mypy, and general quality checks
-- pre-push hooks run semgrep and dockerized tests (core-test and scraper-test)
+- pre-push hooks run semgrep, `core-test` (core mypy + fast test subset in Docker), and the path-triggered `scraper-test` / `edge-mypy`; CI runs the full suite
 - The Droplet runs **only** the Discord bot. Calibration data collection (GEX history every 15 min during market hours, post-close weekly-EM straddles) runs in `nexus_edge_scraper`'s scheduler; reports are produced on a dev machine with `python -m calibration micro-report` (reads edge via `TUNNEL_URL` or a copied `edge_cache.db` with `--edge-db`). Do not add calibration jobs to the Droplet
 
 ---

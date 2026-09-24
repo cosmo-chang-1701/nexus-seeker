@@ -358,6 +358,7 @@ def _synthetic_store(tmp_path: Path) -> tuple[str, str]:
     return str(dates[-120].date()), str(dates[-10].date())
 
 
+@pytest.mark.slow
 def test_full_simulation_runs_with_all_flags(tmp_path: Path) -> None:
     start, end = _synthetic_store(tmp_path)
     eng = RolloverBacktestEngine2025(
@@ -376,6 +377,7 @@ def test_full_simulation_runs_with_all_flags(tmp_path: Path) -> None:
     eng.summarize_exit_events()
 
 
+@pytest.mark.slow
 def test_flags_off_simulation_is_deterministic(tmp_path: Path) -> None:
     start, end = _synthetic_store(tmp_path)
     runs = []

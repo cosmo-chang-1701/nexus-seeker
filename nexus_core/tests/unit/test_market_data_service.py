@@ -1447,6 +1447,10 @@ async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() ->
         # Release the remaining slots this test manually acquired.
         for _ in range(capacity - 1):
             sem.release()
+        # Undo the simulated 10s cooldown: it is module-global state, and leaking it
+        # makes any get_quote test that runs within 10s on the same process (e.g. under
+        # pytest-xdist) take the rate-limited yfinance branch instead of Finnhub.
+        services.market_data_service._core._rate_limit_until = 0.0
 
 
 # ---------------------------------------------------------------------------

@@ -718,6 +718,7 @@ async def test_fetch_sym_radar_data_fast_retains_stored_skew_when_percentile_non
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_fetch_sym_radar_data_slow_handles_none_momentum_value(
     mock_bot: Any,
 ) -> None:
@@ -789,6 +790,7 @@ async def test_fetch_sym_radar_data_slow_handles_none_momentum_value(
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_fetch_sym_radar_data_slow_extracts_momentum_fallback_and_handles_divergence(
     mock_bot: Any,
 ) -> None:

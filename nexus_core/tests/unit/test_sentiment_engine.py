@@ -6,6 +6,10 @@ import sqlite3
 from datetime import datetime, timedelta
 from market_analysis.sentiment_engine import SentimentEngine, _current_week_friday
 
+# 整檔累計約 3.4~3.9 秒且分散在多個 Max Pain／Skew 案例（無單一 >= 1s 的測試），
+# 故整檔標記；pre-push 快速子集排除，CI 全量仍執行。
+pytestmark = pytest.mark.slow
+
 MOCK_EXPIRY = _current_week_friday().strftime("%Y-%m-%d")
 # calculate_skew() 只接受 DTE >= 7 的到期日（避免 0DTE/週選的偏斜值混進同一條
 # 百分位序列），且會挑最接近 30 DTE 的一檔，因此 Skew 相關案例需要月選到期日。

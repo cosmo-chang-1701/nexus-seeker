@@ -113,6 +113,7 @@ def test_watchlist_signal_embed_includes_regime_and_gamma_flip() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_intraday_pipeline_putwall_breach_wick_filtering() -> None:
     """ISS-12: 驗證即時下影線刺穿但未獲 15m 實體收盤確認時，過濾假破位不發出枯竭預警。"""
     metrics = EnhancedWatchlistMetrics(

@@ -46,6 +46,7 @@ def test_clean_market_condition_inputs(trading_service: Any) -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_run_market_scan_unpacks_correctly(trading_service: Any):  # type: ignore
     # Mock database watchlist to return a list of 3-element tuples
     # (user_id, symbol, use_llm)

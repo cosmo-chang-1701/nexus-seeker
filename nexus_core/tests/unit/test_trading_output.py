@@ -82,6 +82,7 @@ async def test_monitor_real_portfolio_task_skips_when_memory_unsafe() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> None:
     """補足動態轉倉引擎後的硬性要求：三個場景 (再平衡/機會成本/保證金防禦)
     皆未觸發時，即便持倉非空，也絕不發送任何轉倉相關 DM。"""

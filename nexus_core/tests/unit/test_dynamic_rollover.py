@@ -1619,6 +1619,7 @@ async def test_evaluate_opportunity_cost_for_satellites_no_candidate(
     return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
+@pytest.mark.slow
 async def test_evaluate_opportunity_cost_for_satellites_triggers(
     mock_cache: MagicMock,
     mock_entry_gate: AsyncMock,
@@ -1688,6 +1689,7 @@ async def test_evaluate_opportunity_cost_for_satellites_triggers(
     return_value=(True, "mocked", None),
 )
 @patch("database.market_cache.get_market_cache")
+@pytest.mark.slow
 async def test_evaluate_opportunity_cost_for_satellites_options_holding_wide_spread_flags_manual_override(
     mock_cache: MagicMock,
     mock_entry_gate: AsyncMock,
@@ -2282,6 +2284,7 @@ async def test_evaluate_core_deployment_satellite_asset_ignored(
     return_value=(True, "confirmed", None),
 )
 @patch("database.market_cache.get_market_cache", return_value=None)
+@pytest.mark.slow
 async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
     mock_cache: MagicMock,
     mock_entry_gate: AsyncMock,

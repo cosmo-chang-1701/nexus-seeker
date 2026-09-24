@@ -63,7 +63,18 @@ repos:
         language: system
         stages: [pre-push]
         always_run: false
-        files: ^nexus_core/.*\.py$
+        files: ^nexus_core/(.*\.py|pyproject\.toml)$
+        pass_filenames: false
+
+      # edge 全量 Mypy（Docker 內含完整依賴：playwright / pandas / yfinance / pytest 等
+      # 在 pre-commit 的 mypy-edge-scraper 環境中並未安裝，只能以 ignore_missing_imports 當 Any）。
+      - id: edge-mypy
+        name: edge-mypy
+        entry: bash scripts/docker_edge_mypy.sh
+        language: system
+        stages: [pre-push]
+        always_run: false
+        files: ^nexus_edge_scraper/
         pass_filenames: false
 
       - id: scraper-test

@@ -98,6 +98,7 @@ async def test_tunnel_disabled_returns_none_not_string() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_custom_query_passed_to_edge_scraper() -> None:
     """驗證 Reddit 服務正確傳入 StockAliasMatrix 構建之 custom_query 參數至邊緣端點。"""
     mock_response = MagicMock()
@@ -155,6 +156,7 @@ async def test_batch_skips_http_when_tunnel_url_unset() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_batch_makes_single_feed_request_and_matches_locally() -> None:
     """Happy path: exactly ONE HTTP call fetches the raw feed, and matching
     against multiple symbols happens locally against that single payload."""

@@ -129,6 +129,7 @@ def _patch_high_60d(value: float = 1_000_000.0) -> Any:
 
 class TestRegimeIV:
     @pytest.mark.asyncio
+    @pytest.mark.slow
     async def test_systemic_liquidity_crisis_forces_regime_iv(self) -> None:
         with patch(
             "market_analysis.index_microstructure.get_market_regime",

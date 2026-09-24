@@ -135,6 +135,7 @@ async def test_fetch_sym_radar_data_fast_sqz_self_healing() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_fetch_sym_radar_data_fast_uoa_self_healing() -> None:
     """驗證 _fetch_sym_radar_data_fast_raw 在 UOA 快取未命中時，即時響應並啟動非同步 SWR 任務寫回快取。"""
     bot = MagicMock()

@@ -630,6 +630,7 @@ def test_new_cost_basis_math() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_recommend_covered_calls_filtering() -> Any:
     # 測試 Covered Call 篩選邏輯：
     # DTE 必須在 30-50 天內，Strike > New Cost Basis，且年化收益率 >= 10.0% 或單次收租權利金大於現貨的 1%
@@ -800,6 +801,7 @@ def test_get_covered_shares_sums_existing_short_calls() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
     # 測試現股已全數被既有 Short Call 覆蓋時，應直接跳過建議 (回傳 None)
     with (
@@ -830,6 +832,7 @@ async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
     # 測試部分覆蓋時，推薦口數應被裁切至尚未覆蓋股數上限 (uncovered_shares // 100)
     with (

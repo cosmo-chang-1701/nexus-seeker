@@ -28,6 +28,7 @@ def mock_bot() -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
@@ -191,6 +192,7 @@ async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type
         "string_max_pain_payload",
     ],
 )
+@pytest.mark.slow
 async def test_symbol_hub_command_tolerates_malformed_payloads(  # type: ignore
     mock_interaction: Any, mock_bot: Any, case: dict[str, Any]
 ):
