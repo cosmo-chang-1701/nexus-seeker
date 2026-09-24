@@ -24,7 +24,7 @@ Nexus Seeker 確立了**「雙管線物理排程隔離 ＋ 數據快取共用 �
 | **數據抓取層** | `RadarDataMixin._fetch_sym_radar_data_slow()` | `evaluate_watchlist_symbol()` |
 | **Embed 渲染模組** | `build_radar_scan_embed()`（10 檔分頁） | `create_watchlist_signal_embed()` |
 | **主動推送過濾門檻** | 無（每 15 分鐘定時推送完整自選雷達面板） | **僅當 `tactical.alert_level != "green"` 時發送**<br/>（非綠色警報才推送，杜絕無效打擾） |
-| **通知控制頻道** | `/notif_settings` $\to$ `heartbeat_watchlist` | `/notif_settings` $\to$ `heartbeat_symbol_deep`<br/>（migration `v070` 獨立分離） |
+| **通知控制頻道** | `/notif_settings` $\to$ `heartbeat_watchlist`（雷達）＋ `intel_market_scenario`（同一份雷達資料衍生的市場情境事件警報，獨立開關） | `/notif_settings` $\to$ `heartbeat_symbol_deep`<br/>（migration `v070` 獨立分離） |
 | **進階進攻模組** | 無 | `NexusGammaSqueezeEngine`（受 `enable_analyst_agent` 閘門控制） |
 | **進場顧問獨立推播** | 無 | `_dispatch_entry_advisor_alert()`：**僅在心跳為 green 時**評估，六重鐵律通過才推播（含進場／停損／目標／盈虧比）。獨立通知頻道 `advisory_entry_signal`、**不受 `enable_analyst_agent` 約束**，不新增 `scenario`、不覆寫 `tactical`。預設乾跑（`WATCHLIST_ADVISOR_DRY_RUN`） |
 
@@ -39,7 +39,7 @@ $$S = \bigcup_{u=1}^U \text{Watchlist}_u, \quad |S| \le U \times K$$
 傳統天真演算法逐一為每位使用者抓取其自選標的，時間與網路 I/O 複雜度為 $O(U \times K)$。當多位使用者關注同檔熱門股（如 NVDA、TSLA）時，重複的網路請求將迅速耗盡 API 配額。
 
 Nexus Seeker 15 分鐘雷達實施 **3-Pass 批次架構**：
-1. **Pass 1 (記憶體篩選與去重)**：遍歷所有用戶，檢查 `heartbeat_watchlist` 通知權限與 `option_alert_mode`（模式 2 僅推播有持倉標的），提取唯一標的集合 $S_{fetch} \subseteq S$，複雜度為 $O(U \times K)$（純記憶體運算）。
+1. **Pass 1 (記憶體篩選與去重)**：遍歷所有用戶，檢查 `heartbeat_watchlist` 或 `intel_market_scenario` 任一通知權限（雷達與情境事件共用抓取，推播於 Pass 3 各自判斷）與 `option_alert_mode`（模式 2 僅推播有持倉標的），提取唯一標的集合 $S_{fetch} \subseteq S$，複雜度為 $O(U \times K)$（純記憶體運算）。
 2. **Pass 2 (併發限流慢速抓取)**：針對去重後的標的 $s \in S_{fetch}$，透過 `asyncio.Semaphore(3)` 併發執行 `_fetch_sym_radar_data_slow(s)`。實體 API 呼叫次數嚴格降為 $|S_{fetch}|$。計算結果同步快取至 `bot._latest_radar_data_cache`。
    網路請求節省效率公式：
    $$\text{Efficiency Gain} = \frac{U \times K - |S_{fetch}|}{U \times K} \times 100\%$$

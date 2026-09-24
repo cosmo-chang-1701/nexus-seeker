@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 
@@ -117,6 +117,7 @@ def build_post_market_intelligence_embed(
     survival_runway: Optional[float] = None,
     sectors_data: Optional[List[Dict[str, Any]]] = None,
     ai_commentary: Optional[str] = None,
+    downside_fields: Optional[List[Tuple[str, str, bool]]] = None,
 ) -> List[discord.Embed]:
     """建立盤後綜合風險與 AI 策略報告 Embed (📋 盤後綜合風險與 AI 策略報告)"""
     embed_color = discord.Color.blue()
@@ -281,7 +282,7 @@ def build_post_market_intelligence_embed(
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
         for i, chunk in enumerate(chunks):
             field_name = (
-                f"📊 持倉明細 (Positions) ({i+1}/{len(chunks)})"
+                f"📊 持倉明細 (Positions) ({i + 1}/{len(chunks)})"
                 if len(chunks) > 1
                 else "📊 持倉明細 (Positions)"
             )
@@ -315,7 +316,7 @@ def build_post_market_intelligence_embed(
     macro_chunks = _chunk_text_blocks([macro_formatted], max_len=1000)
     for i, chunk in enumerate(macro_chunks):
         field_name = (
-            f"🌐 【宏觀風險與資金水位報告】 ({i+1}/{len(macro_chunks)})"
+            f"🌐 【宏觀風險與資金水位報告】 ({i + 1}/{len(macro_chunks)})"
             if len(macro_chunks) > 1
             else "🌐 【宏觀風險與資金水位報告】"
         )
@@ -327,7 +328,7 @@ def build_post_market_intelligence_embed(
         correlation_chunks = _chunk_text_blocks([correlation_formatted], max_len=1000)
         for i, chunk in enumerate(correlation_chunks):
             field_name = (
-                f"🕸️ 【非系統性集中風險 (板塊連動性)】 ({i+1}/{len(correlation_chunks)})"
+                f"🕸️ 【非系統性集中風險 (板塊連動性)】 ({i + 1}/{len(correlation_chunks)})"
                 if len(correlation_chunks) > 1
                 else "🕸️ 【非系統性集中風險 (板塊連動性)】"
             )
@@ -452,7 +453,7 @@ def build_post_market_intelligence_embed(
             sector_chunks = _chunk_text_blocks([sector_content], max_len=1000)
             for i, chunk in enumerate(sector_chunks):
                 field_name = (
-                    f"🔄 板塊輪動 (Sector Rotation) ({i+1}/{len(sector_chunks)})"
+                    f"🔄 板塊輪動 (Sector Rotation) ({i + 1}/{len(sector_chunks)})"
                     if len(sector_chunks) > 1
                     else "🔄 板塊輪動 (Sector Rotation)"
                 )
@@ -495,7 +496,7 @@ def build_post_market_intelligence_embed(
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
         for i, chunk in enumerate(chunks):
             field_name = (
-                f"{icon} {header} ({i+1}/{len(chunks)})"
+                f"{icon} {header} ({i + 1}/{len(chunks)})"
                 if len(chunks) > 1
                 else f"{icon} {header}"
             )
@@ -516,6 +517,10 @@ def build_post_market_intelligence_embed(
                 _add_ai_section("AI 高勝率交易策略推薦", parsed["strategy"], "🛡️")
         else:
             _add_ai_section("AI 損益歸因與次日策略點評", ai_commentary, "🧠")
+
+    # ── 📉 投組下行風險（Sortino 為主、MDD / VaR / CVaR 為輔）──
+    for name, value, inline in downside_fields or []:
+        embed.add_field(name=name, value=value, inline=inline)
 
     embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
     all_embeds = split_embed_by_fields(embed)

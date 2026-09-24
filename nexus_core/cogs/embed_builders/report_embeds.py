@@ -23,7 +23,7 @@ import logging
 import re
 
 from datetime import datetime, timezone
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
@@ -189,7 +189,7 @@ def create_portfolio_report_embed(  # type: ignore
         chunks = _chunk_text_blocks(transformed_blocks, max_len=1000)
         for i, chunk in enumerate(chunks):
             field_name = (
-                f"📊 持倉明細 (Positions) ({i+1}/{len(chunks)})"
+                f"📊 持倉明細 (Positions) ({i + 1}/{len(chunks)})"
                 if len(chunks) > 1
                 else "📊 持倉明細 (Positions)"
             )
@@ -212,7 +212,7 @@ def create_portfolio_report_embed(  # type: ignore
     macro_chunks = _chunk_text_blocks([macro_formatted], max_len=1000)
     for i, chunk in enumerate(macro_chunks):
         field_name = (
-            f"🌐 【宏觀風險與資金水位報告】 ({i+1}/{len(macro_chunks)})"
+            f"🌐 【宏觀風險與資金水位報告】 ({i + 1}/{len(macro_chunks)})"
             if len(macro_chunks) > 1
             else "🌐 【宏觀風險與資金水位報告】"
         )
@@ -230,7 +230,7 @@ def create_portfolio_report_embed(  # type: ignore
         correlation_chunks = _chunk_text_blocks([correlation_formatted], max_len=1000)
         for i, chunk in enumerate(correlation_chunks):
             field_name = (
-                f"🕸️ 【非系統性集中風險 (板塊連動性)】 ({i+1}/{len(correlation_chunks)})"
+                f"🕸️ 【非系統性集中風險 (板塊連動性)】 ({i + 1}/{len(correlation_chunks)})"
                 if len(correlation_chunks) > 1
                 else "🕸️ 【非系統性集中風險 (板塊連動性)】"
             )
@@ -273,7 +273,7 @@ def create_portfolio_report_embed(  # type: ignore
                 f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
                 " --------------------------------------------------",
                 f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
-                f" 對沖有效性 (Effectiveness): {ha_effectiveness*100:.1f}%",
+                f" 對沖有效性 (Effectiveness): {ha_effectiveness * 100:.1f}%",
                 f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
             ]
             if ha_dynamic_tau is not None:
@@ -343,7 +343,10 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
 
 
 def build_vtr_stats_embed(
-    user_name: str, stats: dict, attribution_lines: Optional[List[str]] = None
+    user_name: str,
+    stats: dict,
+    attribution_lines: Optional[List[str]] = None,
+    downside_fields: Optional[List[Tuple[str, str, bool]]] = None,
 ) -> discord.Embed:
     """
     建構 VTR 績效統計 Embed 面板，含對沖效能歸因。
@@ -414,6 +417,10 @@ def build_vtr_stats_embed(
         attr_text = "\n".join(attribution_lines)
         attr_text = _truncate_with_boundary(attr_text, 1024)
         embed.add_field(name="🛡️ 對沖效能與自我進化", value=attr_text, inline=False)
+
+    # 真實投組的下行風險快照（Sortino 為主、MDD / CVaR 為輔），與 VTR 虛擬績效對照
+    for name, value, inline in downside_fields or []:
+        embed.add_field(name=name, value=value, inline=inline)
 
     embed.set_footer(text="Nexus Sandbox Engine | 數據包含已平倉之虛擬部位")
 

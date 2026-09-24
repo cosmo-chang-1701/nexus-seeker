@@ -195,7 +195,7 @@ class EventMonitor:
                 # 0. 先查開關：關閉的使用者不抓事件、也不標記去重。過去是先把事件標記為
                 #    「已提醒」、到 _send_event_alert 才查開關，靜音期間的事件因此永久
                 #    遺失——使用者重新開啟後也不會收到仍在 48 小時內的事件。
-                if not await is_channel_enabled(uid, "defense_macro_tail_risk"):
+                if not await is_channel_enabled(uid, "defense_event_calendar"):
                     continue
 
                 # 1. Fetch events affecting this user
@@ -241,9 +241,9 @@ class EventMonitor:
 
         回傳是否實際入列（頻道關閉時為 False）。
         """
-        if not await is_channel_enabled(user_id, "defense_macro_tail_risk"):
+        if not await is_channel_enabled(user_id, "defense_event_calendar"):
             logger.info(
-                f"使用者 {user_id} 已關閉 defense_macro_tail_risk，略過經濟/財報事件警報。"
+                f"使用者 {user_id} 已關閉 defense_event_calendar，略過經濟/財報事件警報。"
             )
             return False
         user_context = await asyncio.to_thread(get_full_user_context, user_id)
@@ -263,7 +263,7 @@ class EventMonitor:
         ]
         embeds = create_proactive_event_alert_embed(event_payloads)
         return await notify_many(
-            self.bot, user_id, "defense_macro_tail_risk", list(embeds)
+            self.bot, user_id, "defense_event_calendar", list(embeds)
         )
 
 
