@@ -183,7 +183,10 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/database/regime_evaluation_log.py` — access layer for the two tables above (single batched writes through `connection.py`)
 - `nexus_core/market_analysis/evaluation_recorder.py` — hot-path forward-collection recorder: O(1) append into a bounded deque, records **only inside an `evaluation_source()` context** (so unit tests and ad-hoc scripts never pollute data), flushed once per cycle. Hooked into `classify_dynamic_regime`, the right/left gates and `evaluate_short_entry`
 - `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
-- `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
+- `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task; also `run_dispatch_outcome_labeling()` (notification follow-vs-hold labels once 20 sessions have elapsed, extended in place to 60 sessions once available)
+- `nexus_core/services/notification_dispatch_recorder.py` — 已送達可行動通知的前向蒐集：`notify(..., record=DispatchRecord(...))` 只在**實際入列後**記錄、只有 leader 實例記錄（`bot._is_leader_instance is True`，mock bot 不記錄），有界 deque 於週期結尾 `flush_dispatch_records()`。`rollover_dispatch_record()` 把轉倉指令映射成 ENTRY／REDUCE／EXIT／INFO；新增可行動推播點時記得傳 `record`
+- `nexus_core/market_analysis/notification_outcome.py` — 「照做 vs 持有不動」反事實日報酬路徑（純函式，03:30 labeler 與 `calibration/notif_report.py` 共用；無前視：16:00 ET 前送達以當日收盤為第一觀測）
+- `nexus_core/database/migrations/v083_add_notification_dispatch_log.py` / `nexus_core/database/notification_dispatch_log.py` — `notification_dispatch_log`（唯一鍵：使用者／頻道／標的／情境／動作／交易日）與 `notification_dispatch_outcome`
 - `nexus_core/market_analysis/downside_risk.py` — 下行風險指標的**單一權威**（numpy 葉模組）：全樣本分母下行差、Sortino（MAR = $R_f$）、MDD、歷史模擬 VaR／CVaR（樣本 < 60 回 `None`）。`calibration/backtest_engine_2025.py` 與日後任何績效／風險評估都必須呼叫它；`sharpe_ratio()` 僅供回測描述
 - `nexus_core/market_analysis/downside_monitor.py` — 投組下行風險即時監控的純邏輯葉模組（快照、回撤階梯 10/15/20% 與 2.5pp 重新武裝、CVaR 預算 = risk_limit × 0.20 與尾部體制轉換、NAV 快照報酬還原），閾值皆 PRE_CALIBRATION；指標一律呼叫 `downside_risk.py`
 - `nexus_core/services/downside_risk_service.py` — 投組下行風險 I/O：「現權重 × 一年歷史」模擬報酬序列（期權以原始 Delta 等值股數、缺值 ±0.5 近似）、08:45 預熱、盤中只走快取的回撤檢查、16:15 NAV 快照與 CVaR 判定；推播未送達時武裝狀態（`downside_state_` 前綴，刻意不在去重清理白名單）不前進
@@ -443,6 +446,13 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 # or, from a copy of the edge DB placed in nexus_core/.calibration_cache/:
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report --edge-db /app/.calibration_cache/edge_cache.db
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration skew-proxy
+```
+
+Notification outcome report (follow vs hold ΔSortino / ΔMDD / ΔCVaR95 per channel × scenario; read-only on a copied snapshot, never edits parameters — criteria in `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.14):
+
+```bash
+cd nexus_core
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration notif-report --snapshot-db /app/.calibration_cache/snapshot.db
 ```
 
 What to watch after deploying the forward collection / SHORT_ENTRY, the criteria for flipping `SHORT_ENTRY_DRY_RUN` or changing calibratable constants, and the 2026-09 trial-run baseline all live in [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9; the analogous observation queries and pass/tighten/reject thresholds for flipping `WATCHLIST_ADVISOR_DRY_RUN` are in §5.11.

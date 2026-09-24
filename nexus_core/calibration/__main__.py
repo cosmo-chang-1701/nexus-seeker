@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report}"""
 
 import argparse
 import asyncio
@@ -27,6 +27,7 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
             "micro-snapshot",
             "micro-report",
             "skew-proxy",
+            "notif-report",
         ],
     )
     parser.add_argument(
@@ -48,6 +49,11 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
         "--edge-db",
         default=None,
         help="micro-report --source edge：直接讀取複製來的 edge_cache.db；未指定時經 TUNNEL_URL 讀取",
+    )
+    parser.add_argument(
+        "--snapshot-db",
+        default=None,
+        help="notif-report：以唯讀模式讀取複製來的 production 快照；未指定時用 NEXUS_DB_NAME",
     )
     parser.add_argument(
         "--any-time",
@@ -88,6 +94,21 @@ async def _main(args: argparse.Namespace) -> int:
             return 2
     if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
         return await _run_study(args, cfg)
+    if args.command == "notif-report":
+        from calibration.notif_report import (
+            DEFAULT_SEED,
+            build_notif_report,
+            load_rows,
+            write_notif_report,
+        )
+
+        rows = load_rows(Path(args.snapshot_db) if args.snapshot_db else None)
+        result = build_notif_report(
+            rows, seed=args.seed if args.seed is not None else DEFAULT_SEED
+        )
+        target = write_notif_report(Path(cfg.out_dir), result)
+        print(f"報告已輸出：{target.parent}")
+        return 0
 
     store = DataStore(cfg.cache_dir)
     symbols = (

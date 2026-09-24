@@ -122,6 +122,12 @@ ENABLE_REGIME_EVALUATION_LOG = (
     get_env_or_secret("ENABLE_REGIME_EVALUATION_LOG", "true").lower() == "true"
 )
 
+# 已送達可行動通知的前向蒐集 (services/notification_dispatch_recorder.py)。
+# 評估各通知頻道「照做 vs 持有」對 Sortino / MDD / CVaR 的影響的唯一資料來源。
+ENABLE_NOTIFICATION_DISPATCH_LOG = (
+    get_env_or_secret("ENABLE_NOTIFICATION_DISPATCH_LOG", "true").lower() == "true"
+)
+
 # ---------------------------------------------------------------------------
 # Alpaca 即時 1 分 K 串流 (services/alpaca_stream_service.py，leader-only)
 # 預設關閉；需同時設定金鑰才會連線。免費 Basic 方案只有 IEX 資料源 (約佔全市場

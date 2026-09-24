@@ -16,6 +16,11 @@ import database
 import market_time
 from database.notification_channels import NotificationKey, resolve_rollover_channel
 from services.notification_dispatcher import is_channel_enabled, notify
+from services.notification_dispatch_recorder import (
+    DispatchRecord,
+    flush_dispatch_records,
+    rollover_dispatch_record,
+)
 from services.trading_service import TradingService
 from market_analysis.dynamic_rollover import (
     DynamicRolloverEngine,
@@ -475,6 +480,14 @@ class PortfolioMonitorCog(commands.Cog):
                             f"profit_lock_alert_{uid}_{event.get('symbol')}_"
                             f"{event.get('dte')}_{risk_today_str}"
                         ),
+                        # DITM（Delta ≥ 0.85）期權約等於 1 單位標的曝險；
+                        # 鎖定獲利以「該曝險出場」近似
+                        record=DispatchRecord(
+                            symbol=str(event.get("symbol") or ""),
+                            signal_kind="EXIT",
+                            scenario="PROFIT_LOCK",
+                            action="PROFIT_LOCK",
+                        ),
                     )
 
                 elif event["type"] == "GAMMA_FRAGILITY":
@@ -708,6 +721,15 @@ class PortfolioMonitorCog(commands.Cog):
                                 "trim_covered_call",
                                 embed=create_covered_call_unlock_embed(res),
                                 dedup_key=cc_unlock_cache_key,
+                                # 賣出價外 Covered Call 以「上行曝險減少約 30%」近似
+                                # （典型價外 call 的 Delta），用來衡量封頂上行的代價
+                                record=DispatchRecord(
+                                    symbol=sym,
+                                    signal_kind="REDUCE",
+                                    scenario="COVERED_CALL_UNLOCK",
+                                    action="SELL_COVERED_CALL",
+                                    exposure_ratio=0.3,
+                                ),
                             )
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
@@ -1507,7 +1529,11 @@ class PortfolioMonitorCog(commands.Cog):
                             _delivered = False
                         else:
                             _delivered = await notify(
-                                self.bot, u_id, notif_key, embed=embed
+                                self.bot,
+                                u_id,
+                                notif_key,
+                                embed=embed,
+                                record=rollover_dispatch_record(dict(ins)),
                             )
                         await database.save_kv_cache(dedup_key, 1)
 
@@ -1564,6 +1590,7 @@ class PortfolioMonitorCog(commands.Cog):
         finally:
             evaluation_recorder.reset_evaluation_source(eval_source_token)
             await evaluation_recorder.flush_evaluations()
+            await flush_dispatch_records()
 
     @monitor_real_portfolio_task.before_loop
     async def before_monitor_real_portfolio_task(self) -> None:

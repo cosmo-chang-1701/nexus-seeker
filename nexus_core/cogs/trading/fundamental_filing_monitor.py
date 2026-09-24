@@ -22,6 +22,10 @@ from discord.ext import tasks, commands
 import database
 import market_time
 from services.notification_dispatcher import notify
+from services.notification_dispatch_recorder import (
+    DispatchRecord,
+    flush_dispatch_records,
+)
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
@@ -62,6 +66,8 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
             await self._scan_holdings_for_new_filings()
         except Exception as e:
             logger.error(f"📜 [SEC 財報掃描] 執行失敗: {e}", exc_info=True)
+        finally:
+            await flush_dispatch_records()
 
     @fundamental_filing_scan.before_loop
     async def before_fundamental_filing_scan(self) -> None:
@@ -175,7 +181,18 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
                 user_id, "defense_fundamental_thesis"
             ):
                 continue
-            await notify(self.bot, user_id, "defense_fundamental_thesis", embed=embed)
+            await notify(
+                self.bot,
+                user_id,
+                "defense_fundamental_thesis",
+                embed=embed,
+                record=DispatchRecord(
+                    symbol=symbol,
+                    signal_kind="EXIT",
+                    scenario="FUNDAMENTAL_BROKEN",
+                    action=str(form_type or ""),
+                ),
+            )
             logger.warning(
                 f"📜 [SEC 財報掃描] 偵測到 {symbol} 基本面假設破滅，已通知使用者 {user_id}"
             )

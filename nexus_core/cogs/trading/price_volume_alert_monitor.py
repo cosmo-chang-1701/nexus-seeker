@@ -14,7 +14,15 @@ from discord.ext import commands, tasks
 import database
 import market_time
 from services.notification_dispatcher import notify
-from database.price_volume_watch import PriceVolumeWatch, get_all_watches
+from services.notification_dispatch_recorder import (
+    DispatchRecord,
+    flush_dispatch_records,
+)
+from database.price_volume_watch import (
+    PriceVolumeWatch,
+    WatchDirection,
+    get_all_watches,
+)
 from market_analysis.price_volume_alert import (
     Confirmed15mBar,
     evaluate_watch_trigger,
@@ -47,6 +55,8 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
             await self._evaluate_price_volume_alerts()
         except Exception as e:
             logger.error(f"📊 [價量監測] 執行失敗: {e}", exc_info=True)
+        finally:
+            await flush_dispatch_records()
 
     @price_volume_alert_monitor.before_loop
     async def before_price_volume_alert_monitor(self) -> None:
@@ -101,8 +111,23 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
 
             try:
                 embed = create_price_volume_alert_embed(watch, bar)
+                # 向上突破以「1 單位進場」、向下跌破以「持倉出場」衡量照做的效果
                 await notify(
-                    self.bot, watch.user_id, "alpha_price_volume_watch", embed=embed
+                    self.bot,
+                    watch.user_id,
+                    "alpha_price_volume_watch",
+                    embed=embed,
+                    record=DispatchRecord(
+                        symbol=watch.symbol,
+                        signal_kind=(
+                            "ENTRY"
+                            if watch.direction == WatchDirection.ABOVE
+                            else "EXIT"
+                        ),
+                        scenario="PRICE_VOLUME_BREAKOUT",
+                        action=watch.direction.value.upper(),
+                        price=bar.close,
+                    ),
                 )
                 await database.save_kv_cache(cache_key, 1)
 

@@ -245,8 +245,14 @@ def write_report(
     return target
 
 
-def write_study_report(out_dir: Path, name: str, result: dict[str, Any]) -> Path:
-    """研究型子命令 (micro-report / skew-proxy) 的輸出：{out_dir}/calibration/{name}_{stamp}/results.json。"""
+def write_study_report(
+    out_dir: Path,
+    name: str,
+    result: dict[str, Any],
+    markdown: Optional[str] = None,
+) -> Path:
+    """研究型子命令 (micro-report / skew-proxy / notif-report) 的輸出：
+    {out_dir}/calibration/{name}_{stamp}/results.json（有 `markdown` 時另寫 report.md）。"""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     target = resolve_output_dir(out_dir, f"{name}_{stamp}")
     target.mkdir(parents=True, exist_ok=True)
@@ -254,4 +260,6 @@ def write_study_report(out_dir: Path, name: str, result: dict[str, Any]) -> Path
     path.write_text(
         json.dumps(_jsonable(result), ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    if markdown is not None:
+        (target / "report.md").write_text(markdown, encoding="utf-8")
     return path

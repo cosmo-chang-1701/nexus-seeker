@@ -189,19 +189,29 @@ class SchedulerCog(commands.Cog):
         import config
         from services.llm_service import is_memory_safe
 
-        if not getattr(config, "ENABLE_REGIME_EVALUATION_LOG", True):
-            return
         if not is_memory_safe():
             logger.warning("🏷️ [評估結果標註] 記憶體水位過高，跳過本輪。")
             return
 
-        try:
-            from services.regime_outcome_labeler import run_outcome_labeling
+        if getattr(config, "ENABLE_REGIME_EVALUATION_LOG", True):
+            try:
+                from services.regime_outcome_labeler import run_outcome_labeling
 
-            summary = await run_outcome_labeling()
-            logger.info(f"🏷️ [評估結果標註] {summary}")
+                summary = await run_outcome_labeling()
+                logger.info(f"🏷️ [評估結果標註] {summary}")
+            except Exception as e:
+                logger.error(f"Regime 評估紀錄結果標註失敗: {e}")
+
+        # 通知送達紀錄的「照做 vs 持有」反事實標註（與上方獨立：任一失敗不影響另一個）
+        if not getattr(config, "ENABLE_NOTIFICATION_DISPATCH_LOG", True):
+            return
+        try:
+            from services.regime_outcome_labeler import run_dispatch_outcome_labeling
+
+            dispatch_summary = await run_dispatch_outcome_labeling()
+            logger.info(f"🏷️ [通知成效標註] {dispatch_summary}")
         except Exception as e:
-            logger.error(f"Regime 評估紀錄結果標註失敗: {e}")
+            logger.error(f"通知送達紀錄結果標註失敗: {e}")
 
     @regime_outcome_labeler.before_loop
     async def before_regime_outcome_labeler(self) -> None:

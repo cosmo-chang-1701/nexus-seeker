@@ -513,12 +513,51 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
 - Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
 
+### 5.14 通知成效前向評估 (`notification_dispatch_log` / `notif-report`)
+
+**問題**：每個通知頻道「讓使用者照做」究竟改善還是傷害了 B&H 投組的下行風險表現，過去沒有任何資料可以回答。回測只能評估引擎，看不到使用者實際收到、實際可能照做的訊號。
+
+**資料流**：
+1. `services/notification_dispatcher.notify()` / `notify_many()` 的呼叫端對**帶標的且可行動**的推播傳入 `record=DispatchRecord(...)`（動態轉倉指令經 `rollover_dispatch_record()` 映射、DITM 獲利鎖定、Covered Call 解套、自選進場顧問、SEC 論點破滅、價量突破）。只有**實際入列之後**才記錄：頻道關閉、去重擋下、乾跑抑制、入列失敗都不記錄；只有 leader 實例記錄（`bot._is_leader_instance is True`，單元測試的 mock bot 不會污染資料）。
+2. 紀錄進有界 deque，於各排程週期結尾一次批次寫入 `notification_dispatch_log`（v083，唯一鍵：使用者／頻道／標的／情境／動作／交易日）。`ENABLE_NOTIFICATION_DISPATCH_LOG=false` 時完全 no-op。
+3. 03:30 ET `run_dispatch_outcome_labeling()`：送達已滿 20 個交易日（`market_time.get_trading_days_ago_utc(21)` 截點）且非 INFO 的紀錄，以日線計算「照做」與「持有不動」兩條逐日報酬路徑（`market_analysis/notification_outcome.py`），寫入 `notification_dispatch_outcome`。資料不足時延後重試，超過 90 天仍不足才標 `NO_DATA`。**延伸視窗**：已以 20 日標註者，滿 60 個交易日後以 60 日路徑覆寫同一列（送達後 150 天內持續重試；逾期則保留 20 日結果）。20 日路徑恰為 60 日路徑的前 21 期，兩個視窗可直接並列比較。
+4. 開發機以 `python -m calibration notif-report --snapshot-db <快照>` 產出報告；**只讀快照、不寫 DB、不改參數**。
+
+**反事實建構**（每則通知獨立、1 單位名目部位；現金報酬為 $R_f = 4.5\%$）：
+
+| 訊號 | 持有不動曝險 | 照做曝險 | 來源 |
+| :--- | :---: | :---: | :--- |
+| ENTRY | $0$ | $\pm$ratio | 進場顧問、`OPEN_PYRAMID`、`OPEN_SHORT`、價量向上突破 |
+| REDUCE | $1$ | $1 - $ratio | 轉倉 `REDUCE`（`sell_ratio`）、Covered Call 解套（ratio = 0.3，典型價外 call 的 Delta） |
+| EXIT | $1$ | $0$ | `LIQUIDATE`、結構失效類顧問告知（`SL*`）、DITM 獲利鎖定、SEC 論點破滅、價量向下跌破、保護性 Put（上限近似） |
+| INFO | — | — | `HOLD`、`BTC`、目標區顧問告知、所有期權部位指令（標的價格路徑無法近似期權損益） |
+
+路徑起點無前視：送達於美東 16:00 前，當日收盤為第一個觀測；之後則從下一個交易日開始。參考價優先用送達當下價格，缺值時用第一個觀測日之前最後一根收盤。
+
+**報告合併**：同一 (頻道, 情境, 視窗) 內把所有事件的逐日報酬**串接成一條序列**再計算 Sortino（MAR = $R_f$）與 CVaR95，而不是逐筆計算後平均——單一事件只有 21 個觀測，逐筆 Sortino 會被下行差接近 0 的極端小樣本主導，也不足以估計 95% 尾部。MDD 與總報酬由截斷後的序列重算，取逐事件差的平均。信賴區間以事件為單位 bootstrap 重抽樣（保留事件內的時間相關性；固定 seed，可重現）。
+
+**雙視窗**：報告並列 20 日（全部已標註事件，取前 21 期）與 60 日（已延伸者）。防護類訊號（停損、逃頂、基本面出場）的價值常在更長期間才顯現——2025 年 NVDA 在 SL1 結構失效出場後三個月才跌到 −37%——只看 20 日會系統性低估它們；減碼類訊號的機會成本同樣可能在 60 日才完整顯現。**兩個視窗結論相反時視為無法判定。**
+
+**判讀準則**（Sortino 為主，見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）：
+
+| 條件 | 結論 |
+| :--- | :--- |
+| 該組已標註事件 $< 20$ | 樣本不足，只描述不判讀 |
+| ΔSortino 95% CI 上界 $\le 0$，且 ΔCVaR95 $\ge 0$（照做沒有降低尾部損失） | **建議該頻道（或該情境）在 B&H 預設情境下關閉**——人工審核後另開 PR 調整註冊表，工具不自動改 |
+| ΔSortino 95% CI 下界 $> 0$ | 照做顯著改善 Sortino，維持開啟 |
+| 其他 | 無法判定，繼續累積 |
+
+ΔMDD 與 Δ總報酬只作輔助描述：B&H 使用者最在意的是「照做是否以截斷上行換取低回撤」，這正是 Sortino 會抓出、而 MDD 單獨看不出的情形。
+
+**已知限制**：反事實忽略交易成本與稅；轉倉類指令（機會成本、核心資金部署）只評估「賣出來源標的」這一腿，不含買進目標標的；ENTRY 以 1 單位計，與實際倉位模型不同；保護性 Put 以「完全出場」近似會高估其效果；空頭部位的 REDUCE／EXIT 需指令帶 `direction == "SHORT"` 才會取負號（目前只有做空進場指令帶此欄位）。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report`）
+  - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
   - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
   - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
@@ -538,8 +577,11 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
   - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_record_exit_tier()` 出場分層記錄點（顧問模式轉換之前）
   - `nexus_core/database/migrations/v075_add_regime_evaluation_log.py`：資料表定義
   - `nexus_core/database/regime_evaluation_log.py`：存取層
-  - `nexus_core/services/regime_outcome_labeler.py`：事後走勢標註
+  - `nexus_core/services/regime_outcome_labeler.py`：事後走勢標註；`run_dispatch_outcome_labeling()` 為通知送達紀錄的反事實標註（§5.14）
+  - `nexus_core/services/notification_dispatch_recorder.py`：通知送達記錄器（`DispatchRecord`、`rollover_dispatch_record()`、`flush_dispatch_records()`）
+  - `nexus_core/market_analysis/notification_outcome.py`：「照做 vs 持有」反事實路徑（純函式，labeler 與報告共用）
+  - `nexus_core/database/migrations/v083_add_notification_dispatch_log.py`、`nexus_core/database/notification_dispatch_log.py`：通知送達紀錄資料表與存取層
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
 - **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`、`em_snapshot_history`）、`nexus_edge_scraper/scheduler.py`（盤中 GEX 輪詢、收盤後 `record_em_snapshot_once()`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`test_notification_dispatch_outcome.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`

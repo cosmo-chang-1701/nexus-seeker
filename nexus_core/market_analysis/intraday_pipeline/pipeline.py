@@ -601,6 +601,7 @@ class IntradayScanPipeline:
                 rr_ratio=advice.rr_ratio,
             )
             from services.notification_dispatcher import notify
+            from services.notification_dispatch_recorder import DispatchRecord
 
             await notify(
                 self.bot,
@@ -608,6 +609,14 @@ class IntradayScanPipeline:
                 "advisory_entry_signal",
                 embed=embed,
                 dedup_key=cache_key,
+                record=DispatchRecord(
+                    symbol=ticker.upper(),
+                    signal_kind="ENTRY",
+                    scenario=str(advice.regime or advice.strategy or ""),
+                    action="ENTRY_ADVICE",
+                    direction="SHORT" if advice.direction == "SHORT" else "LONG",
+                    price=advice.entry_price,
+                ),
             )
         except Exception as e:
             logger.warning(f"[{ticker}] 進場顧問派發失敗 (uid={user_id}): {e}")
@@ -814,6 +823,11 @@ class IntradayScanPipeline:
                 from market_analysis import evaluation_recorder
 
                 await evaluation_recorder.flush_evaluations()
+                from services.notification_dispatch_recorder import (
+                    flush_dispatch_records,
+                )
+
+                await flush_dispatch_records()
 
                 # 4. 睡眠 30 分鐘
                 await asyncio.sleep(self.scan_interval_seconds)
