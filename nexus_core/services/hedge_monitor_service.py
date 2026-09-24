@@ -181,7 +181,7 @@ class HedgeMonitorService:
         # 4. LLM Narration —— 頻道關閉時不呼叫 LLM（推播不會送出，敘述無人閱讀）。
         #    下方的 VTR 對沖紀錄與 hedge_alerts 仍照常寫入：它們餵給 Brinson 歸因，
         #    不應因使用者靜音通知而出現缺口。
-        if await is_channel_enabled(user_id, "defense_macro_tail_risk"):
+        if await is_channel_enabled(user_id, "defense_hedge_advice"):
             narration = await self._generate_narration(
                 user_id, metrics.model_dump(), adj_delta, vix_level
             )
@@ -314,9 +314,9 @@ class HedgeMonitorService:
         alert_id: Any,
         poly_snapshot: Any = None,
     ):
-        if not await is_channel_enabled(user_id, "defense_macro_tail_risk"):
+        if not await is_channel_enabled(user_id, "defense_hedge_advice"):
             logger.info(
-                f"使用者 {user_id} 已關閉 defense_macro_tail_risk，略過組合對沖警報。"
+                f"使用者 {user_id} 已關閉 defense_hedge_advice，略過組合對沖警報。"
             )
             return
         tier = get_vix_tier(vix)
@@ -335,4 +335,4 @@ class HedgeMonitorService:
             alert_id=alert_id,
             poly_snapshot=poly_snapshot,
         )
-        await notify(self.bot, user_id, "defense_macro_tail_risk", embed=embed)
+        await notify(self.bot, user_id, "defense_hedge_advice", embed=embed)

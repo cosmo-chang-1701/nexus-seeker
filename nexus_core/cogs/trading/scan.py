@@ -12,9 +12,11 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import discord
 from discord.ext import commands
 
 import database
+from database.notification_channels import NotificationKey
 from services.notification_dispatcher import is_channel_enabled, notify, notify_many
 from services.trading_service import TradingService
 from services.alert_filter import should_send_priority_alert
@@ -114,8 +116,14 @@ class MarketScanCog(commands.Cog):
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
             for uid in uids:
-                # 先查開關再掃描：IV 掃描本身要抓期權鏈，關閉的使用者不必付這個成本
-                if not await is_channel_enabled(uid, "alpha_market_signals"):
+                # 先查開關再掃描：IV 掃描本身要抓期權鏈，兩個頻道都關閉的使用者
+                # 不必付這個成本。IV 優勢（廉價期權）屬情報；高 IV 事件風險警告
+                # （IV crush）屬左尾防護，兩者分流。
+                iv_opportunity_on = await is_channel_enabled(
+                    uid, "alpha_market_signals"
+                )
+                iv_risk_on = await is_channel_enabled(uid, "defense_gamma_fragility")
+                if not (iv_opportunity_on or iv_risk_on):
                     continue
                 user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
@@ -130,10 +138,15 @@ class MarketScanCog(commands.Cog):
 
                         embed = create_volatility_embed(report)
                         strategy = report.get("strategy", "IV")
+                        iv_channel: NotificationKey = (
+                            "defense_gamma_fragility"
+                            if report.get("is_high_risk_vol")
+                            else "alpha_market_signals"
+                        )
                         await notify(
                             self.bot,
                             uid,
-                            "alpha_market_signals",
+                            iv_channel,
                             embed=embed,
                             dedup_key=(
                                 f"iv_alert_{uid}_{report['symbol']}_{strategy}_{today_str}"
@@ -233,13 +246,16 @@ class MarketScanCog(commands.Cog):
                         if is_auto:
                             user_cooldowns[cooldown_key] = now
 
-                if valid_alerts and await is_channel_enabled(uid, "alpha_option_scan"):
+                if valid_alerts:
                     title = (
                         "📡 **【盤中動態掃描】NRO 風控已介入判定：**"
                         if is_auto
                         else "⚡ **【管理員強制掃描】風險模擬結果：**"
                     )
                     scan_embeds = [create_info_embed(title="掃描通知", message=title)]
+                    # Re-hedge 是持倉 Delta 再平衡建議（左尾防護），與 NRO 期權掃描
+                    # 分屬不同頻道：使用者關掉期權掃描雜訊時不應連帶失去對沖建議。
+                    rehedge_embeds: list[discord.Embed] = []
                     user_capital = user_context.capital
                     for data in valid_alerts:
                         # 單則組裝失敗只略過該則，不影響同批其他警報
@@ -255,7 +271,7 @@ class MarketScanCog(commands.Cog):
 
                                 rehedge_info = data.get("rehedge_info")
                                 if rehedge_info:
-                                    scan_embeds.append(
+                                    rehedge_embeds.append(
                                         create_rehedge_embed(rehedge_info)
                                     )
                         except Exception as build_err:
@@ -264,6 +280,9 @@ class MarketScanCog(commands.Cog):
                                 f"(uid={uid}, symbol={data.get('symbol')}): {build_err}"
                             )
                     await notify_many(self.bot, uid, "alpha_option_scan", scan_embeds)
+                    await notify_many(
+                        self.bot, uid, "defense_hedge_advice", rehedge_embeds
+                    )
 
             self._update_macro_state(user_results)
 

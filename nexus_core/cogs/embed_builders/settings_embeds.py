@@ -14,26 +14,35 @@ from database.notification_channels import ALL_NOTIFICATION_KEYS
 from datetime import datetime, timezone
 
 
-def create_notification_settings_embed(module_fields: list) -> discord.Embed:
-    """建立自訂通知設定偏好中心 Embed"""
+def create_notification_settings_embed(
+    module_fields: list, recommend_bh_defense: bool = False
+) -> discord.Embed:
+    """建立自訂通知設定偏好中心 Embed。
+
+    模組依「對投組下行風險的影響」分組；每個頻道附「頻率 · 作用」標籤。
+    `recommend_bh_defense` 為 True（帳戶 portfolio_mode='ADVISORY'）時標示 B&H 防守為建議情境。
+    """
+    bh_hint = "（你的帳戶為 B&H 顧問模式，建議使用）" if recommend_bh_defense else ""
     embed = NexusEmbed(
-        title="🌌 Nexus Seeker ｜ 戰術通知管理中樞 (4 大戰術維度)",
+        title="🌌 Nexus Seeker ｜ 通知頻道中心 (依下行風險影響分組)",
         description=(
-            "點擊下方選單切換模組設定，或直接點擊快捷情境按鈕：\n"
-            f"• **🛡️ 戰備全開**：開啟全部 {len(ALL_NOTIFICATION_KEYS)} 個通知頻道\n"
-            "• **🎯 精準交易**：保留定時戰報、持倉防禦與全天候情報 (WTI/Polymarket)，"
-            "僅關閉盤中自選心跳與 Alpha 雜訊\n"
-            "• **🔕 盤中靜音**：僅關閉盤中高頻雜訊，保留戰報、保證金警戒、"
-            "護城河警報與全天候情報 (WTI/Polymarket)"
+            "選擇模組後，在第二個選單勾選要開啟的頻道（未勾選者關閉）；"
+            "或點擊下方預設情境：\n"
+            f"• **🧭 B&H 防守**{bh_hint}：開啟左尾防護與上行捕捉，關閉所有上行削減"
+            "（停利分批、獲利鎖定、換股、賣 Covered Call），情報只保留自訂門檻型\n"
+            "• **🎯 精準交易**：只關閉雜訊類頻道（自選雷達、Alpha 掃描、做空訊號等）\n"
+            "• **🔕 盤中靜音**：再關閉所有盤中節奏的推播，保留每日 / 每週 / 全天候頻道\n"
+            f"• **🛡️ 戰備全開**：開啟全部 {len(ALL_NOTIFICATION_KEYS)} 個頻道\n"
+            "🛡️ 左尾防護的頻道任何預設情境都不會關閉，只能逐項手動關。"
         ),
         color=discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )
     for name, value in module_fields:
         if value.strip():
-            embed.add_field(name=name, value=value, inline=False)
+            embed.add_field(name=name, value=value[:1024], inline=False)
 
-    embed.set_footer(text="Quantitative Preferences | Tactical Dashboard")
+    embed.set_footer(text="頻率 · 作用：截左尾 / 捕捉上行 / 削減上行 / 情報 / 戰報")
     return embed
 
 

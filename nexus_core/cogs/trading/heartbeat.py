@@ -12,7 +12,7 @@ from datetime import datetime
 
 import database
 import market_time
-from services.notification_dispatcher import notify, notify_many
+from services.notification_dispatcher import is_channel_enabled, notify, notify_many
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,13 @@ def _build_user_deliverable(
 
     for uid, symbols in user_symbols.items():
         try:
-            if not database.is_notification_enabled(uid, "heartbeat_watchlist"):
-                logger.info(f"使用者 {uid} 已關閉自選心跳訂閱，略過心跳推送。")
+            # 雷達（heartbeat_watchlist）與情境事件（intel_market_scenario）共用同一份
+            # 雷達資料，任一開啟就需要抓取；各自的推播在 Pass 3 分別判斷。
+            if not (
+                database.is_notification_enabled(uid, "heartbeat_watchlist")
+                or database.is_notification_enabled(uid, "intel_market_scenario")
+            ):
+                logger.info(f"使用者 {uid} 已關閉自選雷達與情境事件，略過心跳推送。")
                 continue
 
             user_context = database.get_full_user_context(uid)
@@ -162,10 +167,11 @@ async def dispatch_watchlist_heartbeat(
             valid_results = [r for r in scan_results if isinstance(r, dict)]
 
             if valid_results:
-                embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
-                if not isinstance(embeds, list):
-                    embeds = [embeds]
-                await notify_many(bot, uid, "heartbeat_watchlist", embeds)
+                if await is_channel_enabled(uid, "heartbeat_watchlist"):
+                    embeds = build_radar_scan_embed(valid_results, "WATCHLIST", uid)
+                    if not isinstance(embeds, list):
+                        embeds = [embeds]
+                    await notify_many(bot, uid, "heartbeat_watchlist", embeds)
 
                 # --- Scenario Alert Logic ---
                 from market_analysis.scenario_classifier import (
@@ -281,7 +287,7 @@ async def dispatch_watchlist_heartbeat(
                         await notify(
                             bot,
                             uid,
-                            "heartbeat_watchlist",
+                            "intel_market_scenario",
                             embed=alert_embed,
                             dedup_key=cache_key,
                         )
