@@ -58,9 +58,11 @@ class RiskAppetite(str, Enum):
     部署比例要套用哪一組參數 (見 constants.py::resolve_risk_profile)。
 
     DEFENSIVE 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化。
-    AGGRESSIVE 的數值全部來自 calibration/backtest_engine_2025.py 已驗證的
-    aggressive 模式（2025 回測顯示其報酬/MDD/Sharpe 三項皆優於 DEFENSIVE，見
-    docs/strategies/04_dynamic_rollover_state_machine.md §2.10）。
+    AGGRESSIVE 的數值全部來自 calibration/backtest_engine_2025.py 的 aggressive
+    模式。採用當時的依據（早期引擎「報酬/MDD/Sharpe 三項皆優於 DEFENSIVE」）在
+    2026-09-23 以 Sortino 為主的判準重跑後已不成立（DEFENSIVE 1.45 > AGGRESSIVE
+    1.13，見 docs/strategies/04_dynamic_rollover_state_machine.md §2.10.1）；
+    是否調整屬人工決策，數值尚未變更。
 
     新增 enum 值不需要 migration：user_settings.risk_appetite 是
     TEXT DEFAULT 'DEFENSIVE'，無 CHECK 約束（見 v076_add_risk_appetite.py）。

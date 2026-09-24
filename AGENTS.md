@@ -122,6 +122,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - DITM 凸性防護與獲利鎖定、Covered Call Unlock Recovery Rules → [`04_ditm_convexity_profit_lock.md`](docs/risk_portfolio/04_ditm_convexity_profit_lock.md)
 - 財務生存跑道與 Theta 現金流防禦緩衝模型 → [`05_financial_runway_and_liquidity.md`](docs/risk_portfolio/05_financial_runway_and_liquidity.md)
 - 對沖績效 Brinson 歸因與動態 Tau 自我進化閉環 → [`06_brinson_performance_attribution.md`](docs/risk_portfolio/06_brinson_performance_attribution.md)
+- 下行風險評估體系（**Sortino 為主判讀指標**、MDD 與 VaR / CVaR 為輔；Sharpe／Calmar 只作回測描述，不得作為判讀或優化目標；減碼 B&H 對照組以下行差對齊）→ [`07_downside_risk_sortino_var_cvar.md`](docs/risk_portfolio/07_downside_risk_sortino_var_cvar.md)
 
 ### 總體經濟、事件日曆與輿情預測 (`docs/macro_sentiment/`)
 - 宏觀逃頂推演矩陣、CME FedWatch、流動性退潮防禦 → [`01_macro_escape_top_matrix.md`](docs/macro_sentiment/01_macro_escape_top_matrix.md)
@@ -183,6 +184,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/evaluation_recorder.py` — hot-path forward-collection recorder: O(1) append into a bounded deque, records **only inside an `evaluation_source()` context** (so unit tests and ad-hoc scripts never pollute data), flushed once per cycle. Hooked into `classify_dynamic_regime`, the right/left gates and `evaluate_short_entry`
 - `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
 - `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
+- `nexus_core/market_analysis/downside_risk.py` — 下行風險指標的**單一權威**（numpy 葉模組）：全樣本分母下行差、Sortino（MAR = $R_f$）、MDD、歷史模擬 VaR／CVaR（樣本 < 60 回 `None`）。`calibration/backtest_engine_2025.py` 與日後任何績效／風險評估都必須呼叫它；`sharpe_ratio()` 僅供回測描述
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
 - `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
@@ -462,7 +464,7 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
 
 - `docs/README.md` 是所有量化模型／交易策略／風控引擎／平台功能敘述的 SSOT；本檔案（`AGENTS.md`）只負責貢獻者導覽（服務架構、模組地圖）與工程慣例（DB／測試／型別／部署），**不應**再累積功能敘事或修復歷史。
 - 新增或修改一項功能時：
-  - 若屬於既有 32 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
+  - 若屬於既有 33 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
   - 若屬於全新量化主題且值得獨立成篇，新增前請評估是否應納入 `scripts/verify_docs_integrity.py` 的 `EXPECTED_SPECIFICATIONS` 強制清單（需符合 6 段式模板）。
   - 若屬於 UX／排程／通知／委託單等非量化平台功能，寫入或更新 `docs/platform/` 下對應文件（格式較自由，但仍需維持繁體中文、不含 Docker/`.env`/quickstart 內容、內部連結有效），並在 [`docs/README.md`](docs/README.md) 的平台文件索引中加入條目。
 - 撰寫任何文件時：
@@ -471,4 +473,4 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
   3. 反映現行的欄位式（field-based）embed 格式
   4. 討論通知行為時提及持久化 DM 佇列
   5. `docs/` 保持功能／業務邏輯導向，`AGENTS.md` 保持貢獻者工作流程導向
-  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 32 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`
+  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 33 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`

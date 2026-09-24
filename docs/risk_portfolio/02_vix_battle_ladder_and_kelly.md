@@ -24,7 +24,7 @@ Nexus Seeker 將此逆向哲學規格化為 **VIX 戰情階梯（VIX Battle Ladd
 
 上述 VIX 戰情階梯與凱利先驗是**盤中即時**的單筆倉位風控，回答「這一筆現在能下多大」。`RiskAppetite`（`DEFENSIVE`／`AGGRESSIVE`）是正交的另一個旋鈕，回答「動態轉倉引擎整體要多快減碼、多快轉倉、多敢部署」，作用在 TP1 執行比例、機會成本轉倉 EV 門檻、核心資金部署比例與衛星預算上限四個組合層級參數上，兩者不互相覆寫。
 
-`DEFENSIVE` 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化；`AGGRESSIVE` 的數值全部來自 [`04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10 已驗證的 2025 回測動能進攻型模式（報酬／MDD／Sharpe 三項皆優於 Defensive）。詳細數值見 §4.4。
+`DEFENSIVE` 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化；`AGGRESSIVE` 的數值全部來自 [`04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10 的 2025 回測動能進攻型模式（採用當時依據為早期引擎版本「報酬／MDD／Sharpe 三項皆優於 Defensive」）。⚠️ 2026-09-23 以現行程式碼與 **Sortino 為主**的判準重跑，Defensive（1.45）優於 Aggressive（1.13），此前提已不成立；是否調整屬人工決策，參數尚未變更。詳細數值見 §4.4 與 [`07_downside_risk_sortino_var_cvar.md`](07_downside_risk_sortino_var_cvar.md)。
 
 因此系統以**交易意圖**（`classify_trade_intent()`）分流，而不是以 `"STO"`／`"BTO"` 字串分流：
 
