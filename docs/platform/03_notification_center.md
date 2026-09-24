@@ -80,11 +80,13 @@
 新增的 10 個子頻道以母頻道（`parent_key`）的**明確設定**回填（`INSERT OR IGNORE`，冪等、不覆寫事後調整）：已靜音母頻道者子頻道維持靜音，從未設定者沿用預設值（比照 `v070`／`v078`）。`defense_portfolio_risk` 拆完後刪除其資料列，並列入 `LEGACY_KEY_ALIASES` 指向 `defense_gamma_fragility`（`profit_lock_alert` → `trim_profit_lock`、`margin_and_api_alert` → `defense_margin_call`）。`MARGIN_API` 併入 `defense_margin_call` 時刻意不回填，避免過去關閉混裝頻道的使用者連帶靜音保證金警戒。遷移內的對照表是凍結快照，`test_v081_parent_map_matches_registry` 確保與註冊表一致。
 
 #### 2.2.5 UI（`NotificationSettingsView`，5 row 以內）
-  - Row 0：模組選單（6 模組，描述寫出該模組對 Sortino／回撤的作用）
+  - **核心 vs 進階**：面板預設只呈現三個會改變投組報酬分佈的**核心模組**（🛡️ 左尾防護、🚀 上行捕捉、✂️ 上行削減）；情報與戰報類模組收在「⚙️ 進階」裡。分組以註冊表的 `risk_role` 推導（模組內所有頻道皆為 `INTEL`／`BRIEFING` 即歸進階，`cogs/settings_ui.py::ADVANCED_MODULES`／`CORE_MODULES`），不寫死模組或頻道 key，註冊表新增頻道時自動跟上。收合只影響畫面呈現，**預設情境仍會一併套用到進階頻道**。
+  - Row 0：模組選單（收合時只列核心模組；展開後列出全部模組；描述寫出該模組對 Sortino／回撤的作用）
   - Row 1：本模組頻道**多選** Select（`min_values=0`、預設選取＝目前開啟；送出後勾選者開啟、未勾選者關閉，以 `set_user_notification_settings_bulk()` 單一交易寫入並清快取）
   - Row 2：本區全開／全關（同一批次寫入）
   - Row 3：預設情境（🧭 B&H 防守、🎯 精準交易、🔕 盤中靜音、🛡️ 戰備全開）
-  - embed 每個頻道顯示 `🟢/🔴 標籤` 與「頻率 · 作用」標籤（`channel_status_tags()`）
+  - Row 4：`⚙️ 進階：情報與戰報`／`⬆️ 收合進階` 切換按鈕。展開時直接切到第一個進階模組；收合時若正停在進階模組則回到左尾防護，停在核心模組則保持不變。
+  - embed：核心模組每個頻道顯示 `🟢/🔴 標籤` 與「頻率 · 作用」標籤（`channel_status_tags()`）；進階收合時只顯示一行摘要（例如「情報 N 項（M 開啟）、戰報 N 項（M 開啟）」，`build_advanced_summary()`），展開後才逐項列出。
 - **集中式推播入口（`services/notification_dispatcher.py`）**：所有主動推播一律經 `notify()`／`notify_many()`，順序固定為「頻道開關 → 去重讀取 → 入列持久化 DM 佇列 → 寫入去重旗標」：
   - 關閉的頻道不做任何 I/O、**不寫去重旗標**，使用者重新開啟後當日尚未送達的事件仍能送出；入列失敗不會燒掉旗標。
   - 昂貴工作之前先以 `is_channel_enabled()` 判斷：Polymarket 巨鯨摘要的 LLM 呼叫、對沖警報的 LLM 敘述、Covered Call 解套推薦、IV 優勢掃描。對沖警報的 VTR 紀錄與 `hedge_alerts` 仍照常寫入（餵給 Brinson 歸因）。

@@ -1,4 +1,5 @@
 from typing import Any
+import discord
 import pytest
 from unittest.mock import AsyncMock
 from database.notification_channels import TRADING_MODULES
@@ -112,14 +113,14 @@ def test_toggle_all_settings(db_conn: Any):  # type: ignore
 
 @pytest.mark.asyncio
 async def test_notification_settings_view_structure(db_conn: Any):  # type: ignore
-    """6 模組選單、多選 Select 與本區全關的反應"""
-    from cogs.settings_ui import NotificationSettingsView
+    """核心模組選單、多選 Select 與本區全關的反應"""
+    from cogs.settings_ui import CORE_MODULES, NotificationSettingsView
 
     user_id = 999444
 
     view = NotificationSettingsView(user_id)
-    # 1 個模組選單、1 個多選、2 個本區按鈕、4 個預設情境按鈕
-    assert len(view.children) == 8
+    # 1 個模組選單、1 個多選、2 個本區按鈕、4 個預設情境按鈕、1 個進階切換按鈕
+    assert len(view.children) == 9
 
     category_select = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_category"
@@ -128,16 +129,18 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
         c for c in view.children if getattr(c, "custom_id", None) == "select_toggles"
     )
 
-    assert len(category_select.options) == 6  # type: ignore
+    # 預設收合：模組選單只列核心模組
+    assert len(category_select.options) == len(CORE_MODULES)  # type: ignore
     # Discord 限制：每個 Select 最多 25 個選項
     for mod in TRADING_MODULES.values():
         assert len(mod["items"]) <= 25
 
-    # 預設模組為左尾防護（7 項），多選且可全不選，預設選取＝目前開啟
+    # 預設模組為左尾防護，多選且可全不選，預設選取＝目前開啟
     assert view.current_module == "left_tail"
-    assert len(module_select.options) == 7  # type: ignore
+    n_left_tail = len(TRADING_MODULES["left_tail"]["items"])
+    assert len(module_select.options) == n_left_tail  # type: ignore
     assert module_select.min_values == 0  # type: ignore
-    assert module_select.max_values == 7  # type: ignore
+    assert module_select.max_values == n_left_tail  # type: ignore
     assert all(o.default for o in module_select.options)  # type: ignore
 
     mock_interaction = AsyncMock()
@@ -711,3 +714,156 @@ def test_v081_backfills_children_from_parents(db_conn: Any) -> None:
     db_conn.commit()
     assert _row(8201, "trim_profit_lock")[0] == 1
     assert _row(8201, "defense_gamma_fragility")[0] == 0
+
+
+# ---------------------------------------------------------------------------
+# ⚙️ 進階：情報與戰報預設收合
+# ---------------------------------------------------------------------------
+
+
+def _child(view: Any, custom_id: str) -> Any:
+    return next(c for c in view.children if getattr(c, "custom_id", None) == custom_id)
+
+
+def _interaction(user_id: int, values: list[str] | None = None) -> Any:
+    it = AsyncMock()
+    it.user.id = user_id
+    it.response.edit_message = AsyncMock()
+    if values is not None:
+        it.data = {"values": values}
+    return it
+
+
+def test_advanced_modules_are_intel_and_briefing_only() -> None:
+    """分組以 risk_role 推導：進階＝只含情報 / 戰報頻道的模組，其餘為核心模組。"""
+    from cogs.settings_ui import ADVANCED_MODULES, CORE_MODULES
+    from database.notification_channels import CHANNELS
+
+    assert ADVANCED_MODULES, "應至少有一個進階模組"
+    assert set(ADVANCED_MODULES) | set(CORE_MODULES) == set(TRADING_MODULES)
+    assert not set(ADVANCED_MODULES) & set(CORE_MODULES)
+    for c in CHANNELS:
+        if c.module in ADVANCED_MODULES:
+            assert c.risk_role in {"INTEL", "BRIEFING"}, c.key
+        else:
+            assert c.risk_role in {
+                "LEFT_TAIL",
+                "UPSIDE_CAPTURE",
+                "UPSIDE_TRIM",
+            }, c.key
+    assert set(CORE_MODULES) == {"left_tail", "upside_capture", "upside_trim"}
+
+
+@pytest.mark.asyncio
+async def test_default_view_shows_only_core_modules(db_conn: Any) -> None:
+    from cogs.settings_ui import (
+        ADVANCED_MODULES,
+        CORE_MODULES,
+        NotificationSettingsView,
+    )
+
+    view = NotificationSettingsView(990001)
+    assert view.show_advanced is False
+    options = [o.value for o in _child(view, "select_category").options]
+    assert options == list(CORE_MODULES)
+    assert not set(options) & set(ADVANCED_MODULES)
+    assert _child(view, "btn_toggle_advanced").label == "⚙️ 進階：情報與戰報"
+
+    # embed：核心模組逐項列出，進階只剩一行摘要
+    embed = view.build_embed()
+    names = [f.name or "" for f in embed.fields]
+    for mod in ADVANCED_MODULES:
+        assert not any(TRADING_MODULES[mod]["title"] in n for n in names)
+    summary = next(f for f in embed.fields if f.name == "⚙️ 進階（已收合）")
+    assert "情報" in (summary.value or "") and "戰報" in (summary.value or "")
+
+
+@pytest.mark.asyncio
+async def test_advanced_summary_counts_follow_settings(db_conn: Any) -> None:
+    from cogs.settings_ui import ADVANCED_MODULES, build_advanced_summary
+    from database.notification_channels import CHANNELS
+
+    user_id = 990002
+    intel = [c.key for c in CHANNELS if c.risk_role == "INTEL"]
+    briefing = [c.key for c in CHANNELS if c.risk_role == "BRIEFING"]
+    assert all(c.module in ADVANCED_MODULES for c in CHANNELS if c.key in intel)
+    set_all_user_notification_settings(user_id, False)
+    set_user_notification_setting(user_id, intel[0], True)
+
+    text = build_advanced_summary(get_user_notification_settings(user_id))
+    assert f"情報 {len(intel)} 項（1 開啟）" in text
+    assert f"戰報 {len(briefing)} 項（0 開啟）" in text
+
+
+@pytest.mark.asyncio
+async def test_expand_advanced_and_toggle_intel_channel(db_conn: Any) -> None:
+    """展開進階後可切到情報與戰報模組，並以多選正常切換開關；收合後回到核心模組。"""
+    from cogs.settings_ui import (
+        ADVANCED_MODULES,
+        CORE_MODULES,
+        NotificationSettingsView,
+    )
+
+    user_id = 990003
+    view = NotificationSettingsView(user_id)
+
+    await view.on_toggle_advanced(_interaction(user_id))
+    assert view.show_advanced is True
+    assert view.current_module == ADVANCED_MODULES[0]
+    options = [o.value for o in _child(view, "select_category").options]
+    assert options == list(CORE_MODULES + ADVANCED_MODULES)
+    assert _child(view, "btn_toggle_advanced").label == "⬆️ 收合進階"
+    embed = view.build_embed()
+    assert not any(f.name == "⚙️ 進階（已收合）" for f in embed.fields)
+    for mod in ADVANCED_MODULES:
+        assert any(
+            TRADING_MODULES[mod]["title"] in (f.name or "") for f in embed.fields
+        )
+
+    for mod in ADVANCED_MODULES:
+        await view.on_category_select(_interaction(user_id, [mod]))
+        assert view.current_module == mod
+        items = list(TRADING_MODULES[mod]["items"])
+        # 只勾選第一個：它開啟、其餘關閉
+        await view.on_select_callback(_interaction(user_id, [items[0]]))
+        assert is_notification_enabled(user_id, items[0]) is True
+        for key in items[1:]:
+            assert is_notification_enabled(user_id, key) is False
+
+    await view.on_toggle_advanced(_interaction(user_id))
+    assert view.show_advanced is False
+    assert view.current_module == "left_tail"
+    options = [o.value for o in _child(view, "select_category").options]
+    assert options == list(CORE_MODULES)
+
+
+@pytest.mark.asyncio
+async def test_collapse_keeps_core_module_selection(db_conn: Any) -> None:
+    from cogs.settings_ui import NotificationSettingsView
+
+    user_id = 990004
+    view = NotificationSettingsView(user_id)
+    await view.on_toggle_advanced(_interaction(user_id))
+    await view.on_category_select(_interaction(user_id, ["upside_trim"]))
+    await view.on_toggle_advanced(_interaction(user_id))
+    assert view.current_module == "upside_trim"
+
+
+@pytest.mark.asyncio
+async def test_view_respects_discord_component_limits(db_conn: Any) -> None:
+    """展開與收合兩種狀態都必須在 Discord 限制內：最多 5 row、每 row 最多 5 個元件、
+    每個 Select 最多 25 個選項。"""
+    from collections import Counter
+
+    from cogs.settings_ui import NotificationSettingsView
+
+    user_id = 990005
+    view = NotificationSettingsView(user_id)
+    for _ in range(2):
+        rows = Counter(getattr(c, "row", None) for c in view.children)
+        assert set(rows) <= {0, 1, 2, 3, 4}
+        assert all(n <= 5 for n in rows.values())
+        for c in view.children:
+            if isinstance(c, discord.ui.Select):
+                assert len(c.options) <= 25
+        await view.on_toggle_advanced(_interaction(user_id))
