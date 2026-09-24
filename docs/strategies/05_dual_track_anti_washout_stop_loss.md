@@ -199,7 +199,7 @@ flowchart TD
 | `ActTP1Exempt`（TP1 趨勢豁免）、`ActSL4`（SL-動態保本）、灰階 `ActHold`、淨額扣抵後降為 `HOLD` | **丟棄**（不推播）。此三者皆為 `HOLD` 且可能攜帶 `dynamic_state_patch`（棘輪停損）；丟棄意味該棘輪不再提交，代價僅是停損維持在較寬鬆的結構位，對 B&H 是可接受的取捨 |
 | `ActReduce`（常規比例控管）、`ActSL2`（SL-狀態翻轉）、`ActSL3`（SL-主力對沖） | **丟棄**，視為對 B&H 策略而言的戰術性雜訊 |
 
-轉換後的指令仍計入去重（`advisory_exit_{user}_{symbol}_{exit_tier}_{date}`），走獨立通知頻道 `advisory_core_levels`，且**不**附加 `RolloverActionView` 一鍵執行按鈕。`MARGIN_DEFENSE`（保證金強制平倉）為帳戶生存線，不受此轉換影響。
+轉換後的指令仍計入去重（`advisory_exit_{user}_{symbol}_{exit_tier}_{date}`）；目標區告知走獨立通知頻道 `advisory_core_levels`（上行削減），結構失效告知（`SL_STRUCTURAL`／`EXTREME_TICK_BREACH`）與指令模式的結構失效類分層同走左尾防護頻道 `defense_structure_break`（對照見 [`../platform/03_notification_center.md`](../platform/03_notification_center.md) §2.2.2），且**不**附加 `RolloverActionView` 一鍵執行按鈕。`MARGIN_DEFENSE`（保證金強制平倉）為帳戶生存線，不受此轉換影響。
 
 ---
 

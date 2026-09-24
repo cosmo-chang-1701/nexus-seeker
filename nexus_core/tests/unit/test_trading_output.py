@@ -32,15 +32,21 @@ async def test_monitor_real_portfolio_task_uses_helpers() -> None:
     embed1 = object()
     embed2 = object()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "cogs.trading.portfolio_monitor.create_profit_lock_alert_embed",
-        return_value=embed1,
-    ) as mock_profit, patch(
-        "cogs.trading.portfolio_monitor.create_gamma_fragility_embed",
-        return_value=embed2,
-    ) as mock_gamma:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch(
+            "cogs.trading.portfolio_monitor.create_profit_lock_alert_embed",
+            return_value=embed1,
+        ) as mock_profit,
+        patch(
+            "cogs.trading.portfolio_monitor.create_gamma_fragility_embed",
+            return_value=embed2,
+        ) as mock_gamma,
+    ):
         await cog.monitor_real_portfolio_task()
 
     mock_profit.assert_called_once()
@@ -62,9 +68,13 @@ async def test_monitor_real_portfolio_task_skips_when_memory_unsafe() -> None:
 
     cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=False):
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=False),
+    ):
         await cog.monitor_real_portfolio_task()
 
     cog.trading_service.audit_real_portfolio_risk.assert_not_called()
@@ -101,14 +111,19 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -152,14 +167,19 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -211,19 +231,25 @@ async def test_monitor_real_portfolio_task_force_live_gex_refresh_overrides_stal
         "gex_profile": {},
     }
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch(
-        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-        new_callable=AsyncMock,
-        return_value=fresh_gex_data,
-    ) as mock_fresh_gex:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            return_value=fresh_gex_data,
+        ) as mock_fresh_gex,
+    ):
         await cog.monitor_real_portfolio_task()
 
     # 除了本測試關注的 NVDA 持倉刷新外，其餘未 mock 的引擎方法 (Scenario 5
@@ -277,14 +303,19 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -333,14 +364,19 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -364,10 +400,13 @@ async def test_pre_market_risk_monitor_triggers_pre_warm() -> None:
     with patch("discord.ext.tasks.Loop.start"):
         cog = PreMarketCog(bot)
 
-    with patch(
-        "cogs.trading.pre_market.market_time.nyse_calendar.schedule",
-        return_value=SimpleNamespace(empty=False),
-    ), patch.object(cog, "_pre_warm_all_targets") as mock_pre_warm:
+    with (
+        patch(
+            "cogs.trading.pre_market.market_time.nyse_calendar.schedule",
+            return_value=SimpleNamespace(empty=False),
+        ),
+        patch.object(cog, "_pre_warm_all_targets") as mock_pre_warm,
+    ):
         await cog.pre_market_risk_monitor()
         # Since it's created as a task, we need to let the event loop run a bit or assert it was called.
         # However, asyncio.create_task wraps the coroutine. We can just patch `asyncio.create_task` directly if needed,
@@ -403,12 +442,16 @@ async def test_monitor_vtr_task_uses_ditm_helper() -> None:
     )
     embed = object()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
-        return_value=embed,
-    ) as mock_builder:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch(
+            "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+            return_value=embed,
+        ) as mock_builder,
+    ):
         await cog.monitor_vtr_task()
 
     mock_builder.assert_called_once()
@@ -449,12 +492,16 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm() -> None:
     )
     embed = object()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
-        return_value=embed,
-    ) as mock_builder:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch(
+            "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+            return_value=embed,
+        ) as mock_builder,
+    ):
         await cog.monitor_vtr_task()
 
     mock_builder.assert_called_once()
@@ -485,21 +532,26 @@ async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+    with (
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                capital=100000.0, risk_limit=15.0, option_alert_mode=1
+            ),
         ),
-    ), patch(
-        "database.is_symbol_in_portfolio",
-        side_effect=[False, True],
-    ), patch(
-        "database.is_notification_enabled",
-        return_value=True,
-    ), patch(
-        "cogs.embed_builder.build_radar_scan_embed",
-        return_value=object(),
-    ) as mock_builder:
+        patch(
+            "database.is_symbol_in_portfolio",
+            side_effect=[False, True],
+        ),
+        patch(
+            "database.is_notification_enabled",
+            return_value=True,
+        ),
+        patch(
+            "cogs.embed_builder.build_radar_scan_embed",
+            return_value=object(),
+        ) as mock_builder,
+    ):
         from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
 
         await dispatch_watchlist_heartbeat(
@@ -525,16 +577,20 @@ async def test_dispatch_watchlist_heartbeat_syncs_symbols_to_edge_cache() -> Any
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+    with (
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                capital=100000.0, risk_limit=15.0, option_alert_mode=1
+            ),
         ),
-    ), patch("database.is_symbol_in_portfolio", return_value=False), patch(
-        "database.is_notification_enabled", return_value=True
-    ), patch("cogs.embed_builder.build_radar_scan_embed", return_value=object()), patch(
-        "services.edge_cache_client.sync_watchlist_symbols", new_callable=AsyncMock
-    ) as mock_sync:
+        patch("database.is_symbol_in_portfolio", return_value=False),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("cogs.embed_builder.build_radar_scan_embed", return_value=object()),
+        patch(
+            "services.edge_cache_client.sync_watchlist_symbols", new_callable=AsyncMock
+        ) as mock_sync,
+    ):
         from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
 
         await dispatch_watchlist_heartbeat(
@@ -559,19 +615,23 @@ async def test_dispatch_watchlist_heartbeat_survives_edge_sync_failure() -> Any:
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            capital=100000.0, risk_limit=15.0, option_alert_mode=1
+    with (
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                capital=100000.0, risk_limit=15.0, option_alert_mode=1
+            ),
         ),
-    ), patch("database.is_symbol_in_portfolio", return_value=False), patch(
-        "database.is_notification_enabled", return_value=True
-    ), patch(
-        "cogs.embed_builder.build_radar_scan_embed", return_value=object()
-    ) as mock_builder, patch(
-        "services.edge_cache_client.sync_watchlist_symbols",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("edge unreachable"),
+        patch("database.is_symbol_in_portfolio", return_value=False),
+        patch("database.is_notification_enabled", return_value=True),
+        patch(
+            "cogs.embed_builder.build_radar_scan_embed", return_value=object()
+        ) as mock_builder,
+        patch(
+            "services.edge_cache_client.sync_watchlist_symbols",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("edge unreachable"),
+        ),
     ):
         from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
 
@@ -600,24 +660,29 @@ async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
     )
     bot.get_cog.return_value = mock_terminal
 
-    with patch(
-        "database.get_full_user_context",
-        return_value=SimpleNamespace(
-            capital=100000.0, risk_limit=15.0, option_alert_mode=2
+    with (
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                capital=100000.0, risk_limit=15.0, option_alert_mode=2
+            ),
         ),
-    ), patch(
-        # 持倉判定已由逐 (使用者, 標的) 查詢改為一次取回集合後在記憶體比對，
-        # 避免心跳 Pass 1 在 event loop 上跑 O(使用者 × 標的) 次同步查詢。
-        # AAPL 無持倉、NVDA 有持倉。
-        "database.get_all_portfolio_symbol_pairs",
-        return_value={(1, "NVDA")},
-    ), patch(
-        "database.is_notification_enabled",
-        return_value=True,
-    ), patch(
-        "cogs.embed_builder.build_radar_scan_embed",
-        return_value=object(),
-    ) as mock_builder:
+        patch(
+            # 持倉判定已由逐 (使用者, 標的) 查詢改為一次取回集合後在記憶體比對，
+            # 避免心跳 Pass 1 在 event loop 上跑 O(使用者 × 標的) 次同步查詢。
+            # AAPL 無持倉、NVDA 有持倉。
+            "database.get_all_portfolio_symbol_pairs",
+            return_value={(1, "NVDA")},
+        ),
+        patch(
+            "database.is_notification_enabled",
+            return_value=True,
+        ),
+        patch(
+            "cogs.embed_builder.build_radar_scan_embed",
+            return_value=object(),
+        ) as mock_builder,
+    ):
         from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
 
         await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1), (1, "NVDA", 1)])
@@ -664,12 +729,16 @@ async def test_monitor_vtr_task_handles_missing_trade_info() -> None:
     )
     embed = object()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
-        return_value=embed,
-    ) as mock_builder:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch(
+            "cogs.trading.portfolio_monitor.create_option_defense_alert_embed",
+            return_value=embed,
+        ) as mock_builder,
+    ):
         await cog.monitor_vtr_task()
 
     # Verify only the valid trade (uid 2) triggered an alert and queued a DM
@@ -730,23 +799,28 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
 
     mock_embed = object()
 
-    with patch(
-        "database.orders.get_all_active_orders", return_value=mock_orders
-    ), patch(
-        "services.calendar_service.calendar_service.get_high_impact_events",
-        new=AsyncMock(return_value=[]),
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_user_holdings", return_value=[]
-    ), patch("database.get_user_portfolio", return_value=[]), patch(
-        "services.order_telemetry_service.resolve_holding_type_and_rows",
-        return_value=("LEVERAGED", {}),
-    ), patch(
-        "services.order_telemetry_service.build_telemetry_alignment_items",
-        new=AsyncMock(return_value=([mock_alignment_item], False)),
-    ), patch(
-        "cogs.trading.telemetry.create_telemetry_alignment_embeds",
-        return_value=[mock_embed],
-    ) as mock_embed_builder:
+    with (
+        patch("database.orders.get_all_active_orders", return_value=mock_orders),
+        patch(
+            "services.calendar_service.calendar_service.get_high_impact_events",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_user_holdings", return_value=[]),
+        patch("database.get_user_portfolio", return_value=[]),
+        patch(
+            "services.order_telemetry_service.resolve_holding_type_and_rows",
+            return_value=("LEVERAGED", {}),
+        ),
+        patch(
+            "services.order_telemetry_service.build_telemetry_alignment_items",
+            new=AsyncMock(return_value=([mock_alignment_item], False)),
+        ),
+        patch(
+            "cogs.trading.telemetry.create_telemetry_alignment_embeds",
+            return_value=[mock_embed],
+        ) as mock_embed_builder,
+    ):
         from cogs.trading.telemetry import _dispatch_order_telemetry_alignment_alert
 
         await _dispatch_order_telemetry_alignment_alert(bot)
@@ -797,14 +871,19 @@ async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_
     cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -868,24 +947,31 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     overlay_embed = object()
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_covered_call_overlay_embed",
-        return_value=overlay_embed,
-    ) as mock_overlay_embed, patch(
-        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
-    ) as mock_rotation_embed:
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch(
+            "cogs.trading.portfolio_monitor.create_covered_call_overlay_embed",
+            return_value=overlay_embed,
+        ) as mock_overlay_embed,
+        patch(
+            "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+        ) as mock_rotation_embed,
+    ):
         await cog.monitor_real_portfolio_task()
 
     cog.rollover_engine.evaluate_covered_call_overlay.assert_awaited_once()
@@ -967,16 +1053,21 @@ async def test_monitor_real_portfolio_task_options_ingestion_gate_off_skips_opti
         ]
     )
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", False), patch(
-        "database.portfolio.get_all_trade_positions", mock_get_trade_positions
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", False),
+        patch("database.portfolio.get_all_trade_positions", mock_get_trade_positions),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1047,21 +1138,29 @@ async def test_monitor_real_portfolio_task_options_ingestion_gate_on_splits_long
         "entry_price": 3.0,
     }
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", True), patch(
-        "database.portfolio.get_all_trade_positions",
-        return_value=[long_call, short_call, short_put],
-    ), patch(
-        "market_analysis.portfolio.get_option_chain_mid_iv",
-        new_callable=AsyncMock,
-        return_value=(4.5, 0.35, 4.4, 4.6),
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", True),
+        patch(
+            "database.portfolio.get_all_trade_positions",
+            return_value=[long_call, short_call, short_put],
+        ),
+        patch(
+            "market_analysis.portfolio.get_option_chain_mid_iv",
+            new_callable=AsyncMock,
+            return_value=(4.5, 0.35, 4.4, 4.6),
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1125,19 +1224,25 @@ async def test_monitor_real_portfolio_task_options_dry_run_suppresses_dm_but_log
     log_mock = AsyncMock()
     save_kv_mock = AsyncMock()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", save_kv_mock), patch(
-        "database.log_rollover_instruction", log_mock
-    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", True):
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", save_kv_mock),
+        patch("database.log_rollover_instruction", log_mock),
+        patch("config.OPTIONS_ROLLOVER_DRY_RUN", True),
+    ):
         await cog.monitor_real_portfolio_task()
 
     bot.queue_dm.assert_not_called()
@@ -1188,19 +1293,25 @@ async def test_monitor_real_portfolio_task_options_dry_run_off_sends_dm_for_opti
         return_value=[options_instruction]
     )
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
-    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch("config.OPTIONS_ROLLOVER_DRY_RUN", False),
+    ):
         await cog.monitor_real_portfolio_task()
 
     bot.queue_dm.assert_awaited_once()
@@ -1211,8 +1322,8 @@ async def test_monitor_real_portfolio_task_notif_key_routes_margin_defense_vs_de
     None
 ):
     """MARGIN_DEFENSE 情境的通知開關應查詢 "defense_margin_call"
-    （帳戶生存等級警訊，獨立於例行轉倉靜音設定），其餘情境一律查詢
-    "defense_option_rollover"。"""
+    （帳戶生存等級警訊，獨立於例行轉倉靜音設定），一般再平衡情境查詢
+    "defense_option_rollover"（完整對照見 test_rollover_channel_routing.py）。"""
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     bot.get_cog = MagicMock(return_value=None)
@@ -1259,18 +1370,23 @@ async def test_monitor_real_portfolio_task_notif_key_routes_margin_defense_vs_de
 
     notif_mock = MagicMock(return_value=True)
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", notif_mock), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", notif_mock),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1329,19 +1445,26 @@ async def test_monitor_real_portfolio_task_dedup_suppresses_second_dm_same_day()
     save_kv_mock = AsyncMock()
     log_mock = AsyncMock()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache",
-        side_effect=lambda key: 1 if key == expected_dedup_key else None,
-    ), patch("database.save_kv_cache", save_kv_mock), patch(
-        "database.log_rollover_instruction", log_mock
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch(
+            "database.get_kv_cache",
+            side_effect=lambda key: 1 if key == expected_dedup_key else None,
+        ),
+        patch("database.save_kv_cache", save_kv_mock),
+        patch("database.log_rollover_instruction", log_mock),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1415,22 +1538,29 @@ async def test_monitor_real_portfolio_task_covered_call_profit_lock_dedup_key_in
 
     get_kv_mock = MagicMock(return_value=None)
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", get_kv_mock
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
-        return_value=object(),
-    ), patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", get_kv_mock),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch(
+            "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
+            return_value=object(),
+        ),
+        patch("config.OPTIONS_ROLLOVER_DRY_RUN", False),
+    ):
         await cog.monitor_real_portfolio_task()
 
     dedup_keys = [c.args[0] for c in get_kv_mock.call_args_list]
@@ -1491,24 +1621,32 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_profit_lock_e
     )
 
     profit_lock_embed = object()
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
-    ), patch(
-        "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
-        return_value=profit_lock_embed,
-    ) as mock_profit_lock_embed, patch(
-        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
-    ) as mock_rotation_embed, patch("config.OPTIONS_ROLLOVER_DRY_RUN", False):
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch(
+            "cogs.trading.portfolio_monitor.create_covered_call_profit_lock_embed",
+            return_value=profit_lock_embed,
+        ) as mock_profit_lock_embed,
+        patch(
+            "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+        ) as mock_rotation_embed,
+        patch("config.OPTIONS_ROLLOVER_DRY_RUN", False),
+    ):
         await cog.monitor_real_portfolio_task()
 
     mock_profit_lock_embed.assert_called_once_with(
@@ -1560,14 +1698,19 @@ async def test_monitor_real_portfolio_task_invokes_macro_top_escape_defense() ->
     mock_macro_top_escape = AsyncMock(return_value=[])
     cog.rollover_engine.evaluate_macro_top_escape_defense = mock_macro_top_escape  # type: ignore
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1622,18 +1765,23 @@ async def test_monitor_real_portfolio_task_logs_rollover_instruction_with_correc
 
     log_mock = AsyncMock()
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", log_mock
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", log_mock),
     ):
         await cog.monitor_real_portfolio_task()
 
@@ -1713,29 +1861,39 @@ async def _run_short_entry_cycle(dry_run: bool) -> tuple[Any, ...]:
         notif_keys.append(key)
         return True
 
-    with patch(
-        "cogs.trading.portfolio_monitor.market_time.is_market_open", return_value=True
-    ), patch("services.llm_service.is_memory_safe", return_value=True), patch(
-        "database.holdings.get_all_holdings", return_value=[]
-    ), patch("database.get_user_ids_by_trading_strategy", return_value=[7]), patch(
-        "services.market_data_service.get_vix_spot_strict",
-        new_callable=AsyncMock,
-        return_value=20.0,
-    ), patch("database.watchlist.get_user_watchlist", return_value=[]), patch(
-        "market_analysis.trading_orchestration.recommend_covered_calls",
-        new_callable=AsyncMock,
-        return_value={"recommendations": []},
-    ), patch("database.is_notification_enabled", side_effect=_notif), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock), patch(
-        "database.log_rollover_instruction", new_callable=AsyncMock
-    ) as mock_audit, patch(
-        "cogs.trading.portfolio_monitor.create_short_entry_embed",
-        return_value=short_embed,
-    ) as mock_short_embed, patch(
-        "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
-    ) as mock_rotation_embed, patch(
-        "cogs.trading.portfolio_monitor.config.SHORT_ENTRY_DRY_RUN", dry_run
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[]),
+        patch("database.get_user_ids_by_trading_strategy", return_value=[7]),
+        patch(
+            "services.market_data_service.get_vix_spot_strict",
+            new_callable=AsyncMock,
+            return_value=20.0,
+        ),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", side_effect=_notif),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "database.log_rollover_instruction", new_callable=AsyncMock
+        ) as mock_audit,
+        patch(
+            "cogs.trading.portfolio_monitor.create_short_entry_embed",
+            return_value=short_embed,
+        ) as mock_short_embed,
+        patch(
+            "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed"
+        ) as mock_rotation_embed,
+        patch("cogs.trading.portfolio_monitor.config.SHORT_ENTRY_DRY_RUN", dry_run),
     ):
         await cog.monitor_real_portfolio_task()
     return (
@@ -1773,7 +1931,7 @@ async def test_monitor_real_portfolio_task_short_entry_for_user_without_holdings
     assert args.args[2] == 20.0  # 嚴格抓取的 VIX
     mock_short_embed.assert_called_once()
     mock_rotation_embed.assert_not_called()
-    assert "alpha_market_signals" in notif_keys
+    assert "alpha_short_entry" in notif_keys
     assert not hasattr(short_embed, "_view")
     bot.queue_dm.assert_awaited_once_with(7, embed=short_embed)
     mock_audit.assert_awaited_once()

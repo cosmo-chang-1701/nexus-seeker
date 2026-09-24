@@ -80,7 +80,7 @@ async def test_notify_flag_written_after_enqueue(db_conn: Any) -> None:
 @pytest.mark.asyncio
 async def test_notify_passes_message_only_when_given(db_conn: Any) -> None:
     bot = _bot()
-    await notify(bot, 7004, "system_lifecycle", message="hi")
+    await notify(bot, 7004, "briefing_pre_market", message="hi")
     bot.queue_dm.assert_awaited_once_with(7004, message="hi", embed=None)
 
 

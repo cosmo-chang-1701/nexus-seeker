@@ -201,7 +201,7 @@ flowchart TD
     Gate2 -- 是 --> Suppress
     Gate2 -- 否 --> Size["價位 → 凱利 × VIX 倉位<br/>停損/目標不合法或 Qty < 1 → fail-closed"]
     Size --> One["取 R:R 最佳者，每週期至多 1 筆"]
-    One --> Notif{"alpha_market_signals 通知開啟?"}
+    One --> Notif{"alpha_short_entry 通知開啟?"}
     Notif -- 否 --> Drop["略過"]
     Notif -- 是 --> Dry{"SHORT_ENTRY_DRY_RUN?"}
     Dry -- 是 --> Audit["僅寫 rollover_audit_log"]
