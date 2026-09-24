@@ -180,6 +180,16 @@ class NotificationSettingsView(discord.ui.View):
             btn.callback = callbacks[preset]  # type: ignore
             self.add_item(btn)
 
+        # Row 4：投組下行風險快照（另發一則僅自己可見的訊息，不覆蓋本面板）
+        btn_downside = discord.ui.Button(  # type: ignore
+            label="📉 投組下行風險",
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_downside_snapshot",
+            row=4,
+        )
+        btn_downside.callback = self.on_downside_snapshot  # type: ignore
+        self.add_item(btn_downside)
+
         # Row 4：展開 / 收合進階（情報與戰報）
         if ADVANCED_MODULES:
             btn_advanced = discord.ui.Button(  # type: ignore
@@ -214,6 +224,39 @@ class NotificationSettingsView(discord.ui.View):
         elif self.current_module in ADVANCED_MODULES:
             self.current_module = _DEFAULT_MODULE
         await self._rerender(interaction)
+
+    async def on_downside_snapshot(self, interaction: discord.Interaction) -> Any:
+        """顯示投組下行風險快照（Sortino / MDD / VaR / CVaR）。
+
+        快取未命中時需抓一年日線，可能超過 Discord 3 秒回應期限，因此先 defer；
+        結果以 ephemeral followup 送出，設定面板本身不變。快取未命中且記憶體水位
+        過高時不抓取（比照背景任務的 is_memory_safe 閘門）。
+        """
+        from cogs.embed_builders.alert_embeds.downside_alerts import (
+            create_downside_snapshot_embed,
+        )
+        from services.downside_risk_service import (
+            get_cached_series,
+            get_downside_snapshots,
+        )
+        from services.llm_service import is_memory_safe
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if get_cached_series(self.user_id) is None and not is_memory_safe():
+            embed = create_downside_snapshot_embed(
+                None,
+                unavailable_reason="系統記憶體水位過高，暫停抓取歷史價格，請稍後再試。",
+            )
+        else:
+            try:
+                simulated, realized = await get_downside_snapshots(self.user_id)
+                embed = create_downside_snapshot_embed(simulated, realized)
+            except Exception as e:
+                logger.warning(f"下行風險快照計算失敗 (uid={self.user_id}): {e}")
+                embed = create_downside_snapshot_embed(
+                    None, unavailable_reason="計算失敗，請稍後再試。"
+                )
+        await interaction.followup.send(embed=embed, ephemeral=True)
 
     async def on_select_callback(self, interaction: discord.Interaction) -> Any:
         """多選送出：本模組內被勾選者開啟、未勾選者關閉，單一交易寫入。"""

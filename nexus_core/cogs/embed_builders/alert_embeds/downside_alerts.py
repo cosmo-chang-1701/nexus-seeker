@@ -125,3 +125,35 @@ def create_portfolio_downside_alert_embed(
         embed.add_field(name=name, value=value, inline=inline)
     embed.set_footer(text="Nexus Seeker | 投組下行風險監控 (Sortino / MDD / CVaR)")
     return embed
+
+
+def create_downside_snapshot_embed(
+    simulated: Optional[DownsideSnapshot],
+    realized: Optional[DownsideSnapshot] = None,
+    *,
+    unavailable_reason: Optional[str] = None,
+) -> discord.Embed:
+    """`/notif_settings`「📉 投組下行風險」按鈕的即時快照（僅呼叫者可見）。
+
+    `unavailable_reason` 有值時（例如記憶體水位過高、計算失敗）只顯示原因。
+    """
+    embed = NexusEmbed(
+        title="📉 投組下行風險快照",
+        description=(
+            "以 **Sortino 為主**、最大回撤與 VaR / CVaR 為輔。"
+            "「現部位回推一年」是以目前持倉套用過去一年的價格，回答的是這組部位的下行風險，"
+            "不是你實際經歷過的淨值；已實現淨值累積滿 60 個交易日後才會並列顯示。"
+        ),
+        color=discord.Color.dark_teal(),
+        timestamp=datetime.now(timezone.utc),
+    )
+    if unavailable_reason:
+        embed.add_field(name="⚠️ 暫時無法計算", value=unavailable_reason, inline=False)
+    else:
+        for name, value, inline in create_downside_snapshot_fields(simulated, realized):
+            embed.add_field(name=name, value=value, inline=inline)
+    embed.set_footer(
+        text="回撤跨越 -10% / -15% / -20% 或 CVaR 超出預算時，"
+        "由「📉 投組下行風險」頻道主動推播"
+    )
+    return embed
