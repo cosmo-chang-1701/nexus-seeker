@@ -1,7 +1,7 @@
 from typing import Any
 import discord
 import pytest
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from database.notification_channels import TRADING_MODULES
 from database.notifications import (
     get_user_notification_settings,
@@ -119,8 +119,9 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
     user_id = 999444
 
     view = NotificationSettingsView(user_id)
-    # 1 個模組選單、1 個多選、2 個本區按鈕、4 個預設情境按鈕、1 個進階切換按鈕
-    assert len(view.children) == 9
+    # 1 個模組選單、1 個多選、2 個本區按鈕、4 個預設情境按鈕、
+    # 1 個下行風險快照按鈕、1 個進階切換按鈕
+    assert len(view.children) == 10
 
     category_select = next(
         c for c in view.children if getattr(c, "custom_id", None) == "select_category"
@@ -871,3 +872,93 @@ async def test_view_respects_discord_component_limits(db_conn: Any) -> None:
             if isinstance(c, discord.ui.Select):
                 assert len(c.options) <= 25
         await view.on_toggle_advanced(_interaction(user_id))
+
+
+# ---------------------------------------------------------------------------
+# 📉 投組下行風險快照按鈕
+# ---------------------------------------------------------------------------
+
+
+def _snapshot_interaction(user_id: int) -> Any:
+    it = AsyncMock()
+    it.user.id = user_id
+    it.response.defer = AsyncMock()
+    it.followup.send = AsyncMock()
+    return it
+
+
+@pytest.mark.asyncio
+async def test_downside_snapshot_sends_ephemeral_followup(db_conn: Any) -> None:
+    """按鈕另發一則僅自己可見的快照，不覆蓋設定面板；先 defer 以免超過 3 秒期限。"""
+    from cogs.settings_ui import NotificationSettingsView
+    from market_analysis.downside_monitor import DownsideSnapshot
+
+    user_id = 990101
+    view = NotificationSettingsView(user_id)
+    assert _child(view, "btn_downside_snapshot").row == 4
+
+    snap = MagicMock(spec=DownsideSnapshot)
+    it = _snapshot_interaction(user_id)
+    with (
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch(
+            "services.downside_risk_service.get_downside_snapshots",
+            new=AsyncMock(return_value=(snap, None)),
+        ) as get_snaps,
+        patch(
+            "cogs.embed_builders.alert_embeds.downside_alerts."
+            "create_downside_snapshot_fields",
+            return_value=[("📉 投組下行風險", "Sortino 1.23", False)],
+        ),
+    ):
+        await view.on_downside_snapshot(it)
+
+    it.response.defer.assert_awaited_once_with(ephemeral=True, thinking=True)
+    get_snaps.assert_awaited_once_with(user_id)
+    it.response.edit_message.assert_not_called()
+    kwargs = it.followup.send.await_args.kwargs
+    assert kwargs["ephemeral"] is True
+    assert kwargs["embed"].fields[0].value == "Sortino 1.23"
+
+
+@pytest.mark.asyncio
+async def test_downside_snapshot_skips_fetch_when_memory_unsafe(db_conn: Any) -> None:
+    """快取未命中且記憶體水位過高時不抓歷史價格，只回報原因。"""
+    from cogs.settings_ui import NotificationSettingsView
+
+    user_id = 990102
+    view = NotificationSettingsView(user_id)
+    it = _snapshot_interaction(user_id)
+    with (
+        patch("services.downside_risk_service.get_cached_series", return_value=None),
+        patch("services.llm_service.is_memory_safe", return_value=False),
+        patch(
+            "services.downside_risk_service.get_downside_snapshots",
+            new=AsyncMock(),
+        ) as get_snaps,
+    ):
+        await view.on_downside_snapshot(it)
+
+    get_snaps.assert_not_awaited()
+    embed = it.followup.send.await_args.kwargs["embed"]
+    assert "記憶體" in embed.fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_downside_snapshot_reports_failure(db_conn: Any) -> None:
+    from cogs.settings_ui import NotificationSettingsView
+
+    user_id = 990103
+    view = NotificationSettingsView(user_id)
+    it = _snapshot_interaction(user_id)
+    with (
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch(
+            "services.downside_risk_service.get_downside_snapshots",
+            new=AsyncMock(side_effect=RuntimeError("boom")),
+        ),
+    ):
+        await view.on_downside_snapshot(it)
+
+    embed = it.followup.send.await_args.kwargs["embed"]
+    assert "計算失敗" in embed.fields[0].value

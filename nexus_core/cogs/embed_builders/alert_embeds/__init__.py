@@ -39,6 +39,7 @@ from cogs.embed_builders.alert_embeds.quote_and_risk_alerts import (
     create_vix_tail_risk_embed,
 )
 from cogs.embed_builders.alert_embeds.downside_alerts import (
+    create_downside_snapshot_embed,
     create_downside_snapshot_fields,
     create_portfolio_downside_alert_embed,
 )
@@ -68,6 +69,7 @@ __all__ = [
     "create_wti_alert_embed",
     "create_price_volume_alert_embed",
     "create_gamma_squeeze_alert_embed",
+    "create_downside_snapshot_embed",
     "create_downside_snapshot_fields",
     "create_portfolio_downside_alert_embed",
 ]
