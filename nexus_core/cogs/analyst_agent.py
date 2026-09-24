@@ -313,12 +313,25 @@ class AnalystAgent(commands.Cog):
                         )
                         ai_commentary = "⚠️ 無法生成 AI 報告分析。"
 
+            downside_fields = None
+            try:
+                from cogs.embed_builders.alert_embeds.downside_alerts import (
+                    create_downside_snapshot_fields,
+                )
+                from services.downside_risk_service import get_downside_snapshots
+
+                simulated, realized = await get_downside_snapshots(uid)
+                downside_fields = create_downside_snapshot_fields(simulated, realized)
+            except Exception as e:
+                logger.warning(f"盤後戰報下行風險快照失敗 (uid={uid}): {e}")
+
             embeds = build_post_market_intelligence_embed(
                 report_lines=report_lines,
                 hedge_analysis=hedge_analysis,
                 survival_runway=survival_runway,
                 sectors_data=sector_rotation_data["sectors"],
                 ai_commentary=ai_commentary,
+                downside_fields=downside_fields,
             )
             await notify_many(self.bot, uid, "briefing_post_market", embeds)
 

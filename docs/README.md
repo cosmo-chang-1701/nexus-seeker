@@ -306,7 +306,7 @@ graph LR
 |:---|:---|
 | [`platform/01_analyst_agent_reporting.md`](platform/01_analyst_agent_reporting.md) | Analyst Agent 報告排程：盤前財報／估值調整、盤後綜合風險結算、正式路徑與孤兒路徑辨識 |
 | [`platform/02_order_management_and_telemetry.md`](platform/02_order_management_and_telemetry.md) | 委託單管理資料庫與 UI、遙測定價對齊引擎三向量 |
-| [`platform/03_notification_center.md`](platform/03_notification_center.md) | 互動設定架構、依下行風險影響分組的 6 模組 28 頻道通知中心、由屬性衍生的預設情境（含 B&H 防守） |
+| [`platform/03_notification_center.md`](platform/03_notification_center.md) | 互動設定架構、依下行風險影響分組的 6 模組 29 頻道通知中心、由屬性衍生的預設情境（含 B&H 防守） |
 | [`platform/04_calendar_translation_engine.md`](platform/04_calendar_translation_engine.md) | 事件日曆共用閘道、150+ 總經事件中英對照與聯準會官員演講解析引擎 |
 | [`platform/05_embed_architecture_and_dm_queue.md`](platform/05_embed_architecture_and_dm_queue.md) | Embed 輸出集中化規範、`NexusEmbed` 視覺一致性、持久化 DM 佇列投遞層 |
 | [`platform/06_price_volume_alert_system.md`](platform/06_price_volume_alert_system.md) | 個股 15 分鐘價量突破警報系統、K 棒完整性防呆、雙模警報支援 |

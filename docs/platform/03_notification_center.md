@@ -23,7 +23,7 @@
 以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。頻道的 key、模組、標籤與屬性只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`DEFAULT_NOTIFICATION_SETTINGS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生。
 
 #### 2.2.1 分類準則：依對 B&H 投組報酬分佈的影響分組
-使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 28 個頻道）：
+使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 29 個頻道）：
 
 | 模組 | `risk_role` | 頻道 | 內容 |
 |---|---|---|---|
@@ -34,6 +34,7 @@
 | | | `defense_hedge_advice` | VIX 急升 SPY 對沖股數（`hedge_monitor_service.py`）＋NRO 掃描的 Re-hedge 建議 |
 | | | `defense_structure_break` | 結構失效類出場分層、逃頂保護性 Put（`MACRO_TOP_ESCAPE_DEFENSE`）、顧問模式的結構失效告知 |
 | | | `defense_gamma_fragility` | 持倉淨 Gamma < −20、IV 優勢掃描的高 IV 事件風險警告（`is_high_risk_vol`） |
+| | | `risk_portfolio_downside` | 投組下行風險：距一年高點回撤跨越 −10%／−15%／−20% 階梯（盤中與收盤檢查），或 1 日 CVaR95 超出 `risk_limit` 推導的預算／尾部體制轉換（收盤檢查）。去重前綴 `downside_dd_`／`downside_cvar_`；推播未送達時武裝狀態不前進（`services/downside_risk_service.py`） |
 | 🚀 上行捕捉 | `UPSIDE_CAPTURE` | `advisory_entry_signal` | 自選標的進場顧問（六重鐵律通過時推播進場價／停損／目標） |
 | | | `entry_pyramid_add` | `PYRAMID_ADD`、`TRANSITION_ENGINE`（停損上推／一次性加碼）、`CORE_DEPLOYMENT` |
 | | | `alpha_short_entry` | `SHORT_ENTRY` 做空進場（校準中，歸雜訊；另受 `SHORT_ENTRY_DRY_RUN` 控制） |
@@ -73,7 +74,7 @@
 - `🎯 精準交易`（`focus`）：只關閉 `noise` 頻道。
 - `🔕 盤中靜音`（`mute_intraday`）：關閉 `noise` 與 `cadence == INTRADAY` 的頻道。
 - `🛡️ 戰備全開`（`all_on`）；`all_off` 僅供程式呼叫。
-- **左尾防護 7 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
+- **左尾防護 8 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
 - `focus`／`mute_intraday` 對既有頻道的結果與重整前逐 key 相同，唯一差異是 `system_lifecycle`（重整後歸雜訊）；`test_notification_toggles.py::test_presets_preserve_legacy_behaviour` 逐一列明。
 
 #### 2.2.4 遷移 `v081_split_notification_channels`

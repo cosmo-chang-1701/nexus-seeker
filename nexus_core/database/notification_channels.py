@@ -43,6 +43,7 @@ NotificationKey = Literal[
     "defense_hedge_advice",
     "defense_structure_break",
     "defense_gamma_fragility",
+    "risk_portfolio_downside",
     # 🚀 上行捕捉
     "advisory_entry_signal",
     "entry_pyramid_add",
@@ -224,6 +225,16 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "DAILY",
         preset_immune=True,
         parent_key="defense_portfolio_risk",
+    ),
+    # 投組下行風險（回撤階梯 / CVaR 預算）：帳戶層級的左尾防護訊號
+    # （services/downside_risk_service.py）。全新頻道、無母頻道，預設開啟。
+    NotificationChannel(
+        "risk_portfolio_downside",
+        "left_tail",
+        "📉 投組下行風險 (距高點回撤階梯 / CVaR 尾部風險超出預算)",
+        "LEFT_TAIL",
+        "DAILY",
+        preset_immune=True,
     ),
     # ------------------------------------------------------------- 🚀 上行捕捉
     NotificationChannel(

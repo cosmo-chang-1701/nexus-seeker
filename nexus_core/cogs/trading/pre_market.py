@@ -60,6 +60,16 @@ class PreMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"情緒指標日級快照補寫失敗: {e}")
 
+        # 投組下行風險：盤中檢查只使用快取的報酬序列、不抓歷史資料，因此在盤前
+        # 先為所有有部位的使用者建好序列（重啟後的第一個交易日也能盤中檢查）
+        try:
+            from services.downside_risk_service import warm_downside_series
+
+            warmed = await warm_downside_series(self.bot)
+            logger.info(f"投組下行風險序列預熱完成：{warmed} 位使用者")
+        except Exception as e:
+            logger.error(f"投組下行風險序列預熱失敗: {e}")
+
         try:
             asyncio.create_task(self._pre_warm_all_targets())
         except Exception as e:
