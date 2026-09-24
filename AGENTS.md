@@ -63,12 +63,12 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `kv_cache_dedup_purge` — **03:00 ET** (off-peak; deletes stale one-shot daily anti-spam dedup flags in `kv_cache` — see `database.cache.purge_stale_kv_cache_dedup_keys` — past a 3-day retention window; scoped to a whitelist of known dedup-only key prefixes so permanent caches/config are never touched)。同一個任務另負責 `uoa_history` 的 10 個交易日保留期清理（`database.uoa_history.purge_stale_uoa_history`）、過期合約歸檔，以及 `sentiment_history`（60 交易日）／`sentiment_daily_canonical`（約 260 交易日）的保留期清理
 - `fundamental_filing_scan` — **08:00 ET** (holdings-only, skips non-trading days)
 - `daily_reddit_update` — **08:30 ET**
-- `pre_market_risk_monitor` — **08:45 ET** (staggered pre-warming of quant metrics, IV, Max Pain & Squeeze before 09:00 Analyst Agent; first back-fills the previous trading day's `sentiment_daily_canonical` snapshot if the 16:15 run was missed)
+- `pre_market_risk_monitor` — **08:45 ET** (staggered pre-warming of quant metrics, IV, Max Pain & Squeeze before 09:00 Analyst Agent; first back-fills the previous trading day's `sentiment_daily_canonical` snapshot if the 16:15 run was missed; also warms the per-user portfolio downside-risk return series so the intraday drawdown check never fetches history — see `services/downside_risk_service.py`)
 - `dynamic_market_scanner` — **every 15 minutes (:00, :15, :30 & :45) during market hours**
 - `wti_oil_monitor` — **every 30 minutes (24/7, 00:00–06:00 ET quiet hours)**
 - `price_volume_alert_monitor` — **every 15 minutes during market hours** (with `Semaphore(3)` concurrent K-line bar retrieval)
 - `monitor_real_portfolio_task` — **every 15 minutes (:05, :20, :35 & :50) during market hours** (staggered 5 minutes after dynamic scanner to consume shared in-memory radar cache)
-- `dynamic_after_market_report` — **16:15 ET** (maintenance, plus the daily `sentiment_daily_canonical` snapshot — see `market_analysis/sentiment/canonical_history.py`)
+- `dynamic_after_market_report` — **16:15 ET** (maintenance, plus the daily `sentiment_daily_canonical` snapshot — see `market_analysis/sentiment/canonical_history.py` — and the portfolio downside-risk close job: rebuilds return series, writes the `portfolio_nav_daily` snapshot, evaluates drawdown tiers and CVaR budget → `risk_portfolio_downside`)
 - `weekly_vtr_report_task` — **Friday 17:05 ET**
 
 ### In `cogs/calendar.py`
@@ -140,7 +140,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 ### 平台工程與使用者體驗 (`docs/platform/`)
 - Analyst Agent 報告排程（盤前財報、盤後綜合結算）→ [`01_analyst_agent_reporting.md`](docs/platform/01_analyst_agent_reporting.md)
 - 委託單管理與遙測定價對齊引擎 → [`02_order_management_and_telemetry.md`](docs/platform/02_order_management_and_telemetry.md)
-- 互動設定與通知偏好中心（依對 B&H 投組下行風險的影響分 6 模組 28 頻道；頻道註冊表 `database/notification_channels.py`、集中推播入口 `services/notification_dispatcher.py`）→ [`03_notification_center.md`](docs/platform/03_notification_center.md)
+- 互動設定與通知偏好中心（依對 B&H 投組下行風險的影響分 6 模組 29 頻道；頻道註冊表 `database/notification_channels.py`、集中推播入口 `services/notification_dispatcher.py`）→ [`03_notification_center.md`](docs/platform/03_notification_center.md)
 - 事件日曆架構與宏觀事件翻譯引擎 → [`04_calendar_translation_engine.md`](docs/platform/04_calendar_translation_engine.md)
 - Embed 渲染架構（`NexusEmbed`、輸出集中化）與 DM 佇列投遞層 → [`05_embed_architecture_and_dm_queue.md`](docs/platform/05_embed_architecture_and_dm_queue.md)
 - 個股 15 分鐘價量突破警報系統 → [`06_price_volume_alert_system.md`](docs/platform/06_price_volume_alert_system.md)
@@ -185,6 +185,9 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/outcome_labeling.py` — single source of truth for forward-path labels (±k×ATR₁D first touch, same-bar double touch counts as adverse), shared by the production labeler and `calibration/`. ⚠️ `get_history_df` returns **tz-naive US/Eastern** indexes; this module localizes them as Eastern — treating them as UTC shifts intraday times 4–5 h and daily dates by one day
 - `nexus_core/services/regime_outcome_labeler.py` — `run_outcome_labeling()`, invoked by the 03:30 ET scheduler task
 - `nexus_core/market_analysis/downside_risk.py` — 下行風險指標的**單一權威**（numpy 葉模組）：全樣本分母下行差、Sortino（MAR = $R_f$）、MDD、歷史模擬 VaR／CVaR（樣本 < 60 回 `None`）。`calibration/backtest_engine_2025.py` 與日後任何績效／風險評估都必須呼叫它；`sharpe_ratio()` 僅供回測描述
+- `nexus_core/market_analysis/downside_monitor.py` — 投組下行風險即時監控的純邏輯葉模組（快照、回撤階梯 10/15/20% 與 2.5pp 重新武裝、CVaR 預算 = risk_limit × 0.20 與尾部體制轉換、NAV 快照報酬還原），閾值皆 PRE_CALIBRATION；指標一律呼叫 `downside_risk.py`
+- `nexus_core/services/downside_risk_service.py` — 投組下行風險 I/O：「現權重 × 一年歷史」模擬報酬序列（期權以原始 Delta 等值股數、缺值 ±0.5 近似）、08:45 預熱、盤中只走快取的回撤檢查、16:15 NAV 快照與 CVaR 判定；推播未送達時武裝狀態（`downside_state_` 前綴，刻意不在去重清理白名單）不前進
+- `nexus_core/database/migrations/v082_add_portfolio_nav_daily.py` — migration 建立 `portfolio_nav_daily (user_id, date, nav, positions_json)`；日報酬以前一日持股計算，加減碼不被算成報酬。⚠️ 遷移執行器只套用大於目前最大版本者，必須在 `v081` 之後部署
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
 - `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine

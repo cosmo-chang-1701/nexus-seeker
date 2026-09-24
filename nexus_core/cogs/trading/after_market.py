@@ -68,6 +68,15 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"情緒指標日級快照失敗: {e}")
 
+        # 投組下行風險：重建模擬報酬序列、寫入 NAV 快照 (portfolio_nav_daily)、
+        # 以完整日線判定回撤階梯與 CVaR 預算（services/downside_risk_service.py）
+        try:
+            from services.downside_risk_service import run_daily_downside_job
+
+            await run_daily_downside_job(self.bot, today)
+        except Exception as e:
+            logger.error(f"投組下行風險收盤檢查失敗: {e}")
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()

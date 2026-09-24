@@ -25,11 +25,11 @@ def clean_db(db_conn: Any):  # type: ignore
 
 
 def test_default_all_enabled(db_conn: Any):  # type: ignore
-    """測試全新用戶 28 個通知頻道預設值（除機器人啟停通知外預設開啟）"""
+    """測試全新用戶 29 個通知頻道預設值（除機器人啟停通知外預設開啟）"""
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 28
+    assert len(ALL_NOTIFICATION_KEYS) == 29
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = key != "system_lifecycle"
@@ -135,9 +135,9 @@ async def test_notification_settings_view_structure(db_conn: Any):  # type: igno
 
     # 預設模組為左尾防護（7 項），多選且可全不選，預設選取＝目前開啟
     assert view.current_module == "left_tail"
-    assert len(module_select.options) == 7  # type: ignore
+    assert len(module_select.options) == 8  # type: ignore
     assert module_select.min_values == 0  # type: ignore
-    assert module_select.max_values == 7  # type: ignore
+    assert module_select.max_values == 8  # type: ignore
     assert all(o.default for o in module_select.options)  # type: ignore
 
     mock_interaction = AsyncMock()
@@ -416,6 +416,7 @@ def test_preset_immune_channels_are_on_in_every_preset() -> None:
         "defense_hedge_advice",
         "defense_structure_break",
         "defense_gamma_fragility",
+        "risk_portfolio_downside",
     }
     for name, profile in PRESET_PROFILES.items():
         for key in immune:
@@ -448,6 +449,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "trim_profit_lock": True,
         "intel_market_scenario": False,
         "vtr_virtual_trades": False,
+        "risk_portfolio_downside": True,
     }.items():
         assert s_focus[key] is expected, key
 
@@ -463,6 +465,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "trim_profit_lock": False,
         "intel_market_scenario": False,
         "vtr_virtual_trades": False,
+        "risk_portfolio_downside": True,
     }.items():
         assert s_mute[key] is expected, key
 
@@ -476,6 +479,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "defense_hedge_advice": True,
         "defense_structure_break": True,
         "defense_gamma_fragility": True,
+        "risk_portfolio_downside": True,
         "advisory_entry_signal": True,
         "entry_pyramid_add": True,
         "alpha_short_entry": False,

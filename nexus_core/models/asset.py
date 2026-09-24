@@ -31,6 +31,11 @@ class TradeMetadata(BaseModel):
     quantity: int
     stock_cost: float = 0.0
     weighted_delta: float = 0.0
+    # 每口合約的原始 BSM Delta（未乘口數、未 Beta 加權）。weighted_delta 已乘上
+    # beta × S / SPY，無法在不知道 Beta 的情況下還原成標的股數；投組下行風險模擬
+    # (services/downside_risk_service.py) 需要 Delta 等值股數，故另存原始值。
+    # 舊資料為 None，直到下一次 refresh_portfolio_greeks。
+    delta: Optional[float] = None
     theta: float = 0.0
     gamma: float = 0.0
     vega: float = 0.0
