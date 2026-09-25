@@ -192,7 +192,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/services/downside_risk_service.py` — 投組下行風險 I/O：「現權重 × 一年歷史」模擬報酬序列（期權以原始 Delta 等值股數、缺值 ±0.5 近似）、08:45 預熱、盤中只走快取的回撤檢查、16:15 NAV 快照與 CVaR 判定；推播未送達時武裝狀態（`downside_state_` 前綴，刻意不在去重清理白名單）不前進
 - `nexus_core/database/migrations/v082_add_portfolio_nav_daily.py` — migration 建立 `portfolio_nav_daily (user_id, date, nav, positions_json)`；日報酬以前一日持股計算，加減碼不被算成報酬。⚠️ 遷移執行器只套用大於目前最大版本者，必須在 `v081` 之後部署
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
-- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
+- `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及動態轉倉回測引擎 (`backtest_engine_2025.py`；預設 2025 年 SPY/NVDA/GLD，`scripts/run_rollover_backtest_2025.py`；可設定 `BacktestUniverse` 的多資產 2022–2025 版本，`scripts/run_multi_asset_backtest.py`，1h 線來自 Alpaca SIP `fetch-alpaca-1h`、可開 `enable_boxx_retreat`)：event study on price/VIX proxies + 全量轉倉回測與 forward-collection report。⚠️ 預設配置的回測結果受 `tests/unit/test_backtest_regression_invariant.py` 逐位元把關——改動引擎時不得更新其中的基準雜湊來讓測試通過。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
 - `nexus_core/market_analysis/wti_analysis.py` — WTI crude oil technicals, energy correlation, and event analysis engine
 - `nexus_core/market_analysis/margin.py` — 全資產類別保證金模型（`calculate_option_margin` 名稱沿用歷史）。空頭選擇權走既有公式，空頭**現貨**走 Reg-T 初始保證金（市值 × 50%）。⚠️ 其輸出經 `total_margin_used` 匯總成 `portfolio_heat`，是「是否允許開新倉」的主要煞車——任何一種空頭部位若在此回傳 0.0，該煞車對它就完全失效
@@ -474,6 +474,15 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 # or, from a copy of the edge DB placed in nexus_core/.calibration_cache/:
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report --edge-db /app/.calibration_cache/edge_cache.db
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration skew-proxy
+```
+
+Multi-asset 2022–2025 backtest (VOO core + 8 equity satellites + GLD; data sources, the per-bar data-quality criterion, BOXX retreat and results in `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.15). The Alpaca key is passed through environment variables only — never copy `.env` into the image or a worktree:
+
+```bash
+cd nexus_core
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration fetch --universe VOO,SPY,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,MRNA,GLD,BIL,BOXX --cache-dir /app/.calibration_cache/multi_asset
+(set -a; . ./.env; set +a; docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -e ALPACA_API_KEY -e ALPACA_API_SECRET nexus-seeker python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,MRNA,GLD --start 2021-11-01 --end 2025-12-31 --cache-dir /app/.calibration_cache/multi_asset)
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python scripts/run_multi_asset_backtest.py --suite all
 ```
 
 Notification outcome report (follow vs hold ΔSortino / ΔMDD / ΔCVaR95 per channel × scenario; read-only on a copied snapshot, never edits parameters — criteria in `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.14):
