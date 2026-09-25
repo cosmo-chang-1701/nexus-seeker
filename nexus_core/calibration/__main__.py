@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report|fetch-alpaca-1h|alpaca-seam}"""
 
 import argparse
 import asyncio
@@ -28,6 +28,8 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
             "micro-report",
             "skew-proxy",
             "notif-report",
+            "fetch-alpaca-1h",
+            "alpaca-seam",
         ],
     )
     parser.add_argument(
@@ -54,6 +56,16 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
         "--snapshot-db",
         default=None,
         help="notif-report：以唯讀模式讀取複製來的 production 快照；未指定時用 NEXUS_DB_NAME",
+    )
+    parser.add_argument(
+        "--start",
+        default="2021-11-01",
+        help="fetch-alpaca-1h / alpaca-seam：起始日 (ISO)",
+    )
+    parser.add_argument(
+        "--end",
+        default="2025-12-31",
+        help="fetch-alpaca-1h / alpaca-seam：結束日 (ISO)",
     )
     parser.add_argument(
         "--any-time",
@@ -94,6 +106,8 @@ async def _main(args: argparse.Namespace) -> int:
             return 2
     if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
         return await _run_study(args, cfg)
+    if args.command in ("fetch-alpaca-1h", "alpaca-seam"):
+        return await _run_alpaca(args, cfg)
     if args.command == "notif-report":
         from calibration.notif_report import (
             DEFAULT_SEED,
@@ -151,6 +165,49 @@ async def _main(args: argparse.Namespace) -> int:
         forward=forward,
     )
     target = report.write_report(cfg, results, {"symbols": symbols})
+    print(f"報告已輸出：{target}")
+    return 0
+
+
+async def _run_alpaca(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
+    """Alpaca 歷史 1h 線：取代（fetch-alpaca-1h）或與既有快取比對（alpaca-seam）。
+
+    fetch-alpaca-1h 以 Alpaca 整段取代快取中 [--start, --end] 的 1h K 棒（區間外保留）；
+    alpaca-seam 只比對、不寫快取，結果輸出為 JSON 報告。
+    """
+    import json
+
+    from calibration.alpaca_history import (
+        compare_with_cache,
+        iter_hourly,
+        replace_range,
+    )
+
+    symbols = [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+    if not symbols:
+        print("請以 --universe 指定標的", file=sys.stderr)
+        return 2
+    store = DataStore(cfg.cache_dir)
+    rows: list[dict[str, Any]] = []
+    async for sym, df in iter_hourly(symbols, args.start, args.end):
+        if args.command == "fetch-alpaca-1h":
+            total = replace_range(store, sym, df, args.start, args.end)
+            print(
+                f"{sym}: 以 {len(df)} 根 Alpaca K 棒取代 {args.start}～{args.end}，"
+                f"快取共 {total} 根",
+                flush=True,
+            )
+        else:
+            cmp = compare_with_cache(store, sym, df)
+            if cmp:
+                rows.append(cmp)
+    if args.command == "fetch-alpaca-1h":
+        return 0
+    result = {"start": args.start, "end": args.end, "symbols": rows}
+    from calibration.report import write_study_report
+
+    target = write_study_report(Path(cfg.out_dir), "alpaca-seam", result)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"報告已輸出：{target}")
     return 0
 

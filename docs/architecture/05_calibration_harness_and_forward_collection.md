@@ -553,10 +553,84 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 ---
 
+### 5.15 多資產 2022–2025 回測：資料來源、資料品質判定與 BOXX 大盤退場
+
+2025 三標的回測（§5.10）只有一年、三檔。為了在含空頭年的期間檢驗引擎，回測引擎一般化為「核心 + N 檔衛星」（`calibration/backtest_engine_2025.py` 的 `BacktestUniverse`／`SatelliteSpec`），結果與判讀見 [`../strategies/04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10.5–§2.10.6。
+
+**一般化原則**
+
+- **核心持倉**（VOO）與**大盤訊號代理**（SPY）分開：負 Gamma 代理、`MARGIN_DEFENSE` 危機判定、逃頂分級、保護性 Put 的定價與 Beta 一律用 SPY（代表指數本身，且期權流動性遠優於 VOO）；核心建倉、超額再平衡、Covered Call 收益與 BOXX 退場訊號用 VOO。
+- NVDA／GLD 專屬常數改由每檔衛星的 `SatelliteSpec` 自帶（個股沿用 NVDA、GLD 沿用 GLD 的值）；Regime V 破位追空擴及 8 檔個股；1h K 棒以時間戳交集對齊。
+- 機會成本輪動改為投組層級（§2.10.6）。
+- **回歸不變式**：預設配置（SPY／NVDA／GLD、原權重、2025）兩模式 × 四種功能開關的逐日 NAV 與全部交易紀錄與改造前逐位元相同（`tests/unit/test_backtest_regression_invariant.py`；真實 2025 資料另以雜湊比對驗證）。
+
+**資料來源**
+
+| 資料 | 來源 | 說明 |
+| :--- | :--- | :--- |
+| 日線 | Yahoo（`python -m calibration fetch`） | 回溯至上市日；200 日均線等特徵需要暖機期 |
+| 1h 線 2021-11 → 2025-12 | Alpaca SIP（`python -m calibration fetch-alpaca-1h`） | Yahoo 1h 只有最近約 730 天；多資產快取整段改由 Alpaca 提供，不與 Yahoo 1h 接合 |
+| BOXX | Yahoo 日線；2022-12-28 上市前以 BIL 日報酬代理 | 見下方 BOXX 退場 |
+
+Alpaca 慣例：價格用 `adjustment=all`（分割 + 股息，與 Yahoo `auto_adjust` 一致）；**成交量自行做分割調整**（原始量 × raw 收盤 ÷ 僅分割調整的收盤）——Alpaca 調整後的成交量不可靠（TSLA 2022-08 分割前被多乘 3 倍）。只用 `feed=sip`（IEX 只有全市場約 2.5% 的量，會讓量比失真）。TSLA 2022-08、GOOGL 2022-07、NVDA 2024-06 三次分割前後的量連續。
+
+**資料品質判定：以同一根 K 棒的量比為準**
+
+判定 Alpaca 與 Yahoo 是否一致時，比較**同一根 1h K 棒**的成交量（`alpaca-seam` 子命令，`calibration/alpaca_history.py::compare_with_cache`）：逐根量比中位數偏離 1 不超過 10%，且兩者各自計算的 `vol_ratio` 在進場門檻（1.15／1.25）上的判定翻轉比例不超過 5%。
+
+**不可**拿「Alpaca 當日小時量加總」對「Yahoo 日線成交量」：兩個來源的小時線都只含常規時段，日線含盤前盤後，Yahoo 自己的小時加總對自己的日線也只有 0.80–0.94，會讓任何小時資料都不及格。2026-09 的重疊期間（2023-10 → 2025-12）實測：
+
+| 標的 | 逐根量比 A/Y 中位數 [p10, p90] | 小時加總 A / Yahoo 日線 | 對照：Yahoo 小時加總 / Yahoo 日線 | vol_ratio 判定翻轉 @1.15／@1.25 |
+| :--- | :---: | :---: | :---: | :---: |
+| VOO | 1.000 [0.926, 1.001] | 0.907 | 0.933 | 2.6%／2.9% |
+| NVDA | 1.000 [0.980, 10.000]\* | 0.866 | 0.862 | 3.3%／2.4% |
+| META | 1.000 [0.947, 1.012] | 0.826 | 0.840 | 2.0%／2.1% |
+| GOOGL | 1.000 [0.948, 1.015] | 0.786 | 0.798 | 2.0%／1.9% |
+| TSLA | 1.000 [0.934, 1.007] | 0.913 | 0.941 | 2.4%／1.7% |
+| MU | 1.000 [0.948, 1.003] | 0.823 | 0.841 | 2.1%／1.9% |
+| PLTR | 1.000 [0.935, 1.001] | 0.911 | 0.941 | 1.6%／1.5% |
+| FCX | 1.000 [0.982, 1.000] | 0.828 | 0.834 | 1.8%／1.4% |
+| MRNA | 1.000 [0.974, 1.004] | 0.869 | 0.874 | 2.0%／1.5% |
+| GLD | 1.000 [0.912, 1.000] | 0.910 | 0.941 | 3.0%／2.9% |
+
+\* NVDA 2024-06-10 分割前的比值為 10.0：**Yahoo 的小時成交量沒有做分割調整**，Alpaca 才是正確的一方；分割後為 1.0。價格方面，FCX 的 Alpaca 與 Yahoo 日線有約 0.36% 的股息調整差異，其餘在 0.02% 以內。結論：繼續使用 Alpaca SIP。
+
+**BOXX 大盤退場（`enable_boxx_retreat`，預設關閉）**
+
+- 觸發：VOO 日收盤連續 3 個交易日低於 200 日均線 → 退場；連續 3 日站回之上 → 回場。以前一交易日收盤判定、下一交易日開盤執行（無前視）。
+- 退場：8 檔個股衛星全數轉入 BOXX，VOO 賣出一半轉入 BOXX；GLD 不動。回場：賣出 BOXX，VOO 與個股依原目標權重重新建倉。B&H 對照組不退場。
+- 退場期間暫停衛星新進場、破位追空、左側演化加碼、順勢加碼、換股與核心超額部署到衛星；停損／TP、`MARGIN_DEFENSE`、逃頂防禦與 Covered Call 收益照常。
+- BOXX 上市前以 BIL 代理：上市日之前的 BIL 價格整段乘上 k = BOXX 上市日收盤 ÷ BIL 同日收盤，代理段的每日報酬等於 BIL（含配息的總報酬），上市日同價銜接、無跳空。
+
+2022–2025 A/B（Sortino；對照為同模式、無退場）：DEFENSIVE 0.41 → 0.38、AGGRESSIVE 0.28 → 0.73、AGGRESSIVE + `PYRAMID_ADD` 0.26 → 0.78；B&H 1.17。四年退場 6 次、合計 258 個交易日：
+
+| 退場 → 回場 | 天數 | VOO 同期變化（> 0 = 錯過的反彈） | BOXX 報酬 |
+| :--- | ---: | ---: | ---: |
+| 2022-01-28 → 2022-02-02 | 3 | +5.3% | 0.00% |
+| 2022-02-23 → 2022-03-23 | 20 | +3.6% | +0.02% |
+| 2022-04-14 → 2022-12-05 | 161 | −8.2% | +1.08% |
+| 2022-12-08 → 2023-01-17 | 25 | +1.3% | +0.46% |
+| 2023-10-30 → 2023-11-06 | 5 | +5.3% | +0.12% |
+| 2025-03-13 → 2025-05-15 | 44 | +5.2% | +0.75% |
+
+判讀：
+
+1. **只有 1 次真正避開下跌**（2022-04 → 2022-12，VOO −8.2%）；另外 5 次是 whipsaw，回場價比退場價高 1.3%–5.3%。2025-04 的關稅急跌與反彈也是 whipsaw。
+2. **2022 年的 Sortino 反而變差**（DEFENSIVE −2.18 → −2.95、AGGRESSIVE −2.16 → −2.83），但 AGGRESSIVE 的 2022 虧損從 −21.8% 降到 −16.9%：退場期間曝險降到約 28%，報酬的絕對虧損變小，單位下行風險的報酬沒有改善。
+3. **AGGRESSIVE 的大幅改善主要出現在 2024 年**（+21.8% → +37.9%），而 2024 年沒有任何退場，兩者的平均曝險也幾乎相同（75.0% vs 76.4%）——差異來自回場重建後的持股路徑不同，屬路徑依賴而非退場規則的系統性效果。DEFENSIVE 沒有改善。**不足以作為上線依據**。
+
+**逐檔觀察**：VOO 核心貢獻最大（兩組都約 +$23k，幾乎全是未實現的持有報酬）。MRNA（2022–2025 自高點下跌超過 80%）是最大虧損來源：DEFENSIVE −$3.5k、AGGRESSIVE + `PYRAMID_ADD` −$13.0k，觸發 54–57 次停損——每次停損後 3 天冷卻期滿又被右側／左側進場條件買回，停損本身有效，但「停損後反覆買回」讓崩跌標的持續失血。FCX 也為負。
+
+**重現**：依序執行 `python -m calibration fetch`（日線）、`python -m calibration fetch-alpaca-1h`（1h 線，Alpaca 金鑰以環境變數傳入、不寫入任何檔案）與 `scripts/run_multi_asset_backtest.py --suite all`；完整指令見 AGENTS.md 的 Testing 段落。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report | fetch-alpaca-1h | alpaca-seam`）
+  - `nexus_core/calibration/alpaca_history.py`：Alpaca SIP 歷史 1h 線（常規時段聚合、成交量分割調整、區間取代、同根 K 棒資料品質判定）（§5.15）
+  - `nexus_core/calibration/backtest_engine_2025.py`：`BacktestUniverse`／`SatelliteSpec`／`legacy_universe()`／`multi_asset_universe()`、`enable_boxx_retreat`（§5.15）
+  - `nexus_core/calibration/backtest_analysis.py`：逐年分列、逐檔貢獻、BOXX 退場統計（§5.15）
+  - `nexus_core/scripts/run_multi_asset_backtest.py`：多資產 2022–2025 回測報告（6 組 + 逃頂 A/B + BOXX 退場 A/B）（§5.15）
   - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
   - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
