@@ -76,6 +76,28 @@ class DataStore:
         self._update_manifest(interval, symbol, frame)
         return len(frame)
 
+    def overwrite(
+        self,
+        interval: str,
+        symbol: str,
+        base: Optional[pd.DataFrame],
+        new: pd.DataFrame,
+    ) -> int:
+        """以 base（已剔除要取代的區間）+ new 重寫快取；不與磁碟上的既有檔合併。"""
+        frame = new[
+            [c for c in ("Open", "High", "Low", "Close", "Volume") if c in new.columns]
+        ].copy()
+        frame.index = to_utc_index(frame.index)
+        frame = frame[frame.index.notna()]
+        if base is not None and not base.empty:
+            frame = pd.concat([base, frame])
+        frame = frame[~frame.index.duplicated(keep="last")].sort_index()
+        path = self._path(interval, symbol)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frame.to_csv(path, compression="gzip")
+        self._update_manifest(interval, symbol, frame)
+        return len(frame)
+
     def manifest(self) -> dict[str, Any]:
         path = self.cache_dir / "manifest.json"
         if not path.exists():

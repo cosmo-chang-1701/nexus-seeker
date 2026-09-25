@@ -1,4 +1,9 @@
-"""2025 年動態轉倉回測模擬引擎 (RolloverBacktestEngine2025).
+"""動態轉倉回測模擬引擎 (RolloverBacktestEngine2025).
+
+預設配置為 2025 年 SPY／NVDA／GLD 三標的（回歸不變式的基準，見
+tests/unit/test_backtest_regression_invariant.py）；可透過 `universe` 參數換成多資產
+配置（`multi_asset_universe()`：VOO 核心 + 8 檔個股衛星 + GLD），並可開啟 BOXX 大盤
+退場（`enable_boxx_retreat`）。標的一般化的方式見 `SatelliteSpec` 上方的說明。
 
 涵蓋 9 大核心轉倉情境：
 1. CORE_DEPLOYMENT (情境一: 核心資金超額再平衡與 Covered Call 收益增強)
@@ -26,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from calibration.data_store import DataStore
-from calibration.features import daily_features, hourly_features
+from calibration.features import daily_features, et_dates, hourly_features
 from market_analysis.dynamic_rollover.constants import (
     _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,
     _CORE_EXCESS_MIN_TRADE_PCT,
@@ -180,6 +185,8 @@ class DailyNavRecord:
     market_regime: str
     daily_return: float
     benchmark_daily_return: float
+    # 各標的收盤市值（多資產報告的逐檔貢獻用；空頭為負值）
+    symbol_values: dict[str, float] = field(default_factory=lambda: dict())
 
 
 @dataclass
@@ -599,8 +606,185 @@ class HedgePut:
         return self.mark * 100.0 * self.contracts
 
 
+# ---------------------------------------------------------------------------
+# 標的配置（多資產一般化）
+# ---------------------------------------------------------------------------
+# 原引擎把 SPY（核心）／NVDA（Alpha 衛星）／GLD（Other 避險衛星）寫死在每個情境裡。
+# 一般化方式：
+# - 「核心持倉」（core_symbol）與「大盤訊號代理」（market_symbol）分開。大盤負 Gamma
+#   代理（開盤 < SMA20）、MARGIN_DEFENSE 的危機判定、逃頂分級、保護性 Put 的定價與
+#   Beta 計算一律用 market_symbol（SPY：代表指數本身，且期權流動性遠優於 VOO）；
+#   核心持倉的建倉、超額再平衡、Covered Call 收益與 BOXX 退場訊號用 core_symbol。
+#   預設配置兩者都是 SPY。
+# - NVDA／GLD 的專屬常數（EV 代理的 HV 預設、缺值時的 60 日高點／ATR 替代倍數、初始
+#   建倉的目標牆與停損倍數）改由每檔衛星的 SatelliteSpec 自帶，預設配置取值與原常數
+#   相同。多資產配置中 8 檔個股沿用 NVDA 的值、GLD 沿用 GLD 的值。
+# - 機會成本輪動：原本是 NVDA ↔ GLD 兩個方向各檢查一次；一般化為「依設定順序逐檔檢查
+#   衰退中的衛星，轉入其餘衛星中 EV 價差最大的突破候選」。只有兩檔時候選唯一，與原
+#   邏輯逐位元相同。
+# - CORE_DEPLOYMENT 的去向：預設配置沿用原優先序（先 GLD 後 NVDA）；多資產配置改為
+#   PSQ 最高的突破候選。
+# - Regime V 破位追空：原本只評估 NVDA，一般化為 allow_short 的衛星（多資產配置中為
+#   8 檔個股；GLD 不做空，與原引擎一致）。
+# - 1h K 棒：原引擎依序號對齊三檔（取最少根數）；多資產配置改以時間戳交集對齊，避免
+#   任一檔缺 K 棒時錯位。
+
+
+@dataclass(frozen=True)
+class SatelliteSpec:
+    symbol: str
+    weight: float
+    init_label: str  # INIT 交易理由中的角色字樣（預設配置沿用原字串）
+    hv_default: float  # EV 代理：前一日特徵缺值時的 HV 預設
+    h60_fallback_mult: float  # 前一日 60 日高點缺值時以開盤價 × 此倍數代替
+    atr_fallback_pct: float  # 前一日 ATR14 缺值時以開盤價 × 此比例代替
+    init_target_mult: float  # 初始建倉目標牆 = 開盤 × 此倍數
+    init_stop_mult: float  # 初始建倉停損 = 開盤 × 此倍數
+    allow_short: bool = False  # 是否評估 Regime V 破位追空
+    retreat_exempt: bool = False  # BOXX 大盤退場時不動（GLD）
+
+
+@dataclass(frozen=True)
+class BacktestUniverse:
+    name: str
+    core_symbol: str
+    core_weight: float
+    satellites: tuple[SatelliteSpec, ...]
+    cash_weight: float
+    # B&H 對照組（單純持有、不退場）的權重，依序加總
+    benchmark_weights: tuple[tuple[str, float], ...]
+    benchmark_cash_weight: float
+    market_symbol: str = "SPY"
+    # CORE_DEPLOYMENT 的候選優先序；None = 依 PSQ 由高到低
+    core_deploy_priority: Optional[tuple[str, ...]] = None
+    # 1h K 棒對齊：position = 依序號（原引擎行為）；timestamp = 依時間戳交集
+    hourly_alignment: str = "position"
+    # INIT 交易理由的年份字樣；None = 回測起始年份
+    init_reason_year: Optional[str] = None
+    # 機會成本輪動的頻率控制：
+    # per_source = 原引擎行為，冷卻以「每檔來源衛星」各自計算（兩檔衛星時只有一對、
+    #   兩個方向同日互斥，等同「一次一筆」）；
+    # portfolio  = 投組層級：每天最多一筆（全部「衰退 → 突破」組合中 EV 價差最大者），
+    #   冷卻以投組計算。N 檔衛星若沿用 per_source，會出現同日多檔同時轉入同一標的、
+    #   剛轉入的標的數日內又被轉出，偏離原設計「單向、低頻輪動」的語意。
+    rotation_policy: str = "per_source"
+
+
+def equity_satellite(
+    symbol: str,
+    weight: float,
+    init_label: Optional[str] = None,
+    allow_short: bool = True,
+) -> SatelliteSpec:
+    """個股型衛星：沿用原引擎 NVDA 的替代常數。"""
+    return SatelliteSpec(
+        symbol=symbol,
+        weight=weight,
+        init_label=init_label if init_label is not None else f"衛星 {symbol} ",
+        hv_default=0.35,
+        h60_fallback_mult=1.08,
+        atr_fallback_pct=0.02,
+        init_target_mult=1.08,
+        init_stop_mult=0.92,
+        allow_short=allow_short,
+    )
+
+
+def gold_satellite(
+    symbol: str, weight: float, init_label: str = "衛星 Other 避險"
+) -> SatelliteSpec:
+    """避險型衛星：沿用原引擎 GLD 的替代常數；不做空、BOXX 退場時不動。"""
+    return SatelliteSpec(
+        symbol=symbol,
+        weight=weight,
+        init_label=init_label,
+        hv_default=0.20,
+        h60_fallback_mult=1.05,
+        atr_fallback_pct=0.015,
+        init_target_mult=1.06,
+        init_stop_mult=0.95,
+        allow_short=False,
+        retreat_exempt=True,
+    )
+
+
+MULTI_ASSET_EQUITIES: tuple[str, ...] = (
+    "NVDA",
+    "META",
+    "GOOGL",
+    "TSLA",
+    "MU",
+    "PLTR",
+    "FCX",
+    "MRNA",
+)
+
+
+def legacy_universe(
+    core_weight: float, alpha_weight: float, other_weight: float, cash_weight: float
+) -> BacktestUniverse:
+    """原引擎的 SPY／NVDA／GLD 三標的配置（回歸不變式的基準）。"""
+    return BacktestUniverse(
+        name="SPY_NVDA_GLD",
+        core_symbol="SPY",
+        core_weight=core_weight,
+        satellites=(
+            equity_satellite("NVDA", alpha_weight, "衛星 Alpha "),
+            gold_satellite("GLD", other_weight),
+        ),
+        cash_weight=cash_weight,
+        benchmark_weights=(("SPY", 0.50), ("NVDA", 0.25), ("GLD", 0.15)),
+        benchmark_cash_weight=0.10,
+        market_symbol="SPY",
+        core_deploy_priority=("GLD", "NVDA"),
+        hourly_alignment="position",
+        init_reason_year="2025",
+    )
+
+
+def multi_asset_universe() -> BacktestUniverse:
+    """VOO 核心 40%、8 檔個股衛星各 6%、GLD 7%、現金 5%（策略與 B&H 共用）。
+
+    大盤訊號代理維持 SPY（見上方說明），VOO 只是核心持倉。
+    """
+    sats = tuple(equity_satellite(sym, 0.06) for sym in MULTI_ASSET_EQUITIES) + (
+        gold_satellite("GLD", 0.07),
+    )
+    return BacktestUniverse(
+        name="VOO_8SAT_GLD",
+        core_symbol="VOO",
+        core_weight=0.40,
+        satellites=sats,
+        cash_weight=0.05,
+        benchmark_weights=(("VOO", 0.40),) + tuple((s.symbol, s.weight) for s in sats),
+        benchmark_cash_weight=0.05,
+        market_symbol="SPY",
+        core_deploy_priority=None,
+        hourly_alignment="timestamp",
+        init_reason_year=None,
+        rotation_policy="portfolio",
+    )
+
+
+# --- BOXX 大盤退場（enable_boxx_retreat，預設關閉）---------------------------
+# 觸發：核心標的日收盤連續 3 個交易日低於其 200 日均線 → 退場；連續 3 個交易日站回
+# 之上 → 回場。以前一交易日收盤判定（無前視），在下一個交易日開盤執行。
+# 退場：非豁免衛星全部轉入 BOXX、核心賣出一半轉入 BOXX；GLD（retreat_exempt）不動。
+# 回場：賣出 BOXX，核心與非豁免衛星依原目標權重重新建倉。
+# 退場期間：暫停衛星的新進場（右側／趨勢延續／左側接刀）、破位追空、左側演化加碼、
+# 順勢加碼、機會成本換股，以及核心超額資金部署到衛星；停損／TP、MARGIN_DEFENSE、
+# 逃頂防禦與 Covered Call 收益照常運作。
+_RETREAT_SMA_WINDOW: int = 200
+_RETREAT_CONFIRM_DAYS: int = 3
+_RETREAT_CORE_SELL_RATIO: float = 0.50
+_RETREAT_REBUILD_MIN_USD: float = 1000.0
+BOXX_SYMBOL: str = "BOXX"
+BOXX_PROXY_SYMBOL: str = "BIL"  # BOXX 2022-12-28 上市前的日報酬代理
+RETREAT_SCENARIO: str = "BOXX_RETREAT"
+
+
 class RolloverBacktestEngine2025:
-    """2025 全年度動態轉倉引擎回測核心。"""
+    """動態轉倉引擎回測核心（預設 2025 年 SPY／NVDA／GLD；可設定標的配置與期間）。"""
 
     def __init__(
         self,
@@ -613,6 +797,8 @@ class RolloverBacktestEngine2025:
         enable_tp1_trend_exempt: bool = False,
         enable_pyramid_add: bool = False,
         enable_escape_tiers: bool = False,
+        universe: Optional[BacktestUniverse] = None,
+        enable_boxx_retreat: bool = False,
     ) -> None:
         self.mode: str = mode.lower()
         # Regime III-B 趨勢延續進場路徑 (handoff.md §4)。預設關閉＝基準線，
@@ -624,6 +810,8 @@ class RolloverBacktestEngine2025:
         self.enable_tp1_trend_exempt: bool = enable_tp1_trend_exempt
         self.enable_pyramid_add: bool = enable_pyramid_add
         self.enable_escape_tiers: bool = enable_escape_tiers
+        # BOXX 大盤退場（預設關閉＝原引擎行為，規則見模組層級說明）
+        self.enable_boxx_retreat: bool = enable_boxx_retreat
         # 出場分層事件 (handoff.md §5.4 SL 分層檢討)。純觀測，不影響任何決策；
         # 回測結束後由 label_exit_events() 以 production 共用的前向路徑定義標註。
         self.exit_events: list[dict[str, Any]] = list()
@@ -646,10 +834,6 @@ class RolloverBacktestEngine2025:
         self.end_date: str = end_date
         self.portfolio: Portfolio = Portfolio(initial_cash=initial_capital)
 
-        # 標的配置定義
-        self.core_symbol: str = "SPY"
-        self.alpha_symbol: str = "NVDA"
-        self.other_symbol: str = "GLD"
         self.vix_symbol: str = "^VIX"
         self.vix3m_symbol: str = "^VIX3M"
 
@@ -680,35 +864,69 @@ class RolloverBacktestEngine2025:
             self.opp_cost_cd_days = 5
             self.opp_cost_hurdle = (
                 _EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT
-            )  # 0.033
+            )
             self.max_satellite_budget_pct = 0.15
+
+        # 標的配置：未指定時沿用原三標的配置（權重依模式而定）。指定時權重以配置為準，
+        # 其餘模式參數（TP1 比例、換股門檻／冷卻、部署比例、單筆衛星上限）不變。
+        if universe is None:
+            universe = legacy_universe(
+                self.core_target_weight,
+                self.alpha_target_weight,
+                self.other_target_weight,
+                self.cash_target_weight,
+            )
+        else:
+            self.core_target_weight = universe.core_weight
+            self.alpha_target_weight = universe.satellites[0].weight
+            self.other_target_weight = universe.satellites[-1].weight
+            self.cash_target_weight = universe.cash_weight
+        self.universe: BacktestUniverse = universe
+        self.core_symbol: str = universe.core_symbol
+        self.market_symbol: str = universe.market_symbol
+        self.sat_specs: tuple[SatelliteSpec, ...] = universe.satellites
+        self.sat_symbols: list[str] = [s.symbol for s in universe.satellites]
+        self.sat_spec: dict[str, SatelliteSpec] = {
+            s.symbol: s for s in universe.satellites
+        }
+        # 相容舊屬性：第一檔衛星沿用 alpha、最後一檔沿用 other 的稱呼
+        self.alpha_symbol: str = self.sat_symbols[0]
+        self.other_symbol: str = self.sat_symbols[-1]
 
         # 資料容器
         self.daily_data: dict[str, pd.DataFrame] = dict()
         self.hourly_data: dict[str, pd.DataFrame] = dict()
         self.daily_feat: dict[str, pd.DataFrame] = dict()
         self.hourly_feat: dict[str, pd.DataFrame] = dict()
+        self._hours_by_date: dict[str, dict[date, pd.DataFrame]] = dict()
         self.trading_dates: list[date] = list()
 
-        # 基準投組追蹤 (50% SPY, 25% NVDA, 15% GLD, 10% Cash 靜態持有)
+        # 基準投組追蹤（單純持有、不退場；預設 50% SPY, 25% NVDA, 15% GLD, 10% Cash）
         self.benchmark_shares: dict[str, float] = dict()
-        self.benchmark_cash: float = initial_capital * 0.10
+        self.benchmark_cash: float = initial_capital * universe.benchmark_cash_weight
         self.benchmark_history: list[float] = list()
 
         # 轉倉與停損冷卻追蹤
         self.last_exit_date: dict[str, date] = dict()
         self.last_macro_escape_date: Optional[date] = None
         self.last_opp_cost_date: dict[str, date] = dict()
+        self.last_portfolio_rotation_date: Optional[date] = None
         self.fundamental_broken_events: dict[str, set[str]] = dict()
+
+        # BOXX 大盤退場狀態
+        self.retreat_active: bool = False
+        self.retreat_signal: dict[date, str] = dict()
+        self.retreat_episodes: list[dict[str, Any]] = list()
+        self.boxx_listing_date: Optional[date] = None
+
+    @property
+    def traded_symbols(self) -> list[str]:
+        """核心 + 衛星（依設定順序）。"""
+        return [self.core_symbol] + self.sat_symbols
 
     def load_and_prepare_data(self) -> None:
         """載入 1d 與 1h 資料並計算無前視時序特徵。"""
-        symbols = [
-            self.core_symbol,
-            self.alpha_symbol,
-            self.other_symbol,
-            self.vix_symbol,
-        ]
+        symbols = self.traded_symbols + [self.vix_symbol]
         for sym in symbols:
             d = self.store.load("1d", sym)
             if d is None or d.empty:
@@ -722,6 +940,17 @@ class RolloverBacktestEngine2025:
                     raise RuntimeError(f"缺失 {sym} 1h 歷史資料")
                 self.hourly_data[sym] = h
                 self.hourly_feat[sym] = hourly_features(h, self.daily_feat[sym])
+                self._hours_by_date[sym] = {
+                    k: grp for k, grp in self.hourly_feat[sym].groupby("date")
+                }
+
+        # 大盤訊號代理：核心持倉不是 SPY 時另外載入（只需日線）
+        if self.market_symbol not in self.daily_feat:
+            m = self.store.load("1d", self.market_symbol)
+            if m is None or m.empty:
+                raise RuntimeError(f"缺失 {self.market_symbol} 1d 歷史資料")
+            self.daily_data[self.market_symbol] = m
+            self.daily_feat[self.market_symbol] = daily_features(m)
 
         # VTS (VIX / VIX3M) 只供逃頂分級代理使用；缺資料時該因子不計分。
         if self.enable_escape_tiers or self.enable_pyramid_add:
@@ -730,7 +959,11 @@ class RolloverBacktestEngine2025:
                 self.daily_data[self.vix3m_symbol] = v3
                 self.daily_feat[self.vix3m_symbol] = daily_features(v3)
 
-        # 篩選出 2025 年交易日
+        if self.enable_boxx_retreat:
+            self._prepare_boxx_series()
+            self._prepare_retreat_signal()
+
+        # 篩選出回測期間的交易日
         spy_dfeat = self.daily_feat[self.core_symbol]
         dt_start = datetime.strptime(self.start_date, "%Y-%m-%d").date()
         dt_end = datetime.strptime(self.end_date, "%Y-%m-%d").date()
@@ -740,6 +973,77 @@ class RolloverBacktestEngine2025:
             if isinstance(d_val, date) and dt_start <= d_val <= dt_end:
                 dates_in_range.add(d_val)
         self.trading_dates = sorted(list(dates_in_range))
+
+        # 多標的配置：每個交易日每檔都必須有日線，否則開盤／收盤取值會失敗
+        if self.universe.hourly_alignment == "timestamp":
+            required = self.traded_symbols + [self.market_symbol]
+            if self.enable_boxx_retreat:
+                required.append(BOXX_SYMBOL)
+            for sym in required:
+                have = set(self.daily_feat[sym]["date"])
+                missing = [d for d in self.trading_dates if d not in have]
+                if missing:
+                    raise RuntimeError(
+                        f"{sym} 缺少 {len(missing)} 個交易日的日線（首個 {missing[0]}）"
+                    )
+
+    def _prepare_boxx_series(self) -> None:
+        """BOXX 日線；上市（2022-12-28）前以 BIL 日報酬代理。
+
+        銜接：把 BOXX 上市日之前的 BIL 價格整段乘上 k = BOXX 上市日收盤 / BIL 同日收盤，
+        使代理段在上市日與 BOXX 同價。上市日之前每天的報酬 = BIL 當日報酬（Yahoo 調整後
+        價格，含配息，即總報酬），上市日之後 = BOXX 實際價格。兩者皆為短天期國庫券收益，
+        銜接點不產生價格跳空。
+        """
+        boxx = self.store.load("1d", BOXX_SYMBOL)
+        bil = self.store.load("1d", BOXX_PROXY_SYMBOL)
+        if boxx is None or boxx.empty or bil is None or bil.empty:
+            raise RuntimeError("BOXX 退場需要 BOXX 與 BIL 日線")
+        first_ts = boxx.index[0]
+        if first_ts not in bil.index:
+            raise RuntimeError("BIL 缺少 BOXX 上市日的日線，無法銜接")
+        k = float(boxx.loc[first_ts, "Close"]) / float(bil.loc[first_ts, "Close"])
+        pre = bil[bil.index < first_ts].astype("float64")
+        for col in ("Open", "High", "Low", "Close"):
+            pre[col] = pre[col] * k
+        spliced = pd.concat([pre, boxx.astype("float64")]).sort_index()
+        self.daily_data[BOXX_SYMBOL] = spliced
+        self.daily_feat[BOXX_SYMBOL] = daily_features(spliced)
+        self.boxx_listing_date = et_dates(pd.DatetimeIndex([first_ts]))[0]
+
+    def _prepare_retreat_signal(self) -> None:
+        """預先算出每個交易日開盤時的退場／回場訊號（核心標的收盤 vs 200 日均線）。
+
+        交易日 D 的訊號只看 D 之前已收盤的 3 個交易日：全部低於均線 → EXIT；全部高於
+        均線 → ENTER。均線以 min_periods=200 計算，暖機期不足時兩者皆不成立。
+        """
+        f = self.daily_feat[self.core_symbol]
+        close = f["close"].astype("float64")
+        sma = close.rolling(_RETREAT_SMA_WINDOW, min_periods=_RETREAT_SMA_WINDOW).mean()
+        below = (close < sma).to_numpy()
+        above = (close > sma).to_numpy()
+        dates = list(f["date"])
+        n = _RETREAT_CONFIRM_DAYS
+        for i in range(n, len(dates)):
+            if bool(below[i - n : i].all()):
+                self.retreat_signal[dates[i]] = "EXIT"
+            elif bool(above[i - n : i].all()):
+                self.retreat_signal[dates[i]] = "ENTER"
+
+    def _day_hours(self, symbol: str, current_date: date) -> pd.DataFrame:
+        grp = self._hours_by_date.get(symbol, {}).get(current_date)
+        if grp is not None:
+            return grp
+        f = self.hourly_feat[symbol]
+        return f[f["date"] == current_date]
+
+    def _open_on(self, symbol: str, current_date: date) -> float:
+        f = self.daily_feat[symbol]
+        return float(f[f["date"] == current_date]["open"].iloc[0])
+
+    def _close_price_on(self, symbol: str, current_date: date) -> float:
+        f = self.daily_feat[symbol]
+        return float(f[f["date"] == current_date]["close"].iloc[0])
 
     @staticmethod
     def _compute_psq_from_series(
@@ -825,103 +1129,250 @@ class RolloverBacktestEngine2025:
         return float(prior["close"].iloc[-1])
 
     def setup_initial_portfolio(self, first_date: date) -> None:
-        """建立 2025 第一個交易日的初始建倉與基準投組。"""
+        """建立回測第一個交易日的初始建倉與基準投組。"""
         first_dt_str = str(first_date)
+        year = self.universe.init_reason_year or str(first_date.year)
 
         # 取得當日開盤價
-        spy_open = float(
-            self.daily_feat[self.core_symbol][
-                self.daily_feat[self.core_symbol]["date"] == first_date
-            ]["open"].iloc[0]
-        )
-        nvda_open = float(
-            self.daily_feat[self.alpha_symbol][
-                self.daily_feat[self.alpha_symbol]["date"] == first_date
-            ]["open"].iloc[0]
-        )
-        gld_open = float(
-            self.daily_feat[self.other_symbol][
-                self.daily_feat[self.other_symbol]["date"] == first_date
-            ]["open"].iloc[0]
-        )
+        opens = {sym: self._open_on(sym, first_date) for sym in self.traded_symbols}
 
-        # 動態投組建倉 (SPY core_target_weight, NVDA alpha_target_weight, GLD other_target_weight)
-        spy_notional = self.initial_capital * self.core_target_weight
-        nvda_notional = self.initial_capital * self.alpha_target_weight
-        gld_notional = self.initial_capital * self.other_target_weight
-
-        # SPY 核心部位
+        # 核心部位
+        core_open = opens[self.core_symbol]
         self.portfolio.buy(
             symbol=self.core_symbol,
             asset_class="CORE",
-            price=spy_open,
-            notional=spy_notional,
+            price=core_open,
+            notional=self.initial_capital * self.core_target_weight,
             scenario="INIT",
-            reason=f"2025 初始核心配置 ({self.core_target_weight:.0%})",
+            reason=f"{year} 初始核心配置 ({self.core_target_weight:.0%})",
             timestamp=f"{first_dt_str} 09:30:00",
             date_str=first_dt_str,
             target_allocation_pct=self.core_target_weight,
-            anchor_base=spy_open,
-            target_wall=spy_open * 1.05,
-            stop_loss=spy_open * 0.90,
+            anchor_base=core_open,
+            target_wall=core_open * 1.05,
+            stop_loss=core_open * 0.90,
         )
 
-        # NVDA 衛星 Alpha 部位
-        self.portfolio.buy(
-            symbol=self.alpha_symbol,
-            asset_class="SATELLITE",
-            price=nvda_open,
-            notional=nvda_notional,
-            scenario="INIT",
-            reason=f"2025 初始衛星 Alpha 配置 ({self.alpha_target_weight:.0%})",
-            timestamp=f"{first_dt_str} 09:30:00",
-            date_str=first_dt_str,
-            anchor_base=nvda_open,
-            target_wall=nvda_open * 1.08,
-            stop_loss=nvda_open * 0.92,
-        )
+        # 衛星部位（依設定順序）
+        for spec in self.sat_specs:
+            sat_open = opens[spec.symbol]
+            weight = self._sat_target_weight(spec)
+            self.portfolio.buy(
+                symbol=spec.symbol,
+                asset_class="SATELLITE",
+                price=sat_open,
+                notional=self.initial_capital * weight,
+                scenario="INIT",
+                reason=f"{year} 初始{spec.init_label}配置 ({weight:.0%})",
+                timestamp=f"{first_dt_str} 09:30:00",
+                date_str=first_dt_str,
+                anchor_base=sat_open,
+                target_wall=sat_open * spec.init_target_mult,
+                stop_loss=sat_open * spec.init_stop_mult,
+            )
 
-        # GLD 衛星 Other 部位
-        self.portfolio.buy(
-            symbol=self.other_symbol,
-            asset_class="SATELLITE",
-            price=gld_open,
-            notional=gld_notional,
-            scenario="INIT",
-            reason=f"2025 初始衛星 Other 避險配置 ({self.other_target_weight:.0%})",
-            timestamp=f"{first_dt_str} 09:30:00",
-            date_str=first_dt_str,
-            anchor_base=gld_open,
-            target_wall=gld_open * 1.06,
-            stop_loss=gld_open * 0.95,
-        )
-
-        # 靜態基準投組股份設定 (扣除手續費) - 基準始終維持標準 50/25/15/10 靜態對照
+        # 靜態基準投組股份設定 (扣除手續費)；基準始終維持單純持有、不退場
         fee_rate = self.portfolio.fee_rate
-        bench_core_usd = self.initial_capital * 0.50
-        bench_alpha_usd = self.initial_capital * 0.25
-        bench_other_usd = self.initial_capital * 0.15
-        self.benchmark_shares[self.core_symbol] = (
-            bench_core_usd * (1.0 - fee_rate)
-        ) / spy_open
-        self.benchmark_shares[self.alpha_symbol] = (
-            bench_alpha_usd * (1.0 - fee_rate)
-        ) / nvda_open
-        self.benchmark_shares[self.other_symbol] = (
-            bench_other_usd * (1.0 - fee_rate)
-        ) / gld_open
+        for sym, weight in self.universe.benchmark_weights:
+            bench_usd = self.initial_capital * weight
+            self.benchmark_shares[sym] = (bench_usd * (1.0 - fee_rate)) / opens[sym]
+
+    def _sat_target_weight(self, spec: SatelliteSpec) -> float:
+        """衛星目標權重（預設配置的兩檔權重已由模式決定並寫入 SatelliteSpec）。"""
+        return spec.weight
+
+    def _prev_rows(self, current_date: date) -> dict[str, Optional[pd.Series]]:
+        syms = list(dict.fromkeys(self.traded_symbols + [self.market_symbol]))
+        return {sym: self._get_daily_proxy_row(sym, current_date) for sym in syms}
+
+    def _sat_psq(self, symbol: str, current_date: date) -> float:
+        mask = self.daily_feat[symbol]["date"] < current_date
+        data = self.daily_data[symbol]
+        return self._compute_psq_from_series(
+            data[mask]["Close"], data[mask]["High"], data[mask]["Low"]
+        )
+
+    def _sat_ev(
+        self,
+        spec: SatelliteSpec,
+        prev_row: Optional[pd.Series],
+        open_px: float,
+        psq: float,
+    ) -> float:
+        # EV proxy based on Expected Move (02_expected_move_and_max_pain.md):
+        # EM_weekly = Spot * max(HV20, 0.15) * sqrt(7 / 365)
+        # PSQ momentum weighting adjusts forward expected drift:
+        # EV = (EM_weekly / Spot) * (PSQ / 50.0)
+        hv = (
+            float(prev_row["hv_rank"]) / 100.0
+            if prev_row is not None
+            else spec.hv_default
+        )
+        hv_val = max(0.15, hv)
+        em_pct = hv_val * math.sqrt(7.0 / 365.0)
+        # 下行風險懲罰 (若跌破 Gamma Flip，施加 30% 懲罰)
+        penalty = (
+            0.30
+            if (prev_row is not None and open_px < float(prev_row["sma20"]))
+            else 0.0
+        )
+        return em_pct * (psq / 50.0) * (1.0 - penalty)
+
+    def _momentum_entry_levels(
+        self, spec: SatelliteSpec, prev_row: Optional[pd.Series], open_px: float
+    ) -> tuple[float, float, float]:
+        """(put wall, 目標天花板, 參考停損)：CORE_DEPLOYMENT 與機會成本轉入時共用。"""
+        pw = float(prev_row["low10"]) if prev_row is not None else open_px * 0.95
+        h60 = (
+            float(prev_row["high60"])
+            if prev_row is not None
+            else open_px * spec.h60_fallback_mult
+        )
+        atr1d = (
+            float(prev_row["atr14"])
+            if prev_row is not None
+            else open_px * spec.atr_fallback_pct
+        )
+        atr15m = atr1d / math.sqrt(26.0)
+        sl = compute_reference_stop(open_px, pw, atr15m, "LONG")
+        target = max(h60, open_px + 3.0 * atr1d)
+        return pw, target, sl
+
+    def _core_deploy_candidates(self, psq: dict[str, float]) -> list[str]:
+        order = self.universe.core_deploy_priority
+        if order is not None:
+            return [s for s in order if s in self.sat_spec]
+        return sorted(self.sat_symbols, key=lambda s: -psq[s])
+
+    # ------------------------------------------------------------------
+    # BOXX 大盤退場
+    # ------------------------------------------------------------------
+    def _apply_retreat_signal(
+        self,
+        current_date: date,
+        current_prices: dict[str, float],
+        prev_rows: dict[str, Optional[pd.Series]],
+        date_str: str,
+    ) -> None:
+        signal = self.retreat_signal.get(current_date)
+        ts = f"{date_str} 09:30:00"
+        boxx_px = current_prices[BOXX_SYMBOL]
+        if signal == "EXIT" and not self.retreat_active:
+            proceeds = 0.0
+            for spec in self.sat_specs:
+                if spec.retreat_exempt or not self.portfolio.has_long(spec.symbol):
+                    continue
+                tr = self.portfolio.sell(
+                    symbol=spec.symbol,
+                    price=current_prices[spec.symbol],
+                    ratio=1.0,
+                    scenario=RETREAT_SCENARIO,
+                    reason=f"🏦 大盤退場：{self.core_symbol} 連續 3 日收盤低於 200 日均線，衛星全數轉入 BOXX",
+                    timestamp=ts,
+                    date_str=date_str,
+                )
+                if tr is not None:
+                    proceeds += tr.notional - tr.fee
+            tr = self.portfolio.sell(
+                symbol=self.core_symbol,
+                price=current_prices[self.core_symbol],
+                ratio=_RETREAT_CORE_SELL_RATIO,
+                scenario=RETREAT_SCENARIO,
+                reason=f"🏦 大盤退場：核心 {self.core_symbol} 賣出 {_RETREAT_CORE_SELL_RATIO:.0%} 轉入 BOXX",
+                timestamp=ts,
+                date_str=date_str,
+            )
+            if tr is not None:
+                proceeds += tr.notional - tr.fee
+            if proceeds > 0:
+                self.portfolio.buy(
+                    symbol=BOXX_SYMBOL,
+                    asset_class="DEFENSE",
+                    price=boxx_px,
+                    notional=proceeds,
+                    scenario=RETREAT_SCENARIO,
+                    reason="🏦 大盤退場：資金停泊於 BOXX（短天期國庫券）",
+                    timestamp=ts,
+                    date_str=date_str,
+                )
+            self.retreat_active = True
+            self.retreat_episodes.append(
+                {
+                    "exit_date": date_str,
+                    "exit_idx": self.trading_dates.index(current_date),
+                    "exit_core_px": current_prices[self.core_symbol],
+                    "exit_boxx_px": boxx_px,
+                    "proceeds": proceeds,
+                    "enter_date": None,
+                    "enter_core_px": None,
+                    "enter_boxx_px": None,
+                }
+            )
+        elif signal == "ENTER" and self.retreat_active:
+            self.portfolio.sell(
+                symbol=BOXX_SYMBOL,
+                price=boxx_px,
+                ratio=1.0,
+                scenario=RETREAT_SCENARIO,
+                reason="🏦 大盤回場：賣出 BOXX",
+                timestamp=ts,
+                date_str=date_str,
+            )
+            nav = self.portfolio.get_total_nav(current_prices)
+            targets: list[tuple[str, str, float]] = [
+                (self.core_symbol, "CORE", self.core_target_weight)
+            ] + [
+                (s.symbol, "SATELLITE", self._sat_target_weight(s))
+                for s in self.sat_specs
+                if not s.retreat_exempt
+            ]
+            for sym, asset_class, weight in targets:
+                pos = self.portfolio.positions.get(sym)
+                held = (
+                    pos.current_value if pos is not None and pos.side == "LONG" else 0.0
+                )
+                need = nav * weight - held
+                if need < _RETREAT_REBUILD_MIN_USD or self.portfolio.has_short(sym):
+                    continue
+                px = current_prices[sym]
+                kwargs: dict[str, Any] = {}
+                if asset_class == "SATELLITE":
+                    spec = self.sat_spec[sym]
+                    pw, target, sl = self._momentum_entry_levels(
+                        spec, prev_rows.get(sym), px
+                    )
+                    kwargs = {"anchor_base": pw, "target_wall": target, "stop_loss": sl}
+                self.portfolio.buy(
+                    symbol=sym,
+                    asset_class=asset_class,
+                    price=px,
+                    notional=need,
+                    scenario=RETREAT_SCENARIO,
+                    reason=f"🏦 大盤回場：{self.core_symbol} 連續 3 日站回 200 日均線，{sym} 依目標權重 {weight:.0%} 重新建倉",
+                    timestamp=ts,
+                    date_str=date_str,
+                    **kwargs,
+                )
+            self.retreat_active = False
+            ep = self.retreat_episodes[-1]
+            ep["enter_date"] = date_str
+            ep["days"] = self.trading_dates.index(current_date) - ep["exit_idx"]
+            ep["enter_core_px"] = current_prices[self.core_symbol]
+            ep["enter_boxx_px"] = boxx_px
 
     def run_simulation(self) -> None:
-        """執行 2025 年回測主迴圈。"""
+        """執行回測主迴圈。"""
         self.load_and_prepare_data()
         if not self.trading_dates:
-            raise RuntimeError("2025 年無有效交易日")
+            raise RuntimeError("回測期間無有效交易日")
 
         first_date = self.trading_dates[0]
         self.setup_initial_portfolio(first_date)
 
         prev_nav = self.initial_capital
         prev_bench_nav = self.initial_capital
+        core = self.core_symbol
+        market = self.market_symbol
 
         for d_idx, current_date in enumerate(self.trading_dates):
             date_str = str(current_date)
@@ -930,101 +1381,54 @@ class RolloverBacktestEngine2025:
             # -----------------------------------------------------------------
             # 1. 開盤微觀特徵與行情更新
             # -----------------------------------------------------------------
-            spy_prev_row = self._get_daily_proxy_row(self.core_symbol, current_date)
-            nvda_prev_row = self._get_daily_proxy_row(self.alpha_symbol, current_date)
-            gld_prev_row = self._get_daily_proxy_row(self.other_symbol, current_date)
+            prev_rows = self._prev_rows(current_date)
+            market_prev_row = prev_rows[market]
+            core_prev_row = prev_rows[core]
 
             # 開盤報價
-            spy_open = float(
-                self.daily_feat[self.core_symbol][
-                    self.daily_feat[self.core_symbol]["date"] == current_date
-                ]["open"].iloc[0]
-            )
-            nvda_open = float(
-                self.daily_feat[self.alpha_symbol][
-                    self.daily_feat[self.alpha_symbol]["date"] == current_date
-                ]["open"].iloc[0]
-            )
-            gld_open = float(
-                self.daily_feat[self.other_symbol][
-                    self.daily_feat[self.other_symbol]["date"] == current_date
-                ]["open"].iloc[0]
-            )
-
-            current_prices = {
-                self.core_symbol: spy_open,
-                self.alpha_symbol: nvda_open,
-                self.other_symbol: gld_open,
+            current_prices: dict[str, float] = {
+                sym: self._open_on(sym, current_date) for sym in self.traded_symbols
             }
+            market_open = (
+                current_prices[market]
+                if market in current_prices
+                else self._open_on(market, current_date)
+            )
+            if market not in current_prices:
+                current_prices[market] = market_open
+            if self.enable_boxx_retreat:
+                current_prices[BOXX_SYMBOL] = self._open_on(BOXX_SYMBOL, current_date)
+            core_open = current_prices[core]
+
             morning_nav = self.portfolio.get_total_nav(current_prices)
             if self.active_hedge is not None:
                 morning_nav += self.active_hedge.value
 
-            # 計算各標的日線 PSQ 與 EV Proxy
-            # NVDA & GLD 動能與 EV
-            nvda_close_hist = self.daily_data[self.alpha_symbol][
-                self.daily_feat[self.alpha_symbol]["date"] < current_date
-            ]["Close"]
-            nvda_high_hist = self.daily_data[self.alpha_symbol][
-                self.daily_feat[self.alpha_symbol]["date"] < current_date
-            ]["High"]
-            nvda_low_hist = self.daily_data[self.alpha_symbol][
-                self.daily_feat[self.alpha_symbol]["date"] < current_date
-            ]["Low"]
-            nvda_psq = self._compute_psq_from_series(
-                nvda_close_hist, nvda_high_hist, nvda_low_hist
-            )
-
-            gld_close_hist = self.daily_data[self.other_symbol][
-                self.daily_feat[self.other_symbol]["date"] < current_date
-            ]["Close"]
-            gld_high_hist = self.daily_data[self.other_symbol][
-                self.daily_feat[self.other_symbol]["date"] < current_date
-            ]["High"]
-            gld_low_hist = self.daily_data[self.other_symbol][
-                self.daily_feat[self.other_symbol]["date"] < current_date
-            ]["Low"]
-            gld_psq = self._compute_psq_from_series(
-                gld_close_hist, gld_high_hist, gld_low_hist
-            )
-
-            # EV proxy based on Expected Move (02_expected_move_and_max_pain.md):
-            # EM_weekly = Spot * max(HV20, 0.15) * sqrt(7 / 365)
-            # PSQ momentum weighting adjusts forward expected drift:
-            # EV = (EM_weekly / Spot) * (PSQ / 50.0)
-            nvda_hv = (
-                float(nvda_prev_row["hv_rank"]) / 100.0
-                if nvda_prev_row is not None
-                else 0.35
-            )
-            nvda_hv_val = max(0.15, nvda_hv)
-            nvda_em_pct = nvda_hv_val * math.sqrt(7.0 / 365.0)
-            # 下行風險懲罰 (若跌破 Gamma Flip，施加 30% 懲罰)
-            nvda_penalty = (
-                0.30
-                if (
-                    nvda_prev_row is not None
-                    and nvda_open < float(nvda_prev_row["sma20"])
+            # 各衛星日線 PSQ 與 EV Proxy
+            psq: dict[str, float] = {
+                sym: self._sat_psq(sym, current_date) for sym in self.sat_symbols
+            }
+            ev: dict[str, float] = {
+                spec.symbol: self._sat_ev(
+                    spec,
+                    prev_rows[spec.symbol],
+                    current_prices[spec.symbol],
+                    psq[spec.symbol],
                 )
-                else 0.0
-            )
-            nvda_ev = nvda_em_pct * (nvda_psq / 50.0) * (1.0 - nvda_penalty)
+                for spec in self.sat_specs
+            }
 
-            gld_hv = (
-                float(gld_prev_row["hv_rank"]) / 100.0
-                if gld_prev_row is not None
-                else 0.20
-            )
-            gld_hv_val = max(0.15, gld_hv)
-            gld_em_pct = gld_hv_val * math.sqrt(7.0 / 365.0)
-            gld_penalty = (
-                0.30
-                if (
-                    gld_prev_row is not None and gld_open < float(gld_prev_row["sma20"])
+            # -----------------------------------------------------------------
+            # 0.5 BOXX 大盤退場 / 回場（以前一交易日收盤判定，今日開盤執行）
+            # -----------------------------------------------------------------
+            if self.enable_boxx_retreat:
+                self._apply_retreat_signal(
+                    current_date, current_prices, prev_rows, date_str
                 )
-                else 0.0
-            )
-            gld_ev = gld_em_pct * (gld_psq / 50.0) * (1.0 - gld_penalty)
+                morning_nav = self.portfolio.get_total_nav(current_prices)
+                if self.active_hedge is not None:
+                    morning_nav += self.active_hedge.value
+            retreating = self.retreat_active
 
             # -----------------------------------------------------------------
             # 0. 情境五: FUNDAMENTAL_BROKEN (基本面護城河破滅清倉保護)
@@ -1048,11 +1452,14 @@ class RolloverBacktestEngine2025:
             # -----------------------------------------------------------------
             # 2. 情境四: MARGIN_DEFENSE (大盤系統性危機防禦)
             # -----------------------------------------------------------------
+            # 危機判定以大盤訊號代理 (SPY) 為準
             spy_gamma_flip = (
-                float(spy_prev_row["sma20"]) if spy_prev_row is not None else spy_open
+                float(market_prev_row["sma20"])
+                if market_prev_row is not None
+                else market_open
             )
             is_market_critical = vix_prev >= 25.0 or (
-                vix_prev >= 20.0 and spy_open < spy_gamma_flip
+                vix_prev >= 20.0 and market_open < spy_gamma_flip
             )
 
             if is_market_critical:
@@ -1066,14 +1473,10 @@ class RolloverBacktestEngine2025:
 
                 if is_margin_stressed:
                     # 檢查各衛星持倉是否「結構性無勝率」
-                    for sat_sym in [self.alpha_symbol, self.other_symbol]:
+                    for sat_sym in self.sat_symbols:
                         sat_pos = self.portfolio.positions.get(sat_sym)
                         if sat_pos is not None and sat_pos.shares > 0:
-                            row = (
-                                nvda_prev_row
-                                if sat_sym == self.alpha_symbol
-                                else gld_prev_row
-                            )
+                            row = prev_rows[sat_sym]
                             pw = float(row["low10"]) if row is not None else 0.0
                             gf = float(row["sma20"]) if row is not None else 0.0
                             spot_now = current_prices[sat_sym]
@@ -1115,7 +1518,7 @@ class RolloverBacktestEngine2025:
                 )
                 if not is_escape_cd:
                     triggered_escape = False
-                    for sat_sym in [self.alpha_symbol, self.other_symbol]:
+                    for sat_sym in self.sat_symbols:
                         sat_pos = self.portfolio.positions.get(sat_sym)
                         if sat_pos is not None and sat_pos.shares > 0:
                             spot_now = current_prices[sat_sym]
@@ -1135,7 +1538,7 @@ class RolloverBacktestEngine2025:
             # -----------------------------------------------------------------
             # 4. 情境一: CORE_DEPLOYMENT (核心超額再平衡與 Covered Call)
             # -----------------------------------------------------------------
-            spy_pos = self.portfolio.positions.get(self.core_symbol)
+            spy_pos = self.portfolio.positions.get(core)
             if spy_pos is not None and spy_pos.shares > 0 and morning_nav > 0:
                 spy_alloc = spy_pos.current_value / morning_nav
                 # 超額超過 50.5% (閾值 0.5%) 且超額金額達標 ($1,000 以上避免 dust trade)
@@ -1149,110 +1552,60 @@ class RolloverBacktestEngine2025:
                     excess_usd = spy_pos.current_value - (
                         morning_nav * self.core_target_weight
                     )
-                    shares_to_trim = excess_usd / spy_open
+                    shares_to_trim = excess_usd / core_open
                     trim_ratio = min(1.0, shares_to_trim / spy_pos.shares)
 
-                    # 賣出 SPY 超額
+                    # 賣出核心超額
                     self.portfolio.sell(
-                        symbol=self.core_symbol,
-                        price=spy_open,
+                        symbol=core,
+                        price=core_open,
                         ratio=trim_ratio,
                         scenario=RolloverScenario.CORE_DEPLOYMENT.value,
-                        reason=f"SPY 核心配置升值至 {spy_alloc:.1%} (超額 ${excess_usd:,.0f})，執行超額再平衡",
+                        reason=f"{core} 核心配置升值至 {spy_alloc:.1%} (超額 ${excess_usd:,.0f})，執行超額再平衡",
                         timestamp=f"{date_str} 09:30:00",
                         date_str=date_str,
                     )
 
-                    # 決定去向: 若 GLD 或 NVDA 處於突破動能 (>80)，且非做空中，部署 core_deploy_ratio 超額至候選，否則留存 CASH
+                    # 決定去向: 突破動能 (>80) 且非做空中的衛星，部署 core_deploy_ratio 超額，否則留存 CASH。
+                    # 大盤退場期間不部署到衛星（留在現金）。
                     deploy_usd = excess_usd * self.core_deploy_ratio
-                    if (
-                        gld_psq > _BREAKOUT_READY_THRESHOLD
-                        and not is_market_critical
-                        and not self.portfolio.has_short(self.other_symbol)
-                    ):
-                        gld_pw = (
-                            float(gld_prev_row["low10"])
-                            if gld_prev_row is not None
-                            else gld_open * 0.95
-                        )
-                        gld_h60 = (
-                            float(gld_prev_row["high60"])
-                            if gld_prev_row is not None
-                            else gld_open * 1.05
-                        )
-                        gld_atr1d = (
-                            float(gld_prev_row["atr14"])
-                            if gld_prev_row is not None
-                            else gld_open * 0.015
-                        )
-                        gld_atr15m = gld_atr1d / math.sqrt(26.0)
-                        gld_sl = compute_reference_stop(
-                            gld_open, gld_pw, gld_atr15m, "LONG"
-                        )
-                        gld_target = max(gld_h60, gld_open + 3.0 * gld_atr1d)
-                        self.portfolio.buy(
-                            symbol=self.other_symbol,
-                            asset_class="SATELLITE",
-                            price=gld_open,
-                            notional=deploy_usd,
-                            scenario=RolloverScenario.CORE_DEPLOYMENT.value,
-                            reason=f"SPY 超額資金分流至突破候選 GLD (PSQ={gld_psq:.0f})",
-                            timestamp=f"{date_str} 09:30:00",
-                            date_str=date_str,
-                            anchor_base=gld_pw,
-                            target_wall=gld_target,
-                            stop_loss=gld_sl,
-                            entry_regime="REGIME_III_RIGHT_MOMENTUM",
-                        )
-                    elif (
-                        nvda_psq > _BREAKOUT_READY_THRESHOLD
-                        and not is_market_critical
-                        and not self.portfolio.has_short(self.alpha_symbol)
-                    ):
-                        nvda_pw = (
-                            float(nvda_prev_row["low10"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 0.95
-                        )
-                        nvda_h60 = (
-                            float(nvda_prev_row["high60"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 1.08
-                        )
-                        nvda_atr1d = (
-                            float(nvda_prev_row["atr14"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 0.02
-                        )
-                        nvda_atr15m = nvda_atr1d / math.sqrt(26.0)
-                        nvda_sl = compute_reference_stop(
-                            nvda_open, nvda_pw, nvda_atr15m, "LONG"
-                        )
-                        nvda_target = max(nvda_h60, nvda_open + 3.0 * nvda_atr1d)
-                        self.portfolio.buy(
-                            symbol=self.alpha_symbol,
-                            asset_class="SATELLITE",
-                            price=nvda_open,
-                            notional=deploy_usd,
-                            scenario=RolloverScenario.CORE_DEPLOYMENT.value,
-                            reason=f"SPY 超額資金分流至突破候選 NVDA (PSQ={nvda_psq:.0f})",
-                            timestamp=f"{date_str} 09:30:00",
-                            date_str=date_str,
-                            anchor_base=nvda_pw,
-                            target_wall=nvda_target,
-                            stop_loss=nvda_sl,
-                            entry_regime="REGIME_III_RIGHT_MOMENTUM",
-                        )
+                    if not retreating:
+                        for cand in self._core_deploy_candidates(psq):
+                            if not (
+                                psq[cand] > _BREAKOUT_READY_THRESHOLD
+                                and not is_market_critical
+                                and not self.portfolio.has_short(cand)
+                            ):
+                                continue
+                            cand_open = current_prices[cand]
+                            pw, target, sl = self._momentum_entry_levels(
+                                self.sat_spec[cand], prev_rows[cand], cand_open
+                            )
+                            self.portfolio.buy(
+                                symbol=cand,
+                                asset_class="SATELLITE",
+                                price=cand_open,
+                                notional=deploy_usd,
+                                scenario=RolloverScenario.CORE_DEPLOYMENT.value,
+                                reason=f"{core} 超額資金分流至突破候選 {cand} (PSQ={psq[cand]:.0f})",
+                                timestamp=f"{date_str} 09:30:00",
+                                date_str=date_str,
+                                anchor_base=pw,
+                                target_wall=target,
+                                stop_loss=sl,
+                                entry_regime="REGIME_III_RIGHT_MOMENTUM",
+                            )
+                            break
 
                 # Covered Call Overlay 收益增強 (情境七)
-                # 當 SPY 貼近 Call Wall 阻力 (spot >= call_wall * 0.98) 且非暴跌日，每週計入 0.08% 權利金增強
+                # 當核心貼近 Call Wall 阻力 (spot >= call_wall * 0.98) 且非暴跌日，每週計入 0.08% 權利金增強
                 spy_cw = (
-                    float(spy_prev_row["high10"])
-                    if spy_prev_row is not None
-                    else spy_open * 1.05
+                    float(core_prev_row["high10"])
+                    if core_prev_row is not None
+                    else core_open * 1.05
                 )
                 if (
-                    spy_open >= spy_cw * 0.98
+                    core_open >= spy_cw * 0.98
                     and spy_pos.shares >= 50.0
                     and (d_idx % 5 == 0)
                 ):
@@ -1260,201 +1613,73 @@ class RolloverBacktestEngine2025:
                         spy_pos.current_value * 0.0008
                     )  # ~0.4% 月化期權權利金收益
                     self.portfolio.add_income(
-                        symbol=self.core_symbol,
+                        symbol=core,
                         amount=premium_yield,
                         scenario=RolloverScenario.COVERED_CALL_PROFIT_LOCK.value,
-                        reason=f"SPY 觸及頂部做市商阻力牆 (${spy_cw:.2f})，覆蓋賣出 OTM Covered Call 收益",
+                        reason=f"{core} 觸及頂部做市商阻力牆 (${spy_cw:.2f})，覆蓋賣出 OTM Covered Call 收益",
                         timestamp=f"{date_str} 09:30:00",
                         date_str=date_str,
                     )
 
             # -------------------------------------------------------------
-            # 5. 情境二: OPPORTUNITY_COST (NVDA ↔ GLD 機會成本動能輪動)
+            # 5. 情境二: OPPORTUNITY_COST (衛星間機會成本動能輪動)
             # -------------------------------------------------------------
-            # 檢驗 NVDA (衰退) -> GLD (突破)
-            nvda_pos = self.portfolio.positions.get(self.alpha_symbol)
-            nvda_rot_cd = self.last_opp_cost_date.get(self.alpha_symbol)
-            can_rot_nvda = (
-                nvda_rot_cd is None
-                or (current_date - nvda_rot_cd).days >= self.opp_cost_cd_days
-            )
-
-            if (
-                nvda_pos is not None
-                and nvda_pos.shares > 0
-                and can_rot_nvda
-                and not self.portfolio.has_short(self.other_symbol)
-            ):
-                ev_spread_gld = gld_ev - nvda_ev
-                if (
-                    nvda_psq < _MOMENTUM_DECAY_THRESHOLD
-                    and gld_psq > _BREAKOUT_READY_THRESHOLD
-                    and ev_spread_gld > self.opp_cost_hurdle
-                ):
-                    rot_ratio = (
-                        _ROLLOVER_RATIO_HIGH_PROFIT
-                        if nvda_pos.return_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD
-                        else _ROLLOVER_RATIO_STANDARD
+            # 「衰退中的衛星 → 突破中的衛星」單向輪動。頻率控制見
+            # BacktestUniverse.rotation_policy。大盤退場期間暫停。
+            if not retreating:
+                if self.universe.rotation_policy == "portfolio":
+                    self._rotate_portfolio_level(
+                        current_date, current_prices, prev_rows, psq, ev, date_str
                     )
-                    if (
-                        nvda_pos.current_value < 1000.0
-                        or (nvda_pos.current_value * (1.0 - rot_ratio)) < 500.0
-                    ):
-                        rot_ratio = 1.0
-                    trade = self.portfolio.sell(
-                        symbol=self.alpha_symbol,
-                        price=nvda_open,
-                        ratio=rot_ratio,
-                        scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                        reason=f"NVDA 動能衰竭 (PSQ={nvda_psq:.0f}) 轉倉至突破標的 GLD (PSQ={gld_psq:.0f}, ΔEV=+{ev_spread_gld * 100:.1f}%)",
-                        timestamp=f"{date_str} 09:30:00",
-                        date_str=date_str,
-                    )
-                    if trade is not None:
-                        self.last_opp_cost_date[self.alpha_symbol] = current_date
-                        proceeds = trade.notional - trade.fee
-                        gld_pw = (
-                            float(gld_prev_row["low10"])
-                            if gld_prev_row is not None
-                            else gld_open * 0.95
+                else:
+                    for src in self.sat_symbols:
+                        src_pos = self.portfolio.positions.get(src)
+                        src_rot_cd = self.last_opp_cost_date.get(src)
+                        can_rot = (
+                            src_rot_cd is None
+                            or (current_date - src_rot_cd).days >= self.opp_cost_cd_days
                         )
-                        gld_h60 = (
-                            float(gld_prev_row["high60"])
-                            if gld_prev_row is not None
-                            else gld_open * 1.05
-                        )
-                        gld_atr1d = (
-                            float(gld_prev_row["atr14"])
-                            if gld_prev_row is not None
-                            else gld_open * 0.015
-                        )
-                        gld_atr15m = gld_atr1d / math.sqrt(26.0)
-                        gld_sl = compute_reference_stop(
-                            gld_open, gld_pw, gld_atr15m, "LONG"
-                        )
-                        gld_target = max(gld_h60, gld_open + 3.0 * gld_atr1d)
-                        self.portfolio.buy(
-                            symbol=self.other_symbol,
-                            asset_class="SATELLITE",
-                            price=gld_open,
-                            notional=proceeds,
-                            scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                            reason="機會成本轉倉買入 GLD (接收 NVDA 輪動資金)",
-                            timestamp=f"{date_str} 09:30:00",
-                            date_str=date_str,
-                            anchor_base=gld_pw,
-                            target_wall=gld_target,
-                            stop_loss=gld_sl,
-                            entry_regime="REGIME_III_RIGHT_MOMENTUM",
-                        )
-
-            # 檢驗 GLD (衰退) -> NVDA (突破)
-            gld_pos = self.portfolio.positions.get(self.other_symbol)
-            gld_rot_cd = self.last_opp_cost_date.get(self.other_symbol)
-            can_rot_gld = (
-                gld_rot_cd is None
-                or (current_date - gld_rot_cd).days >= self.opp_cost_cd_days
-            )
-
-            if (
-                gld_pos is not None
-                and gld_pos.shares > 0
-                and can_rot_gld
-                and not self.portfolio.has_short(self.alpha_symbol)
-            ):
-                ev_spread_nvda = nvda_ev - gld_ev
-                if (
-                    gld_psq < _MOMENTUM_DECAY_THRESHOLD
-                    and nvda_psq > _BREAKOUT_READY_THRESHOLD
-                    and ev_spread_nvda > self.opp_cost_hurdle
-                ):
-                    rot_ratio = (
-                        _ROLLOVER_RATIO_HIGH_PROFIT
-                        if gld_pos.return_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD
-                        else _ROLLOVER_RATIO_STANDARD
-                    )
-                    if (
-                        gld_pos.current_value < 1000.0
-                        or (gld_pos.current_value * (1.0 - rot_ratio)) < 500.0
-                    ):
-                        rot_ratio = 1.0
-                    trade = self.portfolio.sell(
-                        symbol=self.other_symbol,
-                        price=gld_open,
-                        ratio=rot_ratio,
-                        scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                        reason=f"GLD 動能衰竭 (PSQ={gld_psq:.0f}) 轉倉至突破標的 NVDA (PSQ={nvda_psq:.0f}, ΔEV=+{ev_spread_nvda * 100:.1f}%)",
-                        timestamp=f"{date_str} 09:30:00",
-                        date_str=date_str,
-                    )
-                    if trade is not None:
-                        self.last_opp_cost_date[self.other_symbol] = current_date
-                        proceeds = trade.notional - trade.fee
-                        nvda_pw = (
-                            float(nvda_prev_row["low10"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 0.95
-                        )
-                        nvda_h60 = (
-                            float(nvda_prev_row["high60"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 1.08
-                        )
-                        nvda_atr1d = (
-                            float(nvda_prev_row["atr14"])
-                            if nvda_prev_row is not None
-                            else nvda_open * 0.02
-                        )
-                        nvda_atr15m = nvda_atr1d / math.sqrt(26.0)
-                        nvda_sl = compute_reference_stop(
-                            nvda_open, nvda_pw, nvda_atr15m, "LONG"
-                        )
-                        nvda_target = max(nvda_h60, nvda_open + 3.0 * nvda_atr1d)
-                        self.portfolio.buy(
-                            symbol=self.alpha_symbol,
-                            asset_class="SATELLITE",
-                            price=nvda_open,
-                            notional=proceeds,
-                            scenario=RolloverScenario.OPPORTUNITY_COST.value,
-                            reason="機會成本轉倉買入 NVDA (接收 GLD 輪動資金)",
-                            timestamp=f"{date_str} 09:30:00",
-                            date_str=date_str,
-                            anchor_base=nvda_pw,
-                            target_wall=nvda_target,
-                            stop_loss=nvda_sl,
-                            entry_regime="REGIME_III_RIGHT_MOMENTUM",
+                        if not (src_pos is not None and src_pos.shares > 0 and can_rot):
+                            continue
+                        best = self._best_rotation_target(src, psq, ev)
+                        if best is None:
+                            continue
+                        self._execute_rotation(
+                            src,
+                            best[0],
+                            best[1],
+                            current_date,
+                            current_prices,
+                            prev_rows,
+                            psq,
+                            date_str,
                         )
 
             # -----------------------------------------------------------------
             # 6. 盤中小時線走訪迴圈: SL1-4 / TP1-3 / TRANSITION / SHORT_ENTRY
             # -----------------------------------------------------------------
-            # 取得當日所有小時 K 線
-            spy_hours = self.hourly_feat[self.core_symbol][
-                self.hourly_feat[self.core_symbol]["date"] == current_date
-            ]
-            nvda_hours = self.hourly_feat[self.alpha_symbol][
-                self.hourly_feat[self.alpha_symbol]["date"] == current_date
-            ]
-            gld_hours = self.hourly_feat[self.other_symbol][
-                self.hourly_feat[self.other_symbol]["date"] == current_date
-            ]
-
-            num_bars = min(len(spy_hours), len(nvda_hours), len(gld_hours))
+            day_hours: dict[str, pd.DataFrame] = {
+                sym: self._day_hours(sym, current_date) for sym in self.traded_symbols
+            }
+            if self.universe.hourly_alignment == "timestamp":
+                common = day_hours[core].index
+                for sym in self.sat_symbols:
+                    common = common.intersection(day_hours[sym].index)
+                common = common.sort_values()
+                day_hours = {sym: df.loc[common] for sym, df in day_hours.items()}
+            num_bars = min(len(df) for df in day_hours.values())
 
             for b_idx in range(num_bars):
                 self._bar_counter += 1
-                nvda_bar = nvda_hours.iloc[b_idx]
-                gld_bar = gld_hours.iloc[b_idx]
+                bars = {sym: day_hours[sym].iloc[b_idx] for sym in self.sat_symbols}
 
-                ts_str = str(spy_hours.index[b_idx])
+                ts_str = str(day_hours[core].index[b_idx])
 
                 # -------------------------------------------------------------
                 # 6.1 情境八: TRANSITION_ENGINE (左側接刀演化為右側動能)
                 # -------------------------------------------------------------
-                for sym, bar in [
-                    (self.alpha_symbol, nvda_bar),
-                    (self.other_symbol, gld_bar),
-                ]:
+                for sym in self.sat_symbols:
+                    bar = bars[sym]
                     pos = self.portfolio.positions.get(sym)
                     if (
                         pos is not None
@@ -1472,13 +1697,13 @@ class RolloverBacktestEngine2025:
                             and vol_r >= 1.2
                             and not pos.is_pyramided
                         ):
-                            # 上移停損至保本
+                            # 上移停損至保本（防護，退場期間照常）
                             pos.stop_loss = max(pos.avg_cost, pos.anchor_base)
                             pos.is_pyramided = True
                             pos.entry_regime = "REGIME_III_RIGHT_MOMENTUM"
-                            # 授權 Pyramiding 加碼 20%
+                            # 授權 Pyramiding 加碼 20%（加碼，大盤退場期間暫停）
                             add_notional = pos.current_value * 0.20
-                            if self.portfolio.cash >= add_notional:
+                            if self.portfolio.cash >= add_notional and not retreating:
                                 self.portfolio.buy(
                                     symbol=sym,
                                     asset_class="SATELLITE",
@@ -1493,15 +1718,15 @@ class RolloverBacktestEngine2025:
                 # -------------------------------------------------------------
                 # 6.1.1 自選股分析中心/心跳 Regime 路由進場 (閒置衛星資金部署)
                 # -------------------------------------------------------------
-                if not is_market_critical:
+                if not is_market_critical and not retreating:
                     cash_above_reserve = max(
                         0.0,
                         self.portfolio.cash - (morning_nav * self.cash_target_weight),
                     )
-                    for sym, bar, target_wt in [
-                        (self.alpha_symbol, nvda_bar, self.alpha_target_weight),
-                        (self.other_symbol, gld_bar, self.other_target_weight),
-                    ]:
+                    for spec in self.sat_specs:
+                        sym = spec.symbol
+                        bar = bars[sym]
+                        target_wt = self._sat_target_weight(spec)
                         pos = self.portfolio.positions.get(sym)
                         # 檢查轉倉/停損冷卻期 (Cooldown): 停損出場後 3 個自然日內不重複躁進；做空中嚴禁買多
                         last_exit = self.last_exit_date.get(sym)
@@ -1570,11 +1795,7 @@ class RolloverBacktestEngine2025:
                             regime_iii_b_ok = False
                             held_bars_1h = 0
                             if self.enable_trend_continuation and not regime_iii_ok:
-                                window = (
-                                    nvda_hours
-                                    if sym == self.alpha_symbol
-                                    else gld_hours
-                                )
+                                window = day_hours[sym]
                                 lo = max(0, b_idx + 1 - _BT_TREND_CONT_LOOKBACK_BARS_1H)
                                 win = window.iloc[lo : b_idx + 1]
                                 if len(win) >= _BT_TREND_CONT_LOOKBACK_BARS_1H:
@@ -1653,126 +1874,26 @@ class RolloverBacktestEngine2025:
                                 cash_above_reserve -= budget * 0.6
 
                 # -------------------------------------------------------------
-                # 6.2 情境九: SHORT_ENTRY (Regime V 破位追空獨立做空)
+                # 6.2 / 6.3 情境九: SHORT_ENTRY (Regime V 破位追空) 與空頭鏡像出場
                 # -------------------------------------------------------------
-                # 檢驗 NVDA 是否出現 Regime V 追空訊號 (若已有空頭或多頭部位則跳過)
-                short_pos_key = f"{self.alpha_symbol}_SHORT"
-                if not self.portfolio.has_short(self.alpha_symbol):
-                    nvda_c = float(nvda_bar["close"])
-                    nvda_pw = float(nvda_bar["low10_prev"])
-                    nvda_gf = float(nvda_bar["sma20_prev"])
-                    nvda_l60 = float(nvda_bar["low60_prev"])
-                    nvda_atr1d = float(nvda_bar["atr14_prev"])
-                    nvda_atr1h = float(nvda_bar["atr_1h"])
-                    nvda_rsi = float(nvda_bar["rsi"])
-                    nvda_vwap = float(nvda_bar["session_vwap"])
-                    nvda_vol_r = float(nvda_bar["vol_ratio"])
-
-                    # 破位追空六重鐵律條件驗證
-                    is_breakdown_regime_v = (
-                        nvda_c < nvda_vwap
-                        and nvda_c < nvda_pw
-                        and nvda_c < nvda_gf
-                        and nvda_rsi < 45.0
-                        and nvda_vol_r >= 1.3
-                        and (nvda_c - nvda_l60) >= (1.8 * nvda_atr1d)
+                for spec in self.sat_specs:
+                    if not spec.allow_short:
+                        continue
+                    self._short_entry_and_exit(
+                        spec.symbol,
+                        bars[spec.symbol],
+                        morning_nav,
+                        vix_prev,
+                        ts_str,
+                        date_str,
+                        allow_new=not retreating,
                     )
-                    if is_breakdown_regime_v:
-                        # 若尚持有微量殘存多頭 (< $500)，先清空碎片以放行做空
-                        if self.portfolio.has_long(self.alpha_symbol):
-                            long_pos = self.portfolio.positions.get(self.alpha_symbol)
-                            if long_pos is not None and long_pos.current_value < 500.0:
-                                self.portfolio.sell(
-                                    symbol=self.alpha_symbol,
-                                    price=nvda_c,
-                                    ratio=1.0,
-                                    scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-                                    reason=f"🚨 偵測到破位追空訊號，清理微量殘存多頭 (${long_pos.current_value:.2f}) 以放行做空",
-                                    timestamp=ts_str,
-                                    date_str=date_str,
-                                )
-
-                        if not self.portfolio.has_long(self.alpha_symbol):
-                            # 構建 ShortEntryEvaluation
-                            ev = ShortEntryEvaluation(
-                                all_passed=True,
-                                reason="2025 破位追空微觀結構確認",
-                                structure_directive="SHORT_EQUITY",
-                                sub_mode="破位追空",
-                                conditions=(True, True, True, True, True, True),
-                                spot=nvda_c,
-                                resistance_wall=nvda_gf,
-                                call_wall=float(nvda_bar["high10_prev"]),
-                                put_wall=nvda_pw,
-                                gamma_flip=nvda_gf,
-                                next_negative_node=nvda_l60,
-                                net_gex=-1.5,
-                                session_vwap=nvda_vwap,
-                                atr_15m=nvda_atr1h / 2.0,
-                                atr_1d=nvda_atr1d,
-                                ivr=35.0,
-                            )
-                            levels = build_short_entry_levels(ev)
-                            if levels is not None and levels.reward_risk_ratio >= 1.8:
-                                sizing = compute_short_entry_sizing(
-                                    levels=levels,
-                                    capital=morning_nav,
-                                    risk_limit_pct=_SHORT_ENTRY_ACCOUNT_RISK_PCT,
-                                    vix_spot=vix_prev,
-                                    rsi_15m=nvda_rsi,
-                                )
-                                if sizing.share_qty > 0:
-                                    self.portfolio.short(
-                                        symbol=self.alpha_symbol,
-                                        price=nvda_c,
-                                        shares=float(sizing.share_qty),
-                                        stop_price=levels.stop_price,
-                                        target_price=levels.target_price,
-                                        scenario=RolloverScenario.SHORT_ENTRY.value,
-                                        reason=f"Regime V 破位追空 (跌破底牆 ${nvda_pw:.2f} 與 Flip ${nvda_gf:.2f}，盈虧比 {levels.reward_risk_ratio:.2f}:1)",
-                                        timestamp=ts_str,
-                                        date_str=date_str,
-                                    )
-
-                # -------------------------------------------------------------
-                # 6.3 空頭部位鏡像微觀結構出場 (COVER / SL / TP)
-                # -------------------------------------------------------------
-                active_short = self.portfolio.positions.get(short_pos_key)
-                if active_short is not None:
-                    nvda_h = float(nvda_bar["close"])
-                    # 停損觸發: 價格反彈突破阻力防守線
-                    if nvda_h >= active_short.stop_loss and active_short.stop_loss > 0:
-                        self.portfolio.cover(
-                            symbol=self.alpha_symbol,
-                            price=nvda_h,
-                            ratio=1.0,
-                            scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-                            reason=f"🚨 做空部位觸發結構停損 (${nvda_h:.2f} >= ${active_short.stop_loss:.2f})",
-                            timestamp=ts_str,
-                            date_str=date_str,
-                        )
-                    # 獲利了結觸發: 價格到達次級負 GEX 節點
-                    elif (
-                        nvda_h <= active_short.anchor_base
-                        and active_short.anchor_base > 0
-                    ):
-                        self.portfolio.cover(
-                            symbol=self.alpha_symbol,
-                            price=nvda_h,
-                            ratio=1.0,
-                            scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-                            reason=f"🎯 做空部位到達目標價 (${nvda_h:.2f} <= ${active_short.anchor_base:.2f}) 全額獲利了結",
-                            timestamp=ts_str,
-                            date_str=date_str,
-                        )
 
                 # -------------------------------------------------------------
                 # 6.4 情境三: SATELLITE_REBALANCE (微觀結構雙軌防洗盤 SL1-4 / TP1-3)
                 # -------------------------------------------------------------
-                for sat_sym, bar in [
-                    (self.alpha_symbol, nvda_bar),
-                    (self.other_symbol, gld_bar),
-                ]:
+                for sat_sym in self.sat_symbols:
+                    bar = bars[sat_sym]
                     pos = self.portfolio.positions.get(sat_sym)
                     if pos is None or pos.side != "LONG" or pos.shares <= 0:
                         continue
@@ -1915,7 +2036,7 @@ class RolloverBacktestEngine2025:
                             timestamp=ts_str,
                             date_str=date_str,
                         )
-                    elif self.enable_pyramid_add:
+                    elif self.enable_pyramid_add and not retreating:
                         self._try_pyramid_add(
                             sat_sym,
                             current_date,
@@ -1937,38 +2058,27 @@ class RolloverBacktestEngine2025:
             # -----------------------------------------------------------------
             # 7. 收盤計算 Daily NAV 與 Benchmark NAV
             # -----------------------------------------------------------------
-            spy_close = float(
-                self.daily_feat[self.core_symbol][
-                    self.daily_feat[self.core_symbol]["date"] == current_date
-                ]["close"].iloc[0]
-            )
-            nvda_close = float(
-                self.daily_feat[self.alpha_symbol][
-                    self.daily_feat[self.alpha_symbol]["date"] == current_date
-                ]["close"].iloc[0]
-            )
-            gld_close = float(
-                self.daily_feat[self.other_symbol][
-                    self.daily_feat[self.other_symbol]["date"] == current_date
-                ]["close"].iloc[0]
-            )
-
-            close_prices = {
-                self.core_symbol: spy_close,
-                self.alpha_symbol: nvda_close,
-                self.other_symbol: gld_close,
+            close_prices: dict[str, float] = {
+                sym: self._close_price_on(sym, current_date)
+                for sym in self.traded_symbols
             }
+            market_close = (
+                close_prices[market]
+                if market in close_prices
+                else self._close_price_on(market, current_date)
+            )
+            if self.enable_boxx_retreat:
+                close_prices[BOXX_SYMBOL] = self._close_price_on(
+                    BOXX_SYMBOL, current_date
+                )
             daily_nav = self.portfolio.get_total_nav(close_prices)
             if self.active_hedge is not None:
-                daily_nav += self._mark_hedge(current_date, spy_close, date_str)
+                daily_nav += self._mark_hedge(current_date, market_close, date_str)
 
-            # 基準投組合約價值
-            bench_spy_val = self.benchmark_shares[self.core_symbol] * spy_close
-            bench_nvda_val = self.benchmark_shares[self.alpha_symbol] * nvda_close
-            bench_gld_val = self.benchmark_shares[self.other_symbol] * gld_close
-            bench_nav = (
-                self.benchmark_cash + bench_spy_val + bench_nvda_val + bench_gld_val
-            )
+            # 基準投組合約價值（單純持有、不退場）
+            bench_nav = self.benchmark_cash
+            for sym, _w in self.universe.benchmark_weights:
+                bench_nav = bench_nav + self.benchmark_shares[sym] * close_prices[sym]
             self.benchmark_history.append(bench_nav)
 
             # 計算當日報酬率
@@ -1982,21 +2092,25 @@ class RolloverBacktestEngine2025:
             prev_bench_nav = bench_nav
 
             # 持倉權重計算
+            symbol_values: dict[str, float] = dict()
+            for sym in self.traded_symbols + (
+                [BOXX_SYMBOL] if self.enable_boxx_retreat else []
+            ):
+                if self.portfolio.has_long(sym):
+                    symbol_values[sym] = self.portfolio.positions[sym].current_value
+                elif self.portfolio.has_short(sym):
+                    symbol_values[sym] = (
+                        -abs(self.portfolio.positions[f"{sym}_SHORT"].shares)
+                        * close_prices[sym]
+                    )
+                else:
+                    symbol_values[sym] = 0.0
             spy_val = (
-                self.portfolio.positions[self.core_symbol].current_value
-                if self.core_symbol in self.portfolio.positions
+                self.portfolio.positions[core].current_value
+                if core in self.portfolio.positions
                 else 0.0
             )
-            if self.portfolio.has_long(self.alpha_symbol):
-                nvda_val = self.portfolio.positions[self.alpha_symbol].current_value
-            elif self.portfolio.has_short(self.alpha_symbol):
-                short_key = f"{self.alpha_symbol}_SHORT"
-                nvda_val = (
-                    -abs(self.portfolio.positions[short_key].shares)
-                    * close_prices[self.alpha_symbol]
-                )
-            else:
-                nvda_val = 0.0
+            nvda_val = symbol_values[self.alpha_symbol]
             gld_val = (
                 self.portfolio.positions[self.other_symbol].current_value
                 if self.other_symbol in self.portfolio.positions
@@ -2022,8 +2136,239 @@ class RolloverBacktestEngine2025:
                     market_regime=mkt_regime,
                     daily_return=daily_ret,
                     benchmark_daily_return=bench_ret,
+                    symbol_values=symbol_values,
                 )
             )
+
+    def _best_rotation_target(
+        self, src: str, psq: dict[str, float], ev: dict[str, float]
+    ) -> Optional[tuple[str, float]]:
+        """src 動能衰竭時，其餘衛星中 EV 價差最大的突破候選 (標的, 價差)。"""
+        if psq[src] >= _MOMENTUM_DECAY_THRESHOLD:
+            return None
+        best: Optional[tuple[str, float]] = None
+        for dst in self.sat_symbols:
+            if dst == src or self.portfolio.has_short(dst):
+                continue
+            spread = ev[dst] - ev[src]
+            if (
+                psq[dst] > _BREAKOUT_READY_THRESHOLD
+                and spread > self.opp_cost_hurdle
+                and (best is None or spread > best[1])
+            ):
+                best = (dst, spread)
+        return best
+
+    def _rotate_portfolio_level(
+        self,
+        current_date: date,
+        current_prices: dict[str, float],
+        prev_rows: dict[str, Optional[pd.Series]],
+        psq: dict[str, float],
+        ev: dict[str, float],
+        date_str: str,
+    ) -> None:
+        """投組層級輪動：冷卻期內不換股；否則在所有「衰退 → 突破」組合中只執行
+        EV 價差最大的一筆。"""
+        last = self.last_portfolio_rotation_date
+        if last is not None and (current_date - last).days < self.opp_cost_cd_days:
+            return
+        pick: Optional[tuple[str, str, float]] = None
+        for src in self.sat_symbols:
+            pos = self.portfolio.positions.get(src)
+            if pos is None or pos.shares <= 0:
+                continue
+            best = self._best_rotation_target(src, psq, ev)
+            if best is not None and (pick is None or best[1] > pick[2]):
+                pick = (src, best[0], best[1])
+        if pick is None:
+            return
+        if self._execute_rotation(
+            pick[0],
+            pick[1],
+            pick[2],
+            current_date,
+            current_prices,
+            prev_rows,
+            psq,
+            date_str,
+        ):
+            self.last_portfolio_rotation_date = current_date
+
+    def _execute_rotation(
+        self,
+        src: str,
+        dst: str,
+        ev_spread: float,
+        current_date: date,
+        current_prices: dict[str, float],
+        prev_rows: dict[str, Optional[pd.Series]],
+        psq: dict[str, float],
+        date_str: str,
+    ) -> bool:
+        src_pos = self.portfolio.positions[src]
+        rot_ratio = (
+            _ROLLOVER_RATIO_HIGH_PROFIT
+            if src_pos.return_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD
+            else _ROLLOVER_RATIO_STANDARD
+        )
+        if (
+            src_pos.current_value < 1000.0
+            or (src_pos.current_value * (1.0 - rot_ratio)) < 500.0
+        ):
+            rot_ratio = 1.0
+        trade = self.portfolio.sell(
+            symbol=src,
+            price=current_prices[src],
+            ratio=rot_ratio,
+            scenario=RolloverScenario.OPPORTUNITY_COST.value,
+            reason=f"{src} 動能衰竭 (PSQ={psq[src]:.0f}) 轉倉至突破標的 {dst} (PSQ={psq[dst]:.0f}, ΔEV=+{ev_spread * 100:.1f}%)",
+            timestamp=f"{date_str} 09:30:00",
+            date_str=date_str,
+        )
+        if trade is None:
+            return False
+        self.last_opp_cost_date[src] = current_date
+        proceeds = trade.notional - trade.fee
+        dst_open = current_prices[dst]
+        pw, target, sl = self._momentum_entry_levels(
+            self.sat_spec[dst], prev_rows[dst], dst_open
+        )
+        self.portfolio.buy(
+            symbol=dst,
+            asset_class="SATELLITE",
+            price=dst_open,
+            notional=proceeds,
+            scenario=RolloverScenario.OPPORTUNITY_COST.value,
+            reason=f"機會成本轉倉買入 {dst} (接收 {src} 輪動資金)",
+            timestamp=f"{date_str} 09:30:00",
+            date_str=date_str,
+            anchor_base=pw,
+            target_wall=target,
+            stop_loss=sl,
+            entry_regime="REGIME_III_RIGHT_MOMENTUM",
+        )
+        return True
+
+    def _short_entry_and_exit(
+        self,
+        sym: str,
+        bar: pd.Series,
+        morning_nav: float,
+        vix_prev: float,
+        ts_str: str,
+        date_str: str,
+        allow_new: bool = True,
+    ) -> None:
+        """情境九 Regime V 破位追空（6.2）與空頭部位鏡像出場（6.3）。
+
+        原引擎只對 NVDA 評估；一般化為每檔 allow_short 的衛星依序評估。
+        大盤退場期間不開新空單（allow_new=False），既有空單的停損／停利照常。
+        """
+        short_pos_key = f"{sym}_SHORT"
+        if allow_new and not self.portfolio.has_short(sym):
+            nvda_c = float(bar["close"])
+            nvda_pw = float(bar["low10_prev"])
+            nvda_gf = float(bar["sma20_prev"])
+            nvda_l60 = float(bar["low60_prev"])
+            nvda_atr1d = float(bar["atr14_prev"])
+            nvda_atr1h = float(bar["atr_1h"])
+            nvda_rsi = float(bar["rsi"])
+            nvda_vwap = float(bar["session_vwap"])
+            nvda_vol_r = float(bar["vol_ratio"])
+
+            # 破位追空六重鐵律條件驗證
+            is_breakdown_regime_v = (
+                nvda_c < nvda_vwap
+                and nvda_c < nvda_pw
+                and nvda_c < nvda_gf
+                and nvda_rsi < 45.0
+                and nvda_vol_r >= 1.3
+                and (nvda_c - nvda_l60) >= (1.8 * nvda_atr1d)
+            )
+            if is_breakdown_regime_v:
+                # 若尚持有微量殘存多頭 (< $500)，先清空碎片以放行做空
+                if self.portfolio.has_long(sym):
+                    long_pos = self.portfolio.positions.get(sym)
+                    if long_pos is not None and long_pos.current_value < 500.0:
+                        self.portfolio.sell(
+                            symbol=sym,
+                            price=nvda_c,
+                            ratio=1.0,
+                            scenario=RolloverScenario.SATELLITE_REBALANCE.value,
+                            reason=f"🚨 偵測到破位追空訊號，清理微量殘存多頭 (${long_pos.current_value:.2f}) 以放行做空",
+                            timestamp=ts_str,
+                            date_str=date_str,
+                        )
+
+                if not self.portfolio.has_long(sym):
+                    # 構建 ShortEntryEvaluation
+                    ev = ShortEntryEvaluation(
+                        all_passed=True,
+                        reason="2025 破位追空微觀結構確認",
+                        structure_directive="SHORT_EQUITY",
+                        sub_mode="破位追空",
+                        conditions=(True, True, True, True, True, True),
+                        spot=nvda_c,
+                        resistance_wall=nvda_gf,
+                        call_wall=float(bar["high10_prev"]),
+                        put_wall=nvda_pw,
+                        gamma_flip=nvda_gf,
+                        next_negative_node=nvda_l60,
+                        net_gex=-1.5,
+                        session_vwap=nvda_vwap,
+                        atr_15m=nvda_atr1h / 2.0,
+                        atr_1d=nvda_atr1d,
+                        ivr=35.0,
+                    )
+                    levels = build_short_entry_levels(ev)
+                    if levels is not None and levels.reward_risk_ratio >= 1.8:
+                        sizing = compute_short_entry_sizing(
+                            levels=levels,
+                            capital=morning_nav,
+                            risk_limit_pct=_SHORT_ENTRY_ACCOUNT_RISK_PCT,
+                            vix_spot=vix_prev,
+                            rsi_15m=nvda_rsi,
+                        )
+                        if sizing.share_qty > 0:
+                            self.portfolio.short(
+                                symbol=sym,
+                                price=nvda_c,
+                                shares=float(sizing.share_qty),
+                                stop_price=levels.stop_price,
+                                target_price=levels.target_price,
+                                scenario=RolloverScenario.SHORT_ENTRY.value,
+                                reason=f"Regime V 破位追空 (跌破底牆 ${nvda_pw:.2f} 與 Flip ${nvda_gf:.2f}，盈虧比 {levels.reward_risk_ratio:.2f}:1)",
+                                timestamp=ts_str,
+                                date_str=date_str,
+                            )
+
+        # 空頭部位鏡像微觀結構出場 (COVER / SL / TP)
+        active_short = self.portfolio.positions.get(short_pos_key)
+        if active_short is not None:
+            nvda_h = float(bar["close"])
+            # 停損觸發: 價格反彈突破阻力防守線
+            if nvda_h >= active_short.stop_loss and active_short.stop_loss > 0:
+                self.portfolio.cover(
+                    symbol=sym,
+                    price=nvda_h,
+                    ratio=1.0,
+                    scenario=RolloverScenario.SATELLITE_REBALANCE.value,
+                    reason=f"🚨 做空部位觸發結構停損 (${nvda_h:.2f} >= ${active_short.stop_loss:.2f})",
+                    timestamp=ts_str,
+                    date_str=date_str,
+                )
+            # 獲利了結觸發: 價格到達次級負 GEX 節點
+            elif nvda_h <= active_short.anchor_base and active_short.anchor_base > 0:
+                self.portfolio.cover(
+                    symbol=sym,
+                    price=nvda_h,
+                    ratio=1.0,
+                    scenario=RolloverScenario.SATELLITE_REBALANCE.value,
+                    reason=f"🎯 做空部位到達目標價 (${nvda_h:.2f} <= ${active_short.anchor_base:.2f}) 全額獲利了結",
+                    timestamp=ts_str,
+                    date_str=date_str,
+                )
 
     # ------------------------------------------------------------------
     # 階段 1A／1B／3 複刻與出場分層事件 (handoff.md §9 待辦 3、4)
@@ -2056,7 +2401,8 @@ class RolloverBacktestEngine2025:
         """以 production 評分函式計算逃頂分級，輸入全為前一日已知資訊的代理：
 
         - VTS = VIX / VIX3M (前一日收盤)；缺 VIX3M 時以 0.88 (正價差) 代入＝不計分
-        - 大盤負 Gamma = SPY 開盤 < SMA20 (與本引擎 MARGIN_DEFENSE 同一代理)
+        - 大盤負 Gamma = 大盤訊號代理 (SPY，非核心持倉) 開盤 < SMA20 (與本引擎
+          MARGIN_DEFENSE 同一代理)
         - 衛星亢奮廣度 = 多頭衛星中開盤已達 10 日高點 × TP1 比例的比例
         - Fear & Greed、FedWatch 無歷史資料，以中性值代入＝這兩個因子恆不計分
 
@@ -2072,14 +2418,10 @@ class RolloverBacktestEngine2025:
         vix3m_prev = float(v3_row["close"]) if v3_row is not None else 0.0
         vts_ratio = vix_prev / vix3m_prev if vix3m_prev > 0 else 0.88
 
-        spy_open = current_prices.get(self.core_symbol, 0.0)
+        spy_open = current_prices.get(self.market_symbol, 0.0)
         is_negative_gamma = spy_open > 0 and spy_open < spy_gamma_flip
 
-        longs = [
-            sym
-            for sym in (self.alpha_symbol, self.other_symbol)
-            if self.portfolio.has_long(sym)
-        ]
+        longs = [sym for sym in self.sat_symbols if self.portfolio.has_long(sym)]
         euphoria_ratio: Optional[float] = None
         if longs:
             hits = 0
@@ -2127,7 +2469,7 @@ class RolloverBacktestEngine2025:
             else _MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO
         )
         trimmed = False
-        for sat_sym in (self.alpha_symbol, self.other_symbol):
+        for sat_sym in self.sat_symbols:
             if self.portfolio.has_long(sat_sym):
                 self.portfolio.sell(
                     symbol=sat_sym,
@@ -2143,10 +2485,13 @@ class RolloverBacktestEngine2025:
             self.last_escape_tier_date[tier] = current_date
 
     def _beta_vs_spy(self, symbol: str, current_date: date) -> float:
-        if symbol == self.core_symbol:
+        """相對大盤訊號代理 (SPY) 的 Beta；保護性 Put 以 SPY 定價，故 Delta 以 SPY 股數等值計。"""
+        if symbol == self.market_symbol:
             return 1.0
-        a = self.daily_feat[symbol]
-        b = self.daily_feat[self.core_symbol]
+        a = self.daily_feat.get(symbol)
+        if a is None:
+            return 0.0
+        b = self.daily_feat[self.market_symbol]
         ra = a[a["date"] < current_date].set_index("date")["close"].pct_change()
         rb = b[b["date"] < current_date].set_index("date")["close"].pct_change()
         joined = (
@@ -2169,7 +2514,8 @@ class RolloverBacktestEngine2025:
         """WATCH 級：Q_put = ceil(Δβ × ρ / (|Δput| × 100))，Δβ 以 SPY 股數等值計。"""
         if self.active_hedge is not None:
             return False
-        spy_price = current_prices.get(self.core_symbol, 0.0)
+        # 保護性 Put 買的是 SPY（大盤訊號代理；VOO 期權流動性遠不及 SPY）
+        spy_price = current_prices.get(self.market_symbol, 0.0)
         if spy_price <= 0:
             return False
         weighted_delta = 0.0
