@@ -1,7 +1,7 @@
 # 🌌 Nexus Seeker 量化架構與交易策略技術全景導讀
 
 > **版本**：v1.13.38 ｜ **系統核心**：Production Quant Engine ｜ **語言**：100% 繁體中文規範
-> **單一真實來源 (SSOT)**：本全景導讀與 33 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
+> **單一真實來源 (SSOT)**：本全景導讀與 34 篇專業技術規格書為 Nexus Seeker 核心量化模型、做市商微觀結構、期權定價、投資組合風控與事件防衛體系之最高權威技術規格定義。
 
 ---
 
@@ -9,7 +9,7 @@
 
 Nexus Seeker 是一套專為低延遲、高資訊密度美股期權風險控制與量化交易運作打造的生產級非同步架構。系統以做市商庫存對沖微觀結構為基石，深度融合 Black-Scholes-Merton 定價模型、高階希臘字母敏感度推導、事件驅動日曆防衛以及大語言模型（LLM）結構化推論輔助。
 
-本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **33 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
+本技術文檔庫（Documentation Suite）嚴格遵循模組化量化架構設計，劃分為 **6 大專業子系統**，共計 **34 篇深度技術規格書**。每一篇規格書均包含嚴謹的數學模型公式推導、Mermaid 決策狀態機流程圖、具名常數與物理邊界約束表、風控熔斷處理機制，並精確對應至專案生產環境原始碼路徑。
 
 ---
 
@@ -71,6 +71,7 @@ flowchart TB
         S05["雙軌防洗盤動態停損與出場決策矩陣<br/>(05_dual_track_anti_washout_stop_loss.md)"]
         S06["動態自適應波動率空間門檻<br/>(06_dynamic_adaptive_room_threshold.md)"]
         S07["做空交易六重嚴格過濾鐵律<br/>(07_short_side_breakdown_ironclad.md)"]
+        S08["大盤三態切換 + 動能輪動（候選，回測未通過）<br/>(08_regime_momentum_rotation.md)"]
     end
 
     subgraph Risk_Portfolio_Layer["4. 投資組合風控與數學模型 (risk_portfolio/)"]
@@ -125,6 +126,7 @@ flowchart TB
 | 05 | [`05_dual_track_anti_washout_stop_loss.md`](strategies/05_dual_track_anti_washout_stop_loss.md) | 雙軌防洗盤動態停損與出場決策矩陣 | 軌道一 $0.5\times\text{ATR}$ 實體 K 收盤撤退線, 軌道二 $3.0\times\text{ATR}$ 瞬時硬熔斷 | `market_analysis/dynamic_rollover/constants.py` |
 | 06 | [`06_dynamic_adaptive_room_threshold.md`](strategies/06_dynamic_adaptive_room_threshold.md) | 動態自適應波動率空間門檻 | $\max(2.2\times\text{Risk}, 1.5\times\text{ATR}_{1D}, 3.5\%)$, 停損距離雙邊界 $[2.5\times\text{ATR}_{15m}, 8\%]$ | `market_analysis/room_threshold.py` |
 | 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律與 SHORT_ENTRY 做空進場訊號 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$, 倉位 $\min(0.5\%, f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}$ ÷ 停損距離 | `market_analysis/dynamic_rollover/short_side_entry.py` |
+| 07b | [`08_regime_momentum_rotation.md`](strategies/08_regime_momentum_rotation.md) | 大盤三態切換 + 12-1 動能輪動（取代動態轉倉引擎的**候選**策略；2007–2025 日線回測**未通過**及格標準） | SPY 50／200 日均線三態＋連續 3 日確認, GOOD：動能前 5 名等權、VOO 0%, WEAK：防禦 ETF 前 2 名＋VOO, BAD：BOXX, 持有期間高點回落 25% 出場、不設停利 | `calibration/regime_momentum_backtest.py` |
 
 ---
 
@@ -300,7 +302,7 @@ graph LR
 
 ## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
 
-本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「33 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「34 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
 
 | 檔案 | 核心主題 |
 |:---|:---|

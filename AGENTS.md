@@ -99,6 +99,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - 6-Regime 市場環境動態路由矩陣（含 Regime III-B 右側趨勢延續態）、右側動能六重鐵律、左側均值回歸六重鐵律、做空破位追空六重鐵律、Trading Strategy Modes（`RIGHT_SIDE`/`LEFT_SIDE`/`SHORT_SIDE`/`DYNAMIC`，`user_settings.trading_strategy`）→ [`01_regime_routing_matrix.md`](docs/strategies/01_regime_routing_matrix.md)、[`02_right_side_momentum_ironclad.md`](docs/strategies/02_right_side_momentum_ironclad.md)、[`03_left_side_mean_reversion_ironclad.md`](docs/strategies/03_left_side_mean_reversion_ironclad.md)、[`07_short_side_breakdown_ironclad.md`](docs/strategies/07_short_side_breakdown_ironclad.md)
 - 動態自適應波動率空間門檻（單一權威演算法，取代先前散落 7 處的固定百分比；含緩衝雙邊界與破位追空次級節點空間）→ [`06_dynamic_adaptive_room_threshold.md`](docs/strategies/06_dynamic_adaptive_room_threshold.md)
   - ⚠️ **左側（`LEFT_SIDE`）本質是做多**——逆勢均值回歸、Put Wall 底牆接刀，條件三算的是「向上」回歸空間。`SHORT_SIDE` 才是唯一的空頭方向進場路徑。
+- 大盤三態切換 + 動能輪動（取代動態轉倉引擎的**候選**策略，僅離線日線回測、未接入 production；2007–2025 未通過及格標準）→ [`08_regime_momentum_rotation.md`](docs/strategies/08_regime_momentum_rotation.md)
 - Dynamic Rollover Engine 十大情境（Fundamental Thesis／Opportunity Cost／Core-Satellite Rebalance／Margin Defense／Core Deployment／Macro Top-Escape／Covered Call Profit-Lock／Transition Engine／**Short Entry 做空進場訊號**／**Pyramid Add 順勢金字塔加碼**）、DTE 三態機、`/stress_test` 現金赤字精算 → [`04_dynamic_rollover_state_machine.md`](docs/strategies/04_dynamic_rollover_state_machine.md)
 - 雙軌防洗盤動態停損與微觀結構出場決策矩陣（SL-結構失效／SL-狀態翻轉／SL-主力對沖／SL-動態保本／TP1-TP3）→ [`05_dual_track_anti_washout_stop_loss.md`](docs/strategies/05_dual_track_anti_washout_stop_loss.md)
 - Watchlist 心跳所依賴的 Relative Strength 公式、ExecutionRouter、Skew Divergence Gate、Momentum Vector Gate，以及 Event-Driven Market Scenario Alerts（巨鯨護航共振等六大情境）亦記載於本系列文件。
@@ -191,6 +192,7 @@ Do **not** assume that enabling Analyst Agent is required for the watchlist hear
 - `nexus_core/market_analysis/downside_monitor.py` — 投組下行風險即時監控的純邏輯葉模組（快照、回撤階梯 10/15/20% 與 2.5pp 重新武裝、CVaR 預算 = risk_limit × 0.20 與尾部體制轉換、NAV 快照報酬還原），閾值皆 PRE_CALIBRATION；指標一律呼叫 `downside_risk.py`
 - `nexus_core/services/downside_risk_service.py` — 投組下行風險 I/O：「現權重 × 一年歷史」模擬報酬序列（期權以原始 Delta 等值股數、缺值 ±0.5 近似）、08:45 預熱、盤中只走快取的回撤檢查、16:15 NAV 快照與 CVaR 判定；推播未送達時武裝狀態（`downside_state_` 前綴，刻意不在去重清理白名單）不前進
 - `nexus_core/database/migrations/v082_add_portfolio_nav_daily.py` — migration 建立 `portfolio_nav_daily (user_id, date, nav, positions_json)`；日報酬以前一日持股計算，加減碼不被算成報酬。⚠️ 遷移執行器只套用大於目前最大版本者，必須在 `v081` 之後部署
+- `nexus_core/calibration/regime_momentum_backtest.py` / `nexus_core/scripts/run_regime_momentum_backtest.py` — 大盤三態 + 動能輪動候選策略的**日線**離線回測（2007–2025，SPY 50／200 日線三態、12-1 動能前 5 名、防禦 ETF、BOXX、持有期間高點回落 25%）。對照組含「等權持有同一選股池」以隔離選股池本身的漲幅；只產報告到 gitignored 的 `reports/regime_momentum/`，不改任何 production 參數
 - `nexus_core/market_analysis/kelly_priors.py` — stdlib leaf holding the direction-aware Kelly win-rate prior table (`LONG` / `SHORT`, structurally clamped so SHORT never exceeds LONG). Consumed by `ExecutionRouter` and SHORT_ENTRY sizing. Values are `PRE_CALIBRATION`
 - `nexus_core/calibration/` — offline backtest calibration harness (`python -m calibration fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy`; the last three are the D-03/D-04/Skew-threshold studies in `microstructure.py` / `edge_history.py` / `skew_proxy.py`, which only write through `data_store.py` / `report.py` and open the edge DB only via `database.connection.connect_external_readonly()`) 以及 2025 多資產動態轉倉回測引擎 (`backtest_engine_2025.py` / `scripts/run_rollover_backtest_2025.py`)：event study on price/VIX proxies + 2025 年 NVDA/SPY/GLD 全量轉倉回測與 forward-collection report。**Never edits code or writes the DB**; outputs `report.md` / `results.json` for human review. Run on a dev machine, not the VPS
 - `nexus_core/market_analysis/macro_calendar_translator.py` — Macro calendar 150+ translation dictionary & dynamic Fed speech parsing engine
@@ -476,6 +478,16 @@ docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker pyt
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration skew-proxy
 ```
 
+Regime-switched momentum rotation candidate strategy (daily bars only, 2007–2025; spec and pass/fail criteria in `docs/strategies/08_regime_momentum_rotation.md`):
+
+```bash
+cd nexus_core
+# fetch daily history only (no hourly) into .calibration_cache/1d
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python scripts/run_regime_momentum_backtest.py --fetch
+# backtest + report (cache only) → reports/regime_momentum/
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python scripts/run_regime_momentum_backtest.py
+```
+
 Notification outcome report (follow vs hold ΔSortino / ΔMDD / ΔCVaR95 per channel × scenario; read-only on a copied snapshot, never edits parameters — criteria in `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.14):
 
 ```bash
@@ -508,7 +520,7 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
 
 - `docs/README.md` 是所有量化模型／交易策略／風控引擎／平台功能敘述的 SSOT；本檔案（`AGENTS.md`）只負責貢獻者導覽（服務架構、模組地圖）與工程慣例（DB／測試／型別／部署），**不應**再累積功能敘事或修復歷史。
 - 新增或修改一項功能時：
-  - 若屬於既有 33 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
+  - 若屬於既有 34 篇規格書（`docs/{strategies,microstructure,valuation_pricing,risk_portfolio,macro_sentiment,architecture}/`）的既有主題，更新該檔案對應段落即可，並維持其強制的 6 段式結構（核心哲學／數學模型 LaTeX／Mermaid 決策圖／具名常數表／邊界條件／程式碼路徑）；修改後執行 `python3 scripts/verify_docs_integrity.py` 驗證。
   - 若屬於全新量化主題且值得獨立成篇，新增前請評估是否應納入 `scripts/verify_docs_integrity.py` 的 `EXPECTED_SPECIFICATIONS` 強制清單（需符合 6 段式模板）。
   - 若屬於 UX／排程／通知／委託單等非量化平台功能，寫入或更新 `docs/platform/` 下對應文件（格式較自由，但仍需維持繁體中文、不含 Docker/`.env`/quickstart 內容、內部連結有效），並在 [`docs/README.md`](docs/README.md) 的平台文件索引中加入條目。
 - 撰寫任何文件時：
@@ -517,4 +529,4 @@ PYTHONPATH=nexus_edge_scraper nexus_core/.venv/bin/pytest nexus_edge_scraper/tes
   3. 反映現行的欄位式（field-based）embed 格式
   4. 討論通知行為時提及持久化 DM 佇列
   5. `docs/` 保持功能／業務邏輯導向，`AGENTS.md` 保持貢獻者工作流程導向
-  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 33 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`
+  6. **純文件更新**（僅修改 `AGENTS.md`、`README.md`、或 `.md` 檔案）**不需要跑測試套件**，但若改動的是 `docs/` 下的 34 篇規格書或新增／修改 `docs/platform/` 文件，仍應手動執行一次 `python3 scripts/verify_docs_integrity.py`
