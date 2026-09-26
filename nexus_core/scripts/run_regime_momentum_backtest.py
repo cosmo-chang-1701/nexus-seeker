@@ -26,6 +26,11 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from calibration.daily_panel import (  # noqa: E402
+    fetch_daily,
+    load_panel,
+    prepare_panel,
+)
 from calibration.data_store import DataStore  # noqa: E402
 from calibration.regime_momentum_backtest import (  # noqa: E402
     CASH_PROXY,
@@ -37,9 +42,7 @@ from calibration.regime_momentum_backtest import (  # noqa: E402
     RegimeMomentumParams,
     SimulationResult,
     annual_turnover,
-    build_cash_index,
     buy_and_hold,
-    chain_returns,
     compute_metrics,
     equal_weight_pit,
     realized_cash_rate,
@@ -54,7 +57,6 @@ DEFAULT_CACHE = Path("/app/.calibration_cache")
 DEFAULT_OUT = Path("reports/regime_momentum")
 START = "2007-01-03"
 END = "2025-12-31"
-FETCH_FROM = "2005-01-01"
 
 CRASH_WINDOWS: tuple[tuple[str, str, str], ...] = (
     ("2008 金融海嘯", "2007-10-01", "2009-03-31"),
@@ -77,61 +79,16 @@ def all_symbols(params: RegimeMomentumParams) -> list[str]:
     )
 
 
-async def fetch_daily(store: DataStore, symbols: list[str]) -> None:
-    from calibration.fetcher import YFinanceFetcher
-
-    fetcher = YFinanceFetcher()
-    for sym in symbols:
-        df = await fetcher.fetch(sym, "max", "1d")
-        if not df.empty:
-            idx = pd.to_datetime(df.index, utc=True)
-            df = df[idx >= pd.Timestamp(FETCH_FROM, tz="UTC")]
-        n = store.save("1d", sym, df)
-        print(f"  {sym}: {n} 列", flush=True)
-
-
-def _to_dates(df: pd.DataFrame) -> pd.DataFrame:
-    idx = pd.DatetimeIndex(df.index).tz_convert("America/New_York")
-    out = df.copy()
-    out.index = pd.DatetimeIndex(idx.tz_localize(None).normalize())
-    return out[~out.index.duplicated(keep="last")]
-
-
-def load_panel(
-    store: DataStore, symbols: list[str]
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """以 SPY 的交易日曆對齊所有標的的 (開盤, 收盤)。"""
-    frames: dict[str, pd.DataFrame] = {}
-    for sym in symbols:
-        df = store.load("1d", sym)
-        if df is None or df.empty:
-            continue
-        frames[sym] = _to_dates(df).astype(float)
-    calendar = frames[MARKET_SYMBOL].index
-    opens = pd.DataFrame({s: f["Open"] for s, f in frames.items()}).reindex(calendar)
-    closes = pd.DataFrame({s: f["Close"] for s, f in frames.items()}).reindex(calendar)
-    return opens, closes
-
-
 def prepare(
     opens: pd.DataFrame, closes: pd.DataFrame, params: RegimeMomentumParams
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series]:
-    """VOO 上市前以 SPY 串接；建立 BOXX 現金指數。"""
-    opens = opens.copy()
-    closes = closes.copy()
-    closes[CORE_SYMBOL] = chain_returns(closes[CORE_SYMBOL], closes[CORE_PROXY])
-    opens[CORE_SYMBOL] = chain_returns(opens[CORE_SYMBOL], opens[CORE_PROXY])
-    cash_index = build_cash_index(
-        closes.index,
-        closes.get(CASH_SYMBOL),
-        closes.get(CASH_PROXY),
+    """VOO 上市前以 SPY 串接；建立 BOXX 現金指數（共用實作見 `calibration/daily_panel.py`）。"""
+    return prepare_panel(
+        opens,
+        closes,
         params.fallback_cash_rate,
+        list(params.universe) + list(params.defensive),
     )
-    for sym in list(params.universe) + list(params.defensive):
-        if sym not in closes.columns:
-            closes[sym] = float("nan")
-            opens[sym] = float("nan")
-    return opens, closes, cash_index
 
 
 @dataclasses.dataclass
