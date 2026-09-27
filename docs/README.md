@@ -311,3 +311,4 @@ graph LR
 | [`platform/05_embed_architecture_and_dm_queue.md`](platform/05_embed_architecture_and_dm_queue.md) | Embed 輸出集中化規範、`NexusEmbed` 視覺一致性、持久化 DM 佇列投遞層 |
 | [`platform/06_price_volume_alert_system.md`](platform/06_price_volume_alert_system.md) | 個股 15 分鐘價量突破警報系統、K 棒完整性防呆、雙模警報支援 |
 | [`platform/07_alpaca_realtime_stream.md`](platform/07_alpaca_realtime_stream.md) | Alpaca 即時 1 分 K 串流：動態訂閱、Forward Fill、資料完整性不變式、`get_quote` Tier 0 與價量警報影子模式 |
+| [`platform/08_scheduled_jobs_and_background_pipelines.md`](platform/08_scheduled_jobs_and_background_pipelines.md) | 背景排程與系統自動化管線：24 小時全景排程時間軸矩陣、15+ 背景任務規格、快取錯開調度與守護行程 |
