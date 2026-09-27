@@ -21,21 +21,21 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 
 | 時間 (美東 ET) | 任務識別名稱 | 核心模組與入口 | 執行頻率與條件 | 核心職責與下游影響 |
 | :--- | :--- | :--- | :--- | :--- |
-| **03:00** | `kv_cache_dedup_purge` 等離峰維護 | `cogs/trading.py` | 每日離峰（非交易日亦執行） | 1. 刪除 `kv_cache` 逾 3 日單日去重標記；<br/>2. 清理 `uoa_history` 逾 10 交易日異常大單；<br/>3. 歸檔過期持倉與委託；<br/>4. 清理 `sentiment_history`（60 日）與 `sentiment_daily_canonical`（260 日）；<br/>5. 執行 SQLite WAL Checkpoint 與 `PRAGMA optimize`。 |
+| **03:00** | `kv_cache_dedup_purge` 等離峰維護 | `cogs/trading/scheduler.py` | 每日離峰（非交易日亦執行） | 1. 刪除 `kv_cache` 逾 3 日單日去重標記；<br/>2. 清理 `uoa_history` 逾 10 交易日異常大單；<br/>3. 歸檔過期持倉與委託；<br/>4. 清理 `sentiment_history`（60 日）與 `sentiment_daily_canonical`（260 日）；<br/>5. 執行 SQLite WAL Checkpoint 與 `PRAGMA optimize`。 |
 | **03:30** | `regime_outcome_labeler` | `services/regime_outcome_labeler.py` | 每日盤前（Leader-Only，85% RAM 守衛） | 1. 為 `regime_evaluation_log` 滿 5 交易日的紀錄抓取歷史 K 線回填前向報酬標籤；<br/>2. 執行 `run_dispatch_outcome_labeling` 為滿 20/60 交易日的可行動通知計算「照做 vs 持有」反事實報酬。 |
 | **08:00** | `fundamental_filing_scan` | `cogs/trading/fundamental_filing_monitor.py` | 僅美股交易日 | 針對持倉標的掃描最新 SEC 10-K / 10-Q / 8-K 申報，以 `fundamental_scan_state` 游標去重，驅動動態轉倉情境 1。 |
-| **08:30** | `daily_reddit_update` | `cogs/trading.py` | 每日開盤前 | 抓取 Reddit 財經子版輿情貼文，更新社群情緒指標與邊界熱度。 |
-| **08:45** | `pre_market_risk_monitor` | `cogs/trading.py` | 僅美股交易日（開盤前 45 分） | 1. 錯開預熱：量化指標、IV 位階、最大痛點、Gamma 擠壓指標；<br/>2. 補償前一日若遺漏之情緒歷史快照；<br/>3. 預熱每位使用者的投組模擬年化日報酬率序列。 |
+| **08:30** | `daily_reddit_update` | `cogs/trading/scheduler.py` | 每日開盤前 | 抓取 Reddit 財經子版輿情貼文，更新社群情緒指標與邊界熱度。 |
+| **08:45** | `pre_market_risk_monitor` | `cogs/trading/pre_market.py` | 僅美股交易日（開盤前 45 分） | 1. 錯開預熱：量化指標、IV 位階、最大痛點、Gamma 擠壓指標；<br/>2. 補償前一日若遺漏之情緒歷史快照；<br/>3. 預熱每位使用者的投組模擬年化日報酬率序列。 |
 | **09:00** | `pre_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日（開盤前 30 分） | Analyst Agent 盤前速報：整合前日盤後與當晨最新宏觀數據、財報評估與盤前波動預期。 |
-| **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `dynamic_market_scanner` | `cogs/trading.py` | 盤中每 15 分鐘 | 自選標的 15 分鐘動態雷達心跳：評估 GEX 牆體、相對強弱、動能向量與右側/左側/做空進場條件，寫入 `uoa_history` 並更新 `bot._latest_radar_data_cache`。 |
+| **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `dynamic_market_scanner` | `cogs/trading/heartbeat.py` | 盤中每 15 分鐘 | 自選標的 15 分鐘動態雷達心跳：評估 GEX 牆體、相對強弱、動能向量與右側/左側/做空進場條件，寫入 `uoa_history` 並更新 `bot._latest_radar_data_cache`。 |
 | **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `price_volume_alert_monitor` | `cogs/trading/price_volume_alert_monitor.py` | 盤中每 15 分鐘 | 15 分鐘個股價量突破警報：`Semaphore(3)` 併發控制，比對放量與均線突破；支援 Alpaca 串流影子比對。 |
-| **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：直接消費 5 分鐘前大盤掃描之記憶體快取，零外部請求評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。 |
-| **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline.py` | 盤中每 30 分鐘 | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流，與 15 分鐘心跳路徑完全隔離。 |
+| **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading/portfolio_monitor.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：直接消費 5 分鐘前大盤掃描之記憶體快取，零外部請求評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。 |
+| **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘 | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流，與 15 分鐘心跳路徑完全隔離。 |
 | **24/7 每 30 分鐘** | `wti_oil_monitor` | `cogs/trading/wti_monitor.py` | 全天候（00:00–06:00 靜默） | 監控 WTI 原油期貨異動與板塊衝擊矩陣，於異動超過門檻時發送即時推播。 |
 | **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率。 |
-| **16:15** | `dynamic_after_market_report` | `cogs/trading.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定。 |
+| **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定。 |
 | **收盤後** | `post_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日 | Analyst Agent 盤後報告：產出全日市場總結、板塊強弱、異常期權金流匯總與隔夜策略展望。 |
-| **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
+| **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading/scheduler.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
 
 ---
 
@@ -141,7 +141,8 @@ flowchart LR
 
 | 排程名稱 / 功能模組 | 原始程式碼檔案路徑 | 關聯技術規格書 |
 | :--- | :--- | :--- |
-| 交易排程總入口與心跳發送 | `nexus_core/cogs/trading.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
+| 交易排程器與週報任務 | `nexus_core/cogs/trading/scheduler.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
+| 15 分鐘動態雷達心跳發送 | `nexus_core/cogs/trading/heartbeat.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
 | WTI 原油全天候監控循環 | `nexus_core/cogs/trading/wti_monitor.py` | [`03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md) |
 | 15 分鐘價量突破警報循環 | `nexus_core/cogs/trading/price_volume_alert_monitor.py` | [`06_price_volume_alert_system.md`](06_price_volume_alert_system.md) |
 | 每日自動 SEC 財報掃描排程 | `nexus_core/cogs/trading/fundamental_filing_monitor.py` | [`02_sec_filing_moat_scanner.md`](../macro_sentiment/02_sec_filing_moat_scanner.md) |
@@ -149,7 +150,7 @@ flowchart LR
 | 盤前盤後分析師代理人循環 | `nexus_core/cogs/analyst_agent.py` | [`01_analyst_agent_reporting.md`](01_analyst_agent_reporting.md) |
 | 財經事件日曆與 FedWatch 循環 | `nexus_core/cogs/calendar.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
 | 投組下行風險評估與收盤結算 | `nexus_core/services/downside_risk_service.py` | [`07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md) |
-| 盤中 30 分鐘深度掃描管線 | `nexus_core/market_analysis/intraday_pipeline.py` | [`06_gamma_squeeze_engine_and_spear.md`](../microstructure/06_gamma_squeeze_engine_and_spear.md) |
+| 盤中 30 分鐘深度掃描管線 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` | [`06_gamma_squeeze_engine_and_spear.md`](../microstructure/06_gamma_squeeze_engine_and_spear.md) |
 | Alpaca 即時 1 分 K 串流服務 | `nexus_core/services/alpaca_stream_service.py` | [`07_alpaca_realtime_stream.md`](07_alpaca_realtime_stream.md) |
 | Bot 生命週期與常駐 Worker 管理 | `nexus_core/bot.py` | [`05_embed_architecture_and_dm_queue.md`](05_embed_architecture_and_dm_queue.md) |
 | 資料庫單一寫入者與維護入口 | `nexus_core/database/connection.py` | [`04_engineering_standards.md`](../architecture/04_engineering_standards.md) |
