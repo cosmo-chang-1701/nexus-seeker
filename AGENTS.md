@@ -92,7 +92,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - **Cross-Process Retries & Maintenance**: Blue-green container overlap uses 4 retries with jittered exponential backoff. Routine WAL checkpoints and `PRAGMA optimize` execute in `run_maintenance()` at 03:00 ET.
 - **Migration Contract**: Migrations in `database/migrations/` must export `version`, `description`, and `sql` module attributes (functions like `upgrade(cursor)` are silently skipped). The runner only executes versions $> \text{MAX}(version)$.
 
-### 2. Position Direction Semantics 部位方向語意（多空共存）
+### 2. Position Direction Semantics (Long/Short Coexistence)
 - **Signed Quantities**: Short positions are represented solely by negative quantities (`qty < 0`). Never filter active holdings with `qty > 0` (use `qty != 0`).
 - **Magnitude vs. Direction**: Use `abs()` for capital allocation, margin, and portfolio heat; preserve signs for directional exposure (Beta-weighted Delta, Greeks summation).
 - **Direction Helpers in `market_analysis/risk_engine.py`**:
