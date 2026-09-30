@@ -348,11 +348,6 @@ SETTINGS_LABELS = {
         "是否啟用虛擬交易室 GhostTrader 自動建倉",
         None,
     ),
-    "enable_psq_watchlist": (
-        "⚡ PowerSqueeze 追蹤",
-        "是否對自選股開啟 PowerSqueeze 戰情追蹤",
-        None,
-    ),
     "monthly_expense": (
         "💸 每月支出預算",
         "每月支出預算 (USD, 僅供期權 Theta 存活熔斷，不影響提領跑道)",
@@ -765,7 +760,6 @@ class AccountSettingsView(discord.ui.View):
         # 針對布林值，直接切換狀態
         if key in [
             "enable_vtr",
-            "enable_psq_watchlist",
             "polymarket_use_llm",
             "can_trade_spreads",
             "cash_reserve_protection",
@@ -838,7 +832,6 @@ class AccountSettingsView(discord.ui.View):
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
             f"📅 **宏觀逃頂窗口**: `{ctx.escape_window_start} ~ {ctx.escape_window_end}`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
-            f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",
             f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
             f"🧭 **宏觀逃頂前瞻防禦**: `{'🟢 開啟' if ctx.enable_macro_top_escape_defense else '🔴 關閉'}`",
