@@ -203,6 +203,34 @@ def get_cached_earnings(symbol: str) -> Optional[dict[str, Any]]:
             conn.close()
 
 
+def get_cached_earnings_many(symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """批次讀取多檔標的的財報快取列（單一連線、單一查詢）。
+
+    回傳 {大寫 symbol: 快取列}；無快取紀錄的標的不會出現在結果中。讀取失敗回傳
+    空 dict（呼叫端應視為「無快取」並自行退路）。"""
+    unique = sorted({s.upper() for s in symbols if s})
+    if not unique:
+        return {}
+    conn = None
+    try:
+        conn = get_read_connection()
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in unique)
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        cursor.execute(
+            f"SELECT * FROM earnings_calendar_cache WHERE symbol IN ({placeholders})",
+            tuple(unique),
+        )
+        return {str(row["symbol"]).upper(): dict(row) for row in cursor.fetchall()}
+    except Exception as e:
+        logger.error("批次讀取 earnings_calendar_cache 失敗: %s", e)
+        return {}
+    finally:
+        if conn:
+            conn.close()
+
+
 def save_earnings_cache(
     symbol: str, earnings_date: str | None, hour: str | None = None
 ) -> None:

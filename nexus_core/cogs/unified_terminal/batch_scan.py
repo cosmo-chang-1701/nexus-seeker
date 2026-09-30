@@ -128,6 +128,15 @@ class BatchScanMixin:
             advanced_active = bool(scan_params_kwargs)
             adv_params = ScanParams(**scan_params_kwargs)
 
+            from .silent_period import is_in_silent_period, load_silent_period_context
+
+            silent_ctx = None
+            if "avoid_silent_period" in quant_filters:
+                silent_ctx = await load_silent_period_context(
+                    [str(r.get("symbol") or "") for r in valid_results],
+                    params.get("silent_period_days"),
+                )
+
             for r in valid_results:
                 passed = True
 
@@ -161,22 +170,9 @@ class BatchScanMixin:
                     ):
                         passed = False
 
-                # 2. avoid_silent_period (規避財報/總經靜默期)
-                if "avoid_silent_period" in quant_filters:
-                    iv_data = r.get("iv_data")
-                    if iv_data:
-                        earnings_loading = getattr(
-                            iv_data, "has_earnings_event", False
-                        ) or (
-                            isinstance(iv_data, dict)
-                            and iv_data.get("has_earnings_event", False)
-                        )
-                        macro_loading = getattr(iv_data, "has_macro_event", False) or (
-                            isinstance(iv_data, dict)
-                            and iv_data.get("has_macro_event", False)
-                        )
-                        if earnings_loading or macro_loading:
-                            passed = False
+                # 2. avoid_silent_period (規避未來 N 天內的財報/總經事件，N = silent_period_days)
+                if silent_ctx is not None and is_in_silent_period(r, silent_ctx):
+                    passed = False
 
                 # 3. magnetic_filters (高階磁吸過濾)
                 if "magnetic_filters" in quant_filters:
