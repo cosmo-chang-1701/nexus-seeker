@@ -20,8 +20,7 @@ STRESS_BETA_FALLBACK = 1.3
 RUNWAY_WARN_TIERS_YEARS: tuple[int, ...] = (3, 2, 1)
 RUNWAY_REARM_BUFFER_YEARS = 0.5
 TRADING_DAYS_PER_YEAR = 252
-WITHDRAWALS_PER_YEAR = 2
-WITHDRAWAL_INTERVAL_DAYS = TRADING_DAYS_PER_YEAR // WITHDRAWALS_PER_YEAR
+TRADING_DAYS_PER_MONTH = TRADING_DAYS_PER_YEAR // 12
 STRESS_HORIZON_YEARS = 10.0
 
 STRESS_PATH_GFC = "GFC"
@@ -59,11 +58,24 @@ def adjust_withdrawal(
     return base * cpi_now / cpi_anchor
 
 
-def zero_return_runway_years(nav: float, next_withdrawal: float) -> float:
-    """零報酬對照：NAV ÷（每年 2 次 × 每次提領額）。提領額為 0 → inf。"""
+def _validate_months(months: Sequence[int]) -> list[int]:
+    """去重排序的 1–12 月份；空或含非法值 → ValueError。"""
+    ms = sorted(set(months))
+    if not ms or any(not 1 <= m <= 12 for m in ms):
+        raise ValueError(f"提領月份不合法: {months!r}")
+    return ms
+
+
+def zero_return_runway_years(
+    nav: float,
+    next_withdrawal: float,
+    months: Sequence[int] = WITHDRAWAL_MONTHS,
+) -> float:
+    """零報酬對照：NAV ÷（每年提領次數 × 每次提領額）。提領額為 0 → inf。"""
+    per_year = len(_validate_months(months))
     if next_withdrawal <= 0:
         return math.inf
-    return max(nav, 0.0) / (WITHDRAWALS_PER_YEAR * next_withdrawal)
+    return max(nav, 0.0) / (per_year * next_withdrawal)
 
 
 def boxx_payments(boxx_value: float, next_withdrawal: float) -> int:
@@ -81,31 +93,58 @@ def clamp_beta(beta: Optional[float]) -> float:
     return min(max(beta, lo), hi)
 
 
+def withdrawal_gaps_days(
+    months: Sequence[int], first_month: Optional[int] = None
+) -> list[int]:
+    """自 `first_month` 那次提領起，後續各次提領的間隔交易日（依月份差 × 21 循環）。
+
+    `first_month` 為下一次提領所在月份，須屬於 `months`；None 取最小月份。
+    單一月份 → 每 12 個月一次。
+    """
+    ms = _validate_months(months)
+    start = ms[0] if first_month is None else first_month
+    if start not in ms:
+        raise ValueError(f"first_month={start} 不在提領月份 {ms} 內")
+    i = ms.index(start)
+    order = ms[i:] + ms[:i]
+    return [
+        ((order[(j + 1) % len(order)] - m - 1) % 12 + 1) * TRADING_DAYS_PER_MONTH
+        for j, m in enumerate(order)
+    ]
+
+
 def replay_years(
     nav: float,
     next_withdrawal: float,
     path: StressPath,
     scale: float,
     days_to_first: int = 0,
+    months: Sequence[int] = WITHDRAWAL_MONTHS,
+    first_month: Optional[int] = None,
 ) -> float:
     """自今天起重演 `path`：NAV_k = NAV_{k-1} × (1 + scale × r_k) − 該日提領額。
 
-    第一次提領在第 `days_to_first` 個交易日，之後每 WITHDRAWAL_INTERVAL_DAYS 一次；
-    提領額以 `next_withdrawal` 為起點、依路徑同期 CPI 累積比值外推。回傳耗盡年數
-    （第一個 NAV ≤ 0 的 k ÷ 252），重演 STRESS_HORIZON_YEARS 年仍存活則回傳該上限。
+    路徑的 k = 0 為高點當日（ret 為佔位 0），r_k 取 `path.returns[k]`（k ≥ 1）。
+    第一次提領在第 `days_to_first` 個交易日，之後依 `withdrawal_gaps_days(months,
+    first_month)` 循環；提領額以 `next_withdrawal` 為起點、依路徑同期 CPI 累積比值
+    外推。回傳耗盡年數（第一個 NAV ≤ 0 的 k ÷ 252），重演 STRESS_HORIZON_YEARS 年
+    仍存活則回傳該上限。
     """
+    gaps = withdrawal_gaps_days(months, first_month)
     if nav <= 0:
         return 0.0
     if next_withdrawal <= 0:
         return STRESS_HORIZON_YEARS
-    days = min(len(path.returns), int(STRESS_HORIZON_YEARS * TRADING_DAYS_PER_YEAR))
+    days = min(len(path.returns) - 1, int(STRESS_HORIZON_YEARS * TRADING_DAYS_PER_YEAR))
     next_due = max(days_to_first, 1)
+    n = 0
     value = nav
     for k in range(1, days + 1):
-        value *= 1.0 + scale * path.returns[k - 1]
+        value *= 1.0 + scale * path.returns[k]
         if k >= next_due:
             value -= next_withdrawal * path.cpi_growth[min(k, len(path.cpi_growth) - 1)]
-            next_due += WITHDRAWAL_INTERVAL_DAYS
+            next_due += gaps[n % len(gaps)]
+            n += 1
         if value <= 0:
             return k / TRADING_DAYS_PER_YEAR
     return STRESS_HORIZON_YEARS
@@ -126,14 +165,30 @@ def stress_runway(
     beta: Optional[float],
     days_to_first: int = 0,
     paths: Optional[Mapping[str, StressPath]] = None,
+    months: Sequence[int] = WITHDRAWAL_MONTHS,
+    first_month: Optional[int] = None,
 ) -> StressRunway:
     """壓力跑道：2008 SPY × 投組 Beta 與 2000 QQQ × 股票占比，取較差（§2.3）。"""
     p = paths if paths is not None else load_stress_paths()
     s_gfc = clamp_beta(beta)
     equity_share = 1.0 - min(max(boxx_value / nav, 0.0), 1.0) if nav > 0 else 0.0
-    gfc = replay_years(nav, next_withdrawal, p[STRESS_PATH_GFC], s_gfc, days_to_first)
+    gfc = replay_years(
+        nav,
+        next_withdrawal,
+        p[STRESS_PATH_GFC],
+        s_gfc,
+        days_to_first,
+        months,
+        first_month,
+    )
     dot = replay_years(
-        nav, next_withdrawal, p[STRESS_PATH_DOTCOM], equity_share, days_to_first
+        nav,
+        next_withdrawal,
+        p[STRESS_PATH_DOTCOM],
+        equity_share,
+        days_to_first,
+        months,
+        first_month,
     )
     worst = min(gfc, dot)
     return StressRunway(gfc, dot, worst, worst >= STRESS_HORIZON_YEARS)

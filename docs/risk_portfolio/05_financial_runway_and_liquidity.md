@@ -48,14 +48,14 @@ $$W_n = W_0 \times \frac{\text{CPI}_{t_n - L}}{\text{CPI}_{\text{anchor}}}$$
 其中 $\text{CPI}$ 取 FRED `CPIAUCSL`，$L = 45$ 天為公布延遲（只用當時已公布的值）。
 
 ### 2.2 零報酬跑道與 BOXX 可支付次數
-$$Y_0 = \frac{\text{NAV}}{2 \times W_{\text{next}}}, \qquad N_{\text{BOXX}} = \left\lfloor \frac{V_{\text{BOXX}}}{W_{\text{next}}} \right\rfloor$$
-$\text{NAV}$ 取 16:15 ET 寫入 `portfolio_nav_daily` 的當日淨值；$Y_0$ 只作對照，不觸發警示。
+$$Y_0 = \frac{\text{NAV}}{m \times W_{\text{next}}}, \qquad N_{\text{BOXX}} = \left\lfloor \frac{V_{\text{BOXX}}}{W_{\text{next}}} \right\rfloor$$
+$\text{NAV}$ 取 16:15 ET 寫入 `portfolio_nav_daily` 的當日淨值；$m$ 為使用者設定的每年提領次數（`withdrawal_months` 的月份數，預設 1+7 月即 $m = 2$）；$Y_0$ 只作對照，不觸發警示。
 
 ### 2.3 壓力跑道（歷史重演）
 對路徑 $p \in \{\text{GFC}, \text{DOTCOM}\}$，令 $r^{p}_k$ 為該路徑自高點起第 $k$ 個交易日的報酬，$d_k$ 為「今天起第 $k$ 個交易日」：
 $$\text{NAV}_{k} = \text{NAV}_{k-1} \times \left(1 + s_p \cdot r^{p}_k\right) - \sum_{n:\, t_n = d_k} W_n$$
 $$s_{\text{GFC}} = \operatorname{clip}(\beta_{\text{port}},\ 0.5,\ 2.0), \qquad s_{\text{DOTCOM}} = 1 - \frac{V_{\text{BOXX}}}{\text{NAV}}$$
-其中 $W_n$ 以今天的 $W_{\text{next}}$ 依該路徑同期的歷史 CPI 漲幅外推。第一個 $\text{NAV}_k \le 0$ 的 $k$ 換算成年數即 $Y_p$：
+其中 $r^{p}_0$ 為高點當日的佔位 0，重演自 $k = 1$ 起套用 $r^{p}_1$；提領日 $t_n$ 依使用者設定的 `withdrawal_months` 排列，相鄰兩次的間隔為月份差 × 21 個交易日（單一月份即每 252 個交易日一次）。$W_n$ 以今天的 $W_{\text{next}}$ 依該路徑同期的歷史 CPI 漲幅外推。第一個 $\text{NAV}_k \le 0$ 的 $k$ 換算成年數即 $Y_p$：
 $$Y_{\text{stress}} = \min\left(Y_{\text{GFC}},\ Y_{\text{DOTCOM}}\right)$$
 重演期間 BOXX 部分不計利息（保守）；兩條路徑各取 10 年，重演 10 年仍未耗盡者記為「≥ 10 年」。
 

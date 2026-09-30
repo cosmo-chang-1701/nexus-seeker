@@ -29,6 +29,26 @@ def test_zero_return_runway_and_boxx_payments() -> None:
     assert wr.boxx_payments(5_000, 0) == 0
 
 
+def test_zero_return_runway_follows_withdrawal_months() -> None:
+    assert wr.zero_return_runway_years(100_000, 10_000, (1,)) == pytest.approx(10.0)
+    assert wr.zero_return_runway_years(100_000, 10_000, (1, 4, 7, 10)) == pytest.approx(
+        2.5
+    )
+    with pytest.raises(ValueError):
+        wr.zero_return_runway_years(100_000, 10_000, ())
+    with pytest.raises(ValueError):
+        wr.zero_return_runway_years(100_000, 10_000, (0, 7))
+
+
+def test_withdrawal_gaps_days() -> None:
+    m = wr.TRADING_DAYS_PER_MONTH
+    assert wr.withdrawal_gaps_days((1, 7)) == [6 * m, 6 * m]
+    assert wr.withdrawal_gaps_days((1,)) == [12 * m]
+    assert wr.withdrawal_gaps_days((7, 1, 3), first_month=3) == [4 * m, 6 * m, 2 * m]
+    with pytest.raises(ValueError):
+        wr.withdrawal_gaps_days((1, 7), first_month=3)
+
+
 def test_clamp_beta() -> None:
     assert wr.clamp_beta(None) == wr.STRESS_BETA_FALLBACK
     assert wr.clamp_beta(float("nan")) == wr.STRESS_BETA_FALLBACK
@@ -41,8 +61,41 @@ def test_replay_flat_path_matches_zero_return_runway() -> None:
     # 零報酬、CPI 不變：10 次提領領完 10 萬，耗盡發生在第 10 次提領日
     first = 63
     years = wr.replay_years(100_000, 10_000, _flat(0.0), 1.0, days_to_first=first)
-    expected_day = first + 9 * wr.WITHDRAWAL_INTERVAL_DAYS
+    expected_day = first + 9 * 6 * wr.TRADING_DAYS_PER_MONTH
     assert years == pytest.approx(expected_day / wr.TRADING_DAYS_PER_YEAR)
+
+
+def test_replay_uses_configured_months() -> None:
+    first = 63
+    m = wr.TRADING_DAYS_PER_MONTH
+    yearly = wr.replay_years(
+        100_000, 10_000, _flat(0.0), 1.0, days_to_first=first, months=(1,)
+    )
+    assert yearly == pytest.approx((first + 9 * 12 * m) / wr.TRADING_DAYS_PER_YEAR)
+    quarterly = wr.replay_years(
+        100_000, 10_000, _flat(0.0), 1.0, days_to_first=first, months=(1, 4, 7, 10)
+    )
+    assert quarterly == pytest.approx((first + 9 * 3 * m) / wr.TRADING_DAYS_PER_YEAR)
+    # 不等距月份：第一次在 3 月，之後 3→7（4 個月）、7→1（6 個月）、1→3（2 個月）
+    uneven = wr.replay_years(
+        30_000,
+        10_000,
+        _flat(0.0),
+        1.0,
+        days_to_first=1,
+        months=(1, 3, 7),
+        first_month=3,
+    )
+    assert uneven == pytest.approx((1 + 4 * m + 6 * m) / wr.TRADING_DAYS_PER_YEAR)
+
+
+def test_replay_applies_day_k_return_on_day_k() -> None:
+    """k = 0 為高點佔位；第 1 天必須套用 returns[1]，不是 returns[0]。"""
+    rets = (0.0, -1.0) + (0.0,) * 10
+    path = StressPath(rets, (1.0,) * len(rets))
+    assert wr.replay_years(100_000, 1.0, path, 1.0, days_to_first=5) == pytest.approx(
+        1 / wr.TRADING_DAYS_PER_YEAR
+    )
 
 
 def test_replay_capped_when_no_withdrawal_or_survives() -> None:
