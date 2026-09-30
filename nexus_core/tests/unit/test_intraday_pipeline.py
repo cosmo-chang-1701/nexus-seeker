@@ -24,8 +24,8 @@ def squeeze_engine() -> Any:
 
 
 @pytest.fixture
-def intraday_pipeline(squeeze_engine: Any) -> Any:
-    return IntradayScanPipeline(MagicMock(), squeeze_engine)
+def intraday_pipeline() -> Any:
+    return IntradayScanPipeline(MagicMock())
 
 
 @pytest.fixture
@@ -264,405 +264,6 @@ def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
     assert "調升明日 Gate 3" in res2["evolution_msg"]
 
 
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
-    intraday_pipeline: Any,
-) -> None:
-    """Skew 完全無資料時仍要送得出整封心跳。
-
-    `option_skew` 是 Optional[float]（calculate_skew() 在期權鏈抓取失敗且無歷史
-    快取時回傳 None）。舊實作在 pipeline 端直接 f"{option_skew:+.2f}%" 格式化，
-    會拋 TypeError；該例外被 _run_loop 的逐檔 except 吞掉後，**該標的整封心跳
-    直接消失**，連帶讓 build_watchlist_skew_rule_commentary() 的
-    「分位數據缺失」降級分支永遠不可能被渲染出來。
-    """
-    evaluation = SimpleNamespace(
-        metrics=SimpleNamespace(
-            symbol="MU",
-            current_price=410.5,
-            iv_rank=None,
-            option_skew=None,
-            skew_percentile=None,
-            option_skew_state="N/A",
-            buy_zone_status="🟡 測試買區",
-            sell_zone_status="⚪ 測試賣區",
-        ),
-        tactical=SimpleNamespace(
-            alert_level="yellow",
-            scenario="wait",
-            sddm_route="STANDBY",
-        ),
-        event_context=SimpleNamespace(summary="未偵測到近期重大事件"),
-        symbol_gex=None,
-    )
-    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
-
-    with patch(
-        "database.is_symbol_in_portfolio",
-        return_value=False,
-    ), patch(
-        "database.get_user_holdings",
-        return_value=[],
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
-        return_value="option guidance",
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value="option-plan",
-    ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
-        return_value="rule-skew-commentary",
-    ), patch(
-        "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value=MagicMock(),
-    ) as mock_create_embed:
-        embed = await intraday_pipeline._build_watchlist_heartbeat_embed(
-            evaluation, user_context
-        )
-
-    assert embed is mock_create_embed.return_value
-    assert mock_create_embed.call_args[1]["skew_state"] == "N/A"
-
-
-@pytest.mark.asyncio
-@pytest.mark.slow
-async def test_build_watchlist_heartbeat_embed_includes_option_plan(
-    intraday_pipeline: Any,
-) -> None:
-    evaluation = SimpleNamespace(
-        metrics=SimpleNamespace(
-            symbol="MU",
-            current_price=410.5,
-            iv_rank=68.0,
-            option_skew=6.25,
-            option_skew_state="左偏保護",
-            buy_zone_status="🟡 測試買區",
-            sell_zone_status="⚪ 測試賣區",
-        ),
-        tactical=SimpleNamespace(
-            alert_level="yellow",
-            scenario="premium-harvest",
-            sddm_route="SHIELD",
-        ),
-        event_context=SimpleNamespace(summary="財報前風控"),
-        symbol_gex=None,
-    )
-    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
-
-    # derive_watchlist_option_guidance/build_watchlist_option_plan are external
-    # market_analysis.option_guidance symbols imported at module top in
-    # intraday_pipeline/pipeline.py, so the patch must target the pipeline
-    # submodule (not the package-level re-export) to intercept the call made
-    # inside _build_watchlist_heartbeat_embed. build_watchlist_skew_rule_commentary
-    # is instead lazily re-imported from the package inside that same method, so
-    # patching the package-level attribute still works for it.
-    with patch(
-        "database.is_symbol_in_portfolio",
-        return_value=False,
-    ), patch(
-        "database.get_user_holdings",
-        return_value=[],
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
-        return_value="option guidance",
-    ) as mock_guidance, patch(
-        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value="option-plan",
-    ) as mock_build_plan, patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
-        return_value="rule-skew-commentary",
-    ) as mock_skew_commentary, patch(
-        "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value=MagicMock(),
-    ) as mock_create_embed:
-        embed = await intraday_pipeline._build_watchlist_heartbeat_embed(
-            evaluation, user_context
-        )
-
-    assert embed == mock_create_embed.return_value
-    mock_build_plan.assert_awaited_once_with(
-        evaluation.metrics,
-        evaluation.tactical,
-        capital=120000.0,
-        risk_limit=12.0,
-        event_context=evaluation.event_context,
-        has_position=False,
-    )
-    mock_guidance.assert_called_once()
-    assert mock_guidance.call_args[1]["suitable_buy_price"] == 377.78
-    assert mock_guidance.call_args[1]["suitable_sell_price"] == 0.0
-
-    mock_skew_commentary.assert_called_once()
-    mock_create_embed.assert_called_once()
-    create_embed_kwargs = mock_create_embed.call_args[1]
-    assert create_embed_kwargs["symbol"] == "MU"
-    # report_body / quote 參數已移除（embed 從未讀取，等於白算一份 ANSI 報表）。
-    assert "report_body" not in create_embed_kwargs
-    assert "quote" not in create_embed_kwargs
-    assert create_embed_kwargs["option_guidance"] == "option guidance"
-    assert create_embed_kwargs["event_risk_summary"] == "財報前風控"
-    # pipeline 只傳型態字串；數值與分位改由 embed builder 用它既有、
-    # 已做過 None 降級的 skew_val_str / skew_per_str 格式化，
-    # 避免 option_skew=None 時在 pipeline 端拋 TypeError 吃掉整封心跳。
-    assert create_embed_kwargs["skew_state"] == "左偏保護"
-    assert create_embed_kwargs["alert_level"] == "yellow"
-    assert create_embed_kwargs["option_plan"] == "option-plan"
-    assert create_embed_kwargs["skew_commentary"] == "rule-skew-commentary"
-    assert create_embed_kwargs["has_position"] is False
-    assert create_embed_kwargs["holding_quantity"] is None
-    assert create_embed_kwargs["holding_avg_cost"] is None
-    assert create_embed_kwargs["suitable_buy_price"] == 377.78
-    assert create_embed_kwargs["suitable_buy_shares"] == 10
-    assert create_embed_kwargs["suitable_sell_price"] == 0.0
-    assert create_embed_kwargs["suitable_sell_shares"] == 0
-    assert "Skew 避險情緒折價" in create_embed_kwargs["buy_rationale"]
-
-
-@pytest.mark.asyncio
-async def test_build_watchlist_heartbeat_embed_writes_back_uoa_cache(
-    intraday_pipeline: Any,
-) -> None:
-    """
-    測試: 心跳算出的 UOA 結果應寫回 /x 終端共用的 `uoa_{symbol}` kv_cache，
-    避免 /x 對同一標的重複觸發昂貴的 UOA 自癒偵測 (併發抓多個到期日期權鏈)。
-    """
-    evaluation = SimpleNamespace(
-        metrics=SimpleNamespace(
-            symbol="MU",
-            current_price=410.5,
-            iv_rank=68.0,
-            option_skew=6.25,
-            option_skew_state="左偏保護",
-            buy_zone_status="🟡 測試買區",
-            sell_zone_status="⚪ 測試賣區",
-        ),
-        tactical=SimpleNamespace(
-            alert_level="yellow",
-            scenario="premium-harvest",
-            sddm_route="SHIELD",
-        ),
-        event_context=SimpleNamespace(summary="財報前風控"),
-        symbol_gex=None,
-    )
-    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
-    uoa_result = [{"trade_type": "SWEEP", "strike": 420.0}]
-
-    with patch(
-        "database.is_symbol_in_portfolio",
-        return_value=False,
-    ), patch(
-        "database.get_user_holdings",
-        return_value=[],
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
-        return_value="option guidance",
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value="option-plan",
-    ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
-        return_value="rule-skew-commentary",
-    ), patch(
-        "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value=MagicMock(),
-    ), patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 410.5},
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value={"pcr": 1.0},
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-        return_value=uoa_result,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
-        new_callable=AsyncMock,
-        return_value={"max_pain": 400.0},
-    ), patch(
-        "database.cache.save_kv_cache",
-        new_callable=AsyncMock,
-    ) as mock_save_kv_cache:
-        await intraday_pipeline._build_watchlist_heartbeat_embed(
-            evaluation, user_context
-        )
-
-    mock_save_kv_cache.assert_awaited_once_with("uoa_MU", uoa_result)
-
-
-@pytest.mark.asyncio
-async def test_build_watchlist_heartbeat_embed_skips_uoa_writeback_on_fetch_failure(
-    intraday_pipeline: Any,
-) -> None:
-    """
-    測試: 若心跳補充數據抓取失敗 (例如報價 API 出錯)，不應該用空列表覆寫既有的
-    `uoa_{symbol}` kv_cache -- 避免把 /x 終端原本有效的快取資料誤清空。
-    """
-    evaluation = SimpleNamespace(
-        metrics=SimpleNamespace(
-            symbol="MU",
-            current_price=410.5,
-            iv_rank=68.0,
-            option_skew=6.25,
-            option_skew_state="左偏保護",
-            buy_zone_status="🟡 測試買區",
-            sell_zone_status="⚪ 測試賣區",
-        ),
-        tactical=SimpleNamespace(
-            alert_level="yellow",
-            scenario="premium-harvest",
-            sddm_route="SHIELD",
-        ),
-        event_context=SimpleNamespace(summary="財報前風控"),
-        symbol_gex=None,
-    )
-    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
-
-    with patch(
-        "database.is_symbol_in_portfolio",
-        return_value=False,
-    ), patch(
-        "database.get_user_holdings",
-        return_value=[],
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
-        return_value="option guidance",
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value="option-plan",
-    ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
-        return_value="rule-skew-commentary",
-    ), patch(
-        "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value=MagicMock(),
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
-        new_callable=AsyncMock,
-        return_value=None,
-    ), patch(
-        # 心跳補充數據 gather 中的任一項失敗，都不應把半成品的 UOA 清單寫回快取。
-        # 這裡改以 detect_uoa 觸發失敗：get_quote 已不在該 gather 內（embed 的
-        # quote 參數從未被讀取，該次抓取已移除）。
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("uoa api down"),
-    ), patch(
-        "database.cache.save_kv_cache",
-        new_callable=AsyncMock,
-    ) as mock_save_kv_cache:
-        await intraday_pipeline._build_watchlist_heartbeat_embed(
-            evaluation, user_context
-        )
-
-    uoa_calls = [
-        c
-        for c in mock_save_kv_cache.call_args_list
-        if c.args and c.args[0].startswith("uoa_")
-    ]
-    assert len(uoa_calls) == 0
-
-
-@pytest.mark.asyncio
-async def test_build_watchlist_heartbeat_embed_isolates_uoa_failure(
-    intraday_pipeline: Any,
-) -> None:
-    """測試 ISS-03: 當 UOA 抓取失敗時，IV、PCR 與 Max Pain 不得被連帶設為 None (全滅雪崩防護)。"""
-    evaluation = SimpleNamespace(
-        metrics=SimpleNamespace(
-            symbol="MU",
-            current_price=410.5,
-            iv_rank=68.0,
-            option_skew=6.25,
-            option_skew_state="左偏保護",
-            buy_zone_status="🟡 測試買區",
-            sell_zone_status="⚪ 測試賣區",
-        ),
-        tactical=SimpleNamespace(
-            alert_level="yellow",
-            scenario="premium-harvest",
-            sddm_route="SHIELD",
-        ),
-        event_context=SimpleNamespace(summary="財報前風控"),
-        symbol_gex=None,
-    )
-    user_context = SimpleNamespace(user_id=42, capital=120000.0, risk_limit=12.0)
-    fake_iv = SimpleNamespace(iv_rank=72.0)
-    fake_pcr = {"pcr": 1.25}
-    fake_mp = {"max_pain": 415.0}
-
-    with patch(
-        "database.is_symbol_in_portfolio",
-        return_value=False,
-    ), patch(
-        "database.get_user_holdings",
-        return_value=[],
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
-        return_value="option guidance",
-    ), patch(
-        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
-        new_callable=AsyncMock,
-        return_value="option-plan",
-    ), patch(
-        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
-        return_value="rule-skew-commentary",
-    ), patch(
-        "cogs.embed_builder.create_watchlist_signal_embed",
-        return_value=MagicMock(),
-    ) as mock_create_embed, patch(
-        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-        new_callable=AsyncMock,
-        return_value=fake_iv,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value=fake_pcr,
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
-        new_callable=AsyncMock,
-        return_value=fake_mp,
-    ), patch(
-        # 模擬 UOA 失敗拋錯
-        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("UOA 429 rate limited"),
-    ), patch(
-        "database.cache.save_kv_cache",
-        new_callable=AsyncMock,
-    ):
-        await intraday_pipeline._build_watchlist_heartbeat_embed(
-            evaluation, user_context
-        )
-
-    # 驗證即使 UOA 失敗，其餘三組數據仍完整傳遞給 embed builder，未被重置為 None
-    assert mock_create_embed.called
-    kwargs = mock_create_embed.call_args.kwargs
-    assert kwargs.get("iv_metrics") == fake_iv
-    assert kwargs.get("pcr_data") == fake_pcr
-    assert kwargs.get("max_pain_data") == fake_mp
-    assert kwargs.get("uoa_list") == []
-
-
 def _build_skew_test_metrics(**overrides: Any) -> Any:
     from models.schemas import EnhancedWatchlistMetrics
 
@@ -798,6 +399,8 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
         "database.get_all_user_ids", return_value=[42]
     ), patch("database.get_full_user_context") as mock_ctx, patch(
         "database.get_user_watchlist", return_value=[("AAPL", 1), ("MSFT", 1)]
+    ), patch("database.is_notification_enabled", return_value=True), patch(
+        "services.llm_service.is_memory_safe", return_value=True
     ):
         mock_datetime_class.now.return_value = mock_now
 
@@ -820,6 +423,84 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
     assert "AAPL" in called_tickers
     assert "MSFT" in called_tickers
     assert intraday_pipeline.is_running is False
+
+
+async def _run_one_advisor_round(
+    pipeline: Any,
+    *,
+    enabled_uids: set[int],
+    watchlists: dict[int, list[str]],
+    memory_safe: bool = True,
+) -> tuple[AsyncMock, AsyncMock]:
+    """以全 mock 的方式跑一輪精簡後的 30 分鐘進場顧問管線。"""
+    pipeline.is_running = True
+    fake_eval = AsyncMock(return_value=None)
+    fake_dispatch = AsyncMock(return_value=None)
+    pipeline.evaluate_watchlist_symbol = fake_eval
+    pipeline._dispatch_entry_advisor_alert = fake_dispatch
+
+    async def _stop(_secs: Any) -> None:
+        pipeline.is_running = False
+
+    with patch(
+        "market_analysis.intraday_pipeline.pipeline.is_market_open", return_value=True
+    ), patch("services.llm_service.is_memory_safe", return_value=memory_safe), patch(
+        "database.get_all_user_ids", return_value=sorted(watchlists)
+    ), patch(
+        "database.is_notification_enabled",
+        side_effect=lambda uid, key: key == "advisory_entry_signal"
+        and uid in enabled_uids,
+    ), patch(
+        "database.get_full_user_context",
+        return_value=SimpleNamespace(trading_strategy="RIGHT_SIDE"),
+    ), patch(
+        "database.get_user_watchlist",
+        side_effect=lambda uid: [(s, 1) for s in watchlists[uid]],
+    ), patch(
+        "market_analysis.evaluation_recorder.flush_evaluations", AsyncMock()
+    ), patch(
+        "services.notification_dispatch_recorder.flush_dispatch_records", AsyncMock()
+    ), patch("asyncio.sleep", side_effect=_stop):
+        await pipeline._run_loop()
+    return fake_eval, fake_dispatch
+
+
+@pytest.mark.asyncio
+async def test_advisor_round_skips_users_without_advisory_channel() -> None:
+    """沒開進場顧問的使用者不做任何自選評估（不付網路 I/O 成本）。"""
+    pipeline = IntradayScanPipeline(MagicMock())
+    fake_eval, fake_dispatch = await _run_one_advisor_round(
+        pipeline, enabled_uids=set(), watchlists={1: ["NVDA"], 2: ["AAPL"]}
+    )
+    fake_eval.assert_not_awaited()
+    fake_dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_advisor_round_evaluates_shared_symbol_once() -> None:
+    """同一輪多位使用者自選同一標的，評估只做一次、派發各自進行。"""
+    pipeline = IntradayScanPipeline(MagicMock())
+    fake_eval, fake_dispatch = await _run_one_advisor_round(
+        pipeline,
+        enabled_uids={1, 2},
+        watchlists={1: ["NVDA", "AAPL"], 2: ["nvda"]},
+    )
+    assert sorted(c.args[0] for c in fake_eval.await_args_list) == ["AAPL", "NVDA"]
+    assert fake_dispatch.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_advisor_round_respects_memory_gate() -> None:
+    """記憶體水位過高 (is_memory_safe=False) 時整輪略過。"""
+    pipeline = IntradayScanPipeline(MagicMock())
+    fake_eval, fake_dispatch = await _run_one_advisor_round(
+        pipeline,
+        enabled_uids={1},
+        watchlists={1: ["NVDA"]},
+        memory_safe=False,
+    )
+    fake_eval.assert_not_awaited()
+    fake_dispatch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1526,315 +1207,6 @@ def test_compute_daily_trend_levels_fails_safe_on_short_frame() -> None:
     assert _compute_daily_trend_levels(df) == (0.0, 0.0, 0.0)
 
 
-# ---------------------------------------------------------------------------
-# NexusGammaSqueezeEngine 輸出接線
-# ---------------------------------------------------------------------------
-
-
-def _gamma_engine_output(**overrides: Any) -> Any:
-    from datetime import datetime as _dt
-    from market_analysis.models.trader_models import AdvancedTraderOutput
-
-    payload: dict[str, Any] = dict(
-        ticker="NVDA",
-        timestamp=_dt.now(),
-        market_phase="Phase B",
-        is_applicable=True,
-        failed_gates=[],
-        sddm_route="SPEAR",
-        financial_runway_days=210,
-        theta_coverage_pct=45.0,
-        runway_status_msg="🟢 財務跑道極其安全",
-        magnet_target=185.0,
-        recommended_actions=["🏹 進攻", "🎯 磁吸目標"],
-        vanna_hedging_instruction="組合 Delta 處於中性區間。",
-        kelly_position_scaling=0.25,
-        risk_mitigation_notes="波動率環境溫和。",
-    )
-    payload.update(overrides)
-    return AdvancedTraderOutput(**payload)
-
-
-@pytest.mark.asyncio
-async def test_gamma_squeeze_alert_dispatched_on_spear() -> None:
-    """SPEAR 路由應實際推播 DM 並寫入每日去重旗標。
-
-    `analyze_ticker()` 的輸出過去被 `_ =` 丟棄，整段引擎白跑。
-    """
-    from datetime import datetime as _dt
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
-
-    with patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock) as mock_save:
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-
-    bot.queue_dm.assert_awaited_once()
-    dm_call = bot.queue_dm.await_args
-    assert dm_call is not None
-    assert dm_call[0][0] == 42
-    mock_save.assert_awaited_once()
-    save_call = mock_save.await_args
-    assert save_call is not None
-    assert str(save_call[0][0]).startswith("gamma_squeeze_alert_42_NVDA_")
-
-
-@pytest.mark.asyncio
-async def test_gamma_squeeze_alert_suppressed_when_not_spear_or_deduped() -> None:
-    """SHIELD/WAIT、通知關閉、以及當日已發過，三種情況都不得再推播。"""
-    from datetime import datetime as _dt
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
-
-    # 1. 非 SPEAR：SHIELD/WAIT 是「不要動」的結論，重複推播只是噪音
-    for route in ("SHIELD", "WAIT"):
-        with patch("database.is_notification_enabled", return_value=True), patch(
-            "database.get_kv_cache", return_value=None
-        ), patch("database.save_kv_cache", new_callable=AsyncMock):
-            await pipeline._dispatch_gamma_squeeze_alert(
-                42, "NVDA", _gamma_engine_output(sddm_route=route), _dt.now()
-            )
-    bot.queue_dm.assert_not_awaited()
-
-    # 2. 使用者已關閉 alpha_market_signals 通道
-    with patch("database.is_notification_enabled", return_value=False), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock):
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-    bot.queue_dm.assert_not_awaited()
-
-    # 3. 當日已推播過
-    with patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=True
-    ), patch("database.save_kv_cache", new_callable=AsyncMock):
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-    bot.queue_dm.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ticker_market_data_fails_closed_without_real_inputs() -> None:
-    """三個門檻輸入取不到時必須 fail-closed，不得沿用會自動放行的假值。
-
-    過去 market_cap_billion / avg_option_volume /
-    tomorrow_expiring_otm_calls_premium 分別寫死為 250.5 / 65000 / 1_200_000，
-    剛好都高於 Gate 1 (20B / 50k) 與 Gate 3 ($1M) 的門檻，等於兩道閘門對所有標的
-    無條件放行。
-    """
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 150.0},
-    ), patch(
-        "services.market_data_service.get_company_profile",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("profile api down"),
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("chain api down"),
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("expiry api down"),
-    ):
-        data = await pipeline._fetch_ticker_market_data("NVDA")
-
-    assert data is not None
-    assert data.market_cap_billion == 0.0
-    assert data.avg_option_volume == 0
-    assert data.tomorrow_expiring_otm_calls_premium == 0.0
-
-    # 這些值必須讓 Gate 1 與 Gate 3 判定不通過
-    passed, failed = NexusGammaSqueezeEngine().validate_gates(data, "Phase B")
-    assert passed is False
-    assert any("流動性不足" in reason for reason in failed)
-    assert any("資金效率不足" in reason for reason in failed)
-
-
-@pytest.mark.asyncio
-async def test_ticker_market_data_uses_real_inputs() -> None:
-    """市值換算 (百萬→十億)、成交量時段正規化、OTM Call 權利金加總皆須正確。"""
-    import pandas as pd
-
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-
-    from datetime import datetime as _dt, timedelta as _td
-
-    future_exp1 = (_dt.now().date() + _td(days=14)).strftime("%Y-%m-%d")
-
-    chain = SimpleNamespace(
-        calls=pd.DataFrame(
-            [
-                # 價內：不計入
-                {
-                    "strike": 140.0,
-                    "volume": 100.0,
-                    "lastPrice": 12.0,
-                    "openInterest": 100.0,
-                },
-                # 價外：2 筆計入 (DTE >= 7 且 Vol/OI >= 0.8x)
-                {
-                    "strike": 160.0,
-                    "volume": 500.0,
-                    "lastPrice": 3.0,
-                    "openInterest": 100.0,
-                },
-                {
-                    "strike": 170.0,
-                    "volume": 200.0,
-                    "lastPrice": 1.5,
-                    "openInterest": 100.0,
-                },
-            ]
-        ),
-        puts=pd.DataFrame([]),
-    )
-
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 150.0},
-    ), patch(
-        "services.market_data_service.get_company_profile",
-        new_callable=AsyncMock,
-        return_value={"marketCapitalization": 3_400_000.0},  # 百萬美元
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value={"put_vol": 30000.0, "call_vol": 50000.0},
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=[future_exp1],
-    ), patch(
-        "services.market_data_service.get_option_chain",
-        new_callable=AsyncMock,
-        return_value=chain,
-    ), patch("market_time.get_trading_day_elapsed_fraction", return_value=0.5):
-        data = await pipeline._fetch_ticker_market_data("NVDA")
-
-    assert data is not None
-    # 3,400,000 百萬美元 → 3,400 十億美元
-    assert data.market_cap_billion == pytest.approx(3400.0)
-    # 當日 80,000 口，取消跨時段線性外推，真實量為 80,000 口
-    assert data.avg_option_volume == 80000
-    # 只計價外：500*3*100 + 200*1.5*100 = 150,000 + 30,000
-    assert data.tomorrow_expiring_otm_calls_premium == pytest.approx(180_000.0)
-
-
-def test_tactical_exposure_uses_readonly_query_and_skips_expired() -> None:
-    """曝險統計不得觸發歸檔寫入，且應濾掉已到期合約。
-
-    `get_user_portfolio()` 開頭會呼叫 `archive_expired_portfolio_records()`（全表
-    歸檔寫入），不該由這條唯讀統計路徑觸發，更不該在每檔標的的迴圈裡重複執行。
-    """
-    from datetime import datetime as _dt, timedelta as _td
-
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-    from market_time import ny_tz
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-
-    today = _dt.now(ny_tz).date()
-    future = (today + _td(days=30)).strftime("%Y-%m-%d")
-    past = (today - _td(days=5)).strftime("%Y-%m-%d")
-
-    trades = [
-        # 本人、未到期的長倉：2 口 × $3.00 × 100 = $600
-        {
-            "user_id": 7,
-            "symbol": "TSLA",
-            "opt_type": "call",
-            "strike": 250.0,
-            "entry_price": 3.0,
-            "quantity": 2.0,
-            "expiry": future,
-        },
-        # 本人但已到期：不計入
-        {
-            "user_id": 7,
-            "symbol": "AMD",
-            "opt_type": "call",
-            "strike": 200.0,
-            "entry_price": 5.0,
-            "quantity": 4.0,
-            "expiry": past,
-        },
-        # 別的使用者：不計入
-        {
-            "user_id": 99,
-            "symbol": "MSFT",
-            "opt_type": "call",
-            "strike": 400.0,
-            "entry_price": 8.0,
-            "quantity": 10.0,
-            "expiry": future,
-        },
-    ]
-    spot = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "quantity": 10.0,
-            "avg_cost": 120.0,
-        },
-    ]
-
-    with patch(
-        "database.get_all_trade_positions", return_value=trades
-    ) as mock_trades, patch("database.get_user_portfolio") as mock_user_portfolio:
-        total = pipeline._compute_user_tactical_exposure(7, spot_holdings=spot)
-
-    mock_trades.assert_called_once()
-    mock_user_portfolio.assert_not_called()
-    assert total == pytest.approx(1200.0 + 600.0)
-
-
-def test_tactical_exposure_fails_safe_on_query_error() -> None:
-    """期權查詢失敗時仍回傳現貨部分，不整個中斷。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-    spot = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "quantity": 10.0,
-            "avg_cost": 120.0,
-        },
-    ]
-
-    with patch("database.get_all_trade_positions", side_effect=RuntimeError("db down")):
-        total = pipeline._compute_user_tactical_exposure(7, spot_holdings=spot)
-
-    assert total == pytest.approx(1200.0)
-
-
 @pytest.mark.asyncio
 async def test_scheduler_starts_pipeline_even_when_not_yet_leader() -> None:
     """cog 建構時不得以 leader 旗標決定是否啟動 pipeline。
@@ -1862,12 +1234,11 @@ async def test_scheduler_starts_pipeline_even_when_not_yet_leader() -> None:
 @pytest.mark.asyncio
 async def test_pipeline_run_loop_skips_when_not_leader() -> None:
     """非 leader 實例的每輪迴圈必須直接跳過，不執行任何掃描或推播。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
 
     bot = MagicMock()
     bot._is_leader_instance = False
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(bot)
     pipeline.is_running = True
 
     async def _stop_after_first(_seconds: float) -> None:
@@ -1880,42 +1251,3 @@ async def test_pipeline_run_loop_skips_when_not_leader() -> None:
 
     mock_market_open.assert_not_called()
     mock_users.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_tactical_option_positions_loaded_once_and_grouped() -> None:
-    """全站 TRADE 每輪只讀一次、依 user_id 分組，且不阻塞 event loop。"""
-    from datetime import datetime as _dt, timedelta as _td
-
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-    from market_time import ny_tz
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-    today = _dt.now(ny_tz).date()
-    future = (today + _td(days=30)).strftime("%Y-%m-%d")
-    past = (today - _td(days=5)).strftime("%Y-%m-%d")
-
-    trades = [
-        {"user_id": 1, "symbol": "A", "expiry": future, "quantity": 1.0},
-        {"user_id": 2, "symbol": "B", "expiry": future, "quantity": 1.0},
-        {"user_id": 1, "symbol": "C", "expiry": past, "quantity": 1.0},
-    ]
-
-    with patch("database.get_all_trade_positions", return_value=trades) as mock_trades:
-        grouped = await pipeline._load_tactical_option_positions_by_user()
-
-    mock_trades.assert_called_once()
-    assert [p["symbol"] for p in grouped[1]] == ["A"], "已到期合約須被濾除"
-    assert [p["symbol"] for p in grouped[2]] == ["B"]
-
-
-@pytest.mark.asyncio
-async def test_tactical_option_positions_fail_safe() -> None:
-    """全站讀取失敗回傳空 dict，不中斷整輪掃描。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-    with patch("database.get_all_trade_positions", side_effect=RuntimeError("db down")):
-        assert await pipeline._load_tactical_option_positions_by_user() == {}

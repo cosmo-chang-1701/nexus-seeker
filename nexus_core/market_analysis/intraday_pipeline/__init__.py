@@ -5,7 +5,8 @@
 - events.py：事件風控上下文（build_watchlist_event_context 等）
 - evaluation.py：單一標的完整評估（evaluate_watchlist_symbol）
 - skew_commentary.py：Skew 規則化判讀與進階過濾器
-- pipeline.py：IntradayScanPipeline 異步掃描管道
+- pipeline.py：IntradayScanPipeline 盤中進場顧問管道
+- entry_advisor.py：進場顧問判定核心
 
 注意：`build_enhanced_watchlist_metrics`、`build_watchlist_event_context`、
 `build_watchlist_skew_rule_commentary` 在跨子模組呼叫處（evaluation.py、
@@ -67,12 +68,6 @@ from models.schemas import (
 )
 from risk_engine.nro import WatchlistRiskController
 from services.market_data_service import BoundedCache
-from market_analysis.models.trader_models import (
-    TraderAccountState,
-    OptionHolding,
-    TickerMarketData,
-)
-from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.signal_calculator import (
     _derive_buy_levels,
     _derive_sell_levels,
@@ -131,10 +126,6 @@ __all__ = [
     "ScanParams",
     "WatchlistRiskController",
     "BoundedCache",
-    "TraderAccountState",
-    "OptionHolding",
-    "TickerMarketData",
-    "NexusGammaSqueezeEngine",
     "_derive_buy_levels",
     "_derive_sell_levels",
     "_buy_zone_status",

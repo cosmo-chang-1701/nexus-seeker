@@ -8,7 +8,6 @@ import pytest
 
 from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 from cogs.embed_builders.market_embeds import build_radar_scan_embed
-from cogs.embed_builders.watchlist_embeds import create_watchlist_signal_embed
 from market_analysis.dynamic_rollover.structural_signals import (
     _scan_gex_walls,
     _scan_resistance_wall_above_spot,
@@ -230,29 +229,6 @@ def test_market_embeds_handles_invalid_call_wall_and_uses_15m_atr() -> None:
 # ---------------------------------------------------------------------------
 # Point 5: watchlist_embeds safe strike parsing with math.isfinite
 # ---------------------------------------------------------------------------
-
-
-def test_watchlist_embeds_handles_malformed_strike_keys() -> None:
-    """驗證 watchlist_embeds 在 gex_profile 包含非數值或無效 key 時安全略過，正常渲染其餘 strike。"""
-    symbol_gex: dict[str, Any] = {
-        "spot": 100.0,
-        "gex_profile": {
-            "INVALID_KEY": 1000.0,
-            "nan": 500.0,
-            "inf": 600.0,
-            "100.0": 50000.0,
-            "105.0": 60000.0,
-            "95.0": 40000.0,
-        },
-    }
-    embed = create_watchlist_signal_embed(
-        symbol="TEST",
-        symbol_gex=symbol_gex,
-        alert_level="yellow",
-    )
-    assert embed is not None
-    text = _get_embed_all_text(embed)
-    assert "TEST" in (embed.title or "") or "TEST" in text
 
 
 # ---------------------------------------------------------------------------

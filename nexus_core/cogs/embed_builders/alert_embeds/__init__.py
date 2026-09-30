@@ -51,7 +51,6 @@ from cogs.embed_builders.alert_embeds.withdrawal_alerts import (
 from cogs.embed_builders.alert_embeds.market_signal_alerts import (
     create_wti_alert_embed,
     create_price_volume_alert_embed,
-    create_gamma_squeeze_alert_embed,
 )
 
 __all__ = [
@@ -73,7 +72,6 @@ __all__ = [
     "create_vix_tail_risk_embed",
     "create_wti_alert_embed",
     "create_price_volume_alert_embed",
-    "create_gamma_squeeze_alert_embed",
     "create_downside_snapshot_embed",
     "create_downside_snapshot_fields",
     "create_portfolio_downside_alert_embed",

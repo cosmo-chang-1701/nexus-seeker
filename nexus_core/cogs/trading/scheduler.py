@@ -34,15 +34,10 @@ class SchedulerCog(commands.Cog):
     def __init__(self, bot: Any) -> None:
         self.bot = bot
 
-        # Intraday decision scan pipeline (Real-time Phase B SPEAR/Vanna warnings)
-        from market_analysis.intraday_pipeline import (
-            IntradayScanPipeline,
-            NexusGammaSqueezeEngine,
-        )
+        # 30 分鐘盤中進場顧問管道（僅 advisory_entry_signal）
+        from market_analysis.intraday_pipeline import IntradayScanPipeline
 
-        self.intraday_pipeline = IntradayScanPipeline(
-            bot, NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
-        )
+        self.intraday_pipeline = IntradayScanPipeline(bot)
         # leader 判定**不能**放在這裡：cog 是在 setup_hook 載入的，而
         # `_is_leader_instance` 要到 on_ready 才選舉出來（bot.py 建構時固定為
         # False），在此檢查等於永遠不啟動。改為與本 Cog 其餘 tasks.loop 相同，

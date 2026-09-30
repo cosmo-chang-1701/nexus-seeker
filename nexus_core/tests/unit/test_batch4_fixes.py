@@ -15,9 +15,6 @@ from market_analysis.sentiment.skew_taxonomy import (
     SKEW_STATE_DEFENSIVE,
     SKEW_STATE_BULLISH,
 )
-from models.schemas import EnhancedWatchlistMetrics
-from models.quant import IVMetrics
-from cogs.embed_builders.watchlist_embeds import create_watchlist_signal_embed
 from market_analysis.sentiment.iv_metrics import fetch_and_calculate_iv_metrics
 
 
@@ -39,71 +36,6 @@ def test_classify_skew_state_deadband() -> None:
     # 有百分位時正常觸發極端態
     assert classify_skew_state(2.0, 95.0) == SKEW_STATE_DEFENSIVE
     assert classify_skew_state(-2.0, 10.0) == SKEW_STATE_BULLISH
-
-
-def test_watchlist_signal_embed_renders_iv_percentile() -> None:
-    """ISS-13: 驗證 Watchlist Embed 在期權結構區塊並列呈現 IV Rank 與 IV Percentile。"""
-    metrics = EnhancedWatchlistMetrics(
-        symbol="AAPL",
-        exchange="NASDAQ",
-        current_price=150.0,
-        beta=1.0,
-        buy_zone_status="WATCH",
-        buy_price_phase1=140.0,
-        buy_price_phase2=135.0,
-        buy_price_phase3=130.0,
-        sell_zone_status="WATCH",
-        sell_price_phase1=160.0,
-        sell_price_phase2=165.0,
-        sell_price_phase3=170.0,
-        volume_poc=148.0,
-        relative_strength_spy=1.0,
-        option_skew_state="平穩",
-    )
-
-    # Case A: IV Percentile 存在
-    iv_metrics_with_p = IVMetrics(
-        symbol="AAPL",
-        current_iv=0.25,
-        iv_rank=40.0,
-        iv_percentile=55.0,
-        expected_move_weekly=4.0,
-        iv_status="Normal",
-        is_premarket=False,
-        iv_source="LIVE_IV",
-        reference_spot_price=150.0,
-    )
-    embed_a = create_watchlist_signal_embed(
-        symbol="AAPL",
-        metrics=metrics,
-        iv_metrics=iv_metrics_with_p,
-        alert_level="green",
-    )
-    assert embed_a is not None
-    desc_a = "\n".join(f"{f.name}\n{f.value}" for f in embed_a.fields)
-    assert "IV Rank: 40.0% ｜ IVP: 55.0%" in desc_a
-
-    # Case B: IV Percentile 缺失 (數據積累期)
-    iv_metrics_no_p = IVMetrics(
-        symbol="AAPL",
-        current_iv=0.25,
-        iv_rank=40.0,
-        iv_percentile=None,
-        expected_move_weekly=4.0,
-        iv_status="Normal",
-        is_premarket=False,
-        iv_source="LIVE_IV",
-        reference_spot_price=150.0,
-    )
-    embed_b = create_watchlist_signal_embed(
-        symbol="AAPL",
-        metrics=metrics,
-        iv_metrics=iv_metrics_no_p,
-        alert_level="green",
-    )
-    assert embed_b is not None
-    desc_b = "\n".join(f"{f.name}\n{f.value}" for f in embed_b.fields)
-    assert "IV Rank: 40.0% ｜ IVP: --%" in desc_b
 
 
 @pytest.mark.asyncio

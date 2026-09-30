@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from models.schemas import EnhancedWatchlistMetrics, WatchlistEventContext
-from cogs.embed_builders.watchlist_embeds import create_watchlist_signal_embed
 from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 from market_analysis.intraday_pipeline.evaluation import evaluate_watchlist_symbol
 
@@ -66,50 +65,6 @@ def test_portfolio_embed_net_gex_neutral_deadband() -> None:
         assert (
             found_label
         ), f"Expected {expected_label} in embed for net_gex={net_gex_val}"
-
-
-def test_watchlist_signal_embed_includes_regime_and_gamma_flip() -> None:
-    """ISSUE-4.4: 驗證 Heartbeat 2.0 Embed 在 Block 4 包含 Net GEX Regime 與 Gamma Flip。"""
-    metrics = EnhancedWatchlistMetrics(
-        symbol="AAPL",
-        exchange="NASDAQ",
-        current_price=150.0,
-        beta=1.0,
-        buy_zone_status="WATCH",
-        buy_price_phase1=140.0,
-        buy_price_phase2=135.0,
-        buy_price_phase3=130.0,
-        sell_zone_status="WATCH",
-        sell_price_phase1=160.0,
-        sell_price_phase2=165.0,
-        sell_price_phase3=170.0,
-        volume_poc=148.0,
-        relative_strength_spy=1.0,
-        option_skew_state="平穩",
-    )
-    symbol_gex = {
-        "spot": 150.0,
-        "net_gex": 150_000.0,
-        "call_wall": 160.0,
-        "put_wall": 140.0,
-        "gex_profile": {140.0: -500_000.0, 150.0: 0.0, 160.0: 500_000.0},
-    }
-    embed = create_watchlist_signal_embed(
-        symbol="AAPL",
-        metrics=metrics,
-        symbol_gex=symbol_gex,
-        alert_level="green",
-    )
-    assert embed is not None
-    gex_field = None
-    for f in embed.fields:
-        if f.name and "Gamma 曝險分布" in f.name:
-            gex_field = f
-            break
-    assert gex_field is not None
-    assert gex_field.value is not None
-    assert "Net GEX Regime: +150K (🟢 LONG_GAMMA (自穩定壓制波動))" in gex_field.value
-    assert "Gamma Flip:" in gex_field.value
 
 
 @pytest.mark.asyncio
