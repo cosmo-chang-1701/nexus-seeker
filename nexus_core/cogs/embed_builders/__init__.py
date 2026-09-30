@@ -10,7 +10,7 @@
   scan_embeds.py      — Sentiment Scan、Macro Scan、FOMC、Stress Test、Covered Call、Earnings、Sector Flow
   alert_embeds.py     — Option Scan、PSQ、News/Reddit、Polymarket、Quote、各類警報
   portfolio_embeds.py — Holdings、Trades、Strategic Dash、Tactical Symbol/Hedge
-  watchlist_embeds.py — Watchlist 清單、總覽
+  watchlist_embeds.py — Watchlist 清單、心跳 Signal、總覽
   report_embeds.py    — Portfolio Report、Transition、VTR、Scan Report、Rehedge、DDP、Volatility、AI Analysis
   settings_embeds.py  — Notification Settings、Account Settings、Info、Error
   market_embeds.py    — Max Pain、Financial Runway、System Health、Asset Promotion、
@@ -116,6 +116,7 @@ from cogs.embed_builders.portfolio_embeds import (
 # ── Watchlist Embeds ──────────────────────────────────────────────────────────
 from cogs.embed_builders.watchlist_embeds import (
     create_watchlist_embed,
+    create_watchlist_signal_embed,
     create_watchlist_overview_embed,
     create_bulk_watchlist_result_embed,
     create_set_watchlist_result_embed,
@@ -273,6 +274,7 @@ __all__ = [
     "create_entry_rules_embed",
     # Watchlist embeds
     "create_watchlist_embed",
+    "create_watchlist_signal_embed",
     "create_watchlist_overview_embed",
     "create_bulk_watchlist_result_embed",
     "create_set_watchlist_result_embed",

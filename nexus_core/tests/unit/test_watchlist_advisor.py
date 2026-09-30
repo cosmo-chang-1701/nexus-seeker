@@ -17,6 +17,7 @@ import pytest
 import config
 from market_analysis import evaluation_recorder
 from market_analysis.dynamic_rollover.models import DynamicRegime
+from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.intraday_pipeline import IntradayScanPipeline, entry_advisor
 from market_analysis.intraday_pipeline.entry_advisor import (
     EntryAdvice,
@@ -68,7 +69,7 @@ def _make_pipeline(radar: Optional[Dict[str, Any]] = None) -> Any:
     bot.queue_dm = AsyncMock()
     bot._latest_radar_data_cache = {"NVDA": radar or _RADAR}
     bot._latest_radar_cache_time = time.time()
-    return IntradayScanPipeline(bot)
+    return IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
 
 
 class _Kv:
@@ -130,11 +131,12 @@ def test_scenario_literal_unchanged() -> None:
     assert set(args) == {"premium-harvest", "hard-hedge", "wait"}
 
 
-def test_advisor_not_gated_by_analyst_agent_flag() -> None:
-    """進場顧問不得受 enable_analyst_agent 約束（DB 預設 0，掛上去等於永遠到不了）。"""
+def test_advisor_dispatched_before_engine_enabled_continue() -> None:
+    """進場顧問不得掛在 engine_enabled 之後（預設 enable_analyst_agent=0 會到不了）。"""
     src = inspect.getsource(IntradayScanPipeline._run_loop)
-    assert "_dispatch_entry_advisor_alert" in src
-    assert "enable_analyst_agent" not in src
+    assert src.index("_dispatch_entry_advisor_alert") < src.index(
+        "if not engine_enabled or account_state is None"
+    )
 
 
 # ── 派發閘門 ─────────────────────────────────────────────────────

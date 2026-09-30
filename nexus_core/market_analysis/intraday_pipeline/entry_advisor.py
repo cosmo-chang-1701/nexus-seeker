@@ -1,6 +1,6 @@
 """自選標的進場顧問 — 進場確認核心（階段 A）。
 
-自選標的評估（`evaluate_watchlist_symbol`）本身只有 SHIELD／premium-harvest／WAIT
+30 分鐘深度心跳（`IntradayScanPipeline`）本身只有 SHIELD／premium-harvest／WAIT
 三個出口，沒有「進場」路由。本模組把 `/x` 的「🔐 進場鐵律檢核」頁籤
 (`cogs/unified_terminal/symbol_view.py::btn_entry_rules`) 的判定邏輯抽成可獨立
 呼叫的協調函式，由 `pipeline.py::_dispatch_entry_advisor_alert` 以獨立通知頻道

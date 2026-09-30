@@ -37,6 +37,7 @@ from cogs.embed_builder import (
     split_embed_by_fields,
     create_hedge_settlement_embed,
     create_watchlist_overview_embed,
+    create_watchlist_signal_embed,
     create_sentiment_scan_embed,
     create_media_sentiment_embed,
     create_active_orders_embed,
@@ -48,6 +49,7 @@ from cogs.embed_builder import (
     create_fomc_escape_window_embed,
     create_stress_test_embed,
 )
+from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
 def _runway_snapshot() -> Any:
@@ -548,6 +550,119 @@ def test_create_proactive_event_alert_embed() -> None:
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
     assert " (1/" in embeds_many[0].title  # type: ignore
+
+
+def test_create_watchlist_signal_embed() -> None:
+    option_plan = WatchlistOptionPlan(
+        strategy_name="Bull Put Spread",
+        premium_type="credit",
+        estimated_net_premium=0.35,
+        suggested_contracts=2,
+        max_risk_amount=330.0,
+        rationale="測試用",
+        stock_action="測試用",
+        legs=[
+            WatchlistOptionLeg(
+                action="SELL",
+                opt_type="PUT",
+                strike=120.0,
+                expiry="2026-06-19",
+                mid_price=1.1,
+            ),
+            WatchlistOptionLeg(
+                action="BUY",
+                opt_type="PUT",
+                strike=118.0,
+                expiry="2026-06-19",
+                mid_price=0.75,
+            ),
+        ],
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="NVDA",
+        option_guidance="可先以 Bull Put Spread 佈局。",
+        event_risk_summary="CPI 倒數 12.0 小時 ｜ 先縮口數，優先定義風險的 Debit Spread / 保護性部位。",
+        skew_state="⚠️ 預警性對沖 (Put 昂貴)",
+        alert_level="yellow",
+        option_plan=option_plan,
+        skew_commentary="Skew 左偏代表保護性買盤偏多，若事件風險逼近應優先使用定義風險結構。",
+        has_position=True,
+        holding_quantity=120.0,
+        holding_avg_cost=150.0,
+        holding_pnl_pct=0.10,
+        suitable_sell_price=165.50,
+        suitable_sell_shares=30,
+        sell_rationale="分批減碼 25%",
+    )
+
+    assert embed is not None
+    assert (
+        embed.title
+        == "📊 標的分析中心 2.0: NVDA 每半小時戰場心跳 [數據未更新/降級模式]"
+    )
+
+    assert "物理籌碼牆與邊緣偵測 (Market Footprints)" in get_embed_text(embed)
+    assert "心跳：期權結構與波動率" in get_embed_text(embed)
+    assert "結算與目標 (Target Lock)" in get_embed_text(embed)
+    assert (
+        "既有現貨持倉: 120 股 ｜ 平均成本: $150.00 ｜ 當前損益: +10.00%"
+        in get_embed_text(embed)
+    )
+    assert "操盤執行指南: 可先以 Bull Put Spread 佈局。" in get_embed_text(embed)
+    assert "**⚙️ 量化 Skew 解析**" in get_embed_text(embed)
+    # skew_state 只承載型態字串；數值與分位由 builder 自 metrics 格式化，
+    # 此處未傳 metrics，故走 None 降級輸出 --%。
+    assert "Skew: --% (分位 --%) ｜ ⚠️ 預警性對沖 (Put 昂貴)" in get_embed_text(embed)
+
+
+def test_create_watchlist_signal_embed_covered_call() -> None:
+    option_plan = WatchlistOptionPlan(
+        strategy_name="Covered Call",
+        premium_type="credit",
+        estimated_net_premium=4.15,
+        suggested_contracts=1,
+        max_risk_amount=0.0,
+        rationale="測試 Covered Call",
+        stock_action="拋補看漲期權 / 高位收租",
+        legs=[
+            WatchlistOptionLeg(
+                action="SELL",
+                opt_type="CALL",
+                strike=115.0,
+                expiry="2026-06-26",
+                mid_price=4.15,
+            )
+        ],
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="INTC",
+        option_guidance="Covered Call 鎖利。",
+        event_risk_summary="無重大事件",
+        skew_state="右偏 (Call 昂貴)",
+        alert_level="yellow",
+        option_plan=option_plan,
+        skew_commentary="Skew 右偏顯示買權昂貴，適合 Covered Call 收租。",
+        has_position=True,
+        holding_quantity=100.0,
+        holding_avg_cost=113.50,
+        holding_pnl_pct=-0.0397,
+        suitable_sell_price=115.00,
+        suitable_sell_shares=100,
+        sell_rationale="全數出清現貨避險",
+    )
+
+    assert embed is not None
+    assert (
+        embed.title
+        == "📊 標的分析中心 2.0: INTC 每半小時戰場心跳 [數據未更新/降級模式]"
+    )
+    assert (
+        "既有現貨持倉: 100 股 ｜ 平均成本: $113.50 ｜ 當前損益: -3.97%"
+        in get_embed_text(embed)
+    )
+    assert "操盤執行指南: Covered Call 鎖利。" in get_embed_text(embed)
+    assert "**⚙️ 量化 Skew 解析**" in get_embed_text(embed)
+    assert "Skew: --% (分位 --%) ｜ 右偏 (Call 昂貴)" in get_embed_text(embed)
 
 
 def test_create_watchlist_overview_embed() -> None:
@@ -2693,6 +2808,378 @@ def test_create_covered_call_unlock_embed() -> None:
     assert "未尋獲符合條件之極虛值" in embed_no_recs.fields[2].value  # type: ignore
 
 
+def test_create_watchlist_signal_embed_event_loading() -> None:
+    """Verify that event loading formatting displays status and expected move note correctly."""
+    from models.schemas import EnhancedWatchlistMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="MU",
+        exchange="NASDAQ",
+        current_price=130.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=120.0,
+        buy_price_phase2=115.0,
+        buy_price_phase3=110.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=140.0,
+        sell_price_phase2=145.0,
+        sell_price_phase3=150.0,
+        pe_ratio=15.0,
+        rsi_14=55.0,
+        atr_14=4.5,
+        beta=1.2,
+        ma20=128.0,
+        ma50=125.0,
+        ma200=115.0,
+        iv_rank=85.0,
+        iv_percentile=88.0,
+        option_skew=5.0,
+        skew_percentile=85.0,
+        option_skew_state="正常",
+        pcr=0.78,
+        volume_poc=125.0,
+        gex_max_put_wall=110.0,
+        vanna_sensitivity=0.1,
+        relative_strength_spy=1.05,
+        iv_source="STORED_IV",
+        is_premarket=False,
+        volume_pcr=0.78,
+        oi_pcr=1.55,
+        has_earnings_event=True,
+        has_macro_event=False,
+        event_loading_applied=True,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="MU",
+        metrics=metrics,
+        alert_level="yellow",
+    )
+
+    # 值已被乘上 1.4x 事件加載係數，揭露必須據實說明，不能像過去那樣寫
+    # 「快取波動率可能低估」——方向與程式實際所做的剛好相反。
+    text = get_embed_text(embed)
+    assert "已套用 1.4x 事件加載係數 (非原始觀測值)" in text
+    assert "臨近財報" in text
+    assert "可能低估" not in text
+    assert "備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。" in get_embed_text(embed)
+    assert "Volume PCR (即時情緒): 0.78" in get_embed_text(embed)
+    assert "OI PCR (結構防禦): 1.55" in get_embed_text(embed)
+
+
+def test_watchlist_signal_embed_event_without_loading_factor() -> None:
+    """臨近事件但未套用 1.4x 時，不得宣稱已加載；措辭也不能反向說「可能低估」。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="MU",
+        current_iv=0.42,
+        iv_rank=60.0,
+        iv_percentile=62.0,
+        expected_move_weekly=6.0,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+        has_earnings_event=True,
+        event_loading_applied=False,
+    )
+
+    embed = create_watchlist_signal_embed(symbol="MU", iv_metrics=iv_m)
+    assert embed is not None
+    text = get_embed_text(embed)
+    assert "已套用 1.4x 事件加載係數" not in text
+    assert "臨近財報，波動率定價可能尚未反映事件風險" in text
+
+
+def test_create_watchlist_signal_embed_non_degraded() -> None:
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed is not None
+    assert embed.title == "📊 標的分析中心 2.0: AAPL 每半小時戰場心跳"
+
+    desc = get_embed_text(embed) or ""
+    # Verify exact numeric formatting
+
+    assert "GEX PutWall (做市商底牆): $130.00 (當前價差: +15.38%)" in desc
+    assert "Vol POC (籌碼控制中心): $145.00" in desc
+    assert "Option Skew (期權偏斜): +2.50% (分位點: 60.0%)" in desc
+    assert (
+        "Implied Volatility (IV): 35.0% ｜ IV Rank: 25.0% ｜ IVP: 30.0% (狀態: 正常 / 公允)"
+        in desc
+    )
+    assert "本週預期波幅 (Expected Move): ±$5.00" in desc
+    assert "Volume PCR (即時情緒): 0.80" in desc
+    assert "OI PCR (結構防禦): 0.90" in desc
+
+
+def test_create_watchlist_signal_embed_missing_skew_percentile_is_not_degraded() -> (
+    None
+):
+    """skew_percentile 為 None（樣本數 < 20 的 fail-safe 中性狀態）不應讓標題
+    出現「[數據未更新/降級模式]」——IV/GEX/報價等其餘資料都是即時抓取成功，
+    只是 Skew 的歷史分位還沒累積足夠樣本，不代表本次抓取退化。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=None,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed is not None
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" not in embed.title
+
+    desc = get_embed_text(embed) or ""
+    assert "Option Skew (期權偏斜): +2.50% (分位點: --%)" in desc
+
+
+def test_create_watchlist_signal_embed_unavailable_iv_source_is_degraded() -> None:
+    """iv_source == "UNAVAILABLE"（整體 IV 抓取真的失敗）仍應在標題顯示
+    「[數據未更新/降級模式]」，確認上面的修正沒有連帶放寬真正的失敗情境。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=None,
+        iv_percentile=None,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="UNAVAILABLE",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=None,
+        iv_rank=None,
+        iv_percentile=None,
+        expected_move_weekly=None,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="UNAVAILABLE",
+        reference_spot_price=150.0,
+    )
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+    )
+
+    assert embed is not None
+    assert embed.title is not None
+    assert "[數據未更新/降級模式]" in embed.title
+
+
+def test_create_watchlist_signal_embed_marks_stale_max_pain_with_age() -> None:
+    """max_pain_data.is_stale=True 搭配 updated_at 應在心跳的 Max Pain 行同時
+    顯示 [快取 / API 降級] 標記與人類可讀的資料年齡（回應使用者要求：不只顯示
+    是否降級，也要能看到快取資料實際的日期時間）。"""
+    from models.schemas import EnhancedWatchlistMetrics
+    from models.quant import IVMetrics
+    from datetime import datetime, timedelta, timezone
+
+    metrics = EnhancedWatchlistMetrics(
+        symbol="AAPL",
+        exchange="NASDAQ",
+        current_price=150.0,
+        buy_zone_status="🟢 買點支撐",
+        buy_price_phase1=140.0,
+        buy_price_phase2=135.0,
+        buy_price_phase3=130.0,
+        sell_zone_status="🟢 賣點壓力",
+        sell_price_phase1=160.0,
+        sell_price_phase2=165.0,
+        sell_price_phase3=170.0,
+        pe_ratio=30.0,
+        rsi_14=50.0,
+        atr_14=3.0,
+        beta=1.0,
+        ma20=148.0,
+        ma50=145.0,
+        ma200=140.0,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        option_skew=2.5,
+        skew_percentile=60.0,
+        option_skew_state="正常",
+        pcr=0.8,
+        volume_poc=145.0,
+        gex_max_put_wall=130.0,
+        vanna_sensitivity=0.05,
+        relative_strength_spy=1.0,
+        iv_source="LIVE_IV",
+        is_premarket=False,
+        volume_pcr=0.8,
+        oi_pcr=0.9,
+    )
+    iv_metrics = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.35,
+        iv_rank=25.0,
+        iv_percentile=30.0,
+        expected_move_weekly=5.0,
+        iv_status="Normal",
+        is_premarket=False,
+        iv_source="LIVE_IV",
+        reference_spot_price=150.0,
+    )
+
+    stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=42)).strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        metrics=metrics,
+        iv_metrics=iv_metrics,
+        alert_level="green",
+        max_pain_data={
+            "max_pain": 145.0,
+            "distance_pct": 3.45,
+            "is_stale": True,
+            "calculation_mode": "OI",
+            "is_degraded": False,
+            "circuit_breaker_triggered": False,
+            "updated_at": stale_ts,
+        },
+    )
+
+    desc = get_embed_text(embed) or ""
+    assert "[快取 / API 降級" in desc
+    assert "分鐘前" in desc
+
+
 def test_create_telemetry_alignment_embeds() -> None:
     from cogs.embed_builders.order_embeds import create_telemetry_alignment_embeds
 
@@ -3647,6 +4134,57 @@ def test_create_entry_rules_embed_omits_structure_directive_when_absent() -> Non
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def test_holding_pnl_pct_displayed_correctly() -> None:
+    """holding_pnl_pct 應正確計算並顯示損益百分比（而非永遠 0.00%）。"""
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        has_position=True,
+        holding_quantity=100.0,
+        holding_avg_cost=150.0,
+        holding_pnl_pct=0.1333,  # +13.33% = (170 - 150) / 150 * 100
+        suitable_sell_price=170.0,
+        suitable_sell_shares=25,
+        sell_rationale="分批減碼 25%",
+    )
+    assert embed is not None
+    assert get_embed_text(embed)
+    assert "+13.33%" in get_embed_text(embed)
+
+
+def test_holding_pnl_pct_negative_displayed_correctly() -> None:
+    """持倉虧損時，損益應顯示負號。"""
+    embed = create_watchlist_signal_embed(
+        symbol="TSLA",
+        has_position=True,
+        holding_quantity=50.0,
+        holding_avg_cost=200.0,
+        holding_pnl_pct=-0.10,  # -10.00%
+        suitable_sell_price=185.0,
+        suitable_sell_shares=12,
+        sell_rationale="止損",
+    )
+    assert embed is not None
+    assert get_embed_text(embed)
+    assert "-10.00%" in get_embed_text(embed)
+
+
+def test_holding_pnl_pct_none_shows_zero() -> None:
+    """holding_pnl_pct=None 時，顯示為 0.00%（向後相容的 fallback）。"""
+    embed = create_watchlist_signal_embed(
+        symbol="NVDA",
+        has_position=True,
+        holding_quantity=10.0,
+        holding_avg_cost=100.0,
+        holding_pnl_pct=None,
+        suitable_sell_price=110.0,
+        suitable_sell_shares=2,
+        sell_rationale="觀望",
+    )
+    assert embed is not None
+    assert get_embed_text(embed)
+    assert "0.00%" in get_embed_text(embed)
+
+
 def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
     """Verify that build_post_market_intelligence_embed correctly parses and renders STOCK holdings."""
     stock_report_line = (
@@ -3686,6 +4224,69 @@ def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
     fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
     # Debit cost for 10 shares of $120.00 should be $1,200.00 USD
     assert "$1,200.00 USD" in fin_val
+
+
+def test_pcr_state_empty_string_falls_back_to_numeric_logic() -> None:
+    """pcr_dict 中 volume_pcr_state 為空字串時，應 fallback 至數值閾值判斷，不顯示空字串。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="AAPL",
+        current_iv=0.25,
+        iv_rank=45.0,
+        iv_percentile=50.0,
+        expected_move_weekly=4.5,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+    )
+    pcr_data_with_empty_state = {
+        "volume_pcr": 0.75,  # < 0.90 → should resolve to 🐂 中性偏多/看漲主導
+        "volume_pcr_state": "",  # empty string — should NOT be used
+        "oi_pcr": 1.05,  # between 0.90–1.20 → ⚖️ 籌碼結構中性
+        "oi_pcr_state": "",  # empty string — should NOT be used
+    }
+
+    embed = create_watchlist_signal_embed(
+        symbol="AAPL",
+        iv_metrics=iv_m,
+        pcr_data=pcr_data_with_empty_state,
+    )
+    assert embed is not None
+    assert get_embed_text(embed)
+    # volume_pcr_state="" should not appear; numeric branch should activate
+    assert "🐂 中性偏多/看漲主導" in get_embed_text(embed)
+    assert "⚖️ 籌碼結構中性" in get_embed_text(embed)
+
+
+def test_pcr_state_valid_string_is_used() -> None:
+    """pcr_dict 中有效的 volume_pcr_state 應直接使用。"""
+    from models.quant import IVMetrics
+
+    iv_m = IVMetrics(
+        symbol="MSFT",
+        current_iv=0.20,
+        iv_rank=55.0,
+        iv_percentile=60.0,
+        expected_move_weekly=3.0,
+        iv_status="Normal",
+        iv_source="LIVE_IV",
+    )
+    pcr_data_with_custom_state = {
+        "volume_pcr": 0.95,
+        "volume_pcr_state": "🔵 自訂狀態標籤",
+        "oi_pcr": 1.10,
+        "oi_pcr_state": "🟣 OI 自訂狀態",
+    }
+
+    embed = create_watchlist_signal_embed(
+        symbol="MSFT",
+        iv_metrics=iv_m,
+        pcr_data=pcr_data_with_custom_state,
+    )
+    assert embed is not None
+    assert get_embed_text(embed)
+    assert "🔵 自訂狀態標籤" in get_embed_text(embed)
+    assert "🟣 OI 自訂狀態" in get_embed_text(embed)
 
 
 def test_build_post_market_intelligence_embed_target_center_styling_and_sector_matrix() -> (
@@ -4275,6 +4876,47 @@ def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None
     assert "安全續抱" not in blob
     assert "上移停損" in blob or "停損上移" in blob
     assert "$180.00" in blob
+
+
+def test_create_gamma_squeeze_alert_embed() -> None:
+    """Gamma Squeeze SPEAR 警報：欄位齊備、代理數據揭露不可省略。"""
+    from datetime import datetime as _dt
+
+    from cogs.embed_builders.alert_embeds import create_gamma_squeeze_alert_embed
+    from market_analysis.models.trader_models import AdvancedTraderOutput
+
+    output = AdvancedTraderOutput(
+        ticker="NVDA",
+        timestamp=_dt.now(),
+        market_phase="Phase B",
+        is_applicable=True,
+        failed_gates=[],
+        sddm_route="SPEAR",
+        financial_runway_days=210,
+        theta_coverage_pct=45.0,
+        runway_status_msg="🟢 財務跑道極其安全 (生存跑道: 210 天)",
+        magnet_target=185.0,
+        recommended_actions=[
+            "🏹 當前進入 SPEAR 進攻模組",
+            "🎯 預估上行磁吸目標價為 $185.00",
+        ],
+        vanna_hedging_instruction="組合 Delta 處於中性區間，目前無需進行 Vanna 對沖調整。",
+        kelly_position_scaling=0.25,
+        risk_mitigation_notes="當前波動率環境相對溫和。",
+    )
+
+    embed = create_gamma_squeeze_alert_embed(output)
+    text = get_embed_text(embed)
+
+    assert embed.title == "🏹 Gamma 擠壓 SPEAR 進攻訊號 | NVDA"
+    assert "$185.00" in text
+    assert "凱利倉位上限: 25.0%" in text
+    assert "210 天" in text
+    assert "Vanna" in text
+    # Gate 1 / Gate 3 的輸入是代理指標，依 AGENTS.md 慣例必須揭露
+    assert "代理數據揭露" in text
+    assert "RVOL_15m" in text
+    assert "DTE >= 7" in text
 
 
 def test_create_short_entry_embed_renders_short_levels_and_sizing() -> None:
