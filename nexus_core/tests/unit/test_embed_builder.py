@@ -5565,3 +5565,30 @@ async def test_symbol_deep_dive_atr14_fallback_order_when_atr1d_and_df_invalid()
 
     assert result["atr_14"] == pytest.approx(2.85)
     assert result["atr_1d"] == pytest.approx(2.85)
+
+
+def test_runway_warning_embed_shows_paths_and_rearm() -> None:
+    from cogs.embed_builders.alert_embeds import create_runway_warning_embed
+
+    embed = create_runway_warning_embed(_runway_snapshot(), 3)
+    assert embed.title == "🏦 警報：壓力跑道跌破 3 年"
+    text = get_embed_text(embed)
+    assert "2008：3.8 年" in text and "2000：2.3 年" in text
+    assert "3.5 年以上" in text
+
+
+def test_withdrawal_reminder_embed_day_and_cpi_note() -> None:
+    import dataclasses
+    from datetime import date
+
+    from cogs.embed_builders.alert_embeds import create_withdrawal_reminder_embed
+    from market_analysis.withdrawal_runway import WithdrawalPlan
+
+    snap = dataclasses.replace(_runway_snapshot(), cpi_missing=True)
+    plan = WithdrawalPlan(10000.0, 0.0, {"AMD": 3000.0, "NVDA": 7000.0}, 0.0)
+    embed = create_withdrawal_reminder_embed("DAY", date(2027, 1, 4), plan, snap)
+    assert embed.title == "🏦 提領日提醒：2027-01-04"
+    assert "未含通膨調整" in (embed.description or "")
+    sells = str(next(f.value for f in embed.fields if "賣出清單" in str(f.name)))
+    assert sells.index("NVDA") < sells.index("AMD")
+    assert "BOXX" not in sells
