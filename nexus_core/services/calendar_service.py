@@ -296,7 +296,14 @@ class CalendarService:
         reference: Optional[datetime] = None,
         months_ahead: int = 0,
         force_fetch: bool = False,
-    ) -> None:
+    ) -> bool:
+        """確保當月（及往後 months_ahead 個月）的總經日曆已快取。
+
+        回傳值：所有月份皆成功取得（快取仍新鮮，或本次從 Edge Scraper 成功
+        抓取並寫入）時回傳 True；任一月份抓取失敗（僅能沿用舊 SQLite 快取或
+        完全無資料）時回傳 False。既有排程呼叫端忽略回傳值不受影響，供
+        /force_macro_update 等手動刷新流程如實回報是否真的更新成功。
+        """
         now = reference or datetime.now()
         target = date(now.year, now.month, 1)
         month_keys = [target.strftime("%Y-%m")]
@@ -311,12 +318,13 @@ class CalendarService:
         if force_fetch:
             self._economic_cache.clear()
 
-        await asyncio.gather(
+        results = await asyncio.gather(
             *(
                 self._ensure_macro_month_cached(key, force_fetch=force_fetch)
                 for key in month_keys
             )
         )
+        return all(bool(r[0]) for r in results)
 
     async def get_high_impact_events(self, days: int = 7) -> List[EconomicEvent]:
         """
@@ -594,8 +602,13 @@ class CalendarService:
         combined = sorted(all_events, key=lambda x: x.tte_hours)
         return combined
 
-    async def update_fedwatch_probability(self) -> None:
-        """從 edge scraper 獲取下週 FOMC 最新利率定價機率，並寫入資料庫。"""
+    async def update_fedwatch_probability(self) -> bool:
+        """從 edge scraper 獲取下週 FOMC 最新利率定價機率，並寫入資料庫。
+
+        失敗時不拋例外（僅記錄 log 並將 macro_fedwatch_is_fallback 設為 1），
+        因此以回傳值表示結果：成功寫入最新定價回傳 True；未配置 TUNNEL_URL、
+        爬取失敗或數據未通過合理性閘門回傳 False。既有排程呼叫端忽略回傳值
+        不受影響。"""
         import json
         import httpx
         import config
@@ -605,7 +618,7 @@ class CalendarService:
         if not getattr(config, "TUNNEL_URL", ""):
             logger.info("未配置 TUNNEL_URL，跳過 FedWatch 爬取。")
             await save_kv_cache("macro_fedwatch_is_fallback", 1)
-            return
+            return False
 
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
@@ -644,7 +657,7 @@ class CalendarService:
                                 f"FedWatch 返回疑似異常/污染數據 (prob={prob}, prob_hike={prob_hike}%, prob_cut={prob_cut}%, source={source})，觸發防禦阻斷並轉為備援模式。"
                             )
                             await save_kv_cache("macro_fedwatch_is_fallback", 1)
-                            return
+                            return False
 
                         await execute_write_async(
                             """
@@ -661,11 +674,12 @@ class CalendarService:
                             f"成功更新 CME FedWatch FOMC 利率定價: {prob * 100:.1f}%, 明細: {data}"
                         )
                         await save_kv_cache("macro_fedwatch_is_fallback", 0)
-                        return
+                        return True
         except Exception as e:
             logger.error(f"更新 FedWatch 概率失敗: {e}")
 
         await save_kv_cache("macro_fedwatch_is_fallback", 1)
+        return False
 
     # CPI YoY 事件在行事曆快取中的中文標準名稱，須與 TRANSLATIONS 字典的輸出保持一致
     # (nexus_edge_scraper/local_api/macro_calendar.py 與 market_analysis/macro_calendar_translator.py)

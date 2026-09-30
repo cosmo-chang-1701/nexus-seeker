@@ -320,7 +320,12 @@ async def suggest_target_allocation_pct() -> float:
 
 
 async def fetch_liquidity_metrics() -> dict:
-    """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。"""
+    """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。
+
+    無法取得即時數據時回傳靜態常數備援值，並附帶 `_is_fallback: True` 標記
+    （語意同 fetch_gex_metrics() 的 `_is_stale_cache`），讓需要如實呈現資料
+    來源的呼叫端（如 /force_macro_update）不必以常數值比對猜測是否為備援值。
+    僅讀取 `ted_spread` 等數值欄位的呼叫端不受影響。"""
     fallback = {
         "ted_spread": 0.15,
         "sofr_90": 5.3,
@@ -331,7 +336,7 @@ async def fetch_liquidity_metrics() -> dict:
 
     if not getattr(config, "TUNNEL_URL", ""):
         await save_kv_cache("macro_liquidity_is_fallback", 1)
-        return fallback
+        return {**fallback, "_is_fallback": True}
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/liquidity")
@@ -347,7 +352,7 @@ async def fetch_liquidity_metrics() -> dict:
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取流動性數據: {e}")
     await save_kv_cache("macro_liquidity_is_fallback", 1)
-    return fallback
+    return {**fallback, "_is_fallback": True}
 
 
 async def fetch_core_macro_metrics() -> dict:
