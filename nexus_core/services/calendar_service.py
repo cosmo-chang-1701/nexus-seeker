@@ -685,7 +685,7 @@ class CalendarService:
     # (nexus_edge_scraper/local_api/macro_calendar.py 與 market_analysis/macro_calendar_translator.py)
     _CPI_YOY_EVENT_NAME = "CPI 年增率"
 
-    async def update_cpi_deviation(self) -> None:
+    async def update_cpi_deviation(self) -> bool:
         """從已快取的總經行事曆（TradingView）取得最新一期已公布 CPI YoY 的
         實際值與市場預測值，計算偏差並寫入 kv_cache。不另發送 HTTP 請求，
         改為沿用 prefetch_monthly_macro_cache() 既有的 24 小時 SWR 快取。
@@ -696,7 +696,11 @@ class CalendarService:
         上個月的資料過去純粹是靠其他行事曆功能（如 /calendar）順帶快取後殘留
         在 SQLite 裡才拿得到——這在全新資料庫（冷啟動）或月初尚未有人觸發過
         其他行事曆功能時會找不到任何已公布 CPI 數據。因此這裡額外明確確保
-        上個月也已快取，讓本函式的正確性不依賴其他功能的副作用。"""
+        上個月也已快取，讓本函式的正確性不依賴其他功能的副作用。
+
+        失敗時不拋例外（僅記錄 log 並將 macro_cpi_is_fallback 設為 1），因此以
+        回傳值表示結果：成功寫入最新偏差數據回傳 True；無已公布數據、數據未通過
+        合理性閘門或發生例外回傳 False。既有排程呼叫端忽略回傳值不受影響。"""
         from database.cache import save_kv_cache
         from database.calendar_cache import get_latest_released_economic_event
 
@@ -720,7 +724,7 @@ class CalendarService:
                     "尚無已發布且含實際值/預測值的 CPI YoY 資料，跳過 CPI 偏差更新。"
                 )
                 await save_kv_cache("macro_cpi_is_fallback", 1)
-                return
+                return False
 
             actual = float(row["actual_value"])
             expected = float(row["consensus_value"])
@@ -732,7 +736,7 @@ class CalendarService:
                     "觸發防禦阻斷並轉為備援模式。"
                 )
                 await save_kv_cache("macro_cpi_is_fallback", 1)
-                return
+                return False
 
             await save_kv_cache("macro_cpi_actual", actual)
             await save_kv_cache("macro_cpi_expected", expected)
@@ -740,9 +744,11 @@ class CalendarService:
             logger.info(
                 f"成功更新 CPI YoY 偏差數據: actual={actual}%, expected={expected}%"
             )
+            return True
         except Exception as e:
             logger.error(f"更新 CPI 偏差數據失敗: {e}")
             await save_kv_cache("macro_cpi_is_fallback", 1)
+            return False
 
     def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
         """讀取最新 FedWatch 概率與是否為 Fallback 快取"""

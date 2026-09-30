@@ -380,7 +380,10 @@ async def fetch_core_macro_metrics() -> dict:
 
 
 async def _fetch_core_macro_metrics_uncached() -> dict:
-    """fetch_core_macro_metrics() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。"""
+    """fetch_core_macro_metrics() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。
+
+    無法取得即時數據時回傳靜態常數備援值，並附帶 `_is_fallback: True` 標記
+    （語意同 fetch_liquidity_metrics()），供手動刷新流程如實回報資料來源。"""
     fallback = {
         "rrp": 420.5,
         "fed_balance": 7.25,
@@ -392,7 +395,7 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
 
     if not getattr(config, "TUNNEL_URL", ""):
         await save_kv_cache("macro_core_is_fallback", 1)
-        return fallback
+        return {**fallback, "_is_fallback": True}
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             res = await client.get(
@@ -421,7 +424,7 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取核心總經數據: {e}")
     await save_kv_cache("macro_core_is_fallback", 1)
-    return fallback
+    return {**fallback, "_is_fallback": True}
 
 
 async def _scrape_symbol_gex_raw(

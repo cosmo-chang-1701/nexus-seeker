@@ -1,11 +1,15 @@
 """/force_macro_update 管理員指令的回歸測試。
 
+刷新邏輯已抽至 `services/macro_refresh_service.py::refresh_macro_data`，本檔以
+Discord 指令為入口，同時驗證共用流程與 embed 呈現。
+
 涵蓋：
 - 大盤 GEX 有效性改依 fetch_gex_metrics() 的回傳形態（空 dict / `_is_stale_cache`）
   判斷，不再以 510/515 常數比對。
 - SPY 即時備援：拒絕 `_is_stale_cache` 的過期個股快取、以單一交易批次寫入。
 - 錯誤訊息不重複、FedWatch / 總經日曆依實際回傳值回報成敗。
-- 總經日曆必須先於 FedWatch 刷新（日曆整月覆寫會清空 fedwatch_probability）。
+- 刷新順序：總經日曆 → FedWatch → CPI 偏差值（CPI 讀取剛刷新的日曆快取）。
+- CPI 偏差值依 update_cpi_deviation() 回傳值如實回報成敗。
 - 相關服務函式的回傳值契約（save_kv_cache_many、update_fedwatch_probability、
   prefetch_monthly_macro_cache、fetch_liquidity_metrics 的 `_is_fallback`）。
 """
@@ -89,6 +93,14 @@ class _Env:
                 return_value=True,
             )
         )
+        self.cpi = stack.enter_context(
+            patch.object(
+                calendar_service,
+                "update_cpi_deviation",
+                new_callable=AsyncMock,
+                return_value=True,
+            )
+        )
 
 
 @pytest.fixture
@@ -110,9 +122,11 @@ async def _run() -> tuple[str, str]:
 async def test_all_success_reports_every_component(env: _Env) -> None:
     title, desc = await _run()
     assert "系統控制" in title
-    assert "SPY: $600.00 / Gamma Flip: 590.00 / TED Spread: 0.21" in desc
+    assert "**GEX**: SPY: $600.00 / Gamma Flip: 590.00" in desc
+    assert "**流動性指標**: TED Spread: 0.21" in desc
     assert "**FedWatch**: 最新利率定價已寫入資料庫" in desc
     assert "**總經日曆**: 已重新抓取並寫入快取" in desc
+    assert "**CPI 偏差值**: 最新 CPI YoY 實際值與預測值已寫入資料庫" in desc
     # 英文殘留文案已移除（使用者可見文字須為繁中）
     assert "Edge Scraper" not in desc
     assert "Calendar" not in desc
@@ -153,7 +167,7 @@ async def test_empty_gex_uses_spy_fallback_with_single_batch_write(
     title, desc = await _run()
 
     assert "系統控制" in title
-    assert "SPY: $505.00 / Gamma Flip: 500.00" in desc
+    assert "SPY: $505.00 / Gamma Flip: 500.00 (SPY 即時估算)" in desc
     env.spy.assert_awaited_once_with("SPY", force_live=True)
     env.save_many.assert_awaited_once()
     env.save_single.assert_not_awaited()
@@ -213,6 +227,7 @@ async def test_gex_failure_message_is_not_duplicated(env: _Env) -> None:
     # 其餘成功項目仍列出
     assert "**FedWatch**" in desc
     assert "**總經日曆**" in desc
+    assert "**CPI 偏差值**" in desc
 
 
 @pytest.mark.asyncio
@@ -220,7 +235,7 @@ async def test_liquidity_fallback_is_not_shown_as_live_value(env: _Env) -> None:
     env.liq.return_value = {"ted_spread": 0.15, "_is_fallback": True}
     title, desc = await _run()
     assert "更新部分失敗" in title
-    assert "流動性指標 (TED Spread) 更新失敗" in desc
+    assert "流動性指標 更新失敗" in desc
     assert "TED Spread: 0.15" not in desc
     assert "SPY: $600.00 / Gamma Flip: 590.00" in desc
 
@@ -231,7 +246,8 @@ async def test_fedwatch_false_return_is_reported_as_failure(env: _Env) -> None:
     title, desc = await _run()
     assert "更新部分失敗" in title
     assert "FedWatch 更新失敗" in desc
-    assert "已寫入資料庫" not in desc
+    assert "**FedWatch**" not in desc
+    assert "最新利率定價已寫入資料庫" not in desc
 
 
 @pytest.mark.asyncio
@@ -239,14 +255,14 @@ async def test_calendar_false_return_is_reported_as_failure(env: _Env) -> None:
     env.calendar.return_value = False
     title, desc = await _run()
     assert "更新部分失敗" in title
-    assert "總經日曆更新失敗" in desc
+    assert "總經日曆 更新失敗" in desc
     assert "已重新抓取" not in desc
 
 
 @pytest.mark.asyncio
-async def test_calendar_refresh_runs_before_fedwatch(env: _Env) -> None:
-    """日曆強制刷新會整月 DELETE + INSERT（fedwatch_probability 為 NULL），
-    必須先刷新日曆再寫入 FedWatch，否則剛寫入的定價會被清空。"""
+async def test_refresh_order_is_calendar_fedwatch_then_cpi(env: _Env) -> None:
+    """日曆 → FedWatch → CPI：FedWatch 寫入最新一批事件列；CPI 偏差值讀取剛
+    刷新的日曆快取，必須排在日曆之後。"""
     order: list[str] = []
 
     def _calendar(**_: Any) -> bool:
@@ -257,11 +273,48 @@ async def test_calendar_refresh_runs_before_fedwatch(env: _Env) -> None:
         order.append("fedwatch")
         return True
 
+    def _cpi() -> bool:
+        order.append("cpi")
+        return True
+
     env.calendar.side_effect = _calendar
     env.fedwatch.side_effect = _fedwatch
+    env.cpi.side_effect = _cpi
     await _run()
-    assert order == ["calendar", "fedwatch"]
+    assert order == ["calendar", "fedwatch", "cpi"]
     env.calendar.assert_awaited_once_with(months_ahead=1, force_fetch=True)
+
+
+@pytest.mark.asyncio
+async def test_cpi_false_return_is_reported_as_failure(env: _Env) -> None:
+    env.cpi.return_value = False
+    title, desc = await _run()
+    assert "更新部分失敗" in title
+    assert "CPI 偏差值 更新失敗" in desc
+    assert "**CPI 偏差值**" not in desc
+    # 其餘成功項目仍列出
+    assert "**FedWatch**" in desc
+
+
+@pytest.mark.asyncio
+async def test_cpi_exception_does_not_abort_refresh(env: _Env) -> None:
+    env.cpi.side_effect = RuntimeError("db locked")
+    title, desc = await _run()
+    assert "更新部分失敗" in title
+    assert "CPI 偏差值 更新失敗：發生例外：db locked" in desc
+    assert "**總經日曆**" in desc
+
+
+@pytest.mark.asyncio
+async def test_discord_command_skips_vts_and_core(env: _Env) -> None:
+    """Discord 指令維持 GEX / 流動性 / 日曆 / FedWatch / CPI，不刷新 VTS 與核心指標。"""
+    with patch(
+        "market_analysis.index_microstructure.fetch_core_macro_metrics",
+        new_callable=AsyncMock,
+    ) as core:
+        _, desc = await _run()
+    core.assert_not_awaited()
+    assert "VIX 期限結構" not in desc
 
 
 @pytest.mark.asyncio
