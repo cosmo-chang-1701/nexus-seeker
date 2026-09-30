@@ -63,7 +63,7 @@ async def test_dynamic_market_scanner_blocks_false_alarm_vix_zero(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[123456789]
@@ -108,7 +108,7 @@ async def test_dynamic_market_scanner_blocks_false_alarm_mild_vts(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[123456789]
@@ -158,7 +158,7 @@ async def test_dynamic_market_scanner_triggers_on_vix_surge(mock_bot: Any) -> No
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[123456789]
@@ -217,7 +217,7 @@ async def test_dynamic_market_scanner_triggers_on_severe_vts_inversion(
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[987654321]
@@ -259,7 +259,7 @@ async def test_dynamic_market_scanner_skips_when_memory_unsafe(mock_bot: Any) ->
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[123456789]
@@ -292,7 +292,7 @@ async def test_dynamic_market_scanner_spx_sanity_bounds(mock_bot: Any) -> None:
         "market_analysis.index_microstructure.fetch_core_macro_metrics",
         new_callable=AsyncMock,
     ), patch(
-        "cogs.trading.heartbeat.dispatch_watchlist_heartbeat",
+        "cogs.trading.scheduler._sync_edge_watchlist",
         new_callable=AsyncMock,
     ), patch("database.get_all_watchlist", return_value=[]), patch(
         "database.get_all_user_ids", return_value=[]

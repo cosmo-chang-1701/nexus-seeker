@@ -320,16 +320,12 @@ async def compute_structural_breakdown_signals_impl(
     解析（call_wall/hvn 為選填，未傳入時等同舊版行為），確保「是否觸發清倉」與
     報告顯示的「停損設在哪」在 support_wall<=0 (GEX 數據缺失/畸形) 時不再分歧。
 
-    gamma_cliff_level 注意事項（刻意的三方分歧，不應合併）：此處為
-    anchor_base - 1.5*atr_14（持倉專用，含 ATR 緩衝 + SQZ 動能疊加 +
-    現貨/期權雙軌出場邏輯，判定門檻更嚴謹）。另有兩處各自維護的粗粒度變體：
-      - market_analysis/scenario_classifier.py 的
-        gamma_cliff_confirmation.is_below_gamma_defense_line：
-        price < put_wall and price < gamma_flip（無 ATR 緩衝）
-      - cogs/trading/heartbeat.py：gamma_cliff_level = min(put_wall, gamma_flip)
-        （自選股 watchlist 進出場信號，無 ATR 緩衝，涵蓋未持有標的）
-    同一標的若同時在自選股與持倉中，watchlist 心跳與持倉轉倉可能對「是否確認
-    破位」給出不同判定，此為刻意設計而非缺陷（見下方回歸測試）。
+    gamma_cliff_level 注意事項：此處為 anchor_base - 1.5*atr_14（持倉專用，含
+    ATR 緩衝 + SQZ 動能疊加 + 現貨/期權雙軌出場邏輯，判定門檻更嚴謹）。
+    `gamma_cliff_confirmation.is_below_gamma_defense_line`（price < put_wall and
+    price < gamma_flip，無 ATR 緩衝）是保留下來的粗粒度變體；原本使用它的
+    15 分鐘自選雷達情境事件（scenario_classifier / heartbeat）已隨「盤中情報」
+    模組移除。兩者刻意不同、不應合併（見下方回歸測試）。
 
     is_whale_sto_block（微觀結構出場決策矩陣 SL-主力對沖）：改用
     `_detect_whale_put_bto_block` 的真實 UOA 名目金額/比率判定，取代舊版

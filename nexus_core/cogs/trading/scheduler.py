@@ -1,9 +1,9 @@
 """
 cogs/trading/scheduler.py
 
-[Controller] 主排程 Cog：動態市場掃描心跳 (每 15 分鐘)、Reddit 每日更新、
-盤中 Scheduled Audit (每 120 分鐘)。
-業務邏輯委派給 MarketScanCog、HeartbeatCog helper 及其他子 Cog。
+[Controller] 主排程 Cog：盤中 15 分鐘巡邏（總經快取、VIX 黑天鵝警報、edge
+自選同步）、Reddit 每日更新、kv_cache 清理與 Regime 結果標註，以及 30 分鐘
+進場顧問管道 (IntradayScanPipeline) 的生命週期。
 """
 
 from typing import Any
@@ -23,6 +23,37 @@ logger = logging.getLogger(__name__)
 scanner_times = [
     time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 15, 30, 45)
 ]
+
+
+async def _sync_edge_watchlist() -> None:
+    """Best-effort 同步全體去重後的自選標的清單給 nexus_edge_scraper。
+
+    讓 edge 的背景排程知道該輪詢哪些標的的 GEX / Option Chain。實際持倉標的
+    （現貨 HOLDING + 期權 TRADE，可能包含未列在一般自選清單中的標的）額外標記為
+    priority，讓 edge 每輪都優先抓取，不受批次輪替影響。
+
+    原本掛在已移除的 15 分鐘自選雷達（cogs/trading/heartbeat.py）開頭，行為不變：
+    未設定 edge URL (TUNNEL_URL) 時不做任何事；edge 部署不穩定，失敗只記錄
+    warning，不影響本輪其他步驟。
+    """
+    import config
+
+    if not getattr(config, "TUNNEL_URL", ""):
+        return
+    try:
+        from services import edge_cache_client
+
+        all_watchlists = await asyncio.to_thread(database.get_all_watchlist)
+        all_symbols = sorted({row[1] for row in all_watchlists})
+        all_portfolio_rows = await asyncio.to_thread(database.get_all_portfolio)
+        priority_symbols = list(
+            {row[2].upper() for row in all_portfolio_rows if row[2]}
+        )
+        await edge_cache_client.sync_watchlist_symbols(all_symbols, priority_symbols)
+    except Exception as sync_err:
+        logger.warning(
+            f"同步 watchlist 標的清單至 edge 失敗（不影響盤中巡邏繼續執行): {sync_err}"
+        )
 
 
 class SchedulerCog(commands.Cog):
@@ -231,7 +262,7 @@ class SchedulerCog(commands.Cog):
             )
             return
 
-        logger.info("🕒 [盤中掃描] 美股交易時段內，啟動動態雷達並更新大盤總經快取...")
+        logger.info("🕒 [盤中掃描] 美股交易時段內，更新大盤總經快取...")
 
         # 1. 抓取 SPX, VIX, US10Y, WTI 數據並存入 SQLite
         try:
@@ -365,12 +396,8 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             logger.error(f"🕒 [盤中總經快取更新失敗]: {e}")
 
-        all_watchlists = database.get_all_watchlist()
-
-        # 2. Watchlist 心跳推送
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
-
-        await dispatch_watchlist_heartbeat(self.bot, all_watchlists)
+        # 2. 同步自選與持倉標的清單給 nexus_edge_scraper
+        await _sync_edge_watchlist()
 
         # 3. NRO 掃描邏輯
         scan_cog = self.bot.get_cog("MarketScanCog")

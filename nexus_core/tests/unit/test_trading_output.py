@@ -515,183 +515,69 @@ async def test_monitor_vtr_task_uses_settlement_helper_for_non_ditm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_sends_all_watchlist_symbols() -> Any:
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-
-    mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
-        side_effect=lambda sym: {
-            "symbol": sym,
-            "quote": {"c": 150.0, "dp": 1.2},
-            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 4.5},
-            "skew": 1.1,
-            "skew_percentile": 75.0,
-            "max_pain": {"max_pain": 145.0},
-            "uoa": [],
-        }
-    )
-    bot.get_cog.return_value = mock_terminal
+async def test_sync_edge_watchlist_syncs_deduped_symbols_and_priority() -> None:
+    """15 分鐘巡邏應 best-effort 同步全體去重後的自選標的與持倉 priority 給 edge。"""
+    import config
+    from cogs.trading.scheduler import _sync_edge_watchlist
 
     with (
+        patch.object(config, "TUNNEL_URL", "http://edge.local", create=True),
         patch(
-            "database.get_full_user_context",
-            return_value=SimpleNamespace(
-                capital=100000.0, risk_limit=15.0, option_alert_mode=1
-            ),
+            "database.get_all_watchlist",
+            return_value=[(1, "AAPL", 1), (1, "NVDA", 1), (2, "AAPL", 1)],
         ),
         patch(
-            "database.is_symbol_in_portfolio",
-            side_effect=[False, True],
+            "database.get_all_portfolio",
+            return_value=[(1, "x", "tsla"), (2, "y", "")],
         ),
-        patch(
-            "database.is_notification_enabled",
-            return_value=True,
-        ),
-        patch(
-            "cogs.embed_builder.build_radar_scan_embed",
-            return_value=object(),
-        ) as mock_builder,
-    ):
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
-
-        await dispatch_watchlist_heartbeat(
-            bot, [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
-        )
-
-    # AAPL is duplicate in list, so unique AAPL and NVDA are fetched
-    assert mock_terminal._fetch_sym_radar_data_slow.call_count == 2
-    mock_builder.assert_called_once()
-    assert bot.queue_dm.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_syncs_symbols_to_edge_cache() -> Any:
-    """心跳前應 best-effort 同步全體去重後的自選標的清單給 edge，
-    讓背景排程知道該輪詢哪些標的。"""
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-
-    mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
-        side_effect=lambda sym: {"symbol": sym, "quote": {"c": 150.0}}
-    )
-    bot.get_cog.return_value = mock_terminal
-
-    with (
-        patch(
-            "database.get_full_user_context",
-            return_value=SimpleNamespace(
-                capital=100000.0, risk_limit=15.0, option_alert_mode=1
-            ),
-        ),
-        patch("database.is_symbol_in_portfolio", return_value=False),
-        patch("database.is_notification_enabled", return_value=True),
-        patch("cogs.embed_builder.build_radar_scan_embed", return_value=object()),
         patch(
             "services.edge_cache_client.sync_watchlist_symbols", new_callable=AsyncMock
         ) as mock_sync,
     ):
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
-
-        await dispatch_watchlist_heartbeat(
-            bot, [(1, "AAPL", 1), (1, "NVDA", 1), (1, "AAPL", 1)]
-        )
+        await _sync_edge_watchlist()
 
     mock_sync.assert_awaited_once()
     assert mock_sync.await_args is not None
-    synced_symbols = mock_sync.await_args.args[0]
-    assert set(synced_symbols) == {"AAPL", "NVDA"}
+    assert set(mock_sync.await_args.args[0]) == {"AAPL", "NVDA"}
+    assert mock_sync.await_args.args[1] == ["TSLA"]
 
 
 @pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_survives_edge_sync_failure() -> Any:
-    """edge 同步呼叫失敗時，心跳仍應照常完成推播，不受影響。"""
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-
-    mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
-        side_effect=lambda sym: {"symbol": sym, "quote": {"c": 150.0}}
-    )
-    bot.get_cog.return_value = mock_terminal
+async def test_sync_edge_watchlist_noop_without_edge_url() -> None:
+    """未設定 edge URL 時不做任何事（連 DB 都不讀）。"""
+    import config
+    from cogs.trading.scheduler import _sync_edge_watchlist
 
     with (
+        patch.object(config, "TUNNEL_URL", "", create=True),
+        patch("database.get_all_watchlist") as mock_watch,
         patch(
-            "database.get_full_user_context",
-            return_value=SimpleNamespace(
-                capital=100000.0, risk_limit=15.0, option_alert_mode=1
-            ),
-        ),
-        patch("database.is_symbol_in_portfolio", return_value=False),
-        patch("database.is_notification_enabled", return_value=True),
-        patch(
-            "cogs.embed_builder.build_radar_scan_embed", return_value=object()
-        ) as mock_builder,
+            "services.edge_cache_client.sync_watchlist_symbols", new_callable=AsyncMock
+        ) as mock_sync,
+    ):
+        await _sync_edge_watchlist()
+
+    mock_watch.assert_not_called()
+    mock_sync.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_edge_watchlist_survives_edge_failure() -> None:
+    """edge 同步失敗只記錄 warning，不往外拋。"""
+    import config
+    from cogs.trading.scheduler import _sync_edge_watchlist
+
+    with (
+        patch.object(config, "TUNNEL_URL", "http://edge.local", create=True),
+        patch("database.get_all_watchlist", return_value=[(1, "AAPL", 1)]),
+        patch("database.get_all_portfolio", return_value=[]),
         patch(
             "services.edge_cache_client.sync_watchlist_symbols",
             new_callable=AsyncMock,
             side_effect=RuntimeError("edge unreachable"),
         ),
     ):
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
-
-        await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1)])
-
-    mock_builder.assert_called_once()
-    assert bot.queue_dm.await_count == 1
-
-
-@pytest.mark.asyncio
-async def test_dispatch_watchlist_heartbeat_honors_portfolio_only_mode() -> Any:
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-
-    mock_terminal = MagicMock()
-    mock_terminal._fetch_sym_radar_data_slow = AsyncMock(
-        side_effect=lambda sym: {
-            "symbol": sym,
-            "quote": {"c": 150.0, "dp": 1.2},
-            "iv_metrics": {"iv_rank": 30.0, "expected_move_weekly": 4.5},
-            "skew": 1.1,
-            "skew_percentile": 75.0,
-            "max_pain": {"max_pain": 145.0},
-            "uoa": [],
-        }
-    )
-    bot.get_cog.return_value = mock_terminal
-
-    with (
-        patch(
-            "database.get_full_user_context",
-            return_value=SimpleNamespace(
-                capital=100000.0, risk_limit=15.0, option_alert_mode=2
-            ),
-        ),
-        patch(
-            # 持倉判定已由逐 (使用者, 標的) 查詢改為一次取回集合後在記憶體比對，
-            # 避免心跳 Pass 1 在 event loop 上跑 O(使用者 × 標的) 次同步查詢。
-            # AAPL 無持倉、NVDA 有持倉。
-            "database.get_all_portfolio_symbol_pairs",
-            return_value={(1, "NVDA")},
-        ),
-        patch(
-            "database.is_notification_enabled",
-            return_value=True,
-        ),
-        patch(
-            "cogs.embed_builder.build_radar_scan_embed",
-            return_value=object(),
-        ) as mock_builder,
-    ):
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
-
-        await dispatch_watchlist_heartbeat(bot, [(1, "AAPL", 1), (1, "NVDA", 1)])
-
-    # Only NVDA has position, so only NVDA should be fetched and scanned
-    mock_terminal._fetch_sym_radar_data_slow.assert_called_once_with("NVDA")
-    mock_builder.assert_called_once()
-    assert bot.queue_dm.await_count == 1
+        await _sync_edge_watchlist()
 
 
 @pytest.mark.asyncio

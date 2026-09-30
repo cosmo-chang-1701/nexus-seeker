@@ -7,7 +7,7 @@
   create_reddit_scan_embed、create_media_sentiment_embed）
 - polymarket.py：Polymarket 鯨魚追蹤與機率閃崩警報
 - quote_and_risk_alerts.py：即時報價與持倉風險/警報（DITM 停利、Gamma 脆弱性、
-  VTR 結算、情境警報、保證金、VIX 尾部風險等）
+  VTR 結算、保證金、VIX 尾部風險等）
 - market_signal_alerts.py：WTI 原油與個股價量突破警報
 - downside_alerts.py：投組下行風險警報與 Sortino / MDD / CVaR 快照欄位
 - withdrawal_alerts.py：提領跑道警示與提領提醒（賣出清單）
@@ -35,7 +35,6 @@ from cogs.embed_builders.alert_embeds.quote_and_risk_alerts import (
     create_gamma_fragility_embed,
     create_ditm_transition_alert_embed,
     create_vtr_settlement_notice_embed,
-    create_scenario_alert_embed,
     create_margin_api_alert_embed,
     create_vix_tail_risk_embed,
 )
@@ -67,7 +66,6 @@ __all__ = [
     "create_gamma_fragility_embed",
     "create_ditm_transition_alert_embed",
     "create_vtr_settlement_notice_embed",
-    "create_scenario_alert_embed",
     "create_margin_api_alert_embed",
     "create_vix_tail_risk_embed",
     "create_wti_alert_embed",

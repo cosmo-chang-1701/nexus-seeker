@@ -1,7 +1,7 @@
 """
 gamma_cliff_confirmation.py — 負 Gamma 懸崖連續貫穿確認引擎。
 
-在 STRUCTURAL_BREAKDOWN 場景分類器觸發後，本模組提供第二層確認：
+在持倉轉倉的結構性破位判定與自選標的評估的 Put Wall 貫穿判定中，本模組提供第二層確認：
 檢查最近 N 分鐘的 1 分鐘 K 線是否「全部」以實體收盤價
 貫穿負 Gamma 懸崖線（即 PutWall 或指定的 gamma_cliff_level）。
 
@@ -26,13 +26,11 @@ def is_below_gamma_defense_line(
 ) -> bool:
     """負 Gamma 防線基礎判定：現價是否同時跌破 PutWall 與 Gamma Flip。
 
-    供 scenario_classifier.classify_market_scenario 使用，判定是否進入
-    STRUCTURAL_BREAKDOWN_PENDING（待 15 分鐘實體 K 線確認）。
+    原本供 15 分鐘自選雷達的情境事件分類器（scenario_classifier，已隨「盤中情報」
+    模組移除）判定是否進入 STRUCTURAL_BREAKDOWN_PENDING；目前保留為粗粒度參考判定。
 
-    注意：此為粗粒度基礎判定，刻意不含 ATR 緩衝。系統中另有兩處各自維護的
-    「gamma_cliff_level」計算方式，三者刻意不同、不應合併：
-      - cogs/trading/heartbeat.py: gamma_cliff_level = min(put_wall, gamma_flip)
-        （自選股 watchlist 進出場信號，無 ATR 緩衝，涵蓋未持有標的）
+    注意：此為粗粒度基礎判定，刻意不含 ATR 緩衝。與持倉轉倉的版本刻意不同、
+    不應合併：
       - market_analysis/dynamic_rollover.py 的 _compute_structural_breakdown_signals：
         gamma_cliff_level = anchor_base - 1.5*atr_14（持倉專用，含 ATR 緩衝 +
         SQZ 動能疊加 + 現貨/期權雙軌出場邏輯，判定門檻更嚴謹）

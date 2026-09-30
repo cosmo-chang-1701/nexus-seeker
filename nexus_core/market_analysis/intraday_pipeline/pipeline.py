@@ -60,12 +60,13 @@ class IntradayScanPipeline:
     async def _resolve_candidate_radar(self, symbol: str) -> Optional[Dict[str, Any]]:
         """取得進場確認所需的 radar dict（quote / gex_profile_data / uoa / psq_result）。
 
-        沿用 cogs/trading/portfolio_monitor.py 的既有取得模式：優先吃 15 分鐘雷達
-        寫入的共享快取 (`bot._latest_radar_data_cache`，300 秒保鮮窗)，零額外網路；
+        沿用 cogs/trading/portfolio_monitor.py 的既有取得模式：先看共享快取
+        (`bot._latest_radar_data_cache`，300 秒保鮮窗)，命中就零額外網路；
         未命中才經 UnifiedTerminalCog 補抓，且必須走 `self._radar_fetch_sem`。
 
-        ⚠️ 15 分鐘雷達在 :00/:15/:30/:45 寫入，而本管線以 sleep(1800) 排程會時間
-        漂移，故命中率不保證——fallback 是常態而非例外，Semaphore 不可省。
+        ⚠️ 共享快取原本由 15 分鐘自選雷達寫入，該雷達已隨「盤中情報」模組移除，
+        目前沒有寫入端——fallback 補抓是常態而非例外，Semaphore 不可省。讀取端
+        保留，日後若有其他迴圈寫入快取可直接受益。
         取不到 (cog 缺失／抓取失敗) 一律回 None，呼叫端視為本輪略過 (fail-safe)。
         """
         import time

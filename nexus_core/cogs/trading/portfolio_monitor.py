@@ -556,6 +556,8 @@ class PortfolioMonitorCog(commands.Cog):
             radar_cache_map: Dict[str, Any] = {}
             import time
 
+            # 共享雷達快取原本由已移除的 15 分鐘自選雷達寫入，目前沒有寫入端；
+            # 屬性不存在時 getattr 回傳預設值，下方一律退回自行抓取。
             shared_cache = getattr(self.bot, "_latest_radar_data_cache", {}) or {}
             shared_time = float(
                 getattr(self.bot, "_latest_radar_cache_time", 0.0) or 0.0

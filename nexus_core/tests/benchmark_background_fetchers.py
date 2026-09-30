@@ -655,7 +655,6 @@ class BenchmarkSuite:
         from cogs.trading.fundamental_filing_monitor import (
             FundamentalFilingMonitorCog,
         )
-        from cogs.trading.heartbeat import dispatch_watchlist_heartbeat
         from cogs.trading.pre_market import PreMarketCog
         from cogs.trading.price_volume_alert_monitor import (
             PriceVolumeAlertMonitorCog,
@@ -676,28 +675,6 @@ class BenchmarkSuite:
         test_uid = 888888888
         database.add_watchlist_symbol(test_uid, "NVDA")
         database.add_watchlist_symbol(test_uid, "AAPL")
-
-        # 1. 模擬 Watchlist 30 分鐘心跳 (僅測試 2 個標的以精準測量)
-        t0 = time.perf_counter()
-        try:
-            custom_watchlists = [(test_uid, "NVDA", 1), (test_uid, "AAPL", 2)]
-            await dispatch_watchlist_heartbeat(bot, all_watchlists=custom_watchlists)
-            elapsed = (time.perf_counter() - t0) * 1000
-            self.record(
-                "Suite 4",
-                "dispatch_watchlist_heartbeat (2 symbols)",
-                "PASS",
-                elapsed,
-                f"DMs queued: {bot.queue_dm.call_count}",
-            )
-        except Exception as e:
-            self.record(
-                "Suite 4",
-                "dispatch_watchlist_heartbeat",
-                "FAIL",
-                (time.perf_counter() - t0) * 1000,
-                str(e),
-            )
 
         # 2. 模擬 WTI 原油 30 分鐘巡邏
         wti_cog = WtiMonitorCog(bot)

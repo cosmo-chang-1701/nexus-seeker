@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from cogs.embed_builders._core import NexusEmbed
-from market_analysis.scenario_classifier import MarketScenario
 
 
 def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -142,80 +141,6 @@ def create_vtr_settlement_notice_embed(
             inline=False,
         )
     embed.set_footer(text="GhostTrader | Settlement Notice")
-    return embed
-
-
-def create_scenario_alert_embed(
-    symbol: str,
-    scenario: MarketScenario,
-    price: float,
-    put_wall: float,
-    call_wall: float,
-    gamma_flip: float,
-    ivr: float,
-    hvn: float,
-    lvn: float,
-    skew_percentile: float = 50.0,
-) -> discord.Embed:
-    """建立戰場情境轉折警報 Embed"""
-
-    color_map = {
-        MarketScenario.GOLDEN_LEFT: discord.Color.gold(),
-        MarketScenario.STRONG_BREAKOUT: discord.Color.green(),
-        MarketScenario.GOLDEN_TAKE_PROFIT: discord.Color.teal(),
-        MarketScenario.FAKE_SUPPORT_TRAP: discord.Color.orange(),
-        MarketScenario.STRUCTURAL_BREAKDOWN: discord.Color.red(),
-        MarketScenario.WHALE_ESCORT_RESONANCE: discord.Color.purple(),
-    }
-
-    title = f"🚨 戰場情境轉折警報 | {symbol}"
-    desc = f"**🧭 觸發情境：{scenario.value}**"
-    action = "未知操作"
-    tool = "未定義"
-
-    if scenario == MarketScenario.WHALE_ESCORT_RESONANCE:
-        title = f"💎 巨鯨護航共振觸發：{symbol}"
-        desc = f"偵測到 **GEX 正 Gamma 牆 (${put_wall:.2f})** 確立，配合 **Skew 避險分位 ({skew_percentile:.1f}%) < 50%**，以及 **UOA 巨鯨大單方向一致 (STO Put / BTO Call)**。"
-        tool = "現貨分批 或 Sell Put Spread (高勝率防禦建倉)"
-        action = "【勝率極值共振】巨鯨實質硬地板成型，建議可於此防禦水位建倉做多或賣出 Put Spread。"
-    elif scenario == MarketScenario.GOLDEN_LEFT:
-        tool = "現貨分批 或 Sell Put Spread (吃高 IV + Theta)"
-        action = "【試水溫加碼 20%~30%】鋼鐵牆成型，做市商對沖盤與現貨買盤雙重護航。"
-    elif scenario == MarketScenario.STRONG_BREAKOUT:
-        tool = "Buy Call Debit Spread 或 現貨追擊 (軋空行情)"
-        action = "【順勢追擊加碼】做市商進入 Call Squeeze（軋空追買），LVN 提供無阻力加速區。"
-    elif scenario == MarketScenario.GOLDEN_TAKE_PROFIT:
-        if ivr > 50.0:
-            tool = "分批賣出現貨 或 Sell Call Spread"
-            action = "【分批減碼 30%~50%】鎖定利潤；因 IVR > 50%，可疊加 Sell Call Spread 賺取波動率退潮紅利。"
-        else:
-            tool = "分批賣出現貨"
-            action = "【分批減碼 30%~50%】鎖定利潤。做市商拋售賣壓與 HVN 籌碼牆將形成巨大上檔天花板。"
-    elif scenario == MarketScenario.FAKE_SUPPORT_TRAP:
-        tool = "禁止開多 (可佈局 Bear Spread)"
-        action = "【嚴禁抄底 / 觀望】紙糊牆或連環砍單區，基本面再好也不接刀。"
-    elif scenario == MarketScenario.STRUCTURAL_BREAKDOWN:
-        tool = "清空個股多頭，資金轉入 QQQ / SPY 大盤 ETF 避風港"
-        action = "【100% 絕對執行轉倉】個股護盤結構失效，停止對個股抱有幻想。"
-    else:
-        tool = "未定義"
-        action = "未知操作"
-
-    embed = NexusEmbed(
-        title=title,
-        description=desc,
-        color=color_map.get(scenario, discord.Color.default()),
-        timestamp=datetime.now(timezone.utc),
-    )
-
-    embed.add_field(
-        name="📊 關鍵風控指標",
-        value=f"• 現價: `${price:.2f}`\n• Gamma Flip: `${gamma_flip:.2f}`\n• PutWall/CallWall: `${put_wall:.2f}` / `${call_wall:.2f}`\n• HVN/LVN: `${hvn:.2f}` / `${lvn:.2f}`\n• IV Rank: `{ivr:.1f}%`",
-        inline=False,
-    )
-    embed.add_field(name="🛠️ 最優交易工具", value=tool, inline=False)
-    embed.add_field(name="⚔️ 資金處置與加減碼指令", value=f"└─ {action}", inline=False)
-    embed.set_footer(text="Nexus Risk Optimizer | 戰場情境決策矩陣 (v2.0)")
     return embed
 
 

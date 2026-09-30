@@ -165,7 +165,7 @@ def get_user_portfolio(user_id: Any):  # type: ignore
 
     ⚠️ 刻意**不**呼叫 `archive_expired_portfolio_records()`：那是一個全表掃描的
     歸檔**寫入交易**，過去掛在這條純讀取路徑上，等於每次讀取持倉都取得一次寫入
-    鎖。心跳 (`cogs/trading/heartbeat.py`) 每 15 分鐘就會呼叫一次，是
+    鎖。盤中高頻迴圈（例如已移除的 15 分鐘自選雷達）反覆呼叫時，是
     `database is locked` 的主要來源之一。歸檔已改由 03:00 ET 的離峰排程負責
     （`cogs/trading/scheduler.py::kv_cache_dedup_purge`）。
     """

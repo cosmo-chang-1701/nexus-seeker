@@ -118,7 +118,7 @@ async def test_empty_dataframe_returns_false(mock_get_history: AsyncMock) -> Non
 
 
 # ---------------------------------------------------------------------------
-# #11: is_below_gamma_defense_line — scenario_classifier 共用的粗粒度基礎判定
+# #11: is_below_gamma_defense_line — 粗粒度基礎判定（原 scenario_classifier 使用，已移除）
 # ---------------------------------------------------------------------------
 
 
@@ -160,7 +160,7 @@ async def test_deliberate_divergence_heartbeat_vs_dynamic_rollover_gamma_cliff_l
     mock_get_history: AsyncMock,
 ) -> None:
     """
-    #11 刻意記錄的三方分歧：cogs/trading/heartbeat.py 的
+    #11 刻意記錄的三方分歧：已移除的 15 分鐘自選雷達 (cogs/trading/heartbeat.py) 的
     gamma_cliff_level = min(put_wall, gamma_flip)（無 ATR 緩衝）與
     market_analysis/dynamic_rollover.py 的
     gamma_cliff_level = anchor_base - 1.5*atr_14（含 ATR 緩衝）刻意不同，
@@ -177,7 +177,7 @@ async def test_deliberate_divergence_heartbeat_vs_dynamic_rollover_gamma_cliff_l
     df = _make_candle_df([208.0] * 15)
     mock_get_history.return_value = df
 
-    heartbeat_style_level = min(210.0, 215.0)  # cogs/trading/heartbeat.py 公式
+    heartbeat_style_level = min(210.0, 215.0)  # 已移除的 15 分鐘自選雷達公式
     dynamic_rollover_style_level = 210.0 - 1.5 * 2.0  # dynamic_rollover.py 公式
 
     heartbeat_confirmed = await is_gamma_cliff_confirmed("TEST", heartbeat_style_level)
