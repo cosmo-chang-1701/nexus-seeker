@@ -77,6 +77,15 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"投組下行風險收盤檢查失敗: {e}")
 
+        # 總經訊號乾跑記錄：計算候選總經指標與三態判定，只寫入 macro_signal_log /
+        # macro_regime_log，不推播、不影響任何建議（services/macro_signal_service.py）
+        try:
+            from services.macro_signal_service import run_macro_signal_job
+
+            await run_macro_signal_job(self.bot, today)
+        except Exception as e:
+            logger.error(f"總經訊號乾跑記錄失敗: {e}")
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()

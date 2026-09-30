@@ -138,6 +138,28 @@ ALPACA_DATA_FEED = str(get_env_or_secret("ALPACA_DATA_FEED", "iex")).lower()
 ENABLE_ALPACA_STREAM = (
     get_env_or_secret("ENABLE_ALPACA_STREAM", "false").lower() == "true"
 )
+# ---------------------------------------------------------------------------
+# 總經訊號乾跑記錄 (services/macro_signal_service.py，leader-only、16:15 ET)
+# 只寫入 macro_signal_log / macro_regime_log，不推播、不影響任何建議；用於以 LLM 時代的
+# 真實資料前向驗證候選總經指標（market_analysis/macro_signals.py）。
+ENABLE_MACRO_SIGNAL_LOG = (
+    get_env_or_secret("ENABLE_MACRO_SIGNAL_LOG", "true").lower() == "true"
+)
+# 「科技池相對 VOO 強弱」指標的固定科技池；刻意不讀使用者持倉，前向資料才可跨時間比較。
+MACRO_TECH_POOL: tuple[str, ...] = (
+    "NVDA",
+    "META",
+    "GOOGL",
+    "TSLA",
+    "MU",
+    "PLTR",
+    "AAPL",
+    "MSFT",
+    "AMZN",
+    "AVGO",
+    "AMD",
+)
+
 # 只有白名單內的標的被視為「IEX 成交量足以代表全市場」的大型股 (StreamTier)。
 ALPACA_LARGE_CAP_SYMBOLS: frozenset[str] = frozenset(
     {

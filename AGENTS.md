@@ -52,7 +52,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **09:30–16:00 (:00,:15,:30,:45)** | `dynamic_market_scanner` & Alerts | 15m watchlist radar heartbeat & 15m price-volume breakout (`Semaphore(3)`) |
 | **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (zero-API cache consumption) |
 | **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC) |
-| **16:15** | `dynamic_after_market_report` | Close maintenance, daily sentiment snapshot, NAV history, and CVaR tail risk check |
+| **16:15** | `dynamic_after_market_report` | Close maintenance, daily sentiment snapshot, NAV history, CVaR tail risk check, and macro-signal dry-run log (record-only, no notifications) |
 | **Post-market / Fri 17:05** | Analyst Post-Market & VTR | Comprehensive post-market summary and weekly Virtual Trading Room Brinson attribution |
 | **24/7 (30m / 4h / Workers)** | WTI, Calendar & Workers | 24/7 WTI crude oil monitor, 4h macro/FedWatch checker, persistent DM queue, health & stream workers |
 
@@ -141,6 +141,7 @@ PYTHONPATH=nexus_edge_scraper pytest nexus_edge_scraper/tests
 ```bash
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration forward-report
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration macro-forward-report --snapshot-db /app/.calibration_cache/snapshot.db
 ```
 
 ---
