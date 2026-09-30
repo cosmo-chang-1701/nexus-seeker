@@ -141,7 +141,7 @@ flowchart TD
 
 4. **UOA 的兩種儲存：最新快照 vs 可回看歷史**：
    UOA 有兩個持久化目的地，語意刻意不同，不可互相取代。
-   - `kv_cache` 的 `uoa_{SYMBOL}`（由 15 分鐘心跳寫入，供 `/x` 終端複用）是
+   - `kv_cache` 的 `uoa_{SYMBOL}`（由 30 分鐘深度心跳 `IntradayScanPipeline` 寫入，供 `/x` 終端複用）是
      `ON CONFLICT DO UPDATE` 的 **upsert**——每輪覆蓋前一輪，整張表每個標的
      永遠只有一列。它回答「**現在**有沒有機構掃單」。
    - `uoa_history`（migration `v077`）為**逐筆累積**，去重鍵為
@@ -166,7 +166,7 @@ flowchart TD
 
 ## 6. 核心程式碼檔案路徑關聯
 
-- `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 15 分鐘心跳寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）
+- `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 30 分鐘深度心跳 `IntradayScanPipeline` 寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）
 - `nexus_core/database/migrations/v077_add_uoa_history.py`：`uoa_history` 資料表與去重索引定義
 - `nexus_core/market_time.py`：回看窗基準點 `get_trading_days_ago_utc()`（NYSE 行事曆，只計入已開盤的交易日）
 

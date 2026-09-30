@@ -53,7 +53,7 @@ $$\text{Skip Tier 1} \iff force\_live = \text{True}$$
 ### 2.3 持倉標的 Priority 優先級同步協議
 為了防止邊緣爬蟲輪詢全體標的時造成持倉標的數據陳舊，系統實施優先級同步機制：
 設自選標的集合為 $S_{\text{watch}}$，全體持倉標的（現貨 HOLDINGS ＋ 期權 TRADES）集合為 $S_{\text{priority}}$。
-在每次 15 分鐘心跳觸發前，`nexus_core` 透過 `edge_cache_client.sync_watchlist_symbols` 將兩份清單同步給邊緣節點：
+在每次 15 分鐘盤中巡邏（`dynamic_market_scanner`，總經快取更新之後）中，`nexus_core` 透過 `_sync_edge_watchlist()` → `edge_cache_client.sync_watchlist_symbols` 將兩份清單同步給邊緣節點（此段原本掛在已移除的 15 分鐘自選雷達開頭，搬移後行為不變；未設 `TUNNEL_URL` 時完全不執行）：
 $$S_{\text{priority}} = \left\{ \text{sym} \mid \text{sym} \in \text{database.get\_all\_portfolio()} \land \text{sym} \neq \emptyset \right\}$$
 邊緣節點的排程器對 $S_{\text{priority}}$ 實施高頻循環，使其數據延遲上限從常規的 30 分鐘壓縮至單一輪詢週期（約 5 分鐘）：
 $$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{delay, normal}} \approx 30 \text{ 分鐘}$$
@@ -116,7 +116,7 @@ flowchart TD
 | `_OPTION_EXPIRIES_CACHE_TTL` | `1800.0` 秒 (30 分鐘) | 期權到期日清單之記憶體快取存活時間 | `nexus_core/services/market_data_service/options.py:23` |
 | `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 安全穿透端點網址 | `nexus_core/config.py` |
 | `MAX_RETRY_COUNT` | `1` 次 (`_retry_once`) | 外部請求失敗時的快速重試次數（避免阻塞過久） | `nexus_core/services/market_data_service/_utils.py` |
-| `PRIORITY_SYNC_INTERVAL` | 15 分鐘（隨心跳同步） | 持倉標的 Priority 清單同步頻率 | `nexus_core/cogs/trading/heartbeat.py:51` |
+| `PRIORITY_SYNC_INTERVAL` | 15 分鐘（隨盤中巡邏同步） | 持倉標的 Priority 清單同步頻率（`_sync_edge_watchlist`，未設 `TUNNEL_URL` 不同步） | `nexus_core/cogs/trading/scheduler.py:28` |
 | `GEX_HISTORY_ENABLED` | `true`（環境變數） | 是否寫入 GEX 快照歷史 | `nexus_edge_scraper/database.py` |
 | `GEX_HISTORY_RETENTION_DAYS` | `180`（環境變數） | GEX 快照歷史保留天數 | `nexus_edge_scraper/database.py` |
 | `_GEX_HISTORY_BUCKET_MINUTES` | `15` | 歷史分桶粒度 | `nexus_edge_scraper/database.py` |

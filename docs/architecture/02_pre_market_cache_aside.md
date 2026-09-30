@@ -13,7 +13,7 @@ Nexus Seeker 確立**「盤前 08:45 ET 全域預熱 ＋ SQLite 本地持久化 
 
 ### 1.2 適用市場環境與制度角色
 - **每日盤前預熱（Pre-Market Pre-warming）**：美東時間 08:45（開盤前 45 分鐘），背景排程全自動彙整所有使用者關注資產，提前完成全鏈 Greeks 與痛點運算。
-- **盤中零延遲查詢（Zero-LLM Latency）**：盤中 `/x` 指令與 15 分鐘心跳優先讀取 SQLite 本地快照，以微秒級速度就地渲染。
+- **盤中零延遲查詢（Zero-LLM Latency）**：盤中 `/x` 指令與盤中背景排程優先讀取 SQLite 本地快照，以微秒級速度就地渲染。
 - **行情劇烈突破之動態自癒刷新**：當現價相較於快取參考價偏離超過 2% 且已跨越 30 秒冷卻期時，系統自動啟動非阻塞動態重算，無縫刷新快取。
 
 ---
@@ -69,7 +69,7 @@ $$\text{is\_cache\_valid} = \begin{cases}
 - **6 小時絕對 TTL 後盾（`_MARKET_CACHE_MAX_AGE_SECONDS = 21600`）**：防範長期橫盤標的因偏離度未超標而導致快取無限期凍結，強制每 6 小時失效重算一次。
 
 ### 2.4 SingleFlight 併發去重演算法
-當快取失效或發生 Cache Miss 時，若多個協程（例如 15 分鐘雷達心跳與用戶即時點擊）同時請求同檔標的，系統利用 `SingleFlightManager` 進行並行請求摺疊：
+當快取失效或發生 Cache Miss 時，若多個協程（例如持倉監控的雷達補抓與用戶即時點擊）同時請求同檔標的，系統利用 `SingleFlightManager` 進行並行請求摺疊：
 $$\text{FlightKey} = \text{symbol} + \text{"\_"} + \text{expiry}$$
 
 ```python

@@ -10,7 +10,7 @@
 - 板塊資金流向／輪動報告
 - 隔日策略報告
 
-Analyst Agent 是與「Watchlist 15 分鐘雷達心跳」（見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）完全獨立的報告族群，兩者共用部分底層量化引擎但排程與觸發時機不同，切勿混為一談。
+Analyst Agent 是與「Watchlist 30 分鐘深度心跳」（見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）完全獨立的報告族群，兩者共用部分底層量化引擎但排程與觸發時機不同，切勿混為一談。
 
 ## 2. 盤前財報與估值調整：正式路徑與孤兒路徑
 
