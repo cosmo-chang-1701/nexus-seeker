@@ -61,7 +61,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 ## Business Logic & Spec Index (SSOT)
 
 All quantitative models, risk matrices, and platform designs are specified in [`docs/README.md`](docs/README.md). **Always update the corresponding specification under `docs/` instead of expanding this file:**
-- **Trading Strategies** ([`docs/strategies/`](docs/strategies/)): 6-Regime routing matrix (`01`), Right-side momentum (`02`), Left-side mean-reversion (`03`), Dynamic Rollover 10 scenarios (`04`), Dual-track anti-washout SL (`05`), Dynamic adaptive room threshold (`06`), Short-side breakdown (`07`).
+- **Trading Strategies** ([`docs/strategies/`](docs/strategies/)): 6-Regime routing matrix (`01`), Right-side momentum (`02`), Left-side mean-reversion (`03`), Dynamic Rollover 10 scenarios (`04`), Dual-track anti-washout SL (`05`), Dynamic adaptive room threshold (`06`), Short-side breakdown (`07`); offline-only replacement candidates for the rollover engine, not wired into production: Regime-switched momentum rotation (`08`), Static allocation & rebalance / macro 3-state switch (`09`).
 - **Microstructure** ([`docs/microstructure/`](docs/microstructure/)): Net GEX topology & walls (`01`), Physical wall constraint $K < \text{Spot}$ (`02`), Gamma flip (`03`), UOA paced ratio (`04`), Volume Profile & POC (`05`), Gamma squeeze & SPEAR (`06`).
 - **Valuation & Volatility** ([`docs/valuation_pricing/`](docs/valuation_pricing/)): TDP/DDP valuation (`01`), Expected move & Max Pain gravity (`02`), Skew 25-Delta & PCR divergence (`03`), IVR & seller lockout gate (`04`).
 - **Portfolio & Risk** ([`docs/risk_portfolio/`](docs/risk_portfolio/)): Beta-weighted Greeks (`01`), VIX battle ladder & Kelly (`02`), AROC gate (`03`), DITM convexity (`04`), Runway & liquidity (`05`), Brinson attribution (`06`), Downside risk (Sortino/MDD/CVaR) (`07`).
@@ -76,7 +76,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`intraday_pipeline/`, `dynamic_rollover/` 10 scenarios, `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`).
 - `nexus_core/services/`: Asynchronous service orchestrators and I/O pipelines (`downside_risk_service.py`, `notification_dispatcher.py`, `single_flight.py` request deduplication, `alpaca_stream_service.py`, `regime_outcome_labeler.py`, `llm_service.py`).
 - `nexus_core/database/`: SQLite WAL persistence layer (`connection.py` single-writer queue worker & `connect_db()`, `core.py` migration engine, `portfolio.py`, `orders.py`, `cache.py`, `notification_channels.py`).
-- `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`backtest_engine_2025.py`, `microstructure.py`, `notif_report.py`; runs on dev machine only, never writes to live DB).
+- `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`backtest_engine_2025.py`, `microstructure.py`, `notif_report.py`, daily-bar strategy backtests `regime_momentum_backtest.py` / `static_allocation_backtest.py` / `macro_regime.py`; runs on dev machine only, never writes to live DB).
 - `nexus_edge_scraper/`: Standalone scraper and proxy microservice (Playwright scrapers, yfinance proxy endpoints, SEC section extraction).
 
 ---
