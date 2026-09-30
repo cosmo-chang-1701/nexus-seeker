@@ -51,6 +51,20 @@ class DataStore:
                 df[col] = pd.to_numeric(df[col], errors="coerce").astype("float32")
         return df.sort_index()
 
+    def fred_path(self, series: str) -> Path:
+        """FRED 序列的原始 CSV 快取路徑（`calibration/macro_regime.py` 使用）。"""
+        return self.cache_dir / "fred" / f"{_SAFE_RE.sub('_', series.upper())}.csv"
+
+    def save_fred_csv(self, series: str, text: str) -> Path:
+        path = self.fred_path(series)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def load_fred_csv(self, series: str) -> Optional[str]:
+        path = self.fred_path(series)
+        return path.read_text(encoding="utf-8") if path.exists() else None
+
     def require(self, interval: str, symbol: str) -> pd.DataFrame:
         df = self.load(interval, symbol)
         if df is None:

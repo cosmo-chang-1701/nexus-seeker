@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam|fetch-fred}"""
 
 import argparse
 import asyncio
@@ -31,6 +31,7 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
             "macro-forward-report",
             "fetch-alpaca-1h",
             "alpaca-seam",
+            "fetch-fred",
         ],
     )
     parser.add_argument(
@@ -149,6 +150,15 @@ async def _main(args: argparse.Namespace) -> int:
         )
         target = write_report(Path(cfg.out_dir), result)
         print(f"報告已輸出：{target}")
+        return 0
+
+    if args.command == "fetch-fred":
+        # 總經切換回測的 FRED 序列（信用利差、Sahm 即時版），見 calibration/macro_regime.py
+        from calibration.macro_regime import FRED_SERIES, fetch_fred
+
+        for series in FRED_SERIES:
+            n = await asyncio.to_thread(fetch_fred, series, Path(cfg.cache_dir))
+            print(f"  {series}: {n} 筆觀測", flush=True)
         return 0
 
     store = DataStore(cfg.cache_dir)
