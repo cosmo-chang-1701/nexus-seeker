@@ -44,7 +44,7 @@ class UnifiedTerminalCog(
         symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
         scan_type="批次掃描類型 (留空則開啟量化雷達面板)",
         tag="Watchlist 標籤過濾 (僅在 scan_type 為 WATCHLIST 時生效)",
-        squeeze="僅顯示正處於擠壓狀態的標的",
+        squeeze="僅顯示擠壓觸發且動能轉正 (Squeeze Firing) 的標的",
     )
     @app_commands.choices(
         scan_type=[
@@ -77,12 +77,21 @@ class UnifiedTerminalCog(
                 if asyncio.iscoroutine(coro):
                     asyncio.create_task(coro)
 
-            # 1. 參數驗證
-            # (移除了 symbol 與 scan_type 的強制驗證，因為現在沒有帶參數會開啟控制面板)
+            # 1. 參數驗證：兩者皆未帶會開啟控制面板；兩者同時帶則違反「二擇一」
+            # 契約，明確拒絕而非靜默丟棄 scan_type（使用者會以為批次掃描有執行）。
+            if symbol is not None and scan_type is not None:
+                return await interaction.followup.send(
+                    embed=create_error_embed(
+                        "`symbol` 與 `scan_type` 只能擇一填寫：分析單一標的請只填 "
+                        "`symbol`，批次掃描請只填 `scan_type`。",
+                        title="輸入錯誤",
+                    ),
+                    ephemeral=True,
+                )
 
-            # 2. 單一標的深度分析
-            if symbol:
-                symbol = symbol.upper()
+            # 2. 單一標的深度分析（代號正規化與格式驗證由 _run_single_symbol_hub
+            # 統一處理：去空白、去 `$` 前後綴、轉大寫）
+            if symbol is not None:
                 await self._run_single_symbol_hub(interaction, symbol, user_id)
                 return
 
@@ -101,6 +110,13 @@ class UnifiedTerminalCog(
 
             scan_value = scan_type.value
 
+            # tag 僅對 WATCHLIST 掃描有意義；其他範圍明確清空。資料庫內的標籤一律
+            # 以 sanitize_tags() 大寫化儲存，而 slash 參數允許自由輸入（不強制走
+            # autocomplete），這裡同步去空白、轉大寫以免比對落空。
+            normalized_tag: Optional[str] = None
+            if scan_value == "WATCHLIST" and tag is not None:
+                normalized_tag = tag.strip().upper() or None
+
             # 建立相容舊參數的 State Dict 供引擎使用
             state = {
                 "scope": scan_value,
@@ -110,17 +126,19 @@ class UnifiedTerminalCog(
                     "abs_support_tolerance": 1.0,
                     "silent_period_days": 5,
                 },
-                "selected_tag": tag,
+                "selected_tag": normalized_tag,
             }
 
             await self.execute_unified_scan(interaction, state, user_id)
 
         except Exception as outer_err:
-            logger.error(f"Outer Symbol Hub Error: {outer_err}")
+            # 例外細節（可能含內部路徑、SQL、第三方 API 回應）只寫入日誌，
+            # 不直接顯示給使用者。
+            logger.exception(f"Outer Symbol Hub Error: {outer_err}")
             try:
                 await interaction.followup.send(
                     embed=create_error_embed(
-                        f"執行 `/x` 指令時發生未預期錯誤: {outer_err}"
+                        "執行 `/x` 指令時發生未預期錯誤，請稍後再試。"
                     ),
                     ephemeral=True,
                 )

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, List, Optional
 import discord
 
 from services import market_data_service, reddit_service
+from services.market_data_service import _sanitize_ticker
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.risk_engine import MacroContext
@@ -606,10 +607,19 @@ class SymbolDeepDiveMixin:
         user_id: int,
         embeds_accumulator: Optional[List[discord.Embed]] = None,
     ) -> Any:
-        symbol = symbol.upper()
-        if not await market_data_service.validate_symbol(symbol):
+        # 與 market_data_service 各抓取函式同一套清洗規則（去空白、去 `$` 前後綴、
+        # 轉大寫，保留 BRK.B 的 `.`）。只做 upper() 會讓 " nvda" 以 " NVDA" 通過
+        # validate_symbol（其內部自行 strip），卻以帶空白的代號組 SingleFlight 鍵、
+        # 比對持倉成本、傳給不自行清洗的下游；"$NVDA" 則會被誤判為無效代號。
+        symbol = _sanitize_ticker(symbol)
+        if not symbol or not await market_data_service.validate_symbol(symbol):
             error_emb = create_error_embed(
-                f"無效的標的代號: `{symbol}`", title="輸入錯誤"
+                (
+                    f"無效的標的代號: `{symbol}`"
+                    if symbol
+                    else "請輸入有效的股票代號（例如 NVDA、BRK.B）。"
+                ),
+                title="輸入錯誤",
             )
             if embeds_accumulator is not None:
                 embeds_accumulator.append(error_emb)
@@ -646,7 +656,9 @@ class SymbolDeepDiveMixin:
 
         except Exception as e:
             logger.exception(f"Symbol Hub Error for {symbol}: {e}")
-            error_emb = create_error_embed(f"載入 `{symbol}` 資料時發生錯誤: {e}")
+            error_emb = create_error_embed(
+                f"載入 `{symbol}` 資料時發生錯誤，請稍後再試。"
+            )
             if embeds_accumulator is not None:
                 embeds_accumulator.append(error_emb)
             else:

@@ -111,8 +111,9 @@ async def test_symbol_hub_hedge_tolerates_string_iv_rank(  # type: ignore
 
         await view.btn_hedge.callback(mock_interaction)
 
+        # 非數值 IVR 視為未知 (None)，不再捏造 50.0
         mock_builder.assert_called_once_with(
-            "AAPL", 50.0, "Bear Debits / Put Protection (買入保護性認沽)"
+            "AAPL", None, "Bear Debits / Put Protection (買入保護性認沽)"
         )
         _, last_kwargs = mock_interaction.edit_original_response.call_args
         assert last_kwargs["embed"] is mock_builder.return_value

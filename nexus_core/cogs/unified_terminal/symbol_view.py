@@ -2,6 +2,7 @@ from typing import Any
 import discord
 import asyncio
 import logging
+import math
 from typing import Dict, Optional
 
 import database
@@ -22,6 +23,54 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+def _to_float_or_none(value: Any) -> Optional[float]:
+    """數值化；None、非數值字串（如 "--"）與 NaN 一律視為未知回傳 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return None if math.isnan(f) else f
+
+
+_HEDGE_SELL_PUT_SPREAD = "Bull Put Spread (賣出認沽價差策略)"
+_HEDGE_BUY_PROTECTION = "Bear Debits / Put Protection (買入保護性認沽)"
+
+
+def _is_negative_gamma_zone(base_data: Dict[str, Any]) -> bool:
+    """做市商負 Gamma 泥淖：Net GEX < 0 或現價跌穿 Put Wall。
+
+    定義與批次雷達 (`market_embeds.build_radar_scan_embed` 的 `is_neg_gamma`) 一致，
+    對應 docs/valuation_pricing/04 §1.2 的賣方一票否決條件。
+    """
+    gex = base_data.get("gex_profile_data")
+    if not isinstance(gex, dict):
+        return False
+    net_gex = _to_float_or_none(gex.get("net_gex"))
+    if net_gex is not None and net_gex < 0:
+        return True
+    put_wall = _to_float_or_none(gex.get("put_wall")) or 0.0
+    quote = base_data.get("quote")
+    spot_raw = quote.get("c") if isinstance(quote, dict) else None
+    spot = _to_float_or_none(spot_raw)
+    if spot is None or spot <= 0:
+        spot = _to_float_or_none(base_data.get("price")) or 0.0
+    return put_wall > 0 and spot > 0 and spot < put_wall
+
+
+def _recommend_hedge_strategy(ivr: Optional[float], negative_gamma: bool) -> str:
+    """一鍵對沖的策略引導。
+
+    賣方信用價差（做空波動率）只在 IVR 已知且 > 50% 並且不在負 Gamma 泥淖時
+    才推薦；負 Gamma 環境依 docs/valuation_pricing/04 §1.2「無論 IVR 多高一律
+    賣方禁售」，IVR 未知時亦保守地退回買方保護。
+    """
+    if ivr is not None and ivr > 50.0 and not negative_gamma:
+        return _HEDGE_SELL_PUT_SPREAD
+    return _HEDGE_BUY_PROTECTION
 
 
 class SymbolHubView(discord.ui.View):
@@ -65,8 +114,9 @@ class SymbolHubView(discord.ui.View):
         try:
             embed = create_tactical_symbol_embed(self.base_data)
         except Exception as e:
+            logger.exception(f"[{self.symbol}] Home tab render failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed(f"恢復主頁失敗: {e}"), ephemeral=True
+                embed=create_error_embed("恢復主頁失敗，請稍後再試。"), ephemeral=True
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -125,8 +175,9 @@ class SymbolHubView(discord.ui.View):
                 pcr_val=pcr_val,
             )
         except Exception as e:
+            logger.exception(f"[{self.symbol}] Media tab failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed(f"獲取輿情社群失敗: {e}"),
+                embed=create_error_embed("獲取輿情社群失敗，請稍後再試。"),
                 ephemeral=True,
             )
         finally:
@@ -196,7 +247,7 @@ class SymbolHubView(discord.ui.View):
         except Exception as e:
             logger.exception(f"[{self.symbol}] Refresh failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed(f"重整數據失敗: {e}"), ephemeral=True
+                embed=create_error_embed("重整數據失敗，請稍後再試。"), ephemeral=True
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -213,18 +264,20 @@ class SymbolHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            # 根據目前波動率與情緒自動引導對沖操作
-            ivr = _safe_float(self.base_data.get("iv_rank"), 50.0)
-            rec_strategy = (
-                "Bull Put Spread (賣出認沽價差策略)"
-                if ivr > 50.0
-                else "Bear Debits / Put Protection (買入保護性認沽)"
+            # 根據目前波動率與做市商 Gamma 環境引導對沖操作。
+            # IVR 未知（樣本不足/非數值）時維持 None：舊實作補 50.0 會在畫面上
+            # 捏造一個 IVR 讀數。
+            ivr = _to_float_or_none(self.base_data.get("iv_rank"))
+            rec_strategy = _recommend_hedge_strategy(
+                ivr, _is_negative_gamma_zone(self.base_data)
             )
 
             embed = create_tactical_hedge_embed(self.symbol, ivr, rec_strategy)
         except Exception as e:
+            logger.exception(f"[{self.symbol}] Hedge tab failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed(f"開啟對沖中心失敗: {e}"), ephemeral=True
+                embed=create_error_embed("開啟對沖中心失敗，請稍後再試。"),
+                ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -417,7 +470,8 @@ class SymbolHubView(discord.ui.View):
         except Exception as e:
             logger.exception(f"[{self.symbol}] Entry rules check failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed(f"進場鐵律檢核失敗: {e}"), ephemeral=True
+                embed=create_error_embed("進場鐵律檢核失敗，請稍後再試。"),
+                ephemeral=True,
             )
         finally:
             evaluation_recorder.reset_evaluation_source(eval_source_token)

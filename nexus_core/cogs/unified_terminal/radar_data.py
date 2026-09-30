@@ -457,8 +457,11 @@ class RadarDataMixin:
             "put_wall_gex": put_wall_gex,
             "max_pain": {
                 "max_pain": mp_near,
+                # 與 sentiment/max_pain.py 的 distance_pct 同一守衛：報價失敗
+                # (price=0) 時不得算出 -100% 的假偏離（會被 exclude_martial_law
+                # 誤剔除，並在雷達上顯示極端偏離）。
                 "distance_pct": ((price - mp_near) / mp_near) * 100
-                if mp_near and mp_near > 0
+                if mp_near and mp_near > 0 and price and price > 0
                 else 0.0,
                 "is_stale": bool(market_cache.get("is_stale", 0)),
                 "calculation_mode": market_cache.get("calculation_mode", "OI"),

@@ -90,7 +90,8 @@ async def test_symbol_hub_bypass_ui(mock_bot: Any, mock_interaction: Any):  # ty
     state = cog.execute_unified_scan.call_args.args[1]
 
     assert state["scope"] == "ALL"
-    assert state["selected_tag"] == "TECH"
+    # tag 僅對 WATCHLIST 掃描生效，其他範圍一律清空
+    assert state["selected_tag"] is None
     assert "squeeze_mode" in state["quant_filters"]
 
 
