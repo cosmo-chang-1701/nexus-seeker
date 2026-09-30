@@ -5,6 +5,8 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List
 
 import database
+from config import get_short_vix_multiplier, get_vix_tier
+from market_analysis.risk_engine import classify_trade_intent
 from market_analysis import hedging
 from market_analysis.pro_management import simulate_cc_transition
 from services import market_data_service
@@ -18,6 +20,57 @@ logger = logging.getLogger(__name__)
 class VtrMixin:
     if TYPE_CHECKING:
         vtr_engine: GhostTrader
+
+    async def execute_vtr_auto_entry(self, data: Dict[str, Any]) -> Any:
+        """
+        執行 VTR 自動建倉。
+        """
+        uid = data["uid"]
+        sym = data["symbol"]
+        strategy = data.get("strategy", "")
+        safe_qty = data.get("safe_qty", 0)
+
+        # VIX 戰情階梯 VTR 建倉閘門
+        vix_spot_val = data.get("vix_spot")
+        current_vix_tier = get_vix_tier(vix_spot_val)
+        # 方向性做空 (BTO_PUT) 以倒 U 形乘數判定：休兵區賣方禁建倉，但做空仍
+        # 允許 (0.5x)；極端區做空係數為 0 則禁止。
+        if classify_trade_intent(strategy) == "DIRECTIONAL_SHORT":
+            vtr_entry_allowed = get_short_vix_multiplier(vix_spot_val) > 0
+        else:
+            vtr_entry_allowed = bool(current_vix_tier.get("vtr_entry_allowed", True))
+        if not vtr_entry_allowed:
+            logger.info(
+                f"[VTR] 建倉已被 VIX 階梯 '{current_vix_tier['name']}' 放行禁止，略過 {sym}"
+            )
+            return
+
+        if safe_qty > 0:
+            try:
+                opt_t = "put" if "PUT" in strategy else "call"
+                qty = -safe_qty if "STO" in strategy else safe_qty
+
+                # 自動判定類別：Short SPY 或 BTO SPY Put 為 HEDGE
+                trade_category = "SPECULATIVE"
+                if sym == "SPY":
+                    if qty < 0 or (opt_t == "put" and qty > 0):
+                        trade_category = "HEDGE"
+
+                await self.vtr_engine.record_virtual_entry(
+                    user_id=uid,
+                    symbol=sym,
+                    opt_type=opt_t,
+                    strike=data["strike"],
+                    expiry=data["target_date"],
+                    quantity=qty,
+                    weighted_delta=data.get("weighted_delta", 0.0),
+                    theta=data.get("theta", 0.0),
+                    gamma=data.get("gamma", 0.0),
+                    tags=["auto_scan"],
+                    trade_category=trade_category,
+                )
+            except Exception as e:
+                logger.error(f"VTR Entry failed: {e}")
 
     async def monitor_vtr_and_calculate_hedging(self) -> List[Dict[str, Any]]:
         """

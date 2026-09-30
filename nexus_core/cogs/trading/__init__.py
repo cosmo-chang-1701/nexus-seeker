@@ -10,6 +10,7 @@ __all__ = ["SchedulerCog"]
 
 async def setup(bot):  # type: ignore
     """由 bot.py 透過 load_extension("cogs.trading") 呼叫，統一載入所有子 Cog。"""
+    from cogs.trading.scan import setup as setup_scan
     from cogs.trading.scheduler import setup as setup_scheduler
     from cogs.trading.pre_market import setup as setup_pre_market
     from cogs.trading.portfolio_monitor import setup as setup_portfolio_monitor
@@ -25,6 +26,8 @@ async def setup(bot):  # type: ignore
         setup as setup_price_volume_alert_monitor,
     )
 
+    # MarketScanCog must be added before SchedulerCog so get_cog("MarketScanCog") works
+    await setup_scan(bot)
     await setup_scheduler(bot)
     await setup_pre_market(bot)
     await setup_portfolio_monitor(bot)

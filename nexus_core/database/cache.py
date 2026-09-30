@@ -26,6 +26,8 @@ _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
     "macro_tail_risk_alert_",
     "advisory_entry_",
     "advisory_exit_",
+    "ddp_alert_",
+    "iv_alert_",
     "profit_lock_alert_",
     "gamma_fragility_alert_",
     "margin_api_alert_",

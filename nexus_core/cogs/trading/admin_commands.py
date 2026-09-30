@@ -1,7 +1,7 @@
 """
 cogs/trading/admin_commands.py
 
-[Admin] 管理員手動觸發指令：force_after_report、force_macro_update。
+[Admin] 管理員手動觸發指令：force_scan、force_after_report、force_macro_update。
 """
 
 from typing import Any
@@ -26,6 +26,48 @@ class AdminCommandsCog(commands.Cog):
 
     def __init__(self, bot: Any) -> None:
         self.bot = bot
+
+    @app_commands.command(
+        name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)"
+    )
+    async def force_scan(self, interaction: discord.Interaction) -> Any:
+        if not getattr(self.bot, "_is_leader_instance", True):
+            await interaction.response.send_message(
+                embed=create_info_embed(
+                    "系統控制",
+                    "⚠️ 目前此實例為 follower（藍綠部署中）。請稍候或重新觸發指令。",
+                ),
+                ephemeral=True,
+            )
+            return
+        if interaction.user.id != DISCORD_ADMIN_USER_ID:
+            await interaction.response.send_message(
+                embed=create_error_embed(
+                    "權限不足：此指令僅限管理員使用。", title="權限錯誤"
+                ),
+                ephemeral=True,
+            )
+            logger.warning(
+                f"Unauthorized force_scan attempt by {interaction.user.name} ({interaction.user.id})"
+            )
+            return
+
+        logger.info(
+            f"Admin {interaction.user.name} ({interaction.user.id}) triggered force_scan"
+        )
+        await interaction.response.send_message(
+            embed=create_info_embed("系統控制", "🚀 強制啟動全站掃描中..."),
+            ephemeral=True,
+        )
+        scan_cog = self.bot.get_cog("MarketScanCog")
+        if scan_cog:
+            asyncio.create_task(
+                scan_cog._run_market_scan_logic(
+                    is_auto=False, triggered_by=interaction.user
+                )
+            )
+        else:
+            logger.error("MarketScanCog not found, cannot execute force_scan.")
 
     @app_commands.command(
         name="force_after_report",

@@ -15,6 +15,7 @@ async def update_settings_impl(
     capital: Optional[float] = None,
     risk_limit: Optional[float] = None,
     enable_vtr: Optional[bool] = None,
+    enable_psq_watchlist: Optional[bool] = None,
     polymarket_threshold: Optional[float] = None,
     polymarket_use_llm: Optional[bool] = None,
     polymarket_slippage: Optional[float] = None,
@@ -37,6 +38,7 @@ async def update_settings_impl(
             capital,
             risk_limit,
             enable_vtr,
+            enable_psq_watchlist,
             polymarket_threshold,
             polymarket_use_llm,
             polymarket_slippage,
@@ -84,6 +86,12 @@ async def update_settings_impl(
     if enable_vtr is not None:
         db_updates["enable_vtr"] = enable_vtr
         updates.append(f"👻 虛擬交易室 (VTR): `{'開啟' if enable_vtr else '關閉'}`")
+
+    if enable_psq_watchlist is not None:
+        db_updates["enable_psq_watchlist"] = enable_psq_watchlist
+        updates.append(
+            f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`"
+        )
 
     if polymarket_threshold is not None:
         db_updates["polymarket_threshold"] = polymarket_threshold

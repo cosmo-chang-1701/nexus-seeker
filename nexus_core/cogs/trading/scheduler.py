@@ -399,6 +399,13 @@ class SchedulerCog(commands.Cog):
         # 2. 同步自選與持倉標的清單給 nexus_edge_scraper
         await _sync_edge_watchlist()
 
+        # 3. NRO 掃描邏輯
+        scan_cog = self.bot.get_cog("MarketScanCog")
+        if scan_cog:
+            await scan_cog._run_market_scan_logic(is_auto=True)
+        else:
+            logger.error("MarketScanCog not found, skipping market scan.")
+
     @dynamic_market_scanner.before_loop
     async def before_dynamic_market_scanner(self) -> None:
         await self.bot.wait_until_ready()
