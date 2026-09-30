@@ -52,6 +52,29 @@ from cogs.embed_builder import (
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
+def _runway_snapshot() -> Any:
+    from database.withdrawal_runway import RunwaySnapshot
+
+    return RunwaySnapshot(
+        user_id=1,
+        as_of="2026-09-30",
+        nav=100000.0,
+        nav_date="2026-09-30",
+        zero_years=4.8,
+        gfc_years=3.8,
+        dotcom_years=2.3,
+        stress_years=2.3,
+        capped=False,
+        next_withdrawal=10000.0,
+        boxx_value=0.0,
+        boxx_payments=0,
+        beta=1.3,
+        beta_is_fallback=False,
+        cpi_missing=False,
+        next_date="2027-01-04",
+    )
+
+
 def get_embed_text(embed: Any) -> str:
     if embed is None:
         return ""
@@ -208,9 +231,9 @@ def test_create_portfolio_report_embed() -> None:
         "Beta-Weighted Delta: +120.0",
     ]
 
-    embed = create_portfolio_report_embed(report_lines, survival_runway=120)
+    embed = create_portfolio_report_embed(report_lines, runway=_runway_snapshot())
     assert embed.title == "📊 Nexus Seeker 盤後風險結算報告"
-    assert "🏁 財務生存跑道 (Financial Runway)" in (get_embed_text(embed) or "")
+    assert "🏁 提領跑道 (Withdrawal Runway)" in (get_embed_text(embed) or "")
     assert "Debit Cost" in (get_embed_text(embed) or "")
     assert "Credit Cash" in (get_embed_text(embed) or "")
     assert "Unrealized PnL" in (get_embed_text(embed) or "")
@@ -1028,7 +1051,7 @@ def test_create_portfolio_report_embed_chunking() -> None:
     report_lines.append("🌐 【宏觀風險與資金水位報告】")
     report_lines.append("Beta-Weighted Delta: +150.0")
 
-    embed = create_portfolio_report_embed(report_lines, survival_runway=120)
+    embed = create_portfolio_report_embed(report_lines, runway=_runway_snapshot())
     pos_fields = [f for f in embed.fields if "持倉明細 (Positions)" in f.name]
     assert len(pos_fields) > 1
     assert "持倉明細 (Positions) (1/" in pos_fields[0].name
@@ -2546,7 +2569,7 @@ def test_build_post_market_intelligence_embed_empty() -> None:
     embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis={},
-        survival_runway=9999.0,
+        runway=_runway_snapshot(),
         sectors_data=[],
         ai_commentary="Test AI commentary",
     )
@@ -2590,7 +2613,7 @@ def test_build_post_market_intelligence_embed_parsed_ai_commentary() -> None:
     embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis={},
-        survival_runway=9999.0,
+        runway=_runway_snapshot(),
         sectors_data=[],
         ai_commentary=ai_commentary,
     )
@@ -2628,7 +2651,7 @@ def test_build_post_market_intelligence_embed_hedge_attribution() -> None:
     embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis=hedge_data,
-        survival_runway=9999.0,
+        runway=_runway_snapshot(),
         sectors_data=[],
         ai_commentary="Test",
     )
@@ -2680,7 +2703,7 @@ def test_build_post_market_intelligence_embed_markdown_headers_and_independent_c
     embeds = build_post_market_intelligence_embed(
         report_lines=[],
         hedge_analysis=hedge_data,
-        survival_runway=120.0,
+        runway=_runway_snapshot(),
         sectors_data=[
             {
                 "symbol": "XLK",
@@ -4181,7 +4204,7 @@ def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
     embeds = build_post_market_intelligence_embed(
         report_lines=[stock_report_line, macro_report_line],
         hedge_analysis={"net_pnl": 100.0, "status": "OPTIMAL"},
-        survival_runway=500.0,
+        runway=_runway_snapshot(),
         sectors_data=[],
         ai_commentary="1. 📊 多空大盤交叉驗證解讀\n無異常",
     )
@@ -4349,7 +4372,7 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     embeds = build_post_market_intelligence_embed(
         report_lines=[stock_line, option_line, macro_line],
         hedge_analysis=hedge_data,
-        survival_runway=500.0,
+        runway=_runway_snapshot(),
         sectors_data=sectors_data,
         ai_commentary=ai_commentary,
     )
@@ -4358,8 +4381,8 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
 
     # 1. Description contains runway (without timestamp or pnl)
     desc = embed.description or ""
-    assert "🏁 財務生存跑道" in desc
-    assert "500.0 天" in desc
+    assert "🏁 提領跑道" in desc
+    assert "壓力跑道 2.3 年" in desc
 
     fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
     assert "Debit Cost" in fin_val

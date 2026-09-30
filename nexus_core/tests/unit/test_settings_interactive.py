@@ -301,3 +301,9 @@ async def test_settings_modal_escape_window_validation_and_submission(db_conn: A
     assert ctx.escape_window_start == "08-20"
     assert ctx.escape_window_end == "09-10"
     mock_interaction.response.edit_message.assert_called_once()
+
+
+def test_withdrawal_settings_registered_in_labels() -> None:
+    for key in ("withdrawal_amount", "withdrawal_anchor_month", "withdrawal_months"):
+        assert key in SETTINGS_LABELS
+    assert len(SETTINGS_LABELS) <= 25  # Discord Select 上限

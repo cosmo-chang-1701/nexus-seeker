@@ -33,7 +33,7 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 | **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘 | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流，與 15 分鐘心跳路徑完全隔離。 |
 | **24/7 每 30 分鐘** | `wti_oil_monitor` | `cogs/trading/wti_monitor.py` | 全天候（00:00–06:00 靜默） | 監控 WTI 原油期貨異動與板塊衝擊矩陣，於異動超過門檻時發送即時推播。 |
 | **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率。 |
-| **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定；<br/>5. 總經訊號乾跑記錄：抓取 FRED 與市場資料、計算 9 個候選指標與三態判定，寫入 `macro_signal_log`／`macro_regime_log`（**只記錄、不推播**，`ENABLE_MACRO_SIGNAL_LOG`）。 |
+| **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定；<br/>5. 總經訊號乾跑記錄：抓取 FRED 與市場資料、計算 9 個候選指標與三態判定，寫入 `macro_signal_log`／`macro_regime_log`（**只記錄、不推播**，`ENABLE_MACRO_SIGNAL_LOG`）；<br/>6. 提領跑道快照：讀取 `portfolio_nav_daily` 與 CPI，計算壓力跑道並寫入 `withdrawal_runway_snapshot`（僅已設定提領者；階段二**不推播**，須排在 NAV 與 FRED 觀測之後）。 |
 | **收盤後** | `post_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日 | Analyst Agent 盤後報告：產出全日市場總結、板塊強弱、異常期權金流匯總與隔夜策略展望。 |
 | **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading/scheduler.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
 

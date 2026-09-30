@@ -42,6 +42,7 @@ from cogs.embed_builders._embed_helpers import (
     _report_embed_color,
     _parse_ai_report_sections,
     _parse_and_format_positions_table,
+    format_runway_lines,
     get_ema_signal_ui,
 )
 
@@ -49,7 +50,10 @@ logger = logging.getLogger(__name__)
 
 
 def create_portfolio_report_embed(  # type: ignore
-    report_lines: Any, hedge_analysis: Any = None, survival_runway: Any = None
+    report_lines: Any,
+    hedge_analysis: Any = None,
+    runway: Any = None,
+    runway_stale: bool = False,
 ):
     """將盤後持倉結算資料渲染為欄位化、ANSI 友善的結算報告。"""
     if not report_lines:
@@ -97,8 +101,9 @@ def create_portfolio_report_embed(  # type: ignore
         positions_list = [line.strip() for line in report_lines if line.strip()]
         macro_text = "目前無宏觀風險數據。"
 
+    runway_lines = format_runway_lines(runway, stale=runway_stale)
     positions_text = (
-        _parse_and_format_positions_table(positions_list, survival_runway)
+        _parse_and_format_positions_table(positions_list, runway_lines)
         if positions_list
         else "目前無持倉部位。"
     )
@@ -132,22 +137,11 @@ def create_portfolio_report_embed(  # type: ignore
         timestamp=datetime.now(timezone.utc),
     )
 
-    if survival_runway is not None:
-        runway_text = (
-            "無限 (收益已覆蓋支出)"
-            if survival_runway >= 9999
-            else f"{survival_runway:,.1f} 天"
-        )
-        desc_lines = [
-            "```ansi",
-            " 🏁 財務生存跑道 (Financial Runway)",
-            f" • 預估剩餘天數: {runway_text}",
-            " • 計算基準: 基於現有現金儲備與 Theta 收益",
-            "```",
-        ]
-        embed.description = "\n".join(desc_lines)
-    else:
-        embed.description = None
+    embed.description = "\n".join(
+        ["```ansi", " 🏁 提領跑道 (Withdrawal Runway)"]
+        + [f" • {ln}" for ln in runway_lines]
+        + ["```"]
+    )
 
     # 1. 資金與實質暴露 (Financial Summary) 獨立欄位
     debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()

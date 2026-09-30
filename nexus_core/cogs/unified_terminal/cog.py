@@ -163,29 +163,14 @@ class UnifiedTerminalCog(
                 asyncio.create_task(coro)
 
         from services.trading_service import TradingService
-        from services.asset_manager import AssetManager
-        from models.asset import ContextType, HoldingMetadata
-        from market_analysis.pro_management import calculate_financial_runway
+        from services.withdrawal_runway_service import get_runway_display
 
         trading_service = TradingService(self.bot)
         pnl_data = await trading_service.get_portfolio_pnl(user_id)
         ctx = database.get_full_user_context(user_id)
+        runway, runway_stale = await get_runway_display(user_id)
 
-        manager = AssetManager()
-        holdings = manager.get_assets(user_id, ContextType.HOLDING)
-        total_holding_value = 0.0
         with market_data_service.mark_interactive_request():
-            for h in holdings:
-                meta = HoldingMetadata(**h.metadata)
-                quote = await market_data_service.get_quote(h.symbol)
-                total_holding_value += (
-                    quote.get("c", 0.0) if quote else 0.0
-                ) * meta.quantity
-            backup_liq = total_holding_value * 0.8
-            ext_runway = calculate_financial_runway(
-                ctx.cash_reserve + backup_liq, ctx.monthly_expense, ctx.total_theta
-            )
-
             # 獲取 VIX 資訊
             macro_raw = await market_data_service.get_macro_environment()
             vix_spot = macro_raw.get("vix", 18.0)
@@ -194,8 +179,8 @@ class UnifiedTerminalCog(
             ctx,
             pnl_data,
             vix_spot=vix_spot,
-            backup_liquidity=backup_liq,
-            extended_runway=ext_runway,
+            runway=runway,
+            runway_stale=runway_stale,
         )
 
         view = PortfolioHubView(user_id, self.bot)

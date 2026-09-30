@@ -237,15 +237,12 @@ class AnalystAgent(commands.Cog):
             u_report = user_reports.get(uid, {})
             report_lines = u_report.get("report_lines", [])
             hedge_analysis = u_report.get("hedge_analysis", {})
-            survival_runway = u_report.get("survival_runway")
-            if survival_runway is None:
-                from market_analysis.pro_management import calculate_survival_runway
+            runway = u_report.get("runway")
+            runway_stale = bool(u_report.get("runway_stale", False))
+            if runway is None:
+                from services.withdrawal_runway_service import get_runway_display
 
-                survival_runway = calculate_survival_runway(
-                    cash_reserve=user_ctx.cash_reserve,
-                    monthly_expense=user_ctx.monthly_expense,
-                    daily_theta=user_ctx.total_theta,
-                )
+                runway, runway_stale = await get_runway_display(uid)
 
             ai_commentary = None
             if user_ctx.enable_analyst_agent:
@@ -293,8 +290,16 @@ class AnalystAgent(commands.Cog):
                                 else 0,
                                 2,
                             ),
-                            "avg_financial_runway_days": round(
-                                survival_runway if survival_runway is not None else 0, 1
+                            "withdrawal_runway": (
+                                {
+                                    "stress_years": round(runway.stress_years, 1),
+                                    "gfc_years": round(runway.gfc_years, 1),
+                                    "dotcom_years": round(runway.dotcom_years, 1),
+                                    "zero_return_years": round(runway.zero_years, 1),
+                                    "capped_at_10y": runway.capped,
+                                }
+                                if runway is not None
+                                else None
                             ),
                         },
                         "sectors": sector_rotation_data["sectors"],
@@ -328,7 +333,8 @@ class AnalystAgent(commands.Cog):
             embeds = build_post_market_intelligence_embed(
                 report_lines=report_lines,
                 hedge_analysis=hedge_analysis,
-                survival_runway=survival_runway,
+                runway=runway,
+                runway_stale=runway_stale,
                 sectors_data=sector_rotation_data["sectors"],
                 ai_commentary=ai_commentary,
                 downside_fields=downside_fields,

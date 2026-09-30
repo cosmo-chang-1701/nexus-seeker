@@ -1,6 +1,6 @@
 # 提領跑道與歷史壓力重演 (Withdrawal Runway & Historical Stress Replay)
 
-> **狀態：階段一（計算核心與設定）已實作；階段二、三尚未實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。階段一僅新增純邏輯模組與設定欄位，不改任何顯示或推播。
+> **狀態：階段一（計算核心與設定）、階段二（跑道快照、顯示取代舊跑道、設定入口）已實作；階段三（推播）尚未實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。階段一僅新增純邏輯模組與設定欄位；階段二只換顯示、不推播。
 
 ## 1. 核心哲學與適用市場環境
 
@@ -104,6 +104,7 @@ flowchart TD
 | `STRESS_BETA_FALLBACK` | $1.3$ | 無法計算 Beta 時的保守預設（科技持股典型值） | 同上 |
 | `RUNWAY_WARN_TIERS_YEARS` | $(3,\ 2,\ 1)$ | 壓力跑道警示分級 | 同上 |
 | `RUNWAY_REARM_BUFFER_YEARS` | $0.5$ 年 | 回升超過門檻 + 0.5 年才重新武裝 | 同上 |
+| `NAV_STALE_TRADING_DAYS` | $5$ 個交易日 | NAV 快照過期門檻；過期只在顯示標註，階段三起不推播警示 | `nexus_core/services/withdrawal_runway_service.py` |
 | `PRE_REMINDER_DAY` | 前一個月 15 日 | 提領前置提醒日（12／15、6／15，遇假日順延至下一交易日） | 同上 |
 
 ---
@@ -138,10 +139,12 @@ flowchart TD
    - `nexus_core/market_analysis/data/stress_paths.csv`：兩條路徑的逐日報酬與 CPI 累積比值靜態資料；`nexus_core/scripts/build_stress_paths.py` 於開發機一次性產生（需網路），正式環境只讀 CSV。
    - `nexus_core/database/migrations/v085_add_withdrawal_settings.py`：`user_settings` 加入提領基準額、基準月、提領月份、目標權重覆寫；`database/user_settings.py` 的 `upsert_user_config` 對基準月與月份做格式驗證（非法值不覆寫既有設定）。
    - 測試：`nexus_core/tests/unit/test_withdrawal_runway.py`。
-2. **階段二：顯示並取代舊跑道**
-   - `nexus_core/services/withdrawal_runway_service.py`（新增）：16:15 ET 於 NAV 快照之後計算並寫入跑道快照。
-   - `nexus_core/cogs/embed_builders/_embed_helpers.py`、`report_embeds.py`、`portfolio_embeds.py`、`nexus_core/cogs/unified_terminal/portfolio_view.py`、`nexus_core/cogs/analyst_agent.py`、`nexus_core/cli.py`：改顯示新跑道，移除「鐵血不破」與寫死的「4.6+ 年」。
-   - `nexus_core/market_analysis/pro_management.py`：移除 `calculate_survival_runway()`／`calculate_financial_runway`；`cash_reserve` 仍供 `/stress_test` 現金赤字精算使用，不移除；`monthly_expense` 設定由提領基準額取代。
+2. **階段二：顯示並取代舊跑道（已實作）**
+   - `nexus_core/services/withdrawal_runway_service.py`：16:15 ET 於 NAV 快照與 FRED 觀測更新**之後**（`after_market.py` 最後一步）為「已設定提領」的使用者計算並寫入 `withdrawal_runway_snapshot`（v086，每人一列）。NAV／BOXX 取自最新 `portfolio_nav_daily`；Beta 為模擬投組日報酬對 SPY 的 cov/var（共同日 < 60 → 走 `STRESS_BETA_FALLBACK`）；CPI 由 `macro_signals.FRED_SERIES` 新增的 `CPIAUCSL`（`monthly_cpi`，可用日 = 觀測日 + 45 天）取得，基準月 CPI 不套公布延遲；其他 FRED 序列只抓近 3 年，CPI 例外抓自 1947-01 的全史（`FRED_FULL_HISTORY_START`），使早於 3 年的基準月也查得到 CPI；下次提領日為提領月份的首個交易日，交易日數餵給 `stress_runway(days_to_first, first_month)`。NAV 快照超過 5 個交易日未更新 → 顯示端標「資料過期」。提領額為 0（未啟用）時 `get_runway_display` 不回傳快照；任一提領設定變更時，`upsert_user_config` 於同一交易刪除該使用者的快照，待下次收盤以新設定重算，避免顯示以舊設定算出的跑道。
+   - 顯示：`cogs/embed_builders/_embed_helpers.py::format_runway_lines` 為唯一格式來源，`report_embeds.py`、`order_embeds/post_market_intelligence.py`、`portfolio_embeds.py`（戰略看板）、`cogs/unified_terminal/`、`cogs/analyst_agent.py`（LLM 輸入 `aggregate_risk_metrics.withdrawal_runway`）、`cli.py portfolio runway` 皆改讀快照；已移除「鐵血不破」與寫死的「4.6+ 年」。
+   - 設定入口：`/settings` 面板與 terminal `update_settings_impl` 新增每次提領額、基準月、提領月份（沿用 `upsert_user_config` 的格式驗證；基準月須介於 1947-01 與本月之間，超出範圍查不到 CPI，一律拒絕）。
+   - `market_analysis/pro_management.py`：已移除 `calculate_survival_runway`／`calculate_financial_runway`。**`monthly_expense` 欄位保留**，僅供 `gamma_squeeze_engine`／`volatility_inspector`／`analyst_runners/portfolio_runner` 的 Theta 存活熔斷使用（設定介面標註「僅供期權熔斷」）；`cash_reserve` 仍供 `/stress_test` 使用。
+   - 測試：`nexus_core/tests/unit/test_withdrawal_runway_service.py`。
 3. **階段三：推播**
    - `nexus_core/services/withdrawal_runway_service.py`：提領提醒與跑道警示，經 `nexus_core/services/notification_dispatcher.py` 發送。
    - 排程同步更新 [`../platform/08_scheduled_jobs_and_background_pipelines.md`](../platform/08_scheduled_jobs_and_background_pipelines.md)。

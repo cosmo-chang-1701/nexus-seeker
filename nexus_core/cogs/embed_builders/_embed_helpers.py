@@ -14,7 +14,7 @@ import re
 import discord
 from cogs.embed_builders._core import NexusEmbed
 
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from ui import panel_renderer
 from cogs.embed_builders._ansi_utils import (
@@ -352,12 +352,48 @@ def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
 
 
 # ============================================================================
+# 提領跑道摘要（docs/risk_portfolio/05；唯一格式來源，各報表共用）
+# ============================================================================
+
+
+def _years_text(years: float, capped: bool = False) -> str:
+    return "≥ 10 年" if capped else f"{years:.1f} 年"
+
+
+def format_runway_lines(runway: Any, *, stale: bool = False) -> List[str]:
+    """提領跑道快照 → 純文字行（無 ANSI／Markdown）。`runway` 為 None 表示尚無快照。"""
+    if runway is None:
+        return ["提領跑道：尚無資料（未設定提領，或尚未經過收盤計算）"]
+    worst_is_gfc = runway.gfc_years <= runway.dotcom_years
+    lines = [
+        f"壓力跑道 {_years_text(runway.stress_years, runway.capped)}"
+        f"（2008：{_years_text(runway.gfc_years, runway.gfc_years >= 10.0)}"
+        f"／2000：{_years_text(runway.dotcom_years, runway.dotcom_years >= 10.0)}"
+        f"，較差者為{'2008' if worst_is_gfc else '2000'}）",
+        f"零報酬對照 {runway.zero_years:.1f} 年｜BOXX 可支付 {runway.boxx_payments} 次提領"
+        f"｜下次提領 ${runway.next_withdrawal:,.0f}"
+        + (f"（{runway.next_date}）" if runway.next_date else ""),
+    ]
+    notes: List[str] = []
+    if runway.beta_is_fallback:
+        notes.append(f"Beta 無法計算，採保守預設 {runway.beta:.1f}")
+    if runway.cpi_missing:
+        notes.append("未含通膨調整")
+    if stale:
+        notes.append(f"資料過期（NAV 快照日 {runway.nav_date}）")
+    if notes:
+        lines.append("註：" + "；".join(notes))
+    lines.append("※ 歷史崩跌從今天重演的條件式數字，非預測")
+    return lines
+
+
+# ============================================================================
 # Positions table formatter (used by portfolio embeds)
 # ============================================================================
 
 
 def _parse_and_format_positions_table(
-    positions_list: List[str], survival_runway: Any = None
+    positions_list: List[str], runway_lines: Optional[List[str]] = None
 ) -> str:
     if not positions_list:
         return "目前無持倉部位。"
@@ -477,16 +513,9 @@ def _parse_and_format_positions_table(
         f"* 盤中實時未實現損益 (Unrealized PnL): **{pnl_sign}${abs(total_unrealized_pnl):,.2f}** USD {pnl_emoji}"
     )
 
-    if survival_runway is not None:
-        if survival_runway >= 9999:
-            runway_years_str = "無限 年 (鐵血不破)"
-        else:
-            runway_years_str = f"{float(survival_runway)/365.0:.1f}+ 年 (鐵血不破)"
-    else:
-        runway_years_str = "4.6+ 年 (鐵血不破)"
-    summary_lines.append(
-        f"* 全域生存跑道安全係數 (Runway Buffer): `{runway_years_str}`"
-    )
+    if runway_lines:
+        summary_lines.append("* 🏁 提領跑道 (Withdrawal Runway):")
+        summary_lines.extend(f"  - {ln}" for ln in runway_lines)
 
     summary_part = "\n".join(summary_lines)
 

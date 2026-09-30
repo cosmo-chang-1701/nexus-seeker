@@ -94,7 +94,9 @@ SAHM_THRESHOLD = 0.50
 # ---------------------------------------------------------------------------
 
 # FRED 序列 → 發布節奏
-SeriesKind = Literal["daily", "weekly_stlfsi", "weekly_claims", "monthly_sahm"]
+SeriesKind = Literal[
+    "daily", "weekly_stlfsi", "weekly_claims", "monthly_sahm", "monthly_cpi"
+]
 
 FRED_SERIES: dict[str, SeriesKind] = {
     "DFII10": "daily",
@@ -104,6 +106,8 @@ FRED_SERIES: dict[str, SeriesKind] = {
     "STLFSI4": "weekly_stlfsi",
     "ICSA": "weekly_claims",
     "SAHMREALTIME": "monthly_sahm",
+    # 提領跑道的通膨調整用（docs/risk_portfolio/05），不參與任何總經指標判定
+    "CPIAUCSL": "monthly_cpi",
 }
 
 
@@ -120,6 +124,7 @@ def available_date_for(kind: SeriesKind, obs_date: date) -> date:
     - daily：FRED 於次一營業日更新 → 觀測日的下一個平日。
     - weekly_stlfsi：觀測日為週五（週結束），隔週四公布 → +6 天。
     - weekly_claims：觀測日為週六（週結束），隔週四公布 → +5 天。
+    - monthly_cpi：觀測日 + 45 天（提領跑道 CPI_RELEASE_LAG_DAYS）。
     - monthly_sahm：觀測日為當月 1 日，次月第一個週五的就業報告後才可計算；
       保守以**次月 10 日**為準（遇週末順延到下一個平日）。
     """
@@ -129,6 +134,9 @@ def available_date_for(kind: SeriesKind, obs_date: date) -> date:
         return obs_date + timedelta(days=6)
     if kind == "weekly_claims":
         return obs_date + timedelta(days=5)
+    if kind == "monthly_cpi":
+        # 觀測日為當月 1 日；與提領跑道的公布延遲一致（45 天）
+        return obs_date + timedelta(days=45)
     # monthly_sahm
     year = obs_date.year + (1 if obs_date.month == 12 else 0)
     month = 1 if obs_date.month == 12 else obs_date.month + 1
