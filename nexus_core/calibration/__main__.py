@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report|macro-forward-report}"""
 
 import argparse
 import asyncio
@@ -28,6 +28,7 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
             "micro-report",
             "skew-proxy",
             "notif-report",
+            "macro-forward-report",
         ],
     )
     parser.add_argument(
@@ -53,7 +54,10 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
     parser.add_argument(
         "--snapshot-db",
         default=None,
-        help="notif-report：以唯讀模式讀取複製來的 production 快照；未指定時用 NEXUS_DB_NAME",
+        help=(
+            "notif-report / macro-forward-report：以唯讀模式讀取複製來的 production 快照；"
+            "未指定時用 NEXUS_DB_NAME"
+        ),
     )
     parser.add_argument(
         "--any-time",
@@ -108,6 +112,29 @@ async def _main(args: argparse.Namespace) -> int:
         )
         target = write_notif_report(Path(cfg.out_dir), result)
         print(f"報告已輸出：{target.parent}")
+        return 0
+
+    if args.command == "macro-forward-report":
+        import config
+        from calibration.macro_forward_report import (
+            BOXX_SYMBOL,
+            VOO_SYMBOL,
+            build_report,
+            load_logs,
+            load_prices,
+            write_report,
+        )
+
+        regimes, signals = load_logs(
+            Path(args.snapshot_db) if args.snapshot_db else None
+        )
+        tech_prices = await load_prices(config.MACRO_TECH_POOL)
+        other = await load_prices((VOO_SYMBOL, BOXX_SYMBOL))
+        result = build_report(
+            regimes, signals, tech_prices, other[VOO_SYMBOL], other[BOXX_SYMBOL]
+        )
+        target = write_report(Path(cfg.out_dir), result)
+        print(f"報告已輸出：{target}")
         return 0
 
     store = DataStore(cfg.cache_dir)

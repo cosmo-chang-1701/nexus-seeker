@@ -551,13 +551,58 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **已知限制**：反事實忽略交易成本與稅；轉倉類指令（機會成本、核心資金部署）只評估「賣出來源標的」這一腿，不含買進目標標的；ENTRY 以 1 單位計，與實際倉位模型不同；保護性 Put 以「完全出場」近似會高估其效果；空頭部位的 REDUCE／EXIT 需指令帶 `direction == "SHORT"` 才會取負號（目前只有做空進場指令帶此欄位）。
 
+
+### 5.15 總經訊號乾跑前向記錄 (`macro_signal_log` / `macro-forward-report`)
+
+**問題**：使用者的目標是平時 100% 持有科技股，依總經狀況轉到 VOO，甚至 BOXX。歷史回測（2007–2025）顯示信用利差、Sahm、升息等指標都在崩跌開始後才亮；而 LLM 時代（2023 起）的市場結構可能已改變，歷史關係未必成立，且新時代的資料太短、無法回測驗證。因此改用**前向乾跑**：每天計算候選指標與三態判定，**只寫入資料庫、不推播、不影響任何建議**，累積真實資料後再判讀哪些指標真的領先。
+
+**三態判定**（`market_analysis/macro_signals.py`，門檻皆 PRE_CALIBRATION，事先依經濟邏輯訂定，**不得依回測回頭調整**）：
+
+| 層級 | 指標 | 資料 | 警訊條件 |
+| :--- | :--- | :--- | :--- |
+| 第二層（系統性危機 → BOXX） | `vix_term_inversion` | ^VIX ÷ ^VIX3M（每日） | $\ge 1.0$ |
+| | `fin_stress` | FRED `STLFSI4`（每週） | $\ge 0$ |
+| | `claims_surge` | FRED `ICSA`（每週） | 4 週平均較過去 52 週內 4 週平均低點上升 $\ge 20\%$ |
+| 第一層（利率衝擊 → VOO） | `real_yield_jump` | FRED `DFII10`（每日） | 126 筆觀測變化 $\ge +1.0$ pp |
+| | `two_year_jump` | FRED `DGS2`（每日） | 126 筆觀測變化 $\ge +1.0$ pp |
+| | `tech_relative_weak` | 固定科技池（`config.MACRO_TECH_POOL`）等權 vs VOO | 63 交易日報酬差 $\le -5$ pp |
+| 對照組（只記錄，不參與判定） | `credit_spread_widen` | FRED `BAA10Y` | $\ge$ 126 筆均值 $\times 1.2$ |
+| | `sahm_rule` | FRED `SAHMREALTIME` | $\ge 0.50$ |
+| | `fed_hike_cycle` | FRED `DFF` | 126 筆觀測變化 $\ge +1.0$ pp |
+
+- 第二層任一亮 → `WORST`（建議 BOXX）；否則第一層任一亮 → `CAUTION`（建議 VOO）；否則 `GOOD`（100% 科技股）。資料不足（`flag = NULL`）不視為亮起。
+- 狀態需連續 5 個交易日（`CONFIRM_DAYS`）成立才切換；同時記錄未經確認的原始狀態。上線初期未滿 5 天且無前一確認狀態時，確認狀態為 `NULL`（暖機期）。
+- 科技池刻意使用固定清單、不讀使用者持倉，前向資料才能跨時間比較。
+
+**前視防護（資料可用日）**：每筆 FRED 觀測同時存「所屬日期」與「可用日」，判定只用 `available_date <= 當天` 的觀測（`available_date_for()`，寧晚勿早）：
+
+| 序列 | 可用日規則 |
+| :--- | :--- |
+| 每日序列（DFII10、DGS2、BAA10Y、DFF） | 觀測日的下一個平日（FRED 次一營業日更新） |
+| STLFSI4 | 觀測日（週五）+ 6 天（隔週四公布） |
+| ICSA | 觀測日（週六，週結束）+ 5 天（隔週四公布） |
+| SAHMREALTIME | 次月 10 日，遇週末順延（實際於次月第一個週五就業報告後可算，採保守近似） |
+
+**修正偏差防護**：`macro_series_observation` 以 `(series_id, obs_date)` 為主鍵、`INSERT OR IGNORE`——FRED 事後修正（ICSA、Sahm 最常見）時**保留首次看到的值**。上線當天一次載入的 3 年歷史是當時的最新版本；上線之後的觀測才是真正的「當時所見」。
+
+**資料流**：
+1. 16:15 ET `dynamic_after_market_report`（leader-only、`is_memory_safe()`、`ENABLE_MACRO_SIGNAL_LOG`）呼叫 `services/macro_signal_service.run_macro_signal_job()`。
+2. 以 `fredgraph.csv` 抓取最近 3 年的 FRED 序列（經 `services/single_flight.py`；單一序列失敗不影響其他序列），寫入 `macro_series_observation`（v084）。
+3. 以 `get_vix_term_structure()` 取 VIX 期限結構；以 `get_history_df()`（`Semaphore(3)`）取科技池與 VOO 日線。
+4. 計算 9 個指標、原始與確認三態，單一交易寫入 `macro_signal_log`（唯一鍵：交易日 + 指標）與 `macro_regime_log`（唯一鍵：交易日），`INSERT OR REPLACE`，同日重跑冪等。任何一步失敗只記 log、不拋出，不影響同一排程的其他任務。
+
+**離線報告**：開發機以 `python -m calibration macro-forward-report --snapshot-db <快照>`，只讀快照、不寫 DB、不改參數。輸出已確認三態的區段（起訖日、天數）、各指標亮起時段，以及每段狀態開始後 20／60 個交易日科技池（等權）、VOO、BOXX 的報酬與「科技池 − VOO」差。**判讀**：`CAUTION`／`WORST` 開始後科技池相對轉弱，代表訊號領先；科技池反而較強，代表訊號落後（在反彈期才防守，正是歷史回測中三態切換失敗的原因）。
+
+**需要累積多久**：60 個交易日的前向報酬需要約 3 個月；要看到指標在一次真正的回檔／崩跌前後的行為，則取決於市場何時出現壓力事件——平靜期間多數指標不會亮起，只能確認「沒有誤報」。在累積到至少一次 $\ge 10\%$ 回檔之前，不應據此啟用任何切換或推播。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report | macro-forward-report`）
   - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
+  - `nexus_core/calibration/macro_forward_report.py`：總經訊號乾跑前向報告（§5.15）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
   - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
   - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
@@ -581,7 +626,10 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
   - `nexus_core/services/notification_dispatch_recorder.py`：通知送達記錄器（`DispatchRecord`、`rollover_dispatch_record()`、`flush_dispatch_records()`）
   - `nexus_core/market_analysis/notification_outcome.py`：「照做 vs 持有」反事實路徑（純函式，labeler 與報告共用）
   - `nexus_core/database/migrations/v083_add_notification_dispatch_log.py`、`nexus_core/database/notification_dispatch_log.py`：通知送達紀錄資料表與存取層
+  - `nexus_core/market_analysis/macro_signals.py`：總經候選指標、可用日規則與三態判定（純函式，§5.15）
+  - `nexus_core/services/macro_signal_service.py`：FRED／市場資料抓取與每日乾跑記錄（§5.15）
+  - `nexus_core/database/migrations/v084_add_macro_signal_log.py`、`nexus_core/database/macro_signal_log.py`：總經觀測、指標與三態紀錄的資料表與存取層
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
 - **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`、`em_snapshot_history`）、`nexus_edge_scraper/scheduler.py`（盤中 GEX 輪詢、收盤後 `record_em_snapshot_once()`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`test_notification_dispatch_outcome.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`test_notification_dispatch_outcome.py`、`test_macro_signals.py`、`test_macro_signal_service.py`、`test_macro_forward_report.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
