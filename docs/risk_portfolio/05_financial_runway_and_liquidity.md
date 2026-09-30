@@ -1,6 +1,6 @@
 # 提領跑道與歷史壓力重演 (Withdrawal Runway & Historical Stress Replay)
 
-> **狀態：規格已定、尚未實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。
+> **狀態：階段一（計算核心與設定）已實作；階段二、三尚未實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。階段一僅新增純邏輯模組與設定欄位，不改任何顯示或推播。
 
 ## 1. 核心哲學與適用市場環境
 
@@ -94,13 +94,13 @@ flowchart TD
 
 | 常數名稱 / 門檻 | 數值 / 設定 | 物理意義與代碼約束 | 核心程式碼檔案路徑 |
 |---|---|---|---|
-| `WITHDRAWAL_MONTHS` | `(1, 7)` | 每年提領月份；1 月那次兼作年度再平衡 | `nexus_core/market_analysis/withdrawal_runway.py`（規劃中） |
-| `WITHDRAWAL_BASE_AMOUNT` | $10{,}000$ 美元／次（使用者設定） | 基準月購買力下的每次提領額 $W_0$ | `nexus_core/database/user_settings.py`（規劃中欄位） |
+| `WITHDRAWAL_MONTHS` | `(1, 7)` | 每年提領月份；1 月那次兼作年度再平衡 | `nexus_core/market_analysis/withdrawal_runway.py` |
+| `WITHDRAWAL_BASE_AMOUNT` | $10{,}000$ 美元／次（使用者設定） | 基準月購買力下的每次提領額 $W_0$ | `nexus_core/database/user_settings.py`（`withdrawal_amount`） |
 | `CPI_SERIES` | `CPIAUCSL` | 通膨調整所用的 FRED 月資料序列 | `nexus_core/services/macro_signal_service.py`（沿用 FRED 抓取） |
-| `CPI_RELEASE_LAG_DAYS` | $45$ 天 | 只用當時已公布的 CPI，避免前視 | `nexus_core/market_analysis/withdrawal_runway.py`（規劃中） |
-| `STRESS_PATH_GFC` | SPY，2007-10-09 起 10 年 | 2008 金融海嘯重演路徑，乘投組 Beta | `nexus_core/market_analysis/data/stress_paths.csv`（規劃中，隨程式碼提交的靜態資料） |
+| `CPI_RELEASE_LAG_DAYS` | $45$ 天 | 只用當時已公布的 CPI，避免前視 | `nexus_core/market_analysis/withdrawal_runway.py` |
+| `STRESS_PATH_GFC` | SPY，2007-10-09 起 10 年 | 2008 金融海嘯重演路徑，乘投組 Beta | `nexus_core/market_analysis/data/stress_paths.csv`（隨程式碼提交的靜態資料，由 `scripts/build_stress_paths.py` 產生） |
 | `STRESS_PATH_DOTCOM` | QQQ，2000-03-10 起 10 年 | 2000 網路泡沫重演路徑，乘股票部位占比 | 同上 |
-| `STRESS_BETA_CLAMP` | $[0.5,\ 2.0]$ | 投組 Beta 的上下限，避免資料異常放大路徑 | `nexus_core/market_analysis/withdrawal_runway.py`（規劃中） |
+| `STRESS_BETA_CLAMP` | $[0.5,\ 2.0]$ | 投組 Beta 的上下限，避免資料異常放大路徑 | `nexus_core/market_analysis/withdrawal_runway.py` |
 | `STRESS_BETA_FALLBACK` | $1.3$ | 無法計算 Beta 時的保守預設（科技持股典型值） | 同上 |
 | `RUNWAY_WARN_TIERS_YEARS` | $(3,\ 2,\ 1)$ | 壓力跑道警示分級 | 同上 |
 | `RUNWAY_REARM_BUFFER_YEARS` | $0.5$ 年 | 回升超過門檻 + 0.5 年才重新武裝 | 同上 |
@@ -133,10 +133,11 @@ flowchart TD
 
 **分階段實作（每階段上線前另行確認）**：
 
-1. **階段一：計算核心與設定**
-   - `nexus_core/market_analysis/withdrawal_runway.py`（新增、純邏輯葉模組）：提領額通膨調整、零報酬跑道、壓力重演、賣出清單、警示分級。
-   - `nexus_core/market_analysis/data/stress_paths.csv`（新增）：兩條路徑的逐日報酬靜態資料。
-   - `nexus_core/database/migrations/v085_add_withdrawal_settings.py`（新增）：`user_settings` 加入提領基準額、基準月、提領月份、目標權重覆寫。
+1. **階段一：計算核心與設定（已實作）**
+   - `nexus_core/market_analysis/withdrawal_runway.py`（純邏輯葉模組）：提領額通膨調整、零報酬跑道、壓力重演、賣出清單、警示分級。
+   - `nexus_core/market_analysis/data/stress_paths.csv`：兩條路徑的逐日報酬與 CPI 累積比值靜態資料；`nexus_core/scripts/build_stress_paths.py` 於開發機一次性產生（需網路），正式環境只讀 CSV。
+   - `nexus_core/database/migrations/v085_add_withdrawal_settings.py`：`user_settings` 加入提領基準額、基準月、提領月份、目標權重覆寫；`database/user_settings.py` 的 `upsert_user_config` 對基準月與月份做格式驗證（非法值不覆寫既有設定）。
+   - 測試：`nexus_core/tests/unit/test_withdrawal_runway.py`。
 2. **階段二：顯示並取代舊跑道**
    - `nexus_core/services/withdrawal_runway_service.py`（新增）：16:15 ET 於 NAV 快照之後計算並寫入跑道快照。
    - `nexus_core/cogs/embed_builders/_embed_helpers.py`、`report_embeds.py`、`portfolio_embeds.py`、`nexus_core/cogs/unified_terminal/portfolio_view.py`、`nexus_core/cogs/analyst_agent.py`、`nexus_core/cli.py`：改顯示新跑道，移除「鐵血不破」與寫死的「4.6+ 年」。

@@ -1,4 +1,4 @@
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 import sqlite3
 import logging
 from dataclasses import dataclass
@@ -46,6 +46,11 @@ class UserContext:
     # 持倉管理模式: COMMAND(指令，預設=現行行為)/ADVISORY(顧問，B&H 持倉只告知位階、
     # 不建議減碼換股)。單檔可由 assets.metadata.advisory_only 覆寫。
     portfolio_mode: str = "COMMAND"
+    # 提領跑道（docs/risk_portfolio/05）：withdrawal_amount = 0 代表未啟用
+    withdrawal_amount: float = 0.0  # 每次提領額（基準月購買力，USD）
+    withdrawal_anchor_month: Optional[str] = None  # 通膨調整基準月 YYYY-MM
+    withdrawal_months: str = "1,7"  # 每年提領月份
+    withdrawal_target_weights: Optional[str] = None  # JSON；None = 現有持股等權
 
 
 # ==========================================
@@ -58,6 +63,29 @@ _VALID_TRADING_STRATEGIES: frozenset[str] = frozenset(
 )
 _VALID_RISK_APPETITES: frozenset[str] = frozenset({"DEFENSIVE", "AGGRESSIVE"})
 _VALID_PORTFOLIO_MODES: frozenset[str] = frozenset({"COMMAND", "ADVISORY"})
+
+
+def _normalize_anchor_month(value: Any) -> Optional[str]:
+    """`YYYY-MM`；格式不合法回傳 None（該欄位不更新，不靜默寫入壞值）。"""
+    text = str(value).strip()
+    parts = text.split("-")
+    if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
+        return None
+    year, month = int(parts[0]), int(parts[1])
+    if len(parts[0]) != 4 or not 1 <= month <= 12:
+        return None
+    return f"{year:04d}-{month:02d}"
+
+
+def _normalize_withdrawal_months(value: Any) -> Optional[str]:
+    """逗號分隔的 1–12 月份，去重排序；空或含非法值回傳 None。"""
+    try:
+        months = sorted({int(x) for x in str(value).split(",") if x.strip()})
+    except ValueError:
+        return None
+    if not months or any(not 1 <= m <= 12 for m in months):
+        return None
+    return ",".join(str(m) for m in months)
 
 
 def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
@@ -97,6 +125,10 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "trading_strategy",
             "risk_appetite",
             "portfolio_mode",
+            "withdrawal_amount",
+            "withdrawal_anchor_month",
+            "withdrawal_months",
+            "withdrawal_target_weights",
         }
         update_pairs = []
         values = []
@@ -113,6 +145,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                     "polymarket_threshold",
                     "monthly_expense",
                     "cash_reserve",
+                    "withdrawal_amount",
                 ]:
                     value = max(0.0, float(value))
                 elif key == "polymarket_slippage":
@@ -134,6 +167,15 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                 elif key == "portfolio_mode":
                     # 未知值一律回退 COMMAND (= 現行行為)，避免非法值靜默啟用顧問模式。
                     value = value if value in _VALID_PORTFOLIO_MODES else "COMMAND"
+
+                elif key == "withdrawal_anchor_month":
+                    value = _normalize_anchor_month(value)
+                    if value is None:
+                        continue
+                elif key == "withdrawal_months":
+                    value = _normalize_withdrawal_months(value)
+                    if value is None:
+                        continue
 
                 update_pairs.append(f"{key} = ?")
                 values.append(value)
@@ -403,6 +445,10 @@ def get_full_user_context(user_id: int) -> UserContext:
             trading_strategy=_get_val("trading_strategy", "RIGHT_SIDE"),
             risk_appetite=_get_val("risk_appetite", "DEFENSIVE"),
             portfolio_mode=_get_val("portfolio_mode", "COMMAND"),
+            withdrawal_amount=float(_get_val("withdrawal_amount", 0.0)),
+            withdrawal_anchor_month=_get_val("withdrawal_anchor_month", None),
+            withdrawal_months=_get_val("withdrawal_months", "1,7"),
+            withdrawal_target_weights=_get_val("withdrawal_target_weights", None),
         )
 
     except Exception as e:
