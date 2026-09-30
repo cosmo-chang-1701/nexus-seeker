@@ -32,37 +32,70 @@ def get_macro_month_status(month_key: str) -> Optional[dict[str, Any]]:
             conn.close()
 
 
-def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> None:
-    # DELETE + executemany + 月份快取戳記必須同屬一個交易，否則整月事件可能出現
-    # 「舊資料已刪、新資料未寫入」的空窗。走批次寫入入口，只 commit 一次。
-    statements: list[tuple] = [
-        (
-            "DELETE FROM economic_calendar_events WHERE month_key = ?",
-            (month_key,),
+_UPSERT_MACRO_EVENT_SQL = """
+    INSERT INTO economic_calendar_events
+    (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability, actual_value)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(month_key, event, event_time, country) DO UPDATE SET
+        impact = excluded.impact,
+        consensus_value = excluded.consensus_value,
+        actual_value = excluded.actual_value,
+        fedwatch_probability = COALESCE(
+            excluded.fedwatch_probability,
+            economic_calendar_events.fedwatch_probability
         )
-    ]
+"""
+
+
+def replace_macro_month_events(month_key: str, events: list[dict[str, Any]]) -> None:
+    """以最新抓取結果覆寫整月總經事件，但保留 FedWatch 寫入的欄位。
+
+    日曆來源（Edge Scraper / TradingView）不提供 `fedwatch_probability`，該欄位
+    由 `CalendarService.update_fedwatch_probability()` 事後以 UPDATE 寫入既有事件列。
+    早期實作為整月 DELETE + INSERT，新列的 `fedwatch_probability` 一律為 NULL，
+    導致任何觸發日曆重抓的路徑（4h 排程的 CPI 偏差更新、/market、Analyst Agent、
+    /force_macro_update）都會洗掉已寫入的 FedWatch 定價。
+
+    現行作法以主鍵 `(month_key, event, event_time, country)` 對應同一事件：
+    1. 刪除本次抓取結果中已不存在的舊事件（事件取消、改期或改名）。
+    2. 其餘事件以 UPSERT 寫入：日曆欄位（impact / consensus / actual）一律以新值
+       覆寫，`fedwatch_probability` 僅在新資料有值時覆寫，否則保留原值。
+    """
+    # 刪除 + UPSERT + 月份快取戳記必須同屬一個交易，否則整月事件可能出現
+    # 「舊資料已刪、新資料未寫入」的空窗。走批次寫入入口，只 commit 一次。
+    statements: list[tuple] = []
     if events:
+        rows = [
+            (
+                month_key,
+                item["event"],
+                item["time"],
+                item["impact"],
+                item.get("country", "US"),
+                item.get("consensus_value"),
+                item.get("fedwatch_probability"),
+                item.get("actual_value"),
+            )
+            for item in events
+        ]
+        # 僅由 "?" 組成的佔位符，事件內容全部以參數綁定傳入。
+        keep_placeholders = ", ".join("(?, ?, ?)" for _ in rows)
+        keep_params: list[Any] = [month_key]
+        for row in rows:
+            keep_params.extend((row[1], row[2], row[4]))
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        delete_stale_sql = (
+            "DELETE FROM economic_calendar_events "
+            "WHERE month_key = ? "
+            f"AND (event, event_time, country) NOT IN (VALUES {keep_placeholders})"
+        )
+        statements.append((delete_stale_sql, tuple(keep_params)))
+        statements.append((_UPSERT_MACRO_EVENT_SQL, rows, True))
+    else:
         statements.append(
             (
-                """
-                INSERT INTO economic_calendar_events
-                (month_key, event, event_time, impact, country, consensus_value, fedwatch_probability, actual_value)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                [
-                    (
-                        month_key,
-                        item["event"],
-                        item["time"],
-                        item["impact"],
-                        item.get("country", "US"),
-                        item.get("consensus_value"),
-                        item.get("fedwatch_probability"),
-                        item.get("actual_value"),
-                    )
-                    for item in events
-                ],
-                True,
+                "DELETE FROM economic_calendar_events WHERE month_key = ?",
+                (month_key,),
             )
         )
     statements.append(
