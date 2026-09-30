@@ -261,8 +261,7 @@ def create_watchlist_signal_embed(
     has_meaningful_content = False
 
     toggles = toggles or {}
-    # 本 embed 屬 30 分鐘個股深度心跳，開關為 heartbeat_symbol_deep；
-    # 15 分鐘批次雷達 (build_radar_scan_embed) 才是 heartbeat_watchlist。
+    # 本 embed 屬 30 分鐘個股深度心跳，開關為 heartbeat_symbol_deep。
     hb_enabled = toggles.get("heartbeat_symbol_deep", True)
     show_market_footprints = hb_enabled
     show_iv_context = hb_enabled
