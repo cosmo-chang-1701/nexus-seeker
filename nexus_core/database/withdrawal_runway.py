@@ -15,11 +15,12 @@ _UPSERT_SQL = """
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
-_COLUMNS = (
-    "user_id, as_of, nav, nav_date, zero_years, gfc_years, dotcom_years, "
-    "stress_years, capped, next_withdrawal, boxx_value, boxx_payments, "
-    "beta, beta_is_fallback, cpi_missing, next_date"
-)
+_SELECT_SQL = """
+    SELECT user_id, as_of, nav, nav_date, zero_years, gfc_years, dotcom_years,
+           stress_years, capped, next_withdrawal, boxx_value, boxx_payments,
+           beta, beta_is_fallback, cpi_missing, next_date
+    FROM withdrawal_runway_snapshot WHERE user_id = ?
+"""
 
 
 @dataclass(frozen=True)
@@ -74,10 +75,7 @@ def load_snapshot(user_id: int) -> Optional[RunwaySnapshot]:
     """讀取最新快照（同步、無副作用；呼叫端以 asyncio.to_thread 執行）。"""
     conn = get_read_connection()
     try:
-        row = conn.execute(
-            f"SELECT {_COLUMNS} FROM withdrawal_runway_snapshot WHERE user_id = ?",
-            (user_id,),
-        ).fetchone()
+        row = conn.execute(_SELECT_SQL, (user_id,)).fetchone()
     finally:
         conn.close()
     if row is None:
