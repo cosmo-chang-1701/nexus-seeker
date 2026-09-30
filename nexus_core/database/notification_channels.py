@@ -44,6 +44,7 @@ NotificationKey = Literal[
     "defense_structure_break",
     "defense_gamma_fragility",
     "risk_portfolio_downside",
+    "risk_withdrawal_runway",
     # 🚀 上行捕捉
     "advisory_entry_signal",
     "entry_pyramid_add",
@@ -232,6 +233,16 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "risk_portfolio_downside",
         "left_tail",
         "📉 投組下行風險 (距高點回撤階梯 / CVaR 尾部風險超出預算)",
+        "LEFT_TAIL",
+        "DAILY",
+        preset_immune=True,
+    ),
+    # 提領跑道（壓力跑道警示 / 提領前置與當日提醒）：帳戶作為生活費來源的存續風險
+    # （services/withdrawal_runway_service.py）。全新頻道、無母頻道，預設開啟。
+    NotificationChannel(
+        "risk_withdrawal_runway",
+        "left_tail",
+        "🏦 提領跑道 (壓力跑道跌破 3/2/1 年、提領前置與當日賣出清單)",
         "LEFT_TAIL",
         "DAILY",
         preset_immune=True,

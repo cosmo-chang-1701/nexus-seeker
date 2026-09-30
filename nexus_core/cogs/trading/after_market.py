@@ -86,8 +86,8 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"總經訊號乾跑記錄失敗: {e}")
 
-        # 提領跑道快照：須在 NAV 快照（下行風險任務）與 CPI 觀測（總經任務）之後，
-        # 只寫快照、階段二不推播（services/withdrawal_runway_service.py）
+        # 提領跑道：須在 NAV 快照（下行風險任務）與 CPI 觀測（總經任務）之後；
+        # 寫入快照後推播壓力跑道警示與提領提醒（services/withdrawal_runway_service.py）
         try:
             from services.withdrawal_runway_service import run_withdrawal_runway_job
 

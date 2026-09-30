@@ -1,6 +1,6 @@
 # 提領跑道與歷史壓力重演 (Withdrawal Runway & Historical Stress Replay)
 
-> **狀態：階段一（計算核心與設定）、階段二（跑道快照、顯示取代舊跑道、設定入口）已實作；階段三（推播）尚未實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。階段一僅新增純邏輯模組與設定欄位；階段二只換顯示、不推播。
+> **狀態：階段一（計算核心與設定）、階段二（跑道快照、顯示取代舊跑道、設定入口）、階段三（推播）皆已實作。** 本文取代舊版「Theta 現金流生存跑道」（`pro_management.calculate_survival_runway()`）。舊版以手動輸入的 `cash_reserve` 除以「月支出 − Theta × 30」計算天數，不看股票部位、不看市場路徑，也從不推播；介面上一律標示「鐵血不破」，無資料時寫死顯示「4.6+ 年」。實作分三個階段，每個階段上線前另行確認（見 §6）。階段一僅新增純邏輯模組與設定欄位；階段二只換顯示、不推播。
 
 ## 1. 核心哲學與適用市場環境
 
@@ -104,8 +104,9 @@ flowchart TD
 | `STRESS_BETA_FALLBACK` | $1.3$ | 無法計算 Beta 時的保守預設（科技持股典型值） | 同上 |
 | `RUNWAY_WARN_TIERS_YEARS` | $(3,\ 2,\ 1)$ | 壓力跑道警示分級 | 同上 |
 | `RUNWAY_REARM_BUFFER_YEARS` | $0.5$ 年 | 回升超過門檻 + 0.5 年才重新武裝 | 同上 |
-| `NAV_STALE_TRADING_DAYS` | $5$ 個交易日 | NAV 快照過期門檻；過期只在顯示標註，階段三起不推播警示 | `nexus_core/services/withdrawal_runway_service.py` |
+| `NAV_STALE_TRADING_DAYS` | $5$ 個交易日 | NAV 快照過期門檻；過期只在顯示標註，且不推播警示 | `nexus_core/services/withdrawal_runway_service.py` |
 | `PRE_REMINDER_DAY` | 前一個月 15 日 | 提領前置提醒日（12／15、6／15，遇假日順延至下一交易日） | 同上 |
+| `_DAY_REMINDER_GRACE_DAYS` | $7$ 個日曆天 | 提領日當日提醒最晚補發期限；逾期不再提醒 | 同上 |
 
 ---
 
@@ -122,7 +123,11 @@ flowchart TD
 - **持股不足以支付提領**：清單列出全部可賣部位並標示差額，不產生負部位。
 
 ### 5.3 推播與狀態
-- 所有推播經 `services/notification_dispatcher.py` 發送；警示狀態以 kv 快取保存（`runway_state_` 前綴，比照 `downside_state_` 不列入去重清理白名單），推播未送達時狀態不前進。
+- 所有推播經 `services/notification_dispatcher.py` 的 `risk_withdrawal_runway` 頻道（左尾防護、`preset_immune`、預設開啟）發送；每日去重前綴為 `runway_warn_`／`runway_remind_`。
+- 警示狀態以 kv 快取保存（`runway_state_tiers_{uid}` 為仍武裝的門檻、`runway_state_remind_{uid}` 為上次送達的提醒 id `PRE_／DAY_{提領日}`；`runway_state_` 前綴比照 `downside_state_` 不列入去重清理白名單），推播未送達（頻道關閉）時狀態不前進，使用者重新開啟後仍會收到。
+- 無武裝狀態（首次計算）視為三級全部武裝，上線當下已低於門檻者立即收到最嚴重一級的警示；多級同時跌破時只推播最嚴重一級。
+- 提醒以「視窗內第一次成功執行」判定而非恰好某一天：前置提醒視窗為前一個月 15 日至提領日前一天，當日提醒視窗為提領日起 7 個日曆天；16:15 任務當天被記憶體閘門跳過時，下一個交易日補發。
+- 賣出清單的持股取目前 `assets` 的現股多頭（排除 BOXX 與空頭），價格取最新 NAV 快照的收盤價；提領月份為該年第一個提領月時註明「兼作年度再平衡」。快照寫入失敗時不推播，避免推播與面板不一致。
 - 提領提醒是資訊性的：系統無法得知使用者是否真的提領，下一次計算直接以實際 NAV 反映。
 
 ### 5.4 不作為預測
@@ -145,9 +150,11 @@ flowchart TD
    - 設定入口：`/settings` 面板與 terminal `update_settings_impl` 新增每次提領額、基準月、提領月份（沿用 `upsert_user_config` 的格式驗證；基準月須介於 1947-01 與本月之間，超出範圍查不到 CPI，一律拒絕）。
    - `market_analysis/pro_management.py`：已移除 `calculate_survival_runway`／`calculate_financial_runway`。**`monthly_expense` 欄位保留**，僅供 `gamma_squeeze_engine`／`volatility_inspector`／`analyst_runners/portfolio_runner` 的 Theta 存活熔斷使用（設定介面標註「僅供期權熔斷」）；`cash_reserve` 仍供 `/stress_test` 使用。
    - 測試：`nexus_core/tests/unit/test_withdrawal_runway_service.py`。
-3. **階段三：推播**
-   - `nexus_core/services/withdrawal_runway_service.py`：提領提醒與跑道警示，經 `nexus_core/services/notification_dispatcher.py` 發送。
-   - 排程同步更新 [`../platform/08_scheduled_jobs_and_background_pipelines.md`](../platform/08_scheduled_jobs_and_background_pipelines.md)。
+3. **階段三：推播（已實作）**
+   - `nexus_core/services/withdrawal_runway_service.py`：快照寫入後的 `_notify_warnings`（`evaluate_tiers` 分級與重新武裝）與 `_notify_reminder`（`reminder_due` 判定視窗、`plan_withdrawal` 產生賣出清單），經 `nexus_core/services/notification_dispatcher.py` 的 `risk_withdrawal_runway` 頻道發送（`database/notification_channels.py`）。
+   - Embed：`nexus_core/cogs/embed_builders/alert_embeds/withdrawal_alerts.py`（`create_runway_warning_embed`、`create_withdrawal_reminder_embed`，跑道行沿用 `format_runway_lines`）。
+   - 排程同步更新 [`../platform/08_scheduled_jobs_and_background_pipelines.md`](../platform/08_scheduled_jobs_and_background_pipelines.md)，頻道登記於 [`../platform/03_notification_center.md`](../platform/03_notification_center.md)。
+   - 測試：`nexus_core/tests/unit/test_withdrawal_runway_service.py`、`test_embed_builder.py`、`test_notification_toggles.py`。
 
 **沿用的既有元件**：
 - `nexus_core/services/downside_risk_service.py`：`portfolio_nav_daily` NAV 快照（16:15 ET）。
