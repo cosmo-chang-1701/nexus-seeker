@@ -32,7 +32,7 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 | **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading/portfolio_monitor.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：直接消費 5 分鐘前大盤掃描之記憶體快取，零外部請求評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。 |
 | **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘 | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流，與 15 分鐘心跳路徑完全隔離。 |
 | **24/7 每 30 分鐘** | `wti_oil_monitor` | `cogs/trading/wti_monitor.py` | 全天候（00:00–06:00 靜默） | 監控 WTI 原油期貨異動與板塊衝擊矩陣，於異動超過門檻時發送即時推播。 |
-| **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率。 |
+| **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率與 CPI YoY 偏差值（`update_cpi_deviation` 內部會 prefetch 月度日曆；日曆重寫保留既有 FedWatch 欄位，見 §5.4）。 |
 | **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定；<br/>5. 總經訊號乾跑記錄：抓取 FRED 與市場資料、計算 9 個候選指標與三態判定，寫入 `macro_signal_log`／`macro_regime_log`（**只記錄、不推播**，`ENABLE_MACRO_SIGNAL_LOG`）；<br/>6. 提領跑道快照：讀取 `portfolio_nav_daily` 與 CPI，計算壓力跑道並寫入 `withdrawal_runway_snapshot`（僅已設定提領者；須排在 NAV 與 FRED 觀測之後），寫入成功後經 `risk_withdrawal_runway` 推播壓力跑道警示（跌破 3／2／1 年）與提領提醒（前一個月 15 日起的前置提醒、提領月份首個交易日當日提醒，附賣出清單）。 |
 | **收盤後** | `post_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日 | Analyst Agent 盤後報告：產出全日市場總結、板塊強弱、異常期權金流匯總與隔夜策略展望。 |
 | **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading/scheduler.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
@@ -135,6 +135,29 @@ flowchart LR
 - 寫入端以 `database/connection.py` 內建的指數退避重試（Jittered Backoff）解決跨程序 WAL 寫入鎖爭用。
 - 排程端依靠 Leader 判定，確保背景任務由舊容器安全交接至新容器，不產生雙重執行。
 
+### 5.4 總經日曆重寫與 FedWatch 欄位保留
+月度總經日曆（`economic_calendar_events`）可能由多條路徑觸發重抓：4 小時 `event_checker`（`update_cpi_deviation` 內部的 prefetch）、`/market`、Analyst Agent 與手動 `/force_macro_update`。日曆來源不提供 `fedwatch_probability`，該欄位由 `update_fedwatch_probability()` 事後以 UPDATE 寫入。為避免任一路徑的重抓洗掉 FedWatch 定價，`replace_macro_month_events()` 在同一交易內：
+1. 刪除本次抓取結果中已不存在的事件（主鍵 `(month_key, event, event_time, country)` 不在新結果中，例如取消或改期）。
+2. 其餘事件以 UPSERT 寫入：日曆欄位（impact / consensus / actual）以新值覆寫；`fedwatch_probability` 僅在新資料有值時覆寫，否則保留原值：
+$$p_{\text{fedwatch}}' = \text{COALESCE}(p_{\text{new}},\ p_{\text{old}})$$
+
+事件改期（`event_time` 變動）視為新事件，FedWatch 欄位留空，由下一輪 FedWatch 更新補上，不會把舊時點的定價錯接到新事件。
+
+### 5.5 手動強制刷新（`/force_macro_update` 與 CLI `admin force-macro-update`）
+兩個入口共用 `services/macro_refresh_service.py::refresh_macro_data()`，只負責呈現其回傳的逐項結果（`MacroRefreshResult`）。刷新順序與成敗判定：
+
+| 步驟 | 成功判定 | Discord | CLI |
+| :--- | :--- | :---: | :---: |
+| 大盤 GEX | 大盤端點或 SPY 個股期權鏈即時估算取得有效 `spy_spot`（過期快取加註標記） | ✅ | ✅ |
+| 流動性指標 | 取得非備援常數的 TED Spread | ✅ | ✅ |
+| VIX 期限結構 | `is_valid`、比值落在 $[0.5, 3.0]$ 且狀態非 `UNKNOWN` 才寫入 `macro_vts_ratio` | — | ✅ |
+| 核心總經指標 | 回傳值不帶 `_is_fallback` | — | ✅ |
+| 總經日曆 | 當月與下月皆成功重抓 | ✅ | ✅ |
+| FedWatch | `update_fedwatch_probability()` 回傳 `True` | ✅ | ✅ |
+| CPI 偏差值 | `update_cpi_deviation()` 回傳 `True`（讀取剛刷新的日曆快取，排在日曆之後） | ✅ | ✅ |
+
+任一步驟失敗不中斷後續步驟；失敗原因如實列出，不以備援值冒充即時數據。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -149,6 +172,8 @@ flowchart LR
 | 前向報酬標註與反事實標註 | `nexus_core/services/regime_outcome_labeler.py` | [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) |
 | 盤前盤後分析師代理人循環 | `nexus_core/cogs/analyst_agent.py` | [`01_analyst_agent_reporting.md`](01_analyst_agent_reporting.md) |
 | 財經事件日曆與 FedWatch 循環 | `nexus_core/cogs/calendar.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
+| 總經日曆月度重寫（保留 FedWatch 欄位） | `nexus_core/database/calendar_cache.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
+| 手動強制刷新大盤總經數據（共用流程） | `nexus_core/services/macro_refresh_service.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
 | 投組下行風險評估與收盤結算 | `nexus_core/services/downside_risk_service.py` | [`07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md) |
 | 總經訊號乾跑記錄（只記錄、不推播） | `nexus_core/services/macro_signal_service.py` | [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) |
 | 盤中 30 分鐘深度掃描管線 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` | [`06_gamma_squeeze_engine_and_spear.md`](../microstructure/06_gamma_squeeze_engine_and_spear.md) |

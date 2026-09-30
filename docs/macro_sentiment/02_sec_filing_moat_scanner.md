@@ -9,7 +9,7 @@
 1. **雜訊過度反應（Noise Overreaction）**：將總體經濟降息週期、通膨成本上升、匯率波動（FX Headwinds）或單季營收微幅落後等短期週期性逆風，誤判為企業基本面質變，導致在估值底部恐慌停損。
 2. **結構沉沒盲區（Structural Sunk-Cost Blindness）**：在企業定價權瓦解、市佔率永久性流失或核心商業模式被顛覆時，盲目向下攤平轉倉，最終遭受毀滅性虧損。
 
-Nexus Seeker 設計了**「每日 08:00 持倉自動掃描 ＋ 邊緣正則段落擷取 ＋ LLM 嚴格排除條款（Strict Exclusion Rule）」**的量化質化混合防禦體系，嚴格區隔「週期性總經逆風」與「個體結構性質變」，並搭配 5–14 天靜默期避讓（`avoid_silent_period`）及 1.4 倍 Event Loading 波動率風險懲罰溢價。
+Nexus Seeker 設計了**「每日 08:00 持倉自動掃描 ＋ 邊緣正則段落擷取 ＋ LLM 嚴格排除條款（Strict Exclusion Rule）」**的量化質化混合防禦體系，嚴格區隔「週期性總經逆風」與「個體結構性質變」，並搭配可調天數（`silent_period_days`，預設 5 天）的靜默期避讓（`avoid_silent_period`）及 1.4 倍 Event Loading 波動率風險懲罰溢價。
 
 ### 1.2 適用市場環境與制度角色
 - **財報發布季（Earnings Season）**：持倉標的發布 10-K（年度報告）、10-Q（季度報告）或 8-K（重大事件當前報告）時，自動觸發即時質化評估。
@@ -40,11 +40,20 @@ $$End_j = \min(|Text|, pos_j + len(match_j) + C_{\text{context}})$$
 $$\sum |Interval_k| \le L_{\text{section}} = 5000$$
 
 ### 2.2 靜默期避讓機制與 Event Loading 波動率懲罰推導
-在量化掃描與 Radar Terminal 中，當啟動 `avoid_silent_period` 篩選時，系統評估即將到來的財報與總經衝擊：
-$$has\_earnings\_event = \mathbb{I}(t_{\text{today}} \le t_{\text{earnings}} \le t_{\text{today}} + 14 \text{ 天})$$
-$$has\_macro\_event = \mathbb{I}(\exists e \in \text{Events}_{[t, t+14]}: \text{Impact}(e) = \text{"HIGH"} \lor \text{Type}(e) \in \{\text{"FOMC"}, \text{"CPI"}, \text{"NFP"}, \text{"FED DECISION"}\})$$
+在量化掃描與 Radar Terminal（`/x`）中，當啟動 `avoid_silent_period` 篩選時，系統以面板參數 `silent_period_days`（記為 $N$，預設 5 天，負值視為 0）評估未來 $N$ 天內（含今日，美東日期）的財報與總經衝擊。窗口為 $[t_{\text{now}},\ \text{EOD}_{ET}(d_{\text{today}} + N)]$：
 
-若 $has\_earnings\_event \lor has\_macro\_event$，該標的在雷達過濾中直接標記為不通過（`passed = False`）。
+$$earnings\_hit(s) = \mathbb{I}(d_{\text{today}} \le d_{\text{earnings}}(s) \le d_{\text{today}} + N)$$
+$$macro\_hit = \mathbb{I}(\exists e \in \text{Events}_{[t_{\text{now}},\ \text{EOD}(d_{\text{today}}+N)]}: \text{Impact}(e) = \text{"HIGH"} \lor \text{Type}(e) \in \{\text{"FOMC"}, \text{"CPI"}, \text{"NFP"}, \text{"FED DECISION"}\})$$
+
+若 $earnings\_hit(s) \lor macro\_hit$，該標的在雷達過濾中直接標記為不通過（`passed = False`）。總經事件屬全市場事件，一旦窗內存在，所有標的皆排除；今日已公布（早於現在）的事件不計入。
+
+**資料來源（僅讀取既有 SQLite 快取，不新增任何 API 呼叫）**：
+- 財報日：`earnings_calendar_cache`，以 `get_cached_earnings_many()` 單一查詢批次讀取；快取列存在但財報日為空（例如 ETF）視為確定無財報。
+- 總經事件：`economic_calendar_events`（月度快取，事件時間為 UTC），以 `get_macro_events_between()` 讀取。
+
+**退路（拿不到事件日期時）**：沿用 `iv_data` 的 `has_earnings_event`／`has_macro_event` 布林值（由 `iv_metrics.py` 以固定 14 天窗計算）：
+- 財報：標的無快取列、財報日無法解析，或快取的財報日已過（下一期日期未知）。
+- 總經：窗口涵蓋的任一美東月份尚未建立月度快取（`economic_calendar_month_cache` 無紀錄）。
 
 此外，在期權定價與 IVR 計算時，若即時隱含波動率（IV）抓取失敗而回退至快取值或歷史波動率代理值（`STORED_IV` 或 `HV_PROXY`）時，因歷史數值無法反映即將到來的二元事件跳空風險，系統強制乘上 1.4 倍 Event Loading 溢價因子：
 $$IV_{\text{adjusted}} = IV_{\text{proxy}} \times 1.40$$
@@ -125,7 +134,8 @@ stateDiagram-v2
 | `_8K_ITEM_HEADER_PATTERN` | 正則比對 | 8-K Dotted Item 標題定位正則 (`Item \d+\.\d{2}`) | `nexus_edge_scraper/section_extractor.py:113` |
 | `RAM_SAFETY_LIMIT` | `85.0%` | VPS 記憶體防護水位門檻（超過則中斷 LLM 呼叫） | `nexus_core/services/llm_service.py` |
 | `EVENT_LOADING_MULTIPLIER` | `1.40` (1.4x) | 缺乏即時 IV 且處於事件前夕時的波動率補償倍數 | `nexus_core/market_analysis/sentiment/iv_metrics.py:513` |
-| `SILENT_PERIOD_BUFFER_DAYS` | `14` 天 | 總經重大事件與財報事件靜默期前瞻天數 | `nexus_core/market_analysis/sentiment/iv_metrics.py:486` |
+| `SILENT_PERIOD_BUFFER_DAYS` | `14` 天 | `has_earnings_event`／`has_macro_event` 布林值（Event Loading 與雷達靜默期退路）的前瞻天數 | `nexus_core/market_analysis/sentiment/iv_metrics.py:486` |
+| `silent_period_days` | 預設 `5` 天 | `/x` 雷達靜默期避讓窗口 $N$（面板可調，負值視為 0） | `nexus_core/cogs/unified_terminal/silent_period.py` |
 | `HOLDINGS_SCAN_CONCURRENCY` | `3` (Semaphore) | 盤前持倉掃描併發連線數上限 | `nexus_core/cogs/trading/fundamental_filing_monitor.py:85` |
 
 ---
@@ -163,3 +173,7 @@ stateDiagram-v2
   - 14 天財報/總經靜默期檢測與 1.4x Event Loading 溢價計算
 - `nexus_core/cogs/unified_terminal/batch_scan.py`
   - `avoid_silent_period` 量化雷達過濾閘門
+- `nexus_core/cogs/unified_terminal/silent_period.py`
+  - `load_silent_period_context` / `is_in_silent_period`: 依 `silent_period_days` 判定未來 N 天事件窗與布林值退路
+- `nexus_core/database/calendar_cache.py`
+  - `get_cached_earnings_many`: 財報快取批次讀取
