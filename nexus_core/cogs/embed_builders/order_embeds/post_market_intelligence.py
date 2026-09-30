@@ -17,6 +17,7 @@ from cogs.embed_builders._ansi_utils import (
 )
 from cogs.embed_builders._embed_helpers import (
     _parse_and_format_positions_table,
+    format_runway_lines,
     split_embed_by_fields,
 )
 
@@ -114,7 +115,8 @@ def _format_to_target_center_style_with_title(title: str, text: str) -> str:
 def build_post_market_intelligence_embed(
     report_lines: List[str],
     hedge_analysis: Optional[Dict[str, Any]] = None,
-    survival_runway: Optional[float] = None,
+    runway: Any = None,
+    runway_stale: bool = False,
     sectors_data: Optional[List[Dict[str, Any]]] = None,
     ai_commentary: Optional[str] = None,
     downside_fields: Optional[List[Tuple[str, str, bool]]] = None,
@@ -134,21 +136,12 @@ def build_post_market_intelligence_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    if survival_runway is not None:
-        runway_text = (
-            "\u001b[1;32m無限 (收益已覆蓋支出)\u001b[0m"
-            if survival_runway >= 9999
-            else f"\u001b[1;32m{survival_runway:,.1f} 天\u001b[0m"
-        )
-        embed.description = (
-            "```ansi\n"
-            " 🏁 財務生存跑道 (Financial Runway)\n"
-            f" • 預估剩餘天數: {runway_text}\n"
-            " • 計算基準: 基於現有現金儲備與 Theta 收益\n"
-            "```"
-        )
-    else:
-        embed.description = None
+    runway_lines = format_runway_lines(runway, stale=runway_stale)
+    embed.description = "\n".join(
+        ["```ansi", " 🏁 提領跑道 (Withdrawal Runway)"]
+        + [f" • {ln}" for ln in runway_lines]
+        + ["```"]
+    )
 
     positions_list = []
     debit_cost_val = "$0.00 USD"
@@ -191,7 +184,7 @@ def build_post_market_intelligence_embed(
             macro_text = "目前無宏觀風險數據。"
         if positions_list:
             positions_text = _parse_and_format_positions_table(
-                positions_list, survival_runway
+                positions_list, runway_lines
             )
         else:
             positions_text = "目前無持倉部位。"
@@ -290,18 +283,11 @@ def build_post_market_intelligence_embed(
                 name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
             )
     else:
-        runway_info = (
-            "無限 (零負擔運作)"
-            if (survival_runway is not None and survival_runway >= 9999)
-            else f"{survival_runway:,.1f} 天"
-            if survival_runway is not None
-            else "良好"
-        )
         empty_lines = [
             "```ansi",
             " \u001b[1;33m💡 【帳戶處於 100% 現金防禦/觀望狀態】\u001b[0m",
             " • 🛡️ 實質暴露: $0.00 USD ｜ 無下行 Delta 曝險",
-            f" • 🏁 財務生存天數: {runway_info}",
+            f" • 🏁 壓力跑道: {runway_lines[0] if runway is not None else '尚無資料'}",
             " • 🧭 行動建議: 可使用 `/x` 執行即時量化雷達，捕捉超跌磁吸與突破標的。",
             "```",
         ]

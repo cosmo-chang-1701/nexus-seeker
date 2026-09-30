@@ -13,6 +13,29 @@ sys.path.append(os.path.join(os.getcwd(), "nexus_core"))
 from cogs.analyst_agent import AnalystAgent, SECTORS
 
 
+def _runway_snapshot() -> Any:
+    from database.withdrawal_runway import RunwaySnapshot
+
+    return RunwaySnapshot(
+        user_id=12345,
+        as_of="2026-09-30",
+        nav=100000.0,
+        nav_date="2026-09-30",
+        zero_years=4.8,
+        gfc_years=3.8,
+        dotcom_years=2.3,
+        stress_years=2.3,
+        capped=False,
+        next_withdrawal=10000.0,
+        boxx_value=0.0,
+        boxx_payments=0,
+        beta=1.3,
+        beta_is_fallback=False,
+        cpi_missing=False,
+        next_date="2027-01-04",
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_sector_flow_report() -> None:
     # Mock bot
@@ -419,6 +442,11 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
             "cogs.analyst_agent.generate_analyst_report", new_callable=AsyncMock
         ) as mock_gen_report,
         patch("cogs.analyst_agent.is_memory_safe", return_value=True),
+        patch(
+            "services.withdrawal_runway_service.get_runway_display",
+            new_callable=AsyncMock,
+            return_value=(_runway_snapshot(), False),
+        ),
     ):
         # Empty dict from ts.get_after_market_report_data
         mock_get_data.return_value = {}
@@ -429,19 +457,19 @@ async def test_dispatch_post_market_intelligence_runway_fallback() -> None:
         # Check that it fetched empty and fallback was applied
         args, kwargs = mock_gen_report.call_args
         raw_data = args[1]
-        # Check runway calculation fallback is 600.0
-        assert raw_data["aggregate_risk_metrics"]["avg_financial_runway_days"] == 600.0
+        # 盤後資料缺漏時，退回讀取最新的提領跑道快照
+        runway = raw_data["aggregate_risk_metrics"]["withdrawal_runway"]
+        assert runway["stress_years"] == 2.3
+        assert runway["zero_return_years"] == 4.8
 
         # Check queue_dm was called with the build embed containing "600"
         assert bot.queue_dm.await_count == 1
         assert bot.queue_dm.await_args is not None
         sent_embed = bot.queue_dm.await_args.kwargs["embed"]
-        # The fields should include the survival runway field with "600"
-        # The embed should contain the survival runway "600" somewhere
         embed_content = str(sent_embed.description) + "".join(
             [f.name + f.value for f in sent_embed.fields]
         )
-        assert "600" in embed_content
+        assert "壓力跑道 2.3 年" in embed_content
 
 
 @pytest.mark.asyncio

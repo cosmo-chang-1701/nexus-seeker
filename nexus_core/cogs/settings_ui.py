@@ -355,8 +355,23 @@ SETTINGS_LABELS = {
     ),
     "monthly_expense": (
         "💸 每月支出預算",
-        "每月生存支出預算 (USD, 用於財務跑道分析)",
+        "每月支出預算 (USD, 僅供期權 Theta 存活熔斷，不影響提領跑道)",
         "輸入大於等於 0 的預算",
+    ),
+    "withdrawal_amount": (
+        "🏧 每次提領額",
+        "每次提領額 (USD, 基準月購買力；0 = 不啟用提領跑道)",
+        "輸入大於等於 0 的金額，例如 10000",
+    ),
+    "withdrawal_anchor_month": (
+        "📆 提領基準月",
+        "提領額的通膨調整基準月 (YYYY-MM)",
+        "例如 2026-09",
+    ),
+    "withdrawal_months": (
+        "🗓️ 每年提領月份",
+        "每年提領的月份 (逗號分隔)",
+        "例如 1,7",
     ),
     "tax_reserve_rate": (
         "🏦 稅務預留比例",
@@ -545,6 +560,48 @@ class AccountSettingsModal(discord.ui.Modal):
                 )
             return
 
+        if self.key in ("withdrawal_anchor_month", "withdrawal_months"):
+            from database.user_settings import (
+                _normalize_anchor_month,
+                _normalize_withdrawal_months,
+            )
+
+            normalized = (
+                _normalize_anchor_month(value_str)
+                if self.key == "withdrawal_anchor_month"
+                else _normalize_withdrawal_months(value_str)
+            )
+            if normalized is None:
+                hint = (
+                    "基準月格式須為 YYYY-MM (例如 2026-09)"
+                    if self.key == "withdrawal_anchor_month"
+                    else "提領月份須為 1-12 的整數並以逗號分隔 (例如 1,7)"
+                )
+                await interaction.response.send_message(
+                    embed=create_error_embed(hint, title="輸入錯誤"),
+                    ephemeral=True,
+                )
+                return
+            await asyncio.to_thread(
+                database.upsert_user_config, self.user_id, **{self.key: normalized}
+            )
+            if (
+                self.view is not None
+                and hasattr(self.view, "refresh_items")
+                and hasattr(self.view, "build_embed")
+            ):
+                getattr(self.view, "refresh_items")()
+                embed = getattr(self.view, "build_embed")()
+                await interaction.response.edit_message(embed=embed, view=self.view)
+            else:
+                await interaction.response.send_message(
+                    embed=create_info_embed(
+                        title="系統資訊", message="✅ 設定已成功更新！"
+                    ),
+                    ephemeral=True,
+                )
+            return
+
         try:
             val = float(value_str)
         except ValueError:
@@ -570,6 +627,7 @@ class AccountSettingsModal(discord.ui.Modal):
             "polymarket_threshold",
             "monthly_expense",
             "cash_reserve",
+            "withdrawal_amount",
         ]:
             if val < 0:
                 await interaction.response.send_message(
@@ -657,8 +715,11 @@ class AccountSettingsView(discord.ui.View):
                 "polymarket_threshold",
                 "monthly_expense",
                 "cash_reserve",
+                "withdrawal_amount",
             ]:
                 val_display = f"${raw_val:,.0f}" if raw_val > 0 else "關閉/未設定"  # type: ignore
+            elif key in ["withdrawal_anchor_month", "withdrawal_months"]:
+                val_display = str(raw_val) if raw_val else "未設定"
             elif key == "polymarket_slippage":
                 val_display = f"{raw_val}%"
             elif key == "tax_reserve_rate":
@@ -753,6 +814,8 @@ class AccountSettingsView(discord.ui.View):
             modal_val: Any
             if key == "escape_window":
                 modal_val = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
+            elif key in ("withdrawal_anchor_month", "withdrawal_months"):
+                modal_val = getattr(ctx, key, None) or ""
             else:
                 modal_val = getattr(ctx, key, 0.0)
             label, desc, placeholder = SETTINGS_LABELS[key]
@@ -785,7 +848,11 @@ class AccountSettingsView(discord.ui.View):
         ]
 
         runway_settings = [
-            f"💸 **每月生存支出預算**: `${ctx.monthly_expense:,.0f}`",
+            f"🏧 **每次提領額**: `${ctx.withdrawal_amount:,.0f}`"
+            + ("" if ctx.withdrawal_amount > 0 else " *(未啟用提領跑道)*"),
+            f"📆 **提領基準月**: `{ctx.withdrawal_anchor_month or '未設定'}`",
+            f"🗓️ **每年提領月份**: `{ctx.withdrawal_months}`",
+            f"💸 **每月支出預算 (期權熔斷用)**: `${ctx.monthly_expense:,.0f}`",
             f"🏦 **稅務預留比例**: `{ctx.tax_reserve_rate:.1%}`",
             f"💰 **現金儲備金額**: `${ctx.cash_reserve:,.0f}`",
         ]

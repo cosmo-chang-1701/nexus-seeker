@@ -20,6 +20,9 @@ async def update_settings_impl(
     polymarket_use_llm: Optional[bool] = None,
     polymarket_slippage: Optional[float] = None,
     monthly_expense: Optional[float] = None,
+    withdrawal_amount: Optional[float] = None,
+    withdrawal_anchor_month: Optional[str] = None,
+    withdrawal_months: Optional[str] = None,
     tax_reserve_rate: Optional[float] = None,
     cash_reserve: Optional[float] = None,
     trading_strategy: Optional[str] = None,
@@ -40,6 +43,9 @@ async def update_settings_impl(
             polymarket_use_llm,
             polymarket_slippage,
             monthly_expense,
+            withdrawal_amount,
+            withdrawal_anchor_month,
+            withdrawal_months,
             tax_reserve_rate,
             cash_reserve,
             trading_strategy,
@@ -121,6 +127,44 @@ async def update_settings_impl(
                 embed=create_error_embed("支出預算不能為負數", title="系統錯誤"),
                 ephemeral=True,
             )
+
+    if withdrawal_amount is not None:
+        if withdrawal_amount >= 0:
+            db_updates["withdrawal_amount"] = withdrawal_amount
+            updates.append(f"🏧 每次提領額: `${withdrawal_amount:,.0f}`")
+        else:
+            return await interaction.followup.send(
+                embed=create_error_embed("提領額不能為負數", title="系統錯誤"),
+                ephemeral=True,
+            )
+
+    if withdrawal_anchor_month is not None:
+        from database.user_settings import _normalize_anchor_month
+
+        anchor = _normalize_anchor_month(withdrawal_anchor_month)
+        if anchor is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "基準月格式須為 YYYY-MM (例如 2026-09)", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
+        db_updates["withdrawal_anchor_month"] = anchor
+        updates.append(f"📆 提領基準月: `{anchor}`")
+
+    if withdrawal_months is not None:
+        from database.user_settings import _normalize_withdrawal_months
+
+        months_text = _normalize_withdrawal_months(withdrawal_months)
+        if months_text is None:
+            return await interaction.followup.send(
+                embed=create_error_embed(
+                    "提領月份須為 1-12 的整數並以逗號分隔 (例如 1,7)", title="系統錯誤"
+                ),
+                ephemeral=True,
+            )
+        db_updates["withdrawal_months"] = months_text
+        updates.append(f"🗓️ 每年提領月份: `{months_text}`")
 
     if tax_reserve_rate is not None:
         if 0.0 <= tax_reserve_rate <= 1.0:

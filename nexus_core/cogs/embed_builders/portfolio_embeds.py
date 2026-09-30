@@ -27,6 +27,7 @@ from market_analysis.dynamic_rollover.structural_signals import (
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
+    format_runway_lines,
     _chunk_ansi_table,
     _truncate_with_boundary,
 )
@@ -385,8 +386,8 @@ def create_strategic_dash_embed(
     user_ctx: Any,
     pnl_data: Dict[str, Any],
     vix_spot: float = 18.0,
-    backup_liquidity: float = 0.0,
-    extended_runway: float | None = None,
+    runway: Any = None,
+    runway_stale: bool = False,
 ) -> discord.Embed:
     """
     建構戰略看板 (Strategic Dashboard) Embed.
@@ -398,19 +399,12 @@ def create_strategic_dash_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 1. 財務生存狀態 (Financial Runway)
+    # 1. 提領跑道 (Withdrawal Runway；docs/risk_portfolio/05)
     daily_theta = _safe_float(user_ctx.total_theta)
     monthly_expense = _safe_float(user_ctx.monthly_expense)
     daily_expense = monthly_expense / 30.0 if monthly_expense > 0 else 0.0
     coverage_pct = (daily_theta / daily_expense * 100) if daily_expense > 0 else 100.0
-
-    # 計算跑道天數
-    gap = daily_expense - daily_theta
     cash_reserve = _safe_float(user_ctx.cash_reserve)
-    if gap <= 0:
-        runway_days = "∞ (收益已覆蓋支出)"
-    else:
-        runway_days = f"{cash_reserve / gap:,.0f}" if gap > 0 else "∞"
 
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
@@ -421,24 +415,19 @@ def create_strategic_dash_embed(
 
     runway_info = (
         f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
-        f"* **現金儲備:** `${cash_reserve:,.2f}` | **月支出:** `${monthly_expense:,.2f}`\n"
-        f"* **核心跑道:** {runway_days} 天 (由現金與 Theta 推算)\n"
+        f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
     )
-
-    if backup_liquidity > 0 and extended_runway is not None:
-        extended_text = f"{extended_runway:,.1f}" if extended_runway < 9999 else "∞"
-        runway_info += f"* **極限跑道:** {extended_text} 天 (含備用流動性 `${backup_liquidity:,.0f}`)\n"
-
+    for line in format_runway_lines(runway, stale=runway_stale):
+        runway_info += f"* {line}\n"
     runway_info += (
-        f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}` (覆蓋率 {coverage_pct:.1f}%)\n"
+        f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}`"
+        + (f" (覆蓋期權熔斷月支出 {coverage_pct:.1f}%)" if daily_expense > 0 else "")
+        + "\n"
         f"* **安全提領紅線:** `${payout_threshold:,.0f}` (流動性防守限制)\n"
     )
 
-    if coverage_pct < 100 and daily_expense > 0:
-        runway_info += f"> 💡 警訊：現金流覆蓋不足，每日收租缺口為 `${gap:,.2f}`。"
-
     embed.add_field(
-        name="🏁 財務生存狀態 (Financial Runway)", value=runway_info, inline=False
+        name="🏁 提領跑道 (Withdrawal Runway)", value=runway_info, inline=False
     )
 
     # 2. 組合風險精算 (NRO Integrity)

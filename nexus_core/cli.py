@@ -255,34 +255,30 @@ def portfolio_pnl(ctx: Any) -> None:
 @portfolio_group.command(name="runway")
 @click.pass_context
 def runway_check(ctx: Any):  # type: ignore
-    """執行財務生存跑道分析"""
-    from market_analysis.portfolio import calculate_financial_runway  # type: ignore
+    """顯示提領跑道（壓力重演，docs/risk_portfolio/05）"""
     import database
+    from cogs.embed_builders._embed_helpers import format_runway_lines
+    from services.withdrawal_runway_service import get_runway_display
 
     uid = ctx.obj["user_id"]
     u_ctx = database.get_full_user_context(uid)
 
-    from services.asset_manager import AssetManager
-    from models.asset import ContextType
+    async def _run() -> None:
+        snap, stale = await get_runway_display(uid)
+        lines = format_runway_lines(snap, stale=stale)
+        header = (
+            f"每次提領（基準月購買力）: ${u_ctx.withdrawal_amount:,.0f}\n"
+            f"提領月份: {u_ctx.withdrawal_months}｜基準月: "
+            f"{u_ctx.withdrawal_anchor_month or '未設定'}\n"
+        )
+        console.print(
+            Panel(
+                header + "[bold cyan]" + "\n".join(lines) + "[/bold cyan]",
+                title="🏁 Withdrawal Runway",
+            )
+        )
 
-    manager = AssetManager()
-    assets = manager.get_assets(uid, ContextType.TRADE)
-    total_theta = sum(a.metadata.get("theta", 0.0) for a in assets)
-
-    runway = calculate_financial_runway(
-        cash_reserve=u_ctx.cash_reserve,
-        monthly_expense=u_ctx.monthly_expense,
-        daily_theta=total_theta,
-    )
-
-    panel = Panel(
-        f"現金儲備: ${u_ctx.cash_reserve:,.0f}\n"
-        f"每月支出: ${u_ctx.monthly_expense:,.0f}\n"
-        f"組合每日 Theta: ${total_theta:,.2f}\n"
-        f"[bold cyan]預計財務跑道: {runway:,.1f} 天[/bold cyan]",
-        title="🏁 Financial Runway Analysis",
-    )
-    console.print(panel)
+    run_async(_run())
 
 
 # ==========================================

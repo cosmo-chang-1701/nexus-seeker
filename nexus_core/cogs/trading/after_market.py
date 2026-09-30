@@ -86,6 +86,15 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"總經訊號乾跑記錄失敗: {e}")
 
+        # 提領跑道快照：須在 NAV 快照（下行風險任務）與 CPI 觀測（總經任務）之後，
+        # 只寫快照、階段二不推播（services/withdrawal_runway_service.py）
+        try:
+            from services.withdrawal_runway_service import run_withdrawal_runway_job
+
+            await run_withdrawal_runway_job(self.bot, today)
+        except Exception as e:
+            logger.error(f"提領跑道快照計算失敗: {e}")
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()
@@ -132,11 +141,12 @@ class AfterMarketCog(commands.Cog):
         for uid, data in user_reports.items():
             report_lines = data.get("report_lines", [])
             hedge_analysis = data.get("hedge_analysis", {})
-            survival_runway = data.get("survival_runway")
+            runway = data.get("runway")
+            runway_stale = bool(data.get("runway_stale", False))
 
             try:
                 embed = create_portfolio_report_embed(
-                    report_lines, hedge_analysis, survival_runway
+                    report_lines, hedge_analysis, runway, runway_stale
                 )
             except Exception:
                 stats["users_failed"] += 1

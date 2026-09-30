@@ -222,14 +222,10 @@ class ReportsMixin:
                 logger.info(f"盤後報告略過：report_lines 為空，uid={uid}")
                 continue
 
-            # 🚀 [Pro Investor] 生存天數計算 (Runway Calculation) - 預設執行
-            from market_analysis.pro_management import calculate_survival_runway
+            # 提領跑道快照（16:15 ET 寫入；無快照時顯示端會標示「尚無資料」）
+            from services.withdrawal_runway_service import get_runway_display
 
-            survival_runway = calculate_survival_runway(
-                cash_reserve=user_ctx.cash_reserve,
-                monthly_expense=user_ctx.monthly_expense,
-                daily_theta=user_ctx.total_theta,
-            )
+            runway, runway_stale = await get_runway_display(uid)
 
             try:
                 # 2. 執行對沖績效分析
@@ -259,6 +255,7 @@ class ReportsMixin:
             results[uid] = {
                 "report_lines": report_lines,
                 "hedge_analysis": hedge_analysis,
-                "survival_runway": survival_runway,
+                "runway": runway,
+                "runway_stale": runway_stale,
             }
         return results
