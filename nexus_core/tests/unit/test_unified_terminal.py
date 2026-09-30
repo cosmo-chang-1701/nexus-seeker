@@ -350,6 +350,7 @@ async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # t
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_pulse_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
@@ -365,6 +366,131 @@ async def test_pulse_hub_command(mock_interaction: Any, mock_bot: Any):  # type:
         _, kwargs = mock_interaction.followup.send.call_args
         assert "view" in kwargs
         assert isinstance(kwargs["view"], PulseHubView)
+        # 逾時停用按鈕需要可編輯原始回應的互動
+        assert kwargs["view"].last_interaction is mock_interaction
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_command_error_sends_followup(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """資料層拋例外時不得讓使用者卡在「思考中」，且不外洩原始例外字串。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    with patch(
+        "cogs.unified_terminal.cog.get_macro_overview_data",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("secret db path /app/data"),
+    ):
+        await cog.pulse_hub.callback(cog, mock_interaction)  # type: ignore
+
+    mock_interaction.response.defer.assert_awaited_once()
+    mock_interaction.followup.send.assert_awaited_once()
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert kwargs["ephemeral"] is True
+    assert "view" not in kwargs
+    description = kwargs["embed"].description or ""
+    assert "secret db path" not in description
+    assert "市場情報中心" in description
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_command_embed_error_sends_followup(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """Embed 建構失敗同樣須回覆錯誤訊息。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    with (
+        patch(
+            "cogs.unified_terminal.cog.get_macro_overview_data",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "cogs.unified_terminal.cog.build_market_macro_overview_embed",
+            side_effect=ValueError("bad"),
+        ),
+    ):
+        await cog.pulse_hub.callback(cog, mock_interaction)  # type: ignore
+
+    mock_interaction.followup.send.assert_awaited_once()
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert kwargs["embed"].title.startswith("❌")
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_stale_cache_expires_under_memory_pressure() -> None:
+    """記憶體降級時僅回退使用 TTL 內的快取；逾期須重新計算，不得無限期提供舊數據。"""
+    from cogs.unified_terminal import utils as ut
+
+    cache: dict[str, Any] = {}
+    fresh_payload = {"spx": 5000.0, "is_degraded": False, "served_stale_cache": False}
+
+    with (
+        patch.object(ut, "_macro_overview_cache", cache),
+        patch.object(ut, "is_memory_safe", return_value=False),
+        patch.object(ut, "_cache_clock") as mock_clock,
+        patch("database.get_kv_cache", return_value=None),
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            side_effect=Exception("offline"),
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+        patch(
+            "services.calendar_service.calendar_service.prefetch_monthly_macro_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+            new_callable=AsyncMock,
+            side_effect=Exception("offline"),
+        ),
+    ):
+        # TTL 內：直接回退快取並附上年齡
+        cache["overview_7"] = (1000.0, fresh_payload)
+        mock_clock.return_value = 1000.0 + 120.0
+        hit = await ut.get_macro_overview_data(7)
+        assert hit["served_stale_cache"] is True
+        assert hit["spx"] == 5000.0
+        assert hit["stale_cache_age_seconds"] == pytest.approx(120.0)
+        # 回傳副本，不得污染快取本體
+        assert "stale_cache_age_seconds" not in fresh_payload
+
+        # 逾期：重新計算（離線 → spx 為 None），且以新時間戳回寫快取
+        mock_clock.return_value = 1000.0 + ut._MACRO_OVERVIEW_STALE_MAX_AGE_SECONDS + 1
+        miss = await ut.get_macro_overview_data(7)
+        assert miss["served_stale_cache"] is False
+        assert miss["is_degraded"] is True
+        assert miss["spx"] is None
+        cached_at, _ = cache["overview_7"]
+        assert cached_at == mock_clock.return_value
+
+
+def test_macro_overview_embed_discloses_stale_cache_age() -> None:
+    """回退快取時 Embed 須揭露資料年齡（Embed 時間戳是當下，否則會被誤讀為即時）。"""
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    embed = build_market_macro_overview_embed(
+        {
+            "is_degraded": True,
+            "served_stale_cache": True,
+            "stale_cache_age_seconds": 600.0,
+        }
+    )
+    notice = next(f.value for f in embed.fields if f.name == "⚠️ 系統降級警告")
+    assert "約 10 分鐘前之快取" in str(notice)
 
 
 @pytest.mark.asyncio

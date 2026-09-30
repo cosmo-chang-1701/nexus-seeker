@@ -2,12 +2,24 @@ from typing import Any, cast
 import inspect
 import logging
 import re
+import time
 from services.llm_service import is_memory_safe
 from services.market_data_service import BoundedCache
 
 logger = logging.getLogger(__name__)
 
+# 值為 (寫入時的 time.monotonic(), result_data)
 _macro_overview_cache = BoundedCache(max_size=10)
+
+# 記憶體降級時可回退使用的快取最長年齡。過去沒有任何年齡上限，記憶體壓力若持續
+# 數小時，/market 會把數小時前的 VIX / SPX / 零 Gamma 踩踏判定當成現況顯示（Embed
+# 時間戳卻是當下），誤導風控判讀。超過此年齡即視同冷快取，照常完整重算。
+_MACRO_OVERVIEW_STALE_MAX_AGE_SECONDS = 900.0
+
+
+def _cache_clock() -> float:
+    """快取年齡用的單調時鐘（獨立成函式以便測試替換，不必 patch 全域 time）。"""
+    return time.monotonic()
 
 
 async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
@@ -15,12 +27,16 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     cache_key = f"overview_{user_id}"
 
     if is_degraded and cache_key in _macro_overview_cache:
-        cached_data: dict[str, Any] = cast(
-            dict[str, Any], _macro_overview_cache[cache_key].copy()
+        cached_at, cached_payload = cast(
+            tuple[float, dict[str, Any]], _macro_overview_cache[cache_key]
         )
-        cached_data["is_degraded"] = True
-        cached_data["served_stale_cache"] = True
-        return cached_data
+        cache_age = _cache_clock() - cached_at
+        if 0.0 <= cache_age <= _MACRO_OVERVIEW_STALE_MAX_AGE_SECONDS:
+            cached_data: dict[str, Any] = cached_payload.copy()
+            cached_data["is_degraded"] = True
+            cached_data["served_stale_cache"] = True
+            cached_data["stale_cache_age_seconds"] = cache_age
+            return cached_data
 
     # Read from SQLite kv_cache
     from database import get_kv_cache, save_kv_cache
@@ -323,7 +339,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     }
 
     # Save to memory cache
-    _macro_overview_cache[cache_key] = result_data
+    _macro_overview_cache[cache_key] = (_cache_clock(), result_data)
     return result_data
 
 

@@ -1843,6 +1843,10 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                 "**[警告] 偵測到系統記憶體負載 > 85%，已自動啟用 LRU 降級保護機制，"
                 "簡化部分動態計算以確保系統穩定。**"
             )
+            # Embed 時間戳為當下，須另外揭露快取資料實際年齡，避免誤讀為即時數據
+            stale_age = macro_data.get("stale_cache_age_seconds")
+            if isinstance(stale_age, (int, float)) and stale_age >= 0:
+                degradation_notice += f"\n📦 本面板數據為約 {max(1, round(stale_age / 60.0))} 分鐘前之快取。"
         else:
             degradation_notice = (
                 "**[警告] 偵測到系統記憶體負載 > 85%，尚無可用 LRU 快取可供降級回退，"

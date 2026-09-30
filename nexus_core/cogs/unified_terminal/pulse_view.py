@@ -1,4 +1,5 @@
-from typing import Any
+from typing import Any, Optional
+import asyncio
 import discord
 import logging
 import database
@@ -24,8 +25,24 @@ class PulseHubView(discord.ui.View):
         super().__init__(timeout=300)
         self.user_id = user_id
         self.bot = bot
+        # 最近一次可編輯本訊息的互動（slash 指令本身或最後一次按鈕點擊），
+        # 供 on_timeout 停用按鈕；互動 token 有效 15 分鐘，大於 view 逾時 5 分鐘。
+        self.last_interaction: Optional[discord.Interaction] = None
+
+    async def on_timeout(self) -> None:
+        """逾時後停用所有按鈕，避免殘留點了只會顯示「此互動失敗」的殭屍按鈕。"""
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = True
+        if self.last_interaction is None:
+            return
+        try:
+            await self.last_interaction.edit_original_response(view=self)
+        except Exception as e:
+            logger.debug(f"PulseHubView 逾時停用按鈕失敗: {e}")
 
     async def _set_loading(self, interaction: discord.Interaction) -> Any:
+        self.last_interaction = interaction
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = True
@@ -55,9 +72,11 @@ class PulseHubView(discord.ui.View):
 
             macro_data = await get_macro_overview_data(self.user_id)
             embed = build_market_macro_overview_embed(macro_data)
-        except Exception as e:
+        except Exception:
+            logger.exception("/market 總經風控面板載入失敗")
             await interaction.followup.send(
-                embed=create_error_embed(f"獲取總經數據失敗: {e}"), ephemeral=True
+                embed=create_error_embed("獲取總經數據失敗，請稍後再試。"),
+                ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -78,9 +97,11 @@ class PulseHubView(discord.ui.View):
                 max_items=15,
                 empty_message="📭 未來 7 日內無影響持倉標的的重大事件或財報。",
             )
-        except Exception as e:
+        except Exception:
+            logger.exception("/market 市場日曆載入失敗")
             await interaction.followup.send(
-                embed=create_error_embed(f"獲取日曆失敗: {e}"), ephemeral=True
+                embed=create_error_embed("獲取日曆失敗，請稍後再試。"),
+                ephemeral=True,
             )
         finally:
             await self._reset_loading(interaction, embed=embed)
@@ -111,15 +132,16 @@ class PulseHubView(discord.ui.View):
                         )
 
                         view = PolymarketPaginatedView(embeds, total_items=len(markets))
-                        await interaction.followup.send(
-                            embed=embeds[0], view=view, ephemeral=True
+                        view.message = await interaction.followup.send(
+                            embed=embeds[0], view=view, ephemeral=True, wait=True
                         )
                         embed = None  # 不修改原始 Embed
                 else:
                     embed = None
-        except Exception as e:
+        except Exception:
+            logger.exception("/market 預測市場載入失敗")
             await interaction.followup.send(
-                embed=create_error_embed(f"獲取預測市場失敗: {e}"),
+                embed=create_error_embed("獲取預測市場失敗，請稍後再試。"),
                 ephemeral=True,
             )
         finally:
@@ -135,8 +157,12 @@ class PulseHubView(discord.ui.View):
         try:
             from market_analysis.volatility_inspector import VolatilityInspector
 
-            all_watchlists = database.get_all_watchlist()
-            user_watch = [row[1] for row in all_watchlists if row[0] == self.user_id]
+            # 只讀本人清單，且同步 SQLite 讀取移出 event loop（原本在 event loop 上
+            # 同步撈出全站所有使用者的觀察清單再於記憶體過濾）
+            user_rows = await asyncio.to_thread(
+                database.get_user_watchlist, self.user_id
+            )
+            user_watch = [row[0] for row in user_rows]
             if not user_watch:
                 embed = create_info_embed(
                     "查無資料", "📭 觀察清單為空，無法執行 IV 掃描。"
@@ -150,9 +176,10 @@ class PulseHubView(discord.ui.View):
                     if r.get("iv_rank", 0) > 80 or r.get("is_high_risk_vol")
                 ]
                 embed = create_iv_risk_scan_embed(high_iv)
-        except Exception as e:
+        except Exception:
+            logger.exception("/market 高波動掃描失敗")
             await interaction.followup.send(
-                embed=create_error_embed(f"執行 IV 掃描失敗: {e}"),
+                embed=create_error_embed("執行 IV 掃描失敗，請稍後再試。"),
                 ephemeral=True,
             )
         finally:

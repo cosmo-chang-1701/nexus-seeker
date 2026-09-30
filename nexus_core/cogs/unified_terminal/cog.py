@@ -192,18 +192,34 @@ class UnifiedTerminalCog(
     async def pulse_hub(self, interaction: discord.Interaction) -> Any:
         await interaction.response.defer(ephemeral=True)
 
-        # 🚀 Task 2 Hook: Proactive Warmup during pre-market window
-        if hasattr(self.bot, "memory_manager"):
-            coro = self.bot.memory_manager.proactive_warmup()
-            if asyncio.iscoroutine(coro):
-                asyncio.create_task(coro)
+        try:
+            # 🚀 Task 2 Hook: Proactive Warmup during pre-market window
+            if hasattr(self.bot, "memory_manager"):
+                coro = self.bot.memory_manager.proactive_warmup()
+                if asyncio.iscoroutine(coro):
+                    asyncio.create_task(coro)
 
-        with market_data_service.mark_interactive_request():
-            macro_data = await get_macro_overview_data(interaction.user.id)
-        embed = build_market_macro_overview_embed(macro_data)
+            with market_data_service.mark_interactive_request():
+                macro_data = await get_macro_overview_data(interaction.user.id)
+            embed = build_market_macro_overview_embed(macro_data)
 
-        view = PulseHubView(interaction.user.id, self.bot)
-        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+            view = PulseHubView(interaction.user.id, self.bot)
+            # 首則 followup 會取代 defer 的「思考中」原始回應，故 slash 指令本身的
+            # interaction 即可在 view 逾時時編輯此訊息
+            view.last_interaction = interaction
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        except Exception:
+            # defer 之後若未送出任何 followup，使用者會永遠停在「思考中」
+            logger.exception("/market 市場情報中心載入失敗")
+            try:
+                await interaction.followup.send(
+                    embed=create_error_embed(
+                        "載入市場情報中心時發生未預期錯誤，請稍後再試。"
+                    ),
+                    ephemeral=True,
+                )
+            except Exception as follow_err:
+                logger.error(f"/market 錯誤訊息回覆失敗: {follow_err}")
 
     @app_commands.command(
         name="stress_test",

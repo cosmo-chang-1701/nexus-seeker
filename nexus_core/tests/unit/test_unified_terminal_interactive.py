@@ -359,7 +359,7 @@ async def test_pulse_hub_iv_uses_builder_for_empty_watchlist(  # type: ignore
 ):
     view = PulseHubView(user_id=123, bot=mock_bot)
 
-    with patch("database.get_all_watchlist", return_value=[]), patch(
+    with patch("database.get_user_watchlist", return_value=[]), patch(
         "cogs.unified_terminal.pulse_view.create_info_embed"
     ) as mock_builder:
         mock_builder.return_value = MagicMock(spec=discord.Embed)
@@ -383,3 +383,110 @@ async def test_pulse_hub_poly_without_service_returns_error_embed(  # type: igno
 
     _, last_kwargs = mock_interaction.edit_original_response.call_args
     assert last_kwargs["embed"].title.startswith("❌")
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_iv_reads_only_own_watchlist(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """高波動掃描只讀取本人觀察清單，不得在 event loop 上撈全站清單。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+
+    with patch(
+        "database.get_user_watchlist", return_value=[("NVDA", True)]
+    ) as mock_user_wl, patch("database.get_all_watchlist") as mock_all_wl, patch(
+        "market_analysis.volatility_inspector.VolatilityInspector.run_scan",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as mock_scan:
+        await view.btn_iv.callback(mock_interaction)
+
+    mock_user_wl.assert_called_once_with(123)
+    mock_all_wl.assert_not_called()
+    mock_scan.assert_awaited_once_with(["NVDA"], 123)
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_button_error_hides_raw_exception(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """按鈕失敗時回覆繁中通用訊息，不外洩原始例外字串，且按鈕恢復可用。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+
+    with patch(
+        "services.calendar_service.calendar_service.get_portfolio_events",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("secret internal detail"),
+    ):
+        await view.btn_calendar.callback(mock_interaction)
+
+    mock_interaction.followup.send.assert_awaited_once()
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert kwargs["ephemeral"] is True
+    description = kwargs["embed"].description or ""
+    assert "secret internal detail" not in description
+    assert "獲取日曆失敗" in description
+    _, last_kwargs = mock_interaction.edit_original_response.call_args
+    assert all(not c.disabled for c in last_kwargs["view"].children)
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_on_timeout_disables_buttons(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """逾時後須以最後一次互動實際編輯訊息，停用所有按鈕。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+    view.last_interaction = mock_interaction
+
+    await view.on_timeout()
+
+    mock_interaction.edit_original_response.assert_awaited_once()
+    _, kwargs = mock_interaction.edit_original_response.call_args
+    assert all(c.disabled for c in kwargs["view"].children)
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_on_timeout_without_interaction_is_noop(  # type: ignore
+    mock_bot: Any,
+):
+    """尚未綁定任何互動時逾時不得拋錯。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+    await view.on_timeout()
+    assert all(c.disabled for c in view.children if isinstance(c, discord.ui.Button))
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_button_click_rebinds_last_interaction(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """按鈕點擊後，逾時編輯應改用這次（token 較新的）互動。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+    view.last_interaction = MagicMock()
+
+    with patch(
+        "services.calendar_service.calendar_service.get_portfolio_events",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        await view.btn_calendar.callback(mock_interaction)
+
+    assert view.last_interaction is mock_interaction
+
+
+@pytest.mark.asyncio
+async def test_pulse_hub_multi_page_poly_binds_message(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """多頁預測市場須回填 followup 訊息到翻頁 View，供其逾時時移除按鈕。"""
+    view = PulseHubView(user_id=123, bot=mock_bot)
+    mock_bot.polymarket_service = MagicMock()
+    mock_bot.polymarket_service.get_active_markets.return_value = [
+        {"question": f"Q{i}?", "tokens": []} for i in range(20)
+    ]
+    sent_message = MagicMock()
+    mock_interaction.followup.send = AsyncMock(return_value=sent_message)
+
+    await view.btn_poly.callback(mock_interaction)
+
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert kwargs["view"].message is sent_message
