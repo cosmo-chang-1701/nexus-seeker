@@ -145,7 +145,8 @@ async def update_settings_impl(
         if anchor is None:
             return await interaction.followup.send(
                 embed=create_error_embed(
-                    "基準月格式須為 YYYY-MM (例如 2026-09)", title="系統錯誤"
+                    "基準月須為 YYYY-MM，介於 1947-01 與本月之間 (例如 2026-09)",
+                    title="系統錯誤",
                 ),
                 ephemeral=True,
             )

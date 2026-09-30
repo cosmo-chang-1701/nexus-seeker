@@ -58,6 +58,9 @@ logger = logging.getLogger(__name__)
 FRED_CSV_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
 # 每次只抓最近 3 年：足以涵蓋 126 個交易日變化、52 週低點與 Sahm；已存的觀測不會被覆寫
 FRED_LOOKBACK_DAYS = 3 * 365
+# 例外：提領跑道的通膨基準月可早於 3 年（docs/risk_portfolio/05），CPI 抓全史
+# （月資料約 950 筆，已存觀測走 INSERT OR IGNORE，重抓成本可忽略）
+FRED_FULL_HISTORY_START: dict[str, date] = {"CPIAUCSL": date(1947, 1, 1)}
 FRED_TIMEOUT_SECONDS = 20.0
 # 科技池相對強弱需要 63 個交易日，取 6 個月日線即可
 TECH_HISTORY_PERIOD = "6mo"
@@ -98,7 +101,9 @@ async def _download_fred(series_id: str, start: date) -> str:
 
 async def fetch_fred_series(series_id: str, today: date) -> list[Observation]:
     """抓取 FRED 序列並附上各觀測的可用日（前視防護）。"""
-    start = today - timedelta(days=FRED_LOOKBACK_DAYS)
+    start = FRED_FULL_HISTORY_START.get(
+        series_id, today - timedelta(days=FRED_LOOKBACK_DAYS)
+    )
     text = await SingleFlightManager.run(
         f"fred_csv:{series_id}:{start.isoformat()}", _download_fred, series_id, start
     )

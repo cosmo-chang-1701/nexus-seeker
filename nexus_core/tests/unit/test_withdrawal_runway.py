@@ -7,6 +7,7 @@ from database.user_settings import (
     _normalize_withdrawal_months,
 )
 from market_analysis import withdrawal_runway as wr
+from database.withdrawal_runway import RunwaySnapshot
 from market_analysis.withdrawal_runway import StressPath
 
 
@@ -209,6 +210,10 @@ def test_settings_normalizers() -> None:
     assert _normalize_anchor_month("2026-9") == "2026-09"
     assert _normalize_anchor_month("2026-13") is None
     assert _normalize_anchor_month("26-09") is None
+    # 超出 CPIAUCSL 資料範圍（1947-01 之前或未來月份）→ 拒絕，避免通膨調整靜默失效
+    assert _normalize_anchor_month("1947-01") == "1947-01"
+    assert _normalize_anchor_month("1946-12") is None
+    assert _normalize_anchor_month("9999-01") is None
     assert _normalize_withdrawal_months("7, 1,7") == "1,7"
     assert _normalize_withdrawal_months("") is None
     assert _normalize_withdrawal_months("0,7") is None
@@ -260,3 +265,56 @@ def test_withdrawal_settings_roundtrip_and_defaults(db_conn: object) -> None:
     ctx = get_full_user_context(uid)
     assert ctx.withdrawal_anchor_month == "2026-09" and ctx.withdrawal_months == "1,7"
     assert ctx.withdrawal_amount == 0.0
+
+
+@pytest.mark.asyncio
+async def test_withdrawal_setting_change_clears_snapshot_and_disabled_hides_it(
+    db_conn: object,
+) -> None:
+    """設定變更刪除舊快照；提領額為 0 時即使有殘留快照也不顯示。"""
+    import asyncio
+
+    from database.withdrawal_runway import load_snapshot, upsert_snapshots
+    from database.user_settings import upsert_user_config
+    from services.withdrawal_runway_service import get_runway_display
+
+    uid = 990086
+    snap = wr_snapshot(uid)
+    await asyncio.to_thread(upsert_user_config, uid, withdrawal_amount=10_000)
+    await upsert_snapshots([snap])
+
+    # 非提領欄位不影響快照
+    await asyncio.to_thread(upsert_user_config, uid, capital=120_000.0)
+    assert load_snapshot(uid) is not None
+    shown, _ = await get_runway_display(uid)
+    assert shown is not None
+
+    # 任一提領欄位變更 → 快照刪除
+    await asyncio.to_thread(upsert_user_config, uid, withdrawal_months="7")
+    assert load_snapshot(uid) is None
+
+    # 停用後殘留的快照（例如舊版寫入）不顯示
+    await asyncio.to_thread(upsert_user_config, uid, withdrawal_amount=0)
+    await upsert_snapshots([snap])
+    assert await get_runway_display(uid) == (None, False)
+
+
+def wr_snapshot(uid: int) -> RunwaySnapshot:
+    return RunwaySnapshot(
+        user_id=uid,
+        as_of="2026-09-30",
+        nav=100_000.0,
+        nav_date="2026-09-30",
+        zero_years=4.8,
+        gfc_years=3.8,
+        dotcom_years=2.3,
+        stress_years=2.3,
+        capped=False,
+        next_withdrawal=10_000.0,
+        boxx_value=0.0,
+        boxx_payments=0,
+        beta=1.0,
+        beta_is_fallback=False,
+        cpi_missing=False,
+        next_date="2027-01-04",
+    )

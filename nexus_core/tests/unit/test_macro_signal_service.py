@@ -195,3 +195,15 @@ def test_v084_migration_contract_and_tables(db_conn: Any) -> None:
         "macro_signal_log",
         "macro_regime_log",
     } <= tables
+
+
+@pytest.mark.asyncio
+async def test_cpi_fetches_full_history_for_old_anchor_months(db_conn: Any) -> None:
+    """提領跑道的基準月可早於 3 年，CPI 必須抓全史；其他序列維持近 3 年。"""
+    download = AsyncMock(return_value="observation_date,X\n")
+    with patch.object(svc, "_download_fred", new=download):
+        await svc.fetch_fred_series("CPIAUCSL", date(2026, 9, 30))
+        await svc.fetch_fred_series("ICSA", date(2026, 9, 30))
+    starts = [c.args[1] for c in download.call_args_list]
+    assert starts[0] == date(1947, 1, 1)
+    assert starts[1] == date(2026, 9, 30) - timedelta(days=svc.FRED_LOOKBACK_DAYS)

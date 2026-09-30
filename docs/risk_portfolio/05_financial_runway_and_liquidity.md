@@ -140,9 +140,9 @@ flowchart TD
    - `nexus_core/database/migrations/v085_add_withdrawal_settings.py`：`user_settings` 加入提領基準額、基準月、提領月份、目標權重覆寫；`database/user_settings.py` 的 `upsert_user_config` 對基準月與月份做格式驗證（非法值不覆寫既有設定）。
    - 測試：`nexus_core/tests/unit/test_withdrawal_runway.py`。
 2. **階段二：顯示並取代舊跑道（已實作）**
-   - `nexus_core/services/withdrawal_runway_service.py`：16:15 ET 於 NAV 快照與 FRED 觀測更新**之後**（`after_market.py` 最後一步）為「已設定提領」的使用者計算並寫入 `withdrawal_runway_snapshot`（v086，每人一列）。NAV／BOXX 取自最新 `portfolio_nav_daily`；Beta 為模擬投組日報酬對 SPY 的 cov/var（共同日 < 60 → 走 `STRESS_BETA_FALLBACK`）；CPI 由 `macro_signals.FRED_SERIES` 新增的 `CPIAUCSL`（`monthly_cpi`，可用日 = 觀測日 + 45 天）取得，基準月 CPI 不套公布延遲；下次提領日為提領月份的首個交易日，交易日數餵給 `stress_runway(days_to_first, first_month)`。NAV 快照超過 5 個交易日未更新 → 顯示端標「資料過期」。
+   - `nexus_core/services/withdrawal_runway_service.py`：16:15 ET 於 NAV 快照與 FRED 觀測更新**之後**（`after_market.py` 最後一步）為「已設定提領」的使用者計算並寫入 `withdrawal_runway_snapshot`（v086，每人一列）。NAV／BOXX 取自最新 `portfolio_nav_daily`；Beta 為模擬投組日報酬對 SPY 的 cov/var（共同日 < 60 → 走 `STRESS_BETA_FALLBACK`）；CPI 由 `macro_signals.FRED_SERIES` 新增的 `CPIAUCSL`（`monthly_cpi`，可用日 = 觀測日 + 45 天）取得，基準月 CPI 不套公布延遲；其他 FRED 序列只抓近 3 年，CPI 例外抓自 1947-01 的全史（`FRED_FULL_HISTORY_START`），使早於 3 年的基準月也查得到 CPI；下次提領日為提領月份的首個交易日，交易日數餵給 `stress_runway(days_to_first, first_month)`。NAV 快照超過 5 個交易日未更新 → 顯示端標「資料過期」。提領額為 0（未啟用）時 `get_runway_display` 不回傳快照；任一提領設定變更時，`upsert_user_config` 於同一交易刪除該使用者的快照，待下次收盤以新設定重算，避免顯示以舊設定算出的跑道。
    - 顯示：`cogs/embed_builders/_embed_helpers.py::format_runway_lines` 為唯一格式來源，`report_embeds.py`、`order_embeds/post_market_intelligence.py`、`portfolio_embeds.py`（戰略看板）、`cogs/unified_terminal/`、`cogs/analyst_agent.py`（LLM 輸入 `aggregate_risk_metrics.withdrawal_runway`）、`cli.py portfolio runway` 皆改讀快照；已移除「鐵血不破」與寫死的「4.6+ 年」。
-   - 設定入口：`/settings` 面板與 terminal `update_settings_impl` 新增每次提領額、基準月、提領月份（沿用 `upsert_user_config` 的格式驗證）。
+   - 設定入口：`/settings` 面板與 terminal `update_settings_impl` 新增每次提領額、基準月、提領月份（沿用 `upsert_user_config` 的格式驗證；基準月須介於 1947-01 與本月之間，超出範圍查不到 CPI，一律拒絕）。
    - `market_analysis/pro_management.py`：已移除 `calculate_survival_runway`／`calculate_financial_runway`。**`monthly_expense` 欄位保留**，僅供 `gamma_squeeze_engine`／`volatility_inspector`／`analyst_runners/portfolio_runner` 的 Theta 存活熔斷使用（設定介面標註「僅供期權熔斷」）；`cash_reserve` 仍供 `/stress_test` 使用。
    - 測試：`nexus_core/tests/unit/test_withdrawal_runway_service.py`。
 3. **階段三：推播**

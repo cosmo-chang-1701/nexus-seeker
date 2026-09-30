@@ -573,7 +573,7 @@ class AccountSettingsModal(discord.ui.Modal):
             )
             if normalized is None:
                 hint = (
-                    "基準月格式須為 YYYY-MM (例如 2026-09)"
+                    "基準月須為 YYYY-MM，介於 1947-01 與本月之間 (例如 2026-09)"
                     if self.key == "withdrawal_anchor_month"
                     else "提領月份須為 1-12 的整數並以逗號分隔 (例如 1,7)"
                 )

@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, List, Optional, Sequence
 import sqlite3
 import logging
@@ -65,8 +66,17 @@ _VALID_RISK_APPETITES: frozenset[str] = frozenset({"DEFENSIVE", "AGGRESSIVE"})
 _VALID_PORTFOLIO_MODES: frozenset[str] = frozenset({"COMMAND", "ADVISORY"})
 
 
+# CPIAUCSL 自 1947-01 起有資料；基準月早於此或晚於本月都查不到 CPI，
+# 通膨調整會靜默失效，因此一律拒絕。
+ANCHOR_MONTH_MIN = "1947-01"
+# 任一欄位變動都讓既有跑道快照失效（刪除，待下次收盤以新設定重算）
+_WITHDRAWAL_KEYS: frozenset[str] = frozenset(
+    {"withdrawal_amount", "withdrawal_anchor_month", "withdrawal_months"}
+)
+
+
 def _normalize_anchor_month(value: Any) -> Optional[str]:
-    """`YYYY-MM`；格式不合法回傳 None（該欄位不更新，不靜默寫入壞值）。"""
+    """`YYYY-MM`，介於 1947-01 與本月之間；不合法回傳 None（該欄位不更新，不靜默寫入壞值）。"""
     text = str(value).strip()
     parts = text.split("-")
     if len(parts) != 2 or not (parts[0].isdigit() and parts[1].isdigit()):
@@ -74,7 +84,11 @@ def _normalize_anchor_month(value: Any) -> Optional[str]:
     year, month = int(parts[0]), int(parts[1])
     if len(parts[0]) != 4 or not 1 <= month <= 12:
         return None
-    return f"{year:04d}-{month:02d}"
+    normalized = f"{year:04d}-{month:02d}"
+    this_month = datetime.now().strftime("%Y-%m")
+    if not ANCHOR_MONTH_MIN <= normalized <= this_month:
+        return None
+    return normalized
 
 
 def _normalize_withdrawal_months(value: Any) -> Optional[str]:
@@ -132,6 +146,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
         }
         update_pairs = []
         values = []
+        touched_withdrawal = False
 
         for key, value in kwargs.items():
             if key in allowed_keys and value is not None:
@@ -179,6 +194,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
 
                 update_pairs.append(f"{key} = ?")
                 values.append(value)
+                touched_withdrawal = touched_withdrawal or key in _WITHDRAWAL_KEYS
 
         if not update_pairs:
             return False
@@ -189,19 +205,26 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
 
         # 「確保使用者紀錄存在」與「更新欄位」必須同屬一個交易，否則兩者之間
         # 可能被其他寫入插隊。走批次寫入入口，整批共用一個交易、只 commit 一次。
-        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-        execute_write_many(
-            [
-                (
-                    """
+        statements: list[tuple[str, tuple[Any, ...]]] = [
+            (
+                """
             INSERT OR IGNORE INTO user_settings (user_id, capital, risk_limit)
             VALUES (?, 100000.0, 15.0)
         """,
+                (user_id,),
+            ),
+            (sql, tuple(values)),
+        ]
+        if touched_withdrawal:
+            # 舊快照是以舊設定算的，留著會讓面板顯示與新設定不符的跑道
+            statements.append(
+                (
+                    "DELETE FROM withdrawal_runway_snapshot WHERE user_id = ?",
                     (user_id,),
-                ),
-                (sql, tuple(values)),
-            ]
-        )
+                )
+            )
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        execute_write_many(statements)
         return True
 
     except Exception as e:

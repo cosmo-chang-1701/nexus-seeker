@@ -273,9 +273,13 @@ async def get_runway_snapshot(user_id: int) -> Optional[RunwaySnapshot]:
 
 
 async def get_runway_display(user_id: int) -> tuple[Optional[RunwaySnapshot], bool]:
-    """供顯示端使用：(最新快照, 是否過期)。無快照 → (None, False)。"""
+    """供顯示端使用：(最新快照, 是否過期)。無快照或未啟用提領 → (None, False)。"""
     snap = await get_runway_snapshot(user_id)
     if snap is None:
+        return None, False
+    # 設定變更時已刪除快照；此處再擋一次，避免任何殘留快照在停用後繼續顯示
+    ctx = await asyncio.to_thread(get_full_user_context, user_id)
+    if ctx.withdrawal_amount <= 0:
         return None, False
     return snap, await asyncio.to_thread(is_snapshot_stale, snap)
 
