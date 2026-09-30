@@ -452,7 +452,7 @@ class IntradayScanPipeline:
         (`bot._latest_radar_data_cache`，300 秒保鮮窗)，命中就零額外網路；
         未命中才經 UnifiedTerminalCog 補抓，且必須走 `self._radar_fetch_sem`。
 
-        ⚠️ 共享快取原本由 15 分鐘自選雷達寫入，該雷達已隨「盤中情報」模組移除，
+        ⚠️ 共享快取原本由 15 分鐘自選雷達寫入，該雷達推播已移除，
         目前沒有寫入端——fallback 補抓是常態而非例外，Semaphore 不可省。讀取端
         保留，日後若有其他迴圈寫入快取可直接受益。
         取不到 (cog 缺失／抓取失敗) 一律回 None，呼叫端視為本輪略過 (fail-safe)。
@@ -678,6 +678,19 @@ class IntradayScanPipeline:
                     await asyncio.sleep(600)
                     continue
 
+                # AGENTS.md §4：盤中背景迴圈一律受 85% RAM 閘門約束。本管線每輪
+                # 對每位使用者的每檔自選標的抓報價、期權鏈、GEX 並組裝 embed，
+                # 記憶體吃緊時整輪略過，下一輪 (30 分鐘後) 再試。
+                from services.llm_service import is_memory_safe
+
+                if not is_memory_safe():
+                    logger.warning(
+                        "🤖 [Intraday Pipeline] 記憶體水位過高 (RAM+Swap > 85%)，"
+                        "跳過本輪掃描。"
+                    )
+                    await asyncio.sleep(self.scan_interval_seconds)
+                    continue
+
                 logger.info(
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
@@ -746,9 +759,8 @@ class IntradayScanPipeline:
                                 watchlist_eval is not None
                                 and watchlist_eval.tactical.alert_level != "green"
                             ):
-                                # 這條深度心跳有自己的通知通道，與 15 分鐘批次
-                                # 雷達 (cogs/trading/heartbeat.py 的
-                                # heartbeat_watchlist) 分開控制。
+                                # 這條深度心跳有自己的通知通道 (heartbeat_symbol_deep)；
+                                # 原本並存的 15 分鐘批次雷達推播已移除。
                                 # 一次讀取整份設定（走每使用者快取），不再對同一個
                                 # 開關各讀一次 is_notification_enabled 與完整 dict
                                 notif_settings = (

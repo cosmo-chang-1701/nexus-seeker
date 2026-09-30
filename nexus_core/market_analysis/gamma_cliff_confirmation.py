@@ -26,8 +26,8 @@ def is_below_gamma_defense_line(
 ) -> bool:
     """負 Gamma 防線基礎判定：現價是否同時跌破 PutWall 與 Gamma Flip。
 
-    原本供 15 分鐘自選雷達的情境事件分類器（scenario_classifier，已隨「盤中情報」
-    模組移除）判定是否進入 STRUCTURAL_BREAKDOWN_PENDING；目前保留為粗粒度參考判定。
+    原本供 15 分鐘自選雷達的情境事件分類器（scenario_classifier，已移除）判定是否
+    進入 STRUCTURAL_BREAKDOWN_PENDING；目前保留為粗粒度參考判定。
 
     注意：此為粗粒度基礎判定，刻意不含 ATR 緩衝。與持倉轉倉的版本刻意不同、
     不應合併：

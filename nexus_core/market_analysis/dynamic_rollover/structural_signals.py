@@ -324,8 +324,7 @@ async def compute_structural_breakdown_signals_impl(
     ATR 緩衝 + SQZ 動能疊加 + 現貨/期權雙軌出場邏輯，判定門檻更嚴謹）。
     `gamma_cliff_confirmation.is_below_gamma_defense_line`（price < put_wall and
     price < gamma_flip，無 ATR 緩衝）是保留下來的粗粒度變體；原本使用它的
-    15 分鐘自選雷達情境事件（scenario_classifier / heartbeat）已隨「盤中情報」
-    模組移除。兩者刻意不同、不應合併（見下方回歸測試）。
+    15 分鐘自選雷達情境事件（scenario_classifier / heartbeat）已移除。兩者刻意不同、不應合併（見下方回歸測試）。
 
     is_whale_sto_block（微觀結構出場決策矩陣 SL-主力對沖）：改用
     `_detect_whale_put_bto_block` 的真實 UOA 名目金額/比率判定，取代舊版
