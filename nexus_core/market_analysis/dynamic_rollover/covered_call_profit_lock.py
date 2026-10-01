@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any, Dict, List
 
+import market_time
+
 from ._shared import format_cash_impact
 from .constants import (
     _COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT,
@@ -44,7 +46,7 @@ class _CoveredCallProfitLockMixin:
             expiry = str(pos.get("expiry", ""))
             try:
                 exp_dt = datetime.strptime(expiry, "%Y-%m-%d").date()
-                dte = (exp_dt - datetime.now().date()).days
+                dte = market_time.days_to_expiry_et(exp_dt)
             except (ValueError, TypeError):
                 continue  # fail-safe：到期日無法解析，安全起見不產生指令
 

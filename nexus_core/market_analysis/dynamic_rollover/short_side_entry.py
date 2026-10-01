@@ -30,6 +30,8 @@ import math
 from datetime import datetime
 from typing import Any, Dict, Optional, Tuple
 
+import market_time
+
 from market_analysis.atr_utils import compute_atr_15m_from_df
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.room_threshold import (
@@ -532,7 +534,7 @@ async def _confirm_short_entry_condition6_candidate_dte_ivr(
 
     try:
         nearest_expiry_dt = datetime.strptime(expiries[0], "%Y-%m-%d").date()
-        dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
+        dte_nearest = market_time.days_to_expiry_et(nearest_expiry_dt)
     except (ValueError, TypeError) as e:
         reasons.append(f"做空條件六❌：標的最近效期到期日解析失敗: {e}")
         return False, None

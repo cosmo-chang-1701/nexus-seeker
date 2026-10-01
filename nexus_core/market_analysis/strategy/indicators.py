@@ -56,7 +56,7 @@ def _calculate_technical_indicators(df: Any):  # type: ignore
         return None
 
 
-def _determine_strategy_signal(indicators: Any, ivr: float = 0.0):  # type: ignore
+def _determine_strategy_signal(indicators: Any, ivr: Optional[float] = None):  # type: ignore
     """根據技術指標決定策略"""
     price = indicators.get("price", 0.0)
     rsi = indicators.get("rsi", 50.0)
@@ -69,7 +69,7 @@ def _determine_strategy_signal(indicators: Any, ivr: float = 0.0):  # type: igno
     # ━━━ IVR < 10% 底層賣方策略硬鎖 ━━━
     # 當 IVR 極低時，期權權利金過於廉價，賣方策略的 risk/reward 嚴重不利。
     # 鎖死所有 STO 策略，僅允許現貨或 ITM Call BTO。
-    if is_selling_locked_by_ivr(ivr):
+    if ivr is not None and is_selling_locked_by_ivr(ivr):
         logger.info(
             f"IVR 賣方硬鎖啟動 (IVR={ivr:.1f}%): 封鎖所有 STO 策略，僅路由 ITM Call BTO"
         )

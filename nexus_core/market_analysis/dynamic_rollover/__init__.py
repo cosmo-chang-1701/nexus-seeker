@@ -96,7 +96,7 @@ class DynamicRolloverEngine(
         )
 
     def _apply_ivr_strategy_overlay(
-        self, options_strategy: str, strategy_override: str, ivr: float
+        self, options_strategy: str, strategy_override: str, ivr: Optional[float]
     ) -> str:
         """
         IVR 策略防禦與微調。

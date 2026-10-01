@@ -117,14 +117,21 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
         total_items = len(analysis.correlated_impacts)
         for i, imp in enumerate(analysis.correlated_impacts):
             prefix = " └─" if i == total_items - 1 else " ├─"
-            chg_color = "\u001b[1;32m" if imp.daily_change_pct >= 0 else "\u001b[1;31m"
+            if imp.daily_change_pct is None:
+                chg_color = "\u001b[1;37m"
+                chg_str = f"{'--':>6}%"
+            else:
+                chg_color = (
+                    "\u001b[1;32m" if imp.daily_change_pct >= 0 else "\u001b[1;31m"
+                )
+                chg_str = f"{imp.daily_change_pct:>+6.2f}%"
             badge = ""
             if imp.is_in_holdings:
                 badge = " \u001b[1;33m[HOLDING]\u001b[0m"
             elif imp.is_in_watchlist:
                 badge = " \u001b[1;36m[WATCH]\u001b[0m"
             lines.append(
-                f"{prefix} \u001b[1;37m{imp.symbol:<5}\u001b[0m │ ${imp.price:>7.2f} │ {chg_color}{imp.daily_change_pct:>+6.2f}%\u001b[0m{badge}"
+                f"{prefix} \u001b[1;37m{imp.symbol:<5}\u001b[0m │ ${imp.price:>7.2f} │ {chg_color}{chg_str}\u001b[0m{badge}"
             )
         embed.add_field(
             name="⛽ 能源板塊關聯股衝擊",

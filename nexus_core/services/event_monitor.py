@@ -29,6 +29,12 @@ def _extract_quote_price(quote: dict[str, Any], fallback: float = 500.0) -> floa
     return fallback
 
 
+# 「賣方偏重 / 買方保護偏重」的每日 Theta 美元門檻。total_theta 自 PR #31 起為
+# 真實每日美元值 (過去誤除以 365)；舊門檻 0.05 套在縮小 365 倍的數值上，實際
+# 等同每日 $18.25。沿用同一有效門檻，避免單位修正後所有持期權帳戶被抬高一級。
+_THETA_STATE_THRESHOLD_USD: float = 0.05 * 365
+
+
 def _build_portfolio_risk_snapshot(
     user_context: Any,
     *,
@@ -44,9 +50,9 @@ def _build_portfolio_risk_snapshot(
     heat_pct = abs(total_delta) * max(spy_price, 0.0) / capital * 100.0
     heat_ratio = heat_pct / risk_limit
 
-    if total_theta > 0.05:
+    if total_theta > _THETA_STATE_THRESHOLD_USD:
         theta_state = "賣方偏重"
-    elif total_theta < -0.05:
+    elif total_theta < -_THETA_STATE_THRESHOLD_USD:
         theta_state = "買方保護偏重"
     else:
         theta_state = "Theta 中性"
@@ -68,7 +74,11 @@ def _build_portfolio_risk_snapshot(
 
     if heat_ratio >= 1.0 or total_gamma <= -20.0:
         tier = "high"
-    elif heat_ratio >= 0.7 or total_theta > 0.05 or abs_vanna >= 3.0:
+    elif (
+        heat_ratio >= 0.7
+        or total_theta > _THETA_STATE_THRESHOLD_USD
+        or abs_vanna >= 3.0
+    ):
         tier = "medium"
     else:
         tier = "low"

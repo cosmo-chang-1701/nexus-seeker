@@ -109,7 +109,7 @@ async def analyze_symbol(
         price = indicators["price"]
 
         strategy, opt_type, target_delta, min_dte, max_dte = _determine_strategy_signal(
-            indicators, ivr=0.0
+            indicators, ivr=None
         )
         if not strategy:
             return None

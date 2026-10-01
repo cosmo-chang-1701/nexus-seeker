@@ -47,7 +47,7 @@ def scanner_signal(
     price: float, rsi: float, hv_rank: float, sma20: float, macd_hist: float
 ) -> Optional[str]:
     """精確複製 `market_analysis/strategy/indicators.py::_determine_strategy_signal`
-    的分支 (ivr=0.0，與 analyze_symbol 的呼叫方式一致，IVR 賣方硬鎖不觸發)。
+    的分支 (ivr=None，與 analyze_symbol 的呼叫方式一致，IVR 未知時賣方硬鎖不觸發)。
     `tests/unit/test_calibration_events.py` 會對原函式做全格點比對，防止漂移。"""
     if rsi < 35 and hv_rank >= 30:
         return "STO_PUT"

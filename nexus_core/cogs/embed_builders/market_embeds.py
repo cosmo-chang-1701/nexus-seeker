@@ -949,7 +949,7 @@ def build_radar_scan_embed(
                     if exp_str:
                         try:
                             exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                            dte = (exp_dt - datetime.now().date()).days
+                            dte = market_time.days_to_expiry_et(exp_dt)
                             mp_val = float(mp_entry.get("max_pain", 0.0) or 0.0)
                             if mp_val > 0:
                                 dev = (price_val - mp_val) / mp_val * 100
@@ -1176,7 +1176,7 @@ def build_radar_scan_embed(
                     continue
                 try:
                     item_exp_dt = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                    item_dte = (item_exp_dt - datetime.now().date()).days
+                    item_dte = market_time.days_to_expiry_et(item_exp_dt)
                 except Exception:
                     continue
                 if item_dte >= 7 and (

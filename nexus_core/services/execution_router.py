@@ -94,8 +94,8 @@ class ExecutionRouter:
                 )
 
             # ━━━ IVR 賣方策略鎖死閘門 ━━━
-            ivr = getattr(condition, "ivr", 0.0) or 0.0
-            if is_selling_locked_by_ivr(ivr):
+            ivr = getattr(condition, "ivr", None)
+            if ivr is not None and is_selling_locked_by_ivr(ivr):
                 logger.info(
                     f"IVR 底層硬鎖啟動 (IVR={ivr:.1f}%): "
                     f"ExecutionRouter 拒絕所有 SPEAR/SHIELD STO 路由，"
@@ -124,7 +124,7 @@ class ExecutionRouter:
             if abs(condition.skew_percent) > 0.05:
                 return ExecutionDecision(
                     decision_type="SHIELD",
-                    trigger_reason=f"市場偏度異常 (Skew: {condition.skew_percent*100:.2f}%)，防範潛在黑天鵝事件。",
+                    trigger_reason=f"市場偏度異常 (Skew: {condition.skew_percent * 100:.2f}%)，防範潛在黑天鵝事件。",
                     grid_params=self._calculate_atr_grid(condition),
                     position_sizing=None,
                     exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
@@ -152,7 +152,7 @@ class ExecutionRouter:
             if deviation > 0.10:
                 return ExecutionDecision(
                     decision_type="SHIELD",
-                    trigger_reason=f"價格嚴重偏離 20MA (乖離率: {deviation*100:.2f}%)，進入震盪修復網格模式。",
+                    trigger_reason=f"價格嚴重偏離 20MA (乖離率: {deviation * 100:.2f}%)，進入震盪修復網格模式。",
                     grid_params=self._calculate_atr_grid(condition),
                     position_sizing=None,
                     exit_strategy=self._define_trailing_stop(condition, "SHIELD"),
