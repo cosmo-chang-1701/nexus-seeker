@@ -5,6 +5,7 @@ import asyncio
 import logging
 import re
 import time
+from datetime import datetime, time as dtime
 
 import pandas as pd
 import yfinance as yf
@@ -40,7 +41,11 @@ _FALLBACK_TABLES: tuple[str, ...] = (
 # Quote (即時報價)
 # ---------------------------------------------------------------------------
 async def _fetch_history_via_edge(
-    symbol: str, *, period: str, interval: Optional[str] = None
+    symbol: str,
+    *,
+    period: str,
+    interval: Optional[str] = None,
+    auto_adjust: bool = True,
 ) -> Optional[pd.DataFrame]:
     """優先透過 Edge 節點即時抓取 K 線。未設定 TUNNEL_URL 或抓取失敗/空值時回傳 None。"""
     from config import TUNNEL_URL
@@ -56,6 +61,8 @@ async def _fetch_history_via_edge(
         req_url = f"{base_url}/api/v1/scrape/yf/history/{urllib.parse.quote(str(symbol))}?period={period}"
         if interval:
             req_url += f"&interval={interval}"
+        if not auto_adjust:
+            req_url += "&auto_adjust=false"
 
         async with get_edge_client() as client:
             res = await client.get(req_url)
@@ -87,14 +94,18 @@ async def _fetch_history_via_edge(
 
 
 async def _direct_yf_history(
-    ticker: yf.Ticker, *, period: str, interval: Optional[str] = None
+    ticker: yf.Ticker,
+    *,
+    period: str,
+    interval: Optional[str] = None,
+    auto_adjust: bool = True,
 ) -> Optional[pd.DataFrame]:
     """nexus_core 直連 yfinance 抓取 K 線（降級方案），加入 repair 容錯。"""
     df = None
     try:
         kwargs: dict[str, Any] = {
             "period": period,
-            "auto_adjust": True,
+            "auto_adjust": auto_adjust,
             "repair": True,
         }
         if interval is not None:
@@ -108,7 +119,7 @@ async def _direct_yf_history(
         try:
             kwargs_fallback: dict[str, Any] = {
                 "period": period,
-                "auto_adjust": True,
+                "auto_adjust": auto_adjust,
                 "repair": False,
             }
             if interval is not None:
@@ -127,6 +138,7 @@ async def _safe_yf_history(
     *,
     period: str,
     interval: Optional[str] = None,
+    auto_adjust: bool = True,
 ) -> Optional[pd.DataFrame]:
     """安全包裝 yfinance history：優先透過 Edge 節點抓取，
     nexus_core 直連 yfinance（含 repair 容錯）僅作為 Edge 不可用時的降級方案。
@@ -135,7 +147,7 @@ async def _safe_yf_history(
     symbol = getattr(ticker, "ticker", "")
     if symbol:
         df_edge = await _fetch_history_via_edge(
-            symbol, period=period, interval=interval
+            symbol, period=period, interval=interval, auto_adjust=auto_adjust
         )
         if df_edge is not None:
             if not df_edge.empty:
@@ -144,7 +156,9 @@ async def _safe_yf_history(
             return None
         logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取 K 線...")
 
-    return await _direct_yf_history(ticker, period=period, interval=interval)
+    return await _direct_yf_history(
+        ticker, period=period, interval=interval, auto_adjust=auto_adjust
+    )
 
 
 async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
@@ -158,8 +172,10 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
     yf_symbol = _to_yfinance_symbol(symbol)
     try:
         ticker = yf.Ticker(yf_symbol)
-        # 抓取最近 2 天資料以計算昨日收盤 (pc)
-        df = await _safe_yf_history(ticker, period="2d")
+        # 抓取最近幾個交易日以取得昨日收盤 (pc)。必須用未經股息調整的收盤價：
+        # auto_adjust 會在除息日把前收盤下修股息金額，使 d／dp 與 Finnhub 的
+        # 原始報價語意不一致。
+        df = await _safe_yf_history(ticker, period="5d", auto_adjust=False)
         if df is None:
             logger.warning(f"[{yf_symbol}] yfinance quote 回傳資料為空")
             import yfinance as yf_module
@@ -172,27 +188,41 @@ async def get_yfinance_quote(symbol: str) -> Dict[str, Any]:
             return {}
 
         latest = df.iloc[-1]
-        prev_close = df.iloc[-2]["Close"] if len(df) > 1 else latest["Open"]
-        current_price = latest["Close"]
-
-        change = current_price - prev_close
-        pct_change = (change / prev_close) * 100 if prev_close != 0 else 0.0
+        current_price = float(latest["Close"])
+        # 只有一根日線 (例如新上市) 時前收盤未知：不再以當日開盤價冒充
+        prev_close: Optional[float] = (
+            float(df.iloc[-2]["Close"]) if len(df) > 1 else None
+        )
+        change: Optional[float] = None
+        pct_change: Optional[float] = None
+        if prev_close is not None and prev_close > 0:
+            change = current_price - prev_close
+            pct_change = change / prev_close * 100
 
         return {
-            "c": round(float(current_price), 2),
-            "d": round(float(change), 2),
-            "dp": round(float(pct_change), 4),
+            "c": round(current_price, 2),
+            "d": round(change, 2) if change is not None else None,
+            "dp": round(pct_change, 4) if pct_change is not None else None,
             "h": round(float(latest["High"]), 2),
             "l": round(float(latest["Low"]), 2),
             "o": round(float(latest["Open"]), 2),
-            "pc": round(float(prev_close), 2),
-            "t": int(df.index[-1].timestamp()),
+            "pc": round(prev_close, 2) if prev_close is not None else None,
+            "t": _daily_bar_quote_timestamp(df.index[-1]),
         }
     except Exception as e:
         if "SYMBOL_NOT_FOUND" in str(e):
             raise
         logger.error(f"[{yf_symbol}] yfinance quote 失敗: {e}")
         return {}
+
+
+def _daily_bar_quote_timestamp(bar_index: Any, now: Optional[datetime] = None) -> int:
+    """日線報價的時間戳：日線索引是當日 00:00，直接取用會讓報價看起來永遠
+    「已過期」。當日 K 棒取 min(現在, 16:00 ET)，過去的 K 棒取該日 16:00 ET。"""
+    bar_date = pd.Timestamp(bar_index).date()
+    close_dt = datetime.combine(bar_date, dtime(16, 0), tzinfo=ny_tz)
+    now_dt = now if now is not None else datetime.now(ny_tz)
+    return int(min(now_dt, close_dt).timestamp())
 
 
 def _is_finnhub_quote_stale(data: Dict[str, Any]) -> bool:

@@ -442,12 +442,17 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def _optional_positive_float(val: Any) -> Optional[float]:
+def _optional_finite_float(val: Any) -> Optional[float]:
     try:
         f = float(val)
     except (TypeError, ValueError):
         return None
-    return f if f > 0 and f == f else None
+    return f if f == f and f not in (float("inf"), float("-inf")) else None
+
+
+def _optional_positive_float(val: Any) -> Optional[float]:
+    f = _optional_finite_float(val)
+    return f if f is not None and f > 0 else None
 
 
 async def is_covered_call_unlock_allowed() -> bool:
@@ -461,13 +466,14 @@ async def is_covered_call_unlock_allowed() -> bool:
     from services.market_data_service import get_quote, get_vix_spot_strict
     from market_analysis.index_microstructure import fetch_core_macro_metrics
 
-    # 1. 取得薩姆規則指標 (月度資料，KV 快取即為最近一次真實值)
-    sahm_rule = _optional_positive_float(get_kv_cache("macro_sahm_rule"))
+    # 1. 取得薩姆規則指標 (月度資料，KV 快取即為最近一次真實值)。薩姆值可為 0
+    # 或負值 (失業率低於前 12 個月低點)，是有效讀值，不可當成缺值。
+    sahm_rule = _optional_finite_float(get_kv_cache("macro_sahm_rule"))
     if sahm_rule is None:
         try:
             core_data = await fetch_core_macro_metrics()
             if not core_data.get("_is_fallback"):
-                sahm_rule = _optional_positive_float(core_data.get("sahm_rule"))
+                sahm_rule = _optional_finite_float(core_data.get("sahm_rule"))
         except Exception:
             sahm_rule = None
 

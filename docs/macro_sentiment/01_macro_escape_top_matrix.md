@@ -72,6 +72,8 @@ $$prob = \begin{cases}
 4. **因子 4：大盤微觀結構 Net GEX 狀態**
    $$\text{緊縮評分 } T_4 = \mathbb{I}(is\_negative\_gamma = \text{True}), \quad \text{寬鬆評分 } E_4 = \mathbb{I}(is\_negative\_gamma = \text{False})$$
 
+**未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被算成寬鬆而延後逃頂窗口。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
+
 加總總緊縮分 $T = \sum_{i=1}^4 T_i$ 與總寬鬆分 $E = \sum_{i=1}^4 E_i$。窗口位移天數 $\Delta D_{shift}$ 與狀態分級遵循：
 $$\Delta D_{shift} = \begin{cases}
 -8 \text{ 天 (前移)} & \text{若 } T \ge 3 \\
@@ -87,7 +89,7 @@ $$S_{esc} = \mathbb{I}(VTS \ge 1.0) + \mathbb{I}(FearGreed \ge 75.0) + \mathbb{I
 其中衛星持倉亢奮比例 $Ratio_{sat}$ 計算如下：
 $$Ratio_{sat} = \frac{\sum_{k \in \text{Satellite}} \left[ \mathbb{I}(Spot_k \ge CallWall_k \lor \frac{|Spot_k - CallWall_k|}{CallWall_k} < 0.005) \lor \mathbb{I}(Skew_k < 0 \land SkewPct_k \le 20.0\%) \right]}{N_{\text{Satellite}}}$$
 
-若使用者未持有任何衛星持倉，則該項傳入 `None`，不參與評分。分級判斷：
+若使用者未持有任何衛星持倉，則該項傳入 `None`，不參與評分。$VTS$、$FearGreed$、$prob$、$is\_negative\_gamma$ 未知時同樣不計分並顯示「資料不足」（不補 $0.88$／$48$）；此時 $S_{esc}$ 只是下限，若已知分數為 $0$ 但把未知因子計入後可能落入更高分級，回傳 `UNKNOWN` 而非 `NORMAL`，讓以 `NORMAL` 為放行條件的閘門（例如 `PYRAMID_ADD`）fail-closed。分級判斷：
 $$\text{Tier} = \begin{cases}
 \text{CRITICAL (🚨🚨 逃頂確認)} & S_{esc} \ge 3 \\
 \text{ELEVATED (🚨 逃頂警戒)} & S_{esc} = 2 \\
@@ -211,6 +213,7 @@ flowchart TD
 
 ### 5.2 零除與邊界防護
 - **除數保護**：在計算 $\Delta R$ 權重時，會議後天數嚴格約束為 $d_{post} = \max(1, N - d_{prior})$，杜絕月底最後一日開會導致除以零崩潰。
+- **種子預設值清除**：`v050` 曾以 `INSERT OR IGNORE` 為總經快取種下常數（sahm $0.35$、US10Y $4.25$、VIX $18$、Fear & Greed $48$ 等），未設定 `TUNNEL_URL` 時部分鍵永遠不會被覆寫而被當成真實讀值。`v089` 刪除仍與種子逐字相同的列，之後缺值由讀取端走未知路徑。
 - **衛星持倉空集合**：當使用者投資組合中無任何 `SATELLITE` 資產時，`satellite_euphoria_ratio` 返回 `None`，五因子模型自動無縫退化為四因子模型，門檻常數保持一致。
 
 ### 5.3 減碼執行衝突隔離（Conflict Isolation）

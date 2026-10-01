@@ -3,7 +3,7 @@ import logging
 import math
 import time
 import config
-from typing import Dict, NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 # 薄牆門檻定義見 gex_wall_depth.py（stdlib 葉模組，避免循環匯入）；此處重新匯出
 # 以維持既有匯入路徑 (`from market_analysis.index_microstructure import ...`)。
@@ -1016,10 +1016,10 @@ def analyze_local_gamma_regime(
 
 
 def evaluate_escape_window_regime(
-    prob: float | None = 0.50,
-    cpi_dev: float = 0.0,
-    wti: float = 75.0,
-    vts_ratio: float = 0.88,
+    prob: float | None = None,
+    cpi_dev: float | None = None,
+    wti: float | None = None,
+    vts_ratio: float | None = None,
     is_negative_gamma: bool = False,
 ) -> tuple[int, int, str, int, str, str]:
     """
@@ -1032,34 +1032,58 @@ def evaluate_escape_window_regime(
         vts_ratio: VIX 期限結構比例 (VIX / VIX3M)
         is_negative_gamma: 是否處於負 Gamma 踩踏區間
 
+    任一因子輸入未知 (None) 時，該因子不計入收縮或寬鬆分數——不再以 CPI 0、
+    WTI 75、VTS 0.88 之類偏寬鬆的常數補值，以免把「資料缺失」算成寬鬆而延後
+    逃頂窗口。
+
     Returns:
         tuple[int, int, str, int, str, str]:
             (tightening_score, easing_score, direction, shift_days, tier_title, short_status_desc)
     """
-    try:
-        safe_prob = float(prob) if prob is not None else 0.50
-    except (ValueError, TypeError):
-        safe_prob = 0.50
+
+    def _known(val: Any, positive: bool = False) -> float | None:
+        try:
+            f = float(val)
+        except (ValueError, TypeError):
+            return None
+        if f != f or (positive and f <= 0):
+            return None
+        return f
+
+    safe_prob = _known(prob)
+    cpi_known = _known(cpi_dev)
+    wti_known = _known(wti, positive=True)
+    vts_known = _known(vts_ratio, positive=True)
+    is_hawkish = safe_prob is not None and safe_prob > 0.70
+    is_dovish = safe_prob is not None and safe_prob <= 0.40
 
     tightening_score = 0
     easing_score = 0
 
     # Factor 1: FedWatch 利率定價
-    if safe_prob > 0.70:
+    if is_hawkish:
         tightening_score += 1
-    elif safe_prob <= 0.40:
+    elif is_dovish:
         easing_score += 1
 
-    # Factor 2: 通膨與能源 (CPI / WTI)
-    if (cpi_dev > 0.1) or (wti > 85.0):
+    # Factor 2: 通膨與能源 (CPI / WTI)：任一已知值超標即收縮；兩者皆已知且
+    # 平穩才算寬鬆
+    if (cpi_known is not None and cpi_known > 0.1) or (
+        wti_known is not None and wti_known > 85.0
+    ):
         tightening_score += 1
-    elif (cpi_dev <= 0.0) and (wti <= 80.0):
+    elif (
+        cpi_known is not None
+        and wti_known is not None
+        and cpi_known <= 0.0
+        and wti_known <= 80.0
+    ):
         easing_score += 1
 
     # Factor 3: VIX 期限結構 (VTS)
-    if vts_ratio >= 1.0:
+    if vts_known is not None and vts_known >= 1.0:
         tightening_score += 1
-    elif vts_ratio < 0.90:
+    elif vts_known is not None and vts_known < 0.90:
         easing_score += 1
 
     # Factor 4: 大盤微觀結構 Net GEX
@@ -1069,12 +1093,12 @@ def evaluate_escape_window_regime(
         easing_score += 1
 
     # 三階矩陣狀態評估
-    if tightening_score >= 2 or (safe_prob > 0.70 and is_negative_gamma):
+    if tightening_score >= 2 or (is_hawkish and is_negative_gamma):
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
         short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
-    elif safe_prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
+    elif is_dovish and easing_score >= 2 and tightening_score == 0:
         direction = "後推"
         shift_days = 5
         tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
@@ -1083,7 +1107,7 @@ def evaluate_escape_window_regime(
         direction = "維持"
         shift_days = 0
         tier_title = "🟡 中性平衡 (Neutral Balance)"
-        if not is_negative_gamma and safe_prob > 0.70:
+        if not is_negative_gamma and is_hawkish:
             short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
         else:
             short_status_desc = "🟢 正常窗口 (均衡定價)"

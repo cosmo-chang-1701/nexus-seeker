@@ -288,13 +288,12 @@ def create_watchlist_signal_embed(
         skew_samples = getattr(metrics, "skew_sample_size", None)
         skew_is_fallback = bool(getattr(metrics, "skew_is_fallback", False))
     else:
-        live_price_val = (
-            suitable_buy_price if not isinstance(suitable_buy_price, str) else None
-        )
-        live_price = live_price_val or suitable_sell_price or 100.0
+        # 現價與 POC 未知：不再以建議買價或 100.0 冒充。0.0 讓下游距離計算
+        # 走既有的 `live_price > 0` 守衛顯示「--」，POC 顯示 N/A。
+        live_price = 0.0
         gex_putwall = None
         gex_callwall = None
-        vol_poc = 100.0
+        vol_poc = None
         vol_lvn = None
         skew_val = None
         skew_per = None
@@ -476,7 +475,7 @@ def create_watchlist_signal_embed(
 
     gex_dist = (
         ((live_price - gex_putwall) / gex_putwall * 100.0)
-        if gex_putwall and gex_putwall > 0
+        if gex_putwall and gex_putwall > 0 and live_price > 0
         else None
     )
 

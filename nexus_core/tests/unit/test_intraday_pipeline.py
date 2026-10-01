@@ -804,9 +804,9 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
         user_ctx = SimpleNamespace(
             user_id=42,
             enable_analyst_agent=True,
-            total_capital=100000.0,
+            capital=100000.0,
             risk_limit=15.0,
-            monthly_burn_rate=5000.0,
+            monthly_expense=5000.0,
             cash_reserve=20000.0,
         )
         mock_ctx.return_value = user_ctx

@@ -17,6 +17,7 @@ import math
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+import market_time
 
 from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
@@ -104,8 +105,7 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         expiry = data.get("expiry")
         if isinstance(expiry, str):
             try:
-                expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
-                dte = (expiry_dt - datetime.now()).days
+                dte = market_time.days_to_expiry_et(expiry)
                 if dte <= 3:
                     embed.add_field(
                         name="🚀 執行建議",

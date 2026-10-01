@@ -97,12 +97,13 @@ async def analyze_symbol(
                 beta_estimated = beta_strict is None
                 beta = 1.0 if beta_strict is None else beta_strict
 
-        dividend_yield, indicators = await asyncio.gather(
-            _as_awaitable(0.015)
-            if is_etf
-            else market_data_service.get_dividend_yield(symbol),
+        # 股息率取實際值 (ETF 改以近 12 個月配息計算，不再寫死 1.5%)；取不到時
+        # 以 0 代入 BSM——對選約 Delta 的影響遠小於冒充一個常數。
+        dividend_val, indicators = await asyncio.gather(
+            market_data_service.get_dividend_yield_strict(symbol),
             asyncio.to_thread(_calculate_technical_indicators, df),
         )
+        dividend_yield = 0.0 if dividend_val is None else dividend_val
         if indicators is None:
             return None
         price = indicators["price"]

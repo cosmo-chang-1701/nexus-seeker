@@ -152,8 +152,8 @@ def format_position_report(
     spx_weighted_delta: Optional[float],
     status: str,
     quantity: float = 1.0,
-    iv: Optional[float] = 0.0,
-    iv_rank: Optional[float] = 0.0,
+    iv: Optional[float] = None,
+    iv_rank: Optional[float] = None,
     price_note: str = "",
 ) -> str:
     """

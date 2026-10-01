@@ -323,6 +323,8 @@ def get_all_trade_positions() -> Any:
             d["quantity"] = meta.get("quantity", 0)
             d["category"] = meta.get("category", "SPECULATIVE")
             d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
+            # 部位層級每日 Theta 美元值 (單口 Theta × 口數 × 100)；未刷新過為 None
+            d["theta"] = meta.get("theta")
             rows.append(d)
         return rows
     finally:

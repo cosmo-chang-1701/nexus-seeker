@@ -342,41 +342,72 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         ):
             return _get_pcr_fallback("No option chain data retrieved")
 
-        if total_call_vol > 0:
-            volume_pcr = total_put_vol / total_call_vol
-        else:
-            volume_pcr = 99.9 if total_put_vol > 0 else 1.0
+        # 分母為 0 時比率無定義：標為 None，不再以 1.0 (平衡) / 99.9 之類的
+        # 哨兵值冒充，也不寫入 sentiment_history。Put 有量而 Call 為 0 時，狀態
+        # 仍判為空頭主導 (ISSUE-2.4)；兩邊皆 0 (例如盤前) 則走降級路徑。
+        volume_pcr: Optional[float] = (
+            total_put_vol / total_call_vol if total_call_vol > 0 else None
+        )
+        oi_pcr: Optional[float] = (
+            total_put_oi / total_call_oi if total_call_oi > 0 else None
+        )
+        volume_one_sided = volume_pcr is None and total_put_vol > 0
+        oi_one_sided = oi_pcr is None and total_put_oi > 0
+        if (
+            volume_pcr is None
+            and oi_pcr is None
+            and not volume_one_sided
+            and not oi_one_sided
+        ):
+            return _get_pcr_fallback("Put/Call denominators are zero")
 
-        if total_call_oi > 0:
-            oi_pcr = total_put_oi / total_call_oi
-        else:
-            oi_pcr = 99.9 if total_put_oi > 0 else 1.0
-
+        # 大盤 ETF 常態避險需求高，PCR 自然基準較高 (1.3~1.8)
         if is_index_etf:
-            # 大盤 ETF 常態避險需求高，PCR 自然基準較高 (1.3~1.8)
-            volume_state = "平衡"
-            if volume_pcr <= 1.20:
-                volume_state = "中性偏多/看漲主導"
-            elif volume_pcr > 1.40:
-                volume_state = "🐻 偏向空頭/看空主導"
-
-            oi_state = "結構平衡"
-            if oi_pcr <= 1.20:
-                oi_state = "🐂 結構看漲/偏向多頭"
-            elif oi_pcr > 1.40:
-                oi_state = "🐻 結構防禦/偏向空頭"
+            low_th, high_th = 1.20, 1.40
         else:
-            volume_state = "平衡"
-            if volume_pcr < 0.90:
-                volume_state = "中性偏多/看漲主導"
-            elif volume_pcr > 1.10:
-                volume_state = "🐻 偏向空頭/看空主導"
+            low_th, high_th = 0.90, 1.10
 
+        oi_state = "N/A"
+        if oi_one_sided:
+            oi_state = "🐻 結構防禦/偏向空頭 (Call 未平倉量為 0)"
+        elif oi_pcr is not None:
             oi_state = "結構平衡"
-            if oi_pcr < 0.90:
+            if oi_pcr < low_th or (is_index_etf and oi_pcr <= low_th):
                 oi_state = "🐂 結構看漲/偏向多頭"
-            elif oi_pcr > 1.10:
+            elif oi_pcr > high_th:
                 oi_state = "🐻 結構防禦/偏向空頭"
+        oi_fields = {
+            "oi_pcr": round(oi_pcr, 2) if oi_pcr is not None else None,
+            "put_vol": total_put_vol,
+            "call_vol": total_call_vol,
+            "put_oi": total_put_oi,
+            "call_oi": total_call_oi,
+            "oi_pcr_state": oi_state,
+        }
+
+        if volume_one_sided:
+            one_sided_state = "🐻 偏向空頭/看空主導 (Call 成交量為 0)"
+            return {
+                "symbol": symbol,
+                "pcr": None,
+                "volume_pcr": None,
+                "state": one_sided_state,
+                "volume_pcr_state": one_sided_state,
+                **oi_fields,
+            }
+        if volume_pcr is None:
+            # 兩邊成交量皆為 0：成交量部分沿用降級路徑 (歷史快取或 None)，
+            # 未平倉量比率照常回報。
+            fallback = _get_pcr_fallback("Call volume is zero")
+            fallback.pop("error", None)
+            fallback.update(oi_fields)
+            return fallback
+
+        volume_state = "平衡"
+        if volume_pcr < low_th or (is_index_etf and volume_pcr <= low_th):
+            volume_state = "中性偏多/看漲主導"
+        elif volume_pcr > high_th:
+            volume_state = "🐻 偏向空頭/看空主導"
 
         await save_sentiment_history(symbol, "PCR", volume_pcr)
 
@@ -384,14 +415,9 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
             "symbol": symbol,
             "pcr": round(volume_pcr, 2),
             "volume_pcr": round(volume_pcr, 2),
-            "oi_pcr": round(oi_pcr, 2),
-            "put_vol": total_put_vol,
-            "call_vol": total_call_vol,
-            "put_oi": total_put_oi,
-            "call_oi": total_call_oi,
             "state": volume_state,
             "volume_pcr_state": volume_state,
-            "oi_pcr_state": oi_state,
+            **oi_fields,
         }
     except Exception as e:
         return _get_pcr_fallback(f"Exception during PCR calculation: {str(e)}")

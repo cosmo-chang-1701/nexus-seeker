@@ -147,8 +147,9 @@ async def test_net_gex_and_gex_profile_unchanged_sign_convention() -> None:
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
 
     t = 7.0 / 365.0
-    gamma_call = gex_scraper._calculate_gamma(100.0, 105.0, t, 0.04, 0.20)
-    gamma_put = gex_scraper._calculate_gamma(100.0, 95.0, t, 0.04, 0.20)
+    r = gex_scraper.RISK_FREE_RATE
+    gamma_call = gex_scraper._calculate_gamma(100.0, 105.0, t, r, 0.20)
+    gamma_put = gex_scraper._calculate_gamma(100.0, 95.0, t, r, 0.20)
     expected_call_gex = 300 * 100.0 * gamma_call * 100.0 * 100.0
     expected_put_gex = 400 * 100.0 * gamma_put * 100.0 * 100.0
     expected_net = expected_call_gex - expected_put_gex
@@ -260,3 +261,16 @@ async def test_atm_strike_within_tolerance_excluded_from_walls() -> None:
     )
     assert result_atm_only["call_wall"] == 0.0
     assert result_atm_only["put_wall"] == 0.0
+
+
+def test_risk_free_rate_matches_nexus_core_config() -> None:
+    """兩服務不共用模組：edge 的無風險利率必須與 nexus_core/config.py 一致。"""
+    import re
+    from pathlib import Path
+
+    config_src = (
+        Path(__file__).resolve().parents[2] / "nexus_core" / "config.py"
+    ).read_text(encoding="utf-8")
+    match = re.search(r"^RISK_FREE_RATE\s*=\s*([0-9.]+)", config_src, re.MULTILINE)
+    assert match is not None
+    assert gex_scraper.RISK_FREE_RATE == float(match.group(1))

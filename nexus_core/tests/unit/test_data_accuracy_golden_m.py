@@ -138,33 +138,25 @@ async def test_m3_post_market_rebuild_forces_history_refresh() -> None:
 # ===========================================================================
 # M4：historical_iv 只寫 LIVE_IV；IVR 窗口為交易日；污染列清理
 # ===========================================================================
-def test_m4_migration_purges_weekend_and_carry_forward_rows() -> None:
+def test_m4_migration_resets_historical_iv() -> None:
     import sqlite3
 
-    from database.migrations import v088_purge_polluted_historical_iv as m
+    from database.migrations import v088_reset_historical_iv as m
 
     conn = sqlite3.connect(":memory:")
     try:
         conn.execute("CREATE TABLE historical_iv (symbol TEXT, iv REAL, date TEXT)")
         rows = [
-            ("AAA", 0.30, "2026-05-15"),  # 週五 (保留)
-            ("AAA", 0.30, "2026-05-16"),  # 週六 (刪除：週末)
-            ("AAA", 0.30, "2026-05-18"),  # 週一，與前一筆相同 (刪除：搬運列)
-            ("AAA", 0.32, "2026-05-19"),  # 新值 (保留)
-            ("BBB", 0.30, "2026-05-18"),  # 不同標的首筆 (保留)
+            ("AAA", 0.30, "2026-05-15"),
+            ("AAA", 0.30, "2026-05-16"),  # 週末搬運列
+            ("BBB", 0.25, "2026-05-18"),
         ]
         conn.executemany("INSERT INTO historical_iv VALUES (?, ?, ?)", rows)
         conn.executescript(m.sql)
-        left = conn.execute(
-            "SELECT symbol, iv, date FROM historical_iv ORDER BY symbol, date"
-        ).fetchall()
+        left = conn.execute("SELECT COUNT(*) FROM historical_iv").fetchone()[0]
     finally:
         conn.close()
-    assert left == [
-        ("AAA", 0.30, "2026-05-15"),
-        ("AAA", 0.32, "2026-05-19"),
-        ("BBB", 0.30, "2026-05-18"),
-    ]
+    assert left == 0
     assert m.version == 88
 
 

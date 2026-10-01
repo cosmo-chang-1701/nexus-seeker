@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import logging
-from datetime import datetime
+import market_time
 from zoneinfo import ZoneInfo
 
 from services import market_data_service
@@ -188,9 +188,7 @@ class CalendarCog(commands.Cog):
             strike = p[3]
             expiry = p[4]
 
-            # Calculate years to expiry
-            t_dt = datetime.strptime(expiry, "%Y-%m-%d")
-            t_years = (t_dt - datetime.now()).days / 365.0
+            t_years = market_time.years_to_expiry(expiry)
 
             # Get current IV from market data or use placeholder
             # Real implementation would fetch from chain

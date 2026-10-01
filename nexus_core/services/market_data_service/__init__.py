@@ -115,7 +115,6 @@ from .fundamentals import (  # noqa: F401,E402
     get_basic_financials,
     get_company_news,
     get_company_profile,
-    get_dividend_yield,
     get_dividend_yield_strict,
     get_earnings_calendar,
     get_macro_environment,

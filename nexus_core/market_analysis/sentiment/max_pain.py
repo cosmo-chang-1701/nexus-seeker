@@ -56,6 +56,24 @@ def _current_week_friday(now_dt: Optional[datetime] = None) -> date:
     return friday
 
 
+_SPLIT_ADJUST_LOOKBACK_DAYS: int = 30
+
+
+def _recent_split_factor(
+    splits: pd.Series, now: Optional[pd.Timestamp] = None
+) -> float:
+    """近 `_SPLIT_ADJUST_LOOKBACK_DAYS` 日內拆股比率的乘積 (無近期拆股回傳 1.0)。"""
+    idx = pd.DatetimeIndex(splits.index)
+    if now is None:
+        now = pd.Timestamp.now(tz=idx.tz) if idx.tz is not None else pd.Timestamp.now()
+    cutoff = now - pd.Timedelta(days=_SPLIT_ADJUST_LOOKBACK_DAYS)
+    factor = 1.0
+    for split_date, ratio in zip(idx, splits.values):
+        if split_date >= cutoff and ratio > 0.0 and ratio != 1.0:
+            factor *= float(ratio)
+    return factor
+
+
 def _calculate_max_pain_with_weights(  # type: ignore
     option_chain: Any, weight_key: str = "openInterest", spot_price: Any = None
 ):
@@ -591,11 +609,11 @@ async def _calculate_max_pain_raw(
         # 確定性拆股因子校準 (Deterministic Split-Adjustment)
         splits = await market_data_service.get_stock_splits(symbol)
         if splits is not None and not splits.empty and spot_price > 0:
-            # 計算累積拆股因子：所有歷史拆股比率的乘積
-            cumulative_factor = 1.0
-            for split_date, ratio in splits.items():
-                if ratio > 0.0 and ratio != 1.0:
-                    cumulative_factor *= ratio
+            # 只採計近期拆股：OCC 會在拆股生效時調整既有合約，鏈上出現未調整
+            # Strike 只會是拆股前後數據源尚未同步的短暫窗口。過去以「所有歷史
+            # 拆股比率的乘積」校正，會把崩跌股殘留的深度價外 Strike (> 2× 現價)
+            # 以多年前的拆股因子搬進價平區並放大 OI，扭曲 Max Pain。
+            cumulative_factor = _recent_split_factor(splits)
 
             if cumulative_factor > 1.0:
                 # 偵測並清洗未經調整的歷史 Strike

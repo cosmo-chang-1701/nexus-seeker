@@ -69,7 +69,7 @@ async def test_analyze_symbol_phase1_dispatches_concurrently() -> None:
         new_callable=AsyncMock,
         side_effect=_history_effect,
     ), patch(
-        "services.market_data_service.get_dividend_yield",
+        "services.market_data_service.get_dividend_yield_strict",
         new_callable=AsyncMock,
         return_value=0.01,
     ), patch(
@@ -112,7 +112,7 @@ async def test_analyze_symbol_reuses_provided_df_spy() -> None:
         new_callable=AsyncMock,
         side_effect=_history_effect,
     ), patch(
-        "services.market_data_service.get_dividend_yield",
+        "services.market_data_service.get_dividend_yield_strict",
         new_callable=AsyncMock,
         return_value=0.01,
     ), patch(
@@ -178,7 +178,7 @@ async def test_analyze_symbol_phase4_dispatches_concurrently_and_respects_best_c
         new_callable=AsyncMock,
         return_value=_make_df(),
     ), patch(
-        "services.market_data_service.get_dividend_yield",
+        "services.market_data_service.get_dividend_yield_strict",
         new_callable=AsyncMock,
         return_value=0.01,
     ), patch(

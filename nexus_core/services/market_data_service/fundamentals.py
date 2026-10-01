@@ -60,15 +60,6 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
         return {}
 
 
-async def get_dividend_yield(symbol: str) -> float:
-    """取得年化股息殖利率。"""
-    metrics = await get_basic_financials(symbol)
-    yield_val = metrics.get("dividendYieldIndicatedAnnual", 0.0)
-    if yield_val is None:
-        return 0.0
-    return round(float(yield_val) / 100.0, 4)
-
-
 _DIVIDEND_YIELD_CACHE_TTL: float = 24 * 3600.0
 _dividend_yield_cache: Any = BoundedCache(max_size=500)
 

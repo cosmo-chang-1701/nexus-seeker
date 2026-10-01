@@ -93,17 +93,20 @@ async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
 
 @router.get("/api/v1/scrape/yf/history/{symbol}")
 async def scrape_yf_history(
-    symbol: str, period: str = "1y", interval: str = "1d"
+    symbol: str, period: str = "1y", interval: str = "1d", auto_adjust: bool = True
 ) -> Dict[str, Any]:
     try:
         ticker = yf.Ticker(symbol)
         try:
             df = ticker.history(
-                period=period, interval=interval, auto_adjust=True, repair=True
+                period=period, interval=interval, auto_adjust=auto_adjust, repair=True
             )
         except Exception:
             df = ticker.history(
-                period=period, interval=interval, auto_adjust=True, repair=False
+                period=period,
+                interval=interval,
+                auto_adjust=auto_adjust,
+                repair=False,
             )
         if df is None or df.empty:
             return {"status": "error", "data": "empty"}

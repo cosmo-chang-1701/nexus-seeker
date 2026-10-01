@@ -390,10 +390,6 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields() -> None
         new_callable=AsyncMock,
         return_value={"exchange": "NASDAQ"},
     ), patch(
-        "services.market_data_service.get_dividend_yield",
-        new_callable=AsyncMock,
-        return_value=0.01,
-    ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new_callable=AsyncMock,
         return_value=IVMetrics(

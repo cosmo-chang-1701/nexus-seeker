@@ -279,16 +279,24 @@ async def run_fomc_escape_window_analysis(
     cpi_dev = (
         cpi_actual - cpi_expected
         if (cpi_actual is not None and cpi_expected is not None)
-        else (get_kv_cache("macro_cpi_deviation") or 0.0)
+        else get_kv_cache("macro_cpi_deviation")
     )
-    wti = get_kv_cache("macro_wti") or 75.0
+    wti_raw = get_kv_cache("macro_wti")
+    # 未知時不再補 WTI $75 / CPI 偏差 0 冒充「通膨平穩」
+    wti = float(wti_raw) if wti_raw is not None and float(wti_raw) > 0 else None
+    cpi_dev = float(cpi_dev) if cpi_dev is not None else None
+    wti_str = f"${wti:.1f}" if wti is not None else "--"
+    cpi_str = f"{cpi_dev:+.2f}%" if cpi_dev is not None else "--"
+    f2_detail = f"(WTI {wti_str}, CPI偏差 {cpi_str})"
 
-    if (cpi_dev > 0.1) or (wti > 85.0):
-        f2_val = f"\u001b[1;31m🚨 通膨偏高 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
+    if (cpi_dev is not None and cpi_dev > 0.1) or (wti is not None and wti > 85.0):
+        f2_val = f"\u001b[1;31m🚨 通膨偏高 {f2_detail}\u001b[0m"
+    elif cpi_dev is None or wti is None:
+        f2_val = f"⚪ 數據不足 {f2_detail}"
     elif (cpi_dev <= 0.0) and (wti <= 80.0):
-        f2_val = f"\u001b[1;32m🟢 通膨平穩 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
+        f2_val = f"\u001b[1;32m🟢 通膨平穩 {f2_detail}\u001b[0m"
     else:
-        f2_val = f"\u001b[1;33m🟡 通膨受控 (WTI ${wti:.1f}, CPI偏差 {cpi_dev:+.2f}%)\u001b[0m"
+        f2_val = f"\u001b[1;33m🟡 通膨受控 {f2_detail}\u001b[0m"
     factors_summary.append(("通膨與油價壓力 (CPI/WTI)", f2_val))
 
     # Factor 3: VIX 期限結構 (VTS)
@@ -303,7 +311,7 @@ async def run_fomc_escape_window_analysis(
         logger.warning(f"取得 VTS 期限結構失敗: {e}")
 
     if not is_vts_valid:
-        f3_val = "⚪ 數據未更新 (使用中性預設)"
+        f3_val = "⚪ 數據未更新 (不計分)"
     elif vts_ratio >= 1.0:
         f3_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
     elif vts_ratio < 0.90:
@@ -334,7 +342,7 @@ async def run_fomc_escape_window_analysis(
         prob=prob,
         cpi_dev=cpi_dev,
         wti=wti,
-        vts_ratio=vts_ratio if is_vts_valid else 0.88,
+        vts_ratio=vts_ratio if is_vts_valid else None,
         is_negative_gamma=is_negative_gamma,
     )
 

@@ -334,7 +334,9 @@ async def test_calculate_max_pain_split_adjustment() -> None:
     ) as mock_splits:
         mock_expiries.return_value = [MOCK_EXPIRY]
         mock_quote.return_value = {"c": 80.0}
-        mock_splits.return_value = pd.Series([10.0], index=[pd.Timestamp("2024-06-10")])
+        # 近期拆股 (5 天前)：鏈上仍殘留未調整 Strike 的同步窗口
+        recent_split = pd.Timestamp.now().normalize() - pd.Timedelta(days=5)
+        mock_splits.return_value = pd.Series([10.0], index=[recent_split])
 
         # Pre-split strikes at 800.0 (equivalent to post-split 80.0)
         calls_df = pd.DataFrame(
@@ -1204,12 +1206,15 @@ async def test_calculate_pcr_zero_call_volume_reports_bearish() -> None:
     ), patch(
         "market_analysis.sentiment.options_flow.save_sentiment_history",
         new_callable=AsyncMock,
-    ):
+    ) as mock_save:
         res = await SentimentEngine.calculate_pcr("AAPL")
 
     assert res is not None
-    assert res["volume_pcr"] == 99.9
-    assert res["state"] == "🐻 偏向空頭/看空主導"
+    # 比率無定義 → None (不再寫 99.9 哨兵值)，但狀態仍判為空頭主導
+    assert res["volume_pcr"] is None
+    assert res["state"].startswith("🐻 偏向空頭/看空主導")
+    assert res["oi_pcr"] == 10.0
+    mock_save.assert_not_awaited()
 
 
 @pytest.mark.asyncio

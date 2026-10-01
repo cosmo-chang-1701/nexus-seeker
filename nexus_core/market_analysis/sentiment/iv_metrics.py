@@ -646,11 +646,14 @@ async def fetch_and_calculate_iv_metrics(
             high_iv = max(pure_iv_values)
             if high_iv > low_iv:
                 iv_rank = ((current_iv - low_iv) / (high_iv - low_iv)) * 100.0
+                lower_count = sum(1 for iv in pure_iv_values if iv < current_iv)
+                iv_percentile = (lower_count / len(pure_iv_values)) * 100.0
             else:
-                iv_rank = 50.0
-
-            lower_count = sum(1 for iv in pure_iv_values if iv < current_iv)
-            iv_percentile = (lower_count / len(pure_iv_values)) * 100.0
+                # 整個窗口 IV 完全相同 (樣本退化，多為資料問題)：IVR 無定義，
+                # 標為未知而不是補 50 冒充「中位」。
+                logger.warning(
+                    f"[{symbol}] 歷史 IV 窗口高低相同 ({high_iv:.4f})，IV Rank/Percentile 標註為 None。"
+                )
             if iv_rank is not None:
                 iv_rank = max(0.0, min(100.0, iv_rank))
             if iv_percentile is not None:

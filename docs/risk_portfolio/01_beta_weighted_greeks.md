@@ -36,7 +36,7 @@ Gamma 衡量 Delta 隨標的價格變動的加速度。當從個別標的資產 
 ## 2. 數學模型與量化推導
 
 ### 2.1 標的 Beta 係數計量估計模型
-設基準資產為標普 500 ETF（代碼：`SPY`）。採樣標的資產 $i$ 與 SPY 在過去至少 60 個交易日（$N \ge 60$）的日收盤價序列，計算每日連續對數收益率：
+設基準資產為標普 500 ETF（代碼：`SPY`）。以 1 年日線（`BETA_HISTORY_PERIOD = "1y"`）採樣標的資產 $i$ 與 SPY 的重疊日收盤價序列（至少 60 筆，$N \ge 60$），計算每日連續對數收益率：
 $$R_{i, t} = \ln\left(\frac{P_{i, t}}{P_{i, t-1}}\right), \quad R_{\text{SPY}, t} = \ln\left(\frac{P_{\text{SPY}, t}}{P_{\text{SPY}, t-1}}\right)$$
 
 標的資產相對於 SPY 的 Beta 係數由樣本協方差與 SPY 樣本變異數定義：
@@ -44,7 +44,7 @@ $$\beta_i = \frac{\operatorname{Cov}(R_i, R_{\text{SPY}})}{\operatorname{Var}(R_
 
 **約束與剪裁（Clipping）**：
 $$\beta_i \leftarrow \operatorname{clip}(\beta_i, -5.0, 5.0)$$
-若樣本歷史小於 60 日、對數收益率無有效變動、或 $\operatorname{Var}(R_{\text{SPY}}) \le 10^{-9}$，系統平滑降級預設 $\beta_i = 1.0$。
+若樣本歷史小於 60 日、對數收益率無有效變動、或 $\operatorname{Var}(R_{\text{SPY}}) \le 10^{-9}$，`calculate_beta_strict()` 回傳 `None`；呼叫端以 $\beta_i = 1.0$ 估算，但必須帶 `beta_estimated` 旗標並在報告／embed 標示「資料不足，暫以 1.0 估算」，不可默默當成真實 Beta（過去以 5 日線計算，Beta 幾乎永遠退回 1.0 而無人察覺）。
 
 ### 2.2 Beta 加權換算因子 (Weight Factor)
 將標的 $i$ 的股價變動等效轉換為 SPY 股價變動的無因次轉換權重因子 $w_i$：
@@ -104,8 +104,9 @@ $$\Gamma_{\text{portfolio, SPY}} = \sum_{k \in \text{Options}} \Gamma_{\text{SPY
 
 ### 2.5 Daily Theta、Vega 與 Vanna 加權聚合模型
 1. **每日時間價值衰減 (Daily Theta)**：
-   由於 `py_vollib` 與標準 BSM 公式輸出的 Theta 為年化值，系統將其嚴格除以 365 轉換為每日現金流：
-   $$\Theta_{\text{daily}} = \sum_{k \in \text{Options}} \frac{\Theta_{\text{annual}, k} \times Q_k \times 100}{365.0}$$
+   `py_vollib` 的 analytical theta **已是每日值**（內部已除以 365），部位層級每日 Theta 美元值直接加總，不可再除以 365：
+   $$\Theta_{\text{daily}} = \sum_{k \in \text{Options}} \Theta_{\text{daily}, k} \times Q_k \times 100$$
+   `refresh_portfolio_greeks` 寫入 `assets.metadata.theta` 的即為此部位層級值；盤後報告與 `get_full_user_context()` 的 `total_theta` 過去重複除以 365，使組合 Theta 被縮小 365 倍。
 2. **Beta 加權 Vega（波動率曝險）**：
    $$\text{Vega}_{\text{SPY}} = \sum_{k \in \text{Options}} \text{Vega}_k \times Q_k \times 100 \times w_k$$
 3. **Beta 加權 Vanna（二階波動-方向交叉敏感度）**：
@@ -170,15 +171,13 @@ flowchart TD
 ## 5. 邊界條件、風控熔斷與例外處理
 
 ### 5.1 SPY 價格缺失與零除防護 (Zero Division Guard)
-若在盤前或資料流中斷時，`self.spy_price <= 0`，計算權重因子 $w_i = \beta_i \frac{S_i}{S_{\text{SPY}}}$ 會引發 `ZeroDivisionError`。`portfolio.py:130` 與 `risk_engine.py:258` 設立前置硬鎖：
+若在盤前或資料流中斷時 SPY 價格未知（`None` 或 $\le 0$），計算權重因子 $w_i = \beta_i \frac{S_i}{S_{\text{SPY}}}$ 會引發 `ZeroDivisionError`。`portfolio.py::_weight_factor()` 設立前置硬鎖：
 ```python
-weight_factor = (
-    beta * (current_stock_price / self.spy_price)
-    if self.spy_price > 0
-    else 0.0
-)
+if self.spy_price is None or self.spy_price <= 0:
+    return None
+return beta * (stock_price / self.spy_price)
 ```
-若基準價無效，加權因子安全退回 `0.0`，並阻斷倉位開立。
+基準價無效時加權因子為 `None`：該部位的 Beta-Delta 顯示「--」且不計入組合加總，下游閘門 fail-closed。SPY 價格不得以 500／670／690 之類的常數補值——過時的常數會讓所有 Beta-Delta 與對沖判斷系統性偏移。
 
 ### 5.2 持倉列過濾不得使用 `quantity > 0`
 `get_all_portfolio()` 早期以 `if qty > 0` 過濾現貨持倉列，使空頭現貨對整條下游管線**完全隱形**——它不會出現在盤後報告、`audit_real_portfolio_risk()`，也不會計入任何一項組合層指標。這類缺陷不會報錯，只會安靜地少算。

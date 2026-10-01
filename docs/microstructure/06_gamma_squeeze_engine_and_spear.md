@@ -109,6 +109,7 @@ $$
 $$
 \text{Theta Coverage Pct} = \frac{\text{Projected Daily Theta}}{\text{Daily Burn Rate}} \times 100\%
 $$
+**輸入來源**（`IntradayScanPipeline`）：Capital／Cash Reserve／Monthly Burn Rate 取自 `UserContext` 的 `capital`、`cash_reserve`、`monthly_expense`（過去讀不存在的 `total_capital`／`monthly_burn_rate` 屬性，恆為 $100{,}000$／$5{,}000$）。期權持倉讀使用者的 `TRADE` 部位：`metadata.theta` 是部位層級每日 Theta 美元值，換回單口值 $\text{Theta}_i = \theta_{\text{position}} / (Q_i \times 100)$；Theta 尚未刷新（`None`）的部位直接略過、不補值（過去從 `HOLDING` 現貨讀期權，結果恆為空，Theta 覆蓋恆為 $0$）。Portfolio Vanna 取 `UserContext.total_vanna`，為 $0$ 時不再以 $1.25$ 冒充。
 - **風控分級紅線**：
   - $\ge 180$ 天：🟢 極其安全，運營資金結構優良。
   - $90 \sim 179$ 天：🟡 良好防守狀態。

@@ -289,9 +289,9 @@ def calculate_auto_capital(
             except Exception as ex:
                 logger.error(f"解析 asset metadata 失敗: {ex}")
 
+        # 帳戶全空 (無持倉、無現金儲備) 時不以 $100,000 之類的常數冒充：落到
+        # 1.0 下限，部位建議自然歸零 (fail-closed)，直到使用者設定現金儲備。
         total_val = holdings_value + options_value + cash_reserve
-        if total_val == 0.0:
-            return 100000.0
         return max(total_val, 1.0)
     finally:
         if should_close:

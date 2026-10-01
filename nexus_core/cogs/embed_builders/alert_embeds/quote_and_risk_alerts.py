@@ -10,19 +10,31 @@ from cogs.embed_builders._core import NexusEmbed
 
 def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     """建構即時報價 Embed。"""
+    dp = data.get("dp")
+    pc = data.get("pc")
     embed = NexusEmbed(
         title=f"💹 {symbol} 即時報價 (Real-time Quote)",
-        color=discord.Color.blue() if data["dp"] >= 0 else discord.Color.red(),
+        color=discord.Color.red()
+        if dp is not None and dp < 0
+        else discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="💲 現價 (Current)", value=f"**${data['c']}**", inline=True)
-    embed.add_field(name="📈 漲跌幅 (%)", value=f"`{data['dp']}%`", inline=True)
+    embed.add_field(
+        name="📈 漲跌幅 (%)",
+        value=f"`{dp}%`" if dp is not None else "`--`",
+        inline=True,
+    )
     embed.add_field(
         name="📊 今日高/低",
         value=f"H: `${data['h']}` / L: `${data['l']}`",
         inline=False,
     )
-    embed.add_field(name="📉 前收盤 (PC)", value=f"`${data['pc']}`", inline=True)
+    embed.add_field(
+        name="📉 前收盤 (PC)",
+        value=f"`${pc}`" if pc is not None else "`--`",
+        inline=True,
+    )
     embed.set_footer(text="Nexus Seeker | Market Intelligence Feed")
     return embed
 

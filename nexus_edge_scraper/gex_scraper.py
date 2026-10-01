@@ -32,6 +32,8 @@ FALLBACK_GEX: dict[str, Any] = {
 }
 
 _GEX_MIN_DELTA_THRESHOLD = 0.02
+# 與 nexus_core/config.py RISK_FREE_RATE 一致 (兩服務不共用模組，由測試鎖定)
+RISK_FREE_RATE = 0.042
 
 
 def _ndtr_prime(x: float) -> float:
@@ -74,7 +76,7 @@ def _calculate_delta(
 
 
 def _filter_noise_contracts(
-    chain: list[dict[str, Any]], spot: float, r: float = 0.04, q: float = 0.0
+    chain: list[dict[str, Any]], spot: float, r: float = RISK_FREE_RATE, q: float = 0.0
 ) -> list[dict[str, Any]]:
     """過濾雜訊合約：先剔除 oi<=0（本就對曝險零貢獻），再對每邊
     (calls / puts) 各自嘗試以 |delta| < _GEX_MIN_DELTA_THRESHOLD 剔除
@@ -109,7 +111,7 @@ def _filter_noise_contracts(
 async def scrape_symbol_gex_core(
     symbol: str,
     browser: Browser,
-    risk_free_rate: float = 0.04,
+    risk_free_rate: float = RISK_FREE_RATE,
     dividend_yield: Any | None = None,
 ) -> dict[str, Any]:
     """對已存在的 Playwright browser 實例執行單一標的的 GEX 抓取與計算。

@@ -122,19 +122,13 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
         assert metrics.iv_percentile is None
         assert metrics.iv_status == "Normal"
 
-        # When min_history_records=1, can calculate rank from single record
+        # min_history_records=1 時母體只有今日一筆 (高=低)：IVR 無定義，仍為 None
         _iv_cache.clear()
         metrics_single = await SentimentEngine.fetch_and_calculate_iv_metrics(
             symbol, min_history_records=1
         )
-        assert (
-            metrics_single.iv_rank is not None
-            and 0.0 <= metrics_single.iv_rank <= 100.0
-        )
-        assert (
-            metrics_single.iv_percentile is not None
-            and 0.0 <= metrics_single.iv_percentile <= 100.0
-        )
+        assert metrics_single.iv_rank is None
+        assert metrics_single.iv_percentile is None
 
 
 @pytest.mark.asyncio
@@ -383,6 +377,46 @@ async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade() -> None
         assert metrics.iv_percentile is None
         assert metrics.expected_move_weekly is None
         assert metrics.iv_status == "Normal"
+
+
+@pytest.mark.asyncio
+@pytest.mark.slow
+async def test_iv_rank_flat_window_is_unknown() -> None:
+    """數據正確性 L5：窗口 IV 高=低時 IVR 無定義，回 None 而非補 50。"""
+    live_iv: dict[str, Any] = {"iv": 0.30, "spot": 100.0}
+    symbol = "TEST_FLAT"
+
+    conn = sqlite3.connect(config.DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
+    conn.commit()
+    conn.close()
+
+    past_days = [
+        d
+        for d in market_time.get_recent_trading_dates(6)
+        if d < market_time.datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
+    ][-3:]
+    for d in past_days:
+        await SentimentEngine.save_historical_iv(symbol, 0.30, d)
+
+    with patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 100.0},
+    ), _patch_live_iv(live_iv), patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=pd.DataFrame(),
+    ), patch("market_analysis.sentiment.iv_metrics.is_market_open", return_value=True):
+        # 母體 [0.30, 0.30, 0.30] + 今日 0.30 → high == low → IVR 無定義
+        metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
+            symbol, min_history_records=1
+        )
+
+    assert metrics.current_iv == pytest.approx(0.30)
+    assert metrics.iv_rank is None
+    assert metrics.iv_percentile is None
 
 
 @pytest.mark.asyncio
