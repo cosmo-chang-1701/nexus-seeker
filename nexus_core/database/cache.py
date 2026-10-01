@@ -1,7 +1,7 @@
 import logging
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 from .financials import get_cached_financials, save_financials_cache, purge_old_cache
 
 from database.connection import (
@@ -60,6 +60,33 @@ async def save_kv_cache(key: str, value: Any) -> bool:
         return True
     except Exception as e:
         logger.error(f"save_kv_cache 失敗 (key: {key}): {e}")
+        return False
+
+
+_KV_CACHE_UPSERT_SQL = """
+    INSERT INTO kv_cache (key, value, updated_at)
+    VALUES (?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(key) DO UPDATE SET
+    value = excluded.value,
+    updated_at = CURRENT_TIMESTAMP
+"""
+
+
+async def save_kv_cache_many(items: Mapping[str, Any]) -> bool:
+    """一次寫入多個 kv_cache key，整批共用單一交易（全部成功或全部不寫入）。
+
+    供一組彼此相依、必須同時更新的快取鍵使用（例如大盤 GEX 的 spot / flip /
+    fallback 旗標 / last-known-good 快照），避免逐鍵呼叫 `save_kv_cache()`
+    中途失敗時留下「部分鍵已更新、部分鍵仍為舊值」的不一致狀態。
+    """
+    if not items:
+        return True
+    try:
+        rows = [(key, json.dumps(value)) for key, value in items.items()]
+        await execute_write_many_async([(_KV_CACHE_UPSERT_SQL, rows, True)])
+        return True
+    except Exception as e:
+        logger.error(f"save_kv_cache_many 失敗 (keys: {list(items)}): {e}")
         return False
 
 
@@ -198,6 +225,7 @@ __all__ = [
     "save_financials_cache",
     "purge_old_cache",
     "save_kv_cache",
+    "save_kv_cache_many",
     "get_kv_cache",
     "get_kv_cache_with_age",
     "get_kv_cache_many",
