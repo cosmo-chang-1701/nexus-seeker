@@ -1,7 +1,7 @@
 """GEX 牆體深度（薄牆）門檻：stdlib 葉模組。
 
 刻意只依賴標準函式庫（比照 `room_threshold.py`），讓 `index_microstructure`、
-`dynamic_rollover/`、`insights_engine`、`scenario_classifier` 與各 embed 都能
+`dynamic_rollover/`、`insights_engine` 與各 embed 都能
 匯入同一個定義而不產生循環相依。
 """
 

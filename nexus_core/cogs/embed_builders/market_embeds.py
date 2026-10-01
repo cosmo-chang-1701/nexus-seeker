@@ -378,7 +378,7 @@ def build_radar_scan_embed(
     # defense_macro_tail_risk / alpha_market_signals / defense_portfolio_risk 三個開關
     # 以 emoji 子字串刪減洞察行（例如任何含 🚨 的行都會被刪），使用者關掉某類推播後
     # 雷達內容也被靜默閹割，且 slash command 的手動掃描同樣受影響。雷達的推播與否
-    # 由呼叫端以 heartbeat_watchlist 頻道控制。
+    # 由呼叫端決定（15 分鐘自選雷達推播已移除，目前僅 /x 手動掃描使用）。
     title_map = {
         "HOLDINGS": "現貨持倉批次量化雷達 (Holdings)",
         "ORDERS": "待成交掛單批次量化雷達 (Pending Orders)",

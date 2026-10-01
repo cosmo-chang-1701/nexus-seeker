@@ -27,10 +27,11 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 | **08:30** | `daily_reddit_update` | `cogs/trading/scheduler.py` | 每日開盤前 | 抓取 Reddit 財經子版輿情貼文，更新社群情緒指標與邊界熱度。 |
 | **08:45** | `pre_market_risk_monitor` | `cogs/trading/pre_market.py` | 僅美股交易日（開盤前 45 分） | 1. 錯開預熱：量化指標、IV 位階、最大痛點、Gamma 擠壓指標；<br/>2. 補償前一日若遺漏之情緒歷史快照；<br/>3. 預熱每位使用者的投組模擬年化日報酬率序列。 |
 | **09:00** | `pre_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日（開盤前 30 分） | Analyst Agent 盤前速報：整合前日盤後與當晨最新宏觀數據、財報評估與盤前波動預期。 |
-| **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `dynamic_market_scanner` | `cogs/trading/heartbeat.py` | 盤中每 15 分鐘 | 自選標的 15 分鐘動態雷達心跳：評估 GEX 牆體、相對強弱、動能向量與右側/左側/做空進場條件，寫入 `uoa_history` 並更新 `bot._latest_radar_data_cache`。 |
-| **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `price_volume_alert_monitor` | `cogs/trading/price_volume_alert_monitor.py` | 盤中每 15 分鐘 | 15 分鐘個股價量突破警報：`Semaphore(3)` 併發控制，比對放量與均線突破；支援 Alpaca 串流影子比對。 |
-| **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading/portfolio_monitor.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：直接消費 5 分鐘前大盤掃描之記憶體快取，零外部請求評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。 |
-| **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘 | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流，與 15 分鐘心跳路徑完全隔離。 |
+| **09:30–16:00**<br/>*(:00, :15, :30, :45)* | `dynamic_market_scanner` | `cogs/trading/scheduler.py` | 盤中每 15 分鐘（Leader-Only，85% RAM 守衛） | 1. 總經快取（SPX／VIX／US10Y／WTI／VTS）與 VIX 黑天鵝警報（`defense_macro_tail_risk`）；<br/>2. `_sync_edge_watchlist()`：同步自選與持倉標的清單給 edge（未設 `TUNNEL_URL` 不做任何事）；<br/>3. `MarketScanCog` NRO／DDP／IV 期權掃描（含 IV 事件風險、Re-hedge 建議與 VTR 自動進場）。<br/>自選雷達推播（`heartbeat_watchlist`）與市場情境事件（`intel_market_scenario`）已移除，本任務**不再**寫入 `bot._latest_radar_data_cache`。 |
+| **09:30–16:00**<br/>*(每 15 分鐘，未對齊整點)* | `price_volume_alert_monitor` | `cogs/trading/price_volume_alert_monitor.py` | 盤中每 15 分鐘（`tasks.loop(minutes=15)`，以 Cog 載入時間起算，**不**對齊 :00／:15） | 15 分鐘個股價量突破警報：`Semaphore(3)` 併發控制，比對放量與均線突破；支援 Alpaca 串流影子比對。 |
+| **09:30–16:00**<br/>*(每 30 分鐘，未對齊整點)* | `monitor_order_telemetry_alignment_task` | `cogs/trading/telemetry.py` | 盤中每 30 分鐘（`tasks.loop(minutes=30)`，Leader-Only） | 待成交掛單遙測對齊與撤退線：比對掛單價與最新市況、14 日內高影響總經事件，推播至 `telemetry_orders`。 |
+| **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading/portfolio_monitor.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。持倉標的的 radar 資料先查 `bot._latest_radar_data_cache`，該快取已無寫入端，實際一律經 `_fetch_sym_radar_data_slow`（`Semaphore(3)`）自行抓取。 |
+| **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘（Leader-Only，85% RAM 守衛） | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流；非 green 標的推播 `heartbeat_symbol_deep`（含期權合約規劃），並把心跳抓到的 UOA 寫入 `uoa_{SYM}` kv 快取與 `uoa_history`（`uoa_history` 唯一寫入端）。獨立 `asyncio.Task`，與 15 分鐘巡邏完全隔離。 |
 | **24/7 每 30 分鐘** | `wti_oil_monitor` | `cogs/trading/wti_monitor.py` | 全天候（00:00–06:00 靜默） | 監控 WTI 原油期貨異動與板塊衝擊矩陣，於異動超過門檻時發送即時推播。 |
 | **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率與 CPI YoY 偏差值（`update_cpi_deviation` 內部會 prefetch 月度日曆；日曆重寫保留既有 FedWatch 欄位，見 §5.4）。 |
 | **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定；<br/>5. 總經訊號乾跑記錄：抓取 FRED 與市場資料、計算 9 個候選指標與三態判定，寫入 `macro_signal_log`／`macro_regime_log`（**只記錄、不推播**，`ENABLE_MACRO_SIGNAL_LOG`）；<br/>6. 提領跑道快照：讀取 `portfolio_nav_daily` 與 CPI，計算壓力跑道並寫入 `withdrawal_runway_snapshot`（僅已設定提領者；須排在 NAV 與 FRED 觀測之後），寫入成功後經 `risk_withdrawal_runway` 推播壓力跑道警示（跌破 3／2／1 年）與提領提醒（前一個月 15 日起的前置提醒、提領月份首個交易日當日提醒，附賣出清單）。 |
@@ -43,40 +44,39 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 
 在美股 09:30 至 16:00 的常規交易時段中，每 15 分鐘與每 30 分鐘的密集排程如果同時向市場發動請求，將引發 API 頻寬暴增與 VPS CPU 峰值。系統透過以下兩大架構化解爭用：
 
-### 3.1 錯開 5 分鐘共享快取機制（Staggered 5-Minute Offset）
+### 3.1 錯開 5 分鐘排程（Staggered 5-Minute Offset）
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Sched as 動態排程器
     participant Scanner as dynamic_market_scanner (:00, :15, :30, :45)
-    participant Cache as 全域記憶體快取 (bot._latest_radar_data_cache)
+    participant Cache as 共享雷達快取 (bot._latest_radar_data_cache，已無寫入端)
     participant PortRisk as monitor_real_portfolio_task (:05, :20, :35, :50)
     participant ExtAPI as yfinance / Finnhub
 
     Note over Sched,ExtAPI: 每 15 分鐘週期起始 (T + 0 分鐘)
-    Sched->>Scanner: 觸發大盤與自選清單雷達掃描
-    Scanner->>ExtAPI: 抓取 K 線、期權鏈與報價
-    Scanner->>Scanner: 計算 GEX 牆體、動能、進場條件與 UOA
-    Scanner->>Cache: 寫入當前週期最新標的量化快照
-    Scanner-->>Sched: 完成掃描並推播自選心跳
+    Sched->>Scanner: 觸發總經快取、edge 同步與 NRO 期權掃描
+    Scanner->>ExtAPI: 抓取指數報價、VIX 期限結構與期權鏈
+    Scanner-->>Sched: 完成巡邏（不再推播自選雷達、不寫共享快取）
 
     Note over Sched,ExtAPI: 錯開 5 分鐘 (T + 5 分鐘)
     Sched->>PortRisk: 觸發真實投資組合即時風控
-    PortRisk->>Cache: 讀取記憶體快取 (完全零網路 I/O！)
+    PortRisk->>Cache: 查詢共享快取（恆未命中）
+    PortRisk->>ExtAPI: Semaphore(3) 自行抓取持倉標的 radar
     PortRisk->>PortRisk: 計算投組 Beta 加權 Delta、下行回撤與階梯判定
     PortRisk-->>Sched: 若觸發回撤階梯則發送緊急風控警報
 ```
 
-1. **零成本複用**：投資組合風控需要的現價、Delta 與波動率指標，95% 以上與大盤動態掃描標的重疊。錯開 5 分鐘確保大盤快照已精確寫入 `bot._latest_radar_data_cache`，投組風控直接記憶體命中，避免重複拉取期權鏈。
-2. **平滑 CPU 負載**：將密集計算時間點由單一峰值分散為兩段相隔 5 分鐘的小峰值，防止 VPS 負載超過 1.0 觸發 Discord 閘道心跳逾時。
+1. **平滑 CPU 負載**：將密集計算時間點由單一峰值分散為兩段相隔 5 分鐘的小峰值，防止 VPS 負載超過 1.0 觸發 Discord 閘道心跳逾時。
+2. **共享快取已失去寫入端**：`bot._latest_radar_data_cache` 原本由 15 分鐘自選雷達寫入，讓投組風控在 T + 5 分鐘直接記憶體命中。雷達推播移除後，持倉監控與 30 分鐘進場顧問都會退回 `_fetch_sym_radar_data_slow` 自行抓取（`Semaphore(3)` 限流、`SingleFlightManager` 去重在途請求）。每輪額外抓取量約為去重後的持倉標的數 $N_{\text{fetch}} = |S_{\text{holdings}}|$。讀取端保留，日後若有其他迴圈寫入快取可直接受益。
 
-### 3.2 雙自選標的心跳管線完全隔離
+### 3.2 自選標的心跳管線隔離
 
-系統內存在兩條平行的自選心跳推播管線，彼此在資料源、計算模組、執行週期與頻道設定上完全獨立，詳見 [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)：
+自選標的的主動推播只剩一條管線，詳見 [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)：
 
-- **15 分鐘動態雷達心跳**（`dynamic_market_scanner`）：專注於技術結構、右側突破、左側超跌接刀與做空進場條件；推播至 `/notif_settings` 的「動態雷達心跳」頻道。
-- **30 分鐘標的分析中心 2.0 深度心跳**（`IntradayScanPipeline`）：專注於 Gamma 擠壓、量價分佈（Volume Profile / DP-POC）與做市商拓撲深潛；推播至「標的分析中心 2.0」專屬頻道。
+- **15 分鐘盤中巡邏**（`dynamic_market_scanner`）：原本的自選雷達推播（`heartbeat_watchlist`）與市場情境事件（`intel_market_scenario`）已移除；現在只做總經快取、VIX 黑天鵝警報、edge 自選同步與 NRO／DDP／IV 期權掃描。雷達面板改為 `/x` 手動查詢。
+- **30 分鐘標的分析中心 2.0 深度心跳**（`IntradayScanPipeline`）：專注於 Gamma 擠壓、量價分佈（Volume Profile / DP-POC）與做市商拓撲深潛；推播至 `heartbeat_symbol_deep`，另含進場顧問（`advisory_entry_signal`）與 SPEAR（`alpha_market_signals`）。獨立 `asyncio.Task`，每輪開頭檢查 Leader 身分與 `is_memory_safe()`。
 
 ---
 
@@ -126,7 +126,7 @@ flowchart LR
 ### 5.2 資料保留期策略（Retention Policy）
 為維持 SQLite 資料庫在輕量 VPS 上的極致查詢速度，離峰清理排程落實嚴格的生命週期管理：
 - **`kv_cache` 防重複鍵**：白名單前綴（如 `alert_daily_dedup_`）保留 3 個交易日後自動清除，永久設定快取絕不觸碰。
-- **`uoa_history` 異常金流**：保留 10 個交易日，過期紀錄自動清空以防全表掃描效能劣化。
+- **`uoa_history` 異常金流**：唯一寫入端是 30 分鐘深度心跳（`IntradayScanPipeline._build_watchlist_heartbeat_embed`，與 `uoa_{SYM}` kv 快取共用同一份 UOA 資料），15 分鐘巡邏不寫入。保留 10 個交易日，過期紀錄自動清空以防全表掃描效能劣化。
 - **`sentiment_history` / `canonical`**：原始情緒歷史保留 60 交易日；每日正規快照 `sentiment_daily_canonical` 保留 260 交易日（約 1 個完整交易年）。
 - **`regime_evaluation_log`**：前向標註完成後，依保留期設定自動歸檔修剪。
 
@@ -165,7 +165,8 @@ $$p_{\text{fedwatch}}' = \text{COALESCE}(p_{\text{new}},\ p_{\text{old}})$$
 | 排程名稱 / 功能模組 | 原始程式碼檔案路徑 | 關聯技術規格書 |
 | :--- | :--- | :--- |
 | 交易排程器與週報任務 | `nexus_core/cogs/trading/scheduler.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
-| 15 分鐘動態雷達心跳發送 | `nexus_core/cogs/trading/heartbeat.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
+| 15 分鐘盤中巡邏與 edge 自選同步 | `nexus_core/cogs/trading/scheduler.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
+| 30 分鐘掛單遙測對齊循環 | `nexus_core/cogs/trading/telemetry.py` | [`03_notification_center.md`](03_notification_center.md) |
 | WTI 原油全天候監控循環 | `nexus_core/cogs/trading/wti_monitor.py` | [`03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md) |
 | 15 分鐘價量突破警報循環 | `nexus_core/cogs/trading/price_volume_alert_monitor.py` | [`06_price_volume_alert_system.md`](06_price_volume_alert_system.md) |
 | 每日自動 SEC 財報掃描排程 | `nexus_core/cogs/trading/fundamental_filing_monitor.py` | [`02_sec_filing_moat_scanner.md`](../macro_sentiment/02_sec_filing_moat_scanner.md) |

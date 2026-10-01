@@ -140,7 +140,7 @@ flowchart TD
 | `pcr_fomo_lower_threshold` | $< 0.40$ | 散戶極度瘋狂追多門檻（結構背離比對用） | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `pcr_panic_upper_threshold` | $> 1.50$ | 散戶非理性恐慌殺跌門檻（結構背離比對用） | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `uoa_institutional_min_dte` | $\ge 7$ 天 | 判定實質機構買盤護航的最小到期日要求 | `nexus_core/cogs/embed_builders/market_embeds.py` |
-| `uoa_aligned_actions` | `["BTO CALL", "STO PUT"]` | 視為實質看多/托底的異常期權交易動作定義 | `nexus_core/cogs/trading/heartbeat.py` |
+| `uoa_aligned_actions` | `["BTO CALL", "STO PUT"]` | 視為實質看多/托底的異常期權交易動作定義 | `nexus_core/cogs/embed_builders/market_embeds.py` |
 | `_MIN_PERCENTILE_SAMPLES` | `20` 筆 | 高頻回退池樣本數低於此值時百分位直接回傳 `None`，而非用不足樣本假造極端值 | `nexus_core/market_analysis/sentiment/history_storage.py` |
 | `SKEW_D25` | 歷史指標命名空間 | 真 25-Delta Skew 的專屬 history key，與改版前的 `SKEW`（±5% 價平代理）樣本互不混用 | `nexus_core/market_analysis/sentiment/skew_taxonomy.py` |
 
@@ -220,4 +220,4 @@ elif (
   - `nexus_core/market_analysis/sentiment/skew_taxonomy.py`: 門檻具名常數與 `ensure_percentile_pct()`
   - `nexus_core/database/migrations/v080_add_sentiment_daily_canonical.py`: 資料表與回填
 - **機構多頭對齊定義**:
-  - `nexus_core/cogs/trading/heartbeat.py`: `is_uoa_aligned` 判定邏輯
+  - `nexus_core/cogs/embed_builders/market_embeds.py`: `is_uoa_aligned` 判定邏輯（雷達面板；原 15 分鐘雷達的情境事件分類已移除）

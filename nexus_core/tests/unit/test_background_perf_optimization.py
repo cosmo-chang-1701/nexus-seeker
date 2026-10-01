@@ -221,31 +221,6 @@ async def test_fetch_symbol_gex_metrics_swr_consistency() -> None:
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_radar_cache_sharing_with_portfolio_monitor() -> None:
-    """Verify heartbeat and portfolio monitor share radar cache effectively."""
-    import time
-
-    bot = MagicMock()
-    fake_radar_data = {
-        "AAPL": {
-            "price": 150.0,
-            "net_gex": 500000.0,
-            "call_wall": 155.0,
-            "put_wall": 145.0,
-        }
-    }
-    bot._latest_radar_data_cache = fake_radar_data
-    bot._latest_radar_cache_time = time.time()
-
-    # Verify portfolio monitor can read from bot's shared radar data cache
-    is_fresh = (time.time() - getattr(bot, "_latest_radar_cache_time", 0.0)) < 300
-    assert is_fresh is True
-    shared_data = getattr(bot, "_latest_radar_data_cache", {})
-    assert "AAPL" in shared_data
-    assert shared_data["AAPL"]["price"] == 150.0
-
-
-@pytest.mark.asyncio
 async def test_price_volume_alert_monitor_concurrency() -> None:
     """Verify PriceVolumeAlertMonitorCog evaluates watches concurrently without errors."""
     from cogs.trading.price_volume_alert_monitor import PriceVolumeAlertMonitorCog
@@ -307,7 +282,7 @@ async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows
     None
 ):
     """kv_cache has no TTL column and no purge job, so one-shot daily dedup flags
-    (e.g. scenario_alert_..., wti_alert_...) accumulate forever. Verify the new
+    (e.g. rollover_alert_..., wti_alert_...) accumulate forever. Verify the new
     purge helper deletes only whitelisted-prefix rows older than the retention
     window, leaves recent whitelisted rows untouched, and never touches
     non-whitelisted keys regardless of age (e.g. permanent last-known-good
@@ -320,7 +295,7 @@ async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows
         purge_stale_kv_cache_dedup_keys,
     )
 
-    old_dedup_key = "scenario_alert_1_AAPL_2020-01-01_WHALE_ESCORT"
+    old_dedup_key = "rollover_alert_1_AAPL_2020-01-01_TRIM"
     recent_dedup_key = "wti_alert_1_20990101_UPPER_BREAKOUT"
     old_permanent_key = "macro_gex_metrics_cache"
 

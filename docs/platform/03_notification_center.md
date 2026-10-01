@@ -23,7 +23,7 @@
 以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。頻道的 key、模組、標籤與屬性只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`DEFAULT_NOTIFICATION_SETTINGS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生。
 
 #### 2.2.1 分類準則：依對 B&H 投組報酬分佈的影響分組
-使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 30 個頻道）：
+使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 28 個頻道）：
 
 | 模組 | `risk_role` | 頻道 | 內容 |
 |---|---|---|---|
@@ -43,9 +43,7 @@
 | | | `trim_covered_call` | Covered Call 解套、CC Overlay、`COVERED_CALL_PROFIT_LOCK` |
 | | | `trim_profit_lock` | DITM 深價內期權獲利鎖定 |
 | | | `advisory_core_levels` | 顧問模式目標區位階告知（去重鍵 `advisory_exit_{uid}_{SYMBOL}_{EXIT_TIER}_{YYYYMMDD}`） |
-| 📡 盤中情報 | `INTEL` | `heartbeat_watchlist` | 15 分鐘批次量化雷達（`cogs/trading/heartbeat.py`） |
-| | | `heartbeat_symbol_deep` | 30 分鐘個股深度戰場心跳（`IntradayScanPipeline`） |
-| | | `intel_market_scenario` | 自選股市場情境事件（巨鯨護航、結構破位等；與雷達共用資料但獨立開關） |
+| 📡 盤中情報 | `INTEL` | `heartbeat_symbol_deep` | 30 分鐘個股深度戰場心跳（`IntradayScanPipeline`，含期權合約規劃） |
 | | | `telemetry_orders` | 待成交掛單遙測對齊 |
 | | | `alpha_market_signals` | DDP、廉價期權、Gamma Squeeze SPEAR |
 | | | `alpha_option_scan` | NRO 期權掃描執行決策、PowerSqueeze、期權掃描卡 |
@@ -55,7 +53,7 @@
 | | | `vtr_virtual_trades` | 虛擬交易室自動轉倉／平倉（紙上交易，不涉及真實部位） |
 | | | `system_lifecycle` | 機器人啟動／關閉廣播（**預設關閉**） |
 
-兩則心跳是完全獨立的推播路徑（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
+`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權／Gamma Squeeze、NRO 期權掃描與價量突破警報」），不再提自選雷達。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
 
 #### 2.2.2 動態轉倉指令的頻道對照
 `database/notification_channels.py::resolve_rollover_channel()` 取代 `portfolio_monitor.py` 過去的 if/elif 鏈，優先序：
@@ -75,11 +73,13 @@
 - `🎯 精準交易`（`focus`）：只關閉 `noise` 頻道。
 - `🔕 盤中靜音`（`mute_intraday`）：關閉 `noise` 與 `cadence == INTRADAY` 的頻道。
 - `🛡️ 戰備全開`（`all_on`）；`all_off` 僅供程式呼叫。
-- **左尾防護 8 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
+- **左尾防護 9 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
 - `focus`／`mute_intraday` 對既有頻道的結果與重整前逐 key 相同，唯一差異是 `system_lifecycle`（重整後歸雜訊）；`test_notification_toggles.py::test_presets_preserve_legacy_behaviour` 逐一列明。
 
 #### 2.2.4 遷移 `v081_split_notification_channels`
-新增的 10 個子頻道以母頻道（`parent_key`）的**明確設定**回填（`INSERT OR IGNORE`，冪等、不覆寫事後調整）：已靜音母頻道者子頻道維持靜音，從未設定者沿用預設值（比照 `v070`／`v078`）。`defense_portfolio_risk` 拆完後刪除其資料列，並列入 `LEGACY_KEY_ALIASES` 指向 `defense_gamma_fragility`（`profit_lock_alert` → `trim_profit_lock`、`margin_and_api_alert` → `defense_margin_call`）。`MARGIN_API` 併入 `defense_margin_call` 時刻意不回填，避免過去關閉混裝頻道的使用者連帶靜音保證金警戒。遷移內的對照表是凍結快照，`test_v081_parent_map_matches_registry` 確保與註冊表一致。
+新增的 10 個子頻道以母頻道（`parent_key`）的**明確設定**回填（`INSERT OR IGNORE`，冪等、不覆寫事後調整）：已靜音母頻道者子頻道維持靜音，從未設定者沿用預設值（比照 `v070`／`v078`）。`defense_portfolio_risk` 拆完後刪除其資料列，並列入 `LEGACY_KEY_ALIASES` 指向 `defense_gamma_fragility`（`profit_lock_alert` → `trim_profit_lock`、`margin_and_api_alert` → `defense_margin_call`）。`MARGIN_API` 併入 `defense_margin_call` 時刻意不回填，避免過去關閉混裝頻道的使用者連帶靜音保證金警戒。遷移內的對照表是凍結快照，`test_v081_parent_map_matches_registry` 只比對仍在註冊表內的子頻道（`intel_market_scenario` 已於 `v087` 下線，但 `v081` 不得改動）。
+
+遷移 `v087_remove_watchlist_radar_channels` 只刪除 `heartbeat_watchlist` 與 `intel_market_scenario` 兩個 key 的 `user_notification_settings` 列；指向 `heartbeat_watchlist` 的舊別名 `hb_options_structure`／`hb_execution_risk` 同步自 `LEGACY_KEY_ALIASES` 移除。`is_notification_enabled()` 對未知 key 回傳 `True`，因此下線頻道不得留下任何別名或呼叫點。
 
 #### 2.2.5 UI（`NotificationSettingsView`，5 row 以內）
   - **核心 vs 進階**：面板預設只呈現三個會改變投組報酬分佈的**核心模組**（🛡️ 左尾防護、🚀 上行捕捉、✂️ 上行削減）；情報與戰報類模組收在「⚙️ 進階」裡。分組以註冊表的 `risk_role` 推導（模組內所有頻道皆為 `INTEL`／`BRIEFING` 即歸進階，`cogs/settings_ui.py::ADVANCED_MODULES`／`CORE_MODULES`），不寫死模組或頻道 key，註冊表新增頻道時自動跟上。收合只影響畫面呈現，**預設情境仍會一併套用到進階頻道**。

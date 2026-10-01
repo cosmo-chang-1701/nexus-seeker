@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 # 刻意採用白名單前綴（而非依 updated_at 全域清除），避免誤刪任何具持久意義的
 # 快取（如 last-known-good 備援快照、使用者設定、月度/年度資料）。
 _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
-    "scenario_alert_",
     "rollover_alert_",
     "cc_unlock_",
     "price_volume_alert_",

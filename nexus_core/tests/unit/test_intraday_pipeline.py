@@ -798,7 +798,7 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
         "database.get_all_user_ids", return_value=[42]
     ), patch("database.get_full_user_context") as mock_ctx, patch(
         "database.get_user_watchlist", return_value=[("AAPL", 1), ("MSFT", 1)]
-    ):
+    ), patch("services.llm_service.is_memory_safe", return_value=True):
         mock_datetime_class.now.return_value = mock_now
 
         user_ctx = SimpleNamespace(
@@ -820,6 +820,38 @@ async def test_run_loop_exception_isolation(intraday_pipeline: Any):  # type: ig
     assert "AAPL" in called_tickers
     assert "MSFT" in called_tickers
     assert intraday_pipeline.is_running is False
+
+
+@pytest.mark.asyncio
+async def test_run_loop_skips_round_when_memory_unsafe(intraday_pipeline: Any) -> None:
+    """記憶體水位過高 (is_memory_safe=False) 時整輪略過，不讀使用者、不做任何評估。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    intraday_pipeline.is_running = True
+    intraday_pipeline.evaluate_watchlist_symbol = AsyncMock(return_value=None)
+    mock_now = datetime(2026, 6, 5, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+    slept: list[Any] = []
+
+    async def _stop(secs: Any) -> None:
+        slept.append(secs)
+        intraday_pipeline.is_running = False
+
+    with patch(
+        "market_analysis.intraday_pipeline.pipeline.is_market_open", return_value=True
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.datetime"
+    ) as mock_datetime_class, patch(
+        "services.llm_service.is_memory_safe", return_value=False
+    ), patch("database.get_all_user_ids") as mock_users, patch(
+        "asyncio.sleep", side_effect=_stop
+    ):
+        mock_datetime_class.now.return_value = mock_now
+        await intraday_pipeline._run_loop()
+
+    mock_users.assert_not_called()
+    intraday_pipeline.evaluate_watchlist_symbol.assert_not_awaited()
+    assert slept == [intraday_pipeline.scan_interval_seconds]
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 # 200 次/小時，相對於 Finnhub 背景額度 15 次/分 = 900 次/小時，使用率約 22%，仍有餘裕。
 # 選擇權鏈/IV/Max Pain/PCR 等其餘呼叫則受 20 分鐘快取 TTL 保護，15 分鐘節奏下會形成
 # 「隔一輪命中快取」的交替模式，重抓取頻率大致維持每小時 2 次，不會隨節奏壓縮而翻倍。
-# 若未來上限需要調整，可參考 cogs/trading/heartbeat.py 新增的 Pass 2 耗時/標的數 log。
 #
 # 與 database/price_volume_watch.py 的 _MAX_WATCHES_PER_USER 命名/防護模式一致。
 _MAX_WATCHLIST_SYMBOLS_PER_USER = 50

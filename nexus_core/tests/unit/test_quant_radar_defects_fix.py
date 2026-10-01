@@ -16,14 +16,8 @@ from market_analysis.uoa_telemetry import (
     classify_uoa_trade,
 )
 from market_analysis.index_microstructure import (
-    classify_gex_wall,
     find_overhead_negative_gex_swamp,
     calculate_positive_gex_depth_below,
-    is_gex_wall_effective,
-)
-from market_analysis.scenario_classifier import (
-    classify_market_scenario,
-    MarketScenario,
 )
 from market_analysis.insights_engine import (
     RiskInsightsContext,
@@ -60,55 +54,6 @@ def test_stx_sto_high_oi_ratio_classification() -> None:
     assert "$885.00" in result.intent
     assert "STO 築頂收租" in result.intent
     assert "天花板" in result.intent
-
-
-def test_stx_volume_pcr_skew_divergence_gate() -> None:
-    """驗證 STX 跌破 $850 PutWall 且 Volume PCR 飆升至 1.81 時，強制觸發破位順向殺盤，阻斷均值回歸與軋空。"""
-    # 1. 測試 InsightsEngine
-    ctx = RiskInsightsContext(
-        symbol="STX",
-        current_price=843.10,
-        put_wall=850.00,  # 跌破底牆
-        net_gex_status="NEGATIVE_GAMMA_ZONE",
-        term_structure=0.98,
-        uoa_institutional_short_call=False,
-        iv_rank=0.35,
-        max_pain_deviation_pct=-0.08,
-        can_trade_spreads=True,
-        cash_reserve_protection=True,
-        volume_pcr=1.81,  # 搶購 Put 殺盤
-        skew_percentile=5.0,  # 鈍化低 Skew
-    )
-    dmp, status, sugg = InsightsEngine.generate_cro_insight(ctx)
-    assert dmp == "[🚨 破位順向殺盤]"
-    assert "🚨 破位順向殺盤" in str(status)
-    assert "1.81" in str(status)
-    assert sugg == "STOP_ALL_BUY"
-
-    # 2. 測試 ScenarioClassifier
-    scenario = classify_market_scenario(
-        price=843.10,
-        high=855.0,
-        low=840.0,
-        current_volume=1_500_000,
-        avg_volume_20=1_000_000,
-        put_wall=850.0,
-        call_wall=885.0,
-        gamma_flip=860.0,
-        is_squeezing=False,
-        uoa_skew=-0.15,
-        ivr=35.0,
-        hvn=850.0,
-        lvn=840.0,
-        skew_percentile=5.0,
-        is_uoa_aligned=False,
-        volume_pcr=1.81,
-    )
-    # 必須判定為假性支撐陷阱或結構破位，絕非巨鯨護航
-    assert scenario in (
-        MarketScenario.FAKE_SUPPORT_TRAP,
-        MarketScenario.STRUCTURAL_BREAKDOWN_PENDING,
-    )
 
 
 # ==========================================
@@ -162,60 +107,6 @@ def test_amat_lvn_vacuum_and_positive_gex_exhaustion() -> None:
 # ==========================================
 # 案例 3：RCAT（GEX 絕對厚度與極端高波雜訊）
 # ==========================================
-
-
-def test_rcat_paper_thin_gex_wall_and_high_iv_noise() -> None:
-    """驗證 RCAT 名義 PutWall 僅 +62K GEX 被判定為薄弱紙牆，且極端高波 (IV 96.7%) 散戶雜訊被有效過濾。"""
-    # 1. 驗證 GEX 深度有效性門檻
-    assert not is_gex_wall_effective(62_000.0)
-    assert is_gex_wall_effective(1_500_000.0)
-
-    wall_type = classify_gex_wall(
-        strike_gex=62_000.0,
-        max_positive_gex=62_000.0,
-        is_heavy_otm_call=False,
-        min_effective_gex=500_000.0,
-    )
-    assert wall_type == "THIN_SUPPORT_WALL"
-
-    # 2. 驗證 InsightsEngine 薄弱紙牆判定
-    ctx = RiskInsightsContext(
-        symbol="RCAT",
-        current_price=9.45,
-        put_wall=9.50,
-        net_gex_status="POSITIVE_GAMMA",
-        term_structure=0.95,
-        uoa_institutional_short_call=False,
-        iv_rank=0.525,
-        max_pain_deviation_pct=-0.01,
-        can_trade_spreads=True,
-        cash_reserve_protection=True,
-        put_wall_gex=62_000.0,  # 僅 62K
-    )
-    dmp, status, sugg = InsightsEngine.generate_cro_insight(ctx)
-    assert dmp == "[⚠️ 薄弱紙牆]"
-    assert "薄弱紙牆(無做市商深度)" in str(status)
-
-    # 3. 驗證 ScenarioClassifier 不在紙牆上觸發巨鯨護航共振
-    scenario = classify_market_scenario(
-        price=9.45,
-        high=9.60,
-        low=9.40,
-        current_volume=500_000,
-        avg_volume_20=400_000,
-        put_wall=9.50,
-        call_wall=11.0,
-        gamma_flip=9.00,
-        is_squeezing=False,
-        uoa_skew=-0.05,
-        ivr=52.5,
-        hvn=9.50,
-        lvn=8.50,
-        skew_percentile=40.0,
-        is_uoa_aligned=True,
-        put_wall_gex=62_000.0,  # 紙牆
-    )
-    assert scenario != MarketScenario.WHALE_ESCORT_RESONANCE
 
 
 # ==========================================

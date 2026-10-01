@@ -21,8 +21,8 @@ The codebase is optimized for:
 2. **`nexus_edge_scraper`**: Optional FastAPI + Playwright edge container (`docker-compose.yml`). Handles Reddit scraping, SEC section extraction, and acts as a local proxy tunnel for `yfinance` to gracefully bypass datacenter IP blocks (HTTP 403/429).
 
 ### Watchlist & Pipeline Distinctions
-- **Watchlist 15-minute Radar Heartbeat**: Emitted by `cogs/trading/heartbeat.py` (`dynamic_market_scanner`), focuses on technical structures, GEX walls, and entry gates.
-- **Watchlist 30-minute Deep Dive Heartbeat**: Emitted by `IntradayScanPipeline` in `market_analysis/intraday_pipeline/`, focuses on Gamma squeeze, Volume Profile (POC), and options flow. Completely isolated from the 15m radar pipeline.
+- **15-minute Intraday Patrol** (`dynamic_market_scanner` in `cogs/trading/scheduler.py`): macro cache + VIX tail-risk alert, edge watchlist sync (`_sync_edge_watchlist`, no-op without `TUNNEL_URL`), and NRO/DDP/IV option scan. The former watchlist radar DM (`heartbeat_watchlist`) and market-scenario alerts (`intel_market_scenario`) were removed; the radar panel is on-demand via `/x` only, and `bot._latest_radar_data_cache` has no writer (readers fall back to fetching).
+- **Watchlist 30-minute Deep Dive Heartbeat**: Emitted by `IntradayScanPipeline` in `market_analysis/intraday_pipeline/`, focuses on Gamma squeeze, Volume Profile (POC), options flow, and the entry advisor. Independent `asyncio.Task`, gated by leader status and `is_memory_safe()`; sole writer of `uoa_history`.
 - **Analyst Agent**: Independent scheduled report family in `cogs/analyst_agent.py` (09:00 ET pre-market briefing, post-market summary).
 - Detailed comparison and channel routing: [`docs/architecture/01_dual_watchlist_pipelines.md`](docs/architecture/01_dual_watchlist_pipelines.md).
 
@@ -49,9 +49,11 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **08:30** | `daily_reddit_update` | Ingest Reddit market sentiment from edge scraper |
 | **08:45** | `pre_market_risk_monitor` | Pre-warm quant metrics, IV, Max Pain, Squeeze, and portfolio downside return series |
 | **09:00** | `pre_market_loop` | Analyst Agent pre-market outlook and macro briefings |
-| **09:30–16:00 (:00,:15,:30,:45)** | `dynamic_market_scanner` & Alerts | 15m watchlist radar heartbeat & 15m price-volume breakout (`Semaphore(3)`) |
-| **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (zero-API cache consumption) |
-| **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC) |
+| **09:30–16:00 (:00,:15,:30,:45)** | `dynamic_market_scanner` | 15m patrol: macro cache & VIX tail-risk alert, edge watchlist sync, NRO/DDP/IV option scan (no watchlist radar DM) |
+| **09:30–16:00 (every 15m, not clock-aligned)** | `price_volume_alert_monitor` | 15m price-volume breakout (`tasks.loop(minutes=15)`, `Semaphore(3)`) |
+| **09:30–16:00 (every 30m, not clock-aligned)** | `monitor_order_telemetry_alignment_task` | Pending-order telemetry alignment (`telemetry_orders`) |
+| **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (shared radar cache has no writer; fetches via `Semaphore(3)`) |
+| **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC), `is_memory_safe()` gated |
 | **16:15** | `dynamic_after_market_report` | Close maintenance, daily sentiment snapshot, NAV history, CVaR tail risk check, and macro-signal dry-run log (record-only, no notifications) |
 | **Post-market / Fri 17:05** | Analyst Post-Market & VTR | Comprehensive post-market summary and weekly Virtual Trading Room Brinson attribution |
 | **24/7 (30m / 4h / Workers)** | WTI, Calendar & Workers | 24/7 WTI crude oil monitor, 4h macro/FedWatch checker, persistent DM queue, health & stream workers |

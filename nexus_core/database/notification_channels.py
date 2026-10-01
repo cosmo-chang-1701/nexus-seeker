@@ -55,9 +55,7 @@ NotificationKey = Literal[
     "trim_profit_lock",
     "advisory_core_levels",
     # 📡 盤中情報
-    "heartbeat_watchlist",
     "heartbeat_symbol_deep",
-    "intel_market_scenario",
     "telemetry_orders",
     "alpha_market_signals",
     "alpha_option_scan",
@@ -151,7 +149,8 @@ MODULES: tuple[NotificationModule, ...] = (
     NotificationModule(
         "intel_intraday",
         "📡 盤中情報",
-        "盤中自選雷達、個股深度心跳、掛單遙測與 Alpha 掃描。中性但容易誘發過度交易。",
+        "盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權／Gamma Squeeze、"
+        "NRO 期權掃描與價量突破警報。",
     ),
     NotificationModule(
         "intel_always",
@@ -307,29 +306,12 @@ CHANNELS: tuple[NotificationChannel, ...] = (
     ),
     # ------------------------------------------------------------- 📡 盤中情報
     NotificationChannel(
-        "heartbeat_watchlist",
-        "intel_intraday",
-        "📡 自選股 15 分鐘批次量化雷達",
-        "INTEL",
-        "INTRADAY",
-        noise=True,
-    ),
-    NotificationChannel(
         "heartbeat_symbol_deep",
         "intel_intraday",
         "🧱 個股 30 分鐘深度戰場心跳 (微觀結構、Skew、UOA)",
         "INTEL",
         "INTRADAY",
         noise=True,
-    ),
-    NotificationChannel(
-        "intel_market_scenario",
-        "intel_intraday",
-        "🎭 自選股市場情境事件 (巨鯨護航、結構破位等)",
-        "INTEL",
-        "INTRADAY",
-        noise=True,
-        parent_key="heartbeat_watchlist",
     ),
     NotificationChannel(
         "telemetry_orders",

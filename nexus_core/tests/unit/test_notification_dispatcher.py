@@ -89,7 +89,7 @@ async def test_notify_many_checks_once_and_sends_all(db_conn: Any) -> None:
     bot = _bot()
     embeds = [MagicMock(), MagicMock(), MagicMock()]
     with patch("database.is_notification_enabled", return_value=True) as gate:
-        sent = await notify_many(bot, 7005, "heartbeat_watchlist", embeds)
+        sent = await notify_many(bot, 7005, "heartbeat_symbol_deep", embeds)
     assert sent is True
     assert gate.call_count == 1
     assert bot.queue_dm.await_count == 3
@@ -98,7 +98,7 @@ async def test_notify_many_checks_once_and_sends_all(db_conn: Any) -> None:
 @pytest.mark.asyncio
 async def test_notify_many_empty_is_noop(db_conn: Any) -> None:
     bot = _bot()
-    assert await notify_many(bot, 7006, "heartbeat_watchlist", []) is False
+    assert await notify_many(bot, 7006, "heartbeat_symbol_deep", []) is False
     bot.queue_dm.assert_not_awaited()
 
 

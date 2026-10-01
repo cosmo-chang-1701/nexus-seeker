@@ -195,7 +195,7 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 26 | [`01_dual_watchlist_pipelines.md`](architecture/01_dual_watchlist_pipelines.md) | 雙自選標的心跳管線架構與排程隔離 | 15m 批次雷達心跳 (3-Pass 複雜度優化) 與 30m 深度分析心跳完全解耦 | `cogs/trading/heartbeat.py` |
+| 26 | [`01_dual_watchlist_pipelines.md`](architecture/01_dual_watchlist_pipelines.md) | 雙自選標的心跳管線架構與排程隔離 | 15m 自選雷達推播已移除（改為 `/x` 手動查詢）；30m 深度分析心跳獨立排程並受 85% RAM 閘門約束 | `market_analysis/intraday_pipeline/pipeline.py` |
 | 27 | [`02_pre_market_cache_aside.md`](architecture/02_pre_market_cache_aside.md) | 盤前 08:45 預熱與 SQLite Cache-Aside 機制 | 08:45 ET 盤前全標的預熱, 30s 冷卻, 2% 價格偏離度重算, SingleFlight 併發摺疊 | `cogs/trading/pre_market.py` |
 | 28 | [`03_dual_service_and_proxy.md`](architecture/03_dual_service_and_proxy.md) | 雙服務架構與三階式降級代理 | 第 1 階 Edge 快照 $\to$ 第 2 階 Playwright 實時 Scrape $\to$ 第 3 階 本地 yfinance 直連 | `services/market_data_service/options.py` |
 | 29 | [`04_engineering_standards.md`](architecture/04_engineering_standards.md) | 量化系統工程規範與 Discord 防爆分頁原則 | 10 標的分頁 (37.7% 安全裕度), `chunk_embeds` 雙約束背包, 單訊息就地換頁 | `cogs/embed_builders/market_embeds.py` |

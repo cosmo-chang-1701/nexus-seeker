@@ -30,7 +30,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 30
+    assert len(ALL_NOTIFICATION_KEYS) == 28
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = key != "system_lifecycle"
@@ -41,7 +41,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
 def test_toggle_single_setting(db_conn: Any):  # type: ignore
     """測試單一通知項目的切換 (ON/OFF)"""
     user_id = 999111
-    target_key = "heartbeat_watchlist"
+    target_key = "heartbeat_symbol_deep"
 
     # 1. 切換為關閉 (False)
     set_user_notification_setting(user_id, target_key, False)
@@ -66,11 +66,14 @@ def test_legacy_key_aliases(db_conn: Any):  # type: ignore
     user_id = 999112
 
     # 透過舊 key 設定關閉
-    set_user_notification_setting(user_id, "hb_options_structure", False)
+    set_user_notification_setting(user_id, "order_telemetry_alignment_alert", False)
     # 驗證新 key 與舊 key 查詢結果皆為 False
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
-    assert is_notification_enabled(user_id, "hb_options_structure") is False
-    assert is_notification_enabled(user_id, "hb_execution_risk") is False
+    assert is_notification_enabled(user_id, "telemetry_orders") is False
+    assert is_notification_enabled(user_id, "order_telemetry_alignment_alert") is False
+
+    # heartbeat_watchlist（15 分鐘自選雷達）已移除，指向它的舊別名一併拿掉
+    assert "hb_options_structure" not in LEGACY_KEY_ALIASES
+    assert "hb_execution_risk" not in LEGACY_KEY_ALIASES
 
     # 透過舊 key 設定開啟
     set_user_notification_setting(user_id, "ddp_alert", True)
@@ -168,7 +171,7 @@ async def test_notification_settings_view_preset_buttons(db_conn: Any):  # type:
     mock_interaction.response.edit_message = AsyncMock()
 
     await view.on_preset_focus(mock_interaction)
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
+    assert is_notification_enabled(user_id, "alpha_option_scan") is False
     assert is_notification_enabled(user_id, "defense_gamma_fragility") is True
 
     await view.on_preset_mute_intraday(mock_interaction)
@@ -179,7 +182,7 @@ async def test_notification_settings_view_preset_buttons(db_conn: Any):  # type:
     assert is_notification_enabled(user_id, "entry_pyramid_add") is True
 
     await view.on_preset_all_on(mock_interaction)
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is True
+    assert is_notification_enabled(user_id, "alpha_option_scan") is True
     assert is_notification_enabled(user_id, "alpha_market_signals") is True
 
 
@@ -295,7 +298,7 @@ async def test_toggle_select_callback_interaction(db_conn: Any):  # type: ignore
     mock_submit.response.edit_message = AsyncMock()
     await view.on_select_callback(mock_submit)
     assert is_notification_enabled(user_id, "telemetry_orders") is True
-    assert is_notification_enabled(user_id, "heartbeat_watchlist") is False
+    assert is_notification_enabled(user_id, "heartbeat_symbol_deep") is False
     assert is_notification_enabled(user_id, "alpha_option_scan") is False
     # 其他模組不受影響
     assert is_notification_enabled(user_id, "defense_margin_call") is True
@@ -354,7 +357,6 @@ _LEGACY_PRESETS: dict[str, dict[str, bool]] = {
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,
         "system_lifecycle": True,
-        "heartbeat_watchlist": False,
         "heartbeat_symbol_deep": False,
         "telemetry_orders": True,
         "advisory_entry_signal": True,
@@ -374,7 +376,6 @@ _LEGACY_PRESETS: dict[str, dict[str, bool]] = {
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,
         "system_lifecycle": True,
-        "heartbeat_watchlist": False,
         "heartbeat_symbol_deep": False,
         "telemetry_orders": False,
         "advisory_entry_signal": False,
@@ -452,7 +453,6 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "alpha_short_entry": False,
         "trim_covered_call": True,
         "trim_profit_lock": True,
-        "intel_market_scenario": False,
         "vtr_virtual_trades": False,
         "risk_portfolio_downside": True,
         "risk_withdrawal_runway": True,
@@ -469,7 +469,6 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "alpha_short_entry": False,
         "trim_covered_call": False,
         "trim_profit_lock": False,
-        "intel_market_scenario": False,
         "vtr_virtual_trades": False,
         "risk_portfolio_downside": True,
         "risk_withdrawal_runway": True,
@@ -495,9 +494,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "trim_covered_call": False,
         "trim_profit_lock": False,
         "advisory_core_levels": False,
-        "heartbeat_watchlist": False,
         "heartbeat_symbol_deep": False,
-        "intel_market_scenario": False,
         "telemetry_orders": False,
         "alpha_market_signals": False,
         "alpha_option_scan": False,
@@ -658,7 +655,11 @@ def test_v081_parent_map_matches_registry() -> None:
     from database.notification_channels import CHANNELS
 
     registry = {c.key: c.parent_key for c in CHANNELS if c.parent_key}
-    assert dict(_CHILD_TO_PARENT) == registry
+    # 只比對仍在註冊表內的子頻道：intel_market_scenario 已於 v087 下線，
+    # 但 v081 是凍結快照，對照表不得改動。
+    frozen = {child: parent for child, parent in _CHILD_TO_PARENT if child in registry}
+    assert frozen == registry
+    assert set(dict(_CHILD_TO_PARENT)) - set(registry) == {"intel_market_scenario"}
 
 
 def test_v081_backfills_children_from_parents(db_conn: Any) -> None:
@@ -966,3 +967,47 @@ async def test_downside_snapshot_reports_failure(db_conn: Any) -> None:
 
     embed = it.followup.send.await_args.kwargs["embed"]
     assert "計算失敗" in embed.fields[0].value
+
+
+def test_v087_module_exports_required_attributes() -> None:
+    from database.core import get_migrations
+    from database.migrations import v087_remove_watchlist_radar_channels as m
+
+    assert m.version == 87
+    assert isinstance(m.description, str) and m.description
+    assert isinstance(m.sql, str) and "DELETE FROM user_notification_settings" in m.sql
+    assert any(x["version"] == 87 for x in get_migrations())
+
+
+def test_v087_deletes_only_removed_radar_channels(db_conn: Any) -> None:
+    """v087 只刪 heartbeat_watchlist / intel_market_scenario，其他頻道列原封不動。"""
+    from database.migrations.v087_remove_watchlist_radar_channels import sql
+
+    cursor = db_conn.cursor()
+    rows = [
+        (8301, "heartbeat_watchlist", 0),
+        (8301, "intel_market_scenario", 0),
+        (8301, "heartbeat_symbol_deep", 0),
+        (8301, "alpha_market_signals", 0),
+        (8302, "heartbeat_watchlist", 1),
+        (8302, "telemetry_orders", 1),
+    ]
+    cursor.executemany(
+        "INSERT OR REPLACE INTO user_notification_settings VALUES (?, ?, ?)", rows
+    )
+    db_conn.commit()
+
+    cursor.executescript(sql)
+    db_conn.commit()
+
+    cursor.execute(
+        "SELECT user_id, notification_key, enabled FROM user_notification_settings "
+        "WHERE user_id IN (8301, 8302) ORDER BY user_id, notification_key"
+    )
+    assert cursor.fetchall() == [
+        (8301, "alpha_market_signals", 0),
+        (8301, "heartbeat_symbol_deep", 0),
+        (8302, "telemetry_orders", 1),
+    ]
+    for key in ("heartbeat_watchlist", "intel_market_scenario"):
+        assert key not in ALL_NOTIFICATION_KEYS

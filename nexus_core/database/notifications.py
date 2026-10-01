@@ -102,9 +102,9 @@ LEGACY_KEY_ALIASES: dict[str, str] = {
     "pre_market_briefing": "briefing_pre_market",
     "post_market_intelligence": "briefing_post_market",
     "weekly_vtr_report": "briefing_weekly_vtr",
-    # Intraday Heartbeat & Telemetry
-    "hb_options_structure": "heartbeat_watchlist",
-    "hb_execution_risk": "heartbeat_watchlist",
+    # Intraday Telemetry
+    # hb_options_structure / hb_execution_risk 原本指向 heartbeat_watchlist（15 分鐘
+    # 自選雷達，已移除），別名一併拿掉：殘留列不再對應任何頻道，讀取時直接略過。
     "order_telemetry_alignment_alert": "telemetry_orders",
     # Portfolio & Risk Defense
     # defense_portfolio_risk 於 v081 拆分：負 Gamma → defense_gamma_fragility、

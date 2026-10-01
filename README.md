@@ -12,7 +12,7 @@ Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營�
 
 ## ✨ 核心特色 (Key Features)
 
-- **高效能非阻塞背景排程與快取共享 (High-Performance Background Scheduling & Cache-Sharing)**：針對低內存 VPS 全面重構背景任務管線。自選標的心跳 Pass 2、11 大產業板塊輪動與 15 分鐘價量監測全面採用 `Semaphore(3)` 併行化加速；跨模組雷達快取共享 (`_latest_radar_data_cache`) 與 `:05 / :35` 錯峰排程使持倉監控 100% 命中記憶體快取；多使用者市場掃描實施 $O(U \times S) \to O(S)$ 標的層級去重快取；盤前預熱流水線提前至 08:45 ET，搭配 GEX SingleFlight 防重疊查詢與 SWR 降級，杜絕開盤壅塞與 API 穿透。
+- **高效能非阻塞背景排程與快取共享 (High-Performance Background Scheduling & Cache-Sharing)**：針對低內存 VPS 全面重構背景任務管線。11 大產業板塊輪動與 15 分鐘價量監測全面採用 `Semaphore(3)` 併行化加速；`:05 / :35` 錯峰排程分散盤中 CPU 峰值；多使用者市場掃描實施 $O(U \times S) \to O(S)$ 標的層級去重快取；盤前預熱流水線提前至 08:45 ET，搭配 GEX SingleFlight 防重疊查詢與 SWR 降級，杜絕開盤壅塞與 API 穿透。
 - **量化雷達終端與單訊息翻頁架構 (Quantitative Radar & Batch Scan Paging)**：`/x` 批次掃描全面升級為高 Alpha 精簡 Markdown 報表，直擊 `G/P-Wall(±)` 動態極性、`IV 策略` 負 Gamma 熔斷、⚠️ 異常標的視覺連動、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 與 `Top UOA`。多頁掃描結果採用 `BatchScanPaginatedView` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底告別洗版與 Discord 40094 限制，並支援 `⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
 - **個股深度分析面板強化 (Symbol Hub Deep-Dive Upgrades)**：`/x symbol:` 標的分析中心新增 Session VWAP、15m ATR 獨立顯示、GEX Net 曝險 Regime／個股 Gamma Flip 線／CallWall 水位與距現價空間、UOA 權利金欄位與 SWEEP/BLOCK/CROSS 啟發式三分類。凡是由啟發式規則或代理指標（而非真實第一手數據）推算出的判定，一律在對應欄位旁明確標註揭露，避免與即時市場數據混淆。新增「🔐 進場鐵律檢核」頁籤，一鍵呈現「六重鐵律」的即時 Pass/Fail 判定（條件二正 Gamma 支撐牆嚴格約束於現價下方 $K < \text{Spot}$ 避免上方阻力誤判；條件一 Gamma Flip 無交叉點時根據全域 Net GEX 區分空頭阻擋或 VWAP+0.5×ATR₁₅ₘ 替代門檻），取代原本需逐欄位人工核對放量突破、正 Gamma 底牆、UOA 封頂與主力買盤確認等條件的流程。
 - **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、成交量分佈 (Volume Profile / Volume-POC) 磁吸點位、100% 確定性量化 Skew 解析與動態買賣定價指引。
