@@ -174,7 +174,6 @@ class FundamentalFilingMonitorCog(commands.Cog, name="FundamentalFilingMonitorCo
             source_url=source_url,
             form_type=form_type,
         )
-        setattr(embed, "_view", f"RolloverActionView:{symbol}")
 
         for user_id in holder_ids:
             if not database.is_notification_enabled(

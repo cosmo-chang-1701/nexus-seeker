@@ -1163,14 +1163,13 @@ def build_fundamental_broken_embed(
     form_type: str = "",
 ) -> discord.Embed:
     """
-    產生基本面護城河判定破滅（Scenario 1 原型假設破滅）的動態轉倉 Embed。
+    產生基本面護城河判定破滅（情境 7）的告知 Embed。
 
-    使用 Simple-Markdown 格式排版，提供結構化、行動端友善且層次清晰的量化風控報告。
-    集中封裝固定的清算建議參數 (100% 清倉轉入 VOO)，供互動式 `/verify_thesis`
-    與自動化每日 SEC 財報掃描共用，避免兩處組裝邏輯漂移。
+    僅告知判讀結果供使用者自行決策，不附任何清倉／轉倉指令與執行按鈕。
+    供互動式 `/verify_thesis` 與自動化每日 SEC 財報掃描共用，避免兩處組裝邏輯漂移。
     """
     sym = symbol.upper()
-    title = f"💥 原型假設破滅: {sym} → VOO"
+    title = f"💥 基本面假設破滅: {sym}"
     embed = NexusEmbed(title=title, color=discord.Color.red())
 
     if source_url:
@@ -1192,7 +1191,7 @@ def build_fundamental_broken_embed(
     )
 
     desc_lines = [
-        "> 🚨 **【執行轉倉指令】機構基本面護城河已破滅，建議全面防守**\n",
+        "> 🚨 **【僅供告知】機構基本面護城河疑似已破滅，請自行複核後決策**\n",
         "### 📊 評估摘要",
         f"- **驗證標的**：`{sym}`",
         "- **判定結果**：🔴 **假設破滅 (Moat Broken)**",
@@ -1200,19 +1199,14 @@ def build_fundamental_broken_embed(
         f"- **資料來源**：{source_label}\n",
         "### 🧠 護城河分析與歸因",
         f"{safe_reasoning}\n",
-        "### 🎯 轉倉執行建議",
-        f"- **賣出平倉**：`{sym}` × 100% (市價全數清倉)",
-        "- **轉入標的**：`VOO` (防禦避風港 ETF)",
-        "- **執行動作**：買入現貨 (BUY Shares)",
-        "- **建議限價**：市價 (Market)",
+        "### 🎯 後續建議",
+        "- 系統不代為決策；請對照原始申報文件，自行判斷是否調整持倉。",
     ]
 
     embed.description = truncate_with_boundary(
         "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
-    embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
-    )
+    embed.set_footer(text="Nexus Risk & Rollover Engine • 基本面告知（不含交易指令）")
     return embed
 
 

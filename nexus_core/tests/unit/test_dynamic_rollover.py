@@ -393,17 +393,17 @@ def test_build_fundamental_broken_embed_simple_markdown() -> None:
         source_url="https://sec.gov/10k",
         form_type="10-K",
     )
-    assert embed.title == "💥 原型假設破滅: AMD → VOO"
+    assert embed.title == "💥 基本面假設破滅: AMD"
     assert embed.color == discord.Color.red()
     assert embed.description is not None
     assert "### 📊 評估摘要" in embed.description
     assert "### 🧠 護城河分析與歸因" in embed.description
-    assert "### 🎯 轉倉執行建議" in embed.description
+    assert "### 🎯 後續建議" in embed.description
     assert "🔴 **假設破滅 (Moat Broken)**" in embed.description
     assert "90%" in embed.description
     assert "[10-K 申報文件](https://sec.gov/10k)" in embed.description
-    assert "賣出平倉" in embed.description
-    assert "VOO" in embed.description
+    assert "賣出平倉" not in embed.description
+    assert "VOO" not in embed.description
     assert "```ansi" not in embed.description
 
 
