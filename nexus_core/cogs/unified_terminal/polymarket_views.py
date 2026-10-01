@@ -43,6 +43,10 @@ class PolymarketPaginatedView(discord.ui.View):
         self.embeds = embeds
         self.current_page: int = 0
         self.total_items = total_items if total_items is not None else len(embeds)
+        # 由呼叫端在 followup.send(..., wait=True) 後回填；on_timeout 用來移除按鈕
+        self.message: Optional[Any] = None
+        # 最後一次翻頁互動（其 token 較 message 所屬互動新，逾時編輯較不易過期）
+        self.last_interaction: Optional[discord.Interaction] = None
         self._apply_footers()
         self._update_button_states()
 
@@ -64,6 +68,7 @@ class PolymarketPaginatedView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """翻至上一頁。"""
+        self.last_interaction = interaction
         self.current_page = max(0, self.current_page - 1)
         self._update_button_states()
         await interaction.response.edit_message(
@@ -75,6 +80,7 @@ class PolymarketPaginatedView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """翻至下一頁。"""
+        self.last_interaction = interaction
         self.current_page = min(len(self.embeds) - 1, self.current_page + 1)
         self._update_button_states()
         await interaction.response.edit_message(
@@ -82,5 +88,15 @@ class PolymarketPaginatedView(discord.ui.View):
         )
 
     async def on_timeout(self) -> None:
-        """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。"""
+        """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。
+
+        單純 clear_items() 只改動記憶體中的 View 物件，Discord 上的訊息仍會保留
+        按鈕（點了只會顯示「此互動失敗」），因此須實際編輯訊息。"""
         self.clear_items()
+        try:
+            if self.last_interaction is not None:
+                await self.last_interaction.edit_original_response(view=None)
+            elif self.message is not None:
+                await self.message.edit(view=None)
+        except Exception as e:
+            logger.debug(f"PolymarketPaginatedView 逾時移除按鈕失敗: {e}")

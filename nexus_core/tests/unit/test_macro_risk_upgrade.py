@@ -1000,6 +1000,7 @@ def test_safety_payout_threshold_logic() -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_get_macro_overview_data_logic() -> Any:
     from cogs.unified_terminal import get_macro_overview_data
 

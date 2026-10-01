@@ -187,3 +187,44 @@ class TestPolymarketPaginatedViewTimeout:
         assert len(view.children) > 0
         await view.on_timeout()
         assert len(view.children) == 0
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_edits_message_to_remove_buttons(self) -> None:
+        """尚未翻頁即逾時：須透過回填的 message 實際移除 Discord 上的按鈕。"""
+        embeds = [_make_embed(f"Page {i}") for i in range(1, 3)]
+        view = PolymarketPaginatedView(embeds)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock()
+
+        await view.on_timeout()
+
+        view.message.edit.assert_awaited_once_with(view=None)
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_prefers_last_page_interaction(self) -> None:
+        """翻頁過後逾時：優先用最後一次翻頁互動編輯（token 較新），不再動 message。"""
+        embeds = [_make_embed(f"Page {i}") for i in range(1, 3)]
+        view = PolymarketPaginatedView(embeds)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock()
+        interaction = MagicMock()
+        interaction.response.edit_message = AsyncMock()
+        interaction.edit_original_response = AsyncMock()
+
+        await view.btn_next.callback(interaction)
+        await view.on_timeout()
+
+        interaction.edit_original_response.assert_awaited_once_with(view=None)
+        view.message.edit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_on_timeout_swallows_edit_failure(self) -> None:
+        """訊息已被關閉或 token 過期時，逾時處理不得拋出例外。"""
+        embeds = [_make_embed(f"Page {i}") for i in range(1, 3)]
+        view = PolymarketPaginatedView(embeds)
+        view.message = MagicMock()
+        view.message.edit = AsyncMock(side_effect=Exception("Unknown Message"))
+
+        await view.on_timeout()
+
+        assert len(view.children) == 0
