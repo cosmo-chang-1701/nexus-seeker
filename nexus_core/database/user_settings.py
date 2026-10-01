@@ -289,9 +289,9 @@ def calculate_auto_capital(
             except Exception as ex:
                 logger.error(f"解析 asset metadata 失敗: {ex}")
 
+        # 帳戶全空 (無持倉、無現金儲備) 時不以 $100,000 之類的常數冒充：落到
+        # 1.0 下限，部位建議自然歸零 (fail-closed)，直到使用者設定現金儲備。
         total_val = holdings_value + options_value + cash_reserve
-        if total_val == 0.0:
-            return 100000.0
         return max(total_val, 1.0)
     finally:
         if should_close:
@@ -415,11 +415,11 @@ def get_full_user_context(user_id: int) -> UserContext:
             capital = calculate_auto_capital(user_id, conn)
             return UserContext(user_id, capital, 15.0, 0.0, 0.0, 0.0, 0.0)
 
-        # 提取 Greeks (Annual from DB -> Daily for Context)
+        # 提取 Greeks。DB 內 metadata.theta 由 refresh_portfolio_greeks 以
+        # py_vollib 的 analytical theta (已是每日值) × 口數 × 100 寫入，本身就是
+        # 每部位每日 Theta 美元值，不可再除以 365。
         sum_delta = user_row["sum_delta"] if user_row["sum_delta"] is not None else 0.0
-        sum_theta = (
-            user_row["sum_theta"] if user_row["sum_theta"] is not None else 0.0
-        ) / 365.0
+        sum_theta = user_row["sum_theta"] if user_row["sum_theta"] is not None else 0.0
         sum_gamma = user_row["sum_gamma"] if user_row["sum_gamma"] is not None else 0.0
         sum_vanna = user_row["sum_vanna"] if user_row["sum_vanna"] is not None else 0.0
 

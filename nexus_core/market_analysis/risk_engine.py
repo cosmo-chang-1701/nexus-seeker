@@ -27,7 +27,9 @@ class DITMDefenseAction(Enum):
 @dataclass
 class MacroContext:
     vix: float
-    oil_price: float
+    # 原油未知時為 None（不補 75/85 備援值）；get_macro_modifiers 對未知油價
+    # 取最保守的油價修正因子。
+    oil_price: Optional[float]
     vix_change: float
     vts_ratio: float = 0.9
     vix_trend_up: bool = False
@@ -87,8 +89,24 @@ def evaluate_defense_status(
     return "⏳ **繼續持有** ｜ 未達防禦觸發條件"
 
 
-def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
+# Beta 估計所需的最少重疊日線筆數。呼叫端應抓取 >= 90 個交易日的日線
+# (BETA_HISTORY_PERIOD)，扣除假日/缺值後仍能穩定超過此門檻。
+BETA_MIN_OBSERVATIONS: int = 60
+BETA_HISTORY_PERIOD: str = "1y"
+
+
+def calculate_beta_strict(
+    df_stock: pd.DataFrame, df_spy: pd.DataFrame
+) -> Optional[float]:
+    """以日對數報酬估計 Beta；資料不足 (< 60 筆重疊收盤) 或異常時回傳 None。
+
+    呼叫端必須處理 None (標示「Beta 資料不足」)，不可默默當成 1.0——過去
+    `refresh_portfolio_greeks` 用 5 日線、盤中審計用 60d (~41 根) 呼叫，資料
+    永遠不足，所有 Beta 都被靜默設為 1.0。
+    """
     try:
+        if df_stock is None or df_spy is None or df_stock.empty or df_spy.empty:
+            return None
         combined = pd.merge(
             df_stock["Close"],
             df_spy["Close"],
@@ -96,25 +114,32 @@ def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
             right_index=True,
             how="inner",
         ).dropna()
-        if len(combined) < 60:
-            return 1.0
+        if len(combined) < BETA_MIN_OBSERVATIONS:
+            return None
         log_returns = np.log(combined / combined.shift(1)).dropna()
         if log_returns.empty or len(log_returns) < 2:
-            return 1.0
+            return None
 
         cov_matrix = np.cov(log_returns.iloc[:, 0], log_returns.iloc[:, 1])
         market_variance = cov_matrix[1, 1]
-        if np.isfinite(market_variance) and np.abs(market_variance) > 1e-9:
-            beta = cov_matrix[0, 1] / market_variance
-        else:
-            beta = 1.0  # 當市場無變動或資料異常時，預設回傳 1.0
-
+        if not (np.isfinite(market_variance) and np.abs(market_variance) > 1e-9):
+            return None
+        beta = cov_matrix[0, 1] / market_variance
         if not np.isfinite(beta):
-            return 1.0
-
+            return None
         return round(float(np.clip(beta, -5.0, 5.0)), 2)
     except Exception:
-        return 1.0
+        return None
+
+
+def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
+    """相容舊介面：資料不足時回傳 1.0。
+
+    ⚠️ 新程式碼請用 `calculate_beta_strict()` 並在畫面上標示 Beta 未知；本函式
+    僅保留給「資料一律為 1y 日線、且已在呼叫端顯示 Beta 值」的既有路徑。
+    """
+    beta = calculate_beta_strict(df_stock, df_spy)
+    return 1.0 if beta is None else beta
 
 
 async def analyze_sector_correlation(
@@ -279,8 +304,46 @@ def simulate_exposure_impact(
     return projected_total_delta, projected_exposure_pct
 
 
+# 原油價格未知時的油價修正因子：取階梯中最保守的一級 (fail-closed)，不以
+# 備援油價冒充真實值。
+_OIL_UNKNOWN_WEIGHT: float = 0.5
+
+
+def build_macro_context(macro_raw: Optional[Dict[str, Any]]) -> Optional[MacroContext]:
+    """由 `get_macro_environment()` 的結果組裝 MacroContext；VIX 未知回傳 None。
+
+    VIX 是 NRO 倉位計算的核心輸入，未知時整個 MacroContext 不成立，呼叫端
+    應改傳 `vix_unknown=True` 給 optimize_position_risk (fail-closed)。
+    """
+    if not macro_raw:
+        return None
+    vix_raw = macro_raw.get("vix")
+    if vix_raw is None:
+        return None
+    try:
+        vix_val = float(vix_raw)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(vix_val) or vix_val <= 0:
+        return None
+    oil_raw = macro_raw.get("oil")
+    oil_val: Optional[float] = None
+    if oil_raw is not None:
+        try:
+            oil_f = float(oil_raw)
+            oil_val = oil_f if np.isfinite(oil_f) and oil_f > 0 else None
+        except (TypeError, ValueError):
+            oil_val = None
+    change_raw = macro_raw.get("vix_change")
+    try:
+        vix_change = float(change_raw) if change_raw is not None else 0.0
+    except (TypeError, ValueError):
+        vix_change = 0.0
+    return MacroContext(vix=vix_val, oil_price=oil_val, vix_change=vix_change)
+
+
 def get_macro_modifiers(
-    macro: MacroContext, pcr: float = 0.8, skew: float = 0.0
+    macro: MacroContext, pcr: Optional[float] = 0.8, skew: float = 0.0
 ) -> Tuple[float, float, float]:
     """計算宏觀環境風險修正因子。
 
@@ -301,7 +364,9 @@ def get_macro_modifiers(
         w_vix = 0.0
 
     w_oil = (
-        1.0
+        _OIL_UNKNOWN_WEIGHT
+        if macro.oil_price is None
+        else 1.0
         if macro.oil_price < 75
         else 0.9
         if macro.oil_price < 85
@@ -311,8 +376,8 @@ def get_macro_modifiers(
     )
     w_regime = 0.6 if (macro.vts_ratio >= 1.0 or macro.vix_trend_up) else 1.0
 
-    # 整合 PCR 與 Skew 修正
-    if pcr > 1.2:
+    # 整合 PCR 與 Skew 修正 (PCR 未知時不做 PCR 修正)
+    if pcr is not None and pcr > 1.2:
         w_regime *= 0.8  # PCR 過高，情緒過於悲觀，縮減賣方曝險
     if skew > 10:
         w_regime *= 0.9  # Skew 過大，尾端風險對沖成本過高
@@ -356,14 +421,18 @@ def optimize_position_risk(
     risk_limit: float = 15.0,
     is_high_tail_risk: bool = False,
     vix_spot: Optional[float] = None,
-    pcr: float = 0.8,
+    pcr: Optional[float] = 0.8,
     skew: float = 0.0,
     event_tte_hours: Optional[float] = None,
+    vix_unknown: bool = False,
 ) -> OptimizationResult:
     """NRO 風險優化器：根據宏觀環境與日曆事件計算安全持倉口數。
 
     Args:
         vix_spot: VIX 即時價格。
+        vix_unknown: VIX 抓取失敗 (未知)。為 True 時 fail-closed：賣方新倉
+            一律 0 口；做空套用 SHORT_VIX_UNKNOWN_MULTIPLIER；做多買方不放大
+            (風險額度維持 risk_limit 基準，不套用任何 >1 的 VIX 乘數)。
         pcr: 買賣權比率。
         skew: 期權偏斜度。
         event_tte_hours: 距離重大事件 (如財報) 的剩餘小時數。
@@ -395,6 +464,18 @@ def optimize_position_risk(
                 warnings=["VIX Extreme: 做空新倉暫停（軋空／投降區）"],
             )
 
+    if vix_unknown:
+        # VIX 未知：不可用備援值冒充真實 VIX 去推導倉位 (fail-closed)。
+        if intent == "PREMIUM_SELL":
+            return OptimizationResult(
+                suggested_contracts=0,
+                exposure_pct=0.0,
+                warnings=["VIX 資料不足：暫停賣方新倉 (fail-closed)"],
+            )
+        macro_data = None
+        vix_spot = None
+        warnings.append("VIX 資料不足：倉位不套用 VIX 放大乘數")
+
     # ------------------ Calendar-Aware Vanna Weighting ------------------
     vanna_weight = 1.0
     if event_tte_hours is not None and event_tte_hours < 72.0:
@@ -424,7 +505,7 @@ def optimize_position_risk(
 
         # 整合 PCR 與 Skew 的進一步細節。PCR 過低 = 多頭過熱，只縮減「做多」
         # 買方；早期以 "BTO" 比對，連 BTO_PUT (做空) 也被砍，方向相反。
-        if pcr < 0.6 and intent == "DIRECTIONAL_LONG":
+        if pcr is not None and pcr < 0.6 and intent == "DIRECTIONAL_LONG":
             # 市場過熱，警告但不一定硬拒，此處微幅縮減買方額度
             d_regime *= 0.8
             warnings.append("PCR 低位: 市場過熱，買方倉位縮減")
@@ -439,6 +520,10 @@ def optimize_position_risk(
         else:
             current_risk_limit = risk_limit * d_vix * d_oil * d_regime
         spy_iv = macro_data.vix / 100.0
+
+    if vix_unknown and is_directional_short:
+        # macro 區塊已被略過，做空的 VIX 未知保守乘數須在此套用。
+        current_risk_limit *= short_vix_multiplier
 
     if is_high_tail_risk:
         current_risk_limit *= 0.5  # Tail risk haircut

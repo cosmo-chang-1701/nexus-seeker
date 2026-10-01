@@ -7,8 +7,15 @@ from typing import Any, Optional
 
 from services import market_data_service
 from market_analysis.greeks import calculate_contract_delta
+from market_analysis.option_quote import resolve_option_mid
 
 logger = logging.getLogger(__name__)
+
+# 依目標 Delta 選約時的履約價裁減幅度 (現價 ±35%)。get_option_chain 預設的
+# ±10% 在高 IV 時會把目標 Delta 對應的履約價裁掉：40 DTE、IV 0.60 時 -0.20Δ
+# Put 的履約價約在現價 -13.3%，±10% 只能選到 -10% 的履約價 (實際 Δ ≈ -0.257)。
+# ±35% 足以涵蓋 IV ≤ ~1.5 時 0.10~0.30Δ 的履約價，同時仍限制記憶體用量。
+_CONTRACT_SELECTION_PRUNE_PCT: float = 0.35
 
 
 def _find_target_expiry(expirations: Any, today: Any, min_dte: Any, max_dte: Any):  # type: ignore
@@ -128,7 +135,9 @@ async def _fetch_opt_chain_and_best_contract(
     dividend_yield: Any,
 ) -> tuple[Any, Any]:
     """選擇權鏈抓取 -> 最佳合約篩選的既有序列管線，包成單一 coroutine 供 gather 使用。"""
-    opt_chain = await market_data_service.get_option_chain(symbol, target_expiry_date)
+    opt_chain = await market_data_service.get_option_chain(
+        symbol, target_expiry_date, prune_pct=_CONTRACT_SELECTION_PRUNE_PCT
+    )
     best_contract, opt_chain = await asyncio.to_thread(
         _get_best_contract_data,
         opt_chain,
@@ -157,7 +166,7 @@ async def find_best_contract(
         price = quote.get("c", 0.0) if quote else 0.0
 
         opt_chain = await market_data_service.get_option_chain(
-            symbol, target_expiry_date
+            symbol, target_expiry_date, prune_pct=_CONTRACT_SELECTION_PRUNE_PCT
         )
         opt_type = "call" if "CALL" in strategy_type else "put"
         best_contract, _ = await asyncio.to_thread(
@@ -172,15 +181,14 @@ async def find_best_contract(
             return None
 
         bid, ask = best_contract.get("bid", 0.0), best_contract.get("ask", 0.0)
-        mid = (
-            (bid + ask) / 2.0
-            if bid > 0 and ask > 0
-            else best_contract.get("lastPrice", 0.0)
-        )
+        # 與 get_option_chain_mid_iv 同一規則：bid/ask 中間價，零 bid 時 ask/2
+        # (mid_source="ASK_HALF")，不再退回可能數日前成交的 lastPrice。
+        mid, mid_source = resolve_option_mid(bid, ask)
         return {
             "strike": float(best_contract.get("strike", 0.0)),
             "expiry": target_expiry_date,
             "mid": mid,
+            "mid_source": mid_source,
             "bid": bid,
             "ask": ask,
         }
@@ -211,7 +219,7 @@ async def find_lowest_strike_call_above_floor(
             return None
 
         opt_chain = await market_data_service.get_option_chain(
-            symbol, target_expiry_date
+            symbol, target_expiry_date, prune_pct=_CONTRACT_SELECTION_PRUNE_PCT
         )
         if opt_chain is None or opt_chain.calls is None:
             return None
@@ -224,15 +232,14 @@ async def find_lowest_strike_call_above_floor(
 
         best_contract = chain_data.loc[chain_data["strike"].idxmin()]
         bid, ask = best_contract.get("bid", 0.0), best_contract.get("ask", 0.0)
-        mid = (
-            (bid + ask) / 2.0
-            if bid > 0 and ask > 0
-            else best_contract.get("lastPrice", 0.0)
-        )
+        # 與 get_option_chain_mid_iv 同一規則：bid/ask 中間價，零 bid 時 ask/2
+        # (mid_source="ASK_HALF")，不再退回可能數日前成交的 lastPrice。
+        mid, mid_source = resolve_option_mid(bid, ask)
         return {
             "strike": float(best_contract.get("strike", 0.0)),
             "expiry": target_expiry_date,
             "mid": mid,
+            "mid_source": mid_source,
             "bid": bid,
             "ask": ask,
         }

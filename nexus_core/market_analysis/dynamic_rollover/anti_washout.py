@@ -1130,7 +1130,9 @@ class _AntiWashoutMixin:
         執行比例；未傳入時為現行 _MICROSTRUCTURE_TP1_RATIO，零行為變化。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        ivr = float(metrics.get("ivr", 0.0))
+        # IVR 未知 (None) 以 0.0 表示：本模組既有慣例即把 0.0 視為「數據缺失」
+        # (不觸發賣方鎖死、不判 IV 泡沫，並在報告加註數據失真)。
+        ivr = float(metrics.get("ivr") or 0.0)
         iv_term_structure_status = metrics.get("iv_term_structure_status") or "N/A"
         max_pain = float(metrics.get("max_pain", 0.0))
         is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
@@ -1563,18 +1565,27 @@ async def check_satellite_rebalancing_impl(
             from services.market_data_service import get_vix_term_structure
 
             regime = await get_market_regime()
-            is_negative_gamma = regime in (
-                "SHORT_GAMMA_CRITICAL",
-                "SYSTEMIC_LIQUIDITY_CRISIS",
+            # 未知一律傳 None (不補 0.88 / 48 備援值)：evaluate_macro_top_escape_score
+            # 會把「無法確定為常態」回傳為 UNKNOWN，條件八隨之 fail-closed。
+            is_negative_gamma: Optional[bool] = (
+                None
+                if regime == "UNKNOWN"
+                else regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS")
             )
             vts_data = await get_vix_term_structure()
-            vts_ratio = (
-                vts_data.get("vts_ratio", 0.88)
+            vts_ratio: Optional[float] = (
+                float(vts_data["vts_ratio"])
                 if vts_data.get("is_valid", False)
-                else 0.88
+                and vts_data.get("vts_ratio") is not None
+                else None
             )
             core_metrics = await fetch_core_macro_metrics()
-            fear_greed = float(core_metrics.get("fear_greed", 48.0))
+            fg_raw = core_metrics.get("fear_greed")
+            fear_greed: Optional[float] = (
+                float(fg_raw)
+                if fg_raw is not None and not core_metrics.get("_is_fallback")
+                else None
+            )
             from database.cache import get_kv_cache
 
             prob = get_kv_cache("macro_fedwatch_probability")
@@ -1636,7 +1647,8 @@ async def check_satellite_rebalancing_impl(
             spot: float = float(asset.get("spot_price", 0.0))
             call_wall: float = float(asset.get("call_wall", 0.0))
             max_pain: float = float(asset.get("max_pain", 0.0))
-            ivr: float = float(asset.get("ivr", 0.0))
+            # None (IVR 未知) → 0.0：下游既有慣例視 0.0 為數據缺失 (見上方註解)。
+            ivr: float = float(asset.get("ivr") or 0.0)
             # ⚠️ 既有缺陷修正：portfolio_monitor 早已把 ivr_drop 放進 asset
             # entry，但此處的 metrics 組裝從未讀取它，導致
             # _apply_decision_matrix 的 is_ivr_fast_exit

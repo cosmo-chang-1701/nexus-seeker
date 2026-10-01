@@ -10,7 +10,6 @@ from services import market_data_service, reddit_service
 from services.market_data_service import _sanitize_ticker
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.psq_engine import analyze_psq
-from market_analysis.risk_engine import MacroContext
 from market_analysis.atr_utils import (
     compute_atr_14_from_daily_df,
     fetch_atr_15m,
@@ -290,20 +289,20 @@ class SymbolDeepDiveMixin:
         vp_data = data.get("volume_profile")
         catalysts = data.get("catalysts", [])
 
-        spy_price = _safe_float(
-            (df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0),
-            670.0,
+        # SPY / VIX 未知時為 None（不補 670 / 18.0 / 75.0 備援常數）。
+        spy_price: Optional[float] = (
+            _safe_float(df_spy["Close"].iloc[-1], 0.0) or None
+            if df_spy is not None and not df_spy.empty
+            else None
         )
-        safe_macro = macro_raw or {}
-        macro_data = MacroContext(
-            vix=_safe_float(safe_macro.get("vix"), 18.0),
-            oil_price=_safe_float(safe_macro.get("oil"), 75.0),
-            vix_change=_safe_float(safe_macro.get("vix_change"), 0.0),
-        )
+        from market_analysis.risk_engine import build_macro_context
+
+        macro_data = build_macro_context(macro_raw or {})
+        vix_now = macro_data.vix if macro_data is not None else None
 
         # 並行執行技術指標分析與 Polymarket 機率解析
         math_task = market_math.analyze_symbol(
-            symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
+            symbol, stock_cost, df_spy, spy_price, vix_spot=vix_now
         )
         poly_task = find_matching_polymarket_odds(symbol, poly_markets, bot=self.bot)
         poly_summary_task = calculate_polymarket_weighted_odds(
@@ -319,7 +318,7 @@ class SymbolDeepDiveMixin:
             else {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
         )
 
-        psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
+        psq_result = analyze_psq(df_hist_1d, vix_spot=vix_now)
         if psq_result:
             result["psq_result"] = psq_result
             is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
@@ -396,7 +395,7 @@ class SymbolDeepDiveMixin:
 
         safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
         result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
-        result["vix"] = macro_data.vix
+        result["vix"] = vix_now
         result["spy_price"] = spy_price
 
         # Reddit sentiment score
@@ -573,10 +572,11 @@ class SymbolDeepDiveMixin:
             )
             stock_iv_val = _safe_float(raw_stock_iv, 0.0)
             stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
-            vol_pcr = (
-                _safe_float(pcr_data.get("volume_pcr"), 0.8)
-                if isinstance(pcr_data, dict)
-                else 0.8
+            # PCR 缺值為 None (NRO 不做 PCR 修正)，不補 0.8。
+            vol_pcr: Optional[float] = (
+                _safe_float(pcr_data.get("volume_pcr"))
+                if isinstance(pcr_data, dict) and pcr_data.get("volume_pcr") is not None
+                else None
             )
             skew_val = _safe_float(safe_skew.get("skew"), 0.0)
 
@@ -584,14 +584,15 @@ class SymbolDeepDiveMixin:
                 current_delta=0.0,
                 unit_weighted_delta=0.16,
                 user_capital=user_capital,
-                spy_price=spy_price,
+                spy_price=spy_price if spy_price is not None else 0.0,
                 stock_iv=stock_iv,
                 strategy="STO",
                 macro_data=macro_data,
                 risk_limit=risk_limit,
-                vix_spot=macro_data.vix,
+                vix_spot=vix_now,
                 pcr=vol_pcr,
                 skew=skew_val,
+                vix_unknown=macro_data is None,
             )
             result["kelly_sizing"] = opt_result
         except Exception as e:

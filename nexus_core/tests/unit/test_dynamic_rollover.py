@@ -5737,14 +5737,17 @@ async def test_confirm_entry_signal_returns_structure_directive_when_all_pass(
     engine: DynamicRolloverEngine,
 ) -> None:
     """六重鐵律全數通過時，第三個回傳元素為建議進場結構；fixture 的 Call Wall
-    $110 距現價 $100 恰為 10% (延伸跑道) 且無 iv_metrics (IVR=0) -> 波段買方。"""
+    $110 距現價 $100 恰為 10% (延伸跑道) 且 IVR=20 (低於價差門檻) -> 波段買方。
+    (IVR 未知時不再視為 0，而是改建議價差，見 test_data_accuracy_golden)"""
+    radar = _green_candidate_radar()
+    radar["iv_metrics"] = {"iv_rank": 20.0}
     with patch(
         "services.market_data_service.get_history_df",
         new_callable=AsyncMock,
         return_value=_GREEN_15M_DF,
     ):
         confirmed, reason, directive = await engine._confirm_entry_signal(
-            "TEST", _green_candidate_radar(), 100.0
+            "TEST", radar, 100.0
         )
     assert confirmed is True
     assert directive is not None
@@ -5775,6 +5778,7 @@ async def test_confirm_entry_signal_high_ivr_directive_does_not_change_verdict(
     """🔒 最關鍵的迴歸鎖定：structure_directive 純為附加輸出，其內容變化
     (此處由 IVR 驅動) 絕不得改變六重鐵律的 Pass/Fail 判定。"""
     radar_low_ivr = _green_candidate_radar()
+    radar_low_ivr["iv_metrics"] = {"iv_rank": 20.0}
     radar_high_ivr = _green_candidate_radar()
     radar_high_ivr["iv_metrics"] = {"iv_rank": 88.0}
 

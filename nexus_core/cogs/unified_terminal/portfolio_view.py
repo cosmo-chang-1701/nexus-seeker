@@ -59,8 +59,14 @@ class PortfolioHubView(discord.ui.View):
             ctx = database.get_full_user_context(self.user_id)
             runway, runway_stale = await get_runway_display(self.user_id)
 
-            macro_raw = await market_data_service.get_macro_environment()
-            vix_spot = macro_raw.get("vix", 18.0)
+            vix_spot = await market_data_service.get_vix_spot_strict()
+
+            nav_data = await trading_service.get_market_nav(
+                self.user_id, float(ctx.cash_reserve or 0.0), pnl_data
+            )
+            spy_quote = await market_data_service.get_quote("SPY")
+            spy_raw = spy_quote.get("c") if spy_quote else None
+            spy_now = float(spy_raw) if spy_raw and float(spy_raw) > 0 else None
 
             embed = create_strategic_dash_embed(
                 ctx,
@@ -68,6 +74,8 @@ class PortfolioHubView(discord.ui.View):
                 vix_spot=vix_spot,
                 runway=runway,
                 runway_stale=runway_stale,
+                nav_data=nav_data,
+                spy_price=spy_now,
             )
         except Exception as e:
             await interaction.followup.send(

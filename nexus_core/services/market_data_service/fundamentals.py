@@ -15,6 +15,7 @@ from services.market_data_service._core import (
     _sanitize_ticker,
 )
 from services.market_data_service.caches import (
+    BoundedCache,
     _etf_cache,
     _ETF_CACHE_TTL,
     _option_chain_cache,
@@ -59,13 +60,62 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
         return {}
 
 
-async def get_dividend_yield(symbol: str) -> float:
-    """取得年化股息殖利率。"""
-    metrics = await get_basic_financials(symbol)
-    yield_val = metrics.get("dividendYieldIndicatedAnnual", 0.0)
-    if yield_val is None:
-        return 0.0
-    return round(float(yield_val) / 100.0, 4)
+_DIVIDEND_YIELD_CACHE_TTL: float = 24 * 3600.0
+_dividend_yield_cache: Any = BoundedCache(max_size=500)
+
+
+async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
+    """取得「實際」年化股息率 (小數)；無法取得時回傳 None。
+
+    1. Finnhub `dividendYieldIndicatedAnnual` (個股)。
+    2. 缺值時 (ETF 多數不在 Finnhub basic financials 內) 改以 yfinance 近 12 個月
+       實際配息總額 / 最新收盤價計算。
+    兩者皆失敗回傳 None，由呼叫端標示「股息率未知」——不再以 ETF 一律 1.5%
+    之類的常數冒充。真的不配息的標的回傳 0.0 (已知為零)。
+    """
+    from services.market_data_service import get_history_df
+    from services.market_data_service._core import _to_yfinance_symbol, call_yf
+
+    symbol = _sanitize_ticker(symbol)
+    now = time.time()
+    if symbol in _dividend_yield_cache:
+        val, expiry = _dividend_yield_cache[symbol]
+        if now < expiry:
+            return cast(Optional[float], val)
+
+    result: Optional[float] = None
+    try:
+        metrics = await get_basic_financials(symbol)
+        raw = metrics.get("dividendYieldIndicatedAnnual") if metrics else None
+        if raw is not None:
+            result = round(float(raw) / 100.0, 4)
+    except Exception as e:
+        logger.debug(f"[{symbol}] Finnhub 股息率讀取失敗: {e}")
+
+    if result is None:
+        try:
+            import yfinance as yf
+            import pandas as pd
+
+            ticker = yf.Ticker(_to_yfinance_symbol(symbol))
+            divs = await call_yf(lambda: ticker.dividends)
+            df = await get_history_df(symbol, "1y")
+            price = (
+                float(df["Close"].iloc[-1]) if df is not None and not df.empty else 0.0
+            )
+            if divs is not None and price > 0:
+                idx = pd.to_datetime(divs.index)
+                if getattr(idx, "tz", None) is not None:
+                    idx = idx.tz_localize(None)
+                cutoff = pd.Timestamp(datetime.now()) - pd.Timedelta(days=365)
+                ttm = float(divs[idx >= cutoff].sum()) if len(divs) else 0.0
+                result = round(ttm / price, 4)
+        except Exception as e:
+            logger.warning(f"[{symbol}] yfinance 近 12 月配息抓取失敗，股息率未知: {e}")
+
+    if result is not None:
+        _dividend_yield_cache[symbol] = (result, now + _DIVIDEND_YIELD_CACHE_TTL)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -194,60 +244,76 @@ async def get_company_news(
 # ---------------------------------------------------------------------------
 # Macro Environment (異步併發優化)
 # ---------------------------------------------------------------------------
-async def get_macro_environment() -> Dict[str, float]:
-    """併發獲獲取 VIX 與原油數據。"""
-    # 延遲從套件頂層 import get_history_df：讓 `patch("services.market_data_service.get_history_df")`
-    # 能正確攔截這裡的內部呼叫（get_history_df 定義於 history.py，跨子模組呼叫若在
-    # 檔案頂層綁定會繞過套件層級的 monkeypatch，理由同 quote.py 內部處理）。
-    from services.market_data_service import get_history_df
+async def get_macro_environment() -> Dict[str, Any]:
+    """併發取得 VIX 與原油數據；任一項未知時該欄位為 None（**不補備援常數**）。
 
-    try:
-        # 同時啟動兩個非同步任務
-        vix_task = get_history_df("^VIX", period="5d")
-        oil_task = get_history_df("CL=F", period="5d")
-
-        vix_df, oil_df = await asyncio.gather(vix_task, oil_task)
-
-        if vix_df.empty or oil_df.empty:
-            logger.warning("宏觀數據 (VIX/Oil) 抓取結果為空，使用預設值")
-            return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
-
-        vix_val = float(vix_df["Close"].iloc[-1])
-        oil_val = float(oil_df["Close"].iloc[-1])
-        vix_change_val = float(vix_df["Close"].pct_change().iloc[-1])
-
-        return {
-            "vix": round(vix_val, 2) if not math.isnan(vix_val) else 18.0,
-            "oil": round(oil_val, 2) if not math.isnan(oil_val) else 75.0,
-            "vix_change": round(vix_change_val, 4)
-            if not math.isnan(vix_change_val)
-            else 0.0,
-        }
-    except Exception as e:
-        logger.error(f"宏觀環境參數獲取失敗: {e}")
-        return {"vix": 18.0, "oil": 75.0, "vix_change": 0.0}
-
-
-async def get_vix_spot_strict() -> Optional[float]:
-    """取得 VIX 最新收盤；任何失敗或空資料回傳 None。
-
-    與 `get_macro_environment()` 刻意分開：後者失敗時靜默回傳 `vix=18.0`，
-    與真實的 18.0 無從區分 (落在 Ready 階梯)。做空倉位需要知道「VIX 未知」
-    才能退回保守乘數 (config.SHORT_VIX_UNKNOWN_MULTIPLIER)。
+    回傳 `{"vix": float|None, "oil": float|None, "vix_change": float|None}`：
+    - `vix` 取自 `get_vix_spot_strict()`（即時 quote），與原油互相獨立——原油
+      抓不到不再拖累 VIX 一起退回 18.0。
+    - `vix_change` 為 VIX 相對昨收的變動率（小數，0.05 = +5%）。
+    - 呼叫端必須自行處理 None（fail-closed 或在畫面上標示「資料不足」）。
     """
     from services.market_data_service import get_history_df
 
+    async def _oil() -> Optional[float]:
+        try:
+            oil_df = await get_history_df("CL=F", period="5d")
+            if oil_df is None or oil_df.empty:
+                return None
+            oil_val = float(oil_df["Close"].iloc[-1])
+            if math.isnan(oil_val) or oil_val <= 0:
+                return None
+            return round(oil_val, 2)
+        except Exception as e:
+            logger.warning(f"原油 (CL=F) 抓取失敗，回傳 None: {e}")
+            return None
+
+    vix_snapshot, oil_val = await asyncio.gather(_vix_quote_snapshot(), _oil())
+    vix_val, vix_change = vix_snapshot
+    if vix_val is None:
+        logger.warning("宏觀數據：VIX 未知 (不補 18.0 備援值)")
+    if oil_val is None:
+        logger.warning("宏觀數據：原油價格未知 (不補 75.0 備援值)")
+    return {"vix": vix_val, "oil": oil_val, "vix_change": vix_change}
+
+
+async def _vix_quote_snapshot() -> tuple[Optional[float], Optional[float]]:
+    """以即時 quote 取得 (VIX 現值, 相對昨收變動率)；任一失敗回傳 None。"""
+    from services.market_data_service import get_quote
+
     try:
-        vix_df = await get_history_df("^VIX", period="5d")
-        if vix_df is None or vix_df.empty:
-            return None
-        vix_val = float(vix_df["Close"].iloc[-1])
-        if math.isnan(vix_val) or vix_val <= 0:
-            return None
-        return round(vix_val, 2)
+        quote = await get_quote("^VIX")
     except Exception as e:
-        logger.warning(f"VIX 嚴格抓取失敗，回傳 None: {e}")
-        return None
+        logger.warning(f"VIX 即時報價抓取失敗，回傳 None: {e}")
+        return None, None
+    if not quote:
+        return None, None
+    try:
+        vix_val = float(quote.get("c") or 0.0)
+    except (TypeError, ValueError):
+        return None, None
+    if math.isnan(vix_val) or vix_val <= 0:
+        return None, None
+    change: Optional[float] = None
+    try:
+        pc = float(quote.get("pc") or 0.0)
+        if pc > 0 and not math.isnan(pc):
+            change = round((vix_val - pc) / pc, 4)
+    except (TypeError, ValueError):
+        change = None
+    return round(vix_val, 2), change
+
+
+async def get_vix_spot_strict() -> Optional[float]:
+    """取得 VIX 即時值（quote）；任何失敗或空資料回傳 None。
+
+    全 repo 的 VIX 消費端統一走這裡（或 `get_macro_environment()["vix"]`，
+    兩者同源），未知時回傳 None，由呼叫端 fail-closed——不得以 18.0 冒充
+    真實值（18.0 落在 Ready 階梯，會讓部位照常放大）。過去取自 6 小時快取的
+    日線收盤，盤中可能是前一日的舊值；現改用 15 秒快取的即時 quote。
+    """
+    vix_val, _change = await _vix_quote_snapshot()
+    return vix_val
 
 
 async def get_vix_term_structure() -> Dict[str, Any]:

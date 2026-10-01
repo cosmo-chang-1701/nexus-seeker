@@ -390,10 +390,6 @@ async def test_build_enhanced_watchlist_metrics_assembles_quant_fields() -> None
         new_callable=AsyncMock,
         return_value={"exchange": "NASDAQ"},
     ), patch(
-        "services.market_data_service.get_dividend_yield",
-        new_callable=AsyncMock,
-        return_value=0.01,
-    ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new_callable=AsyncMock,
         return_value=IVMetrics(
@@ -953,7 +949,8 @@ def test_compute_deployed_tactical_value_scope() -> None:
         {
             "symbol": "NVDA",
             "asset_class": "SATELLITE",
-            "quantity": 10.0,
+            # 100 股才足以擔保下方 1 口 Covered Call (不足 100 股的部分視為裸賣)
+            "quantity": 100.0,
             "avg_cost": 120.0,
         },
         # CORE 是退守目的地
@@ -1005,8 +1002,8 @@ def test_compute_deployed_tactical_value_scope() -> None:
     total = compute_deployed_tactical_value(
         spot_holdings=spot, option_positions=options
     )
-    # 10*120 (NVDA) + 5*100 (AMD) + 2*3*100 (TSLA long) + 1*90*100 (MU short put)
-    assert total == pytest.approx(1200.0 + 500.0 + 600.0 + 9000.0)
+    # 100*120 (NVDA) + 5*100 (AMD) + 2*3*100 (TSLA long) + 1*90*100 (MU short put)
+    assert total == pytest.approx(12000.0 + 500.0 + 600.0 + 9000.0)
 
     assert compute_deployed_tactical_value() == 0.0
 

@@ -153,7 +153,9 @@ async def test_build_symbol_metrics_parses_radar_data(
     assert metrics["skew"] == -0.2
     assert metrics["hvn"] == 148.5
     assert metrics["lvn"] == 143.0
-    assert metrics["dte"] == 14
+    # 標的層級 nearest_dte 不再被當成部位 DTE (H1)：現貨無到期概念維持 99，
+    # 期權部位的 DTE 由 _build_option_asset_entry 依合約 expiry 計算。
+    assert metrics["dte"] == 99
     # atr_15m 必須是真實的 15m ATR (獨立於 atr_14)，不得別名 (Task 1.1)。
     assert metrics["atr_14"] == 3.0
     assert metrics["atr_15m"] == 1.2

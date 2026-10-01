@@ -43,30 +43,41 @@ def compute_deployed_tactical_value(
     納入與排除規則：
       - 排除 `asset_class == "CORE"`：大盤流動性資產（如 VOO）正是退守的目的地。
       - 排除 BOXX / BIL / SHV：現金等價物，同理。
-      - 現貨：`quantity * avg_cost`。
+      - 現貨：`|quantity| * avg_cost` (空頭現貨同樣佔用資本，依 AGENTS.md 的
+        abs() 慣例計入；過去以 `quantity > 0` 過濾而漏算)。
       - 長倉期權：已付權利金 `quantity * entry_price * 100`。
       - 賣出 PUT：佔用的擔保現金 `|quantity| * strike * 100`。
-      - 賣出 CALL：**不計入**。備兌買權的擔保品是股票，已由對應的現貨部位計入，
-        重複計算會高估曝險。
+      - 賣出 CALL：有同標的多頭現股擔保的備兌部分 (每 100 股擔保 1 口) **不計入**
+        (擔保品已由現貨計入)；超出擔保的裸賣 Call 以 `口數 * strike * 100` 計入
+        (過去一律不計，裸賣 Call 的曝險完全消失)。
 
     任何一筆資料缺漏或型別異常都跳過該筆而非中斷整體計算——寧可少算一筆，也不要
     讓一筆髒資料使整道風控閘門失效。
     """
     total = 0.0
+    # 備兌擔保：各標的多頭現股數 (不論 CORE/衛星，CORE 現股同樣可擔保 Call)。
+    long_shares: dict[str, float] = {}
 
     for holding in spot_holdings or ():
         try:
+            symbol = str(holding.get("symbol") or "").upper()
+            quantity = float(holding.get("quantity") or 0.0)
+            if quantity > 0.0:
+                long_shares[symbol] = long_shares.get(symbol, 0.0) + quantity
             if str(holding.get("asset_class") or "").upper() == "CORE":
                 continue
-            symbol = str(holding.get("symbol") or "").upper()
             if symbol in _TACTICAL_EXPOSURE_EXCLUDED_SYMBOLS:
                 continue
-            quantity = float(holding.get("quantity") or 0.0)
             avg_cost = float(holding.get("avg_cost") or 0.0)
-            if quantity > 0.0 and avg_cost > 0.0:
-                total += quantity * avg_cost
+            if quantity != 0.0 and avg_cost > 0.0:
+                total += abs(quantity) * avg_cost
         except (AttributeError, TypeError, ValueError):
             continue
+
+    # 尚可用於擔保 Call 的口數 (每 100 股 1 口)，依序扣抵。
+    covered_contracts_left: dict[str, float] = {
+        sym: float(int(sh // 100)) for sym, sh in long_shares.items()
+    }
 
     for position in option_positions or ():
         try:
@@ -84,6 +95,18 @@ def compute_deployed_tactical_value(
                 strike = float(position.get("strike") or 0.0)
                 if strike > 0.0:
                     total += abs(quantity) * strike * 100.0
+            elif (
+                quantity < 0.0 and str(position.get("opt_type") or "").lower() == "call"
+            ):
+                strike = float(position.get("strike") or 0.0)
+                contracts = abs(quantity)
+                covered = min(contracts, covered_contracts_left.get(symbol, 0.0))
+                covered_contracts_left[symbol] = (
+                    covered_contracts_left.get(symbol, 0.0) - covered
+                )
+                naked = contracts - covered
+                if naked > 0.0 and strike > 0.0:
+                    total += naked * strike * 100.0
         except (AttributeError, TypeError, ValueError):
             continue
 

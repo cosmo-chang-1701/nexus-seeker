@@ -14,6 +14,7 @@ from playwright_stealth import Stealth
 
 import statistics
 from gex_scraper import (
+    RISK_FREE_RATE,
     _calculate_gamma,
     _filter_noise_contracts,
     scrape_symbol_gex_core,
@@ -35,7 +36,10 @@ def _fedwatch_today() -> date:
 
 
 def calculate_total_gex(
-    S: float, option_chain: list[dict[str, Any]], r: float = 0.04, q: float = 0.013
+    S: float,
+    option_chain: list[dict[str, Any]],
+    r: float = RISK_FREE_RATE,
+    q: float = 0.013,
 ) -> float:
     total_gex = 0.0
     for contract in option_chain:
@@ -56,7 +60,7 @@ def calculate_total_gex(
 def find_gamma_flip(
     spot_price: float,
     option_chain: list[dict[str, Any]],
-    r: float = 0.04,
+    r: float = RISK_FREE_RATE,
     q: float = 0.013,
 ) -> float:
     if spot_price <= 0 or not option_chain:
@@ -244,7 +248,7 @@ async def scrape_gex() -> dict[str, Any]:
 
             # 過濾深度價外雜訊合約 (|delta| < 0.02)
             option_chain = _filter_noise_contracts(
-                option_chain, spot_price, r=0.04, q=0.013
+                option_chain, spot_price, r=RISK_FREE_RATE, q=0.013
             )
             if not option_chain:
                 logger.warning(
@@ -264,7 +268,9 @@ async def scrape_gex() -> dict[str, Any]:
                 put_wall = max(put_oi_by_strike, key=lambda k: put_oi_by_strike[k])
 
             # Calculate Gamma Flip
-            gamma_flip = find_gamma_flip(spot_price, option_chain, r=0.04, q=0.013)
+            gamma_flip = find_gamma_flip(
+                spot_price, option_chain, r=RISK_FREE_RATE, q=0.013
+            )
 
             return {
                 "status": "success",

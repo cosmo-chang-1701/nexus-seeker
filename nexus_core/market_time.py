@@ -227,3 +227,71 @@ def get_session_bounds_utc(
             market_close.tz_convert(timezone.utc).strftime(fmt),
         )
     return bounds
+
+
+def get_recent_trading_dates(n: int, as_of: datetime | None = None) -> list[str]:
+    """回傳截至 as_of (含當天，若為交易日) 的最近 n 個 NYSE 交易日 (ET 日期字串，
+    由舊到新)。行事曆查詢失敗時退回「平日」(只排除週末，無法排除國定假日)。
+
+    供 IV Rank 母體以「交易日」而非「資料列數」定義 252 日窗口。
+    """
+    today = _to_et_date(as_of)
+    n = max(1, int(n))
+    start = today - timedelta(days=n * 2 + 10)
+    try:
+        schedule = nyse_calendar.schedule(start_date=start, end_date=today)
+        if not schedule.empty:
+            dates = [
+                ts.tz_convert(ny_tz).strftime("%Y-%m-%d")
+                for ts in schedule["market_open"]
+            ]
+            return dates[-n:]
+    except Exception as e:
+        logger.warning(f"NYSE 行事曆查詢失敗，交易日退回平日近似: {e}")
+    out: list[str] = []
+    d = today
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.strftime("%Y-%m-%d"))
+        d -= timedelta(days=1)
+    return list(reversed(out))
+
+
+# ---------------------------------------------------------------------------
+# 期權到期時間 (DTE / T) 的單一計算來源
+# ---------------------------------------------------------------------------
+# 0DTE 的年化時間下限（日曆日）。盤中 0DTE 合約剩餘時間不足一天，但 BSM 在
+# T→0 時 Greeks 發散；全 repo 統一以 1 個日曆日作為下限（與既有多數呼叫端的
+# `max(days, 1) / 365` 慣例一致）。
+MIN_T_DAYS: float = 1.0
+
+
+def _to_et_date(as_of: datetime | None) -> Any:
+    if as_of is None:
+        return datetime.now(ny_tz).date()
+    if as_of.tzinfo is None:
+        return as_of.date()  # naive 一律視為美東時間
+    return as_of.astimezone(ny_tz).date()
+
+
+def days_to_expiry_et(expiry: Any, as_of: datetime | None = None) -> int:
+    """合約到期日與「今天 (美東日期)」的日曆日差。
+
+    `expiry` 可為 `'YYYY-MM-DD'` 字串、`date` 或 `datetime`。以 ET 日期相減，
+    不受時分秒影響（`datetime - datetime` 的 `.days` 會在到期前一天盤中少算
+    1 天）。已過期回傳負值，由呼叫端決定如何處理。
+    """
+    from datetime import date as _date
+
+    if isinstance(expiry, datetime):
+        exp_d = expiry.date()
+    elif isinstance(expiry, _date):
+        exp_d = expiry
+    else:
+        exp_d = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
+    return int((exp_d - _to_et_date(as_of)).days)
+
+
+def years_to_expiry(expiry: Any, as_of: datetime | None = None) -> float:
+    """BSM 用年化到期時間 T = max(DTE, MIN_T_DAYS) / 365（DTE 以 ET 日期計）。"""
+    return max(float(days_to_expiry_et(expiry, as_of)), MIN_T_DAYS) / 365.0

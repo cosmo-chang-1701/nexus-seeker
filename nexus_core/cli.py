@@ -226,6 +226,18 @@ def portfolio_pnl(ctx: Any) -> None:
         table.add_column("幅度 (%)", justify="right")
 
         for t in data["trades"]:
+            if t.get("current_price") is None or t.get("unrealized_pnl") is None:
+                # 報價缺失：不顯示 ±100% 損益
+                table.add_row(
+                    str(t["id"]),
+                    t["symbol"],
+                    str(t["quantity"]),
+                    f"${t['entry_price']:.2f}",
+                    "--",
+                    "[yellow]報價缺失[/yellow]",
+                    "--",
+                )
+                continue
             color = "green" if t["unrealized_pnl"] >= 0 else "red"
             table.add_row(
                 str(t["id"]),

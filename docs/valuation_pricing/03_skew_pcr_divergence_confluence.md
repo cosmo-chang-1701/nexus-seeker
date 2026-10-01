@@ -169,7 +169,12 @@ elif (
 若標的在全市場期權鏈中本日完全無任何 UOA 異動（`uoa_list` 為空列表），則遍歷迴圈將正常結束，`has_dte7_institutional_buy_support` 自然保持預設的 `False`。這符合量化物理直覺：完全沒有主力大單介入，就是最徹底的機構真空狀態。
 
 ### 5.3 單邊流動性與零成交量防護 (Zero Division in PCR)
-若當日買權成交量為零（$\sum V_{\text{Call}} = 0$），在計算 `Volume PCR` 時可能引發除以零錯誤。代碼在 `insights_engine.py` 與 `market_embeds.py` 中均對 `vol_pcr` 進行空值與安全轉換（`_safe_float`），當成交量為零時安全賦值為 `None`，不觸發破位順向殺盤。
+若當日買權成交量為零（$\sum V_{\text{Call}} = 0$），比率無定義。`calculate_pcr()`（`options_flow.py`）依分子分母分三種情況，**一律不以哨兵值冒充比率、也不寫入 `sentiment_history`**（過去寫入 $99.9$ 或 $1.0$，會污染 PCR 歷史序列與降級快取）：
+- **Put 有量、Call 為 0**：`volume_pcr = None`，狀態仍判為「偏向空頭／看空主導（Call 成交量為 0）」，保留極端賣壓不被反轉為多頭的語意。
+- **兩邊成交量皆為 0**（例如盤前）：成交量部分走降級路徑，沿用最近一筆已存 PCR 並標示「[歷史快取]」，無快取則為 `None`；未平倉量比率（`oi_pcr`）照常回報。
+- **成交量與未平倉量皆無定義**：整體走降級路徑。
+
+`oi_pcr` 比照辦理（Put OI 有值、Call OI 為 0 時判為結構防禦）。下游在 `insights_engine.py` 與 `market_embeds.py` 以 `_safe_float` 處理 `None`，不觸發破位順向殺盤。
 
 ### 5.4 Skew 百分位的統計母體與樣本邊界防護 (Canonical Daily Population & Edge Guards)
 `calculate_skew()` 的呼叫點遍布心跳、終端指令、Analyst runner 與委託單遙測，每次呼叫都寫入一筆 `sentiment_history`，取樣頻率不固定。舊實作以「最近 500 列」為母體，實際只涵蓋兩三週且相鄰樣本高度自相關：安靜期的微小跳動即可衝上高分位，連續數週的恐慌反而被當成常態。現行實作改為**雙軌**：

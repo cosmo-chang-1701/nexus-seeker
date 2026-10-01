@@ -50,7 +50,7 @@ async def test_process_symbol_positions_fetches_option_chain_without_pruning() -
             return_value=False,
         ),
         patch(
-            "market_analysis.portfolio.market_data_service.get_dividend_yield",
+            "market_analysis.portfolio.market_data_service.get_dividend_yield_strict",
             new_callable=AsyncMock,
             return_value=0.0,
         ),
@@ -90,7 +90,7 @@ async def test_process_symbol_positions_handles_none_chain_gracefully() -> None:
             return_value=False,
         ),
         patch(
-            "market_analysis.portfolio.market_data_service.get_dividend_yield",
+            "market_analysis.portfolio.market_data_service.get_dividend_yield_strict",
             new_callable=AsyncMock,
             return_value=0.0,
         ),

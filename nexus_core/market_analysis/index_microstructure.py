@@ -3,7 +3,7 @@ import logging
 import math
 import time
 import config
-from typing import Dict, NamedTuple, Optional
+from typing import Any, Dict, NamedTuple, Optional
 
 # 薄牆門檻定義見 gex_wall_depth.py（stdlib 葉模組，避免循環匯入）；此處重新匯出
 # 以維持既有匯入路徑 (`from market_analysis.index_microstructure import ...`)。
@@ -180,69 +180,121 @@ async def get_market_regime() -> str:
     return regime  # type: ignore
 
 
+def _and3(*vals: Optional[bool]) -> Optional[bool]:
+    """三值邏輯 AND：任一為 False → False；全部為 True → True；其餘 (含未知) → None。"""
+    if any(v is False for v in vals):
+        return False
+    if all(v is True for v in vals):
+        return True
+    return None
+
+
 async def _compute_market_regime_uncached() -> str:
-    """get_market_regime() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。"""
+    """get_market_regime() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。
+
+    回傳 "SYSTEMIC_LIQUIDITY_CRISIS" | "SHORT_GAMMA_CRITICAL" | "NORMAL" | "UNKNOWN"。
+
+    **未知就是未知**：VIX、VTS、SPY 現價、Gamma Flip、TED Spread 任一抓不到時
+    不再補備援常數 (過去 vix 18、vts 0.95、spy 510、flip 515——SPY 實際約 670
+    時「SPY < Flip」永遠不成立，危機 regime 永遠不會觸發)。各條件以三值邏輯
+    判定：能確定成立 → 對應危機；能確定不成立 → NORMAL；無法確定 → "UNKNOWN"，
+    由消費端 fail-closed (不開新倉、不加碼)。
+    """
     from services.market_data_service import (
-        get_macro_environment,
+        get_vix_spot_strict,
         get_vix_term_structure,
         get_quote,
     )
 
-    # 1. 抓取大盤微觀結構 GEX 數據
-    gex_data = await fetch_gex_metrics()
-    gamma_flip_raw = gex_data.get("gamma_flip")
-    gamma_flip = float(gamma_flip_raw) if gamma_flip_raw is not None else 515.0
-
-    # 2. 獲取 VIX 數值
+    # 1. 大盤 GEX：只採用真實資料或 last-known-good 快取，不採靜態備援值。
     try:
-        macro = await get_macro_environment()
-        vix_raw = macro.get("vix")
-        vix = float(vix_raw) if vix_raw is not None else 18.0
+        gex_data = await fetch_gex_metrics(allow_empty=True)
+    except Exception as e:
+        logger.warning(f"獲取大盤 GEX 失敗: {e}")
+        gex_data = {}
+    gamma_flip: Optional[float] = None
+    try:
+        gf_raw = gex_data.get("gamma_flip") if isinstance(gex_data, dict) else None
+        if gf_raw is not None and float(gf_raw) > 0:
+            gamma_flip = float(gf_raw)
+    except (TypeError, ValueError):
+        gamma_flip = None
+
+    # 2. VIX (即時 quote，未知為 None)
+    vix: Optional[float] = None
+    try:
+        vix = await get_vix_spot_strict()
     except Exception as e:
         logger.warning(f"獲取 VIX 指標失敗: {e}")
-        vix = 18.0
 
-    # 3. 獲取 VTS 期限結構
+    # 3. VTS 期限結構 (is_valid 為 False 視為未知)
+    vts_ratio: Optional[float] = None
     try:
         vts = await get_vix_term_structure()
-        vts_ratio_raw = vts.get("vts_ratio")
-        vts_ratio = float(vts_ratio_raw) if vts_ratio_raw is not None else 0.95
+        if vts.get("is_valid") and vts.get("vts_ratio") is not None:
+            vts_ratio = float(vts["vts_ratio"])
     except Exception as e:
         logger.warning(f"獲取 VIX 期限結構失敗: {e}")
-        vts_ratio = 0.95
 
-    # 4. 獲取 SPY 現貨價
+    # 4. SPY 現貨價 (quote 優先，退回同一份 GEX 資料內的 spot；皆無則未知)
+    spy_spot: Optional[float] = None
     try:
         spy_quote = await get_quote("SPY")
-        spy_spot_raw = spy_quote.get("c") if spy_quote else None
-        spy_spot = float(spy_spot_raw) if spy_spot_raw is not None else 0.0
-        if spy_spot <= 0.0:
-            spy_spot_gex = gex_data.get("spy_spot")
-            spy_spot = float(spy_spot_gex) if spy_spot_gex is not None else 510.0
+        q_raw = spy_quote.get("c") if spy_quote else None
+        if q_raw is not None and float(q_raw) > 0:
+            spy_spot = float(q_raw)
     except Exception as e:
         logger.warning(f"獲取 SPY 即時報價失敗: {e}")
-        spy_spot_gex = gex_data.get("spy_spot")
-        spy_spot = float(spy_spot_gex) if spy_spot_gex is not None else 510.0
+    if spy_spot is None and isinstance(gex_data, dict):
+        try:
+            g_spot = gex_data.get("spy_spot")
+            if g_spot is not None and float(g_spot) > 0:
+                spy_spot = float(g_spot)
+        except (TypeError, ValueError):
+            spy_spot = None
 
-    # 5. Regime 條件判定 (繁體中文回傳說明，內部邏輯以英文代號)
-    # 獲取跨資產流動性指標
+    # 5. 跨資產流動性 (備援值視為未知)
+    ted_spread: Optional[float] = None
     try:
         liquidity = await fetch_liquidity_metrics()
-        ted_spread = liquidity.get("ted_spread", 0.0)
+        if (
+            not liquidity.get("_is_fallback")
+            and liquidity.get("ted_spread") is not None
+        ):
+            ted_spread = float(liquidity["ted_spread"])
     except Exception as e:
         logger.warning(f"獲取流動性指標失敗: {e}")
-        ted_spread = 0.0
 
+    below_flip: Optional[bool] = (
+        spy_spot < gamma_flip
+        if (spy_spot is not None and gamma_flip is not None)
+        else None
+    )
     # 系統性流動性危機 (TED Spread > 0.5 且處於 Negative Gamma)
     # 這裡 0.5 (50 bps) 為 TED Spread 歷史上的警戒水位
-    if ted_spread > 0.5 and spy_spot < gamma_flip:
+    liquidity_crisis = _and3(
+        (ted_spread > 0.5) if ted_spread is not None else None, below_flip
+    )
+    if liquidity_crisis is True:
         return "SYSTEMIC_LIQUIDITY_CRISIS"
 
     # 條件：VIX > 20 且 vts_ratio >= 1.0 (Backwardation) 且 SPY 現貨價 < Gamma Flip Line
-    if vix > 20.0 and vts_ratio >= 1.0 and spy_spot < gamma_flip:
+    gamma_critical = _and3(
+        (vix > 20.0) if vix is not None else None,
+        (vts_ratio >= 1.0) if vts_ratio is not None else None,
+        below_flip,
+    )
+    if gamma_critical is True:
         return "SHORT_GAMMA_CRITICAL"
 
-    return "NORMAL"
+    if liquidity_crisis is False and gamma_critical is False:
+        return "NORMAL"
+
+    logger.warning(
+        "大盤 Regime 無法判定 (資料不足)："
+        f"VIX={vix} VTS={vts_ratio} SPY={spy_spot} Flip={gamma_flip} TED={ted_spread}"
+    )
+    return "UNKNOWN"
 
 
 _FEAR_GREED_EXTREME_FEAR_BOUND: float = 25.0
@@ -254,6 +306,8 @@ _FEAR_GREED_EXTREME_GREED_BOUND: float = 75.0
 # 取得同一份分級結果，確保兩者的建議值永遠基於完全一致的市況輸入 (regime +
 # fear_greed 只評估一次)，結構上不可能互相矛盾。
 _BOXX_SUGGEST_BY_TIER: Dict[str, float] = {
+    # 總經資料不足 (regime/Fear & Greed 未知)：比照 CRISIS 採最保守值。
+    "UNKNOWN": 70.0,
     "CRISIS": 70.0,
     "EXTREME_FEAR": 60.0,
     "EXTREME_GREED": 20.0,
@@ -264,6 +318,7 @@ _BOXX_SUGGEST_BY_TIER: Dict[str, float] = {
 # 一旦真的觸發部署，超額資金才由 boxx_allocation_pct 決定優先停泊 BOXX 還是追價
 # 候選標的。兩者共用同一份分級，方向設計上彼此呼應而非衝突。
 _TARGET_ALLOC_SUGGEST_BY_TIER: Dict[str, float] = {
+    "UNKNOWN": 70.0,
     "CRISIS": 70.0,
     "EXTREME_FEAR": 60.0,
     "EXTREME_GREED": 30.0,
@@ -273,22 +328,29 @@ _TARGET_ALLOC_SUGGEST_BY_TIER: Dict[str, float] = {
 
 async def _resolve_core_deployment_macro_tier() -> str:
     """評估核心資金部署總經自動建議機制所使用的統一市況分級，回傳
-    "CRISIS" | "EXTREME_FEAR" | "EXTREME_GREED" | "NORMAL" 其中之一。"""
+    "CRISIS" | "EXTREME_FEAR" | "EXTREME_GREED" | "NORMAL" | "UNKNOWN" 其中之一。"""
     try:
         regime = await get_market_regime()
     except Exception as e:
         logger.warning(f"評估核心資金部署總經建議值時取得市場 Regime 失敗: {e}")
-        regime = "NORMAL"
+        regime = "UNKNOWN"
 
     if regime in ("SYSTEMIC_LIQUIDITY_CRISIS", "SHORT_GAMMA_CRITICAL"):
         return "CRISIS"
 
+    fear_greed: Optional[float] = None
     try:
         core_metrics = await fetch_core_macro_metrics()
-        fear_greed = float(core_metrics.get("fear_greed", 48.0))
+        fg_raw = core_metrics.get("fear_greed")
+        if fg_raw is not None and not core_metrics.get("_is_fallback"):
+            fear_greed = float(fg_raw)
     except Exception as e:
         logger.warning(f"評估核心資金部署總經建議值時取得 Fear & Greed 指數失敗: {e}")
-        fear_greed = 48.0
+
+    # Regime 或 Fear & Greed 未知：不宣稱 NORMAL (過去補 48 → NORMAL)，改採
+    # 最保守的建議值 (fail-closed：超額資金優先停泊 BOXX)。
+    if regime == "UNKNOWN" or fear_greed is None:
+        return "UNKNOWN"
 
     if fear_greed <= _FEAR_GREED_EXTREME_FEAR_BOUND:
         return "EXTREME_FEAR"
@@ -382,14 +444,16 @@ async def fetch_core_macro_metrics() -> dict:
 async def _fetch_core_macro_metrics_uncached() -> dict:
     """fetch_core_macro_metrics() 的實際運算邏輯 (無快取)，供快取層與 SingleFlight 呼叫。
 
-    無法取得即時數據時回傳靜態常數備援值，並附帶 `_is_fallback: True` 標記
-    （語意同 fetch_liquidity_metrics()），供手動刷新流程如實回報資料來源。"""
-    fallback = {
-        "rrp": 420.5,
-        "fed_balance": 7.25,
-        "uer": 4.0,
-        "sahm_rule": 0.35,
-        "fear_greed": 48.0,
+    無法取得即時數據時，各指標一律回傳 None (**不再回傳 rrp 420.5、uer 4.0、
+    sahm 0.35、fear_greed 48 等靜態常數**——那些值會讓下游把「未知」判成
+    NORMAL，使 PYRAMID_ADD 等 fail-closed 閘門失效)，並附帶 `_is_fallback: True`
+    標記供手動刷新流程如實回報資料來源。"""
+    fallback: Dict[str, Optional[float]] = {
+        "rrp": None,
+        "fed_balance": None,
+        "uer": None,
+        "sahm_rule": None,
+        "fear_greed": None,
     }
     from database.cache import save_kv_cache
 
@@ -405,20 +469,17 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
                 data = res.json()
                 if data.get("status") == "success":
                     core_data = data.get("data", fallback)
-                    await save_kv_cache("macro_rrp", core_data.get("rrp", 420.5))
-                    await save_kv_cache(
-                        "macro_rrp_change_30d", core_data.get("rrp_change_30d", 5.0)
-                    )
-                    await save_kv_cache(
-                        "macro_fed_balance", core_data.get("fed_balance", 7.25)
-                    )
-                    await save_kv_cache("macro_uer", core_data.get("uer", 4.0))
-                    await save_kv_cache(
-                        "macro_sahm_rule", core_data.get("sahm_rule", 0.35)
-                    )
-                    await save_kv_cache(
-                        "macro_fear_greed", core_data.get("fear_greed", 48.0)
-                    )
+                    # 只快取實際存在的欄位：缺欄位時不再以常數補值寫入 KV。
+                    for kv_key, field in (
+                        ("macro_rrp", "rrp"),
+                        ("macro_rrp_change_30d", "rrp_change_30d"),
+                        ("macro_fed_balance", "fed_balance"),
+                        ("macro_uer", "uer"),
+                        ("macro_sahm_rule", "sahm_rule"),
+                        ("macro_fear_greed", "fear_greed"),
+                    ):
+                        if core_data.get(field) is not None:
+                            await save_kv_cache(kv_key, core_data.get(field))
                     await save_kv_cache("macro_core_is_fallback", 0)
                     return core_data  # type: ignore
     except Exception as e:
@@ -955,10 +1016,10 @@ def analyze_local_gamma_regime(
 
 
 def evaluate_escape_window_regime(
-    prob: float | None = 0.50,
-    cpi_dev: float = 0.0,
-    wti: float = 75.0,
-    vts_ratio: float = 0.88,
+    prob: float | None = None,
+    cpi_dev: float | None = None,
+    wti: float | None = None,
+    vts_ratio: float | None = None,
     is_negative_gamma: bool = False,
 ) -> tuple[int, int, str, int, str, str]:
     """
@@ -971,34 +1032,58 @@ def evaluate_escape_window_regime(
         vts_ratio: VIX 期限結構比例 (VIX / VIX3M)
         is_negative_gamma: 是否處於負 Gamma 踩踏區間
 
+    任一因子輸入未知 (None) 時，該因子不計入收縮或寬鬆分數——不再以 CPI 0、
+    WTI 75、VTS 0.88 之類偏寬鬆的常數補值，以免把「資料缺失」算成寬鬆而延後
+    逃頂窗口。
+
     Returns:
         tuple[int, int, str, int, str, str]:
             (tightening_score, easing_score, direction, shift_days, tier_title, short_status_desc)
     """
-    try:
-        safe_prob = float(prob) if prob is not None else 0.50
-    except (ValueError, TypeError):
-        safe_prob = 0.50
+
+    def _known(val: Any, positive: bool = False) -> float | None:
+        try:
+            f = float(val)
+        except (ValueError, TypeError):
+            return None
+        if f != f or (positive and f <= 0):
+            return None
+        return f
+
+    safe_prob = _known(prob)
+    cpi_known = _known(cpi_dev)
+    wti_known = _known(wti, positive=True)
+    vts_known = _known(vts_ratio, positive=True)
+    is_hawkish = safe_prob is not None and safe_prob > 0.70
+    is_dovish = safe_prob is not None and safe_prob <= 0.40
 
     tightening_score = 0
     easing_score = 0
 
     # Factor 1: FedWatch 利率定價
-    if safe_prob > 0.70:
+    if is_hawkish:
         tightening_score += 1
-    elif safe_prob <= 0.40:
+    elif is_dovish:
         easing_score += 1
 
-    # Factor 2: 通膨與能源 (CPI / WTI)
-    if (cpi_dev > 0.1) or (wti > 85.0):
+    # Factor 2: 通膨與能源 (CPI / WTI)：任一已知值超標即收縮；兩者皆已知且
+    # 平穩才算寬鬆
+    if (cpi_known is not None and cpi_known > 0.1) or (
+        wti_known is not None and wti_known > 85.0
+    ):
         tightening_score += 1
-    elif (cpi_dev <= 0.0) and (wti <= 80.0):
+    elif (
+        cpi_known is not None
+        and wti_known is not None
+        and cpi_known <= 0.0
+        and wti_known <= 80.0
+    ):
         easing_score += 1
 
     # Factor 3: VIX 期限結構 (VTS)
-    if vts_ratio >= 1.0:
+    if vts_known is not None and vts_known >= 1.0:
         tightening_score += 1
-    elif vts_ratio < 0.90:
+    elif vts_known is not None and vts_known < 0.90:
         easing_score += 1
 
     # Factor 4: 大盤微觀結構 Net GEX
@@ -1008,12 +1093,12 @@ def evaluate_escape_window_regime(
         easing_score += 1
 
     # 三階矩陣狀態評估
-    if tightening_score >= 2 or (safe_prob > 0.70 and is_negative_gamma):
+    if tightening_score >= 2 or (is_hawkish and is_negative_gamma):
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
         short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
-    elif safe_prob <= 0.40 and easing_score >= 2 and tightening_score == 0:
+    elif is_dovish and easing_score >= 2 and tightening_score == 0:
         direction = "後推"
         shift_days = 5
         tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
@@ -1022,7 +1107,7 @@ def evaluate_escape_window_regime(
         direction = "維持"
         shift_days = 0
         tier_title = "🟡 中性平衡 (Neutral Balance)"
-        if not is_negative_gamma and safe_prob > 0.70:
+        if not is_negative_gamma and is_hawkish:
             short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
         else:
             short_status_desc = "🟢 正常窗口 (均衡定價)"
@@ -1044,10 +1129,10 @@ _MACRO_ESCAPE_BREADTH_TRIGGER_RATIO: float = 0.5
 
 
 def evaluate_macro_top_escape_score(
-    vts_ratio: float = 0.88,
-    fear_greed: float = 48.0,
+    vts_ratio: float | None = 0.88,
+    fear_greed: float | None = 48.0,
     prob: float | None = 0.50,
-    is_negative_gamma: bool = False,
+    is_negative_gamma: bool | None = False,
     satellite_euphoria_ratio: float | None = None,
 ) -> tuple[int, str, str, list[tuple[str, str]]]:
     """
@@ -1068,17 +1153,28 @@ def evaluate_macro_top_escape_score(
     Returns:
         tuple[int, str, str, list[tuple[str, str]]]:
             (score, tier, tier_title, factor_breakdown)
+
+    未知輸入 (vts_ratio / fear_greed / prob / is_negative_gamma 為 None) 不計分、
+    顯示「資料不足」。分數因而只是下限：若把未知因子全部計入後可能落入更高
+    分級，且已知分數僅為 NORMAL，回傳 tier="UNKNOWN" (不得宣稱常態)，讓
+    PYRAMID_ADD 等以 NORMAL 為放行條件的閘門 fail-closed。
     """
+    safe_prob: Optional[float]
     try:
-        safe_prob = float(prob) if prob is not None else 0.50
+        safe_prob = float(prob) if prob is not None else None
     except (ValueError, TypeError):
-        safe_prob = 0.50
+        safe_prob = None
 
     score = 0
+    unknown_factors = 0
     factor_breakdown: list[tuple[str, str]] = []
+    unknown_val = "\u001b[1;33m⚪ 資料不足 (不計分)\u001b[0m"
 
     # Factor 1: VIX 期限結構逆價差
-    if vts_ratio >= 1.0:
+    if vts_ratio is None:
+        unknown_factors += 1
+        f1_val = unknown_val
+    elif vts_ratio >= 1.0:
         score += 1
         f1_val = f"\u001b[1;31m🚨 期限倒掛 (VTS: {vts_ratio:.3f})\u001b[0m"
     else:
@@ -1086,7 +1182,10 @@ def evaluate_macro_top_escape_score(
     factor_breakdown.append(("VIX 期限結構逆價差", f1_val))
 
     # Factor 2: Fear & Greed 極度貪婪
-    if fear_greed >= _FEAR_GREED_EXTREME_GREED_BOUND:
+    if fear_greed is None:
+        unknown_factors += 1
+        f2_val = unknown_val
+    elif fear_greed >= _FEAR_GREED_EXTREME_GREED_BOUND:
         score += 1
         f2_val = f"\u001b[1;31m🚨 極度貪婪 (F&G: {fear_greed:.0f})\u001b[0m"
     else:
@@ -1094,7 +1193,10 @@ def evaluate_macro_top_escape_score(
     factor_breakdown.append(("市場情緒 (Fear & Greed)", f2_val))
 
     # Factor 3: FedWatch 鷹派傾向分數過高
-    if safe_prob > 0.70:
+    if safe_prob is None:
+        unknown_factors += 1
+        f3_val = unknown_val
+    elif safe_prob > 0.70:
         score += 1
         f3_val = f"\u001b[1;31m🚨 鷹派傾向偏高 ({safe_prob * 100:.1f}%)\u001b[0m"
     else:
@@ -1102,7 +1204,10 @@ def evaluate_macro_top_escape_score(
     factor_breakdown.append(("FOMC 鷹派傾向分數 (FedWatch)", f3_val))
 
     # Factor 4: 大盤負 Gamma 狀態
-    if is_negative_gamma:
+    if is_negative_gamma is None:
+        unknown_factors += 1
+        f4_val = unknown_val
+    elif is_negative_gamma:
         score += 1
         f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
     else:
@@ -1137,5 +1242,13 @@ def evaluate_macro_top_escape_score(
     else:
         tier = "NORMAL"
         tier_title = "🟢 常態 (Normal)"
+
+    if (
+        tier == "NORMAL"
+        and unknown_factors > 0
+        and score + unknown_factors >= _MACRO_ESCAPE_WATCH_THRESHOLD
+    ):
+        tier = "UNKNOWN"
+        tier_title = "⚪ 資料不足 (Insufficient Data)"
 
     return score, tier, tier_title, factor_breakdown

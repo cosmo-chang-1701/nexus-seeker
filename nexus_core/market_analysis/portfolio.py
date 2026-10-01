@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, Optional
 from services import market_data_service
 from services.market_data_service import get_option_chain
 from database.connection import execute_write_many_async
@@ -8,10 +8,14 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict
 from .greeks import calculate_greeks
+from .option_quote import resolve_option_mid
+import market_time
 
 from .risk_engine import (
     evaluate_defense_status as evaluate_defense_status_core,
-    calculate_beta,
+    BETA_HISTORY_PERIOD,
+    calculate_beta,  # noqa: F401  (re-export：reports.py 等既有匯入路徑)
+    calculate_beta_strict,
     get_macro_risk_metrics as get_macro_risk_metrics_core,
     analyze_sector_correlation as analyze_sector_correlation_core,
 )
@@ -46,10 +50,16 @@ class PortfolioStatusOrchestrator:
     def __init__(self, user_capital: float):
         self.user_capital = user_capital
         self.today = datetime.now().date()
-        self.spy_price = 500.0
+        # SPY 現價未知時為 None（不再以 500 冒充）：Beta-Delta 無法換算，
+        # 報告標示「資料不足」。
+        self.spy_price: Optional[float] = None
         self.spy_hist = pd.DataFrame()
         self.stock_hist_map: Dict[str, pd.DataFrame] = {}
         self.report_lines: List[str] = []
+        # 資料品質旗標：於報告尾端彙總標示。
+        self.beta_estimated_symbols: List[str] = []
+        self.dividend_unknown_symbols: List[str] = []
+        self.missing_quote_contracts: List[str] = []
 
         self.total_beta_delta = 0.0
         self.total_theta = 0.0
@@ -77,12 +87,17 @@ class PortfolioStatusOrchestrator:
         return self.report_lines
 
     async def _prepare_market_data(self, portfolio_rows: Any) -> None:
-        """下載所有必要的行情資料。"""
+        """下載所有必要的行情資料。
+
+        Beta 需要 >= 90 個交易日的日線 (BETA_HISTORY_PERIOD = 1y)；過去的
+        "90d" 只有約 62 根，扣除缺值後常落到 60 筆門檻以下，Beta 被靜默設為 1.0。
+        """
         unique_symbols = sorted(list(set([row[0] for row in portfolio_rows])))
         all_targets = unique_symbols + ["SPY"]
 
         tasks = {
-            sym: market_data_service.get_history_df(sym, "90d") for sym in all_targets
+            sym: market_data_service.get_history_df(sym, BETA_HISTORY_PERIOD)
+            for sym in all_targets
         }
         results = await asyncio.gather(*tasks.values())
 
@@ -91,9 +106,23 @@ class PortfolioStatusOrchestrator:
                 continue
             if sym == "SPY":
                 self.spy_hist = df
-                self.spy_price = df["Close"].iloc[-1]
+                self.spy_price = float(df["Close"].iloc[-1])
             else:
                 self.stock_hist_map[sym] = df
+
+        # 盤後以即時報價為準 (16:15 後即為當日收盤)；抓不到才沿用日線收盤。
+        try:
+            spy_quote = await market_data_service.get_quote("SPY")
+            spy_live = float(spy_quote.get("c") or 0.0) if spy_quote else 0.0
+            if spy_live > 0:
+                self.spy_price = spy_live
+        except Exception as e:
+            logger.debug(f"盤後報告 SPY 即時報價抓取失敗，沿用日線收盤: {e}")
+
+    def _weight_factor(self, beta: float, stock_price: float) -> Optional[float]:
+        if self.spy_price is None or self.spy_price <= 0:
+            return None
+        return beta * (stock_price / self.spy_price)
 
     async def _process_symbol_positions(self, symbol: Any, rows: Any):  # type: ignore
         """處理單一標下的所有持倉。"""
@@ -113,8 +142,15 @@ class PortfolioStatusOrchestrator:
                 )
             except Exception as e:
                 logger.error(f"獲取 {symbol} IV指標失敗: {e}")
+            # IVR 未知時為 None → 報告顯示 `--`（過去顯示 0.0%）。
+            iv_rank_val: Optional[float] = (
+                iv_metrics.iv_rank
+                if (iv_metrics and iv_metrics.iv_rank is not None)
+                else None
+            )
 
             option_chains_cache = {}
+            weight_factor = self._weight_factor(beta, current_stock_price)
 
             for row in rows:
                 _, opt_type, strike, expiry, entry_price, quantity, stock_cost, *_ = row
@@ -124,21 +160,24 @@ class PortfolioStatusOrchestrator:
                     current_price = current_stock_price
                     # 空頭現貨 (quantity < 0) 的損益方向相反：價格下跌才是獲利。
                     # 與下方選擇權分支既有的空頭 P&L 反轉處理對稱。
-                    if entry_price > 0:
-                        pnl_pct = (
+                    stock_pnl: Optional[float]
+                    if entry_price > 0 and current_price > 0:
+                        stock_pnl = (
                             (entry_price - current_price) / entry_price
                             if quantity < 0
                             else (current_price - entry_price) / entry_price
                         )
+                    elif entry_price > 0:
+                        stock_pnl = None  # 現價未知
                     else:
-                        pnl_pct = 0.0
-                    weight_factor = (
-                        beta * (current_stock_price / self.spy_price)
-                        if self.spy_price > 0
-                        else 0.0
+                        stock_pnl = 0.0
+                    stock_weighted_delta: Optional[float] = (
+                        (quantity / 100.0) * 100 * weight_factor
+                        if weight_factor is not None
+                        else None
                     )
-                    spx_weighted_delta = (quantity / 100.0) * 100 * weight_factor
-                    self.total_beta_delta += spx_weighted_delta
+                    if stock_weighted_delta is not None:
+                        self.total_beta_delta += float(stock_weighted_delta)
                     # 空頭現貨佔用 Reg-T 初始保證金；多頭回傳 0.0。不計入的話
                     # 一個純空頭帳戶的 portfolio_heat 會顯示 0%，使 30%/50% 的
                     # 熱度煞車完全失效。
@@ -158,16 +197,14 @@ class PortfolioStatusOrchestrator:
                             "stock",
                             "",
                             entry_price,
-                            current_price,
-                            pnl_pct,
+                            current_price if current_price > 0 else None,
+                            stock_pnl,
                             0,
-                            spx_weighted_delta,
+                            stock_weighted_delta,
                             "HOLD",
                             quantity=quantity,
-                            iv=0.0,
-                            iv_rank=iv_metrics.iv_rank
-                            if (iv_metrics and iv_metrics.iv_rank is not None)
-                            else 0.0,
+                            iv=None,
+                            iv_rank=iv_rank_val,
                         )
                     )
                     continue
@@ -188,15 +225,22 @@ class PortfolioStatusOrchestrator:
 
                 if chain_data.empty:
                     continue
-                contract = chain_data[chain_data["strike"] == strike]
+                contract = chain_data[(chain_data["strike"] - strike).abs() < 0.01]
                 if contract.empty:
                     continue
 
-                current_price = contract["lastPrice"].iloc[0]
-                iv = contract["impliedVolatility"].iloc[0]
+                c_row = contract.iloc[0]
+                # 現價一律用 bid/ask 中間價 (與 get_option_chain_mid_iv 同一規則)，
+                # 不再用可能是數日前成交的 lastPrice。
+                mid, quote_source = resolve_option_mid(
+                    c_row.get("bid", 0.0), c_row.get("ask", 0.0)
+                )
+                current_opt_price: Optional[float] = mid if mid > 0 else None
+                price_note = " (ask/2 估)" if quote_source == "ASK_HALF" else ""
+                iv = float(c_row.get("impliedVolatility", 0.0) or 0.0)
 
-                exp_date = datetime.strptime(expiry, "%Y-%m-%d").date()
-                t_years = max((exp_date - self.today).days, 1) / 365.0
+                dte_days = market_time.days_to_expiry_et(expiry)
+                t_years = market_time.years_to_expiry(expiry)
 
                 greeks = calculate_greeks(
                     opt_type, current_stock_price, strike, t_years, iv, dividend_yield
@@ -205,39 +249,47 @@ class PortfolioStatusOrchestrator:
                     opt_type,
                     strike,
                     current_stock_price,
-                    current_price,
+                    current_opt_price if current_opt_price is not None else 0.0,
                     quantity,
                     stock_cost,
                 )
                 self.total_margin_used += margin
 
-                weight_factor = beta * (current_stock_price / self.spy_price)
-                spx_weighted_delta = greeks["delta"] * quantity * 100 * weight_factor
-                self.total_beta_delta += spx_weighted_delta
+                spx_weighted_delta: Optional[float] = None
+                if weight_factor is not None:
+                    opt_weighted_delta: float = (
+                        greeks["delta"] * quantity * 100 * weight_factor
+                    )
+                    spx_weighted_delta = opt_weighted_delta
+                    self.total_beta_delta += opt_weighted_delta
+                    pos_gamma = greeks["gamma"] * quantity * 100
+                    self.total_gamma += pos_gamma * (weight_factor**2)
+                    # Vega & Vanna
+                    self.total_vega += greeks["vega"] * quantity * 100 * weight_factor
+                    self.total_vanna += greeks["vanna"] * quantity * 100 * weight_factor
 
-                # py_vollib theta is Annual. Convert to Daily.
-                daily_theta = (greeks["theta"] * quantity * 100) / 365.0
+                # py_vollib 的 analytical theta 已是「每日」值 (原始碼內已除以
+                # 365)，不可再除一次——過去重複除 365 使 Theta 被縮小 365 倍。
+                daily_theta = greeks["theta"] * quantity * 100
                 self.total_theta += daily_theta
 
-                pos_gamma = greeks["gamma"] * quantity * 100
-                spx_weighted_gamma = pos_gamma * (weight_factor**2)
-                self.total_gamma += spx_weighted_gamma
-
-                # Vega & Vanna
-                self.total_vega += greeks["vega"] * quantity * 100 * weight_factor
-                self.total_vanna += greeks["vanna"] * quantity * 100 * weight_factor
-
-                pnl_pct = (
-                    (entry_price - current_price) / entry_price
-                    if quantity < 0
-                    else (current_price - entry_price) / entry_price
-                )
-                status = evaluate_defense_status_core(
-                    quantity,
-                    opt_type,
-                    pnl_pct,
-                    greeks["delta"],
-                    (exp_date - self.today).days,
+                pnl_pct: Optional[float] = None
+                if current_opt_price is not None and entry_price > 0:
+                    pnl_pct = (
+                        (entry_price - current_opt_price) / entry_price
+                        if quantity < 0
+                        else (current_opt_price - entry_price) / entry_price
+                    )
+                else:
+                    self.missing_quote_contracts.append(
+                        f"{symbol} {expiry} {strike}{str(opt_type)[:1].upper()}"
+                    )
+                status = (
+                    evaluate_defense_status_core(
+                        quantity, opt_type, pnl_pct, greeks["delta"], dte_days
+                    )
+                    if pnl_pct is not None
+                    else "⚪ 報價缺失，暫不評估"
                 )
                 cc_tag = " 🛡️(CC)" if (opt_type == "call" and stock_cost > 0.0) else ""
 
@@ -249,61 +301,101 @@ class PortfolioStatusOrchestrator:
                         opt_type,
                         cc_tag,
                         entry_price,
-                        current_price,
+                        current_opt_price,
                         pnl_pct,
-                        (exp_date - self.today).days,
+                        dte_days,
                         spx_weighted_delta,
                         status,
                         quantity=quantity,
-                        iv=iv if iv is not None else 0.0,
-                        iv_rank=iv_metrics.iv_rank
-                        if (iv_metrics and iv_metrics.iv_rank is not None)
-                        else 0.0,
+                        iv=iv,
+                        iv_rank=iv_rank_val,
+                        price_note=price_note,
                     )
                 )
         except Exception as e:
             logger.error(f"Symbol {symbol} 處理失敗: {e}", exc_info=True)
 
     async def _get_stock_info(self, symbol: str, stock_hist: Any) -> Any:
-        """獲取標的價格、Beta 與股息率。"""
+        """獲取標的價格、Beta 與股息率。
+
+        Beta 算不出來 (資料不足) 時以 1.0 估算並記入 beta_estimated_symbols；
+        股息率未知時以 0.0 計算並記入 dividend_unknown_symbols——兩者都在報告
+        尾端標示，不再默默冒充真實值 (過去 ETF 股息率一律寫死 1.5%)。
+        """
+        price = 0.0
         try:
             quote = await market_data_service.get_quote(symbol)
-            price = quote.get("c", 0.0) if quote else 0.0
-            if price is None or price <= 0:
-                price = stock_hist["Close"].iloc[-1] if not stock_hist.empty else 0.0
+            price = float(quote.get("c", 0.0) or 0.0) if quote else 0.0
+        except Exception as e:
+            logger.debug(f"[{symbol}] 即時報價抓取失敗: {e}")
+        if price <= 0 and not stock_hist.empty:
+            price = float(stock_hist["Close"].iloc[-1])
 
-            is_etf_flag = await market_data_service.is_etf(symbol)
-            if is_etf_flag:
-                dividend_yield = 0.015
-            else:
-                dividend_yield = await market_data_service.get_dividend_yield(symbol)
-
-            if symbol.upper() == "BOXX":
-                beta_val = 0.0
-            elif not self.spy_hist.empty and not stock_hist.empty:
-                beta_val = calculate_beta(stock_hist, self.spy_hist)
-            else:
-                beta_val = 1.0
-
+        try:
+            dividend_val = await market_data_service.get_dividend_yield_strict(symbol)
         except Exception:
-            price = stock_hist["Close"].iloc[-1] if not stock_hist.empty else 0.0
-            dividend_yield, beta_val = 0.0, 1.0
+            dividend_val = None
+        if dividend_val is None:
+            self.dividend_unknown_symbols.append(symbol)
+            dividend_yield = 0.0
+        else:
+            dividend_yield = dividend_val
+
+        if symbol.upper() == "BOXX":
+            beta_val = 0.0
+        else:
+            beta_strict = calculate_beta_strict(stock_hist, self.spy_hist)
+            if beta_strict is None:
+                self.beta_estimated_symbols.append(symbol)
+                beta_val = 1.0
+            else:
+                beta_val = beta_strict
 
         return {"price": price, "dividend_yield": dividend_yield, "beta": beta_val}
 
     async def _append_final_reports(self, positions_by_symbol: Any):  # type: ignore
         """追加宏觀風險與相關性報告。"""
-        metrics = get_macro_risk_metrics_core(
-            self.total_beta_delta,
-            self.total_theta,
-            self.total_margin_used,
-            self.total_gamma,
-            self.user_capital,
-            self.spy_price,
-            total_vega=self.total_vega,
-            total_vanna=self.total_vanna,
-        )
-        self.report_lines.extend(format_macro_risk_report_core(metrics, self.spy_price))
+        if self.spy_price is None or self.spy_price <= 0:
+            self.report_lines.append(
+                "⚠️ **SPY 現價資料不足**：無法換算 Beta-Delta 曝險，本次略過宏觀風險報告。\n"
+            )
+        else:
+            metrics = get_macro_risk_metrics_core(
+                self.total_beta_delta,
+                self.total_theta,
+                self.total_margin_used,
+                self.total_gamma,
+                self.user_capital,
+                self.spy_price,
+                total_vega=self.total_vega,
+                total_vanna=self.total_vanna,
+            )
+            self.report_lines.extend(
+                format_macro_risk_report_core(metrics, self.spy_price)
+            )
+
+        quality_notes: List[str] = []
+        if self.missing_quote_contracts:
+            quality_notes.append(
+                "報價缺失 (未計入損益)："
+                + "、".join(sorted(set(self.missing_quote_contracts)))
+            )
+        if self.beta_estimated_symbols:
+            quality_notes.append(
+                "Beta 資料不足 (暫以 1.0 估算)："
+                + "、".join(sorted(set(self.beta_estimated_symbols)))
+            )
+        if self.dividend_unknown_symbols:
+            quality_notes.append(
+                "股息率未知 (Greeks 以 0% 計算)："
+                + "、".join(sorted(set(self.dividend_unknown_symbols)))
+            )
+        if quality_notes:
+            self.report_lines.append(
+                "⚠️ **資料品質提示**\n"
+                + "\n".join(f" └─ {n}" for n in quality_notes)
+                + "\n"
+            )
 
         symbols = list(positions_by_symbol.keys())
         high_corr_pairs = await analyze_sector_correlation_core(symbols)
@@ -318,6 +410,11 @@ async def refresh_portfolio_greeks(
     """
     [Unified Asset Lifecycle] 重新整理 Assets 表中所有資產的希臘字母數據。
     包含：TRADE (期權) 與 HOLDING (現貨)。
+
+    - Beta 以 1y 日線計算 (過去用 5d，Beta 永遠是 1.0)；算不出來時以 1.0 估算
+      並在 metadata 寫入 `beta_estimated=True`。
+    - SPY 現價未知時不更新任何 weighted_delta (不再以 670 冒充)。
+    - 期權報價或 IV 失敗時不再保留舊 Greeks 而無標示：寫入 `greeks_stale=True`。
     """
     try:
         from services.asset_manager import AssetManager
@@ -357,23 +454,40 @@ async def refresh_portfolio_greeks(
         if not unique_symbols:
             return
 
-        spy_df = await market_data_service.get_history_df("SPY", "5d")
-        spy_price = spy_df["Close"].iloc[-1] if not spy_df.empty else 670.0
+        spy_df = await market_data_service.get_history_df("SPY", BETA_HISTORY_PERIOD)
+        spy_price: Optional[float] = None
+        try:
+            spy_quote = await market_data_service.get_quote("SPY")
+            spy_live = float(spy_quote.get("c") or 0.0) if spy_quote else 0.0
+            if spy_live > 0:
+                spy_price = spy_live
+        except Exception as e:
+            logger.debug(f"refresh_portfolio_greeks SPY 報價失敗: {e}")
+        if spy_price is None and not spy_df.empty:
+            spy_price = float(spy_df["Close"].iloc[-1])
+        if spy_price is None or spy_price <= 0:
+            logger.warning(
+                "refresh_portfolio_greeks：SPY 現價未知，略過本輪 Greeks 更新 (不以 670 冒充)"
+            )
+            return
 
-        stock_data = {}
+        stock_data: Dict[str, Dict[str, Any]] = {}
         for sym in unique_symbols:
-            df = await market_data_service.get_history_df(sym, "5d")
+            df = await market_data_service.get_history_df(sym, BETA_HISTORY_PERIOD)
             quote = await market_data_service.get_quote(sym)
+            price = float(quote.get("c") or 0.0) if quote else 0.0
+            if price <= 0 and not df.empty:
+                price = float(df["Close"].iloc[-1])
+            if sym.upper() == "BOXX":
+                beta_val: Optional[float] = 0.0
+            else:
+                beta_val = calculate_beta_strict(df, spy_df)
+            div_val = await market_data_service.get_dividend_yield_strict(sym)
             stock_data[sym] = {
-                "price": quote.get("c", df["Close"].iloc[-1] if not df.empty else 0.0),
-                "beta": 0.0
-                if sym.upper() == "BOXX"
-                else (
-                    calculate_beta(df, spy_df)
-                    if not df.empty and not spy_df.empty
-                    else 1.0
-                ),
-                "div_yield": await market_data_service.get_dividend_yield(sym),
+                "price": price,
+                "beta": 1.0 if beta_val is None else beta_val,
+                "beta_estimated": beta_val is None,
+                "div_yield": 0.0 if div_val is None else div_val,
             }
 
         # 🚀 構建 HOLDING 現貨成本 Map
@@ -410,41 +524,33 @@ async def refresh_portfolio_greeks(
                     trade_meta.opt_type,
                 )
 
+                t_years = market_time.years_to_expiry(trade_meta.expiry)
                 iv = iv_raw
                 if iv <= 0.001 and mid > 0:
                     try:
-                        exp_date = datetime.strptime(
-                            trade_meta.expiry, "%Y-%m-%d"
-                        ).date()
-                        t_years = (
-                            max((exp_date - datetime.now().date()).days, 1) / 365.0
-                        )
                         from config import RISK_FREE_RATE
 
+                        # py_vollib BSM 簽名為 (price, S, K, t, r, q, flag)；過去
+                        # 漏傳 q，flag 落到 q 的位置而永遠拋例外，IV 反推從未成功。
                         iv = implied_volatility(
                             mid,
                             s_info["price"],
                             trade_meta.strike,
                             t_years,
                             RISK_FREE_RATE,
+                            s_info["div_yield"],
                             trade_meta.opt_type[0],
                         )
-                    except Exception:
+                    except Exception as e:
+                        logger.warning(f"[{asset.symbol}] IV 反推失敗 (mid={mid}): {e}")
                         iv = iv_raw
 
                 if iv <= 0:
+                    # 報價/IV 皆不可得：保留舊 Greeks 但明確標示過期。
+                    trade_meta.greeks_stale = True
+                    pending_updates.append((trade_meta.model_dump_json(), asset.id))
                     continue
 
-                t_years = (
-                    max(
-                        (
-                            datetime.strptime(trade_meta.expiry, "%Y-%m-%d").date()
-                            - datetime.now().date()
-                        ).days,
-                        1,
-                    )
-                    / 365.0
-                )
                 greeks = calculate_greeks(
                     trade_meta.opt_type,
                     s_info["price"],
@@ -458,6 +564,7 @@ async def refresh_portfolio_greeks(
                 trade_meta.weighted_delta = round(
                     greeks["delta"] * trade_meta.quantity * 100 * weight_factor, 4
                 )
+                # 每部位每日 Theta (vollib theta 已是每日值)。
                 trade_meta.theta = round(greeks["theta"] * trade_meta.quantity * 100, 4)
                 trade_meta.gamma = round(
                     greeks["gamma"] * trade_meta.quantity * 100 * (weight_factor**2),
@@ -469,6 +576,8 @@ async def refresh_portfolio_greeks(
                 trade_meta.vanna = round(
                     greeks["vanna"] * trade_meta.quantity * 100 * weight_factor, 4
                 )
+                trade_meta.greeks_stale = False
+                trade_meta.beta_estimated = bool(s_info["beta_estimated"])
 
                 pending_updates.append((trade_meta.model_dump_json(), asset.id))
 
@@ -478,6 +587,7 @@ async def refresh_portfolio_greeks(
                 holding_meta.weighted_delta = round(
                     1.0 * holding_meta.quantity * weight_factor, 4
                 )
+                holding_meta.beta_estimated = bool(s_info["beta_estimated"])
                 pending_updates.append((holding_meta.model_dump_json(), asset.id))
 
         if pending_updates:
@@ -495,27 +605,45 @@ async def refresh_portfolio_greeks(
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)
 
 
-async def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_type: Any):  # type: ignore
-    """回傳 (mid, iv, bid, ask)。bid/ask 為合約原始報價 (供流動性點差判斷用，
-    非 mid)；找不到匹配合約或例外時全部回傳 0.0。"""
+async def get_option_chain_quote(
+    symbol: Any, expiry: Any, strike: Any, opt_type: Any
+) -> Dict[str, Any]:
+    """回傳單一合約報價 `{mid, iv, bid, ask, source}`。
+
+    source 為 "MID" | "ASK_HALF" | "MISSING"（見 resolve_option_mid）；找不到
+    合約或例外時 mid=0.0、source="MISSING"。
+    """
+    missing: Dict[str, Any] = {
+        "mid": 0.0,
+        "iv": 0.0,
+        "bid": 0.0,
+        "ask": 0.0,
+        "source": "MISSING",
+    }
     try:
         opt_chain = await get_option_chain(symbol, expiry, prune_pct=None)
         if opt_chain is None:
-            return 0.0, 0.0, 0.0, 0.0
+            return missing
         chain = opt_chain.calls if opt_type == "call" else opt_chain.puts
         # 彈性匹配：尋找最接近的履約價 (防止浮點數誤差)
         contract = chain[(chain["strike"] - strike).abs() < 0.01]
 
         if not contract.empty:
             c = contract.iloc[0]
-            bid = c.get("bid", 0.0)
-            ask = c.get("ask", 0.0)
-            last = c.get("lastPrice", 0.0)
-
-            # 優先使用 Mid，若無報價使用 Last
-            mid = (bid + ask) / 2 if (bid > 0 and ask > 0) else last
-            iv = c.get("impliedVolatility", 0.0)
-            return mid, iv, bid, ask
+            bid = float(c.get("bid", 0.0) or 0.0)
+            ask = float(c.get("ask", 0.0) or 0.0)
+            mid, source = resolve_option_mid(bid, ask)
+            iv = float(c.get("impliedVolatility", 0.0) or 0.0)
+            return {"mid": mid, "iv": iv, "bid": bid, "ask": ask, "source": source}
     except Exception as e:
-        logger.debug(f"get_option_chain_mid_iv 異常: {e}")
-    return 0.0, 0.0, 0.0, 0.0
+        logger.debug(f"get_option_chain_quote 異常: {e}")
+    return missing
+
+
+async def get_option_chain_mid_iv(symbol: Any, expiry: Any, strike: Any, opt_type: Any):  # type: ignore
+    """回傳 (mid, iv, bid, ask)。bid/ask 為合約原始報價 (供流動性點差判斷用，
+    非 mid)；找不到匹配合約、報價缺失或例外時 mid=0.0——呼叫端必須把
+    mid<=0 視為「報價缺失」而非價格 0。需要報價來源 (ask/2 估) 時改用
+    get_option_chain_quote()。"""
+    q = await get_option_chain_quote(symbol, expiry, strike, opt_type)
+    return q["mid"], q["iv"], q["bid"], q["ask"]

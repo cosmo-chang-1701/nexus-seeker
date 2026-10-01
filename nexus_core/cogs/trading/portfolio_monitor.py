@@ -94,7 +94,7 @@ class PortfolioMonitorCog(commands.Cog):
             "spot_price": 0.0,
             "price_15m_close": 0.0,
             "price_15m_open": 0.0,
-            "ivr": 0.0,
+            "ivr": None,
             "ivr_drop": 0.0,
             "max_pain": 0.0,
             "put_wall": 0.0,
@@ -120,24 +120,27 @@ class PortfolioMonitorCog(commands.Cog):
         if not r_data:
             return fallback_metrics
         try:
-            # 追蹤 IVR 變動量 (供期權快速通道偵測 IV 崩塌)
-            curr_ivr = float(
-                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
-                if r_data.get("iv_metrics")
-                else 0.0
+            # 追蹤 IVR 變動量 (供期權快速通道偵測 IV 崩塌)。IVR 未知時為 None：
+            # 過去 radar slow path 把未知 IVR 存成 0.0，前值 60 → 本輪「0.0」會被
+            # 判成 IVR 驟降 60 點 (IV 崩塌快速出場)。未知時不計算 ivr_drop，也
+            # 不覆寫前值快取。
+            _ivr_raw = (r_data.get("iv_metrics") or {}).get("iv_rank")
+            curr_ivr: Optional[float] = (
+                float(_ivr_raw) if _ivr_raw is not None else None
             )
             ivr_drop_val = 0.0
-            try:
-                from database.cache import get_kv_cache, save_kv_cache
+            if curr_ivr is not None:
+                try:
+                    from database.cache import get_kv_cache, save_kv_cache
 
-                prev_ivr_val = get_kv_cache(f"prev_ivr_{sym.upper()}")
-                if prev_ivr_val is not None:
-                    prev_ivr = float(prev_ivr_val)
-                    if prev_ivr > curr_ivr:
-                        ivr_drop_val = prev_ivr - curr_ivr
-                await save_kv_cache(f"prev_ivr_{sym.upper()}", curr_ivr)
-            except Exception:
-                pass
+                    prev_ivr_val = get_kv_cache(f"prev_ivr_{sym.upper()}")
+                    if prev_ivr_val is not None:
+                        prev_ivr = float(prev_ivr_val)
+                        if prev_ivr > curr_ivr:
+                            ivr_drop_val = prev_ivr - curr_ivr
+                    await save_kv_cache(f"prev_ivr_{sym.upper()}", curr_ivr)
+                except Exception:
+                    pass
 
             atr_val = float(r_data.get("atr_14", 0.0))
             atr_15m_val = float(r_data.get("atr_15m", 0.0))
@@ -222,8 +225,12 @@ class PortfolioMonitorCog(commands.Cog):
                 if isinstance(raw_max_pain, dict)
                 else (float(raw_max_pain) if raw_max_pain else 0.0)
             )
-            raw_dte = r_data.get("nearest_dte")
-            dte_val = int(raw_dte) if raw_dte is not None else 99
+            # 標的層級快照不帶 DTE：radar 的 `nearest_dte` 是「該標的最近一個
+            # 到期日」(SPY 等每日到期標的恆為 0)，不是任何一張持倉合約的到期日。
+            # 過去把它當成部位 DTE，使長天期期權落入 dte<=1 的強制結算保護、
+            # 現貨部位誤觸 TP3 (dte<=5)。現貨無到期概念維持 99；期權部位的 DTE
+            # 一律由 _build_option_asset_entry 依合約自身 expiry 計算。
+            dte_val = 99
 
             prev_call_wall_val = float(
                 r_data.get("previous_call_wall")
@@ -368,6 +375,14 @@ class PortfolioMonitorCog(commands.Cog):
         """
         delta_val: Optional[float] = None
         spot_price = float(metrics.get("spot_price", 0.0))
+        # 合約自身的 DTE（ET 日期差）。expiry 缺失/格式錯誤時退回 99
+        # (NORMAL_EXECUTION)——不可沿用標的層級 metrics["dte"]。
+        contract_dte = 99
+        if expiry is not None:
+            try:
+                contract_dte = market_time.days_to_expiry_et(expiry)
+            except (TypeError, ValueError) as e:
+                logger.warning(f"[{opt_sym}] 合約到期日 {expiry!r} 解析失敗: {e}")
         if (
             strike is not None
             and expiry is not None
@@ -377,13 +392,9 @@ class PortfolioMonitorCog(commands.Cog):
             and float(strike) > 0
         ):
             try:
-                from datetime import date, datetime
-
                 from market_analysis.greeks import calculate_greeks
 
-                exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
-                dte_days = max((exp_dt - date.today()).days, 0.5)
-                t_years = dte_days / 365.0
+                t_years = market_time.years_to_expiry(expiry)
                 greeks = calculate_greeks(
                     str(opt_type).lower(), spot_price, float(strike), t_years, iv, 0.0
                 )
@@ -419,7 +430,7 @@ class PortfolioMonitorCog(commands.Cog):
             "atr_15m": metrics.get("atr_15m", 0.0),
             "hvn": metrics.get("hvn", 0.0),
             "lvn": metrics.get("lvn", 0.0),
-            "dte": metrics.get("dte", 99),
+            "dte": contract_dte,
             "iv_term_structure_status": metrics.get("iv_term_structure_status"),
             "gex_profile_data": r_data.get("gex_profile_data", {}) if r_data else {},
             "avg_cost": 0.0,
@@ -685,10 +696,12 @@ class PortfolioMonitorCog(commands.Cog):
                         # 檢查雷達數據，若符合強勢多頭+低IV+強支撐條件則阻斷
                         r_data = radar_cache_map.get(sym)
                         if r_data:
-                            ivr = float(
-                                r_data.get("iv_metrics", {}).get("iv_rank", 0.0)
-                                if r_data.get("iv_metrics")
-                                else 0.0
+                            # IVR 未知 (None) 時不可當成 0 而觸發「零溢價」阻斷。
+                            _cc_ivr_raw = (r_data.get("iv_metrics") or {}).get(
+                                "iv_rank"
+                            )
+                            ivr: Optional[float] = (
+                                float(_cc_ivr_raw) if _cc_ivr_raw is not None else None
                             )
                             spot = float(
                                 r_data.get("quote", {}).get("c", 0.0)
@@ -706,7 +719,12 @@ class PortfolioMonitorCog(commands.Cog):
                                 else 0.0
                             )
 
-                            if ivr <= 5.0 and sqz_mom > 10.0 and spot > put_wall:
+                            if (
+                                ivr is not None
+                                and ivr <= 5.0
+                                and sqz_mom > 10.0
+                                and spot > put_wall
+                            ):
                                 logger.info(
                                     f"[{sym}] 處於零溢價與多頭強勢巡航形態 (IVR: {ivr}%, SQZ: {sqz_mom}, Spot: {spot} > PutWall: {put_wall})，拒絕物理死鎖解除與備兌建單。"
                                 )

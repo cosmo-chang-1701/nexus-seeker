@@ -127,7 +127,8 @@ async def _classify_dynamic_regime_impl(
     try:
         macro_regime = await get_market_regime()
     except Exception as e:
-        macro_regime = "NORMAL"
+        # 抓取失敗 = 未知，不再假設 NORMAL (fail-closed：下方視同宏觀鎖定)。
+        macro_regime = "UNKNOWN"
         logger.warning(f"[{candidate_symbol}] Regime 分類器大盤 Regime 抓取失敗: {e}")
 
     # VIX 期限結構深度倒掛：get_market_regime() 的 SHORT_GAMMA_CRITICAL 需同時
@@ -148,9 +149,12 @@ async def _classify_dynamic_regime_impl(
     # SYSTEMIC_LIQUIDITY_CRISIS 同屬「禁止任何開倉」的鎖定情境，比照既有
     # index_microstructure.py 與 Scenario 4 margin_defense.py 對這兩個 regime
     # 一視同仁的既有慣例。
+    # 大盤 Regime 無法判定 (UNKNOWN：VIX/SPY/Gamma Flip 等資料不足) 時同樣
+    # 鎖定：無法排除危機就不開新倉 (fail-closed)。
     is_macro_lockout = macro_regime in (
         "SYSTEMIC_LIQUIDITY_CRISIS",
         "SHORT_GAMMA_CRITICAL",
+        "UNKNOWN",
     )
 
     if is_macro_lockout or is_deep_backwardation:

@@ -238,6 +238,14 @@ if macro_data.vix < 15.0 and intent == "PREMIUM_SELL":
 ```
 此規則直接返回 `suggested_contracts = 0`，防止在低波動死水區過早消耗保證金。
 
+### 5.1a VIX 未知時 fail-closed (Unknown VIX Guard)
+VIX 一律取即時報價（`get_vix_spot_strict()`），抓不到時回傳 `None`，**不再以 $18.0$ 之類的常數冒充**，空 DataFrame 也不寫入 6 小時快取。`get_vix_tier(None)` 仍回傳 Ready 階梯，只供不涉及新曝險的顯示用途；倉位優化器 (`risk_engine.py`) 以 `vix_unknown=True` 明確走 fail-closed：
+- **賣方新倉**（`PREMIUM_SELL`）：一律 $0$ 口，警示「VIX 資料不足：暫停賣方新倉」。
+- **方向性做空**：套用 `SHORT_VIX_UNKNOWN_MULTIPLIER`（$0.5$，見 §2.6）。
+- **做多買方**：風險額度維持 `risk_limit` 基準，不套用任何 $> 1$ 的 VIX 放大乘數。
+
+embed 一律標示「VIX 資料不足」（倉位不放大、賣方新倉暫停），Gamma Squeeze 引擎與大盤 Regime 判定同樣無法確認波動環境時暫停進攻（見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)）。
+
 ### 5.2 賠率為零或為負防護 (Zero or Negative Odds Guard)
 若因為數據延遲或深度價外，期權權利金報價為零（`bid <= 0`）或潛在利潤為負，賠率 $b \le 0$。若直接套入公式將引發除以零錯誤。`risk_engine.py:229` 設置前置防護：
 ```python

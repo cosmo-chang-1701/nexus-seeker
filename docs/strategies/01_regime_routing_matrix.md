@@ -199,7 +199,7 @@ flowchart TD
    **Regime III-B 必須排在 Regime III 之後**：突破當下兩者的條件都會成立，若順序顛倒，帶著更強事件證據的突破態會被降級成放寬態，UOA 時間窗也會被錯誤地套用到突破進場上。III-B 同時排在 Regime IV 個股結構封頂之後——上方沒有空間時，趨勢再完好也不構成進場理由。
 5. **動態門檻的降級是刻意的 fail-open**：15m K 線或 ATR 抓取失敗時，`room_threshold` 自動降級至 $3.5\%$ 絕對底線——比舊版固定 $5\%$ **寬鬆**。這是刻意選擇：資料缺失不應把標的誤鎖進「結構封頂危機態」而連帶封鎖整個動態轉倉引擎。降級狀態會在分類理由字串中以 `⚠️` 明確揭露。
 6. **大盤總經 API 異常防禦**：
-   呼叫 `get_market_regime()` 或 `get_vix_term_structure()` 若遭遇超時或網路例外，日誌發出警告，大盤狀態預設降級為 `"NORMAL"`，VTS Ratio 預設為 `0.0`，由個股微觀結構條件承擔最終風控，避免因外部 API 抖動癱瘓整個排程。
+   `get_market_regime()` 回傳 `SYSTEMIC_LIQUIDITY_CRISIS`／`SHORT_GAMMA_CRITICAL`／`NORMAL`／`UNKNOWN` 四值。VIX、VTS、SPY 現價、Gamma Flip、TED Spread 任一抓不到時**不再補備援常數**（過去補 VIX $18$、VTS $0.95$、SPY $510$、Flip $515$——SPY 實際約 $670$ 時「SPY < Flip」永遠不成立，危機 Regime 永遠不會觸發）。各危機條件以三值邏輯判定：能確定成立 → 對應危機；能確定不成立 → `NORMAL`；無法確定 → `UNKNOWN`。進場確認（條件五）把 `UNKNOWN` 視同無法排除危機，fail-closed 不開新倉、不加碼；排程本身不因外部 API 抖動中斷。
 7. **極端單邊 Gamma 分佈 Fallback**：
    當標的期權分佈極端導致累積 GEX 無零交叉點時（`estimate_symbol_gamma_flip <= 0`），Regime III 與 Regime III-B 的 `Spot > GammaFlip` 判定將無法滿足，系統將自動拒絕兩者並導向後續審查，防止在無法界定 Gamma 翻轉線時進行高風險追漲。
 

@@ -47,9 +47,17 @@ def test_cli_portfolio_integration(db_conn: Any, mock_market_data: Any):  # type
         user_id, "AAPL", "CALL", 150.0, "2036-06-19", 5.0, 1, 0.0, 0.5, -0.1, 0.01
     )
 
-    # Mock 期權價格獲取
-    with patch("market_analysis.portfolio.get_option_chain_mid_iv") as mock_mid:
-        mock_mid.return_value = (6.0, 0.25, 0.0, 0.0)  # mid_price, iv, bid, ask
+    # Mock 期權報價 (服務端改用 get_option_chain_quote 取 bid/ask 中間價)
+    with patch(
+        "market_analysis.portfolio.get_option_chain_quote", new_callable=AsyncMock
+    ) as mock_quote:
+        mock_quote.return_value = {
+            "mid": 6.0,
+            "iv": 0.25,
+            "bid": 5.9,
+            "ask": 6.1,
+            "source": "MID",
+        }
 
         runner = CliRunner()
         result = runner.invoke(

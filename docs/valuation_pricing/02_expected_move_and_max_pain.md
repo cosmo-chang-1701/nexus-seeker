@@ -124,6 +124,7 @@ flowchart TD
 | `spot_deviation_threshold` | `0.02` ($2.0\%$) | 現價相對於快取基準價偏離超過 2% 強制觸發重算 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `cooldown_seconds` | `30.0` 秒 | 短時間內防止高頻重複計算的冷卻窗口 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `circuit_breaker_threshold` | `0.30` ($30.0\%$) | 痛點與現價偏離逾 30% 判定數據污染，啟動自癒斷路 | `nexus_core/market_analysis/sentiment/max_pain.py` |
+| `_SPLIT_ADJUST_LOOKBACK_DAYS` | `30` 天 | 拆股未調整 Strike 校正只採計此窗口內的拆股比率 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `max_expiry_days` | `30` 天 | 痛點與波幅計算嚴格限制在 30 天內合約，逾期阻斷 | `nexus_core/market_analysis/sentiment/max_pain.py` |
 | `straddle_sigma_factor` | $\sqrt{\pi/2} \approx 1.2533$ | ATM Straddle（平均絕對離差）還原為 1-Sigma 預期波幅的係數 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
 | `_STRADDLE_EM_MIN_DTE` / `_STRADDLE_EM_TARGET_DTE` / `_STRADDLE_EM_MAX_DTE` | `2` / `7` / `14` 天 | 跨式到期日選擇範圍與目標：排除 0/1-DTE，取最接近一週者 | `nexus_core/market_analysis/sentiment/iv_metrics.py` |
@@ -159,16 +160,21 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 若 ATM 期權無有效成交價且未提供 Bid/Ask 報價（`call_mid <= 0` 且 `put_mid <= 0`），系統自動跳過 Straddle 計算，平滑切換至 BSM 公式與歷史波動率降級管線，確保不拋出未捕捉異常。
 
 ### 5.4 IV 與跨式 EM 尺度交叉驗證 (Scale Mismatch Guard)
-EM 優先採跨式定價，顯示的 IV 卻來自 `yf.Ticker.info["impliedVolatility"]`，兩者互不驗證時曾出現「IV 6.9%、EM ±12%」這種 10 倍斷層。`fetch_and_calculate_iv_metrics()` 於**寫入 `historical_iv` 之前**以同一個 $\sqrt{7/365}$ 換算反推跨式隱含 IV：
+EM 優先採跨式定價，顯示的 IV 過去來自 `yf.Ticker.info["impliedVolatility"]`（來源不明的定義），兩者互不驗證時曾出現「IV 6.9%、EM ±12%」這種 10 倍斷層；現已統一改用期權鏈加權 ATM IV，尺度檢查保留作為防線。`fetch_and_calculate_iv_metrics()` 於**寫入 `historical_iv` 之前**以同一個 $\sqrt{7/365}$ 換算反推跨式隱含 IV：
 $$\sigma_{\text{straddle}} = \frac{EM_{\text{weekly}}}{S\sqrt{7/365}}$$
 `LIVE_IV` 與 $\sigma_{\text{straddle}}$ 相差超過 `_IV_STRADDLE_SCALE_MISMATCH`（4 倍）即判為尺度錯誤，改用 $\sigma_{\text{straddle}}$ 並設 `iv_scale_corrected`；錯誤值不會寫入 DB 污染 IV Rank。4 倍門檻刻意寬於財報週 2~3 倍的正常事件溢價，實盤觀測到的錯誤值落在 4.6~13 倍。呈現層在 EM 旁並列 `straddle_implied_iv`，讓使用者驗算 EM 時不會誤判數量級。
 
 **後續觀察事項**：
-- **修正頻率**：統計日誌 `判定為尺度錯誤，改用跨式反推值` 的出現比例與標的分布。若大多數標的的盤中 IV 都被修正，代表 `yf.Ticker.info["impliedVolatility"]` 已不可用，應改以既有的加權 ATM IV（`fetch_and_calculate_iv_metrics()` 的第二條即時路徑）為主來源；屆時 `historical_iv` 的序列語意會改變，IV Rank 需標示暖機期。
+- **修正頻率**：統計日誌 `判定為尺度錯誤，改用跨式反推值` 的出現比例與標的分布。IV 來源已改為期權鏈加權 ATM IV，`historical_iv` 隨之整批重建（`v088`，IV Rank 暖機期見 [`04_ivr_regime_and_seller_lockout.md`](04_ivr_regime_and_seller_lockout.md) §5.1）；若加權 IV 仍頻繁被修正，代表期權鏈的 `impliedVolatility` 欄位本身失真。
 - **4 倍門檻**：若出現被修正、但人工核對後屬於正常事件溢價的案例（財報週的週度 IV 超過 30D IV 的 4 倍），需重新檢討 `_IV_STRADDLE_SCALE_MISMATCH`。
 
 ### 5.5 財報日與期限結構近月的相對位置
 「臨近財報」只代表 14 天內有財報；若財報日**晚於**期限結構近月到期日（`_select_term_expiries()` 選出的 5~20 DTE 合約），近月 IV 本就不含事件溢價，Contango 與財報警告並存並不矛盾。`earnings_after_near_term` 據此讓呈現層改寫文案；「快取波動率可能低估」只在 `STORED_IV`／`HV_PROXY` 時出現。期限結構 0.95~1.05 為刻意死區，標示為「持平 (Flat)」而非「正常」。
+
+### 5.6 拆股未調整 Strike 校正只採計近期拆股
+OCC 在拆股生效時會調整既有合約，鏈上出現未調整的 Strike 只會是拆股前後數據源尚未同步的短暫窗口。`calculate_max_pain()` 只以近 `_SPLIT_ADJUST_LOOKBACK_DAYS`（30）日內的拆股比率乘積校正偏離現價 2 倍以上的 Strike（並放大對應 OI／成交量）：
+$$F_{\text{split}} = \prod_{i:\ t_i \ge t_{\text{now}} - 30\text{d}} r_i$$
+過去使用「所有歷史拆股比率的乘積」，對多次拆股的標的（例如乘積 224）幾乎不會觸發；對只拆過一次的標的，則會把崩跌股殘留的深度價外 Strike 以多年前的因子搬進價平區並放大 OI，扭曲 Max Pain。
 
 ---
 

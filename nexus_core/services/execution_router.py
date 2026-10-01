@@ -71,8 +71,13 @@ class ExecutionRouter:
 
             # ━━━ 微觀背離防護攔截 (Micro-Divergence Gate) ━━━
             sqz_mom = getattr(condition, "sqz_mom", 0.0) or 0.0
-            skew_percentile = getattr(condition, "skew_percentile", 50.0) or 50.0
-            if sqz_mom > 0 and skew_percentile >= SKEW_DIVERGENCE_HIGH_PERCENTILE:
+            # 分位未知 (None) 時跳過此閘門，不補 50 冒充中性。
+            skew_percentile = getattr(condition, "skew_percentile", None)
+            if (
+                sqz_mom > 0
+                and skew_percentile is not None
+                and skew_percentile >= SKEW_DIVERGENCE_HIGH_PERCENTILE
+            ):
                 logger.warning(
                     f"Micro-Divergence Gate 觸發 (SQZ={sqz_mom:.2f}, Skew_Pct={skew_percentile:.1f}%): "
                     f"散戶追高/機構買 Put 防禦之偽突破。"

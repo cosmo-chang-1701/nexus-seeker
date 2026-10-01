@@ -630,7 +630,13 @@ async def _confirm_entry_condition5_macro_earnings_gate(
             from market_analysis.index_microstructure import get_market_regime
 
             regime = await get_market_regime()
-            if regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
+            if regime == "UNKNOWN":
+                c5_passed = False
+                reasons.append(
+                    "條件五❌：大盤 Regime 資料不足 (VIX/SPY/Gamma Flip 未知)，"
+                    "無法排除危機，安全起見判定未通過"
+                )
+            elif regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
                 c5_passed = False
                 if direction == "SHORT":
                     reasons.append(
@@ -653,9 +659,14 @@ async def _confirm_entry_condition5_macro_earnings_gate(
     return c5_passed, days_to_er
 
 
+def _fmt_ivr(ivr: Optional[float]) -> str:
+    """IVR 顯示字串：未知時為 `--`。"""
+    return f"{ivr:.1f}%" if ivr is not None else "--"
+
+
 def _derive_entry_structure_directive(
     call_wall_room_pct: float,
-    target_ivr: float,
+    target_ivr: Optional[float],
     days_to_earnings: Optional[int],
 ) -> str:
     """由「當下市況」推導右側進場的建議合約天期 (DTE band) 與部位結構。
@@ -693,7 +704,10 @@ def _derive_entry_structure_directive(
     if earnings_capped:
         dte_text += f" (財報前收斂，距財報 {days_to_earnings} 天)"
 
-    if target_ivr <= _ENTRY_IVR_SPREAD_THRESHOLD:
+    if target_ivr is None:
+        # IVR 未知：不能宣稱低 IV 而建議單腳買方，改建議有限風險的價差結構。
+        structure = "Bull Call Spread (IVR 資料不足，以價差控制 Vega 風險)"
+    elif target_ivr <= _ENTRY_IVR_SPREAD_THRESHOLD:
         structure = "Long Call (ATM/輕度 OTM)"
     else:
         structure = "Bull Call Spread (IVR 過高，避免單腳買方 Vega 崩塌)"
@@ -706,7 +720,7 @@ async def _confirm_entry_condition6_candidate_dte(
     prior_conditions_passed: bool,
     reasons: list,
     call_wall_room_pct: float = 0.0,
-    target_ivr: float = 0.0,
+    target_ivr: Optional[float] = None,
     days_to_earnings: Optional[int] = None,
 ) -> Tuple[bool, Optional[str]]:
     """條件六：避開 candidate 自身最近效期選擇權週期的結算日前夕/當日雜訊
@@ -755,7 +769,7 @@ async def _confirm_entry_condition6_candidate_dte(
             )
             reason_line += (
                 f"｜Call Wall 空間 {call_wall_room_pct:.1%}，"
-                f"IVR={target_ivr:.1f}% -> {structure_directive}"
+                f"IVR={_fmt_ivr(target_ivr)} -> {structure_directive}"
             )
         reasons.append(reason_line)
         return c6_passed, structure_directive
@@ -971,7 +985,7 @@ class _OpportunityCostMixin:
         target_power_squeeze: float,
         target_expected_value: float,
         current_holding_expected_value: float,
-        target_ivr: float = 0.0,
+        target_ivr: Optional[float] = None,
         target_uoa_sweep: bool = False,
         target_spot: float = 0.0,
         target_put_wall: float = 0.0,
@@ -1024,7 +1038,9 @@ class _OpportunityCostMixin:
             # ----------------------------------------------------
             # 條件二：新標的出現「極致不對稱勝率」
             # ----------------------------------------------------
-            is_low_ivr = 0 < target_ivr < _LOW_IVR_UPPER_BOUND
+            is_low_ivr = (
+                target_ivr is not None and 0 < target_ivr < _LOW_IVR_UPPER_BOUND
+            )
             is_near_put_wall = (target_put_wall > 0 and target_spot > 0) and (
                 abs(target_spot - target_put_wall) / target_put_wall
                 <= _PUT_WALL_PROXIMITY_TOLERANCE
@@ -1039,7 +1055,7 @@ class _OpportunityCostMixin:
                     if target_spot > 0
                     else ""
                 )
-                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({target_ivr:.1f}%) + 鋼鐵牆築底 + 巨鯨掃貨{strike_note}，強制啟動轉倉)"
+                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({_fmt_ivr(target_ivr)}) + 鋼鐵牆築底 + 巨鯨掃貨{strike_note}，強制啟動轉倉)"
             else:
                 strategy = "Buy Shares"
                 reason_suffix = ""
@@ -1245,11 +1261,9 @@ class _OpportunityCostMixin:
             if call_wall > 0 and target_spot > 0
             else 0.0
         )
-        target_ivr = float(
-            candidate_radar.get("iv_metrics", {}).get("iv_rank", 0.0)
-            if candidate_radar.get("iv_metrics")
-            else 0.0
-        )
+        # IVR 未知時為 None (radar slow/fast path 不再以 0.0/50.0 冒充)。
+        _ivr_raw = (candidate_radar.get("iv_metrics") or {}).get("iv_rank")
+        target_ivr: Optional[float] = float(_ivr_raw) if _ivr_raw is not None else None
         c6_passed, structure_directive = await _confirm_entry_condition6_candidate_dte(
             candidate_symbol,
             c1_passed and c2_passed and c3_passed and c4_passed and c5_passed,
@@ -1320,11 +1334,9 @@ class _OpportunityCostMixin:
             if candidate_radar.get("quote")
             else 0.0
         )
-        target_ivr = float(
-            candidate_radar.get("iv_metrics", {}).get("iv_rank", 0.0)
-            if candidate_radar.get("iv_metrics")
-            else 0.0
-        )
+        # IVR 未知時為 None (radar slow/fast path 不再以 0.0/50.0 冒充)。
+        _ivr_raw = (candidate_radar.get("iv_metrics") or {}).get("iv_rank")
+        target_ivr: Optional[float] = float(_ivr_raw) if _ivr_raw is not None else None
         target_put_wall = (
             float(
                 candidate_radar.get("gex_profile_data", {}).get("put_wall", 0.0) or 0.0

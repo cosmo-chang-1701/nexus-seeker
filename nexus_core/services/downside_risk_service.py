@@ -235,7 +235,14 @@ def compute_return_series(
     )
 
 
-async def _fetch_closes(symbols: list[str]) -> dict[str, pd.Series]:
+async def _fetch_closes(
+    symbols: list[str], force_refresh: bool = False
+) -> dict[str, pd.Series]:
+    """抓取各標的 1y 日線收盤。
+
+    `force_refresh=True` 略過 6 小時快取：16:15 盤後 NAV 快照與 CVaR 必須用
+    「今日完整收盤」，不可吃到盤中寫入、最後一根仍是未完成 K 棒的舊快取。
+    """
     from services import market_data_service
 
     sem = asyncio.Semaphore(_HISTORY_CONCURRENCY)
@@ -243,7 +250,9 @@ async def _fetch_closes(symbols: list[str]) -> dict[str, pd.Series]:
     async def _one(sym: str) -> tuple[str, Optional[pd.Series]]:
         async with sem:
             try:
-                df = await market_data_service.get_history_df(sym, "1y")
+                df = await market_data_service.get_history_df(
+                    sym, "1y", force_refresh=force_refresh
+                )
             except Exception as e:
                 logger.warning(f"[DownsideRisk] {sym} 歷史 K 線抓取失敗: {e}")
                 return sym, None
@@ -272,7 +281,8 @@ async def build_portfolio_return_series(
         and cached.built_on == today.isoformat()
     ):
         return cached
-    closes = await _fetch_closes(exposure.symbols)
+    # force=True (16:15 盤後重建) 時一併強制刷新日線，避免沿用盤中快取。
+    closes = await _fetch_closes(exposure.symbols, force_refresh=force)
     # 盤中建構時，yfinance 日線會包含今天未完成的 K 棒；丟掉它，讓「最後收盤價」
     # 恆為前一交易日收盤，盤中報酬才能以即時價 / 昨收計算。
     drop_today = today if market_time.is_market_open() else None

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Any, Optional
 
 import database
 from config import get_vix_tier
@@ -61,8 +62,9 @@ async def run_postmarket_summary() -> str:
     time_str = _get_tw_time_str()
     try:
         macro = await get_macro_environment()
-        vix = macro.get("vix", 18.0)
-        vix_tier = get_vix_tier(vix)
+        # VIX 未知時如實告知 LLM「資料不足」，不以 18.0 冒充 (會被判成 Ready 階梯)。
+        vix = macro.get("vix")
+        vix_tier: Any = get_vix_tier(vix) if vix is not None else "資料不足"
 
         user_ids = database.get_all_user_ids()
         total_net_pnl = total_alpha = total_hedge = 0.0
@@ -94,11 +96,15 @@ async def run_postmarket_summary() -> str:
         avg_runway = total_runway / active_users if active_users > 0 else 0
 
         spy_data = await get_quote("SPY")
-        spy_price = spy_data.get("c", 500.0)
-        portfolio_heat = (
+        spy_raw = spy_data.get("c") if spy_data else None
+        spy_price: Optional[float] = (
+            float(spy_raw) if spy_raw is not None and float(spy_raw) > 0 else None
+        )
+        # SPY 未知時熱度無法換算 (過去補 500)，以 None 回報「資料不足」。
+        portfolio_heat: Optional[float] = (
             (abs(total_delta) * spy_price / total_capital * 100)
-            if total_capital > 0
-            else 0
+            if total_capital > 0 and spy_price is not None
+            else (0.0 if total_capital <= 0 else None)
         )
 
         raw_data = {
@@ -115,7 +121,9 @@ async def run_postmarket_summary() -> str:
             "aggregate_risk_metrics": {
                 "total_theta": round(total_theta, 2),
                 "total_beta_delta": round(total_delta, 2),
-                "portfolio_heat_pct": round(portfolio_heat, 2),
+                "portfolio_heat_pct": round(portfolio_heat, 2)
+                if portfolio_heat is not None
+                else "資料不足 (SPY 現價未知)",
                 "avg_financial_runway_days": round(avg_runway, 1),
             },
             "sector_correlation": "Stable",

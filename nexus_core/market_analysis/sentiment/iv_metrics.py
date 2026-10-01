@@ -6,12 +6,11 @@ import sqlite3  # noqa: F401
 import time
 import math
 import asyncio
-import yfinance as yf
 from datetime import datetime, timedelta
 from typing import Literal
 from services import market_data_service
 from models.quant import IVMetrics
-from market_time import is_market_open
+from market_time import is_market_open, ny_tz
 
 
 from .cache import _iv_cache, _IV_CACHE_TTL
@@ -424,56 +423,45 @@ async def fetch_and_calculate_iv_metrics(
         is_market_active = is_market_open()
 
         # A. Live IV Calculation (Preferred)
+        # IV 定義統一為「最近到期日、現價 ±20% 內合約之 (OI+量)/距離 加權 IV」
+        # (docs/valuation_pricing/04 §2.1 的日線 IV 觀測樣本)。過去優先採用
+        # yfinance ticker.info 的 impliedVolatility——不同的、來源不明的定義——
+        # 與本加權值混入同一條 historical_iv 序列，使 IV Rank 母體不一致。
         if is_market_active:
-            ticker = yf.Ticker(symbol)
             try:
-                info = await market_data_service.call_yf(lambda: ticker.info)
-                current_iv = info.get("impliedVolatility")
-                if current_iv and current_iv > 0:
-                    iv_source = "LIVE_IV"
-            except Exception as e:
-                logger.warning(f"[{symbol}] yfinance ticker.info 獲取異常: {e}")
-
-            if not current_iv or current_iv <= 0:
-                try:
-                    expirations = await market_data_service.get_all_option_expiries(
-                        symbol
+                expirations = await market_data_service.get_all_option_expiries(symbol)
+                if expirations:
+                    chain = await market_data_service.get_option_chain(
+                        symbol, expirations[0], force_live=force_refresh
                     )
-                    if expirations:
-                        chain = await market_data_service.get_option_chain(
-                            symbol, expirations[0], force_live=force_refresh
-                        )
-                        if chain:
-                            all_options = []
-                            for df in [chain.calls, chain.puts]:
-                                if df is not None and not df.empty:
-                                    for _, row in df.iterrows():
-                                        iv_val = float(
-                                            row.get("impliedVolatility", 0.0)
+                    if chain:
+                        all_options = []
+                        for df in [chain.calls, chain.puts]:
+                            if df is not None and not df.empty:
+                                for _, row in df.iterrows():
+                                    iv_val = float(row.get("impliedVolatility", 0.0))
+                                    strike_val = float(row.get("strike", 0.0))
+                                    oi = float(row.get("openInterest", 0.0))
+                                    vol = float(row.get("volume", 0.0))
+                                    if iv_val > 0.01 and strike_val > 0.0:
+                                        distance_pct = (
+                                            abs(strike_val - spot_price) / spot_price
                                         )
-                                        strike_val = float(row.get("strike", 0.0))
-                                        oi = float(row.get("openInterest", 0.0))
-                                        vol = float(row.get("volume", 0.0))
-                                        if iv_val > 0.01 and strike_val > 0.0:
-                                            distance_pct = (
-                                                abs(strike_val - spot_price)
-                                                / spot_price
+                                        if distance_pct <= 0.20:
+                                            weight = (oi + vol + 1.0) / (
+                                                distance_pct * 100.0 + 1.0
                                             )
-                                            if distance_pct <= 0.20:
-                                                weight = (oi + vol + 1.0) / (
-                                                    distance_pct * 100.0 + 1.0
-                                                )
-                                                all_options.append((iv_val, weight))
-                            if all_options:
-                                total_weight = sum(w for _, w in all_options)
-                                current_iv = (
-                                    sum(iv * w for iv, w in all_options) / total_weight
-                                )
-                                iv_source = "LIVE_IV"
-                except Exception as opt_err:
-                    logger.warning(
-                        f"[{symbol}] VIX-style weighted IV calculation failed: {opt_err}"
-                    )
+                                            all_options.append((iv_val, weight))
+                        if all_options:
+                            total_weight = sum(w for _, w in all_options)
+                            current_iv = (
+                                sum(iv * w for iv, w in all_options) / total_weight
+                            )
+                            iv_source = "LIVE_IV"
+            except Exception as opt_err:
+                logger.warning(
+                    f"[{symbol}] VIX-style weighted IV calculation failed: {opt_err}"
+                )
 
         # B. Fallback path
         if not current_iv or math.isnan(current_iv) or current_iv <= 0:
@@ -522,9 +510,13 @@ async def fetch_and_calculate_iv_metrics(
             current_iv = straddle_iv
             iv_scale_corrected = True
 
-        # 3. 儲存至 database historical_iv (儲存原始 IV，防範閉市期間重複乘算與歷史數據污染)
-        today_str = datetime.now().strftime("%Y-%m-%d")
-        await save_historical_iv(symbol, current_iv, today_str)
+        # 3. 儲存至 database historical_iv：**只寫入盤中即時 IV (LIVE_IV)**。
+        # LIVE_IV 只在 is_market_open() 時產生，因此必為交易日；STORED_IV (前值
+        # 搬運) 與 HV_PROXY (已實現波動率) 不寫入——過去兩者都以「今天」日期寫入，
+        # 週末會多出重複列、HV 混入 IV Rank 母體。日期一律取美東日期。
+        today_str = datetime.now(ny_tz).strftime("%Y-%m-%d")
+        if iv_source == "LIVE_IV":
+            await save_historical_iv(symbol, current_iv, today_str)
 
         has_earnings_event = False
         has_macro_event = False
@@ -600,20 +592,33 @@ async def fetch_and_calculate_iv_metrics(
                     f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
                 )
 
-        # 4. 取得 DB 歷史 IV
+        # 4. 取得 DB 歷史 IV：窗口為「最近 252 個交易日」(含今天)，而非 252
+        # 列資料 (舊版 LIMIT 252 會把週末/假日重複列算進樣本數)。非交易日的
+        # 殘留列一律排除。
         db_ivs = {}
         try:
             from database.connection import get_read_connection
+            import market_time as _mt
 
+            window_dates = set(_mt.get_recent_trading_dates(252))
+            window_dates.discard(today_str)
+            start_date = min(window_dates) if window_dates else today_str
             conn = get_read_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT date, iv FROM historical_iv WHERE symbol = ? ORDER BY date DESC LIMIT 252",
-                (symbol,),
-            )
-            db_rows = cursor.fetchall()
-            conn.close()
-            db_ivs = {row[0]: row[1] for row in db_rows}
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT date, iv FROM historical_iv WHERE symbol = ? "
+                    "AND date >= ? AND date < ? ORDER BY date DESC",
+                    (symbol, start_date, today_str),
+                )
+                db_rows = cursor.fetchall()
+            finally:
+                conn.close()
+            db_ivs = {
+                row[0]: row[1]
+                for row in db_rows
+                if str(row[0])[:10] in window_dates and row[1] is not None
+            }
         except Exception as e:
             logger.error(f"讀取資料庫歷史 IV 失敗: {e}")
 
@@ -641,11 +646,14 @@ async def fetch_and_calculate_iv_metrics(
             high_iv = max(pure_iv_values)
             if high_iv > low_iv:
                 iv_rank = ((current_iv - low_iv) / (high_iv - low_iv)) * 100.0
+                lower_count = sum(1 for iv in pure_iv_values if iv < current_iv)
+                iv_percentile = (lower_count / len(pure_iv_values)) * 100.0
             else:
-                iv_rank = 50.0
-
-            lower_count = sum(1 for iv in pure_iv_values if iv < current_iv)
-            iv_percentile = (lower_count / len(pure_iv_values)) * 100.0
+                # 整個窗口 IV 完全相同 (樣本退化，多為資料問題)：IVR 無定義，
+                # 標為未知而不是補 50 冒充「中位」。
+                logger.warning(
+                    f"[{symbol}] 歷史 IV 窗口高低相同 ({high_iv:.4f})，IV Rank/Percentile 標註為 None。"
+                )
             if iv_rank is not None:
                 iv_rank = max(0.0, min(100.0, iv_rank))
             if iv_percentile is not None:

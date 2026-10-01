@@ -727,19 +727,18 @@ class IntradayScanPipeline:
                     holdings: List[OptionHolding] = []
                     portfolio_greeks: Dict[str, float] = {}
                     if engine_enabled:
+                        # UserContext 的欄位是 capital / cash_reserve /
+                        # monthly_expense；過去讀不存在的 total_capital /
+                        # monthly_burn_rate，資金與月支出恆為 100000 / 5000。
                         account_state = TraderAccountState(
-                            capital=ctx.total_capital
-                            if hasattr(ctx, "total_capital")
-                            else 100000.0,
-                            cash_reserve=ctx.cash_reserve
-                            if hasattr(ctx, "cash_reserve")
-                            else 20000.0,
-                            monthly_burn_rate=ctx.monthly_burn_rate
-                            if hasattr(ctx, "monthly_burn_rate")
-                            else 5000.0,
+                            capital=float(ctx.capital),
+                            cash_reserve=float(ctx.cash_reserve),
+                            monthly_burn_rate=float(ctx.monthly_expense),
                             current_vix=await self._fetch_current_vix(),
                         )
-                        holdings = await self._fetch_user_options_holdings(uid)
+                        holdings = self._build_options_holdings(
+                            trades_by_user.get(uid, [])
+                        )
                         portfolio_greeks = await self._fetch_portfolio_greeks(uid)
 
                     # 掃描 watchlist 中的標的
@@ -852,39 +851,40 @@ class IntradayScanPipeline:
                 await asyncio.sleep(60)
 
     # 模擬/輔助獲取資料方法
-    async def _fetch_current_vix(self) -> float:
-        """獲取 VIX 即時數據，預設為 18.0"""
+    async def _fetch_current_vix(self) -> Optional[float]:
+        """獲取 VIX 即時數據；未知時回傳 None (不再補 18.0，由引擎 fail-closed)。"""
         try:
-            from services.market_data_service import get_quote
+            from services.market_data_service import get_vix_spot_strict
 
-            quote = await get_quote("^VIX")
-            if quote and quote.get("c", 0) > 0:
-                return float(quote["c"])
+            return await get_vix_spot_strict()
         except Exception:
-            pass
-        return 18.0
+            return None
 
-    async def _fetch_user_options_holdings(self, user_id: int) -> List[OptionHolding]:
-        """從資料庫獲取使用者期權持倉"""
-        holdings = []
-        try:
-            from database.holdings import get_user_holdings
+    @staticmethod
+    def _build_options_holdings(option_positions: Any) -> List[OptionHolding]:
+        """把使用者的 TRADE 期權部位轉成引擎用的 OptionHolding。
 
-            db_holdings = get_user_holdings(user_id)
-            for h in db_holdings:
-                # 僅處理期權合約
-                if "opt_type" in h and h.get("opt_type"):
-                    # 估計 theta (一般期權服務會提供，這裡給予預設值或從 holdings 讀取)
-                    holdings.append(
-                        OptionHolding(
-                            symbol=h.get("symbol", ""),
-                            quantity=float(h.get("quantity", 1.0)),
-                            theta=float(h.get("theta", -0.05)),
-                        )
+        過去從 HOLDING (現貨) 讀期權，結果恆為空、Theta 覆蓋恆為 0，且缺值時
+        補 −0.05。現在讀 TRADE 部位：metadata.theta 是部位層級每日 Theta 美元值
+        (單口 × 口數 × 100)，換回單口值；Theta 未知 (尚未刷新) 的部位直接略過，
+        不補值。
+        """
+        holdings: List[OptionHolding] = []
+        for pos in option_positions or []:
+            try:
+                qty = float(pos.get("quantity") or 0.0)
+                position_theta = pos.get("theta")
+                if qty == 0.0 or position_theta is None:
+                    continue
+                holdings.append(
+                    OptionHolding(
+                        symbol=str(pos.get("symbol", "")),
+                        quantity=qty,
+                        theta=float(position_theta) / (qty * 100.0),
                     )
-        except Exception as e:
-            logger.error(f"Failed to fetch option holdings for user {user_id}: {e}")
-
+                )
+            except (TypeError, ValueError):
+                continue
         return holdings
 
     async def _fetch_portfolio_greeks(self, user_id: int) -> Dict[str, float]:
@@ -897,10 +897,6 @@ class IntradayScanPipeline:
             greeks["vanna"] = float(getattr(user_ctx, "total_vanna", 0.0))
         except Exception:
             pass
-
-        # Mock 預設值
-        if greeks["vanna"] == 0.0:
-            greeks["vanna"] = 1.25
         return greeks
 
     async def _fetch_market_cap_billion(self, ticker: str) -> float:

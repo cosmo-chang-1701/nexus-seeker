@@ -284,7 +284,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     cpi_dev = (
         cpi_actual - cpi_expected
         if (cpi_actual is not None and cpi_expected is not None)
-        else (get_kv_cache("macro_cpi_deviation") or 0.0)
+        else get_kv_cache("macro_cpi_deviation")
     )
 
     # 多因子宏觀逃頂窗口狀態判定
@@ -299,9 +299,9 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         escape_win_status,
     ) = evaluate_escape_window_regime(
         prob=fedwatch_prob,
-        cpi_dev=float(cpi_dev) if cpi_dev is not None else 0.0,
-        wti=float(wti) if (wti is not None and float(wti) > 0) else 75.0,
-        vts_ratio=float(vts_val) if (vts_val is not None and vts_val > 0) else 0.88,
+        cpi_dev=cpi_dev,
+        wti=wti,
+        vts_ratio=vts_val,
         is_negative_gamma=short_gamma_critical or is_negative_gamma_spy,
     )
 

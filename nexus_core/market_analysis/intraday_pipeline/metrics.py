@@ -5,6 +5,7 @@ import logging
 import math
 from datetime import datetime
 from typing import Any, Dict, Optional
+import market_time
 
 import pandas as pd
 
@@ -133,8 +134,7 @@ async def _estimate_options_wall_metrics(
     if chain is None or chain.puts.empty:
         return None, None
 
-    expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
-    t_years = max((expiry_dt - datetime.now()).days / 365.0, 7.0 / 365.0)
+    t_years = max(market_time.days_to_expiry_et(expiry), 7) / 365.0
 
     puts = chain.puts.copy()
     puts = puts.dropna(subset=["strike", "openInterest", "impliedVolatility"])
@@ -230,7 +230,6 @@ async def build_enhanced_watchlist_metrics(
     iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
     skew_task = SentimentEngine.calculate_skew(symbol)
     pcr_task = SentimentEngine.calculate_pcr(symbol)
-    dividend_yield_task = market_data_service.get_dividend_yield(symbol)
 
     (
         quote,
@@ -241,7 +240,6 @@ async def build_enhanced_watchlist_metrics(
         iv_metrics,
         skew_metrics,
         pcr_metrics,
-        dividend_yield,
     ) = await asyncio.gather(
         quote_task,
         stock_history_task,
@@ -251,7 +249,6 @@ async def build_enhanced_watchlist_metrics(
         iv_task,
         skew_task,
         pcr_task,
-        dividend_yield_task,
     )
 
     if df_stock.empty or len(df_stock) < 60:

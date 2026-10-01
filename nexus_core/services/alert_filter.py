@@ -94,14 +94,18 @@ async def should_send_priority_alert(
     """判定單筆掃描結果是否符合「緊急推播」條件 (Async)。"""
     symbol = result.get("symbol", "N/A")
     if prev_macro is not None:
-        current_vix, prev_vix = (
-            result.get("macro_vix", 18.0),
-            prev_macro.get("vix", 18.0),
-        )
+        # 任一端 VIX 未知 (None) 時不比較：過去兩端都補 18.0，一端真實 VIX
+        # 一端備援值會算出假的「宏觀波動」觸發。
+        current_vix = result.get("macro_vix")
+        prev_vix = prev_macro.get("vix")
         if (
-            prev_vix > 0
-            and abs(current_vix - prev_vix) / prev_vix >= VIX_CHANGE_THRESHOLD
+            current_vix is not None
+            and prev_vix is not None
+            and float(prev_vix) > 0
+            and abs(float(current_vix) - float(prev_vix)) / float(prev_vix)
+            >= VIX_CHANGE_THRESHOLD
         ):
+            current_vix, prev_vix = float(current_vix), float(prev_vix)
             reason = (
                 f"🌪️ 宏觀波動：VIX 變動達 {abs(current_vix - prev_vix) / prev_vix:.1%}"
             )

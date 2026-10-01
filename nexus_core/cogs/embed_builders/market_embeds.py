@@ -16,11 +16,16 @@ import discord
 import math
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+import market_time
 
 from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
 from cogs.embed_builders.settings_embeds import create_info_embed
-from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
+from cogs.embed_builders._core import (
+    OPTION_DATA_TIMING_NOTE,
+    NexusEmbed,
+    format_cache_age_suffix,
+)
 from market_analysis.macro_calendar_translator import translate_macro_event
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.insight_generator import compute_realtime_insights
@@ -100,8 +105,7 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         expiry = data.get("expiry")
         if isinstance(expiry, str):
             try:
-                expiry_dt = datetime.strptime(expiry, "%Y-%m-%d")
-                dte = (expiry_dt - datetime.now()).days
+                dte = market_time.days_to_expiry_et(expiry)
                 if dte <= 3:
                     embed.add_field(
                         name="🚀 執行建議",
@@ -528,15 +532,15 @@ def build_radar_scan_embed(
             dp_raw = quote.get("dp")
             dp_val = float(dp_raw) if dp_raw is not None else 0.0
 
-            # 2. IV Rank
-            iv_rank_val = 0.0
+            # 2. IV Rank (未知時為 None，不再以 0.0 冒充「低 IVR」)
+            iv_rank_val: Optional[float] = None
             em_weekly = 0.0
             if iv_metrics:
                 if not isinstance(iv_metrics, dict) and hasattr(iv_metrics, "iv_rank"):
                     iv_rank_val = (
                         float(iv_metrics.iv_rank)
                         if iv_metrics.iv_rank is not None
-                        else 0.0
+                        else None
                     )
                     em_weekly = (
                         float(iv_metrics.expected_move_weekly)
@@ -545,7 +549,7 @@ def build_radar_scan_embed(
                     )
                 elif isinstance(iv_metrics, dict):
                     ivr_raw = iv_metrics.get("iv_rank")
-                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
+                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else None
                     em_raw = iv_metrics.get("expected_move_weekly")
                     em_weekly = float(em_raw) if em_raw is not None else 0.0
 
@@ -780,7 +784,12 @@ def build_radar_scan_embed(
                 _safe_float(vp_dict.get("hvn")) if isinstance(vp_dict, dict) else 0.0
             )
             skew_val = _safe_float(r.get("skew"), 0.0)
-            skew_percentile_val = _safe_float(r.get("skew_percentile"), 50.0)
+            # 分位未知時為 None (跳過該指標)，不再補 50 冒充「中性」。
+            skew_percentile_val: Optional[float] = (
+                _safe_float(r.get("skew_percentile"))
+                if r.get("skew_percentile") is not None
+                else None
+            )
 
             risk_ctx = RiskInsightsContext(
                 symbol=sym,
@@ -793,7 +802,7 @@ def build_radar_scan_embed(
                 uoa_institutional_short_call=uoa_institutional_short_call,
                 # iv_rank_val 上游一律為 0~100 百分點 (IVMetrics 已 clamp)；
                 # 舊的 `> 1.0 才除 100` 啟發式會把 IVR 0.9% 當成 90%。
-                iv_rank=iv_rank_val / 100.0,
+                iv_rank=iv_rank_val / 100.0 if iv_rank_val is not None else 0.0,
                 max_pain_deviation_pct=dist_pct / 100.0,
                 can_trade_spreads=ctx_db.can_trade_spreads,
                 cash_reserve_protection=ctx_db.cash_reserve_protection,
@@ -869,15 +878,8 @@ def build_radar_scan_embed(
                         "iv_rank": iv_rank_val,
                     }
 
-                    if data["skew_percentile"] is None:
-                        skew_val = _safe_float(r.get("skew"), 0.0)
-                        if skew_val > 0:
-                            data["skew_percentile"] = 75.0
-                        elif skew_val < 0:
-                            data["skew_percentile"] = 25.0
-                        else:
-                            data["skew_percentile"] = 50.0
-
+                    # Skew 分位未知時維持 None (insight_generator 跳過該指標)；
+                    # 過去依 skew 正負號捏造 75/25/50 分位。
                     insight_str = compute_realtime_insights(data)
                     insights.append(insight_str)
 
@@ -978,9 +980,13 @@ def build_radar_scan_embed(
 
             # --- 新增：SQZ - Skew 結構背離過濾器 (Micro-Divergence Gate) ---
             skew_raw = r.get("skew_percentile")
-            skew_percentile_val = float(skew_raw) if skew_raw is not None else 50.0
+            skew_percentile_val = float(skew_raw) if skew_raw is not None else None
 
-            if sqz_mom > 0 and skew_percentile_val > SKEW_DIVERGENCE_HIGH_PERCENTILE:
+            if (
+                sqz_mom > 0
+                and skew_percentile_val is not None
+                and skew_percentile_val > SKEW_DIVERGENCE_HIGH_PERCENTILE
+            ):
                 status_label = "🚫 偽突破 (嚴禁單腿看多)"
                 embed.color = 0xE74C3C
                 insights.append(
@@ -1085,20 +1091,25 @@ def build_radar_scan_embed(
                 )
 
             # ---- 產生 Markdown 行 (高 Alpha 欄位) ----
-            # 2. IV Rank & Skew
-            iv_rank_val = 0.0
+            # 2. IV Rank & Skew (未知時為 None，相關判斷一律跳過)
+            iv_rank_val = None
             if iv_metrics:
                 if hasattr(iv_metrics, "iv_rank"):
                     iv_rank_val = (
                         float(iv_metrics.iv_rank)
                         if iv_metrics.iv_rank is not None
-                        else 0.0
+                        else None
                     )
                 elif isinstance(iv_metrics, dict):
                     ivr_raw = iv_metrics.get("iv_rank")
-                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else 0.0
+                    iv_rank_val = float(ivr_raw) if ivr_raw is not None else None
             skew_val = _safe_float(r.get("skew"), 0.0)
-            skew_percentile_val = _safe_float(r.get("skew_percentile"), 50.0)
+            # 分位未知時為 None (跳過該指標)，不再補 50 冒充「中性」。
+            skew_percentile_val = (
+                _safe_float(r.get("skew_percentile"))
+                if r.get("skew_percentile") is not None
+                else None
+            )
 
             # 3. EM Z-Score
             em_z_score_str = "N/A"
@@ -1198,8 +1209,10 @@ def build_radar_scan_embed(
                 iv_strategy_str = "⚠️總經事件防禦期"
             elif is_neg_gamma:
                 iv_strategy_str = "🔴賣方禁售"
-            elif iv_rank_val < 15.0:
+            elif iv_rank_val is not None and iv_rank_val < 15.0:
                 iv_strategy_str = "🔴CSP 禁售"
+            elif iv_rank_val is None:
+                iv_strategy_str = "⚪IVR 資料不足"
             else:
                 iv_strategy_str = "🟢適宜賣方"
 
@@ -1266,7 +1279,9 @@ def build_radar_scan_embed(
 
             prev_iv_rank_gate = get_kv_cache(f"iv_rank_prev_{sym.upper()}")
             iv_rising_with_price_gate = (
-                prev_iv_rank_gate is not None and iv_rank_val > float(prev_iv_rank_gate)
+                prev_iv_rank_gate is not None
+                and iv_rank_val is not None
+                and iv_rank_val > float(prev_iv_rank_gate)
             )
             crossed_gamma_flip_up_gate = (
                 gamma_flip_est_gate > 0
@@ -1321,7 +1336,8 @@ def build_radar_scan_embed(
             ):
                 tactical_adv = f"⚠️ ${put_wall:.1f} 僅單薄紙牆，無做市商深度"
             elif (
-                skew_percentile_val >= SKEW_TRIPLE_CONFLUENCE_PERCENTILE
+                skew_percentile_val is not None
+                and skew_percentile_val >= SKEW_TRIPLE_CONFLUENCE_PERCENTILE
                 and mp_gravity_strong_down
                 and not has_dte7_institutional_buy_support
             ):
@@ -1332,7 +1348,10 @@ def build_radar_scan_embed(
                 insights.append(
                     f"• 🚨 {sym}: Skew 避險分位 {skew_percentile_val:.0f}% 極端背離，疊加 Max Pain 向下引力，且無 DTE≥7 機構買盤護航，結構性風險合流。"
                 )
-            elif skew_percentile_val > SKEW_HIGH_DEFENSE_PERCENTILE:
+            elif (
+                skew_percentile_val is not None
+                and skew_percentile_val > SKEW_HIGH_DEFENSE_PERCENTILE
+            ):
                 tactical_adv = "🛑 防洗盤處置，嚴守 15 分鐘實體 K 線撤退線"
             elif z_score is not None and (z_score > 0.9 or z_score < -0.9):
                 tactical_adv = "🟡 貼近 EM 頂/底緣，停損墊高或觀察突破"
@@ -1354,11 +1373,15 @@ def build_radar_scan_embed(
                 )
                 if price_val >= anti_washout_stop and (
                     has_positive_gamma_support
-                    or (iv_rank_val < 60.0 and term_structure <= 1.05)
+                    or (
+                        iv_rank_val is not None
+                        and iv_rank_val < 60.0
+                        and term_structure <= 1.05
+                    )
                     or has_gex_prof
                 ):
                     tactical_adv = f"🟡 護航網支撐，現貨續抱，防守退至 ${anti_washout_stop:.2f} (嚴守15分K收盤)"
-                elif iv_rank_val >= 80.0:
+                elif iv_rank_val is not None and iv_rank_val >= 80.0:
                     tactical_adv = f"🟡 跌破底牆，善用 {iv_rank_val:.0f}% IVR 做 Spread 防禦或暫泊 VOO"
                 else:
                     tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，無 UOA 護航，資金轉移"
@@ -1375,12 +1398,17 @@ def build_radar_scan_embed(
             g_p_wall_str = (
                 f"({gex_pol}) {g_p_wall_str}" if g_p_wall_str != "N/A" else "N/A"
             )
+            sp_disp = (
+                f"{skew_percentile_val:.0f}%"
+                if skew_percentile_val is not None
+                else "--%"
+            )
             if vol_pcr is not None and vol_pcr >= 1.2:
-                skew_pct_str = f"{skew_percentile_val:.0f}% (PCR:{vol_pcr:.2f}⚠️)"
+                skew_pct_str = f"{sp_disp} (PCR:{vol_pcr:.2f}⚠️)"
             elif skew_val != 0.0:
-                skew_pct_str = f"{skew_percentile_val:.0f}% ({skew_val:+.2f}%)"
+                skew_pct_str = f"{sp_disp} ({skew_val:+.2f}%)"
             else:
-                skew_pct_str = f"{skew_percentile_val:.0f}%"
+                skew_pct_str = sp_disp
             psq_dict = r.get("psq_result")
             if not isinstance(psq_dict, dict):
                 psq_dict = {}
@@ -1536,7 +1564,8 @@ def build_radar_scan_embed(
             "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
             "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
             "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。\n"
-            "提示: 🧲 共振磁吸代表現價站穩期權 Put Wall 且 Volume-POC (HVN) 與 Put Wall 差距在 1% 內。"
+            "提示: 🧲 共振磁吸代表現價站穩期權 Put Wall 且 Volume-POC (HVN) 與 Put Wall 差距在 1% 內。\n"
+            f"時效: {OPTION_DATA_TIMING_NOTE}。"
         )
         embed.add_field(
             name="📋 雷達圖例與風控指引",

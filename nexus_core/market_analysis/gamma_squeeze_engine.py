@@ -278,7 +278,11 @@ class NexusGammaSqueezeEngine:
 
         # 5. SDDM 路由決策 (全局風控優先級仲裁)
         # 優先級：存活熔斷 (Runway < 30) SHIELD > 未開盤 WAIT > 微觀否決 SHIELD > 門檻未過 SHIELD > VIX>=25 SHIELD > SPEAR
-        vix = account_state.current_vix
+        # VIX 未知 (None) 時不以 18.0 冒充：SDDM 路由 fail-closed 進入 SHIELD，
+        # 凱利進攻倉位歸零。下方以 vix_known 判斷，避免 None 參與比較。
+        vix_raw = account_state.current_vix
+        vix_known = vix_raw is not None
+        vix: float = float(vix_raw) if vix_raw is not None else 0.0
         if is_runway_critical:
             # 全局風控覆蓋機制 (Global Risk Override)：強制硬鎖，阻斷所有買方進攻
             sddm_route = "SHIELD"
@@ -290,6 +294,11 @@ class NexusGammaSqueezeEngine:
                 failed_gates.append(vr)
         elif not gates_passed:
             sddm_route = "SHIELD"
+        elif not vix_known:
+            sddm_route = "SHIELD"
+            failed_gates.append(
+                "VIX 資料不足：無法確認波動環境，暫停買方進攻 (fail-closed)"
+            )
         elif vix >= 25.0:
             sddm_route = "SHIELD"
         else:
@@ -353,6 +362,10 @@ class NexusGammaSqueezeEngine:
                 f"🔥 波動率體制：當前處於【高波劇烈洗盤環境】(IV Rank: {data.iv_rank:.1f}%{iv_str} > 50%)。"
                 "嚴禁裸買 OTM 期權以規避劇烈波動率回縮 (IV Crush) 殺傷，進攻時應改採垂直價差 (Bull Call Spread) 或賣方保護。"
             )
+        elif not vix_known:
+            notes.append(
+                f"⚪ VIX 資料不足 (IV Rank: {data.iv_rank:.1f}%)，波動環境無法判定。"
+            )
         elif vix >= 25.0:
             notes.append(
                 f"⚠️ 市場恐慌指標高企 (VIX: {vix:.2f} >= 25.0)，波動率期限結構轉為逆價差，防範市場系統性尾部風險。"
@@ -410,7 +423,11 @@ class NexusGammaSqueezeEngine:
             if microstructure_veto or not gates_passed:
                 for fg in failed_gates:
                     recommended_actions.append(f"❌ {fg}")
-            if vix >= 25.0:
+            if not vix_known:
+                recommended_actions.append(
+                    "⚪ VIX 資料不足，無法確認波動環境，暫停買方進攻。"
+                )
+            elif vix >= 25.0:
                 recommended_actions.append(
                     f"⚠️ 市場 VIX 指數達 {vix:.2f} (高波動警戒區)，強烈建議暫停多頭部位，轉為買入尾盤保護性 Put。"
                 )

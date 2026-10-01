@@ -189,9 +189,15 @@ class UnifiedTerminalCog(
         runway, runway_stale = await get_runway_display(user_id)
 
         with market_data_service.mark_interactive_request():
-            # 獲取 VIX 資訊
-            macro_raw = await market_data_service.get_macro_environment()
-            vix_spot = macro_raw.get("vix", 18.0)
+            # 獲取 VIX 資訊（未知時為 None，看板標示「資料不足」而非冒用 18.0）
+            vix_spot = await market_data_service.get_vix_spot_strict()
+
+        nav_data = await trading_service.get_market_nav(
+            user_id, float(ctx.cash_reserve or 0.0), pnl_data
+        )
+        spy_quote = await market_data_service.get_quote("SPY")
+        spy_raw = spy_quote.get("c") if spy_quote else None
+        spy_now = float(spy_raw) if spy_raw and float(spy_raw) > 0 else None
 
         embed = create_strategic_dash_embed(
             ctx,
@@ -199,6 +205,8 @@ class UnifiedTerminalCog(
             vix_spot=vix_spot,
             runway=runway,
             runway_stale=runway_stale,
+            nav_data=nav_data,
+            spy_price=spy_now,
         )
 
         view = PortfolioHubView(user_id, self.bot)

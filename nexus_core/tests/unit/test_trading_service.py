@@ -1,4 +1,4 @@
-from typing import Any, Tuple
+from typing import Any
 import pytest
 import pandas as pd
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -205,16 +205,22 @@ async def test_get_portfolio_pnl_maps_each_trade_to_its_own_mid_price() -> None:
     # Distinct mid price per symbol so a mixed-up mapping would be caught.
     mid_by_symbol = {"AAPL": 6.0, "TSLA": 7.0, "NVDA": 25.0}
 
-    async def _fake_get_option_chain_mid_iv(
+    async def _fake_get_option_chain_quote(
         symbol: str, expiry: Any, strike: Any, opt_type: Any
-    ) -> Tuple[float, float, float, float]:
-        return mid_by_symbol[symbol], 0.3, 0.0, 0.0
+    ) -> dict[str, Any]:
+        return {
+            "mid": mid_by_symbol[symbol],
+            "iv": 0.3,
+            "bid": 0.0,
+            "ask": 0.0,
+            "source": "MID",
+        }
 
     with (
         patch("services.asset_manager.AssetManager.get_assets", return_value=assets),
         patch(
-            "market_analysis.portfolio.get_option_chain_mid_iv",
-            side_effect=_fake_get_option_chain_mid_iv,
+            "market_analysis.portfolio.get_option_chain_quote",
+            side_effect=_fake_get_option_chain_quote,
         ),
     ):
         service = TradingService(MagicMock())
@@ -260,21 +266,21 @@ async def test_get_portfolio_pnl_fetches_mid_prices_concurrently() -> None:
     in_flight = 0
     max_in_flight = 0
 
-    async def _fake_get_option_chain_mid_iv(
+    async def _fake_get_option_chain_quote(
         symbol: str, expiry: Any, strike: Any, opt_type: Any
-    ) -> Tuple[float, float, float, float]:
+    ) -> dict[str, Any]:
         nonlocal in_flight, max_in_flight
         in_flight += 1
         max_in_flight = max(max_in_flight, in_flight)
         await asyncio.sleep(0.05)
         in_flight -= 1
-        return 1.5, 0.3, 0.0, 0.0
+        return {"mid": 1.5, "iv": 0.3, "bid": 0.0, "ask": 0.0, "source": "MID"}
 
     with (
         patch("services.asset_manager.AssetManager.get_assets", return_value=assets),
         patch(
-            "market_analysis.portfolio.get_option_chain_mid_iv",
-            side_effect=_fake_get_option_chain_mid_iv,
+            "market_analysis.portfolio.get_option_chain_quote",
+            side_effect=_fake_get_option_chain_quote,
         ),
     ):
         service = TradingService(MagicMock())

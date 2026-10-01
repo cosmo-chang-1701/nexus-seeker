@@ -127,26 +127,29 @@ class MarketScanMixin:
         all_holdings = await asyncio.to_thread(get_all_holdings)
         holding_map = {(h["user_id"], h["symbol"]): h["avg_cost"] for h in all_holdings}
 
-        from market_analysis.risk_engine import MacroContext
+        from market_analysis.risk_engine import MacroContext, build_macro_context
 
-        # 1. 🚀 獲取全域基準資料
+        # 1. 🚀 獲取全域基準資料。SPY/VIX 未知時一律為 None（不補 670/18.0
+        # 備援常數）：SPY 未知則本輪不推選擇權倉位建議 (無法換算曝險)；VIX
+        # 未知則 optimize_position_risk 以 vix_unknown=True fail-closed。
+        spy_price: Optional[float] = None
+        vix_spot: Optional[float] = None
+        macro_data: Optional[MacroContext] = None
+        df_spy: Any = None
         try:
             spy_task = market_data_service.get_spy_history_df("1y")
             macro_task = market_data_service.get_macro_environment()
             df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
-            spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
-            vix_spot = macro_raw.get("vix", 18.0)
-            macro_data = MacroContext(
-                vix=vix_spot,
-                oil_price=macro_raw.get("oil", 75.0),
-                vix_change=macro_raw.get("vix_change", 0.0),
+            spy_price = (
+                float(df_spy["Close"].iloc[-1])
+                if df_spy is not None and not df_spy.empty
+                else None
             )
-        except Exception:
-            df_spy, spy_price = None, 670.0
-            vix_spot, macro_data = (
-                18.0,
-                MacroContext(vix=18.0, oil_price=85.0, vix_change=0.0),
-            )
+            macro_data = build_macro_context(macro_raw)
+            vix_spot = macro_data.vix if macro_data is not None else None
+        except Exception as e:
+            logger.warning(f"市場掃描基準資料 (SPY/VIX) 抓取失敗，視為未知: {e}")
+            df_spy = None
 
         vix_tier = get_vix_tier(vix_spot)
 
@@ -212,7 +215,7 @@ class MarketScanMixin:
             earnings_info = await calendar_service.get_symbol_earnings(sym)
             symbol_sentiment_cache[sym] = {
                 "skew_val": skew_data.get("skew") or 0.0,
-                "pcr_val": pcr_data.get("pcr") or 0.8,
+                "pcr_val": pcr_data.get("pcr"),  # 缺值為 None，不補 0.8
                 "tte_hours": earnings_info.tte_hours if earnings_info else None,
             }
 
@@ -232,13 +235,21 @@ class MarketScanMixin:
                     base_data = scan_results[(sym, stock_cost)].copy()
                     base_data["uid"] = uid
                     base_data["spy_price"] = spy_price
-                    base_data["macro_vix"] = macro_data.vix
-                    base_data["macro_vix_change"] = macro_data.vix_change
-                    base_data["macro_oil"] = macro_data.oil_price
+                    base_data["macro_vix"] = (
+                        macro_data.vix if macro_data is not None else None
+                    )
+                    base_data["macro_vix_change"] = (
+                        macro_data.vix_change if macro_data is not None else None
+                    )
+                    base_data["macro_oil"] = (
+                        macro_data.oil_price if macro_data is not None else None
+                    )
                     # VIX 戰情階梯狀態注入 (供 UI 層渲染)
                     base_data["vix_spot"] = vix_spot
                     base_data["vix_battle_status"] = {
-                        "name": vix_tier.get("name", "N/A"),
+                        "name": vix_tier.get("name", "N/A")
+                        if vix_spot is not None
+                        else "VIX 資料不足",
                         "emoji": vix_tier.get("emoji", ""),
                         "color_hex": vix_tier.get("color_hex", 0x808080),
                         "vix_spot": vix_spot,
@@ -266,7 +277,21 @@ class MarketScanMixin:
                         continue  # 此標的沒有任何觸發訊號
 
                     # === 1. 選擇權策略分支 ===
-                    if user_context.option_alert_mode != 0 and is_option_valid:
+                    # SPY 現價未知時無法把 Beta-Delta 換算成曝險 (過去補 670)，
+                    # fail-closed：本輪不推選擇權倉位建議。
+                    if (
+                        user_context.option_alert_mode != 0
+                        and is_option_valid
+                        and spy_price is None
+                    ):
+                        logger.warning(
+                            f"🚫 [{sym}] SPY 現價未知，略過選擇權倉位建議 (fail-closed)"
+                        )
+                    if (
+                        user_context.option_alert_mode != 0
+                        and is_option_valid
+                        and spy_price is not None
+                    ):
                         opt_data = base_data.copy()
                         opt_data["alert_type"] = "OPTION"
 
@@ -280,7 +305,7 @@ class MarketScanMixin:
                             )
                             cached_sent = {
                                 "skew_val": skew_data.get("skew") or 0.0,
-                                "pcr_val": pcr_data.get("pcr") or 0.8,
+                                "pcr_val": pcr_data.get("pcr"),  # 缺值為 None，不補 0.8
                                 "tte_hours": earnings_info.tte_hours
                                 if earnings_info
                                 else None,
@@ -305,6 +330,7 @@ class MarketScanMixin:
                             pcr=pcr_val,
                             skew=skew_val,
                             event_tte_hours=tte_hours,
+                            vix_unknown=macro_data is None,
                         )
                         safe_qty = opt_res.suggested_contracts
                         hedge_spy = opt_res.suggested_hedge_spy

@@ -2438,7 +2438,9 @@ class RolloverBacktestEngine2025:
         _score, tier, _title, _factors = evaluate_macro_top_escape_score(
             vts_ratio=vts_ratio,
             fear_greed=48.0,
-            prob=None,
+            # 以中性值代入 (恆不計分)：production 的 None 代表「未知」，會讓
+            # 分級回傳 UNKNOWN 而非 NORMAL，與回測「無歷史資料＝中性」的假設不同
+            prob=0.50,
             is_negative_gamma=is_negative_gamma,
             satellite_euphoria_ratio=euphoria_ratio,
         )

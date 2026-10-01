@@ -1,7 +1,11 @@
 """Portfolio and trading position embed builders"""
 
 import discord
-from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
+from cogs.embed_builders._core import (
+    OPTION_DATA_TIMING_NOTE,
+    NexusEmbed,
+    format_cache_age_suffix,
+)
 import logging
 import math
 import psutil
@@ -352,11 +356,17 @@ def create_trades_embed(
         qty_fmt = f"{color_code}{qty_val}\x1b[0m"
 
         cost_fmt = f"{entry_p:6.2f}"
-        curr_fmt = f"{curr_p:6.2f}"
-
-        pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
-        pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
-        pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
+        # 報價缺失 (current_price None) 顯示 `--`，不再顯示 ±100% 損益；
+        # ask/2 估算值加註 `*`。
+        if curr_p is None or unrealized_pnl is None or pnl_pct is None:
+            curr_fmt = f"{'--':>6}"
+            pnl_fmt = f"\x1b[0;33m{'報價缺失':>10}\x1b[0m"
+        else:
+            est_mark = "*" if t.get("quote_source") == "ASK_HALF" else ""
+            curr_fmt = f"{curr_p:6.2f}{est_mark}"
+            pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
+            pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
+            pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
 
         data_lines.append(
             f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {cost_fmt} | {curr_fmt} | {pnl_fmt}"
@@ -370,24 +380,36 @@ def create_trades_embed(
         embed.add_field(name=name, value=chunk, inline=False)
 
     total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
+    missing_quotes = int(pnl_data.get("missing_quote_count", 0) or 0)
+    has_estimate = any(t.get("quote_source") == "ASK_HALF" for t in trades)
 
     summary = (
         f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
         f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`\n"
         f"📈 **總未實現損益 (Unrealized PnL)**: `${total_unrealized_pnl:,.2f}`"
     )
+    if missing_quotes:
+        summary += f"\n⚠️ {missing_quotes} 筆部位報價缺失，未計入損益"
+    if has_estimate:
+        summary += "\n`*` 零 bid，現價以 ask/2 估算"
     embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
 
     embed.set_footer(text="Nexus Portfolio Engine | 專業實單與損益監控")
     return embed
 
 
+# /dash 對沖狀態：淨 Beta-Delta 美元名目 (|Δ| × SPY) 低於資本的 10% 視為平衡。
+_DASH_HEDGE_NOTIONAL_RATIO: float = 0.1
+
+
 def create_strategic_dash_embed(
     user_ctx: Any,
     pnl_data: Dict[str, Any],
-    vix_spot: float = 18.0,
+    vix_spot: Optional[float] = None,
     runway: Any = None,
     runway_stale: bool = False,
+    nav_data: Optional[Dict[str, Any]] = None,
+    spy_price: Optional[float] = None,
 ) -> discord.Embed:
     """
     建構戰略看板 (Strategic Dashboard) Embed.
@@ -411,11 +433,25 @@ def create_strategic_dash_embed(
     payout_threshold = get_safety_payout_threshold()
 
     status_mode = "觀戰模式" if not user_ctx.is_professional_mode else "實戰模式"
-    nav = _safe_float(user_ctx.capital) + pnl_data.get("total_unrealized_pnl", 0.0)
+    # NAV 按市價：現金 + 現貨市值 + 期權市值 (賣方為負債)，見
+    # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
+    # 資本 + 未實現損益——那會忽略現貨漲跌並重複計入賣方權利金)。
+    if nav_data is not None:
+        nav_line = f"`${_safe_float(nav_data.get('nav')):,.0f}` (按市價，{status_mode})"
+        missing_parts: List[str] = []
+        if nav_data.get("missing_spot_symbols"):
+            missing_parts.append(
+                "現貨 " + "、".join(nav_data.get("missing_spot_symbols") or [])
+            )
+        if nav_data.get("missing_option_quotes"):
+            missing_parts.append(f"期權 {nav_data.get('missing_option_quotes')} 筆")
+        if missing_parts:
+            nav_line += f"\n  ⚠️ 報價缺失未計入：{'；'.join(missing_parts)}"
+    else:
+        nav_line = f"`--` ({status_mode})"
 
     runway_info = (
-        f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
-        f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
+        f"* **總資產 (NAV):** {nav_line}\n" f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
     )
     for line in format_runway_lines(runway, stale=runway_stale):
         runway_info += f"* {line}\n"
@@ -436,11 +472,22 @@ def create_strategic_dash_embed(
     total_delta = _safe_float(user_ctx.total_weighted_delta)
     capital = _safe_float(user_ctx.capital)
 
-    vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
-    new_delta = total_delta + vanna_impact
+    # VIX 未知時不做 Vanna 壓力測試（過去以 18.0 冒充真實 VIX）。
+    new_delta: Optional[float] = None
+    if vix_spot is not None and vix_spot > 0:
+        vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
+        new_delta = total_delta + vanna_impact
 
-    # 對沖狀態與建議
-    hedge_status = "運行中" if abs(total_delta) < (capital * 0.1) else "需調整"
+    # 對沖狀態與建議：Beta-Delta 是 SPY 等值「股數」，須乘上 SPY 價格換成
+    # 美元名目才能與資本比較 (過去把股數直接和美元比，永遠顯示「運行中」)。
+    if spy_price is not None and spy_price > 0:
+        hedge_status = (
+            "運行中"
+            if abs(total_delta) * spy_price < capital * _DASH_HEDGE_NOTIONAL_RATIO
+            else "需調整"
+        )
+    else:
+        hedge_status = "資料不足 (SPY 現價未知)"
     # 簡單邏輯：如果 Delta 太正，建議賣出 SPY；如果太負，建議買入 SPY
     if total_delta > 100:
         hedge_instruction = f"賣出 {int(total_delta)} 股 SPY 以對沖正 Delta"
@@ -451,8 +498,12 @@ def create_strategic_dash_embed(
 
     nro_info = (
         f"* **Beta-Delta:** `{total_delta:+.1f}` (相對於 SPY 的整體曝險)\n"
-        f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
-        f"* **對沖狀態:** {hedge_status}\n"
+        + (
+            f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
+            if new_delta is not None
+            else "* **Vanna 敏感度:** `--` (VIX 資料不足，無法壓力測試)\n"
+        )
+        + f"* **對沖狀態:** {hedge_status}\n"
         f"> 🎯 建議對沖位：{hedge_instruction}"
     )
     embed.add_field(name="🛡️ 組合風險精算 (NRO Integrity)", value=nro_info, inline=False)
@@ -2095,7 +2146,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
 
     embed.set_footer(
-        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
+        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。\n"
+        f"⏱️ {OPTION_DATA_TIMING_NOTE}"
     )
     return embed
 

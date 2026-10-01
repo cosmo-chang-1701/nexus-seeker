@@ -26,14 +26,15 @@
 ## 2. 數學模型與量化推導
 
 ### 2.1 IV Rank 與 IV Percentile 數學定義
-採集標的資產在過去 252 個交易日（1 年）的日線歷史隱含波動率觀測樣本序列：
+採集標的資產在最近 252 個 NYSE 交易日（1 年，排除週末與國定假日）的歷史隱含波動率觀測樣本序列，加上今日即時值：
 $$\mathcal{V}_{252} = \{\sigma_1, \sigma_2, \dots, \sigma_{252}\}$$
+樣本來源為 `historical_iv`，**只收盤中寫入的即時 IV**（`LIVE_IV`，期權鏈加權 IV）；盤後／週末不再以「今天」日期寫入前值搬運（`STORED_IV`）或已實現波動率代理（`HV_PROXY`）——前者製造重複樣本，後者因波動率風險溢酬恆正而使 $\sigma_{\min}$ 虛低、IVR 虛高。樣本不足 60 筆時 IVR／IVP 為未知（`None`）。
 $$\sigma_{\min} = \min(\mathcal{V}_{252}), \quad \sigma_{\max} = \max(\mathcal{V}_{252})$$
 
 #### 1. IV Rank (IVR) 公式
 IV Rank 衡量當前隱含波動率相對於歷史極值區間的極差相對位置：
-$$\text{IV Rank} = \begin{cases} \left( \frac{\sigma_{\text{curr}} - \sigma_{\min}}{\sigma_{\max} - \sigma_{\min}} \right) \times 100\%, & \text{若 } \sigma_{\max} > \sigma_{\min} \\ 50.0\%, & \text{若 } \sigma_{\max} = \sigma_{\min} \end{cases}$$
-值域嚴格約束在 $[0.0, 100.0]$。
+$$\text{IV Rank} = \begin{cases} \left( \frac{\sigma_{\text{curr}} - \sigma_{\min}}{\sigma_{\max} - \sigma_{\min}} \right) \times 100\%, & \text{若 } \sigma_{\max} > \sigma_{\min} \\ \text{未知 (None)}, & \text{若 } \sigma_{\max} = \sigma_{\min} \end{cases}$$
+值域嚴格約束在 $[0.0, 100.0]$。窗口內 IV 完全相同代表樣本退化（多為資料問題），IVR 與 IVP 皆無定義，標為未知而不是補 $50\%$ 冒充「中位」。
 
 #### 2. IV Percentile (IVP) 公式
 IV Percentile 衡量當前隱含波動率高於過去一年中多少比例的交易日（經驗分佈函數）：
@@ -41,8 +42,8 @@ $$\text{IV Percentile} = \left( \frac{1}{252} \sum_{t=1}^{252} \mathbf{1}_{\{\si
 值域嚴格約束在 $[0.0, 100.0]$。
 
 #### 3. 物理常識校驗約束 (Sanity Check)
-若計算得出 $\text{IV Rank} > 70.0\%$，但當前絕對年化隱含波動率卻異常低於 5%（$\sigma_{\text{curr}} < 0.05$），代表歷史觀測樣本存在嚴重畸形或資料源丟包，系統強制拋出異常阻斷：
-$$\text{Conflict Alert} \iff (\text{IV Rank} > 70.0\%) \land (\sigma_{\text{curr}} < 0.05)$$
+若計算得出 $\text{IV Rank} > 70.0\%$，但當前絕對年化隱含波動率卻異常低於 1%（$\sigma_{\text{curr}} < 0.01$，放寬自 5% 以免誤殺 BIL、SHY 等超低波標的的正常定價），代表歷史觀測樣本存在嚴重畸形或資料源丟包，系統強制拋出異常阻斷：
+$$\text{Conflict Alert} \iff (\text{IV Rank} > 70.0\%) \land (\sigma_{\text{curr}} < 0.01)$$
 
 ### 2.2 四階波動率位階劃分 (IV Tiers)
 系統依據 IV Rank 將市場環境劃分為四種微觀波幅狀態：
@@ -108,8 +109,8 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-### 5.1 IVR = 0.0 數據缺失不誤殺 (Missing Data Guard)
-在盤前時段或歷史資料庫初次冷啟動時，若缺少歷史 252 日 IV 序列，系統計算出的 `iv_rank` 可能為 `0.0`。若機械式執行 `ivr < 10.0`，將導致所有標的被錯誤鎖死。`ivr_strategy_gate.py:39` 明確設置安全防護：
+### 5.1 IVR 未知不誤殺 (Missing Data Guard)
+盤前時段、歷史樣本不足 60 筆或窗口退化時，`iv_rank` 為 `None`（未知）。顯示端一律標示「--」或「IVR 資料不足」，不得當成 $0\%$ 低 IVR 顯示；呼叫 `is_selling_locked_by_ivr()` 的路徑以 `ivr or 0.0` 傳入，由閘門的安全防護處理，避免機械式執行 `ivr < 10.0` 把所有標的錯誤鎖死：
 ```python
 if ivr <= 0.0:
     # IVR == 0.0 通常代表數據缺失或盤前，不由此閘門處理
@@ -117,6 +118,8 @@ if ivr <= 0.0:
 return ivr < _IVR_SELLING_LOCKOUT
 ```
 確保資料缺失時由降級系統平滑處理，不產生偽鎖死。
+
+**母體重建期**：`v088` 遷移整批清空 `historical_iv`（舊母體混入無法辨識的 `HV_PROXY` 與搬運列，逐列清理無法保證乾淨），由盤中即時 IV 從頭累積。清空後約 60 個交易日內所有標的 IVR 為未知，IVR 相關閘門（賣方鎖定、Covered Call 解鎖、`target_ivr`）期間一律走上述未知路徑。
 
 ### 5.2 負 Gamma 踩踏區優先覆寫一切 IVR (Gamma Overrides IVR)
 在市場崩盤期間，隱含波動率往往暴增至 90% 以上（極高 IVR）。傳統教科書常盲目建議此時「大舉賣出 Put 收取天價權利金」。然而，如果做市商全鏈處於負 Gamma 泥淖，現貨隨時可能引發無量跌停或流動性斷裂。因此在 `market_embeds.py:1140` 中：

@@ -31,7 +31,7 @@ SNAPSHOT_SUBDIR = "microstructure"
 
 # 與 nexus_edge_scraper/gex_scraper.py 相同的常數
 _GEX_MIN_DELTA_THRESHOLD = 0.02
-_RISK_FREE_RATE = 0.04
+_RISK_FREE_RATE = 0.042  # 亦與 config.RISK_FREE_RATE 一致 (由測試鎖定)
 _MIN_T_DAYS = 2.0
 
 # 週 EM 候選到期日範圍（日曆日）
