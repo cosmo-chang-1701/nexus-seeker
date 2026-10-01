@@ -49,18 +49,8 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
     0.3  # 未設定 max_allocation_pct 時的預設衛星部位上限
 )
 
-# --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
-_CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
-_BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
-# 機會分支（State A）通過既有六重鐵律 _confirm_entry_signal 後，僅動用超額
-# 資金的這個比例部署至候選標的；剩餘部分維持現金/緩衝，不生成第二筆分流
-# 指令。BOXX 防禦分支不受此常數影響，仍為 100% 部署。
-_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO: float = 0.5
-
-# --- 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
-# 與 evaluate_core_deployment 的兩個既有分支不同，本分支刻意不要求
-# target_allocation_pct opt-in (詳見該函式 docstring)，只要求 CORE 持倉股數
-# 達 1 口門檻，故獨立於上方兩個常數之外另立一組。
+# --- 邏輯 (1)：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
+# 只要求 CORE 持倉股數達 1 口門檻，不要求 target_allocation_pct opt-in。
 _COVERED_CALL_MIN_SHARES: int = 100  # 1 口最低股數門檻
 _COVERED_CALL_MAX_LOTS: int = (
     1  # 使用者明確規格：固定 1 口，未來若放寬為 N 口只需調整此常數
@@ -517,7 +507,7 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 # --- 風險偏好參數化 (RiskAppetite / RiskProfile)，見 models.py::RiskAppetite ---
 #
-# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻／核心資金部署比例三處的
+# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻兩處的
 # 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
 # 已移除的離線轉倉回測（backtest_engine_2025）的 aggressive 模式。⚠️ 採用依據「報酬/MDD/
 # Sharpe 三項皆優於 DEFENSIVE」來自早期引擎；2026-09-23 以 Sortino 為主的判準
@@ -540,8 +530,6 @@ class RiskProfile(NamedTuple):
     # 效果。維持「基礎門檻 + 動態摩擦成本」兩項相加的既有運算式不變，本欄位
     # 只替換其中的基礎門檻分量。
     rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
-    core_deploy_ratio: float  # core_deployment.py 機會分支部署比例，取代
-    # _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
     max_satellite_budget_pct: float  # 單筆衛星預算上限，由 pyramid_add.py 條件七
     # (加碼後總曝險不得超過此比例，超過時降量) 消費
 
@@ -551,14 +539,12 @@ _RISK_PROFILES: dict[str, RiskProfile] = {
         tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
         ev_hurdle=_EV_SPREAD_MIN_THRESHOLD,  # 0.05，現行行為
         rotation_cooldown_days=5,
-        core_deploy_ratio=_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,  # 0.50，現行行為
         max_satellite_budget_pct=0.15,
     ),
     "AGGRESSIVE": RiskProfile(
         tp1_ratio=0.30,
         ev_hurdle=0.02,
         rotation_cooldown_days=3,
-        core_deploy_ratio=0.80,
         max_satellite_budget_pct=0.25,
     ),
 }

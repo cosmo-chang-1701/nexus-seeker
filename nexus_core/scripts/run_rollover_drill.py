@@ -368,10 +368,7 @@ async def run_scenario_3() -> None:
         print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}通過 ✅{C_RESET}")
 
     from cogs.embed_builders.rollover_embeds import create_short_entry_embed
-    from market_analysis.dynamic_rollover.models import (
-        EntryConfirmation,
-        ShortEntryEvaluation,
-    )
+    from market_analysis.dynamic_rollover.models import ShortEntryEvaluation
     from market_analysis.dynamic_rollover.short_entry_sizing import (
         build_short_entry_levels,
         build_short_entry_plan,
@@ -397,38 +394,10 @@ async def run_scenario_3() -> None:
         ivr=20.0,
     )
 
-    print_section("3. 下游隔離：做空確認不進入任何多頭路徑")
-    engine = DynamicRolloverEngine()
-    confirmation = EntryConfirmation(
-        True,
-        ev.reason,
-        "SHORT",
-        short_evaluation=ev,
-        entry_regime="REGIME_V_BREAKDOWN_CHASE",
-    )
-    core = await engine.evaluate_core_deployment(
-        101,
-        [
-            {
-                "symbol": "VOO",
-                "asset_class": "CORE",
-                "current_value": 60000.0,
-                "target_allocation_pct": 0.5,
-                "boxx_allocation_pct": 0.0,
-            }
-        ],
-        set(),
-        100000.0,
-        "TSLA",
-        {"quote": {"c": 92.0}},
-        precomputed_entry_confirmation=confirmation,
-    )
+    print_section("3. 下游隔離：做空確認只走 SHORT_ENTRY")
     print(
-        f" • Scenario 2 機會成本轉倉：{C_GREEN}0 筆{C_RESET} (做空確認在衛星迴圈前返回)"
-    )
-    print(
-        f" • Scenario 5 核心資金部署：{C_GREEN}{len(core)} 筆{C_RESET} "
-        "(SHORT 確認不得把 CORE 現金 Buy Shares 進做空標的)"
+        f" • 做空確認 ➔ {C_GREEN}僅由 SHORT_ENTRY 情境產生獨立的做空進場訊號{C_RESET}"
+        "（不進入任何多頭買進路徑）"
     )
 
     print_section("4. SHORT_ENTRY 價位與倉位計算")

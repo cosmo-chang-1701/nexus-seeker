@@ -78,7 +78,6 @@ def test_build_option_asset_entry_degrades_avg_cost_and_acquired_at() -> None:
     )
     assert entry["avg_cost"] == 0.0
     assert entry["acquired_at"] is None
-    assert entry["boxx_allocation_pct"] is None
     # 無雷達資料時，gex_profile_data/psq_result 優雅降級為空 dict
     assert entry["gex_profile_data"] == {}
     assert entry["psq_result"] == {}

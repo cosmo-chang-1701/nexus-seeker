@@ -331,23 +331,9 @@ async def _compute_market_regime_uncached() -> str:
 _FEAR_GREED_EXTREME_FEAR_BOUND: float = 25.0
 _FEAR_GREED_EXTREME_GREED_BOUND: float = 75.0
 
-# 核心資金部署引擎 (Dynamic Rollover Scenario 5) 的總經自動建議機制，統一分為四級
-# 市況分級 (CRISIS / EXTREME_FEAR / EXTREME_GREED / NORMAL)。suggest_boxx_allocation_pct()
-# 與 suggest_target_allocation_pct() 皆透過 _resolve_core_deployment_macro_tier()
-# 取得同一份分級結果，確保兩者的建議值永遠基於完全一致的市況輸入 (regime +
-# fear_greed 只評估一次)，結構上不可能互相矛盾。
-_BOXX_SUGGEST_BY_TIER: Dict[str, float] = {
-    # 總經資料不足 (regime/Fear & Greed 未知)：比照 CRISIS 採最保守值。
-    "UNKNOWN": 70.0,
-    "CRISIS": 70.0,
-    "EXTREME_FEAR": 60.0,
-    "EXTREME_GREED": 20.0,
-    "NORMAL": 30.0,  # 其餘正常市況，維持偏向投入候選標的的既有行為
-}
-# target_allocation_pct 建議值語意與 boxx_allocation_pct 相反方向連動：市況越差，
-# 越傾向續抱防禦性核心部位（建議的目標配置上限越高，觸發部署的門檻也越高）；
-# 一旦真的觸發部署，超額資金才由 boxx_allocation_pct 決定優先停泊 BOXX 還是追價
-# 候選標的。兩者共用同一份分級，方向設計上彼此呼應而非衝突。
+# CORE 持倉 target_allocation_pct 的總經參考建議值，分為四級市況
+# (CRISIS / EXTREME_FEAR / EXTREME_GREED / NORMAL)，僅供 /list_holdings 顯示。
+# 市況越差，建議的目標配置上限越高（越傾向續抱防禦性核心部位）。
 _TARGET_ALLOC_SUGGEST_BY_TIER: Dict[str, float] = {
     "UNKNOWN": 70.0,
     "CRISIS": 70.0,
@@ -358,12 +344,12 @@ _TARGET_ALLOC_SUGGEST_BY_TIER: Dict[str, float] = {
 
 
 async def _resolve_core_deployment_macro_tier() -> str:
-    """評估核心資金部署總經自動建議機制所使用的統一市況分級，回傳
+    """評估目標配置總經參考建議所使用的統一市況分級，回傳
     "CRISIS" | "EXTREME_FEAR" | "EXTREME_GREED" | "NORMAL" | "UNKNOWN" 其中之一。"""
     try:
         regime = await get_market_regime()
     except Exception as e:
-        logger.warning(f"評估核心資金部署總經建議值時取得市場 Regime 失敗: {e}")
+        logger.warning(f"評估目標配置總經建議值時取得市場 Regime 失敗: {e}")
         regime = "UNKNOWN"
 
     if regime in ("SYSTEMIC_LIQUIDITY_CRISIS", "SHORT_GAMMA_CRITICAL"):
@@ -376,7 +362,7 @@ async def _resolve_core_deployment_macro_tier() -> str:
         if fg_raw is not None and not core_metrics.get("_is_fallback"):
             fear_greed = float(fg_raw)
     except Exception as e:
-        logger.warning(f"評估核心資金部署總經建議值時取得 Fear & Greed 指數失敗: {e}")
+        logger.warning(f"評估目標配置總經建議值時取得 Fear & Greed 指數失敗: {e}")
 
     # Regime 或 Fear & Greed 未知：不宣稱 NORMAL (過去補 48 → NORMAL)，改採
     # 最保守的建議值 (fail-closed：超額資金優先停泊 BOXX)。
@@ -391,23 +377,11 @@ async def _resolve_core_deployment_macro_tier() -> str:
     return "NORMAL"
 
 
-async def suggest_boxx_allocation_pct() -> float:
-    """依當前大盤 Gamma Regime 與 Fear & Greed 指數，評估動態轉倉引擎核心資金部署
-    (Dynamic Rollover Scenario 5, CORE_DEPLOYMENT) 超額資金轉入 BOXX 防禦的建議
-    閾值 (0-100)。供使用者未透過 /edit_holding 手動設定 boxx_allocation_pct 時的
-    自動預設依據，數值 >= _BOXX_DEFENSE_THRESHOLD (50.0) 代表建議優先防禦轉入 BOXX。
-    """
-    tier = await _resolve_core_deployment_macro_tier()
-    return _BOXX_SUGGEST_BY_TIER[tier]
-
-
 async def suggest_target_allocation_pct() -> float:
     """依當前大盤 Gamma Regime 與 Fear & Greed 指數，評估 CORE 持倉 (如 VOO)
     target_allocation_pct 的參考建議值 (0-100)。**僅供 /list_holdings 顯示參考，
-    不會被核心資金部署引擎自動套用生效**——target_allocation_pct 是 CORE_DEPLOYMENT
-    是否觸發的嚴格 opt-in 閘門，刻意不比照 boxx_allocation_pct 自動代入計算，避免
-    從未透過 /edit_holding 表態過的使用者被意外觸發部署 (見 core_deployment.py 的
-    opt-in 閘門設計說明)。"""
+    不會自動套用生效**——target_allocation_pct 只有使用者透過 /edit_holding 明確
+    設定過才生效（持倉頁超限顯示與提領再平衡權重）。"""
     tier = await _resolve_core_deployment_macro_tier()
     return _TARGET_ALLOC_SUGGEST_BY_TIER[tier]
 

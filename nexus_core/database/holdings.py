@@ -77,7 +77,6 @@ def get_user_holdings(user_id: int) -> Any:
             # 三態：缺省/None=跟隨帳戶 portfolio_mode、True=顧問、False=指令
             d["advisory_only"] = meta.get("advisory_only")
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
-            d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")
             d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
             rows.append(d)
@@ -117,7 +116,6 @@ def get_all_holdings() -> Any:
             # 三態：缺省/None=跟隨帳戶 portfolio_mode、True=顧問、False=指令
             d["advisory_only"] = meta.get("advisory_only")
             d["target_allocation_pct"] = meta.get("target_allocation_pct")
-            d["boxx_allocation_pct"] = meta.get("boxx_allocation_pct")
             d["acquired_at"] = meta.get("acquired_at")
             d["dynamic_strategy_state"] = meta.get("dynamic_strategy_state")
             rows.append(d)

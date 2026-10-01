@@ -362,7 +362,7 @@ class PortfolioMonitorCog(commands.Cog):
         """組裝單筆多頭期權持倉的 asset_entry，供動態轉倉引擎評估迴圈使用。
 
         選擇權合約本身恆為戰術性部位：即使標的是 CORE 防禦 ETF，也不套用
-        CORE 的無上限配置假設，避免 evaluate_core_deployment /
+        CORE 的無上限配置假設，避免
         evaluate_covered_call_overlay 誤處理。期權部位無法從既有資料推導
         單筆成本基礎 (見 anti_washout.py 的 acquired_at 估算邏輯)，
         avg_cost/acquired_at 明確降級為 0.0/None。
@@ -438,7 +438,6 @@ class PortfolioMonitorCog(commands.Cog):
             "acquired_at": None,
             "bid": bid,
             "ask": ask,
-            "boxx_allocation_pct": None,
             "uoa": metrics.get("uoa", []),
             "vwap_loss_with_volume": metrics.get("vwap_loss_with_volume", False),
             "session_vwap": metrics.get("session_vwap", 0.0),
@@ -853,10 +852,6 @@ class PortfolioMonitorCog(commands.Cog):
                         if radar_cache_map.get(sym)
                         else {},
                         "acquired_at": h.get("acquired_at"),
-                        # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：None 時
-                        # evaluate_core_deployment() 會自動改用
-                        # suggest_boxx_allocation_pct() 的總經自動建議值。
-                        "boxx_allocation_pct": h.get("boxx_allocation_pct"),
                         # 微觀結構出場決策矩陣 (SL-主力對沖/TP3-終局平倉) 所需的
                         # 原始 UOA 清單與 VWAP 帶量失守訊號，皆由 _build_symbol_metrics
                         # 標的層級計算一次，現貨與期權部位共用同一份結果。
@@ -1105,34 +1100,14 @@ class PortfolioMonitorCog(commands.Cog):
                     )
                     rebalance_instructions += opportunity_cost_instructions
 
-                    # 🚀 邏輯 (5): 核心資金部署 — 對超過使用者明確設定
-                    # target_allocation_pct 的 CORE 持倉，將超額部位部署至
-                    # 邏輯 (2) 已找到並確認突破的候選標的，重用同一份
-                    # candidate_symbol / candidate_radar，不重複掃描 watchlist；
-                    # 同時沿用邏輯 (2) 已算好的 _confirm_entry_signal 六重鐵律
-                    # 確認結果 (candidate_entry_confirmation)，避免對同一候選
-                    # 標的在同一輪次內重複驗證 (內含未快取的 get_market_regime()
-                    # 呼叫)。
                     already_flagged = {
                         (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
                     }
-                    rebalance_instructions += (
-                        await self.rollover_engine.evaluate_core_deployment(
-                            u_id,
-                            portfolio_assets,
-                            already_flagged,
-                            total_val,
-                            candidate_symbol,
-                            candidate_radar,
-                            precomputed_entry_confirmation=candidate_entry_confirmation,
-                        )
-                    )
 
-                    # 🚀 邏輯 (5) 延伸: Covered Call Overlay — 與上方超額配置部署
-                    # 分支互相獨立，不要求 target_allocation_pct opt-in，只要求
-                    # CORE 持倉股數達 1 口門檻。輸出恆為 action="HOLD"（不賣出
+                    # 🚀 邏輯 (1): Covered Call Overlay — 不要求
+                    # target_allocation_pct opt-in，只要求 CORE 持倉股數達 1 口門檻。輸出恆為 action="HOLD"（不賣出
                     # 任何標的持股），故不需要、也不應該把它的輸出併入
                     # already_flagged_symbols 用於排除後續分支 —— 沿用當前的
                     # already_flagged 集合即可（其僅用於避免重複評估已被標記
@@ -1145,7 +1120,7 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3/5 標記過的
+                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
                     # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
                     # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的

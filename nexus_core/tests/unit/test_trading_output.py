@@ -723,64 +723,6 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_monitor_real_portfolio_task_threads_entry_confirmation_into_core_deployment() -> (
-    None
-):
-    """Phase 2 回歸鎖定：monitor_real_portfolio_task 應將 Scenario 2
-    (evaluate_opportunity_cost_for_satellites) 回傳的 _confirm_entry_signal
-    確認結果，原樣透過 precomputed_entry_confirmation 轉交 Scenario 5
-    (evaluate_core_deployment)，而非各自獨立重新確認。"""
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    bot.get_cog = MagicMock(return_value=None)
-
-    with patch("discord.ext.tasks.Loop.start"):
-        cog = PortfolioMonitorCog(bot)
-
-    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
-
-    holding = {
-        "id": 1,
-        "user_id": 1,
-        "symbol": "NVDA",
-        "metadata": "{}",
-        "quantity": 10.0,
-        "avg_cost": 200.0,
-    }
-
-    from market_analysis.dynamic_rollover.models import EntryConfirmation
-
-    entry_confirmation = EntryConfirmation(True, "已確認突破")
-    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], entry_confirmation)
-    )
-    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
-
-    with (
-        patch(
-            "cogs.trading.portfolio_monitor.market_time.is_market_open",
-            return_value=True,
-        ),
-        patch("services.llm_service.is_memory_safe", return_value=True),
-        patch("database.holdings.get_all_holdings", return_value=[holding]),
-        patch("database.watchlist.get_user_watchlist", return_value=[]),
-        patch(
-            "market_analysis.trading_orchestration.recommend_covered_calls",
-            new_callable=AsyncMock,
-            return_value={"recommendations": []},
-        ),
-    ):
-        await cog.monitor_real_portfolio_task()
-
-    cog.rollover_engine.evaluate_core_deployment.assert_awaited_once()
-    await_args = cog.rollover_engine.evaluate_core_deployment.await_args
-    assert await_args is not None
-    assert await_args.kwargs["precomputed_entry_confirmation"] == entry_confirmation
-
-
-@pytest.mark.asyncio
 async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed() -> (
     None
 ):
@@ -827,7 +769,6 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
         return_value=([], None)
     )
-    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
         return_value=[overlay_instruction]
     )
@@ -886,7 +827,6 @@ def _mock_all_rollover_scenarios(cog: PortfolioMonitorCog) -> None:
     cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
         return_value=([], None)
     )
-    cog.rollover_engine.evaluate_core_deployment = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
         return_value=[]
     )
