@@ -16,7 +16,7 @@
 - `enable_vtr`、`enable_psq_watchlist`、`monthly_expense`、`tax_reserve_rate`、`cash_reserve`
 - `trading_strategy`（`RIGHT_SIDE` / `LEFT_SIDE` / `SHORT_SIDE` / `DYNAMIC`，遷移 `v068`，預設 `RIGHT_SIDE`）——詳見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)。這是第一個既非布林開關、也非自由文字數值欄位的設定，因此 `AccountSettingsView.on_select_callback()` 新增了**第三分支**：一個固定 4 選項的 `TradingStrategySelectView`，直接寫入資料庫並導回父視圖，不經過 Modal（仿照 `ui/watchlist_tags.py` 的 Select 子類作法）。
   - `SHORT_SIDE`（做空交易）是後續新增的第四個值。因該欄位是 `TEXT DEFAULT 'RIGHT_SIDE'` 且無 `CHECK` 約束，新增 enum 值**不需要**新的 migration。選單描述文字刻意標明方向（「做多・逆勢均值回歸」／「做空・結構破位追空」），避免使用者把「左側」誤讀為「做空」——左側本質仍是做多。
-- `portfolio_mode`（`COMMAND` / `ADVISORY`，遷移 `v079`，預設 `COMMAND`）——持倉停利停損輸出語意的帳戶層開關，詳見 [`../strategies/05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1。比照 `risk_appetite` 的既有 Select 範式（`PortfolioModeSelectView`，固定 2 選項、直接寫入 DB、不經 Modal）。單檔可用 `/edit_holding advisory_mode` 三態覆寫（`FOLLOW`/`ADVISORY`/`COMMAND`，存於 `assets.metadata.advisory_only`）。
+- `portfolio_mode`（遷移 `v079`）——**已停用**：欄位保留但不再讀寫；多頭現貨的停利停損一律顧問化（見 [`../strategies/05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1）。
 - 也整合了**自選股標籤系統**：允許使用者透過互動下拉選單與 Modal，為自選股資產附加自訂分類標籤（如 `TECH`、`CORE`，`ui/watchlist_tags.py`）。此標籤引擎也完整暴露於 `/list_watch` 指令輸出中，透過在地化的「🏷️ 原地編輯標籤」捷徑按鈕，實現自動重建並替換原始 Discord 視圖的無縫、類 SPA 編輯體驗。
 
 ### 2.2 通知偏好（`/notif_settings`）
@@ -39,7 +39,7 @@
 | 🚀 上行捕捉 | `UPSIDE_CAPTURE` | `advisory_entry_signal` | 自選標的進場顧問（六重鐵律通過時推播進場價／停損／目標） |
 | | | `entry_pyramid_add` | `PYRAMID_ADD`、`TRANSITION_ENGINE`（停損上推／一次性加碼）、`CORE_DEPLOYMENT` |
 | | | `alpha_short_entry` | `SHORT_ENTRY` 做空進場（校準中，歸雜訊；另受 `SHORT_ENTRY_DRY_RUN` 控制） |
-| ✂️ 上行削減 | `UPSIDE_TRIM` | `defense_option_rollover` | TP1–TP3 分批、衛星再平衡、機會成本換股、動態保本（`SL_TRAILING_BREAKEVEN`） |
+| ✂️ 上行削減 | `UPSIDE_TRIM` | `defense_option_rollover` | TP1–TP3 分批、衛星再平衡、動態保本（`SL_TRAILING_BREAKEVEN`） |
 | | | `trim_covered_call` | Covered Call 解套、CC Overlay、`COVERED_CALL_PROFIT_LOCK` |
 | | | `trim_profit_lock` | DITM 深價內期權獲利鎖定 |
 | | | `advisory_core_levels` | 顧問模式目標區位階告知（去重鍵 `advisory_exit_{uid}_{SYMBOL}_{EXIT_TIER}_{YYYYMMDD}`） |
@@ -69,7 +69,7 @@
 #### 2.2.3 預設情境（由頻道屬性衍生）
 每個頻道帶 `risk_role`、`cadence`（盤中／每日／每週／全天候／事件）、`noise`（高頻或尚未校準）、`user_configured`（使用者自訂門檻）與 `preset_immune` 屬性，預設情境由規則衍生，新增頻道時不可能漏填：
 
-- `🧭 B&H 防守`（`bh_defense`）：上行捕捉開（不含做空）、上行削減全關、情報只留自訂門檻型（價量、WTI）、戰報開（不含雜訊）。帳戶 `portfolio_mode='ADVISORY'` 時按鈕標示「建議」。
+- `🧭 B&H 防守`（`bh_defense`）：上行捕捉開（不含做空）、上行削減全關、情報只留自訂門檻型（價量、WTI）、戰報開（不含雜訊）。按鈕恆標「建議」（系統以 B&H 為主要策略）。
 - `🎯 精準交易`（`focus`）：只關閉 `noise` 頻道。
 - `🔕 盤中靜音`（`mute_intraday`）：關閉 `noise` 與 `cadence == INTRADAY` 的頻道。
 - `🛡️ 戰備全開`（`all_on`）；`all_off` 僅供程式呼叫。

@@ -163,7 +163,7 @@ _MACRO_TOP_ESCAPE_PUT_DTE_MAX: int = 60  # 建議 DTE 上限：避開近月 Thet
 # 僅對 OPTIONS 部位有意義。與既有 _ENTRY_UOA_MIN_DTE(7)/_ENTRY_CANDIDATE_MIN_DTE(1)
 # 刻意分開命名而不合併重用：後兩者是「候選標的」進場確認條件的一部分，本組常數
 # 是「既有持倉」本身的到期日分級門檻，語意不同，數值恰好相同純屬巧合。
-_HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，Scenario 2 的機會成本轉倉
+_HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，TP 輪動目標的轉倉
 # 與 Scenario 3 Euphoria 分支的「開立全新 Bear Call Spread」判定一律封鎖 (末日
 # 流動性雜訊，不適合用於驅動新開倉/轉倉決策)；既有部位的雙軌停損監控不受影響。
 _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD: int = 1  # dte <= 此值時，無論停損是否
@@ -443,7 +443,7 @@ _SHORT_ENTRY_KELLY_SCALE: float = 0.5
 _SHORT_ENTRY_KELLY_CAP: float = 0.01
 # 每位使用者每個 15 分鐘週期最多產生的做空進場指令數。
 _SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE: int = 1
-# 每週期最多評估的做空候選數 (含 Scenario 2 預先確認的候選)。
+# 每週期最多評估的做空候選數 (僅 _find_best_short_target 挑選)。
 _SHORT_ENTRY_MAX_CANDIDATES: int = 2
 
 # --- PYRAMID_ADD 情境 (pyramid_add.py) 具名常數 ---

@@ -22,7 +22,7 @@ Nexus Seeker 將此逆向哲學規格化為 **VIX 戰情階梯（VIX Battle Ladd
 
 ### 1.4 使用者風險偏好的組合層級旋鈕 (`RiskAppetite`)
 
-上述 VIX 戰情階梯與凱利先驗是**盤中即時**的單筆倉位風控，回答「這一筆現在能下多大」。`RiskAppetite`（`DEFENSIVE`／`AGGRESSIVE`）是正交的另一個旋鈕，回答「動態轉倉引擎整體要多快減碼、多快轉倉、多敢部署」，作用在 TP1 執行比例、機會成本轉倉 EV 門檻、核心資金部署比例與衛星預算上限四個組合層級參數上，兩者不互相覆寫。
+上述 VIX 戰情階梯與凱利先驗是**盤中即時**的單筆倉位風控，回答「這一筆現在能下多大」。`RiskAppetite`（`DEFENSIVE`／`AGGRESSIVE`）是正交的另一個旋鈕，回答「動態轉倉引擎整體要TP1 減碼比例與金字塔加碼預算」，作用在 TP1 執行比例、機會成本轉倉 EV 門檻、核心資金部署比例與衛星預算上限四個組合層級參數上，兩者不互相覆寫。
 
 `DEFENSIVE` 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化；`AGGRESSIVE` 的數值全部來自 [`04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10 的 2025 回測動能進攻型模式（採用當時依據為早期引擎版本「報酬／MDD／Sharpe 三項皆優於 Defensive」）。⚠️ 2026-09-23 以現行程式碼與 **Sortino 為主**的判準重跑，Defensive（1.45）優於 Aggressive（1.13），此前提已不成立；是否調整屬人工決策，參數尚未變更。詳細數值見 §4.4 與 [`07_downside_risk_sortino_var_cvar.md`](07_downside_risk_sortino_var_cvar.md)。
 
@@ -214,14 +214,11 @@ flowchart TD
 | 欄位 (`RiskProfile`) | `DEFENSIVE`（預設） | `AGGRESSIVE` | 消費端 |
 |---|---|---|---|
 | `tp1_ratio` | $0.50$（現行行為） | $0.30$ | `anti_washout.py::_evaluate_microstructure_tp_ladder` TP1 執行比例 |
-| `ev_hurdle` | $0.05$（`_EV_SPREAD_MIN_THRESHOLD`，現行行為） | $0.02$ | `opportunity_cost.py` 機會成本轉倉 EV Spread 門檻基礎分量 |
 | `rotation_cooldown_days` | $5$ | $3$ | 保留欄位，供既有輪動冷卻邏輯串接 |
-| `core_deploy_ratio` | $0.50$（現行行為） | $0.80$ | `core_deployment.py::evaluate_core_deployment` 機會分支部署比例 |
 | `max_satellite_budget_pct` | $0.15$ | $0.25$ | `pyramid_add.py` 條件七單筆衛星預算上限 |
 
-$\text{resolve\_risk\_profile}(\text{appetite})$ 對未知值或 `None` 一律 fail-safe 回退 `DEFENSIVE`（大小寫不敏感）。三個既有消費端皆在各自函式入口**解析一次後往下傳**，不在熱路徑迴圈內對每筆持倉重複查表。
+$\text{resolve\_risk\_profile}(\text{appetite})$ 對未知值或 `None` 一律 fail-safe 回退 `DEFENSIVE`（大小寫不敏感）。既有消費端皆在各自函式入口**解析一次後往下傳**，不在熱路徑迴圈內對每筆持倉重複查表。
 
-⚠️ `ev_hurdle` 的 `DEFENSIVE` 值刻意**不是** $\_EV\_SPREAD\_MIN\_THRESHOLD + \_ESTIMATED\_ROUND\_TRIP\_COST\_PCT$（即不含 §2.2 情境二的 $0.3\%$ 往返成本）——`opportunity_cost.py` 對近價期權合約會以實際 Bid-Ask 點差動態放大摩擦成本，若把往返成本併入本欄位的靜態基礎值，會蓋掉那個已驗證的動態機制、失去自動放大效果。
 
 ---
 
