@@ -77,8 +77,9 @@ $$
    無論衰減幅度，強制 100% BTC 平倉回補，規避末日價內指派（Pin Risk）。
 
 ### 2.6 情境六：宏觀逃頂前瞻防禦 (`MACRO_TOP_ESCAPE_DEFENSE`)
-當總經逃頂評分 `evaluate_macro_top_escape_score()` 達到 `CRITICAL` 分級（同時滿足 $\ge 3$ 項宏觀風險因子，如 VTS 倒掛、極度貪婪、FedWatch 鷹派偏離、負 Gamma、衛星持倉亢奮廣度 $\ge 50\%$）時：
+當總經逃頂評分 `evaluate_macro_top_escape_score()` 達到 `WATCH` 以上分級（WATCH $\ge 1$、ELEVATED $\ge 2$、CRITICAL $\ge 3$ 項宏觀風險因子，如 VTS 倒掛、極度貪婪、FedWatch 鷹派偏離、負 Gamma、衛星持倉亢奮廣度 $\ge 50\%$）時：
 - 建議買入 SPY 保護性 Put 作為尾部避險（WATCH／ELEVATED／CRITICAL 皆如此）。不減碼 SATELLITE、不轉入 `BOXX`——截斷上行的減碼會壓低 Sortino（§2.10.1）。
+- 判讀文案依分級不同；分級納入每日 dedup key（同日升級再推播），且不受 `OPTIONS_ROLLOVER_DRY_RUN` 攔截（[`macro_sentiment/01`](../macro_sentiment/01_macro_escape_top_matrix.md) §5.6）。
 
 ### 2.7 情境七：基本面護城河破滅 (`FUNDAMENTAL_BROKEN`)
 整合 LLM 對 SEC 申報文件（10-K / 10-Q / 8-K）或核心新聞進行結構化推理。模型需依據四項嚴苛標準判斷：

@@ -214,7 +214,6 @@ flowchart TD
 | 欄位 (`RiskProfile`) | `DEFENSIVE`（預設） | `AGGRESSIVE` | 消費端 |
 |---|---|---|---|
 | `tp1_ratio` | $0.50$（現行行為） | $0.30$ | `anti_washout.py::_evaluate_microstructure_tp_ladder` TP1 執行比例 |
-| `rotation_cooldown_days` | $5$ | $3$ | 保留欄位，供既有輪動冷卻邏輯串接 |
 | `max_satellite_budget_pct` | $0.15$ | $0.25$ | `pyramid_add.py` 條件七單筆衛星預算上限 |
 
 $\text{resolve\_risk\_profile}(\text{appetite})$ 對未知值或 `None` 一律 fail-safe 回退 `DEFENSIVE`（大小寫不敏感）。既有消費端皆在各自函式入口**解析一次後往下傳**，不在熱路徑迴圈內對每筆持倉重複查表。

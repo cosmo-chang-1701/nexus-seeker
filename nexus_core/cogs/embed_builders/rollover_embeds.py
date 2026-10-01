@@ -1275,6 +1275,8 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "COVERED_CALL_PROFIT_LOCK": "CC停利",
     "TRANSITION_ENGINE": "動態切換",
     "SHORT_ENTRY": "做空進場",
+    # 已移除的情境：審計軌跡仍保有舊紀錄，保留短標籤以免撐開固定寬度表格。
+    "OPPORTUNITY_COST": "機會成本",
 }
 
 

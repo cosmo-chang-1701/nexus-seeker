@@ -4,8 +4,8 @@ Nexus Seeker - Dynamic Rollover Engine Real-Time Simulation Drill (動態轉倉�
 =============================================================================
 This script simulates and prints step-by-step telemetry, decision matrices,
 and resulting Discord Embed notifications for:
-  - Scenario 1: NVDA turns weak, SPCX turns strong and passes all 6 entry gates.
-  - Scenario 2: NVDA turns weak, no candidate meets criteria (Hold / Blocked / VOO / BOXX).
+  - Scenario 2: NVDA (long spot, B&H advisory mode) turns weak: structure intact ->
+    silent; structure break -> advisory notice only; margin crisis -> BOXX defense.
   - Scenario 3: TSLA breaks below the Put Wall (Regime V) -> standalone SHORT_ENTRY
     instruction with levels and sizing; long-only downstream paths stay silent.
 """
@@ -20,10 +20,14 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
+from cogs.embed_builders.rollover_embeds import (
+    create_advisory_levels_embed,
+    create_dynamic_rollover_embed,
+)
 from market_analysis.dynamic_rollover import (
     RolloverScenario,
 )
+from market_analysis.dynamic_rollover.advisory_mode import _structure_reason
 
 # ANSI Color Codes for Terminal Output
 C_RESET = "\033[0m"
@@ -57,71 +61,43 @@ def print_embed_preview(embed: Any) -> None:
 
 
 async def run_scenario_2() -> None:
-    print_banner("情境二演練：NVDA 轉弱，沒有標的符合轉倉條件")
+    print_banner("情境二演練：NVDA 轉弱（多頭現股一律走 B&H 顧問模式）")
 
-    print_section("子情境 2A：Watchlist 無候選標的 ➔ S2 早退，S3 安心防守 (HOLD)")
-    print(" • Watchlist 所有標的 EV <= 0.05 或 3 天內有財報，目標鎖定 VOO")
-    print(" • S2 機會成本引擎: 直接早退，不發送無效雜訊")
+    print_section("子情境 2A：結構完好 ➔ 不推播")
     print(
         " • S3 持倉檢驗: NVDA 現價 $195.00 > Stop Loss $185.50 (PutWall $190 - 1.5x ATR $3.0)"
     )
-    print(" • 決策: 產出安心防守卡，嚴守 15 分鐘實體 K 線收盤撤退線")
+    print(" • 顧問模式: HOLD 不推播，只在結構失效／抵達目標區時告知")
 
-    embed_2a = create_dynamic_rollover_embed(
-        rollover_type="持倉防守 (核心衛星再平衡)",
-        sell_symbol="NVDA",
-        sell_ratio=0.0,
-        buy_symbol="NVDA",
-        reason="微結構判定: GEX Wall $190.00 護城河完好，阻力天花板 $210.00\n防守機制: 建議設置防守委託單 停損: $185.50",
-        suggested_strategy="HOLD (維持現狀續抱)",
-        suggested_price="N/A (維持現狀)",
-        strike="N/A",
-        expiry="N/A",
-        direction="HOLD",
-        scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-        asset_class="SPOT",
+    print_section("子情境 2B：NVDA 實體跌破防守線 (結構破位) ➔ 僅告知，不下賣出指令")
+    print(" • NVDA 15m 實體收盤 $184.00 跌破防守線 $185.50，觸發 SL_STRUCTURAL")
+    print(" • 顧問模式: 轉為結構失效告知，是否處置由使用者依自己的論點決定")
+
+    embed_2b = create_advisory_levels_embed(
+        symbol="NVDA",
+        reason=_structure_reason("NVDA", "SL_STRUCTURAL", 184.0, 185.5),
+        advisory_plan={
+            "kind": "STRUCTURE_FAILURE",
+            "spot": 184.0,
+            "stop_loss": 185.5,
+            "call_wall": None,
+            "target": None,
+            "is_blue_sky": False,
+        },
+        exit_tier="SL_STRUCTURAL",
     )
-    print_embed_preview(embed_2a)
+    print_embed_preview(embed_2b)
 
-    print_section("子情境 2B：候選標的被六重進場鐵律攔截 ➔ 系統靜默早退")
-    print(
-        " • Watchlist 有 SPCX，但在 $88.00 爆出單筆 ratio=4.0x OI 的 STO Call 巨量壓頂"
-    )
-    print(f" • 條件三判定: {C_RED}❌ 偵測到 STO Call 物理封頂 @ $88.00{C_RESET}")
-    print(" • 系統行為: 靜默早退，阻擋追高與踩入主力出貨陷阱")
-
-    print_section("子情境 2C：NVDA 實體跌破防守線 (結構破位) ➔ 強制 100% 撤退回防 VOO")
-    print(" • NVDA 15m 實體收盤 $184.00 跌破防守線 $185.50，Gamma Cliff 確認崩塌")
-    print(
-        " • 機構風控鐵律: 強制 100% 清倉 (LIQUIDATE)，撤退回防大盤核心 VOO，嚴禁追逐高波衛星標的"
-    )
-
-    embed_2c = create_dynamic_rollover_embed(
-        rollover_type="核心衛星再平衡",
-        sell_symbol="NVDA",
-        sell_ratio=1.0,
-        buy_symbol="VOO",
-        reason="1. 盤勢定調: 現價 $184.00 | IV 位階: 45.0%\n2. 主力意圖: GEX Wall $190.00 失守\n3. 建議: 🚨 15m 實體破位確認：15 分鐘實體收盤跌破 $185.50，負 Gamma 助跌啟動，強制 100% 轉入 VOO 防禦。",
-        suggested_strategy="100% LIQUIDATE (轉入 VOO)",
-        suggested_price="Market",
-        strike="N/A",
-        expiry="N/A",
-        direction="BUY",
-        sell_action="SELL",
-        scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-        cash_impact="$14,168",
-        asset_class="SPOT",
-    )
-    print_embed_preview(embed_2c)
-
-    print_section("子情境 2D：大盤負 Gamma 踩踏 + 保證金危機 ➔ 強制 100% 轉入 BOXX")
+    print_section("子情境 2C：大盤負 Gamma 踩踏 + 保證金危機 ➔ 強制 100% 轉入 BOXX")
     print(" • 大盤進入 SHORT_GAMMA_CRITICAL 負 Gamma 踩踏模式，帳戶存在保證金赤字")
-    print(" • NVDA 判定無邊際優勢 (No-Edge)，觸發 Scenario 4 保證金防禦")
+    print(
+        " • NVDA 判定無邊際優勢 (No-Edge)，觸發 Scenario 4 保證金防禦 (帳戶生存線，不受顧問模式影響)"
+    )
     print(
         " • 機構風控鐵律: 強制 100% 清倉轉入純現金等價物 BOXX 鎖定無風險利息 (絕非 VOO)"
     )
 
-    embed_2d = create_dynamic_rollover_embed(
+    embed_2c = create_dynamic_rollover_embed(
         rollover_type="槓桿與保證金防禦",
         sell_symbol="NVDA",
         sell_ratio=1.0,
@@ -138,7 +114,7 @@ async def run_scenario_2() -> None:
         cash_impact="$14,168",
         asset_class="SPOT",
     )
-    print_embed_preview(embed_2d)
+    print_embed_preview(embed_2c)
 
 
 async def run_scenario_3() -> None:
@@ -268,12 +244,12 @@ async def main() -> None:
         "--scenario",
         choices=["2", "3", "all"],
         default="all",
-        help="指定演練情境 (2: 無標的符合, 3: TSLA破位追空, all: 全部)",
+        help="指定演練情境 (2: NVDA 轉弱顧問告知, 3: TSLA破位追空, all: 全部)",
     )
     args = parser.parse_args()
 
-    # 逐情境隔離：本演練腳本會對真實市場資料源發動請求，而情境一/二使用的是
-    # 示範用代號 (SPCX)，在真實資料源上取不到 K 線就會拋例外。早期版本沒有
+    # 逐情境隔離：本演練腳本可能對真實市場資料源發動請求，示範用代號在真實
+    # 資料源上取不到 K 線就會拋例外。早期版本沒有
     # 隔離，任何一個情境的資料層失敗都會中止整個 main()，讓後續情境**完全
     # 不會執行**——演練工具的價值正在於一次跑完所有情境並比對，故改為逐個
     # 捕捉、印出失敗原因後繼續。

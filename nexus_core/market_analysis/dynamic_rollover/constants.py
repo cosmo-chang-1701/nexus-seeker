@@ -486,7 +486,6 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 class RiskProfile(NamedTuple):
     tp1_ratio: float  # anti_washout.py TP1 執行比例，取代 _MICROSTRUCTURE_TP1_RATIO
-    rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
     max_satellite_budget_pct: float  # 單筆衛星預算上限，由 pyramid_add.py 條件七
     # (加碼後總曝險不得超過此比例，超過時降量) 消費
 
@@ -494,12 +493,10 @@ class RiskProfile(NamedTuple):
 _RISK_PROFILES: dict[str, RiskProfile] = {
     "DEFENSIVE": RiskProfile(
         tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
-        rotation_cooldown_days=5,
         max_satellite_budget_pct=0.15,
     ),
     "AGGRESSIVE": RiskProfile(
         tp1_ratio=0.30,
-        rotation_cooldown_days=3,
         max_satellite_budget_pct=0.25,
     ),
 }

@@ -63,7 +63,6 @@ def test_aggressive_profile_values() -> None:
     profile = resolve_risk_profile("AGGRESSIVE")
     assert profile == RiskProfile(
         tp1_ratio=0.30,
-        rotation_cooldown_days=3,
         max_satellite_budget_pct=0.25,
     )
 
