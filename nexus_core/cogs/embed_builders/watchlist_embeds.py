@@ -16,6 +16,7 @@ from typing import Dict, List
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 from cogs.embed_builders._core import (
+    OPTION_DATA_TIMING_NOTE,
     NexusEmbed,
     format_market_cache_freshness_suffix,
     format_cache_age_suffix,
@@ -906,7 +907,10 @@ def create_watchlist_signal_embed(
             inline=False,
         )
 
-    embed.set_footer(text="Watchlist Heartbeat | 核心作戰雷達每 30 分鐘自動校準")
+    embed.set_footer(
+        text="Watchlist Heartbeat | 核心作戰雷達每 30 分鐘自動校準\n"
+        f"⏱️ {OPTION_DATA_TIMING_NOTE}"
+    )
     return embed
 
 

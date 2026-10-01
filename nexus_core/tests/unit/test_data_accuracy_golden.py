@@ -265,10 +265,17 @@ async def test_h4_vix_strict_uses_live_quote_and_oil_is_independent() -> None:
 async def test_h4_vix_unknown_returns_none_not_18() -> None:
     from services.market_data_service import fundamentals
 
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={},
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=pd.DataFrame(),
+        ),
     ):
         assert await fundamentals.get_vix_spot_strict() is None
         assert (await fundamentals.get_macro_environment())["vix"] is None

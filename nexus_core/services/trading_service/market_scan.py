@@ -215,7 +215,7 @@ class MarketScanMixin:
             earnings_info = await calendar_service.get_symbol_earnings(sym)
             symbol_sentiment_cache[sym] = {
                 "skew_val": skew_data.get("skew") or 0.0,
-                "pcr_val": pcr_data.get("pcr") or 0.8,
+                "pcr_val": pcr_data.get("pcr"),  # 缺值為 None，不補 0.8
                 "tte_hours": earnings_info.tte_hours if earnings_info else None,
             }
 
@@ -305,7 +305,7 @@ class MarketScanMixin:
                             )
                             cached_sent = {
                                 "skew_val": skew_data.get("skew") or 0.0,
-                                "pcr_val": pcr_data.get("pcr") or 0.8,
+                                "pcr_val": pcr_data.get("pcr"),  # 缺值為 None，不補 0.8
                                 "tte_hours": earnings_info.tte_hours
                                 if earnings_info
                                 else None,

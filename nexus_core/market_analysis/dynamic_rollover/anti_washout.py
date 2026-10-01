@@ -1130,7 +1130,9 @@ class _AntiWashoutMixin:
         執行比例；未傳入時為現行 _MICROSTRUCTURE_TP1_RATIO，零行為變化。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        ivr = float(metrics.get("ivr", 0.0))
+        # IVR 未知 (None) 以 0.0 表示：本模組既有慣例即把 0.0 視為「數據缺失」
+        # (不觸發賣方鎖死、不判 IV 泡沫，並在報告加註數據失真)。
+        ivr = float(metrics.get("ivr") or 0.0)
         iv_term_structure_status = metrics.get("iv_term_structure_status") or "N/A"
         max_pain = float(metrics.get("max_pain", 0.0))
         is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
@@ -1645,7 +1647,8 @@ async def check_satellite_rebalancing_impl(
             spot: float = float(asset.get("spot_price", 0.0))
             call_wall: float = float(asset.get("call_wall", 0.0))
             max_pain: float = float(asset.get("max_pain", 0.0))
-            ivr: float = float(asset.get("ivr", 0.0))
+            # None (IVR 未知) → 0.0：下游既有慣例視 0.0 為數據缺失 (見上方註解)。
+            ivr: float = float(asset.get("ivr") or 0.0)
             # ⚠️ 既有缺陷修正：portfolio_monitor 早已把 ivr_drop 放進 asset
             # entry，但此處的 metrics 組裝從未讀取它，導致
             # _apply_decision_matrix 的 is_ivr_fast_exit

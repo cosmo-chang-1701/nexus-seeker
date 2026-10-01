@@ -1012,15 +1012,20 @@ def _add_trend_and_support_fields(embed: Any, data: Any):  # type: ignore
 
 def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
     """添加情緒指標欄位 (used by create_scan_embed)"""
-    pcr = data.get("pcr", 0.0)
-    pcr_label = "🐂 偏多" if pcr < 0.7 else ("🐻 偏空" if pcr > 1.0 else "⚖️ 中性")
+    pcr = data.get("pcr")
+    if pcr is None:
+        # PCR 缺值：顯示 `--`，不以 0.8/0.0 冒充
+        pcr_value = "`--` 資料不足"
+    else:
+        pcr_label = "🐂 偏多" if pcr < 0.7 else ("🐻 偏空" if pcr > 1.0 else "⚖️ 中性")
+        pcr_value = f"`{pcr:.2f}` {pcr_label}"
     embed.add_field(
         name="📊 P/C Ratio\u2800\u2800\u2800",
-        value=f"`{pcr:.2f}` {pcr_label}\n\u200b",
+        value=f"{pcr_value}\n\u200b",
         inline=True,
     )
 
-    skew = data.get("skew", 0.0)
+    skew = data.get("skew") or 0.0
     skew_label = (
         "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
     )

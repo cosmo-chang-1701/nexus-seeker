@@ -119,7 +119,7 @@ class ShortEntryEvaluation(NamedTuple):
     session_vwap: float
     atr_15m: float
     atr_1d: float
-    ivr: float
+    ivr: Optional[float]  # None = IVR 未知
 
 
 class EntryConfirmation(NamedTuple):

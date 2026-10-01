@@ -94,7 +94,9 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
             exp_str = f"{exp:<10}"
             strike_str = f"${strike:<7.2f}"
             delta_str = f"{d_val:<10.3f}"
-            premium_str = f"${premium:<9.2f}"
+            # 權利金一律為 bid/ask 中間價；零 bid 時為 ask/2 估算，加註 `*`。
+            est = "*" if r.get("premium_source") == "ASK_HALF" else " "
+            premium_str = f"${premium:<8.2f}{est}"
 
             if "annualized_yield" in r:
                 yield_str = f"{ann_yield:>9.2f}%"
@@ -107,6 +109,8 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
                 f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
             )
         rec_table_lines.append("```")
+        if any(r.get("premium_source") == "ASK_HALF" for r in recs):
+            rec_table_lines.append("`*` 零 bid，權利金以 ask/2 估算")
 
         embed.add_field(
             name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
@@ -196,7 +200,9 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
             exp_str = f"{exp:<10}"
             strike_str = f"${strike:<7.2f}"
             delta_str = f"{d_val:<10.3f}"
-            premium_str = f"${premium:<9.2f}"
+            # 權利金一律為 bid/ask 中間價；零 bid 時為 ask/2 估算，加註 `*`。
+            est = "*" if r.get("premium_source") == "ASK_HALF" else " "
+            premium_str = f"${premium:<8.2f}{est}"
 
             yield_str = f"{ann_yield:>9.2f}%"
             color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
@@ -205,6 +211,8 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
                 f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
             )
         rec_table_lines.append("```")
+        if any(r.get("premium_source") == "ASK_HALF" for r in recs):
+            rec_table_lines.append("`*` 零 bid，權利金以 ask/2 估算")
 
         rec_table_str = "\n".join(rec_table_lines)
         if any(r.get("has_earnings_risk") for r in recs):

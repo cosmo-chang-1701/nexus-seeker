@@ -258,6 +258,15 @@ class NexusEmbed(discord.Embed):
 # ============================================================================
 
 
+# 期權鏈/OI 資料時效說明 (M12)：edge 期權鏈快照最多 30 分鐘舊
+# (services/market_data_service/caches.py::_EDGE_SNAPSHOT_MAX_AGE_SECONDS)，
+# 未平倉量 (OI) 由交易所每日收盤後更新一次，盤中看到的都是前一交易日數據。
+OPTION_DATA_TIMING_NOTE: str = (
+    "OI 類指標 (Max Pain / GEX 牆 / OI PCR) 為前一交易日收盤未平倉量；"
+    "期權鏈快照最多延遲 30 分鐘"
+)
+
+
 def format_gex_stale_suffix(is_stale_cache: bool) -> str:
     """GEX 快取降級標記後綴，供讀取 `_is_stale_cache` 旗標的 embed builder 共用。"""
     return " [快取 / API 降級]" if is_stale_cache else ""

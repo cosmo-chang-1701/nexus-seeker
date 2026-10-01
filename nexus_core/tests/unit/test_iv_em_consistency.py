@@ -51,9 +51,17 @@ async def _run_metrics(
             new=AsyncMock(return_value={"c": spot, "h": spot, "l": spot}),
         ),
         patch("market_analysis.sentiment.iv_metrics.is_market_open", return_value=True),
+        # 即時 IV 統一取自期權鏈加權 IV：單一履約價 (=現價) 時加權值即為該 IV。
         patch(
-            "services.market_data_service.call_yf",
-            new=AsyncMock(return_value={"impliedVolatility": live_iv}),
+            "services.market_data_service.get_option_chain",
+            new=AsyncMock(
+                return_value=MagicMock(
+                    calls=__import__("pandas").DataFrame(
+                        {"strike": [spot], "impliedVolatility": [live_iv]}
+                    ),
+                    puts=__import__("pandas").DataFrame(),
+                )
+            ),
         ),
         patch(
             "database.connection.get_read_connection",
@@ -72,7 +80,7 @@ async def _run_metrics(
         patch("database.calendar_cache.get_macro_events_between", return_value=[]),
         patch(
             "services.market_data_service.get_all_option_expiries",
-            new=AsyncMock(return_value=expiries or []),
+            new=AsyncMock(return_value=expiries or ["2099-01-16"]),
         ),
         patch(
             "services.market_data_service.get_history_df",

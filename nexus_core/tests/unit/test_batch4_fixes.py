@@ -21,6 +21,24 @@ from cogs.embed_builders.watchlist_embeds import create_watchlist_signal_embed
 from market_analysis.sentiment.iv_metrics import fetch_and_calculate_iv_metrics
 
 
+def _past_trading_days(n: int) -> list[str]:
+    import market_time
+    from datetime import datetime
+
+    today = datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
+    return [d for d in market_time.get_recent_trading_dates(n + 1) if d < today][-n:]
+
+
+def _single_strike_chain(spot: float, iv: float) -> MagicMock:
+    """即時 IV 統一取自期權鏈加權 IV；單一履約價 (=現價) 時加權值即為該 IV。"""
+    import pandas as pd
+
+    return MagicMock(
+        calls=pd.DataFrame({"strike": [spot], "impliedVolatility": [iv]}),
+        puts=pd.DataFrame(),
+    )
+
+
 def test_classify_skew_state_deadband() -> None:
     """ISSUE-2.7: 驗證 [-0.5%, +0.5%] 零軸死區抑制微觀噪聲。"""
     # 樣本不足（冷啟動）時測試死區
@@ -114,8 +132,11 @@ async def test_low_volatility_iv_conflict_threshold_relaxed() -> None:
     mock_conn1 = MagicMock()
     mock_cursor1 = MagicMock()
     mock_cursor1.fetchall.return_value = [
-        (f"2026-01-{i:03d}", iv)
-        for i, iv in enumerate([0.012, 0.015, 0.018, 0.020, 0.022] * 15)
+        # IV Rank 母體以最近 252 個 NYSE 交易日定義，測試列須落在真實交易日上
+        (d, iv)
+        for d, iv in zip(
+            _past_trading_days(75), [0.012, 0.015, 0.018, 0.020, 0.022] * 15
+        )
     ]
     mock_conn1.cursor.return_value = mock_cursor1
 
@@ -126,8 +147,11 @@ async def test_low_volatility_iv_conflict_threshold_relaxed() -> None:
         "market_analysis.sentiment.iv_metrics.is_market_open",
         return_value=True,
     ), patch(
-        "services.market_data_service.call_yf",
-        new=AsyncMock(return_value={"impliedVolatility": 0.02}),
+        "services.market_data_service.get_all_option_expiries",
+        new=AsyncMock(return_value=["2099-01-16"]),
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new=AsyncMock(return_value=_single_strike_chain(91.50, 0.02)),
     ), patch(
         "database.connection.get_read_connection",
         return_value=mock_conn1,
@@ -148,8 +172,11 @@ async def test_low_volatility_iv_conflict_threshold_relaxed() -> None:
     mock_conn2 = MagicMock()
     mock_cursor2 = MagicMock()
     mock_cursor2.fetchall.return_value = [
-        (f"2026-01-{i:03d}", iv)
-        for i, iv in enumerate([0.001, 0.002, 0.003, 0.005, 0.006] * 15)
+        # IV Rank 母體以最近 252 個 NYSE 交易日定義，測試列須落在真實交易日上
+        (d, iv)
+        for d, iv in zip(
+            _past_trading_days(75), [0.001, 0.002, 0.003, 0.005, 0.006] * 15
+        )
     ]
     mock_conn2.cursor.return_value = mock_cursor2
 
@@ -160,8 +187,11 @@ async def test_low_volatility_iv_conflict_threshold_relaxed() -> None:
         "market_analysis.sentiment.iv_metrics.is_market_open",
         return_value=True,
     ), patch(
-        "services.market_data_service.call_yf",
-        new=AsyncMock(return_value={"impliedVolatility": 0.005}),
+        "services.market_data_service.get_all_option_expiries",
+        new=AsyncMock(return_value=["2099-01-16"]),
+    ), patch(
+        "services.market_data_service.get_option_chain",
+        new=AsyncMock(return_value=_single_strike_chain(91.50, 0.005)),
     ), patch(
         "database.connection.get_read_connection",
         return_value=mock_conn2,

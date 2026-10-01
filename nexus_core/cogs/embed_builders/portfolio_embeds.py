@@ -1,7 +1,11 @@
 """Portfolio and trading position embed builders"""
 
 import discord
-from cogs.embed_builders._core import NexusEmbed, format_cache_age_suffix
+from cogs.embed_builders._core import (
+    OPTION_DATA_TIMING_NOTE,
+    NexusEmbed,
+    format_cache_age_suffix,
+)
 import logging
 import math
 import psutil
@@ -394,12 +398,18 @@ def create_trades_embed(
     return embed
 
 
+# /dash 對沖狀態：淨 Beta-Delta 美元名目 (|Δ| × SPY) 低於資本的 10% 視為平衡。
+_DASH_HEDGE_NOTIONAL_RATIO: float = 0.1
+
+
 def create_strategic_dash_embed(
     user_ctx: Any,
     pnl_data: Dict[str, Any],
     vix_spot: Optional[float] = None,
     runway: Any = None,
     runway_stale: bool = False,
+    nav_data: Optional[Dict[str, Any]] = None,
+    spy_price: Optional[float] = None,
 ) -> discord.Embed:
     """
     建構戰略看板 (Strategic Dashboard) Embed.
@@ -423,11 +433,25 @@ def create_strategic_dash_embed(
     payout_threshold = get_safety_payout_threshold()
 
     status_mode = "觀戰模式" if not user_ctx.is_professional_mode else "實戰模式"
-    nav = _safe_float(user_ctx.capital) + pnl_data.get("total_unrealized_pnl", 0.0)
+    # NAV 按市價：現金 + 現貨市值 + 期權市值 (賣方為負債)，見
+    # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
+    # 資本 + 未實現損益——那會忽略現貨漲跌並重複計入賣方權利金)。
+    if nav_data is not None:
+        nav_line = f"`${_safe_float(nav_data.get('nav')):,.0f}` (按市價，{status_mode})"
+        missing_parts: List[str] = []
+        if nav_data.get("missing_spot_symbols"):
+            missing_parts.append(
+                "現貨 " + "、".join(nav_data.get("missing_spot_symbols") or [])
+            )
+        if nav_data.get("missing_option_quotes"):
+            missing_parts.append(f"期權 {nav_data.get('missing_option_quotes')} 筆")
+        if missing_parts:
+            nav_line += f"\n  ⚠️ 報價缺失未計入：{'；'.join(missing_parts)}"
+    else:
+        nav_line = f"`--` ({status_mode})"
 
     runway_info = (
-        f"* **總資產 (NAV):** `${nav:,.0f}` ({status_mode})\n"
-        f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
+        f"* **總資產 (NAV):** {nav_line}\n" f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
     )
     for line in format_runway_lines(runway, stale=runway_stale):
         runway_info += f"* {line}\n"
@@ -454,8 +478,16 @@ def create_strategic_dash_embed(
         vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
         new_delta = total_delta + vanna_impact
 
-    # 對沖狀態與建議
-    hedge_status = "運行中" if abs(total_delta) < (capital * 0.1) else "需調整"
+    # 對沖狀態與建議：Beta-Delta 是 SPY 等值「股數」，須乘上 SPY 價格換成
+    # 美元名目才能與資本比較 (過去把股數直接和美元比，永遠顯示「運行中」)。
+    if spy_price is not None and spy_price > 0:
+        hedge_status = (
+            "運行中"
+            if abs(total_delta) * spy_price < capital * _DASH_HEDGE_NOTIONAL_RATIO
+            else "需調整"
+        )
+    else:
+        hedge_status = "資料不足 (SPY 現價未知)"
     # 簡單邏輯：如果 Delta 太正，建議賣出 SPY；如果太負，建議買入 SPY
     if total_delta > 100:
         hedge_instruction = f"賣出 {int(total_delta)} 股 SPY 以對沖正 Delta"
@@ -2114,7 +2146,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
 
     embed.set_footer(
-        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。"
+        text="🔗 使用 /settle_hedge 紀錄對沖或 /event_impact 進行曝險模擬。\n"
+        f"⏱️ {OPTION_DATA_TIMING_NOTE}"
     )
     return embed
 

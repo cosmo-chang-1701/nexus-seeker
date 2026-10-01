@@ -48,16 +48,23 @@ def _compute_satellite_euphoria_ratio(
 
     euphoria_count = 0
     for asset in satellite_assets:
-        spot = float(asset.get("spot_price", 0.0))
-        call_wall = float(asset.get("call_wall", 0.0))
-        skew = float(asset.get("skew", 0.0))
-        skew_percentile = float(asset.get("skew_percentile", 50.0))
+        # 值為 None 時以 `or` 退回 0.0 (float(None) 會丟 TypeError)；Skew 或其
+        # 分位未知時跳過亢奮 Skew 指標，不補 50 冒充中性。
+        spot = float(asset.get("spot_price") or 0.0)
+        call_wall = float(asset.get("call_wall") or 0.0)
+        skew_raw = asset.get("skew")
+        sp_raw = asset.get("skew_percentile")
 
         is_profit_unlocked = (call_wall > 0 and spot > 0) and (
             spot >= call_wall
             or abs(spot - call_wall) / call_wall < _PROFIT_UNLOCK_TOLERANCE
         )
-        is_euphoria_skew = skew < 0 and skew_percentile <= _EUPHORIA_SKEW_PERCENTILE
+        is_euphoria_skew = (
+            skew_raw is not None
+            and sp_raw is not None
+            and float(skew_raw) < 0
+            and float(sp_raw) <= _EUPHORIA_SKEW_PERCENTILE
+        )
         if is_profit_unlocked or is_euphoria_skew:
             euphoria_count += 1
 

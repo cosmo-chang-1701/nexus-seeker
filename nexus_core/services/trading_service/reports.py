@@ -105,6 +105,65 @@ class ReportsMixin:
             "missing_quote_count": missing_quote_count,
         }
 
+    async def get_market_nav(
+        self, user_id: int, cash_reserve: float, pnl_data: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """按市價計算帳戶淨值 (NAV)。
+
+        NAV = 現金儲備 + Σ 現貨數量(帶號) × 即時價 + Σ 期權 mid × 100 × 口數(帶號)
+
+        - 現貨按市價計值 (過去 /dash 用 avg_cost 成本，漲跌完全不反映)。
+        - 賣方權利金：假設 cash_reserve 已包含收到的權利金與放空所得，期權
+          空頭以「回補成本」(mid×100×|口數|) 列為負債。過去 NAV = 成本資本
+          (含 entry×100×|口數|) + 未實現損益 ((entry−mid)×100×|口數|)，等於把
+          賣方權利金計入兩次 (2×entry − mid)。
+        - 報價缺失的部位不計入，回傳 missing_* 供畫面標示。
+        """
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+
+        manager = AssetManager()
+        holdings = await asyncio.to_thread(
+            manager.get_assets, user_id, ContextType.HOLDING
+        )
+        sem = asyncio.Semaphore(3)
+
+        async def _price(sym: str) -> float:
+            async with sem:
+                try:
+                    q = await market_data_service.get_quote(sym)
+                    return float(q.get("c") or 0.0) if q else 0.0
+                except Exception:
+                    return 0.0
+
+        symbols = sorted({str(h.symbol).upper() for h in holdings})
+        prices = dict(zip(symbols, await asyncio.gather(*[_price(s) for s in symbols])))
+
+        spot_value = 0.0
+        missing_spot: List[str] = []
+        for h in holdings:
+            qty = float((h.metadata or {}).get("quantity", 0.0) or 0.0)
+            if qty == 0:
+                continue
+            px = prices.get(str(h.symbol).upper(), 0.0)
+            if px <= 0:
+                missing_spot.append(str(h.symbol).upper())
+                continue
+            spot_value += qty * px
+
+        option_value = float(pnl_data.get("total_option_market_value", 0.0) or 0.0)
+        missing_options = int(pnl_data.get("missing_quote_count", 0) or 0)
+        nav = float(cash_reserve) + spot_value + option_value
+        return {
+            "nav": nav,
+            "cash_reserve": float(cash_reserve),
+            "spot_market_value": spot_value,
+            "option_market_value": option_value,
+            "missing_spot_symbols": missing_spot,
+            "missing_option_quotes": missing_options,
+            "is_complete": not missing_spot and missing_options == 0,
+        }
+
     async def audit_real_portfolio_risk(self) -> List[Dict[str, Any]]:
         """
         [NRO Refinement] 審計真實持倉風險。

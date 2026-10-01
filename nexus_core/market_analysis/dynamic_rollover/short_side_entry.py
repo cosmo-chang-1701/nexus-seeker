@@ -500,7 +500,7 @@ async def _confirm_short_entry_condition5_macro_earnings_gate(
 async def _confirm_short_entry_condition6_candidate_dte_ivr(
     candidate_symbol: str,
     prior_conditions_passed: bool,
-    target_ivr: float,
+    target_ivr: Optional[float],
     reasons: list,
 ) -> Tuple[bool, Optional[str]]:
     """做空條件六：Candidate 自身效期防禦與 IVR 結構分流。
@@ -544,7 +544,10 @@ async def _confirm_short_entry_condition6_candidate_dte_ivr(
         )
         return False, None
 
-    if target_ivr <= _SHORT_ENTRY_IVR_SPREAD_THRESHOLD:
+    if target_ivr is None:
+        # IVR 未知：不宣稱低 IV 而建議單腳買方，改建議有限風險價差。
+        structure_directive = "Bear Put Spread (IVR 資料不足，以價差控制 Vega 風險)"
+    elif target_ivr <= _SHORT_ENTRY_IVR_SPREAD_THRESHOLD:
         structure_directive = "Long Put (輕度 OTM)"
     else:
         structure_directive = (
@@ -553,7 +556,7 @@ async def _confirm_short_entry_condition6_candidate_dte_ivr(
 
     reasons.append(
         f"做空條件六✅：標的最近效期 {expiries[0]} DTE={dte_nearest}，"
-        f"IVR={target_ivr:.1f}% -> {structure_directive}"
+        f"IVR={f'{target_ivr:.1f}%' if target_ivr is not None else '--'} -> {structure_directive}"
     )
     return True, structure_directive
 
@@ -580,11 +583,9 @@ async def evaluate_short_entry(
 
     gex_profile_data = candidate_radar.get("gex_profile_data") or {}
     uoa_list = candidate_radar.get("uoa") or []
-    target_ivr = float(
-        candidate_radar.get("iv_metrics", {}).get("iv_rank", 0.0)
-        if candidate_radar.get("iv_metrics")
-        else 0.0
-    )
+    # IVR 未知時為 None (radar slow/fast path 不再以 0.0/50.0 冒充)。
+    _ivr_raw = (candidate_radar.get("iv_metrics") or {}).get("iv_rank")
+    target_ivr: Optional[float] = float(_ivr_raw) if _ivr_raw is not None else None
     net_gex: Optional[float] = None
     if isinstance(gex_profile_data, dict):
         try:

@@ -343,7 +343,7 @@ def build_macro_context(macro_raw: Optional[Dict[str, Any]]) -> Optional[MacroCo
 
 
 def get_macro_modifiers(
-    macro: MacroContext, pcr: float = 0.8, skew: float = 0.0
+    macro: MacroContext, pcr: Optional[float] = 0.8, skew: float = 0.0
 ) -> Tuple[float, float, float]:
     """計算宏觀環境風險修正因子。
 
@@ -376,8 +376,8 @@ def get_macro_modifiers(
     )
     w_regime = 0.6 if (macro.vts_ratio >= 1.0 or macro.vix_trend_up) else 1.0
 
-    # 整合 PCR 與 Skew 修正
-    if pcr > 1.2:
+    # 整合 PCR 與 Skew 修正 (PCR 未知時不做 PCR 修正)
+    if pcr is not None and pcr > 1.2:
         w_regime *= 0.8  # PCR 過高，情緒過於悲觀，縮減賣方曝險
     if skew > 10:
         w_regime *= 0.9  # Skew 過大，尾端風險對沖成本過高
@@ -421,7 +421,7 @@ def optimize_position_risk(
     risk_limit: float = 15.0,
     is_high_tail_risk: bool = False,
     vix_spot: Optional[float] = None,
-    pcr: float = 0.8,
+    pcr: Optional[float] = 0.8,
     skew: float = 0.0,
     event_tte_hours: Optional[float] = None,
     vix_unknown: bool = False,
@@ -505,7 +505,7 @@ def optimize_position_risk(
 
         # 整合 PCR 與 Skew 的進一步細節。PCR 過低 = 多頭過熱，只縮減「做多」
         # 買方；早期以 "BTO" 比對，連 BTO_PUT (做空) 也被砍，方向相反。
-        if pcr < 0.6 and intent == "DIRECTIONAL_LONG":
+        if pcr is not None and pcr < 0.6 and intent == "DIRECTIONAL_LONG":
             # 市場過熱，警告但不一定硬拒，此處微幅縮減買方額度
             d_regime *= 0.8
             warnings.append("PCR 低位: 市場過熱，買方倉位縮減")

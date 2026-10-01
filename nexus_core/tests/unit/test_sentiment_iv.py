@@ -7,8 +7,39 @@ from unittest.mock import AsyncMock, patch, MagicMock
 from market_analysis.sentiment_engine import SentimentEngine, _iv_cache
 from models.quant import IVMetrics
 import config
+import contextlib
+import market_time
 
 # Test Suite for Implied Volatility and IV Rank Calculations
+
+
+@contextlib.contextmanager
+def _patch_live_iv(live_iv: dict[str, Any]) -> Any:
+    """以「單一履約價 = 現價」的期權鏈模擬盤中即時 IV。
+
+    IV 定義已統一為期權鏈 (OI+量)/距離 加權 IV (不再讀 yfinance ticker.info)；
+    單一合約時加權 IV 恰等於該合約 IV。`live_iv["iv"]` 可在測試中途修改。
+    """
+
+    async def _chain(symbol: str, expiry: Any, *a: Any, **k: Any) -> Any:
+        if live_iv.get("iv") is None:
+            return None
+        chain = MagicMock()
+        chain.calls = pd.DataFrame(
+            {
+                "strike": [live_iv.get("spot", 100.0)],
+                "impliedVolatility": [live_iv["iv"]],
+            }
+        )
+        chain.puts = pd.DataFrame()
+        return chain
+
+    with patch("yfinance.Ticker") as m_ticker, patch(
+        "services.market_data_service.get_all_option_expiries",
+        new_callable=AsyncMock,
+        return_value=["2099-06-19"],
+    ), patch("services.market_data_service.get_option_chain", side_effect=_chain):
+        yield m_ticker
 
 
 @pytest.fixture(autouse=True)
@@ -53,6 +84,7 @@ async def test_save_and_get_last_stored_iv() -> None:
 @pytest.mark.slow
 async def test_fetch_and_calculate_iv_metrics_success() -> None:
     """Test fetch_and_calculate_iv_metrics when yfinance successfully returns impliedVolatility."""
+    live_iv: dict[str, Any] = {"iv": None, "spot": 100.0}
     symbol = "TEST_SUCCESS"
 
     mock_quote = {"c": 100.0}
@@ -66,7 +98,7 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
 
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
+    ) as m_quote, _patch_live_iv(live_iv), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
         "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
@@ -75,9 +107,7 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
         m_hist.return_value = df_hist
 
         # Mock yfinance.Ticker info
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.info = mock_info
-        m_ticker.return_value = mock_ticker_instance
+        live_iv["iv"] = mock_info["impliedVolatility"]
 
         # Calculate (with default min_history_records=60, empty DB returns None for iv_rank)
         metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
@@ -110,6 +140,7 @@ async def test_fetch_and_calculate_iv_metrics_success() -> None:
 @pytest.mark.asyncio
 async def test_fetch_and_calculate_iv_metrics_cache() -> None:
     """Verify that cached IV metrics are returned without executing logic again."""
+    live_iv: dict[str, Any] = {"iv": None, "spot": 150.0}
     symbol = "TEST_CACHE"
 
     mock_quote = {"c": 150.0}
@@ -118,7 +149,7 @@ async def test_fetch_and_calculate_iv_metrics_cache() -> None:
     # Mock data to return
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
+    ) as m_quote, _patch_live_iv(live_iv), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
         "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
@@ -126,9 +157,7 @@ async def test_fetch_and_calculate_iv_metrics_cache() -> None:
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()
 
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.info = mock_info
-        m_ticker.return_value = mock_ticker_instance
+        live_iv["iv"] = mock_info["impliedVolatility"]
 
         # First call
         metrics1 = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
@@ -360,6 +389,7 @@ async def test_fetch_and_calculate_iv_metrics_failure_graceful_degrade() -> None
 @pytest.mark.slow
 async def test_iv_rank_and_percentile_math() -> None:
     """Explicitly verify IV Rank and IV Percentile calculations with specific test values."""
+    live_iv: dict[str, Any] = {"iv": None, "spot": 100.0}
     symbol = "TEST_MATH"
 
     mock_quote = {"c": 100.0}
@@ -377,14 +407,19 @@ async def test_iv_rank_and_percentile_math() -> None:
     cursor.execute("DELETE FROM historical_iv WHERE symbol = ?", (symbol,))
     conn.commit()
 
-    await SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-16")
-    await SentimentEngine.save_historical_iv(symbol, 0.30, "2026-05-17")
-    await SentimentEngine.save_historical_iv(symbol, 0.50, "2026-05-18")
-    await SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-19")
+    # IV Rank 母體以「最近 252 個交易日」定義 (非交易日列會被排除)，故以
+    # 最近 4 個已過交易日寫入，避免測試日期落在週末或窗口之外。
+    past_days = [
+        d
+        for d in market_time.get_recent_trading_dates(6)
+        if d < market_time.datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
+    ][-4:]
+    for iv_val, d in zip((0.20, 0.30, 0.50, 0.60), past_days):
+        await SentimentEngine.save_historical_iv(symbol, iv_val, d)
 
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
+    ) as m_quote, _patch_live_iv(live_iv), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
         "market_analysis.sentiment.iv_metrics.is_market_open", return_value=True
@@ -392,9 +427,7 @@ async def test_iv_rank_and_percentile_math() -> None:
         m_quote.return_value = mock_quote
         m_hist.return_value = pd.DataFrame()  # empty so we only use DB data
 
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.info = mock_info
-        m_ticker.return_value = mock_ticker_instance
+        live_iv["iv"] = mock_info["impliedVolatility"]
 
         metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
             symbol, min_history_records=1
@@ -408,7 +441,7 @@ async def test_iv_rank_and_percentile_math() -> None:
         # If current IV is 0.25 (range 0.20 to 0.60).
         # Rank: ((0.25 - 0.20) / (0.60 - 0.20)) * 100 = 12.5%
         # Status should be "Low"
-        mock_ticker_instance.info = {"impliedVolatility": 0.25}
+        live_iv["iv"] = 0.25
         _iv_cache.clear()
         metrics_low = await SentimentEngine.fetch_and_calculate_iv_metrics(
             symbol, min_history_records=1
@@ -419,7 +452,7 @@ async def test_iv_rank_and_percentile_math() -> None:
         # If current IV is 0.52 (range 0.20 to 0.60).
         # Rank: ((0.52 - 0.20) / (0.60 - 0.20)) * 100 = 80.0%
         # Status should be "High"
-        mock_ticker_instance.info = {"impliedVolatility": 0.52}
+        live_iv["iv"] = 0.52
         _iv_cache.clear()
         metrics_high = await SentimentEngine.fetch_and_calculate_iv_metrics(
             symbol, min_history_records=1
@@ -430,7 +463,7 @@ async def test_iv_rank_and_percentile_math() -> None:
         # If current IV is 0.58 (range 0.20 to 0.60).
         # Rank: ((0.58 - 0.20) / (0.60 - 0.20)) * 100 = 95.0%
         # Status should be "Extreme"
-        mock_ticker_instance.info = {"impliedVolatility": 0.58}
+        live_iv["iv"] = 0.58
         _iv_cache.clear()
         metrics_extreme = await SentimentEngine.fetch_and_calculate_iv_metrics(
             symbol, min_history_records=1
@@ -506,10 +539,16 @@ async def test_fetch_and_calculate_iv_metrics_premarket_success() -> None:
     conn.commit()
 
     # Pre-populate historical records: low=0.20, high=0.60
-    await SentimentEngine.save_historical_iv(symbol, 0.20, "2026-05-15")
-    await SentimentEngine.save_historical_iv(symbol, 0.60, "2026-05-16")
+    # 以最近 3 個已過交易日寫入 (IV Rank 母體排除非交易日列)
+    past_days = [
+        d
+        for d in market_time.get_recent_trading_dates(5)
+        if d < market_time.datetime.now(market_time.ny_tz).strftime("%Y-%m-%d")
+    ][-3:]
+    await SentimentEngine.save_historical_iv(symbol, 0.20, past_days[0])
+    await SentimentEngine.save_historical_iv(symbol, 0.60, past_days[1])
     await SentimentEngine.save_historical_iv(
-        symbol, 0.40, "2026-05-17"
+        symbol, 0.40, past_days[2]
     )  # last stored is 0.40
     conn.commit()
 
@@ -583,6 +622,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_mark
     None
 ):
     """Verify that cached pre-market IV metrics are bypassed if the market is now open."""
+    live_iv: dict[str, Any] = {"iv": None, "spot": 100.0}
     symbol = "TEST_BYPASS"
     mock_quote = {"c": 100.0}
 
@@ -594,7 +634,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_mark
 
     with patch(
         "services.market_data_service.get_quote", new_callable=AsyncMock
-    ) as m_quote, patch("yfinance.Ticker") as m_ticker, patch(
+    ) as m_quote, _patch_live_iv(live_iv), patch(
         "services.market_data_service.get_history_df", new_callable=AsyncMock
     ) as m_hist, patch(
         "market_analysis.sentiment.iv_metrics.is_market_open"
@@ -616,9 +656,7 @@ async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_mark
         m_market_open.return_value = True
 
         # Mock yfinance.Ticker info to return live IV
-        mock_ticker_instance = MagicMock()
-        mock_ticker_instance.info = {"impliedVolatility": 0.45}
-        m_ticker.return_value = mock_ticker_instance
+        live_iv["iv"] = 0.45
 
         metrics2 = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
 

@@ -24,7 +24,11 @@ def compute_realtime_insights(data: dict[str, Any]) -> str:
     # Optional fields for deeper analysis if present
     uoa_calls_vol = _clean_float(data.get("uoa_calls_vol"), 0.0)
     uoa_puts_vol = _clean_float(data.get("uoa_puts_vol"), 0.0)
-    skew_percentile = _clean_float(data.get("skew_percentile"), 50.0)
+    # Skew 分位 / IVR 未知時為 None：相關判斷一律跳過 (不補 50 冒充中性)。
+    sp_raw = data.get("skew_percentile")
+    skew_percentile = _clean_float(sp_raw, math.nan) if sp_raw is not None else math.nan
+    sp_hi = math.isfinite(skew_percentile) and skew_percentile >= 70.0
+    sp_lo = math.isfinite(skew_percentile) and skew_percentile <= 30.0
 
     if max_pain > 0 and spot > 0:
         dist_pct = (spot - max_pain) / max_pain * 100
@@ -44,25 +48,17 @@ def compute_realtime_insights(data: dict[str, Any]) -> str:
 
     # 1. 籌碼狀態
     chip_status = "⚖️ 籌碼結構與情緒波動相對均衡"
-    if (
-        uoa_calls_vol > uoa_puts_vol * 1.5
-        and uoa_calls_vol > 0
-        and skew_percentile <= 30.0
-    ):
+    if uoa_calls_vol > uoa_puts_vol * 1.5 and uoa_calls_vol > 0 and sp_lo:
         chip_status = "🔥 籌碼面呈大額買權掃貨且看漲情緒亢奮"
-    elif (
-        uoa_puts_vol > uoa_calls_vol * 1.5
-        and uoa_puts_vol > 0
-        and skew_percentile >= 70.0
-    ):
+    elif uoa_puts_vol > uoa_calls_vol * 1.5 and uoa_puts_vol > 0 and sp_hi:
         chip_status = "⚠️ 籌碼面顯現大額避險 Put 流入且下行保護需求高企"
     elif uoa_calls_vol > uoa_puts_vol * 1.5 and uoa_calls_vol > 0:
         chip_status = "📈 籌碼面出現大額 Call 掃單"
     elif uoa_puts_vol > uoa_calls_vol * 1.5 and uoa_puts_vol > 0:
         chip_status = "📉 籌碼面湧現大額 Put 避險買盤"
-    elif skew_percentile >= 70.0:
+    elif sp_hi:
         chip_status = "🛡️ 情緒面呈現 Put 偏斜昂貴，避險情緒高溫"
-    elif skew_percentile <= 30.0:
+    elif sp_lo:
         chip_status = "🚀 情緒面呈現 Call 偏斜亢奮，散戶搶購看漲"
 
     # 2. 量化偏離事實
@@ -74,26 +70,27 @@ def compute_realtime_insights(data: dict[str, Any]) -> str:
         dev_fact = f"，股價距離 Max Pain 有 {dist_pct:.1f}% 的偏差，面臨向上動能衰退與拉回修正壓力"
 
     # 3. 實盤防禦指引
-    iv_rank = _clean_float(data.get("iv_rank"), 50.0)
+    ivr_raw = data.get("iv_rank")
+    iv_rank = _clean_float(ivr_raw, math.nan) if ivr_raw is not None else math.nan
 
-    if iv_rank < 15.0:
+    if math.isfinite(iv_rank) and iv_rank < 15.0:
         if dist_pct < 0:
             guidance = "；IVR 處於絕對低位，具備高盈虧比的買方建倉條件。建議透過買入看漲期權 (Long Call) 或構建借方價差 (Debit Spread) 捕捉磁吸效應，避免 Vega 擴張風險。"
         else:
             guidance = "；IVR 處於絕對低位，建議以買入看跌期權 (Long Put) 或借方價差 (Debit Spread) 防禦，避免賣出期權的 Vega 擴張風險。"
     else:
         guidance = "；操作上建議於支撐區間分批逢低吸納，降低建倉成本。"
-        if dist_pct < -10.0 and skew_percentile >= 70.0:
+        if dist_pct < -10.0 and sp_hi:
             guidance = "；雖有磁吸引力但避險情緒仍重，建議透過賣出 CSP（備兌看跌）分批建倉，避免單腿買入。"
-        elif dist_pct < -10.0 and skew_percentile <= 30.0:
+        elif dist_pct < -10.0 and sp_lo:
             guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
         elif dist_pct < -10.0 and uoa_calls_vol > uoa_puts_vol * 1.5:
             guidance = "；量化磁吸與多頭籌碼共振，可於波動下緣分批逢低吸納，或部署 Bull Put Spread 策略。"
         elif dist_pct < -10.0:
             guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
-        elif dist_pct > 10.0 and skew_percentile >= 70.0:
+        elif dist_pct > 10.0 and sp_hi:
             guidance = "；操作上應嚴禁單腿追高，建議以現貨持有搭配賣出 OTM Call（備兌看漲）進行防禦保護，或買入 Put 鎖定下行風險。"
-        elif dist_pct > 10.0 and skew_percentile <= 30.0:
+        elif dist_pct > 10.0 and sp_lo:
             guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
         elif dist_pct > 10.0:
             guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"

@@ -116,7 +116,7 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
         skew_data, pcr_data, uoa_list = await asyncio.gather(
             skew_task, pcr_task, uoa_task
         )
-        pcr_val = pcr_data.get("pcr", 0.8)
+        pcr_val = pcr_data.get("pcr")  # 缺值為 None，不補 0.8
         skew_val = skew_data.get("skew", 0.0)
 
         ai_verdict = await llm_service.evaluate_trade_risk(

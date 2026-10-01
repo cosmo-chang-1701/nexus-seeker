@@ -8,6 +8,7 @@ import asyncio
 from datetime import datetime
 from typing import List, Dict
 from .greeks import calculate_greeks
+from .option_quote import resolve_option_mid
 import market_time
 
 from .risk_engine import (
@@ -602,30 +603,6 @@ async def refresh_portfolio_greeks(
 
     except Exception as e:
         logger.error(f"refresh_portfolio_greeks 失敗: {e}", exc_info=True)
-
-
-def resolve_option_mid(bid: Any, ask: Any) -> tuple[float, str]:
-    """由 bid/ask 推導期權現價，回傳 (mid, source)。
-
-    - bid > 0 且 ask > 0：(bid+ask)/2，source="MID"
-    - bid <= 0 且 ask > 0：ask/2，source="ASK_HALF" (呼叫端必須標示為估算)
-    - 其餘：0.0，source="MISSING" (報價缺失)
-
-    **不使用 lastPrice**：零 bid 的深價外合約，lastPrice 可能是數日前的成交，
-    拿來估值會讓損益與 NAV 失真。
-    """
-    try:
-        b = float(bid or 0.0)
-        a = float(ask or 0.0)
-    except (TypeError, ValueError):
-        return 0.0, "MISSING"
-    if b != b or a != a:  # NaN
-        return 0.0, "MISSING"
-    if b > 0 and a > 0:
-        return (b + a) / 2.0, "MID"
-    if a > 0:
-        return a / 2.0, "ASK_HALF"
-    return 0.0, "MISSING"
 
 
 async def get_option_chain_quote(

@@ -15,6 +15,22 @@ _SWR_REVALIDATE_SEM = asyncio.Semaphore(3)
 _active_swr_tasks: set[str] = set()
 
 
+def _compute_rvol(current_volume: Any, avg_vol_20d: Any) -> Optional[float]:
+    """相對成交量 = 今日成交量 / 20 日均量；任一未知回傳 None。
+
+    Finnhub `/quote` 沒有成交量欄位，雷達 fast path 過去讀到 0 → rvol 恆為 0
+    (被當成「無量」)。未知時回傳 None，不冒充 0。
+    """
+    try:
+        cur = float(current_volume) if current_volume is not None else None
+        avg = float(avg_vol_20d) if avg_vol_20d is not None else 0.0
+    except (TypeError, ValueError):
+        return None
+    if cur is None or cur <= 0 or avg <= 0:
+        return None
+    return cur / avg
+
+
 class _KvSnapshot:
     """單一標的所需 kv_cache 鍵值的一次性快照。
 
@@ -100,7 +116,7 @@ class RadarDataMixin:
 
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
-        current_volume = quote.get("volume", 0) if quote else 0
+        current_volume = quote.get("volume") if quote else None
 
         today_str = datetime.now().strftime("%Y-%m-%d")
         # 所有 SQLite 讀取集中在這一次 to_thread 呼叫內完成，不佔用 event loop。
@@ -272,7 +288,8 @@ class RadarDataMixin:
             if last_iv is not None and not iv_metrics:
                 iv_metrics = {
                     "current_iv": last_iv,
-                    "iv_rank": radar_cache.get("iv_rank", 50.0),
+                    # 雷達快取沒有 IVR 時為 None (未知)，不再補 50.0。
+                    "iv_rank": radar_cache.get("iv_rank"),
                 }
 
         if "expected_move_lower" not in iv_metrics:
@@ -295,7 +312,7 @@ class RadarDataMixin:
             )
 
         avg_vol_20d = radar_cache.get("avg_vol_20d", 0.0)
-        rvol = (current_volume / avg_vol_20d) if avg_vol_20d > 0 else 0.0
+        rvol = _compute_rvol(current_volume, avg_vol_20d)
         # 20 日平均成交額：薄牆門檻依此正規化 (gex_wall_depth.thin_wall_threshold)
         adv_dollar_20d = (
             float(avg_vol_20d) * float(price) if avg_vol_20d > 0 and price > 0 else None
@@ -331,8 +348,10 @@ class RadarDataMixin:
             raw_sp = radar_cache.get("skew_percentile")
             skew_percentile = float(raw_sp) if raw_sp is not None else None
         else:
-            skew_val = -0.5 if radar_cache.get("is_skew_extreme") else 0.0
-            skew_percentile = 50.0
+            # 無任何 Skew 來源：維持 None (未知)，下游跳過 Skew 指標。過去補
+            # skew 0.0 / -0.5 與分位 50.0，冒充「中性」或「極端」。
+            skew_val = None
+            skew_percentile = None
 
         # GEX Wall 解析（優先從 gex_metrics 快取讀取）
         put_wall = gex_data.get("put_wall") or radar_cache.get("put_wall_strike")
@@ -735,13 +754,15 @@ class RadarDataMixin:
             except (TypeError, ValueError):
                 return 0.0
 
-        iv_rank_val = 0.0
+        # IVR 未知 (樣本不足/抓取失敗) 時為 None——過去存成 0.0，下游把它當成
+        # 「IVR 0%」：IVR 驟降 (IV 崩塌) 誤判、Covered Call 零溢價阻斷。
+        iv_rank_val: Optional[float] = None
         em_weekly = _safe_em_float(em_context.get("expected_move_weekly"))
         em_lower = _safe_em_float(em_context.get("expected_move_lower"))
         em_upper = _safe_em_float(em_context.get("expected_move_upper"))
 
         if iv_m:
-            iv_rank_val = iv_m.iv_rank if iv_m.iv_rank is not None else 0.0
+            iv_rank_val = iv_m.iv_rank
 
         mock_iv = {
             "iv_rank": iv_rank_val,

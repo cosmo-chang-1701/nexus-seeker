@@ -229,6 +229,34 @@ def get_session_bounds_utc(
     return bounds
 
 
+def get_recent_trading_dates(n: int, as_of: datetime | None = None) -> list[str]:
+    """回傳截至 as_of (含當天，若為交易日) 的最近 n 個 NYSE 交易日 (ET 日期字串，
+    由舊到新)。行事曆查詢失敗時退回「平日」(只排除週末，無法排除國定假日)。
+
+    供 IV Rank 母體以「交易日」而非「資料列數」定義 252 日窗口。
+    """
+    today = _to_et_date(as_of)
+    n = max(1, int(n))
+    start = today - timedelta(days=n * 2 + 10)
+    try:
+        schedule = nyse_calendar.schedule(start_date=start, end_date=today)
+        if not schedule.empty:
+            dates = [
+                ts.tz_convert(ny_tz).strftime("%Y-%m-%d")
+                for ts in schedule["market_open"]
+            ]
+            return dates[-n:]
+    except Exception as e:
+        logger.warning(f"NYSE 行事曆查詢失敗，交易日退回平日近似: {e}")
+    out: list[str] = []
+    d = today
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d.strftime("%Y-%m-%d"))
+        d -= timedelta(days=1)
+    return list(reversed(out))
+
+
 # ---------------------------------------------------------------------------
 # 期權到期時間 (DTE / T) 的單一計算來源
 # ---------------------------------------------------------------------------

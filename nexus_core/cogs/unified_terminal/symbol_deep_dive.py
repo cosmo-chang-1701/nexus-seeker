@@ -572,10 +572,11 @@ class SymbolDeepDiveMixin:
             )
             stock_iv_val = _safe_float(raw_stock_iv, 0.0)
             stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
-            vol_pcr = (
-                _safe_float(pcr_data.get("volume_pcr"), 0.8)
-                if isinstance(pcr_data, dict)
-                else 0.8
+            # PCR 缺值為 None (NRO 不做 PCR 修正)，不補 0.8。
+            vol_pcr: Optional[float] = (
+                _safe_float(pcr_data.get("volume_pcr"))
+                if isinstance(pcr_data, dict) and pcr_data.get("volume_pcr") is not None
+                else None
             )
             skew_val = _safe_float(safe_skew.get("skew"), 0.0)
 

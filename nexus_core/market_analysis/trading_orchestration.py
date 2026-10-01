@@ -1,4 +1,5 @@
 import logging
+import market_time
 import asyncio
 import math
 import pandas as pd
@@ -9,6 +10,7 @@ from config import RISK_FREE_RATE
 from database.holdings import get_user_holdings
 from database.orders import get_user_active_orders
 from market_analysis.sentiment_engine import SentimentEngine
+from market_analysis.option_quote import resolve_option_mid
 from services.market_data_service import (
     get_history_df,
     get_quote,
@@ -201,10 +203,11 @@ async def recommend_covered_calls(
 
     for exp in target_expirations:
         try:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d")
-            t_years = (exp_date - today_dt).days / 365.0
-            if t_years <= 0:
+            # T 以美東日期差計算 (共用 market_time.years_to_expiry)。過去用
+            # 含時分秒的 datetime 相減，`.days` 會少算 1 天，隔天到期時 t=0 被跳過。
+            if market_time.days_to_expiry_et(exp, as_of=today_dt) < 0:
                 continue
+            t_years = market_time.years_to_expiry(exp, as_of=today_dt)
 
             # 抓取 option chain (不裁減履約價範圍：篩選條件是 Strike > New Cost
             # Basis，股價已大漲時合理的履約價可能落在現價 ±10% 之外)
@@ -233,16 +236,15 @@ async def recommend_covered_calls(
 
                 # 篩選 Delta < 0.15
                 if 0.0 < d_val < 0.15:
-                    premium = float(row.get("lastPrice", 0.0))
-                    bid = float(row.get("bid", 0.0))
-                    ask = float(row.get("ask", 0.0))
+                    bid = float(row.get("bid", 0.0) or 0.0)
+                    ask = float(row.get("ask", 0.0) or 0.0)
 
-                    # 取得合理的權利金參考 (Mid-price 優先)
-                    ref_premium = (
-                        (bid + ask) / 2.0 if (bid > 0 and ask > bid) else premium
-                    )
-                    if ref_premium <= 0:
-                        ref_premium = premium
+                    # 權利金一律用 bid/ask 中間價 (與 get_option_chain_mid_iv 同一
+                    # 規則)；零 bid 時 ask/2 並標示，報價缺失則略過——不再用可能
+                    # 是數日前成交的 lastPrice 計算年化收益。
+                    ref_premium, premium_source = resolve_option_mid(bid, ask)
+                    if premium_source == "MISSING":
+                        continue
 
                     # 計算年化收益率
                     ann_yield = (
@@ -259,6 +261,7 @@ async def recommend_covered_calls(
                                 "strike": strike,
                                 "delta": round(d_val, 3),
                                 "premium": round(ref_premium, 2),
+                                "premium_source": premium_source,
                                 "bid": bid,
                                 "ask": ask,
                                 "annualized_yield": round(ann_yield, 2),
@@ -353,10 +356,11 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
 
     for exp in target_expirations:
         try:
-            exp_date = datetime.strptime(exp, "%Y-%m-%d")
-            t_years = (exp_date - today_dt).days / 365.0
-            if t_years <= 0:
+            # T 以美東日期差計算 (共用 market_time.years_to_expiry)。過去用
+            # 含時分秒的 datetime 相減，`.days` 會少算 1 天，隔天到期時 t=0 被跳過。
+            if market_time.days_to_expiry_et(exp, as_of=today_dt) < 0:
                 continue
+            t_years = market_time.years_to_expiry(exp, as_of=today_dt)
 
             opt_chain = await get_option_chain(symbol, exp)
             if not opt_chain or opt_chain.calls is None:
@@ -381,15 +385,15 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
                 # 篩選條件
                 # Risk Boundary: Option Type == CALL and 0 < Delta < 0.15
                 if 0.0 < d_val < 0.15:
-                    premium = float(row.get("lastPrice", 0.0))
-                    bid = float(row.get("bid", 0.0))
-                    ask = float(row.get("ask", 0.0))
+                    bid = float(row.get("bid", 0.0) or 0.0)
+                    ask = float(row.get("ask", 0.0) or 0.0)
 
-                    ref_premium = (
-                        (bid + ask) / 2.0 if (bid > 0 and ask > bid) else premium
-                    )
-                    if ref_premium <= 0:
-                        ref_premium = premium
+                    # 權利金一律用 bid/ask 中間價 (與 get_option_chain_mid_iv 同一
+                    # 規則)；零 bid 時 ask/2 並標示，報價缺失則略過——不再用可能
+                    # 是數日前成交的 lastPrice 計算年化收益。
+                    ref_premium, premium_source = resolve_option_mid(bid, ask)
+                    if premium_source == "MISSING":
+                        continue
 
                     # 計算年化收益率
                     ann_yield = (
@@ -415,6 +419,7 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
                                 "strike": strike,
                                 "delta": round(d_val, 3),
                                 "premium": round(ref_premium, 2),
+                                "premium_source": premium_source,
                                 "bid": bid,
                                 "ask": ask,
                                 "annualized_yield": round(ann_yield, 2),
