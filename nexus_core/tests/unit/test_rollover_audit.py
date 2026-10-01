@@ -46,7 +46,7 @@ async def test_get_rollover_audit_log_scoped_per_user_and_ordered(
     await log_rollover_instruction(
         user_id=1,
         symbol="AAA",
-        scenario="OPPORTUNITY_COST",
+        scenario="TRANSITION_ENGINE",
         action="REDUCE",
         sell_ratio=0.5,
     )

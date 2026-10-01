@@ -369,18 +369,14 @@ async def test_pyramid_add_stays_command_in_advisory_mode(
 
 
 # ---------------------------------------------------------------------------
-# 其餘兩個情境跳過顧問持倉；MARGIN_DEFENSE 不受影響
+# 宏觀逃頂情境跳過顧問持倉；MARGIN_DEFENSE 不受影響
 # ---------------------------------------------------------------------------
-def test_opportunity_cost_and_macro_trim_import_the_skip() -> None:
-    """兩個情境的迴圈皆以 is_advisory_asset 跳過顧問持倉（原始碼層級守衛）。"""
+def test_macro_trim_imports_the_skip() -> None:
+    """宏觀逃頂情境的迴圈以 is_advisory_asset 跳過顧問持倉（原始碼層級守衛）。"""
     import inspect
 
-    from market_analysis.dynamic_rollover import (
-        macro_top_escape_defense,
-        opportunity_cost,
-    )
+    from market_analysis.dynamic_rollover import macro_top_escape_defense
 
-    assert "is_advisory_asset(asset)" in inspect.getsource(opportunity_cost)
     assert "is_advisory_asset(asset)" in inspect.getsource(macro_top_escape_defense)
 
 

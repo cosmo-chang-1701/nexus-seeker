@@ -107,9 +107,6 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
     }
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
-    )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     with (
@@ -129,7 +126,6 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
         await cog.monitor_real_portfolio_task()
 
     cog.rollover_engine.check_satellite_rebalancing.assert_awaited_once()
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites.assert_awaited_once()
     cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
     bot.queue_dm.assert_not_called()
 
@@ -163,9 +159,6 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
     }
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
-    )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     with (
@@ -219,9 +212,6 @@ async def test_monitor_real_portfolio_task_force_live_gex_refresh_overrides_stal
     }
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
-    )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     fresh_gex_data = {
@@ -270,13 +260,13 @@ async def test_monitor_real_portfolio_task_force_live_gex_refresh_overrides_stal
 
 
 @pytest.mark.asyncio
-async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and_3_flags() -> (
+async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario3_flags() -> (
     None
 ):
     """
     Scenario 4 (槓桿與保證金防禦) 呼叫時傳入的 already_flagged_symbols 必須涵蓋
-    Scenario 3 (核心衛星再平衡) 與 Scenario 2 (機會成本轉倉) 兩者已標記過的標的，
-    避免同一標的同一輪次收到互相矛盾的清倉指令。
+    Scenario 3 (核心衛星再平衡) 已標記過的標的，避免同一標的同一輪次收到
+    互相矛盾的清倉指令。
     """
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
@@ -299,9 +289,6 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
         return_value=[{"symbol": "NVDA", "action": "REDUCE"}]
     )
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([{"symbol": "AAPL", "action": "LIQUIDATE"}], None)
-    )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     with (
@@ -323,10 +310,7 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario2_and
     cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
     await_args = cog.rollover_engine.evaluate_margin_defense.await_args
     assert await_args is not None
-    assert await_args.kwargs["already_flagged_symbols"] == {
-        ("NVDA", "SPOT"),
-        ("AAPL", "SPOT"),
-    }
+    assert await_args.kwargs["already_flagged_symbols"] == {("NVDA", "SPOT")}
 
 
 @pytest.mark.asyncio
@@ -336,7 +320,7 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
     """
     修正回歸測試：Scenario 3 若僅回傳 HOLD 安心防守卡（無實際賣出/減碼動作），
     不應被計入 already_flagged，否則會 silently 阻擋同一標的在同一輪次收到
-    更高等級的 Scenario 2 機會成本轉倉評估，或 Scenario 4 保證金強制平倉警報。
+    後續情境的評估，或 Scenario 4 保證金強制平倉警報。
     """
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
@@ -360,9 +344,6 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
         return_value=[{"symbol": "NVDA", "action": "HOLD"}]
     )
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
-    )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
 
     with (
@@ -380,13 +361,6 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
         ),
     ):
         await cog.monitor_real_portfolio_task()
-
-    # Scenario 2 呼叫時傳入的 already_flagged_symbols 不應包含僅 HOLD 的 NVDA
-    opp_cost_call = (
-        cog.rollover_engine.evaluate_opportunity_cost_for_satellites.await_args
-    )
-    assert opp_cost_call is not None
-    assert opp_cost_call.args[2] == set()
 
     # Scenario 4 呼叫時傳入的 already_flagged_symbols 同樣不應包含僅 HOLD 的 NVDA
     margin_call = cog.rollover_engine.evaluate_margin_defense.await_args
@@ -766,9 +740,6 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
     }
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
-    )
     cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
         return_value=[overlay_instruction]
     )
@@ -823,9 +794,6 @@ def _mock_all_rollover_scenarios(cog: PortfolioMonitorCog) -> None:
     (例如 evaluate_macro_top_escape_defense 的總經資料抓取)。"""
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
         return_value=[]
-    )
-    cog.rollover_engine.evaluate_opportunity_cost_for_satellites = AsyncMock(  # type: ignore
-        return_value=([], None)
     )
     cog.rollover_engine.evaluate_covered_call_overlay = AsyncMock(  # type: ignore
         return_value=[]
@@ -1495,8 +1463,8 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_profit_lock_e
 @pytest.mark.asyncio
 async def test_monitor_real_portfolio_task_invokes_macro_top_escape_defense() -> None:
     """Scenario 6 (宏觀逃頂前瞻防禦) 必須被實際掛進 monitor_real_portfolio_task
-    的評估迴圈，且接收到的 already_flagged_symbols 應是 Scenario 2/3/4/5
-    累積後的完整集合（在六大情境中排最後一位，永遠享有最低優先權）。"""
+    的評估迴圈，且接收到的 already_flagged_symbols 應是 Scenario 3/4
+    累積後的完整集合（在各情境中排最後一位，永遠享有最低優先權）。"""
     bot = MagicMock()
     bot.queue_dm = AsyncMock()
     bot.get_cog = MagicMock(return_value=None)

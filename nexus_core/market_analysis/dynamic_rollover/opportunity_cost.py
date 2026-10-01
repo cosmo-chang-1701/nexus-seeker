@@ -1,11 +1,10 @@
 import asyncio
 import math
 from datetime import datetime
-from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, Mapping, Optional, Tuple
 
 import market_time
 
-from database.user_settings import get_full_user_context
 from market_analysis.index_microstructure import (
     detect_uoa_sto_call_physical_cap,
     estimate_symbol_gamma_flip,
@@ -17,11 +16,7 @@ from market_analysis.room_threshold import (
 )
 
 from . import logger
-from .advisory_mode import is_advisory_asset
 from ._shared import (
-    format_cash_impact,
-    format_illiquidity_warning,
-    resolve_current_value,
     resolve_room_threshold_inputs,
 )
 from .constants import (
@@ -29,7 +24,6 @@ from .constants import (
     INDEX_INVERSE_MAP,
     SECTOR_INVERSE_MAP,
     SINGLE_STOCK_INVERSE_MAP,
-    _BREAKOUT_READY_THRESHOLD,
     _EARNINGS_PRE_EVENT_BUFFER_DAYS,
     _ENTRY_CANDIDATE_MIN_DTE,
     _ENTRY_DTE_BAND_SHORT,
@@ -45,30 +39,16 @@ from .constants import (
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
     _REGIME_III_B_LOOKBACK_BARS,
     _REGIME_III_B_MIN_HELD_BARS,
-    _ESTIMATED_ROUND_TRIP_COST_PCT,
     _EV_SPREAD_MIN_THRESHOLD,
-    _LOW_IVR_UPPER_BOUND,
-    _MOMENTUM_DECAY_THRESHOLD,
-    _PROFIT_LOCK_PROFIT_PCT_THRESHOLD,
-    _PUT_WALL_PROXIMITY_TOLERANCE,
-    _ROLLOVER_RATIO_HIGH_PROFIT,
-    _ROLLOVER_RATIO_STANDARD,
-    _SHORT_CANDIDATE_MAX_PSQ,
     _SKEW_DOWNSIDE_PENALTY_FACTOR,
-    resolve_risk_profile,
+    _SHORT_CANDIDATE_MAX_PSQ,
 )
 from .models import (
-    DynamicRegime,
-    EntryConfirmation,
     EntryDirection,
-    RolloverInstruction,
-    RolloverScenario,
-    TradingStrategyMode,
 )
 from .structural_signals import (
     _scan_gex_walls,
     count_structure_held_bars,
-    evaluate_option_dte_tier,
 )
 
 
@@ -781,7 +761,11 @@ async def _confirm_entry_condition6_candidate_dte(
 
 
 class _OpportunityCostMixin:
-    """邏輯 (2)：機會成本與期望值比對 (Opportunity Cost & EV Comparison)。"""
+    """進場鐵律與候選標的篩選（右側六重鐵律、多空候選挑選）。
+
+    原「機會成本換股」情境 (Scenario 2) 已移除，僅保留仍被進場顧問、symbol_view、
+    左側、做空情境與 Scenario 3 TP 分層輪動目標共用的部分。
+    """
 
     def _calculate_ev_proxy(
         self, symbol: str, skew_percentile: Optional[float] = None
@@ -977,123 +961,6 @@ class _OpportunityCostMixin:
             score = min(score, 5.0)
 
         return float(max(0.0, min(100.0, score)))
-
-    def evaluate_opportunity_cost(
-        self,
-        current_holding_symbol: str,
-        current_holding_power_squeeze: float,
-        current_holding_profit_pct: float,
-        target_watchlist_symbol: str,
-        target_power_squeeze: float,
-        target_expected_value: float,
-        current_holding_expected_value: float,
-        target_ivr: Optional[float] = None,
-        target_uoa_sweep: bool = False,
-        target_spot: float = 0.0,
-        target_put_wall: float = 0.0,
-        friction_cost_pct: float = _ESTIMATED_ROUND_TRIP_COST_PCT,
-        base_ev_hurdle_pct: float = _EV_SPREAD_MIN_THRESHOLD,
-    ) -> Dict[str, Any]:
-        """
-        邏輯 (2): 機會成本與期望值比對 (包含勝率傾斜)
-        結合 PowerSqueeze 動能指標，當持倉動能衰退且 Watchlist 具備突破條件時，
-        計算期望值並給出具備清晰履約價規格的轉倉建議。
-
-        friction_cost_pct：往返交易摩擦成本估計值，預設為靜態保守值
-        _ESTIMATED_ROUND_TRIP_COST_PCT。呼叫端 (evaluate_opportunity_cost_for_satellites)
-        於高波動環境下會改傳入動態計算值 (候選標的近價期權合約 Bid-Ask 點差
-        推算)，確保 EV 門檻在流動性摩擦擴大時自動提高。本函式維持純運算、
-        零 I/O，僅接受呼叫端已算好的數值，不在此處發動網路請求。
-
-        base_ev_hurdle_pct：EV 轉倉門檻的「基礎」分量，預設為現行
-        _EV_SPREAD_MIN_THRESHOLD (0.05)。呼叫端依使用者 risk_appetite 解析出的
-        RiskProfile.ev_hurdle 覆寫。⚠️ 刻意與 friction_cost_pct 分開、不合併成
-        單一常數：後者在高波動環境下會被動態放大，若合併會讓那組已驗證的動態
-        摩擦成本機制被靜態值覆蓋掉。
-        """
-        # 假設 PowerSqueeze 指標中，數值越低代表動能越弱，越高代表突破動能強烈
-        holding_momentum_decaying = (
-            current_holding_power_squeeze < _MOMENTUM_DECAY_THRESHOLD
-        )
-        target_breakout_ready = target_power_squeeze > _BREAKOUT_READY_THRESHOLD
-
-        # 期望值差距
-        ev_spread = target_expected_value - current_holding_expected_value
-
-        should_rollover = False
-        rollover_ratio = 0.0
-        strategy = "Buy Shares"
-
-        if (
-            holding_momentum_decaying
-            and target_breakout_ready
-            and ev_spread > (base_ev_hurdle_pct + friction_cost_pct)
-        ):
-            should_rollover = True
-            if current_holding_profit_pct > _PROFIT_LOCK_PROFIT_PCT_THRESHOLD:
-                # 獲利豐厚，可轉換 50%
-                rollover_ratio = _ROLLOVER_RATIO_HIGH_PROFIT
-            else:
-                # 獲利一般或虧損，轉換 30% 或全轉，視風險偏好而定
-                rollover_ratio = _ROLLOVER_RATIO_STANDARD
-
-            # ----------------------------------------------------
-            # 條件二：新標的出現「極致不對稱勝率」
-            # ----------------------------------------------------
-            is_low_ivr = (
-                target_ivr is not None and 0 < target_ivr < _LOW_IVR_UPPER_BOUND
-            )
-            is_near_put_wall = (target_put_wall > 0 and target_spot > 0) and (
-                abs(target_spot - target_put_wall) / target_put_wall
-                <= _PUT_WALL_PROXIMITY_TOLERANCE
-            )
-            is_extreme_asymmetric = is_low_ivr and is_near_put_wall and target_uoa_sweep
-
-            if is_extreme_asymmetric:
-                strategy = "Shares + ITM Call"
-                target_strike = round(target_spot * 0.95, 2) if target_spot > 0 else 0.0
-                strike_note = (
-                    f" (ITM 70Δ Call @ ${target_strike:.2f}, 30-45 DTE)"
-                    if target_spot > 0
-                    else ""
-                )
-                reason_suffix = f" (🎯 條件二極致勝率觸發: 低IVR({_fmt_ivr(target_ivr)}) + 鋼鐵牆築底 + 巨鯨掃貨{strike_note}，強制啟動轉倉)"
-            else:
-                strategy = "Buy Shares"
-                reason_suffix = ""
-
-            # 強制優先採用極致不對稱勝率條件
-            if holding_momentum_decaying and is_extreme_asymmetric:
-                should_rollover = True
-                rollover_ratio = 1.0  # 條件三要求 100% 滿載運算 / 不留戀
-                return {
-                    "should_rollover": should_rollover,
-                    "rollover_ratio": rollover_ratio,
-                    "strategy": strategy,
-                    "reason": (
-                        f"Holding {current_holding_symbol} momentum decaying (PSQ={current_holding_power_squeeze}). "
-                        f"Target {target_watchlist_symbol} hit asymmetric win-rate. "
-                        + reason_suffix
-                    ),
-                }
-
-            return {
-                "should_rollover": should_rollover,
-                "rollover_ratio": rollover_ratio,
-                "strategy": strategy,
-                "reason": (
-                    f"Holding {current_holding_symbol} momentum decaying (PSQ={current_holding_power_squeeze}). "
-                    f"Target {target_watchlist_symbol} showing breakout potential (PSQ={target_power_squeeze}) "
-                    f"with EV spread +{ev_spread * 100:.1f}%." + reason_suffix
-                ),
-            }
-
-        return {
-            "should_rollover": False,
-            "rollover_ratio": 0.0,
-            "strategy": "N/A",
-            "reason": "No action required.",
-        }
 
     async def _confirm_entry_signal(
         self,
@@ -1295,346 +1162,3 @@ class _OpportunityCostMixin:
             candidate_radar=candidate_radar,
         )
         return all_passed, reason_text, structure_directive
-
-    async def evaluate_opportunity_cost_for_satellites(
-        self,
-        user_id: int,
-        portfolio_assets: List[Dict[str, Any]],
-        already_flagged_symbols: set,
-        candidate_symbol: str,
-        candidate_radar: Optional[Dict[str, Any]],
-    ) -> Tuple[List[RolloverInstruction], Optional[EntryConfirmation]]:
-        """
-        邏輯 (2) 批次橋接：對每一個尚未被 Scenario 3 標記的 SATELLITE 持倉，
-        比對其 PowerSqueeze/EV 與單一預篩選候選標的 (candidate_symbol) 的機會成本，
-        產生與 check_satellite_rebalancing 相同結構的 instruction dict。
-
-        candidate_radar: 由呼叫端 (cog 層) 預先透過既有 radar 抓取機制取得的單一候選標的資料，
-        純資料 dict，避免 market_analysis 層依賴 cogs。
-
-        回傳 (instructions, entry_confirmation)：entry_confirmation 為
-        `EntryConfirmation` (含方向) 或 None (未觸及 _confirm_entry_signal，
-        例如 candidate_symbol 為 "VOO" 或無 candidate_radar 而提早返回)。呼叫端
-        (portfolio_monitor.py) 將此結果原樣轉交邏輯 (5) 核心資金部署，避免針對
-        同一 candidate_symbol 在同一輪次內重複執行 _confirm_entry_signal 的六重
-        條件驗證 (內含未快取的 get_market_regime() 呼叫與歷史 K 線/選擇權到期日抓取)。
-
-        ⚠️ 做空確認 (direction="SHORT") **永遠不會**在本函式產生指令：本情境的
-        語意是「賣掉衛星持倉、把資金買進候選標的」，整條下游全是多頭假設。
-        做空確認只原樣回傳，交由 SHORT_ENTRY 情境 (short_entry_deployment.py)
-        建立獨立的做空進場訊號；core_deployment 收到 SHORT 確認同樣略過。
-        """
-        instructions: List[RolloverInstruction] = []
-        if candidate_symbol == "VOO" or not candidate_radar:
-            return instructions, None  # 沒有找到高 EV 候選標的，不強制轉倉
-
-        target_psq = candidate_radar.get("psq_result", {}) or {}
-        target_power_squeeze = self._normalize_power_squeeze(target_psq)
-        target_expected_value = self._calculate_ev_proxy(candidate_symbol)
-        target_spot = float(
-            candidate_radar.get("quote", {}).get("c", 0.0)
-            if candidate_radar.get("quote")
-            else 0.0
-        )
-        # IVR 未知時為 None (radar slow/fast path 不再以 0.0/50.0 冒充)。
-        _ivr_raw = (candidate_radar.get("iv_metrics") or {}).get("iv_rank")
-        target_ivr: Optional[float] = float(_ivr_raw) if _ivr_raw is not None else None
-        target_put_wall = (
-            float(
-                candidate_radar.get("gex_profile_data", {}).get("put_wall", 0.0) or 0.0
-            )
-            if isinstance(candidate_radar.get("gex_profile_data"), dict)
-            else 0.0
-        )
-        target_uoa_sweep = len(candidate_radar.get("uoa", []) or []) > 0
-
-        # 交易策略引擎：依使用者 /settings 選擇的 trading_strategy (右側交易/
-        # 左側交易/做空交易/動態調整) 決定要套用哪一套進場鐵律。RIGHT_SIDE 為
-        # 預設值，呼叫既有六重鐵律，行為與改動前完全一致 (零行為變化)。
-        # LEFT_SIDE 呼叫逆勢均值回歸六重鐵律 (left_side_entry.py)——注意左側
-        # **仍是做多**。SHORT_SIDE 呼叫結構破位追空六重鐵律
-        # (short_side_entry.py)，是本系統唯一的空頭方向進場路徑。DYNAMIC 先透過
-        # 5-Regime 分類器 (regime_classifier.py) 判定盤勢，再路由至對應鐵律或
-        # 直接判定未通過 (Regime II 混沌泥淖態/IV 結構封頂危機態)。
-        # 風險偏好參數化：與 trading_strategy 共用同一次 get_full_user_context
-        # 讀取，避免對同一使用者發動兩次幾乎相同的查詢。resolve_risk_profile 為
-        # 純函式零 I/O，未知值/讀取失敗一律回退 DEFENSIVE (零行為變化)。
-        try:
-            user_ctx = get_full_user_context(user_id)
-            trading_strategy = user_ctx.trading_strategy
-            risk_profile = resolve_risk_profile(user_ctx.risk_appetite)
-        except Exception as e:
-            trading_strategy = TradingStrategyMode.RIGHT_SIDE.value
-            risk_profile = resolve_risk_profile(None)
-            logger.warning(
-                f"[{candidate_symbol}] 讀取使用者 {user_id} 交易策略設定失敗，"
-                f"退回右側交易預設: {e}"
-            )
-
-        structure_directive: Optional[str] = None
-        entry_regime: Optional[str] = None
-
-        if trading_strategy == TradingStrategyMode.LEFT_SIDE.value:
-            from .left_side_entry import _confirm_left_entry_signal
-
-            (
-                is_entry_confirmed,
-                entry_reason,
-                structure_directive,
-            ) = await _confirm_left_entry_signal(
-                candidate_symbol, candidate_radar, target_spot
-            )
-        elif trading_strategy == TradingStrategyMode.SHORT_SIDE.value:
-            # 本函式的 candidate_symbol 來自 _find_best_rollover_target()——依
-            # 「上漲」期望值排序的多頭候選，對它跑做空鐵律在建構上就是錯的對象。
-            # 做空候選由 _find_best_short_target() 另行挑選，在 SHORT_ENTRY 情境
-            # 獨立評估。
-            return instructions, EntryConfirmation(
-                False,
-                "做空模式：多頭候選不適用，改由 SHORT_ENTRY 情境獨立評估",
-                "SHORT",
-            )
-        elif trading_strategy == TradingStrategyMode.DYNAMIC.value:
-            from .left_side_entry import _confirm_left_entry_signal
-            from .regime_classifier import classify_dynamic_regime
-            from .short_side_entry import evaluate_short_entry
-
-            gex_profile_data_for_regime = candidate_radar.get("gex_profile_data") or {}
-            uoa_list_for_regime = candidate_radar.get("uoa") or []
-            regime, regime_reason, regime_market_data = await classify_dynamic_regime(
-                candidate_symbol,
-                target_spot,
-                gex_profile_data_for_regime,
-                uoa_list_for_regime,
-            )
-            entry_regime = regime.value
-            if regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
-                (
-                    is_entry_confirmed,
-                    entry_reason,
-                    structure_directive,
-                ) = await self._confirm_entry_signal(
-                    candidate_symbol,
-                    candidate_radar,
-                    target_spot,
-                    # 原樣沿用分類階段已抓取的 15m frame / Session VWAP，避免對
-                    # 同一標的重複發起網路請求 (比照下方 REGIME_I 分支既有作法)。
-                    df_15m=regime_market_data.df_15m,
-                    session_vwap=regime_market_data.session_vwap,
-                )
-            elif regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION:
-                # 趨勢延續態：走同一套右側六重鐵律，只放寬條件一與條件四
-                # (見 _confirm_entry_signal 的 trend_continuation 說明)。刻意
-                # **不**另開一套鐵律——條件二/三/五/六是風控，重寫一份必然漂移，
-                # 正是 06_dynamic_adaptive_room_threshold.md 收斂 7 處固定百分比
-                # 時所依據的同一個理由。
-                (
-                    is_entry_confirmed,
-                    entry_reason,
-                    structure_directive,
-                ) = await self._confirm_entry_signal(
-                    candidate_symbol,
-                    candidate_radar,
-                    target_spot,
-                    df_15m=regime_market_data.df_15m,
-                    session_vwap=regime_market_data.session_vwap,
-                    trend_continuation=True,
-                )
-            elif regime == DynamicRegime.REGIME_I_LEFT_CATCH:
-                (
-                    is_entry_confirmed,
-                    entry_reason,
-                    structure_directive,
-                ) = await _confirm_left_entry_signal(
-                    candidate_symbol,
-                    candidate_radar,
-                    target_spot,
-                    # 原樣沿用分類階段已抓取的 15m frame / Session VWAP /
-                    # ATR₁₅ₘ，確保「盤勢分類」與「進場確認」建立在同一份資料
-                    # 快照上，並省去對同一標的的重複網路請求。
-                    df_15m=regime_market_data.df_15m,
-                    session_vwap=regime_market_data.session_vwap,
-                    atr_15m=regime_market_data.atr_15m,
-                )
-            elif regime == DynamicRegime.REGIME_V_BREAKDOWN_CHASE:
-                short_ev = await evaluate_short_entry(
-                    candidate_symbol,
-                    candidate_radar,
-                    target_spot,
-                    # 同上：原樣沿用分類階段已抓取的資料快照。
-                    df_15m=regime_market_data.df_15m,
-                    session_vwap=regime_market_data.session_vwap,
-                    atr_15m=regime_market_data.atr_15m,
-                )
-                if not short_ev.all_passed:
-                    logger.info(
-                        f"[{candidate_symbol}] Regime V 做空訊號未確認: {short_ev.reason}"
-                    )
-                # 做空確認在衛星迴圈之前返回：永遠不產生 Buy Shares 指令。
-                return instructions, EntryConfirmation(
-                    short_ev.all_passed,
-                    short_ev.reason,
-                    "SHORT",
-                    short_evaluation=short_ev,
-                    entry_regime=entry_regime,
-                    rsi_15m=regime_market_data.rsi_15m,
-                )
-            else:
-                is_entry_confirmed = False
-                entry_reason = f"⛔ Regime `{regime.value}`：{regime_reason}"
-        else:
-            # 防洗盤實戰策略：進場訊號六重嚴格過濾鐵律 (右側交易，預設行為)。
-            # 六項條件必須同時成立才允許對 candidate_symbol 啟動任何機會成本
-            # 轉倉指令；未通過時比照上方「找不到候選標的」的早退模式，靜默
-            # 略過、不產生任何指令。
-            (
-                is_entry_confirmed,
-                entry_reason,
-                structure_directive,
-            ) = await self._confirm_entry_signal(
-                candidate_symbol, candidate_radar, target_spot
-            )
-
-        entry_confirmation: Optional[EntryConfirmation] = EntryConfirmation(
-            is_entry_confirmed,
-            entry_reason,
-            "LONG",
-            entry_regime=entry_regime,
-        )
-        if not is_entry_confirmed:
-            logger.info(
-                f"[{candidate_symbol}] 進場訊號未確認，靜默略過機會成本轉倉: {entry_reason}"
-            )
-            return instructions, entry_confirmation
-
-        # 高波環境滑點與摩擦成本動態化：以候選標的近價期權合約的實際 Bid-Ask
-        # 點差取代固定 0.3% 往返成本估算，確保極端高波 (寬點差) 時 EV 門檻
-        # 自動提高，避免在流動性摩擦過大時仍放行進場。任何抓取失敗一律退回
-        # 靜態保守值 (find_best_contract 本身已內含 try/except 永不拋例外，
-        # 此處另包一層防禦僅為了 bid/ask 數值驗證與除法本身)。
-        friction_cost_pct = _ESTIMATED_ROUND_TRIP_COST_PCT
-        try:
-            from market_analysis.strategy import find_best_contract
-
-            near_atm_contract = await find_best_contract(
-                candidate_symbol, "STO_CALL", 0.50, 21, 45
-            )
-            if near_atm_contract and target_spot > 0:
-                bid = float(near_atm_contract.get("bid", 0.0))
-                ask = float(near_atm_contract.get("ask", 0.0))
-                if bid > 0 and ask > bid:
-                    spread_pct = (ask - bid) / target_spot
-                    friction_cost_pct = max(
-                        _ESTIMATED_ROUND_TRIP_COST_PCT, spread_pct * 1.5
-                    )
-        except Exception as e:
-            logger.warning(
-                f"[{candidate_symbol}] 近價期權合約點差抓取失敗，退回靜態摩擦成本: {e}"
-            )
-
-        for asset in portfolio_assets:
-            symbol = str(asset.get("symbol", "")).upper()
-            if asset.get("asset_class") != "SATELLITE":
-                continue
-            # 顧問模式 (B&H) 持倉不作為「賣 A 買 B」的賣出端：轉倉換股與其
-            # 策略直接衝突，只告知位階（見 advisory_mode.py）。
-            if is_advisory_asset(asset):
-                continue
-            instrument_class = str(
-                asset.get("instrument_type", asset.get("asset_type", "SPOT"))
-            ).upper()
-            instrument_class = (
-                "OPTIONS"
-                if ("OPT" in instrument_class or "CONTRACT" in instrument_class)
-                else "SPOT"
-            )
-            if (symbol, instrument_class) in already_flagged_symbols:
-                continue
-            if symbol == candidate_symbol:
-                continue
-
-            # DTE 三態狀態機：機會成本轉倉本質即是「新增轉倉」(NEW_OPPORTUNITY)，
-            # dte<7 一律封鎖 (末日流動性雜訊，不適合驅動新轉倉決策)。dte<=1
-            # 已由 Scenario 3 的強制結算保護接管，此處靜默跳過避免重複/矛盾指令。
-            if instrument_class == "OPTIONS":
-                dte_tier = evaluate_option_dte_tier(
-                    int(asset.get("dte", 99)), "NEW_OPPORTUNITY"
-                )
-                if dte_tier != "NORMAL_EXECUTION":
-                    continue
-
-            holding_psq = asset.get("psq_result", {}) or {}
-            current_power_squeeze = self._normalize_power_squeeze(holding_psq)
-            current_ev = self._calculate_ev_proxy(symbol)
-
-            avg_cost = float(asset.get("avg_cost", 0.0))
-            spot = float(asset.get("spot_price", 0.0))
-            profit_pct = (spot - avg_cost) / avg_cost if avg_cost > 0 else 0.0
-
-            result = self.evaluate_opportunity_cost(
-                current_holding_symbol=symbol,
-                current_holding_power_squeeze=current_power_squeeze,
-                current_holding_profit_pct=profit_pct,
-                target_watchlist_symbol=candidate_symbol,
-                target_power_squeeze=target_power_squeeze,
-                target_expected_value=target_expected_value,
-                current_holding_expected_value=current_ev,
-                target_ivr=target_ivr,
-                target_uoa_sweep=target_uoa_sweep,
-                target_spot=target_spot,
-                target_put_wall=target_put_wall,
-                friction_cost_pct=friction_cost_pct,
-                base_ev_hurdle_pct=risk_profile.ev_hurdle,
-            )
-            if not result["should_rollover"]:
-                continue
-
-            # 預估資金影響與建議限價：現貨持倉市值優先，缺失時退回股數*現價估算；
-            # 限價採用候選標的即時報價 (target_spot)，取代呼叫端過去恆為
-            # "Market" 的佔位字串。
-            current_value = resolve_current_value(
-                float(asset.get("current_value", 0.0)),
-                float(asset.get("quantity", 0.0)),
-                spot,
-            )
-            recovered_cash = current_value * result["rollover_ratio"]
-            cash_impact = format_cash_impact(recovered_cash)
-
-            # 流動性閘門：比照 Scenario 3/4 既有做法，期權部位若帶有 bid/ask 且
-            # 點差過寬時強制要求手動確認執行 (ManualOverrideView)，而非放行一鍵
-            # 執行按鈕 (RolloverActionView)，避免使用者在滑價風險下誤觸一鍵轉倉。
-            bid = float(asset.get("bid", 0.0))
-            ask = float(asset.get("ask", 0.0))
-            illiquidity_warning = (
-                format_illiquidity_warning(bid, ask)
-                if instrument_class == "OPTIONS"
-                else None
-            )
-            is_illiquid_warning = illiquidity_warning is not None
-            reason_text = f"💡 **機會成本轉倉 (Opportunity Cost)**\n{result['reason']}"
-            if illiquidity_warning:
-                reason_text += illiquidity_warning
-
-            instructions.append(
-                {
-                    "symbol": symbol,
-                    "action": "LIQUIDATE"
-                    if result["rollover_ratio"] >= 1.0
-                    else "REDUCE",
-                    "sell_ratio": result["rollover_ratio"],
-                    "target_core": candidate_symbol,
-                    "reason": reason_text,
-                    # suggested_strategy 維持 _calculate_rollover_decision 自行
-                    # 決策的工具別 (Buy Shares / Shares + ITM Call)，不被進場鐵律
-                    # 的期權結構建議覆寫；後者獨立走 structure_directive 欄位。
-                    "suggested_strategy": result["strategy"],
-                    "structure_directive": structure_directive,
-                    "scenario": RolloverScenario.OPPORTUNITY_COST.value,
-                    "is_manual_override_required": is_illiquid_warning,
-                    "cash_impact": cash_impact,
-                    "limit_price": target_spot if target_spot > 0 else None,
-                    "instrument_type": instrument_class,
-                    "entry_regime": entry_regime,
-                }
-            )
-        return instructions, entry_confirmation

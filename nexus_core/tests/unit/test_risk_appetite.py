@@ -19,7 +19,6 @@ import pytest
 from market_analysis.dynamic_rollover import DynamicRolloverEngine
 from market_analysis.dynamic_rollover.constants import (
     RiskProfile,
-    _EV_SPREAD_MIN_THRESHOLD,
     _MICROSTRUCTURE_TP1_RATIO,
     resolve_risk_profile,
 )
@@ -58,14 +57,12 @@ def test_defensive_profile_matches_existing_constants_bit_identical() -> None:
     risk_appetite 的既有使用者行為會被靜默改變 (§2.7 驗收標準)。"""
     profile = resolve_risk_profile("DEFENSIVE")
     assert profile.tp1_ratio == _MICROSTRUCTURE_TP1_RATIO
-    assert profile.ev_hurdle == _EV_SPREAD_MIN_THRESHOLD
 
 
 def test_aggressive_profile_values() -> None:
     profile = resolve_risk_profile("AGGRESSIVE")
     assert profile == RiskProfile(
         tp1_ratio=0.30,
-        ev_hurdle=0.02,
         rotation_cooldown_days=3,
         max_satellite_budget_pct=0.25,
     )
@@ -156,114 +153,3 @@ async def test_check_satellite_rebalancing_threads_risk_profile_tp1_ratio(
 # ============================================================================
 # 消費端 2：opportunity_cost.py 機會成本轉倉 EV Spread 門檻基礎分量
 # ============================================================================
-
-
-def test_evaluate_opportunity_cost_default_hurdle_unchanged(
-    engine: DynamicRolloverEngine,
-) -> None:
-    # ev_spread = 0.25 - 0.20 = 0.05；預設門檻 0.05 + 0.003(摩擦成本) = 0.053 → 不觸發
-    result = engine.evaluate_opportunity_cost(
-        current_holding_symbol="NVDA",
-        current_holding_power_squeeze=10.0,
-        current_holding_profit_pct=0.1,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=95.0,
-        target_expected_value=0.25,
-        current_holding_expected_value=0.20,
-    )
-    assert result["should_rollover"] is False
-
-
-def test_evaluate_opportunity_cost_aggressive_hurdle_triggers_earlier(
-    engine: DynamicRolloverEngine,
-) -> None:
-    # 同樣 ev_spread=0.05，AGGRESSIVE 基礎門檻 0.02 + 摩擦成本 0.003 = 0.023 → 觸發
-    profile = resolve_risk_profile("AGGRESSIVE")
-    result = engine.evaluate_opportunity_cost(
-        current_holding_symbol="NVDA",
-        current_holding_power_squeeze=10.0,
-        current_holding_profit_pct=0.1,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=95.0,
-        target_expected_value=0.25,
-        current_holding_expected_value=0.20,
-        base_ev_hurdle_pct=profile.ev_hurdle,
-    )
-    assert result["should_rollover"] is True
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-@patch("market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context")
-@pytest.mark.slow
-async def test_evaluate_opportunity_cost_for_satellites_threads_risk_profile_ev_hurdle(
-    mock_get_user: MagicMock,
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """evaluate_opportunity_cost_for_satellites 必須把解析出的
-    RiskProfile.ev_hurdle 傳給 evaluate_opportunity_cost 作為
-    base_ev_hurdle_pct，且與既有的動態摩擦成本 (friction_cost_pct) 並存，
-    而非互相覆蓋 (見 constants.py::RiskProfile.ev_hurdle 的 docstring)。"""
-    mock_get_user.return_value = MagicMock(
-        trading_strategy="RIGHT_SIDE", risk_appetite="AGGRESSIVE"
-    )
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 50.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,
-            "psq_result": {
-                "squeeze_level": "Release",
-                "signal_direction": "Neutral",
-            },
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    spy = MagicMock(wraps=engine.evaluate_opportunity_cost)
-    with patch.object(engine, "evaluate_opportunity_cost", spy):
-        await engine.evaluate_opportunity_cost_for_satellites(
-            1, portfolio, set(), "SMCI", candidate_radar
-        )
-
-    spy.assert_called()
-    assert spy.call_args is not None
-    assert spy.call_args.kwargs["base_ev_hurdle_pct"] == pytest.approx(0.02)

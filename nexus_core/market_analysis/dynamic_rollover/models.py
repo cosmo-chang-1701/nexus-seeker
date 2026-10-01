@@ -5,11 +5,10 @@ from pydantic import BaseModel, Field
 
 
 class RolloverScenario(str, Enum):
-    """動態轉倉引擎六大情境的明確識別碼，供 embed 呈現層做顏色/危險等級判斷，
+    """動態轉倉引擎情境的明確識別碼，供 embed 呈現層做顏色/危險等級判斷，
     避免依賴呼叫端自由文字 rollover_type 的子字串比對（該作法曾導致最危險的
     MARGIN_DEFENSE 警報無法正確標紅，詳見 rollover_embeds.py）。"""
 
-    OPPORTUNITY_COST = "OPPORTUNITY_COST"
     SATELLITE_REBALANCE = "SATELLITE_REBALANCE"
     MARGIN_DEFENSE = "MARGIN_DEFENSE"
     FUNDAMENTAL_BROKEN = "FUNDAMENTAL_BROKEN"
@@ -17,10 +16,7 @@ class RolloverScenario(str, Enum):
     MACRO_TOP_ESCAPE_DEFENSE = "MACRO_TOP_ESCAPE_DEFENSE"
     COVERED_CALL_PROFIT_LOCK = "COVERED_CALL_PROFIT_LOCK"
     TRANSITION_ENGINE = "TRANSITION_ENGINE"
-    # 做空進場訊號 (short_entry_deployment.py)。刻意獨立成情境、不借用
-    # OPPORTUNITY_COST：後者的語意是「賣掉衛星持倉、把資金**買進**候選標的」，
-    # 整條下游 (PowerSqueeze > 80 門檻、Buy Shares 工具別、RolloverActionView
-    # 的 BUY 數量計算) 全是多頭假設，做空確認走進去只會得到自相矛盾的指令。
+    # 做空進場訊號 (short_entry_deployment.py)，帶獨立的進場／停損／目標與倉位。
     SHORT_ENTRY = "SHORT_ENTRY"
     # 順勢金字塔加碼 (pyramid_add.py)。刻意獨立成情境、不借用 TRANSITION_ENGINE
     # 既有的 OPEN_PYRAMID action：後者是 entry_regime 驅動的一次性狀態切換
@@ -290,7 +286,7 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # 「用什麼工具進場」(Buy Shares / Shares + ITM Call，由 _calculate_rollover_
     # decision 自行決策)，本欄位回答的是「若以期權表達，該選哪個天期與結構」，
     # 兩者互補而非互斥。早期版本以覆寫實作，會把 "Shares + ITM Call" 連同它自帶
-    # 的 ITM 70Δ 履約價/DTE 指引一起抹掉。僅 OPPORTUNITY_COST 情境會攜帶此欄位。
+    # 的 ITM 70Δ 履約價/DTE 指引一起抹掉。
     structure_directive: Optional[str]
     scenario: str
     is_manual_override_required: bool

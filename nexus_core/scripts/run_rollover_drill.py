@@ -14,18 +14,14 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, patch
+from typing import Any
 
 # Ensure root of nexus_core is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pandas as pd
 
 from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
 from market_analysis.dynamic_rollover import (
-    DynamicRolloverEngine,
     RolloverScenario,
 )
 
@@ -58,182 +54,6 @@ def print_embed_preview(embed: Any) -> None:
     print(f"{C_BOLD}描述 (Description):{C_RESET}\n{embed.description}\n")
     for f in embed.fields:
         print(f"{C_BOLD}【{f.name}】{C_RESET}\n{f.value}\n")
-
-
-async def run_scenario_1() -> None:
-    print_banner("情境一演練：NVDA 轉弱，SPCX 轉強符合轉倉條件 (Opportunity Cost)")
-
-    engine = DynamicRolloverEngine()
-
-    print_section("1. 持倉與市場微結構遙測 (NVDA)")
-    print(f" • 標的: {C_YELLOW}NVDA{C_RESET} (SATELLITE 現貨持倉)")
-    print(
-        " • 持倉現值: $15,000.00 | 股數: 77 股 | 成本: $180.00 | 現價: $195.00 (+8.3%)"
-    )
-    print(f" • PowerSqueeze: {C_RED}10.0 (Release / Neutral - 動能衰退 ⚠️){C_RESET}")
-    print(" • Skew-Adjusted EV: Base 1.54% - 40% Skew 懲罰 = 1.23%")
-    print(" • 做市商結構: PutWall $190.00 | CallWall $210.00 | 15m K 線未破位")
-
-    print_section("2. 候選標的掃描與突破評估 (SPCX)")
-    print(f" • 候選標的: {C_GREEN}SPCX{C_RESET} (Watchlist 最佳高 EV 現貨標的)")
-    print(" • 即時現價: $85.00 | Expected Move Upper: $105.00")
-    print(
-        f" • PowerSqueeze: {C_GREEN}95.0 (High Squeeze + Long + Breakout Long - 突破待發 🚀){C_RESET}"
-    )
-    print(" • Skew-Adjusted EV: (105-85)/85 = 23.50%")
-    print(f" • 期望值利差 (EV Spread): {C_GREEN}+22.27%{C_RESET} (大幅超越 5.5% 門檻)")
-
-    print_section("3. 防洗盤進場訊號六重嚴格過濾鐵律檢驗")
-    gates = [
-        (
-            "條件一",
-            "結構性右側突破",
-            "15m 實體收盤 $85.50 > Gamma Flip $80.00，量能 2.5x 均量",
-            "通過 ✅",
-        ),
-        (
-            "條件二",
-            "做市商正 Gamma 底牆",
-            "Support GEX Wall $80.00 (+1.5M)，牆距 5.9% 落在動態緩衝雙邊界內",
-            "通過 ✅",
-        ),
-        (
-            "條件三",
-            "UOA 無實質物理封頂",
-            "Call Wall $95.00 (空間 11.8% > 動態門檻 8.2%)，無 STO 蓋頂",
-            "通過 ✅",
-        ),
-        (
-            "條件四",
-            "主力 UOA 買盤",
-            "偵測到 $90C BTO 主力買盤，DTE = 21 天 (>= 7 天)",
-            "通過 ✅",
-        ),
-        ("條件五", "總經與財報風控", "距財報 45 天，大盤處於 NORMAL 模式", "通過 ✅"),
-        ("條件六", "效期雜訊過濾", "最近效期選擇權 DTE = 5 天 (> 1 天)", "通過 ✅"),
-    ]
-    for g_num, g_name, g_desc, g_res in gates:
-        print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}{g_res}{C_RESET}")
-
-    portfolio_assets: List[Dict[str, Any]] = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 195.0,
-            "avg_cost": 180.0,
-            "quantity": 77.0,
-            "current_value": 15000.0,
-            "skew_percentile": 40.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
-        }
-    ]
-
-    candidate_radar: Dict[str, Any] = {
-        "quote": {"c": 85.0},
-        "iv_metrics": {"iv_rank": 25.0},
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "gex_profile_data": {
-            "gex_profile": {"75.0": -500000.0, "80.0": 1500000.0, "95.0": -500000.0},
-            "call_wall": 95.0,
-            "put_wall": 80.0,
-        },
-        "uoa": [
-            {
-                "type": "CALL",
-                "action": "BTO",
-                "strike": 90.0,
-                "expiry": (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d"),
-                "ratio": 1.5,
-            }
-        ],
-    }
-
-    def cache_side_effect(
-        symbol: str, expiry: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 195.0,
-                "expected_move_upper": 198.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SPCX":
-            return {
-                "reference_spot_price": 85.0,
-                "expected_move_upper": 105.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    df_data: Dict[str, List[float]] = {
-        "Close": [80.0] * 20 + [85.50],
-        "Volume": [10000.0] * 20 + [25000.0],
-    }
-
-    with patch(
-        "database.market_cache.get_market_cache", side_effect=cache_side_effect
-    ), patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=pd.DataFrame(df_data),
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=[(datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")],
-    ), patch(
-        "database.calendar_cache.get_cached_earnings",
-        return_value={
-            "earnings_date": (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
-        },
-    ), patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="NORMAL",
-    ):
-        (
-            instructions,
-            _entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=101,
-            portfolio_assets=portfolio_assets,
-            already_flagged_symbols=set(),
-            candidate_symbol="SPCX",
-            candidate_radar=candidate_radar,
-        )
-
-    print_section("4. 轉倉決策輸出")
-    ins = instructions[0]
-    print(f" • 觸發情境: {C_YELLOW}{ins['scenario']}{C_RESET}")
-    print(
-        f" • 執行動作: {C_GREEN}{ins['action']}{C_RESET} (減碼 {ins['sell_ratio']:.0%})"
-    )
-    print(f" • 轉入資產: {C_GREEN}{ins['target_core']}{C_RESET}")
-    print(f" • 建議限價: ${ins['limit_price']:.2f}")
-    print(f" • 回收資金: {ins['cash_impact']}")
-
-    embed = create_dynamic_rollover_embed(
-        rollover_type="機會成本轉倉",
-        sell_symbol=ins["symbol"],
-        sell_ratio=ins["sell_ratio"],
-        buy_symbol=ins["target_core"],
-        reason=ins["reason"],
-        suggested_strategy=ins["suggested_strategy"],
-        suggested_price=f"${ins['limit_price']:.2f} (限價)",
-        strike="N/A",
-        expiry="N/A",
-        direction="BUY",
-        sell_action="SELL",
-        scenario=ins["scenario"],
-        cash_impact=ins["cash_impact"],
-        asset_class="SPOT",
-    )
-    print_embed_preview(embed)
 
 
 async def run_scenario_2() -> None:
@@ -446,9 +266,9 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Nexus Seeker 動態轉倉演練執行工具")
     parser.add_argument(
         "--scenario",
-        choices=["1", "2", "3", "all"],
+        choices=["2", "3", "all"],
         default="all",
-        help="指定演練情境 (1: SPCX轉強, 2: 無標的符合, 3: TSLA破位追空, all: 全部)",
+        help="指定演練情境 (2: 無標的符合, 3: TSLA破位追空, all: 全部)",
     )
     args = parser.parse_args()
 
@@ -458,7 +278,6 @@ async def main() -> None:
     # 不會執行**——演練工具的價值正在於一次跑完所有情境並比對，故改為逐個
     # 捕捉、印出失敗原因後繼續。
     scenarios = (
-        ("1", run_scenario_1),
         ("2", run_scenario_2),
         ("3", run_scenario_3),
     )

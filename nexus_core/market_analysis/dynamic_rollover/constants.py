@@ -17,21 +17,8 @@ CORE_DEFENSE_ETF_SYMBOLS: frozenset[str] = frozenset(
 # 使用的最終備援估計值（僅用於股數建議粗估，非交易執行依據）。
 _FALLBACK_TARGET_PRICE_ESTIMATE = 500.0
 
-# evaluate_opportunity_cost 中，機會成本轉倉的 EV Spread 門檻須額外扣除的保守
-# 往返交易成本估計值 (佣金 + 預期滑價)，避免轉倉在扣除交易成本後實質虧損。
-# 非逐券商精算，僅作保守閘門，涵蓋常規轉倉與極致不對稱勝率強制全倉分支
-# (後者巢狀於同一 ev_spread 門檻之內，故單一常數即可覆蓋兩者)。
-_ESTIMATED_ROUND_TRIP_COST_PCT: float = 0.003
-
 # --- 決策門檻具名常數 (純重構，零行為變化；不串接 risk_limit 或新增 per-user 設定) ---
-_MOMENTUM_DECAY_THRESHOLD: float = 20.0  # PowerSqueeze < 此值視為原持倉動能衰退
-_BREAKOUT_READY_THRESHOLD: float = 80.0  # PowerSqueeze > 此值視為新標的突破待發
-_EV_SPREAD_MIN_THRESHOLD: float = 0.05  # 機會成本轉倉最低期望值差距門檻
-_ROLLOVER_RATIO_HIGH_PROFIT: float = 0.5  # 原持倉獲利 > 30% 時的機會成本轉倉比例
-_ROLLOVER_RATIO_STANDARD: float = 0.3  # 原持倉獲利一般/虧損時的機會成本轉倉比例
-_PROFIT_LOCK_PROFIT_PCT_THRESHOLD: float = 0.3  # 判定「獲利豐厚」的持倉獲利率門檻
-_LOW_IVR_UPPER_BOUND: float = 30.0  # 極致不對稱勝率條件之「低 IVR」上限
-_PUT_WALL_PROXIMITY_TOLERANCE: float = 0.01  # 極致不對稱勝率條件之貼近 put_wall 容差
+_EV_SPREAD_MIN_THRESHOLD: float = 0.05  # 最低期望值門檻（多空候選挑選）
 # ⚠️ 注意：_PROFIT_UNLOCK_TOLERANCE 與 _EUPHORIA_SKEW_PERCENTILE 已不再是
 # Scenario 3 (anti_washout.py) 的清倉閘門條件——該角色已由下方「微觀結構出場
 # 決策矩陣」的 TP1/TP2/SL-主力對沖 取代。兩者現僅由 Scenario 6
@@ -507,7 +494,7 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 # --- 風險偏好參數化 (RiskAppetite / RiskProfile)，見 models.py::RiskAppetite ---
 #
-# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻兩處的
+# 單一權威查表，取代原本散落於 TP 階梯等處的
 # 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
 # 已移除的離線轉倉回測（backtest_engine_2025）的 aggressive 模式。⚠️ 採用依據「報酬/MDD/
 # Sharpe 三項皆優於 DEFENSIVE」來自早期引擎；2026-09-23 以 Sortino 為主的判準
@@ -520,15 +507,6 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 class RiskProfile(NamedTuple):
     tp1_ratio: float  # anti_washout.py TP1 執行比例，取代 _MICROSTRUCTURE_TP1_RATIO
-    ev_hurdle: float  # opportunity_cost.py 機會成本轉倉 EV Spread 門檻的「基礎」
-    # 分量，取代 _EV_SPREAD_MIN_THRESHOLD。⚠️ 刻意不是
-    # _EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT 的合併值：
-    # evaluate_opportunity_cost() 的 friction_cost_pct 參數在高波動環境下會由
-    # 呼叫端動態覆寫為近價期權合約的實際 Bid-Ask 點差 (見
-    # evaluate_opportunity_cost_for_satellites)，若把往返成本併進本欄位，會讓
-    # 那組已驗證的動態摩擦成本機制在 gate 運算式裡被靜態覆蓋、失去自動放大
-    # 效果。維持「基礎門檻 + 動態摩擦成本」兩項相加的既有運算式不變，本欄位
-    # 只替換其中的基礎門檻分量。
     rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
     max_satellite_budget_pct: float  # 單筆衛星預算上限，由 pyramid_add.py 條件七
     # (加碼後總曝險不得超過此比例，超過時降量) 消費
@@ -537,13 +515,11 @@ class RiskProfile(NamedTuple):
 _RISK_PROFILES: dict[str, RiskProfile] = {
     "DEFENSIVE": RiskProfile(
         tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
-        ev_hurdle=_EV_SPREAD_MIN_THRESHOLD,  # 0.05，現行行為
         rotation_cooldown_days=5,
         max_satellite_budget_pct=0.15,
     ),
     "AGGRESSIVE": RiskProfile(
         tp1_ratio=0.30,
-        ev_hurdle=0.02,
         rotation_cooldown_days=3,
         max_satellite_budget_pct=0.25,
     ),

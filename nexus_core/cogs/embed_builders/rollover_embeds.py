@@ -28,11 +28,6 @@ _SCENARIO_STYLE: Dict[str, Dict[str, Any]] = {
         "label": "原型假設破滅",
         "color": discord.Color.red(),
     },
-    "OPPORTUNITY_COST": {
-        "emoji": "💡",
-        "label": "機會成本轉倉",
-        "color": discord.Color.blue(),
-    },
     "CORE_DEPLOYMENT": {
         "emoji": "🌱",
         "label": "核心資金部署",
@@ -1279,7 +1274,6 @@ def create_thesis_passed_embed(
 _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "MARGIN_DEFENSE": "保證金防禦",
     "FUNDAMENTAL_BROKEN": "護城河破滅",
-    "OPPORTUNITY_COST": "機會成本",
     "SATELLITE_REBALANCE": "核心衛星",
     "CORE_DEPLOYMENT": "核心部署",
     "MACRO_TOP_ESCAPE_DEFENSE": "逃頂前瞻",
