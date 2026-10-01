@@ -393,63 +393,6 @@ def test_v079_module_exports_required_attributes() -> None:
     assert any(x["version"] == 79 for x in get_migrations())
 
 
-def test_upsert_portfolio_mode_whitelist_and_default(db_conn: Any) -> None:
-    import database
-
-    database.upsert_user_config(1001, capital=10_000.0)
-    assert database.get_full_user_context(1001).portfolio_mode == "COMMAND"
-    database.upsert_user_config(1001, portfolio_mode="ADVISORY")
-    assert database.get_full_user_context(1001).portfolio_mode == "ADVISORY"
-    database.upsert_user_config(1001, portfolio_mode="garbage")
-    assert database.get_full_user_context(1001).portfolio_mode == "COMMAND"
-
-
 # ---------------------------------------------------------------------------
 # /edit_holding advisory_mode 三態 → metadata
 # ---------------------------------------------------------------------------
-def _choice(value: str) -> MagicMock:
-    c = MagicMock()
-    c.value = value
-    return c
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "mode,expected",
-    [("ADVISORY", True), ("COMMAND", False), ("FOLLOW", None)],
-)
-async def test_edit_holding_advisory_mode_writes_tristate(
-    mode: str, expected: Any
-) -> None:
-    from cogs.terminal import holdings
-
-    interaction = MagicMock()
-    interaction.user.id = 7
-    interaction.response.defer = AsyncMock()
-    interaction.response.send_message = AsyncMock()
-    interaction.followup.send = AsyncMock()
-
-    manager = MagicMock()
-    manager.update_asset_metadata_by_symbol.return_value = True
-    with patch("services.asset_manager.AssetManager", return_value=manager), patch(
-        "market_analysis.portfolio.refresh_portfolio_greeks", new_callable=AsyncMock
-    ):
-        # 只傳 advisory_mode：不得被「未提供任何參數」擋下
-        await holdings.edit_holding_impl(
-            interaction, "nvda", advisory_mode=_choice(mode)
-        )
-
-    interaction.response.send_message.assert_not_called()
-    updates = manager.update_asset_metadata_by_symbol.call_args.args[3]
-    assert "advisory_only" in updates
-    assert updates["advisory_only"] is expected
-
-
-def test_holdings_flatten_exposes_advisory_only_tristate() -> None:
-    """None / True / False 三態經 metadata JSON 往返後不得互相混淆。"""
-    import json
-
-    for stored, expected in [(None, None), (True, True), (False, False)]:
-        meta = json.loads(json.dumps({"advisory_only": stored}))
-        assert meta.get("advisory_only") is expected
-    assert json.loads("{}").get("advisory_only") is None

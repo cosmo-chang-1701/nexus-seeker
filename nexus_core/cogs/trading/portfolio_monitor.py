@@ -766,27 +766,6 @@ class PortfolioMonitorCog(commands.Cog):
                         sym, radar_cache_map.get(sym)
                     )
 
-                # 顧問模式 (B&H)：帳戶層 portfolio_mode 每位使用者只讀一次
-                # (不在持倉迴圈內逐檔讀 DB)，讀取失敗一律視為 COMMAND (現行行為)。
-                portfolio_mode_by_user: Dict[int, str] = {}
-
-                async def _portfolio_mode_for(uid: int) -> str:
-                    if uid not in portfolio_mode_by_user:
-                        try:
-                            ctx = await asyncio.to_thread(
-                                database.get_full_user_context, uid
-                            )
-                            portfolio_mode_by_user[uid] = str(
-                                getattr(ctx, "portfolio_mode", "COMMAND")
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"[AdvisoryMode] 讀取 portfolio_mode 失敗 (UID: {uid})，"
-                                f"視為 COMMAND: {e}"
-                            )
-                            portfolio_mode_by_user[uid] = "COMMAND"
-                    return portfolio_mode_by_user[uid]
-
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
@@ -870,17 +849,10 @@ class PortfolioMonitorCog(commands.Cog):
                         asset_entry["target_allocation_pct"] = h.get(
                             "target_allocation_pct"
                         )
-                    # 顧問模式三態解析：單檔 advisory_only (None=跟隨帳戶、
-                    # True=顧問、False=指令)。⚠️ 不可用 `or` (會吃掉顯式 False)。
-                    # 僅為 True 時才寫入 key，預設 (COMMAND、未覆寫) 下 asset_entry
-                    # 與改動前逐位元相同；比較一律用 == "ADVISORY"。
-                    per_holding_advisory = h.get("advisory_only")
-                    if per_holding_advisory is None:
-                        per_holding_advisory = (
-                            await _portfolio_mode_for(u_id)
-                        ) == "ADVISORY"
-                    if per_holding_advisory is True:
-                        asset_entry["advisory_only"] = True
+                    # 系統以買入並持有 (B&H) 為主要策略：多頭現貨一律走顧問路徑
+                    # (只告知位階，不輸出減碼/換股指令)；空頭現貨 (quantity < 0)
+                    # 由 is_advisory_asset 排除，維持指令路徑。
+                    asset_entry["advisory_only"] = True
                     user_assets.setdefault(u_id, []).append(asset_entry)
 
                 # 🚀 期權部位併入動態轉倉評估迴圈 (Feature Flag)。此機制與

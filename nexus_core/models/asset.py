@@ -62,9 +62,6 @@ class HoldingMetadata(BaseModel):
     # 建倉日期 (YYYY-MM-DD)，供動態轉倉引擎的稅務提醒粗估長/短期資本利得稅率
     # 區間。單一日期為簡化估計，非完整多批次 (Lot-based FIFO) 成本基礎追蹤。
     acquired_at: Optional[str] = None
-    # 顧問模式單檔覆寫（三態）：None=跟隨帳戶 portfolio_mode、True=強制顧問、
-    # False=強制指令。由 /edit_holding advisory_mode 設定。
-    advisory_only: Optional[bool] = None
     # Beta 資料不足，weighted_delta 以 Beta=1.0 估算 (refresh_portfolio_greeks 寫入)。
     beta_estimated: bool = False
 

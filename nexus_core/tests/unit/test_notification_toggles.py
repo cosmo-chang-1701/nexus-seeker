@@ -187,10 +187,9 @@ async def test_notification_settings_view_preset_buttons(db_conn: Any):  # type:
 
 
 @pytest.mark.asyncio
-async def test_bh_defense_button_marked_recommended_for_advisory_accounts(
+async def test_bh_defense_button_always_marked_recommended(
     db_conn: Any,
 ) -> None:
-    import database
     from cogs.settings_ui import NotificationSettingsView
 
     def _label(view: Any) -> str:
@@ -201,10 +200,7 @@ async def test_bh_defense_button_marked_recommended_for_advisory_accounts(
         )
         return str(btn.label)
 
-    assert "建議" not in _label(NotificationSettingsView(999556))
-
-    database.upsert_user_config(999557, portfolio_mode="ADVISORY")
-    assert "建議" in _label(NotificationSettingsView(999557))
+    assert "建議" in _label(NotificationSettingsView(999556))
 
 
 @pytest.mark.asyncio

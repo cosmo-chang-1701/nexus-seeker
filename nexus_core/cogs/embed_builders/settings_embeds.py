@@ -14,15 +14,13 @@ from database.notification_channels import ALL_NOTIFICATION_KEYS
 from datetime import datetime, timezone
 
 
-def create_notification_settings_embed(
-    module_fields: list, recommend_bh_defense: bool = False
-) -> discord.Embed:
+def create_notification_settings_embed(module_fields: list) -> discord.Embed:
     """建立自訂通知設定偏好中心 Embed。
 
     模組依「對投組下行風險的影響」分組；每個頻道附「頻率 · 作用」標籤。
-    `recommend_bh_defense` 為 True（帳戶 portfolio_mode='ADVISORY'）時標示 B&H 防守為建議情境。
+    B&H 防守為建議情境（系統以買入並持有為主要策略）。
     """
-    bh_hint = "（你的帳戶為 B&H 顧問模式，建議使用）" if recommend_bh_defense else ""
+    bh_hint = "（建議使用）"
     embed = NexusEmbed(
         title="🌌 Nexus Seeker ｜ 通知頻道中心 (依下行風險影響分組)",
         description=(
