@@ -115,7 +115,7 @@ async def evaluate_margin_defense_impl(
     因此以 /stress_test 既有的現金緩衝算法作為保證金壓力代理指標。
 
     already_flagged_symbols: 已被 Scenario 3 (核心衛星再平衡) 以實際減碼/
-    清倉指令標記過的標的集合 (HOLD／ADVISORY 告知卡不計入)，會被跳過以避免
+    清倉指令標記過的標的集合 (HOLD 與位階告知卡不計入)，會被跳過以避免
     同一標的同一輪次收到互相矛盾的清倉指令。
     """
     from market_analysis.index_microstructure import get_market_regime
