@@ -369,17 +369,8 @@ async def test_pyramid_add_stays_command_in_advisory_mode(
 
 
 # ---------------------------------------------------------------------------
-# 宏觀逃頂情境跳過顧問持倉；MARGIN_DEFENSE 不受影響
+# MARGIN_DEFENSE 不受顧問模式影響
 # ---------------------------------------------------------------------------
-def test_macro_trim_imports_the_skip() -> None:
-    """宏觀逃頂情境的迴圈以 is_advisory_asset 跳過顧問持倉（原始碼層級守衛）。"""
-    import inspect
-
-    from market_analysis.dynamic_rollover import macro_top_escape_defense
-
-    assert "is_advisory_asset(asset)" in inspect.getsource(macro_top_escape_defense)
-
-
 def test_margin_defense_does_not_use_advisory_skip() -> None:
     """MARGIN_DEFENSE 是帳戶生存線，不得受顧問模式影響。"""
     import inspect

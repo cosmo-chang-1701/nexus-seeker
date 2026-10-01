@@ -139,36 +139,15 @@ _EARNINGS_PRE_EVENT_BUFFER_DAYS: int = (
 )
 
 # --- 邏輯 (6)：宏觀逃頂前瞻防禦 (evaluate_macro_top_escape_defense) 具名常數 ---
-# 三級階梯化：WATCH (前哨) 買保護性 Put 不賣股，ELEVATED (警戒) 與 CRITICAL
-# (確認) 才實際減碼——三者共用同一組 evaluate_macro_top_escape_score() 分級輸出，
-# 差別只在動作強度。校準基準：Scenario 3 (反應式，個股結構已破) 用 90%；
-# Scenario 4 (反應式，系統性 regime + 保證金壓力已雙重確認) 用 100%；本情境即使
-# 是三級中最果斷的 CRITICAL，仍是「領先訊號」(組合式機率評分，尚無任何個股結構
-# 真正破位)，假陽性風險明顯高於前兩者，故上限仍遠低於它們。
-#
-# ⚠️ _MACRO_TOP_ESCAPE_TRIM_RATIO 由 calibration/backtest_engine_2025.py 直接
-# 匯入以維持回測與生產環境的參數一致性 (scanner replica parity)，其 2025 回測
-# 引擎目前僅複製 CRITICAL 單一分級的行為 (無 WATCH/ELEVATED 分支)，改動本值會
-# 直接反映在下次回測執行的 CRITICAL 分支結果中，這是刻意保留的行為，非孤兒常數。
-_MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.50  # CRITICAL：既有 WATCH/ELEVATED 已各自
-# 承擔前哨與初階防禦，CRITICAL 應對應更果斷的動作，由既有的 25% 提高至 50%，
-# 否則三級階梯只是把同一個 25% 拆成三次發送。
-_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO: float = 0.25  # ELEVATED：沿用原本唯一的
-# CRITICAL 減碼比例，作為介於 WATCH 與新版 CRITICAL 之間的中繼防禦強度。
+# 宏觀逃頂評分達 WATCH 以上的任一分級，都只建議買保護性 Put、不賣股
+# （原 ELEVATED／CRITICAL 級的減碼轉 BOXX 分支已移除）。NORMAL 不在集合內，
+# 代表無動作。
+_MACRO_TOP_ESCAPE_PUT_TIERS: frozenset[str] = frozenset(
+    {"WATCH", "ELEVATED", "CRITICAL"}
+)
 
-# tier -> (trim_ratio, action_kind)。trim_ratio 僅 TRIM 動作有意義，
-# PROTECTIVE_PUT 恆為 0.0（不賣股，改買保護）。NORMAL 未列於表中，代表無動作
-# （既有 `tier not in _MACRO_TOP_ESCAPE_TIER_ACTIONS` 短路判斷）。
-_MACRO_TOP_ESCAPE_TIER_ACTIONS: dict[str, tuple[float, str]] = {
-    "WATCH": (0.00, "PROTECTIVE_PUT"),
-    "ELEVATED": (_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO, "TRIM"),
-    "CRITICAL": (_MACRO_TOP_ESCAPE_TRIM_RATIO, "TRIM"),
-}
-
-# --- WATCH 級 Protective Put 分支具名常數 ---
-# 保留 100% 上檔曝險（不減碼），只付出權利金成本買保護——與 ELEVATED/CRITICAL
-# 的「放棄上檔換取下檔保護」策略互補，回答的是「前哨階段還不確定要不要砍倉時，
-# 如何先鎖住下檔」。
+# --- 保護性 Put 分支具名常數 ---
+# 保留 100% 上檔曝險（不減碼），只付出權利金成本買保護。
 _MACRO_TOP_ESCAPE_HEDGE_SYMBOL: str = (
     "SPY"  # 大盤 ETF 而非個股：逃頂訊號是系統性的，指數 Put 的流動性與價差優於
     # 個股。沿用 market_analysis/hedging.py 既有以 SPY 作為組合對沖代理的慣例。
