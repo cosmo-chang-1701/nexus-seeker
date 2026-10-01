@@ -187,6 +187,24 @@ def test_parse_target_weights() -> None:
     assert parse_target_weights(json.dumps({"x": 0})) is None
 
 
+def test_resolve_target_weights_priority_and_mixing() -> None:
+    from services.withdrawal_runway_service import resolve_target_weights
+
+    syms = ["VOO", "NVDA", "AMD"]
+    # 手動覆寫最優先
+    assert resolve_target_weights({"NVDA": 1.0}, {"VOO": 0.5}, syms) == {"NVDA": 1.0}
+    # 全無目標 → None（等權）
+    assert resolve_target_weights(None, {}, syms) is None
+    # 部分設定：VOO 40%，其餘兩檔平分剩餘 60%
+    w = resolve_target_weights(None, {"VOO": 0.4}, syms)
+    assert w == pytest.approx({"VOO": 0.4, "NVDA": 0.3, "AMD": 0.3})
+    # 目標總和超過 100% → 未設者為 0、其餘正規化
+    w = resolve_target_weights(None, {"VOO": 0.8, "NVDA": 0.4}, syms)
+    assert w == pytest.approx({"VOO": 2 / 3, "NVDA": 1 / 3, "AMD": 0.0})
+    # 不在可賣清單者（如 BOXX 或已清空）忽略
+    assert resolve_target_weights(None, {"QQQ": 0.5}, syms) is None
+
+
 def test_sellable_holdings_excludes_boxx_shorts_and_missing_prices() -> None:
     out = sellable_holdings(
         {"NVDA": 10, "BOXX": 50, "TSLA": -5, "AMD": 3},
