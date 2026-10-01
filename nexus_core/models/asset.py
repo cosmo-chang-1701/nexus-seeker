@@ -41,6 +41,11 @@ class TradeMetadata(BaseModel):
     vega: float = 0.0
     vanna: float = 0.0
     category: str = "SPEC"
+    # 資料品質旗標 (refresh_portfolio_greeks 寫入)：
+    # greeks_stale — 本輪報價/IV 不可得，上方 Greeks 為舊值；
+    # beta_estimated — Beta 資料不足，weighted_delta 以 Beta=1.0 估算。
+    greeks_stale: bool = False
+    beta_estimated: bool = False
 
 
 class HoldingMetadata(BaseModel):
@@ -64,6 +69,8 @@ class HoldingMetadata(BaseModel):
     # 顧問模式單檔覆寫（三態）：None=跟隨帳戶 portfolio_mode、True=強制顧問、
     # False=強制指令。由 /edit_holding advisory_mode 設定。
     advisory_only: Optional[bool] = None
+    # Beta 資料不足，weighted_delta 以 Beta=1.0 估算 (refresh_portfolio_greeks 寫入)。
+    beta_estimated: bool = False
 
     @field_validator("weighted_delta", mode="before")
     @classmethod

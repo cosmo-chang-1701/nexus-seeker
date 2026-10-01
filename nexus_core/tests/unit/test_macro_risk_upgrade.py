@@ -116,13 +116,17 @@ async def test_get_market_regime_critical() -> None:
     # 輸入：現有 VIX = 22.22, VIX3M = 21.0 (vts_ratio = 1.058)，SPY 現貨價 = 510，爬取之 Gamma Flip Line = 515。
     # 預期輸出：get_market_regime() 回傳 SHORT_GAMMA_CRITICAL
     with (
-        patch("services.market_data_service.get_macro_environment") as mock_macro,
+        patch("services.market_data_service.get_vix_spot_strict") as mock_vix,
         patch("services.market_data_service.get_vix_term_structure") as mock_vts,
         patch("services.market_data_service.get_quote") as mock_quote,
         patch("market_analysis.index_microstructure.fetch_gex_metrics") as mock_gex,
     ):
-        mock_macro.return_value = {"vix": 22.22, "oil": 75.0, "vix_change": 0.0}
-        mock_vts.return_value = {"vts_ratio": 1.058, "vts_state": "Backwardation"}
+        mock_vix.return_value = 22.22
+        mock_vts.return_value = {
+            "vts_ratio": 1.058,
+            "vts_state": "Backwardation",
+            "is_valid": True,
+        }
         mock_quote.return_value = {"c": 510.0}
         mock_gex.return_value = {
             "spy_spot": 510.0,
@@ -635,6 +639,12 @@ async def test_recommend_covered_calls_filtering() -> Any:
     # 測試 Covered Call 篩選邏輯：
     # DTE 必須在 30-50 天內，Strike > New Cost Basis，且年化收益率 >= 10.0% 或單次收租權利金大於現貨的 1%
     with (
+        # 衰退閘門改為未知時 fail-closed；本測試聚焦合約篩選，明確放行。
+        patch(
+            "market_analysis.trading_orchestration.is_covered_call_unlock_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch(
             "market_analysis.trading_orchestration.get_user_holdings"
         ) as mock_holdings,
@@ -805,6 +815,12 @@ def test_get_covered_shares_sums_existing_short_calls() -> None:
 async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
     # 測試現股已全數被既有 Short Call 覆蓋時，應直接跳過建議 (回傳 None)
     with (
+        # 衰退閘門改為未知時 fail-closed；本測試聚焦合約篩選，明確放行。
+        patch(
+            "market_analysis.trading_orchestration.is_covered_call_unlock_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch(
             "market_analysis.trading_orchestration.get_user_holdings"
         ) as mock_holdings,
@@ -836,6 +852,12 @@ async def test_recommend_covered_calls_fully_covered_returns_none() -> Any:
 async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
     # 測試部分覆蓋時，推薦口數應被裁切至尚未覆蓋股數上限 (uncovered_shares // 100)
     with (
+        # 衰退閘門改為未知時 fail-closed；本測試聚焦合約篩選，明確放行。
+        patch(
+            "market_analysis.trading_orchestration.is_covered_call_unlock_allowed",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
         patch(
             "market_analysis.trading_orchestration.get_user_holdings"
         ) as mock_holdings,
@@ -928,6 +950,12 @@ async def test_is_covered_call_unlock_allowed_logic() -> Any:
     with (
         patch("database.get_kv_cache") as mock_kv,
         patch("services.market_data_service.get_quote") as mock_quote,
+        # VIX 一律走嚴格即時抓取 (不再讀 macro_vix KV 舊值)
+        patch(
+            "services.market_data_service.get_vix_spot_strict",
+            new_callable=AsyncMock,
+            return_value=18.0,
+        ) as mock_vix,
     ):
         # We simulate get_quote throwing an Exception so it falls back to mock_kv
         mock_quote.side_effect = Exception("Mocked error")
@@ -956,6 +984,7 @@ async def test_is_covered_call_unlock_allowed_logic() -> Any:
             "macro_us10y": 4.65,
             "macro_vix": 22.0,
         }.get(key)
+        mock_vix.return_value = 22.0
         assert await is_covered_call_unlock_allowed() is False
 
 

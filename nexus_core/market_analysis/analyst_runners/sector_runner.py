@@ -78,8 +78,11 @@ async def _fetch_poly_events(bot: Any) -> list[dict]:
 async def gather_sector_rotation_data(bot: Any) -> dict:
     """Collect sector performance, skew, UOA, Polymarket events, and SPY max pain."""
     macro = await get_macro_environment()
-    vix = macro.get("vix", 18.0)
-    vix_tier = get_vix_tier(vix)
+    # VIX 未知時為 None，報告標示「資料不足」(不以 18.0 冒充 Ready 階梯)。
+    vix = macro.get("vix")
+    vix_tier_name = (
+        get_vix_tier(vix).get("name", "Unknown") if vix is not None else "資料不足"
+    )
     spy_quote = await get_quote("SPY")
 
     sem = asyncio.Semaphore(3)
@@ -137,7 +140,7 @@ async def gather_sector_rotation_data(bot: Any) -> dict:
 
     return {
         "vix": vix,
-        "vix_tier_name": vix_tier.get("name", "Unknown"),
+        "vix_tier_name": vix_tier_name,
         "spy_price": spy_quote.get("c", 0),
         "sectors": sector_results,
         "poly_events": poly_events,

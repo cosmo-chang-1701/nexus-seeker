@@ -30,8 +30,12 @@ class VtrMixin:
         strategy = data.get("strategy", "")
         safe_qty = data.get("safe_qty", 0)
 
-        # VIX 戰情階梯 VTR 建倉閘門
+        # VIX 戰情階梯 VTR 建倉閘門。VIX 未知 (None) 時 fail-closed 不建倉——
+        # get_vix_tier(None) 會回傳 Ready 階梯 (放行)，不能用它判斷未知。
         vix_spot_val = data.get("vix_spot")
+        if vix_spot_val is None:
+            logger.info(f"[VTR] VIX 資料不足，略過 {sym} 自動建倉 (fail-closed)")
+            return
         current_vix_tier = get_vix_tier(vix_spot_val)
         # 方向性做空 (BTO_PUT) 以倒 U 形乘數判定：休兵區賣方禁建倉，但做空仍
         # 允許 (0.5x)；極端區做空係數為 0 則禁止。
@@ -136,7 +140,12 @@ class VtrMixin:
                 # 獲獲取全站最近紀錄
                 all_history = await asyncio.to_thread(get_virtual_trades, user_id=None)
                 spy_quote = await market_data_service.get_quote("SPY")
-                spy_price = spy_quote.get("c", 500.0) if spy_quote else 500.0
+                spy_raw = spy_quote.get("c") if spy_quote else None
+                spy_price = float(spy_raw) if spy_raw and float(spy_raw) > 0 else 0.0
+                if spy_price <= 0:
+                    # SPY 未知時無法換算避險口數 (過去補 500)，本輪略過避險建議。
+                    logger.warning("[VTR] SPY 現價未知，略過平倉後的避險位階建議")
+                    closed_ids = set()
 
                 for tid in closed_ids:
                     trade_info = next((t for t in all_history if t["id"] == tid), None)

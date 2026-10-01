@@ -3,11 +3,12 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import database
 from market_analysis import portfolio, hedging
 from services import market_data_service
+from market_analysis.risk_engine import BETA_HISTORY_PERIOD
 
 from services.trading_service.capital import get_adjusted_user_capital
 
@@ -22,28 +23,31 @@ class ReportsMixin:
         """
         from services.asset_manager import AssetManager
         from models.asset import ContextType
-        from market_analysis.portfolio import get_option_chain_mid_iv
+        from market_analysis.portfolio import get_option_chain_quote
 
         manager = AssetManager()
         assets = manager.get_assets(user_id, ContextType.TRADE)
 
         trades = []
         total_unrealized_pnl = 0.0
+        # 期權部位按市價 (mid×100×帶號口數) 的合計；空頭為負 (負債)。報價缺失的
+        # 部位不計入，另列於 missing_quote_count。
+        total_option_market_value = 0.0
+        missing_quote_count = 0
 
         # 併發批次拉取各部位期權鏈中間價 (Semaphore(3) 上限，避免逐筆序列 await 拖慢回應)
         sem = asyncio.Semaphore(3)
 
-        async def _fetch_mid(asset: Any) -> float:
+        async def _fetch_quote(asset: Any) -> Dict[str, Any]:
             am = asset.metadata
             async with sem:
-                mid_price, _, _bid, _ask = await get_option_chain_mid_iv(
+                return await get_option_chain_quote(
                     asset.symbol, am.get("expiry"), am.get("strike"), am.get("opt_type")
                 )
-                return float(mid_price)
 
-        mids = await asyncio.gather(*[_fetch_mid(a) for a in assets])
+        quotes = await asyncio.gather(*[_fetch_quote(a) for a in assets])
 
-        for a, mid in zip(assets, mids):
+        for a, q in zip(assets, quotes):
             m = a.metadata
             sym = a.symbol
             opt_type = m.get("opt_type")
@@ -51,17 +55,32 @@ class ReportsMixin:
             expiry = m.get("expiry")
             entry_price = m.get("entry_price") or a.entry_price or 0.0
             quantity = m.get("quantity", 0)
+            mid = float(q.get("mid") or 0.0)
+            source = str(q.get("source") or "MISSING")
 
-            unrealized_pnl = (mid - entry_price) * 100 * quantity
-            pnl_pct = ((mid - entry_price) / entry_price) if entry_price > 0 else 0.0
-
-            if quantity < 0:
+            # 報價缺失 (mid<=0)：過去直接以 0 計算，買方顯示 -100%、賣方 +100%，
+            # 並污染總損益與 NAV。現在標記缺失並排除於加總之外。
+            quote_missing = mid <= 0
+            unrealized_pnl: Optional[float]
+            pnl_pct: Optional[float]
+            if quote_missing:
+                unrealized_pnl = None
+                pnl_pct = None
+                missing_quote_count += 1
+            elif quantity < 0:
                 unrealized_pnl = (entry_price - mid) * 100 * abs(quantity)
                 pnl_pct = (
                     ((entry_price - mid) / entry_price) if entry_price > 0 else 0.0
                 )
+            else:
+                unrealized_pnl = (mid - entry_price) * 100 * quantity
+                pnl_pct = (
+                    ((mid - entry_price) / entry_price) if entry_price > 0 else 0.0
+                )
 
-            total_unrealized_pnl += unrealized_pnl
+            if unrealized_pnl is not None:
+                total_unrealized_pnl += unrealized_pnl
+                total_option_market_value += mid * 100 * float(quantity)
 
             trades.append(
                 {
@@ -71,14 +90,20 @@ class ReportsMixin:
                     "strike": strike,
                     "expiry": expiry,
                     "entry_price": entry_price,
-                    "current_price": mid,
+                    "current_price": None if quote_missing else mid,
+                    "quote_source": source,
                     "quantity": quantity,
                     "unrealized_pnl": unrealized_pnl,
                     "pnl_pct": pnl_pct,
                 }
             )
 
-        return {"trades": trades, "total_unrealized_pnl": total_unrealized_pnl}
+        return {
+            "trades": trades,
+            "total_unrealized_pnl": total_unrealized_pnl,
+            "total_option_market_value": total_option_market_value,
+            "missing_quote_count": missing_quote_count,
+        }
 
     async def audit_real_portfolio_risk(self) -> List[Dict[str, Any]]:
         """
@@ -96,8 +121,14 @@ class ReportsMixin:
 
         results = []
         spy_quote = await market_data_service.get_quote("SPY")
-        spy_price = spy_quote.get("c", 670.0) if spy_quote else 670.0
-        df_spy = await market_data_service.get_history_df("SPY", "60d")
+        spy_raw = spy_quote.get("c") if spy_quote else None
+        # SPY 未知時為 None (不再以 670 冒充)：局部 Delta 無法由 weighted_delta
+        # 換算，下方 DITM 判定只依損益與 DTE。
+        spy_price: Optional[float] = (
+            float(spy_raw) if spy_raw is not None and float(spy_raw) > 0 else None
+        )
+        # Beta 需 >= 90 個交易日日線；"60d" 只有約 41 根，Beta 永遠退回 1.0。
+        df_spy = await market_data_service.get_history_df("SPY", BETA_HISTORY_PERIOD)
 
         for uid, rows in user_ports.items():
             user_ctx = database.get_full_user_context(uid)
@@ -155,32 +186,50 @@ class ReportsMixin:
                     # 此處簡化處理，利用 w_delta 與 qty 的關係進行臨界點判定
                     # 在 NRO 模型中，若 w_delta / (qty * 100) 接近 beta * (price / spy_price)，則 local delta 趨近於 1
 
-                    from market_analysis.portfolio import calculate_beta
+                    from market_analysis.portfolio import calculate_beta_strict
 
-                    df_stock = await market_data_service.get_history_df(sym, "60d")
-                    beta = calculate_beta(df_stock, df_spy)
+                    df_stock = await market_data_service.get_history_df(
+                        sym, BETA_HISTORY_PERIOD
+                    )
+                    beta = calculate_beta_strict(df_stock, df_spy)
 
-                    # 精確局部 Delta 估算
-                    denominator = qty * 100 * beta * (curr_price / spy_price)
-                    local_delta = abs(w_delta / denominator) if denominator != 0 else 0
+                    # 精確局部 Delta 估算：Beta 或 SPY 未知時無法由 weighted_delta
+                    # 還原 (過去 Beta 被靜默設為 1.0、SPY 補 670)，視為未知。
+                    local_delta: Optional[float] = None
+                    if beta is not None and spy_price is not None:
+                        denominator = qty * 100 * beta * (curr_price / spy_price)
+                        if denominator != 0:
+                            local_delta = abs(w_delta / denominator)
 
                     # Profit Lock 觸發條件：Delta >= 0.85 且 PnL > 150% 且 DTE <= 21
-                    # 獲取即時 Mid 以計算 PnL
+                    # 獲取即時 Mid 以計算 PnL；報價缺失時 PnL 未知 (不當作 0)。
                     mid, _, _bid, _ask = await portfolio.get_option_chain_mid_iv(
                         sym, exp, strike, opt_t
                     )
-                    pnl_pct = ((mid - entry) / entry) if mid > 0 else 0
+                    pnl_pct: Optional[float] = (
+                        ((mid - entry) / entry) if mid > 0 and entry > 0 else None
+                    )
 
-                    if (local_delta >= 0.85 or pnl_pct > 1.5) and dte <= 21:
+                    is_ditm = local_delta is not None and local_delta >= 0.85
+                    is_big_gain = pnl_pct is not None and pnl_pct > 1.5
+                    if (is_ditm or is_big_gain) and dte <= 21:
                         results.append(
                             {
                                 "uid": uid,
                                 "type": "PROFIT_LOCK",
                                 "symbol": sym,
-                                "local_delta": round(local_delta, 3),
-                                "pnl_pct": round(pnl_pct * 100, 1),
+                                "local_delta": round(local_delta, 3)
+                                if local_delta is not None
+                                else None,
+                                "pnl_pct": round(pnl_pct * 100, 1)
+                                if pnl_pct is not None
+                                else None,
                                 "dte": dte,
-                                "reason": f"標的 **{sym}** Delta 已達 `{local_delta:.3f}`，部位進入深價內 (DITM) 區間，凸性 (Convexity) 已消失且 Theta 衰退加劇。",
+                                "reason": (
+                                    f"標的 **{sym}** Delta 已達 `{local_delta:.3f}`，部位進入深價內 (DITM) 區間，凸性 (Convexity) 已消失且 Theta 衰退加劇。"
+                                    if local_delta is not None
+                                    else f"標的 **{sym}** 未實現獲利已達 `{(pnl_pct or 0.0) * 100:.1f}%` (Delta 因 Beta/SPY 資料不足無法換算)，建議評估鎖定獲利。"
+                                ),
                             }
                         )
 

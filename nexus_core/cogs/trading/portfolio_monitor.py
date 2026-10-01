@@ -222,8 +222,12 @@ class PortfolioMonitorCog(commands.Cog):
                 if isinstance(raw_max_pain, dict)
                 else (float(raw_max_pain) if raw_max_pain else 0.0)
             )
-            raw_dte = r_data.get("nearest_dte")
-            dte_val = int(raw_dte) if raw_dte is not None else 99
+            # 標的層級快照不帶 DTE：radar 的 `nearest_dte` 是「該標的最近一個
+            # 到期日」(SPY 等每日到期標的恆為 0)，不是任何一張持倉合約的到期日。
+            # 過去把它當成部位 DTE，使長天期期權落入 dte<=1 的強制結算保護、
+            # 現貨部位誤觸 TP3 (dte<=5)。現貨無到期概念維持 99；期權部位的 DTE
+            # 一律由 _build_option_asset_entry 依合約自身 expiry 計算。
+            dte_val = 99
 
             prev_call_wall_val = float(
                 r_data.get("previous_call_wall")
@@ -368,6 +372,14 @@ class PortfolioMonitorCog(commands.Cog):
         """
         delta_val: Optional[float] = None
         spot_price = float(metrics.get("spot_price", 0.0))
+        # 合約自身的 DTE（ET 日期差）。expiry 缺失/格式錯誤時退回 99
+        # (NORMAL_EXECUTION)——不可沿用標的層級 metrics["dte"]。
+        contract_dte = 99
+        if expiry is not None:
+            try:
+                contract_dte = market_time.days_to_expiry_et(expiry)
+            except (TypeError, ValueError) as e:
+                logger.warning(f"[{opt_sym}] 合約到期日 {expiry!r} 解析失敗: {e}")
         if (
             strike is not None
             and expiry is not None
@@ -377,13 +389,9 @@ class PortfolioMonitorCog(commands.Cog):
             and float(strike) > 0
         ):
             try:
-                from datetime import date, datetime
-
                 from market_analysis.greeks import calculate_greeks
 
-                exp_dt = datetime.strptime(str(expiry), "%Y-%m-%d").date()
-                dte_days = max((exp_dt - date.today()).days, 0.5)
-                t_years = dte_days / 365.0
+                t_years = market_time.years_to_expiry(expiry)
                 greeks = calculate_greeks(
                     str(opt_type).lower(), spot_price, float(strike), t_years, iv, 0.0
                 )
@@ -419,7 +427,7 @@ class PortfolioMonitorCog(commands.Cog):
             "atr_15m": metrics.get("atr_15m", 0.0),
             "hvn": metrics.get("hvn", 0.0),
             "lvn": metrics.get("lvn", 0.0),
-            "dte": metrics.get("dte", 99),
+            "dte": contract_dte,
             "iv_term_structure_status": metrics.get("iv_term_structure_status"),
             "gex_profile_data": r_data.get("gex_profile_data", {}) if r_data else {},
             "avg_cost": 0.0,

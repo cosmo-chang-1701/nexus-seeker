@@ -415,11 +415,11 @@ def get_full_user_context(user_id: int) -> UserContext:
             capital = calculate_auto_capital(user_id, conn)
             return UserContext(user_id, capital, 15.0, 0.0, 0.0, 0.0, 0.0)
 
-        # 提取 Greeks (Annual from DB -> Daily for Context)
+        # 提取 Greeks。DB 內 metadata.theta 由 refresh_portfolio_greeks 以
+        # py_vollib 的 analytical theta (已是每日值) × 口數 × 100 寫入，本身就是
+        # 每部位每日 Theta 美元值，不可再除以 365。
         sum_delta = user_row["sum_delta"] if user_row["sum_delta"] is not None else 0.0
-        sum_theta = (
-            user_row["sum_theta"] if user_row["sum_theta"] is not None else 0.0
-        ) / 365.0
+        sum_theta = user_row["sum_theta"] if user_row["sum_theta"] is not None else 0.0
         sum_gamma = user_row["sum_gamma"] if user_row["sum_gamma"] is not None else 0.0
         sum_vanna = user_row["sum_vanna"] if user_row["sum_vanna"] is not None else 0.0
 

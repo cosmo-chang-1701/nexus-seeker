@@ -7,7 +7,7 @@ from typing import Any, Optional
 
 from services import market_data_service
 from config import get_vix_sizing_multiplier
-from market_analysis.risk_engine import calculate_beta, classify_trade_intent
+from market_analysis.risk_engine import calculate_beta_strict, classify_trade_intent
 from market_analysis.greeks import calculate_greeks
 
 from market_analysis.strategy.indicators import _determine_strategy_signal
@@ -70,20 +70,32 @@ async def analyze_symbol(
         if price is None or price <= 0:
             price = df["Close"].iloc[-1]
 
-        if df_spy.empty:
-            logger.warning(f"無法取得 SPY 基準資料，{symbol} 改用 beta=1.0 fallback")
-            spy_price_val = (
-                spy_price if spy_price is not None and spy_price > 0 else price
-            )
+        # Beta 算不出來時以 1.0 估算但帶 beta_estimated 旗標並在 embed 標示；
+        # SPY 現價完全未知時無法換算 Beta-Delta (過去以標的自身價格冒充 SPY)，
+        # fail-closed 不產生選擇權訊號。
+        beta_estimated = False
+        if df_spy is None or df_spy.empty:
+            if spy_price is None or spy_price <= 0:
+                logger.warning(
+                    f"無法取得 SPY 基準資料與現價，{symbol} 無法換算 Beta-Delta，略過分析"
+                )
+                return None
+            logger.warning(f"無法取得 SPY 歷史資料，{symbol} Beta 以 1.0 估算 (已標示)")
+            spy_price_val = spy_price
             beta = 1.0
+            beta_estimated = True
         else:
             spy_price_val = (
                 spy_price if spy_price is not None else df_spy["Close"].iloc[-1]
             )
             if symbol.upper() == "BOXX":
                 beta = 0.0
+            elif symbol == "SPY":
+                beta = 1.0
             else:
-                beta = calculate_beta(df, df_spy) if symbol != "SPY" else 1.0
+                beta_strict = calculate_beta_strict(df, df_spy)
+                beta_estimated = beta_strict is None
+                beta = 1.0 if beta_strict is None else beta_strict
 
         dividend_yield, indicators = await asyncio.gather(
             _as_awaitable(0.015)
@@ -117,6 +129,11 @@ async def analyze_symbol(
 
         # VIX 戰情階梯資訊注入，供 Service 層進行 Macro 階段判定
         vix_allow_signal = vix_tier.get("allow_signal", True)
+        if vix_spot is None and trade_intent == "PREMIUM_SELL":
+            # VIX 未知：get_vix_tier(None) 預設回傳 Ready (放行、1.0x)，等同以
+            # 18~24 的假 VIX 開賣方。fail-closed：賣方訊號關閉、倉位乘數歸零。
+            vix_allow_signal = False
+            vix_sizing_multiplier = 0.0
         if strategy in ["STO_PUT", "STO_CALL"]:
             # Delta 上限鉗制：sto_delta_cap 為負數，max() 取較小絕對值（更保守）
             sto_cap = vix_tier.get("sto_delta_cap", -0.20)
@@ -293,6 +310,7 @@ async def analyze_symbol(
             "symbol": symbol,
             "price": price,
             "beta": beta,
+            "beta_estimated": beta_estimated,
             "weighted_delta": weighted_delta,
             "stock_cost": stock_cost,
             "rsi": indicators.get("rsi", 0.0),
@@ -341,7 +359,9 @@ async def analyze_symbol(
             "distance_from_21": dist_21,
             # VIX 戰情階梯元資料
             "vix_spot": vix_spot,
-            "vix_tier_name": vix_tier.get("name", "N/A"),
+            "vix_tier_name": vix_tier.get("name", "N/A")
+            if vix_spot is not None
+            else "VIX 資料不足",
             "vix_tier_emoji": vix_tier.get("emoji", ""),
             "vix_tier_color": vix_tier.get("color_hex", 0x808080),
             "vix_sizing_multiplier": vix_sizing_multiplier,

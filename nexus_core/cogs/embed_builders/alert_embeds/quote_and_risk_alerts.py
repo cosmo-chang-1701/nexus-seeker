@@ -40,7 +40,15 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
     )
     embed.add_field(
         name="🎯 觸發指標",
-        value=f"```\n未實現損益: {event['pnl_pct']}% | DTE: {event['dte']}\n```",
+        value=(
+            "```\n未實現損益: "
+            + (
+                f"{event['pnl_pct']}%"
+                if event.get("pnl_pct") is not None
+                else "-- (報價缺失)"
+            )
+            + f" | DTE: {event['dte']}\n```"
+        ),
         inline=False,
     )
     embed.add_field(

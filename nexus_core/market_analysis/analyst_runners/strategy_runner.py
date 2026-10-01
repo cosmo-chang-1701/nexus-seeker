@@ -349,12 +349,15 @@ async def run_fomc_escape_window_analysis(
         fetch_core_macro_metrics,
     )
 
+    # 未知一律傳 None (不補 48 / 0.88)，評分卡會標示「資料不足」。
+    fear_greed: Optional[float] = None
     try:
         core_metrics = await fetch_core_macro_metrics()
-        fear_greed = float(core_metrics.get("fear_greed", 48.0))
+        fg_raw = core_metrics.get("fear_greed")
+        if fg_raw is not None and not core_metrics.get("_is_fallback"):
+            fear_greed = float(fg_raw)
     except Exception as e:
         logger.warning(f"評估宏觀逃頂綜合評分時取得 Fear & Greed 指數失敗: {e}")
-        fear_greed = 48.0
 
     (
         top_escape_score,
@@ -362,7 +365,7 @@ async def run_fomc_escape_window_analysis(
         top_escape_tier_title,
         top_escape_factors,
     ) = evaluate_macro_top_escape_score(
-        vts_ratio=vts_ratio if is_vts_valid else 0.88,
+        vts_ratio=vts_ratio if is_vts_valid else None,
         fear_greed=fear_greed,
         prob=prob,
         is_negative_gamma=is_negative_gamma,

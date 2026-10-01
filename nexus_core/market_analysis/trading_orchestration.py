@@ -437,56 +437,73 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
     }
 
 
+def _optional_positive_float(val: Any) -> Optional[float]:
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 and f == f else None
+
+
 async def is_covered_call_unlock_allowed() -> bool:
-    """判斷當前是否允許解鎖 Covered Call。"""
+    """判斷當前是否允許解鎖 Covered Call。
+
+    RECESSION_WARNING = 薩姆規則 >= 0.5，或 (US10Y > 4.5% 且 VIX > 20)。任一輸入
+    未知時**不再補 sahm 0.35 / us10y 4.25 / VIX 18**：以三值邏輯判定，只有在
+    能確定「非衰退」時才放行，無法排除衰退時 fail-closed 回傳 False。
+    """
     from database import get_kv_cache
-    from services.market_data_service import get_quote
+    from services.market_data_service import get_quote, get_vix_spot_strict
     from market_analysis.index_microstructure import fetch_core_macro_metrics
 
-    # 1. 取得薩姆規則指標
-    sahm_rule = get_kv_cache("macro_sahm_rule")
+    # 1. 取得薩姆規則指標 (月度資料，KV 快取即為最近一次真實值)
+    sahm_rule = _optional_positive_float(get_kv_cache("macro_sahm_rule"))
     if sahm_rule is None:
         try:
             core_data = await fetch_core_macro_metrics()
-            sahm_rule = core_data.get("sahm_rule", 0.35)
+            if not core_data.get("_is_fallback"):
+                sahm_rule = _optional_positive_float(core_data.get("sahm_rule"))
         except Exception:
-            sahm_rule = 0.35
+            sahm_rule = None
 
-    # 2. 取得國債收益率與 VIX
+    # 2. 取得國債收益率 (即時 quote，退回盤中排程寫入的 KV 快取)
+    us10y: Optional[float] = None
     try:
         q = await get_quote("^TNX")
-        us10y = (
-            q.get("c", 4.25)
-            if isinstance(q, dict) and q.get("c", 0) > 0
-            else get_kv_cache("macro_us10y")
-        )
+        if isinstance(q, dict):
+            us10y = _optional_positive_float(q.get("c"))
     except Exception:
-        us10y = get_kv_cache("macro_us10y")
-
-    us10y = us10y or 4.25
-
-    if us10y > 10.0:
+        us10y = None
+    if us10y is None:
+        us10y = _optional_positive_float(get_kv_cache("macro_us10y"))
+    if us10y is not None and us10y > 10.0:
         us10y = us10y / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
 
+    # 3. VIX 一律走嚴格即時抓取 (未知為 None)
     try:
-        q = await get_quote("^VIX")
-        vix = (
-            q.get("c", 18.0)
-            if isinstance(q, dict) and q.get("c", 0) > 0
-            else get_kv_cache("macro_vix")
-        )
+        vix = await get_vix_spot_strict()
     except Exception:
-        vix = get_kv_cache("macro_vix")
+        vix = None
 
-    vix = vix or 18.0
+    sahm_flag: Optional[bool] = sahm_rule >= 0.5 if sahm_rule is not None else None
+    rate_flag: Optional[bool] = us10y > 4.5 if us10y is not None else None
+    vix_flag: Optional[bool] = vix > 20.0 if vix is not None else None
+    if rate_flag is False or vix_flag is False:
+        rate_vix_flag: Optional[bool] = False
+    elif rate_flag is True and vix_flag is True:
+        rate_vix_flag = True
+    else:
+        rate_vix_flag = None
 
-    # 3. 判定 RECESSION_WARNING
-    # 失業率上升觸及薩姆規則 (>= 0.5) 或 US10Y > 4.5% 且 VIX > 20
-    is_recession = (sahm_rule >= 0.5) or (us10y > 4.5 and vix > 20.0)
-
-    if is_recession:
-        return False
-    return True
+    if sahm_flag is True or rate_vix_flag is True:
+        return False  # 確定衰退警告
+    if sahm_flag is False and rate_vix_flag is False:
+        return True  # 確定非衰退
+    logger.warning(
+        "Covered Call 解鎖衰退閘門資料不足 (fail-closed)："
+        f"sahm={sahm_rule} us10y={us10y} vix={vix}"
+    )
+    return False
 
 
 def get_safety_payout_threshold() -> float:

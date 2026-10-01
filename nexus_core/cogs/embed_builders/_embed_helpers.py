@@ -570,6 +570,13 @@ def _add_vix_battle_status_field(embed: Any, data: Any):  # type: ignore
     sizing_label = "做空倉位乘數" if trade_intent == "DIRECTIONAL_SHORT" else "倉位乘數"
 
     if vix_spot is None:
+        # VIX 未知：明確標示，而非靜默略過 (使用者看不到就會以為一切照常)。
+        if "vix_battle_status" in data or "vix_spot" in data:
+            embed.add_field(
+                name="🛡️ VIX 戰情階梯狀態",
+                value="⚪ **VIX 資料不足** | 倉位不放大、賣方新倉暫停\n\u200b",
+                inline=False,
+            )
         return
 
     status_line = f"{tier_emoji} **{tier_name}** | VIX: `{vix_spot:.1f}`"
@@ -590,6 +597,8 @@ def _add_vix_battle_status_field(embed: Any, data: Any):  # type: ignore
 def _add_market_overview_fields(embed: Any, data: Any):  # type: ignore
     beta = data.get("beta", 1.0)
     beta_status = "🚀" if beta > 1.3 else ("⚖️" if beta >= 0.8 else "🧊")
+    if data.get("beta_estimated"):
+        beta_status = "⚠️ 資料不足，暫以 1.0 估算"
     embed.add_field(
         name="🏷️ 標價 / Beta\u2800\u2800",
         value=f"${data['price']:.2f} / `{beta:.2f}` {beta_status}\n\u200b",
@@ -871,11 +880,20 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
         inline=False,
     )
 
+    # NRO 風控警示 (含 VIX/SPY 資料不足的 fail-closed 說明)
+    nro_warnings = data.get("nro_warnings") or []
+    if nro_warnings:
+        embed.add_field(
+            name="⚠️ 風控警示",
+            value="\n".join(f"• {w}" for w in nro_warnings)[:1000] + "\n\u200b",
+            inline=False,
+        )
+
     # 2. Nexus Risk Optimizer 自動優化建議
     if suggested > safe_qty:
         opt_title = "⚖️ Nexus Risk Optimizer (自動優化建議)"
 
-        spy_p = data.get("spy_price", 690.0)
+        spy_p = data.get("spy_price")
 
         actions = ["--- 偵測到風險超標，執行自動降規 ---"]
         actions.append(f"❌ 原始建議: {suggested} 口")
@@ -884,8 +902,9 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
         if safe_qty == 0 and hedge_spy != 0:
             actions.append("\n⚠️ 警告: 即使下 1 口也過載")
             direction = "賣出" if hedge_spy > 0 else "買入"
+            spy_label = f"@${float(spy_p):.1f}" if spy_p else "SPY 現價 --"
             actions.append(
-                f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY (@${spy_p:.1f})"
+                f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY ({spy_label})"
             )
 
         opt_block = "```diff\n" + "\n".join(actions) + "\n```"

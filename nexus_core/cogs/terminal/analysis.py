@@ -1,6 +1,6 @@
 """量化掃描、部位轉換模擬與 VTR（虛擬交易室）績效查詢指令邏輯。"""
 
-from typing import Any
+from typing import Any, Optional
 import asyncio
 import logging
 
@@ -44,27 +44,29 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
         0.0,
     )
 
+    from market_analysis.risk_engine import MacroContext, build_macro_context
+
+    # SPY / VIX 未知時為 None（不補 670 / 18.0 / 22.0 備援常數）。
+    spy_price: Optional[float] = None
+    macro_data: Optional[MacroContext] = None
+    df_spy: Any = None
     try:
         spy_task = market_data_service.get_spy_history_df("1y")
         macro_task = market_data_service.get_macro_environment()
         df_spy, macro_raw = await asyncio.gather(spy_task, macro_task)
-        spy_price = df_spy["Close"].iloc[-1] if not df_spy.empty else 670.0
-        from market_analysis.risk_engine import MacroContext
-
-        macro_data = MacroContext(
-            vix=macro_raw.get("vix", 18.0),
-            oil_price=macro_raw.get("oil", 75.0),
-            vix_change=macro_raw.get("vix_change", 0.0),
+        spy_price = (
+            float(df_spy["Close"].iloc[-1])
+            if df_spy is not None and not df_spy.empty
+            else None
         )
-    except Exception:
-        df_spy, spy_price, macro_data = (
-            None,
-            670.0,
-            MacroContext(vix=22.0, oil_price=85.0, vix_change=0.0),
-        )
+        macro_data = build_macro_context(macro_raw)
+    except Exception as e:
+        logger.warning(f"手動掃描基準資料 (SPY/VIX) 抓取失敗，視為未知: {e}")
+        df_spy = None
+    vix_now = macro_data.vix if macro_data is not None else None
 
     result = await market_math.analyze_symbol(
-        symbol, stock_cost, df_spy, spy_price, vix_spot=macro_data.vix
+        symbol, stock_cost, df_spy, spy_price, vix_spot=vix_now
     )
     is_option_valid = bool(result)
     if not result:
@@ -90,7 +92,7 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
     from market_analysis.psq_engine import analyze_psq
     from cogs.embed_builder import create_psq_embed
 
-    psq_result = analyze_psq(df_hist_1d, vix_spot=macro_data.vix)
+    psq_result = analyze_psq(df_hist_1d, vix_spot=vix_now)
     if psq_result:
         result["psq_result"] = psq_result
 
@@ -126,8 +128,8 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
                 "reddit_text": reddit_text,
                 "ai_decision": ai_verdict.get("decision", "APPROVE"),
                 "ai_reasoning": ai_verdict.get("reasoning", "無資料"),
-                "vix": macro_data.vix,
-                "oil": macro_data.oil_price,
+                "vix": vix_now,
+                "oil": macro_data.oil_price if macro_data is not None else None,
                 "pcr": pcr_val,
                 "skew": skew_val,
                 "uoa_list": uoa_list,
@@ -135,19 +137,26 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
         )
 
         user_context = database.get_full_user_context(user_id)
+        # SPY 未知時 spy_price 傳 0.0：optimize_position_risk 對 spy_price<=0
+        # 直接回傳 0 口 (fail-closed)，不以 670 換算曝險。
         opt_res = optimize_position_risk(
             current_delta=user_context.total_weighted_delta,
             unit_weighted_delta=result.get("weighted_delta", 0.0),
             user_capital=user_context.capital,
-            spy_price=spy_price,
+            spy_price=spy_price if spy_price is not None else 0.0,
             stock_iv=result.get("iv", 0.15),
             strategy=result.get("strategy", ""),
             macro_data=macro_data,
             risk_limit=user_context.risk_limit,
-            vix_spot=macro_data.vix,
+            vix_spot=vix_now,
             pcr=pcr_val,
             skew=skew_val,
+            vix_unknown=macro_data is None,
         )
+        if spy_price is None:
+            opt_res.warnings.append("SPY 現價資料不足：不提供建議口數")
+        if opt_res.warnings:
+            result["nro_warnings"] = opt_res.warnings
         safe_qty = opt_res.suggested_contracts
         hedge_spy = opt_res.suggested_hedge_spy
         projected_exposure_pct = opt_res.exposure_pct

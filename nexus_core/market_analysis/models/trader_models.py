@@ -19,7 +19,9 @@ class TraderAccountState(BaseModel):
     monthly_burn_rate: float = Field(
         description="每月固定生活開銷 (Monthly Living Expenses)"
     )
-    current_vix: float = Field(description="即時 VIX 指數 (Real-time VIX level)")
+    current_vix: Optional[float] = Field(
+        description="即時 VIX 指數 (Real-time VIX level)；None 代表未知 (fail-closed)"
+    )
 
 
 class OptionHolding(BaseModel):

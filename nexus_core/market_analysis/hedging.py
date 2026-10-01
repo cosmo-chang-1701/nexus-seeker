@@ -19,9 +19,13 @@ def evaluate_rehedge_necessity(
     current_price = result.get("price") or result.get("current_price", 0.0)
     ema_8 = result.get("ema_8", 0.0)
     ema_21 = result.get("ema_21", 0.0)
-    current_vix = result.get("macro_vix") or result.get("vix", 18.0)
-    vix_change = result.get("macro_vix_change", 0.0)
-    spy_price = result.get("spy_price", 670.0)
+    # VIX / SPY 未知時為 None（不補 18.0 / 670 備援常數）：未知的 VIX 不能
+    # 被當成「低於 20」，未知的 SPY 也不能拿來換算曝險，相關條件直接略過。
+    current_vix = result.get("macro_vix")
+    if current_vix is None:
+        current_vix = result.get("vix")
+    vix_change = result.get("macro_vix_change")
+    spy_price = result.get("spy_price")
 
     rehedge_reason = None
     if current_price > 0 and ema_8 > 0 and current_price < ema_8:
@@ -29,12 +33,13 @@ def evaluate_rehedge_necessity(
     if current_price > 0 and ema_21 > 0 and current_price < ema_21:
         rehedge_reason = "⚠️ 價格跌破 EMA 21 (趨勢反轉)"
 
-    if current_vix > 20:
-        rehedge_reason = f"🌪️ VIX 突破 20 ({current_vix:.1f} 市場進入恐慌區)"
-    if vix_change > 0.10:
-        rehedge_reason = f"⚡ VIX 單日大幅飆升 ({vix_change * 100:+.1f}%)"
+    if current_vix is not None and float(current_vix) > 20:
+        rehedge_reason = f"🌪️ VIX 突破 20 ({float(current_vix):.1f} 市場進入恐慌區)"
+    if vix_change is not None and float(vix_change) > 0.10:
+        rehedge_reason = f"⚡ VIX 單日大幅飆升 ({float(vix_change) * 100:+.1f}%)"
 
-    if u_ctx.capital > 0:
+    if u_ctx.capital > 0 and spy_price is not None and float(spy_price) > 0:
+        spy_price = float(spy_price)
         current_exposure_pct = (
             (u_ctx.total_weighted_delta * spy_price) / u_ctx.capital * 100
         )
@@ -64,7 +69,10 @@ def evaluate_rehedge_necessity(
             "reason": rehedge_reason,
             "suggested_spy_qty": round(needed_spy_qty, 2),
             "priority": "HIGH"
-            if (current_price < ema_21 or current_vix > 25)
+            if (
+                current_price < ema_21
+                or (current_vix is not None and float(current_vix) > 25)
+            )
             else "NORMAL",
         }
     return None
@@ -195,9 +203,12 @@ def suggest_hedge_unlock(
 ) -> Optional[Dict[str, Any]]:
     if not mtf.is_aligned or mtf.confirmed_direction != TrendState.BULLISH:
         return None
-    current_vix = result.get("macro_vix", 18.0)
-    vix_change = result.get("macro_vix_change", 0.0)
-    if current_vix >= 18 or vix_change >= 0:
+    current_vix = result.get("macro_vix")
+    vix_change = result.get("macro_vix_change")
+    # VIX 未知 → 不解除對沖 (fail-closed)。
+    if current_vix is None or vix_change is None:
+        return None
+    if float(current_vix) >= 18 or float(vix_change) >= 0:
         return None
     price, ema_8 = result.get("price", 0.0), result.get("ema_8", 0.0)
     if not (ema_8 > 0 and (price - ema_8) / ema_8 >= 0.015):

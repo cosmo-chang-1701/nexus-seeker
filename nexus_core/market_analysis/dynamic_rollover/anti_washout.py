@@ -1563,18 +1563,27 @@ async def check_satellite_rebalancing_impl(
             from services.market_data_service import get_vix_term_structure
 
             regime = await get_market_regime()
-            is_negative_gamma = regime in (
-                "SHORT_GAMMA_CRITICAL",
-                "SYSTEMIC_LIQUIDITY_CRISIS",
+            # 未知一律傳 None (不補 0.88 / 48 備援值)：evaluate_macro_top_escape_score
+            # 會把「無法確定為常態」回傳為 UNKNOWN，條件八隨之 fail-closed。
+            is_negative_gamma: Optional[bool] = (
+                None
+                if regime == "UNKNOWN"
+                else regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS")
             )
             vts_data = await get_vix_term_structure()
-            vts_ratio = (
-                vts_data.get("vts_ratio", 0.88)
+            vts_ratio: Optional[float] = (
+                float(vts_data["vts_ratio"])
                 if vts_data.get("is_valid", False)
-                else 0.88
+                and vts_data.get("vts_ratio") is not None
+                else None
             )
             core_metrics = await fetch_core_macro_metrics()
-            fear_greed = float(core_metrics.get("fear_greed", 48.0))
+            fg_raw = core_metrics.get("fear_greed")
+            fear_greed: Optional[float] = (
+                float(fg_raw)
+                if fg_raw is not None and not core_metrics.get("_is_fallback")
+                else None
+            )
             from database.cache import get_kv_cache
 
             prob = get_kv_cache("macro_fedwatch_probability")

@@ -59,8 +59,7 @@ class PortfolioHubView(discord.ui.View):
             ctx = database.get_full_user_context(self.user_id)
             runway, runway_stale = await get_runway_display(self.user_id)
 
-            macro_raw = await market_data_service.get_macro_environment()
-            vix_spot = macro_raw.get("vix", 18.0)
+            vix_spot = await market_data_service.get_vix_spot_strict()
 
             embed = create_strategic_dash_embed(
                 ctx,

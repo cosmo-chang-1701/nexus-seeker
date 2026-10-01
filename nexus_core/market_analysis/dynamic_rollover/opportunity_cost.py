@@ -630,7 +630,13 @@ async def _confirm_entry_condition5_macro_earnings_gate(
             from market_analysis.index_microstructure import get_market_regime
 
             regime = await get_market_regime()
-            if regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
+            if regime == "UNKNOWN":
+                c5_passed = False
+                reasons.append(
+                    "條件五❌：大盤 Regime 資料不足 (VIX/SPY/Gamma Flip 未知)，"
+                    "無法排除危機，安全起見判定未通過"
+                )
+            elif regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
                 c5_passed = False
                 if direction == "SHORT":
                     reasons.append(

@@ -54,8 +54,12 @@ class HedgeMonitorService:
 
     async def _check_spikes_and_alerts(self) -> None:
         # 1. Fetch current VIX
-        macro = await market_data_service.get_macro_environment()
-        current_vix = macro.get("vix", 18.0)
+        current_vix = await market_data_service.get_vix_spot_strict()
+        if current_vix is None:
+            # VIX 未知：不以 18.0 冒充，本輪不判定 Spike，也不覆寫上一輪狀態
+            # (避免下一輪拿假值當基準算出假的 10% 跳升)。
+            logger.warning("🛡️ Hedge Monitor：VIX 未知，略過本輪 Spike 判定。")
+            return
         current_tier = get_vix_tier(current_vix)
         current_stage_idx = next(
             (
@@ -122,7 +126,11 @@ class HedgeMonitorService:
         total_gamma = 0.0
 
         spy_df = await market_data_service.get_history_df("SPY", "2d")
-        spy_price = spy_df["Close"].iloc[-1] if not spy_df.empty else 670.0
+        if spy_df is None or spy_df.empty:
+            # SPY 未知時不以 670 換算曝險 (fail-closed)：略過此使用者本輪評估。
+            logger.warning(f"🛡️ Hedge Monitor：SPY 現價未知，略過 UID {user_id} 評估。")
+            return
+        spy_price = float(spy_df["Close"].iloc[-1])
 
         conn = manager._get_conn()
         try:

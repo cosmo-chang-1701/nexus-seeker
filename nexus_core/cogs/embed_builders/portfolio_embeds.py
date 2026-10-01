@@ -352,11 +352,17 @@ def create_trades_embed(
         qty_fmt = f"{color_code}{qty_val}\x1b[0m"
 
         cost_fmt = f"{entry_p:6.2f}"
-        curr_fmt = f"{curr_p:6.2f}"
-
-        pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
-        pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
-        pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
+        # 報價缺失 (current_price None) 顯示 `--`，不再顯示 ±100% 損益；
+        # ask/2 估算值加註 `*`。
+        if curr_p is None or unrealized_pnl is None or pnl_pct is None:
+            curr_fmt = f"{'--':>6}"
+            pnl_fmt = f"\x1b[0;33m{'報價缺失':>10}\x1b[0m"
+        else:
+            est_mark = "*" if t.get("quote_source") == "ASK_HALF" else ""
+            curr_fmt = f"{curr_p:6.2f}{est_mark}"
+            pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
+            pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
+            pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
 
         data_lines.append(
             f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {cost_fmt} | {curr_fmt} | {pnl_fmt}"
@@ -370,12 +376,18 @@ def create_trades_embed(
         embed.add_field(name=name, value=chunk, inline=False)
 
     total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
+    missing_quotes = int(pnl_data.get("missing_quote_count", 0) or 0)
+    has_estimate = any(t.get("quote_source") == "ASK_HALF" for t in trades)
 
     summary = (
         f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
         f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`\n"
         f"📈 **總未實現損益 (Unrealized PnL)**: `${total_unrealized_pnl:,.2f}`"
     )
+    if missing_quotes:
+        summary += f"\n⚠️ {missing_quotes} 筆部位報價缺失，未計入損益"
+    if has_estimate:
+        summary += "\n`*` 零 bid，現價以 ask/2 估算"
     embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
 
     embed.set_footer(text="Nexus Portfolio Engine | 專業實單與損益監控")
@@ -385,7 +397,7 @@ def create_trades_embed(
 def create_strategic_dash_embed(
     user_ctx: Any,
     pnl_data: Dict[str, Any],
-    vix_spot: float = 18.0,
+    vix_spot: Optional[float] = None,
     runway: Any = None,
     runway_stale: bool = False,
 ) -> discord.Embed:
@@ -436,8 +448,11 @@ def create_strategic_dash_embed(
     total_delta = _safe_float(user_ctx.total_weighted_delta)
     capital = _safe_float(user_ctx.capital)
 
-    vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
-    new_delta = total_delta + vanna_impact
+    # VIX 未知時不做 Vanna 壓力測試（過去以 18.0 冒充真實 VIX）。
+    new_delta: Optional[float] = None
+    if vix_spot is not None and vix_spot > 0:
+        vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
+        new_delta = total_delta + vanna_impact
 
     # 對沖狀態與建議
     hedge_status = "運行中" if abs(total_delta) < (capital * 0.1) else "需調整"
@@ -451,8 +466,12 @@ def create_strategic_dash_embed(
 
     nro_info = (
         f"* **Beta-Delta:** `{total_delta:+.1f}` (相對於 SPY 的整體曝險)\n"
-        f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
-        f"* **對沖狀態:** {hedge_status}\n"
+        + (
+            f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
+            if new_delta is not None
+            else "* **Vanna 敏感度:** `--` (VIX 資料不足，無法壓力測試)\n"
+        )
+        + f"* **對沖狀態:** {hedge_status}\n"
         f"> 🎯 建議對沖位：{hedge_instruction}"
     )
     embed.add_field(name="🛡️ 組合風險精算 (NRO Integrity)", value=nro_info, inline=False)

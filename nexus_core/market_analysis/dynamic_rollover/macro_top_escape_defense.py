@@ -193,28 +193,35 @@ async def evaluate_macro_top_escape_defense_impl(
     )
     from services.market_data_service import get_vix_term_structure
 
+    # 未知一律傳 None，不補 NORMAL / 0.88 / 48 備援值：未知因子不計分並在
+    # 卡片上標示「資料不足」，分數僅為下限 (不會因假資料觸發防禦性減碼)。
+    is_negative_gamma: Optional[bool] = None
     try:
         regime = await get_market_regime()
+        if regime != "UNKNOWN":
+            is_negative_gamma = regime in (
+                "SHORT_GAMMA_CRITICAL",
+                "SYSTEMIC_LIQUIDITY_CRISIS",
+            )
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得市場 Regime 失敗: {e}")
-        regime = "NORMAL"
-    is_negative_gamma = regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS")
 
+    vts_ratio: Optional[float] = None
     try:
         vts_data = await get_vix_term_structure()
-        vts_ratio = (
-            vts_data.get("vts_ratio", 0.88) if vts_data.get("is_valid", False) else 0.88
-        )
+        if vts_data.get("is_valid", False) and vts_data.get("vts_ratio") is not None:
+            vts_ratio = float(vts_data["vts_ratio"])
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得 VTS 期限結構失敗: {e}")
-        vts_ratio = 0.88
 
+    fear_greed: Optional[float] = None
     try:
         core_metrics = await fetch_core_macro_metrics()
-        fear_greed = float(core_metrics.get("fear_greed", 48.0))
+        fg_raw = core_metrics.get("fear_greed")
+        if fg_raw is not None and not core_metrics.get("_is_fallback"):
+            fear_greed = float(fg_raw)
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得 Fear & Greed 指數失敗: {e}")
-        fear_greed = 48.0
 
     from database.cache import get_kv_cache
 

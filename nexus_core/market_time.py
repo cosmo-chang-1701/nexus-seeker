@@ -227,3 +227,43 @@ def get_session_bounds_utc(
             market_close.tz_convert(timezone.utc).strftime(fmt),
         )
     return bounds
+
+
+# ---------------------------------------------------------------------------
+# 期權到期時間 (DTE / T) 的單一計算來源
+# ---------------------------------------------------------------------------
+# 0DTE 的年化時間下限（日曆日）。盤中 0DTE 合約剩餘時間不足一天，但 BSM 在
+# T→0 時 Greeks 發散；全 repo 統一以 1 個日曆日作為下限（與既有多數呼叫端的
+# `max(days, 1) / 365` 慣例一致）。
+MIN_T_DAYS: float = 1.0
+
+
+def _to_et_date(as_of: datetime | None) -> Any:
+    if as_of is None:
+        return datetime.now(ny_tz).date()
+    if as_of.tzinfo is None:
+        return as_of.date()  # naive 一律視為美東時間
+    return as_of.astimezone(ny_tz).date()
+
+
+def days_to_expiry_et(expiry: Any, as_of: datetime | None = None) -> int:
+    """合約到期日與「今天 (美東日期)」的日曆日差。
+
+    `expiry` 可為 `'YYYY-MM-DD'` 字串、`date` 或 `datetime`。以 ET 日期相減，
+    不受時分秒影響（`datetime - datetime` 的 `.days` 會在到期前一天盤中少算
+    1 天）。已過期回傳負值，由呼叫端決定如何處理。
+    """
+    from datetime import date as _date
+
+    if isinstance(expiry, datetime):
+        exp_d = expiry.date()
+    elif isinstance(expiry, _date):
+        exp_d = expiry
+    else:
+        exp_d = datetime.strptime(str(expiry)[:10], "%Y-%m-%d").date()
+    return int((exp_d - _to_et_date(as_of)).days)
+
+
+def years_to_expiry(expiry: Any, as_of: datetime | None = None) -> float:
+    """BSM 用年化到期時間 T = max(DTE, MIN_T_DAYS) / 365（DTE 以 ET 日期計）。"""
+    return max(float(days_to_expiry_et(expiry, as_of)), MIN_T_DAYS) / 365.0

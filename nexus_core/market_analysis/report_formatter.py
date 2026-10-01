@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Optional, Union
 from models.quant import MacroRiskMetrics
 
 # Discord/Telegram 排版優化常數
@@ -146,27 +146,49 @@ def format_position_report(
     opt_type: str,
     cc_tag: str,
     entry_price: float,
-    current_price: float,
-    pnl_pct: float,
+    current_price: Optional[float],
+    pnl_pct: Optional[float],
     dte: int,
-    spx_weighted_delta: float,
+    spx_weighted_delta: Optional[float],
     status: str,
     quantity: float = 1.0,
-    iv: float = 0.0,
-    iv_rank: float = 0.0,
+    iv: Optional[float] = 0.0,
+    iv_rank: Optional[float] = 0.0,
+    price_note: str = "",
 ) -> str:
     """
     格式化單一持倉報告。
+
+    未知值 (None) 一律顯示 `--`：報價缺失時不顯示 ±100% 損益、IVR 未知時不
+    顯示 0.0%、SPY 未知時不顯示 Beta-Delta。`price_note` 標示報價來源 (例如
+    「ask/2 估」)。
     """
-    pnl_icon = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+    pnl_icon = (
+        "⚪"
+        if pnl_pct is None
+        else "🟢"
+        if pnl_pct > 0
+        else "🔴"
+        if pnl_pct < 0
+        else "⚪"
+    )
     direction = "STO" if quantity < 0 else "BTO"
     opt_type_upper = opt_type.upper()
+    price_str = (
+        f"${current_price:.2f}{price_note}"
+        if current_price is not None
+        else "-- (報價缺失)"
+    )
+    pnl_str = f"{pnl_pct*100:+.2f}%" if pnl_pct is not None else "--"
+    delta_str = f"{spx_weighted_delta:+.2f}" if spx_weighted_delta is not None else "--"
+    iv_str = f"{iv*100:.1f}%" if iv is not None and iv > 0 else "--"
+    ivr_str = f"{iv_rank:.1f}%" if iv_rank is not None else "--"
     return (
         f"🔹 **{symbol}** ｜ `{expiry}` ｜ `${strike}` **{opt_type_upper}**{cc_tag}\n"
-        f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `${current_price:.2f}`\n"
-        f"├─ {pnl_icon} 損益: **{pnl_pct*100:+.2f}%**\n"
-        f"├─ ⏳ DTE: `{dte}` 天 ｜ 秤⚖️ SPY Δ: `{spx_weighted_delta:+.2f}`\n"
+        f"├─ 💰 成本: `${entry_price:.2f}` ｜ 📈 現價: `{price_str}`\n"
+        f"├─ {pnl_icon} 損益: **{pnl_str}**\n"
+        f"├─ ⏳ DTE: `{dte}` 天 ｜ 秤⚖️ SPY Δ: `{delta_str}`\n"
         f"├─ ⚙️ 方向: `{direction}` ｜ 📦 數量: `{quantity}`\n"
-        f"├─ 📊 IV/IVR: `{iv*100:.1f}%/{iv_rank:.1f}%`\n"
+        f"├─ 📊 IV/IVR: `{iv_str}/{ivr_str}`\n"
         f"└─ 🎯 動作: {status}\n"
     )

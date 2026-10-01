@@ -137,9 +137,14 @@ class ExecutionMixin:
             )
 
             # 2. 構建 MarketCondition與調用 Router
+            vix_now = macro.get("vix")
+            if vix_now is None:
+                # VIX 未知：不以 18.0 冒充 (fail-closed，不給進場決策)。
+                logger.warning(f"[{symbol}] VIX 未知，執行決策回傳 SKIP")
+                return Signal.SKIP
             try:
                 condition = MarketCondition(
-                    vix=macro.get("vix", 18.0),
+                    vix=float(vix_now),
                     skew_percent=skew_val,
                     asset_price=price,
                     ma20=clean_ma20,

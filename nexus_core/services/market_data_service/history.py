@@ -84,9 +84,9 @@ async def _fetch_history_uncached(
             logger.warning(
                 f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})"
             )
-            empty_df = pd.DataFrame()
-            _history_cache[cache_key] = (empty_df, now + _HISTORY_CACHE_TTL)
-            return empty_df
+            # 空結果**不寫入快取**：暫時性失敗 (限流/Edge 斷線) 若被快取 6 小時，
+            # 期間所有呼叫端 (含 VIX、盤後 NAV) 都會拿到「無資料」而退回備援值。
+            return pd.DataFrame()
 
         df.index.name = "Date"
         if df.index.tz is not None:

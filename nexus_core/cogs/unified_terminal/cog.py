@@ -189,9 +189,8 @@ class UnifiedTerminalCog(
         runway, runway_stale = await get_runway_display(user_id)
 
         with market_data_service.mark_interactive_request():
-            # 獲取 VIX 資訊
-            macro_raw = await market_data_service.get_macro_environment()
-            vix_spot = macro_raw.get("vix", 18.0)
+            # 獲取 VIX 資訊（未知時為 None，看板標示「資料不足」而非冒用 18.0）
+            vix_spot = await market_data_service.get_vix_spot_strict()
 
         embed = create_strategic_dash_embed(
             ctx,

@@ -104,7 +104,9 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
         data.get("vix_battle_status", {}).get("name", "")
     )
     vix_footer = f" | VIX: {vix_spot:.1f} {vix_emoji} {vix_name}" if vix_spot else ""
-    embed.set_footer(
-        text=f"Nexus Seeker 風控引擎 • 基準 SPY: ${data.get('spy_price', 500):.1f}{vix_footer}"
-    )
+    spy_ref = data.get("spy_price")
+    spy_label = f"${float(spy_ref):.1f}" if spy_ref else "--"
+    if not vix_spot and ("vix_battle_status" in data or "vix_spot" in data):
+        vix_footer = " | VIX: --"
+    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: {spy_label}{vix_footer}")
     return embed

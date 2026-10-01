@@ -289,7 +289,16 @@ async def test_state_patch_not_committed_inside_evaluator() -> None:
     new_callable=AsyncMock,
     return_value=0.0,
 )
+@patch(
+    "database.cache.get_kv_cache",
+    # 條件八的宏觀逃頂評分需要 FedWatch 鷹派分數；未知 (None) 時評分回傳
+    # UNKNOWN 而 fail-closed，故端到端測試須提供已知值。
+    side_effect=lambda key, *a, **k: 0.5
+    if key == "macro_fedwatch_probability"
+    else None,
+)
 async def test_end_to_end_via_check_satellite_rebalancing(
+    _mock_kv: MagicMock,
     _mock_high_60d: AsyncMock,
     _mock_fear_greed: AsyncMock,
     _mock_vts: AsyncMock,

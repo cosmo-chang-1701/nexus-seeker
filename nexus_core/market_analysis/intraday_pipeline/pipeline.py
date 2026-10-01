@@ -852,17 +852,14 @@ class IntradayScanPipeline:
                 await asyncio.sleep(60)
 
     # 模擬/輔助獲取資料方法
-    async def _fetch_current_vix(self) -> float:
-        """獲取 VIX 即時數據，預設為 18.0"""
+    async def _fetch_current_vix(self) -> Optional[float]:
+        """獲取 VIX 即時數據；未知時回傳 None (不再補 18.0，由引擎 fail-closed)。"""
         try:
-            from services.market_data_service import get_quote
+            from services.market_data_service import get_vix_spot_strict
 
-            quote = await get_quote("^VIX")
-            if quote and quote.get("c", 0) > 0:
-                return float(quote["c"])
+            return await get_vix_spot_strict()
         except Exception:
-            pass
-        return 18.0
+            return None
 
     async def _fetch_user_options_holdings(self, user_id: int) -> List[OptionHolding]:
         """從資料庫獲取使用者期權持倉"""
