@@ -37,7 +37,7 @@ def test_scanner_replica_matches_production_on_full_grid() -> None:
                 "sma20": sma,
                 "macd_hist": macd,
             },
-            ivr=0.0,
+            ivr=None,
         )[0]
         assert scanner_signal(price, rsi, hv, sma, macd) == expected
 

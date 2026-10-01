@@ -156,7 +156,10 @@ async def resolve_telemetry_pricing(
     except Exception as e:
         logger.warning(f"Error calculating skew for {symbol}: {e}")
 
-    prev_close = quote.get("pc", spot_price)
+    # 前收盤未知 (yfinance 只有一根日線時 pc 為 None) 以 0.0 傳入：定價引擎在
+    # prev_close <= 0 時跳過跳空缺口錨定，而不是對 None 比較拋 TypeError。
+    pc_raw = quote.get("pc")
+    prev_close = float(pc_raw) if pc_raw is not None else 0.0
 
     # 4. Calculate base_price based on order_type
     if order_type in ("LIMIT", "STOP_LIMIT"):

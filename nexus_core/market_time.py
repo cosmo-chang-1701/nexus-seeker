@@ -229,14 +229,26 @@ def get_session_bounds_utc(
     return bounds
 
 
+_TRADING_DATES_CACHE_MAX: int = 32
+_trading_dates_cache: dict[tuple[Any, int], tuple[str, ...]] = {}
+
+
 def get_recent_trading_dates(n: int, as_of: datetime | None = None) -> list[str]:
     """回傳截至 as_of (含當天，若為交易日) 的最近 n 個 NYSE 交易日 (ET 日期字串，
     由舊到新)。行事曆查詢失敗時退回「平日」(只排除週末，無法排除國定假日)。
 
     供 IV Rank 母體以「交易日」而非「資料列數」定義 252 日窗口。
+
+    行事曆結果依 (ET 日期, n) 快取：IV 指標熱路徑每個標的都會呼叫一次，結果
+    一天只變一次，不必每次重建約 500 天的 NYSE schedule。退回平日近似的結果
+    不快取，下次呼叫會重試行事曆。
     """
     today = _to_et_date(as_of)
     n = max(1, int(n))
+    cache_key = (today, n)
+    cached = _trading_dates_cache.get(cache_key)
+    if cached is not None:
+        return list(cached)
     start = today - timedelta(days=n * 2 + 10)
     try:
         schedule = nyse_calendar.schedule(start_date=start, end_date=today)
@@ -245,7 +257,11 @@ def get_recent_trading_dates(n: int, as_of: datetime | None = None) -> list[str]
                 ts.tz_convert(ny_tz).strftime("%Y-%m-%d")
                 for ts in schedule["market_open"]
             ]
-            return dates[-n:]
+            result = tuple(dates[-n:])
+            if len(_trading_dates_cache) >= _TRADING_DATES_CACHE_MAX:
+                _trading_dates_cache.clear()
+            _trading_dates_cache[cache_key] = result
+            return list(result)
     except Exception as e:
         logger.warning(f"NYSE 行事曆查詢失敗，交易日退回平日近似: {e}")
     out: list[str] = []

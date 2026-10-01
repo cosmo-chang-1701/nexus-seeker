@@ -87,7 +87,7 @@ class CorrelatedStockImpact:
 
     symbol: str
     price: float
-    daily_change_pct: float
+    daily_change_pct: Optional[float]  # None = 前收盤未知 (漲跌幅無法計算)
     is_in_watchlist: bool = False
     is_in_holdings: bool = False
 
@@ -241,7 +241,7 @@ async def _fetch_correlated_impacts(
             return CorrelatedStockImpact(
                 symbol=sym,
                 price=float(q.get("c", 0.0)),
-                daily_change_pct=float(q.get("dp", 0.0)),
+                daily_change_pct=float(dp) if (dp := q.get("dp")) is not None else None,
                 is_in_watchlist=sym in watchlist,
                 is_in_holdings=sym in holdings,
             )

@@ -11,6 +11,7 @@ execution_router.py、dynamic_rollover.py）應統一引用本模組
 """
 
 import logging
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ _IVR_SELLING_LOCKOUT: float = 10.0
 _ITM_CALL_MIN_DELTA: float = 0.70
 
 
-def is_selling_locked_by_ivr(ivr: float) -> bool:
+def is_selling_locked_by_ivr(ivr: Optional[float]) -> bool:
     """
     判斷當前 IVR 是否觸發賣方策略鎖死。
 
@@ -30,14 +31,15 @@ def is_selling_locked_by_ivr(ivr: float) -> bool:
     卻承擔完整的 Vega 擴張與方向性風險。
 
     Args:
-        ivr: 當前 IV Rank (0.0 ~ 100.0)。注意 ivr == 0.0 可能代表
-             數據缺失，此時不觸發鎖死（由其他降級邏輯處理）。
+        ivr: 當前 IV Rank (0.0 ~ 100.0)；None 代表未知 (數據缺失)，此時不觸發
+             鎖死（由其他降級邏輯處理）。0.0 是真實值——現值 IV 就是窗口最低，
+             正是權利金最廉價、最該鎖死賣方的情境。
 
     Returns:
         True 如果 IVR 有效且低於鎖死門檻 (應封鎖所有賣方策略)。
     """
-    if ivr <= 0.0:
-        # IVR == 0.0 通常代表數據缺失或盤前，不由此閘門處理
+    if ivr is None or ivr < 0.0:
+        # 未知或異常值不由此閘門處理
         return False
     return ivr < _IVR_SELLING_LOCKOUT
 

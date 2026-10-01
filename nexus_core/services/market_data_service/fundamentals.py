@@ -61,6 +61,7 @@ async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str,
 
 
 _DIVIDEND_YIELD_CACHE_TTL: float = 24 * 3600.0
+_DIVIDEND_YIELD_NEGATIVE_CACHE_TTL: float = 30 * 60.0
 _dividend_yield_cache: Any = BoundedCache(max_size=500)
 
 
@@ -113,8 +114,13 @@ async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
         except Exception as e:
             logger.warning(f"[{symbol}] yfinance 近 12 月配息抓取失敗，股息率未知: {e}")
 
-    if result is not None:
-        _dividend_yield_cache[symbol] = (result, now + _DIVIDEND_YIELD_CACHE_TTL)
+    # 抓不到 (None) 也短暫快取，避免每輪對同一個缺值標的重打 yfinance。
+    ttl = (
+        _DIVIDEND_YIELD_CACHE_TTL
+        if result is not None
+        else _DIVIDEND_YIELD_NEGATIVE_CACHE_TTL
+    )
+    _dividend_yield_cache[symbol] = (result, now + ttl)
     return result
 
 

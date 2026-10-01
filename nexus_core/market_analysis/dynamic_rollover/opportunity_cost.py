@@ -3,6 +3,8 @@ import math
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
+import market_time
+
 from database.user_settings import get_full_user_context
 from market_analysis.index_microstructure import (
     detect_uoa_sto_call_physical_cap,
@@ -552,7 +554,7 @@ def _confirm_entry_condition4_uoa_dte(
         try:
             expiry_str = str(entry.get("expiry", ""))
             exp_dt = datetime.strptime(expiry_str, "%Y-%m-%d").date()
-            dte = (exp_dt - datetime.now().date()).days
+            dte = market_time.days_to_expiry_et(exp_dt)
         except (ValueError, TypeError):
             continue
         if dte >= _ENTRY_UOA_MIN_DTE:
@@ -615,7 +617,7 @@ async def _confirm_entry_condition5_macro_earnings_gate(
         if earn and earn.get("earnings_date"):
             earn_date_str = str(earn["earnings_date"])[:10]
             earn_dt = datetime.strptime(earn_date_str, "%Y-%m-%d").date()
-            days_to_er = (earn_dt - datetime.now().date()).days
+            days_to_er = market_time.days_to_expiry_et(earn_dt)
             if 0 <= days_to_er <= _EARNINGS_PRE_EVENT_BUFFER_DAYS:
                 c5_passed = False
                 reasons.append(
@@ -755,7 +757,7 @@ async def _confirm_entry_condition6_candidate_dte(
 
     try:
         nearest_expiry_dt = datetime.strptime(expiries[0], "%Y-%m-%d").date()
-        dte_nearest = (nearest_expiry_dt - datetime.now().date()).days
+        dte_nearest = market_time.days_to_expiry_et(nearest_expiry_dt)
         c6_passed = dte_nearest > _ENTRY_CANDIDATE_MIN_DTE
         reason_line = (
             f"條件六{'✅' if c6_passed else '❌'}：標的最近效期 {expiries[0]} "

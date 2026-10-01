@@ -294,12 +294,17 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
     from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
 
-    fallback = {
-        "rrp": 420.5,
-        "fed_balance": 7.25,
-        "uer": 4.0,
-        "sahm_rule": 0.35,
-        "fear_greed": 48.0,
+    # 抓不到的欄位一律回 None (未知)，不以 sahm 0.35、fear_greed 48 之類的常數
+    # 冒充真實值——core 端會把它們寫進 KV 並據以放行 Covered Call、判定市況。
+    # 整批失敗時附 is_fallback=True，供 core 端整批視為未知。
+    fallback: dict[str, Any] = {
+        "rrp": None,
+        "rrp_change_30d": None,
+        "fed_balance": None,
+        "uer": None,
+        "sahm_rule": None,
+        "fear_greed": None,
+        "is_fallback": True,
     }
 
     async def fetch_fred_csv_all(
@@ -378,28 +383,26 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
                 await browser.close()
 
         rrp = rrp_data[0][1] if rrp_data else None
-        rrp_change = 0.0
+        rrp_change: float | None = None
         if rrp_data and len(rrp_data) > 30:
             # RRPONTSYD is daily, so index 30 is roughly 30 days ago
             past_rrp = rrp_data[30][1]
             if past_rrp > 0 and rrp is not None:
                 rrp_change = round(((rrp - past_rrp) / past_rrp) * 100.0, 1)
 
+        values = (rrp, walcl, unrate, sahm, fgi)
         return {
             "status": "success",
             "data": {
-                "rrp": round(rrp, 1) if rrp is not None else fallback["rrp"],
+                "rrp": round(rrp, 1) if rrp is not None else None,
                 "rrp_change_30d": rrp_change,
                 "fed_balance": round(walcl / 1000000.0, 2)
                 if walcl is not None
-                else fallback["fed_balance"],
-                "uer": round(unrate, 1) if unrate is not None else fallback["uer"],
-                "sahm_rule": round(sahm, 2)
-                if sahm is not None
-                else fallback["sahm_rule"],
-                "fear_greed": round(fgi, 1)
-                if fgi is not None
-                else fallback["fear_greed"],
+                else None,
+                "uer": round(unrate, 1) if unrate is not None else None,
+                "sahm_rule": round(sahm, 2) if sahm is not None else None,
+                "fear_greed": round(fgi, 1) if fgi is not None else None,
+                "is_fallback": all(v is None for v in values),
             },
         }
     except Exception as e:
@@ -415,11 +418,14 @@ async def scrape_liquidity() -> dict[str, Any]:
     from playwright.async_api import async_playwright
     from playwright_stealth import Stealth
 
-    fallback = {
-        "ted_spread": 0.15,
-        "sofr_90": 5.3,
-        "dtb3": 5.15,
-        "high_yield_spread": 3.1,
+    # 同 core_metrics：抓不到就是未知 (None + is_fallback)，不以 TED 0.15 冒充
+    # ——core 端的流動性危機三值邏輯會把它當成「已知未達警戒」。
+    fallback: dict[str, Any] = {
+        "ted_spread": None,
+        "sofr_90": None,
+        "dtb3": None,
+        "high_yield_spread": None,
+        "is_fallback": True,
     }
 
     async def fetch_fred_csv(series_id: str, context: Any) -> float | None:
@@ -486,7 +492,8 @@ async def scrape_liquidity() -> dict[str, Any]:
                 "dtb3": round(dtb3, 4),
                 "high_yield_spread": round(hy_spread, 4)
                 if hy_spread is not None
-                else fallback["high_yield_spread"],
+                else None,
+                "is_fallback": False,
             },
         }
     except Exception as e:

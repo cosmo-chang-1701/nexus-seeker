@@ -44,7 +44,7 @@ def apply_ivr_strategy_overlay_impl(
     is_selling_locked_by_ivr: Any,
     options_strategy: str,
     strategy_override: str,
-    ivr: float,
+    ivr: Optional[float],
 ) -> str:
     """
     IVR 策略防禦與微調。
@@ -56,7 +56,7 @@ def apply_ivr_strategy_overlay_impl(
         return strategy_override
     if is_selling_locked_by_ivr(ivr):
         return options_strategy + f" | ⚠️ IVR 極低位 ({ivr:.1f}%): 賣方策略已鎖死。"
-    if ivr > _BUYER_LOCKOUT_IVR_THRESHOLD:
+    if ivr is not None and ivr > _BUYER_LOCKOUT_IVR_THRESHOLD:
         return options_strategy + " | 嚴禁買方 (IV 過高，規避 Gamma 陷阱)"
     return options_strategy
 
@@ -111,7 +111,7 @@ class _AntiWashoutMixin:
         # 由 DynamicRolloverEngine（__init__.py）實際提供，此處僅供 mypy 解析
         # mixin 之間互相依賴的方法簽名，執行期不會用到這個宣告。
         def _apply_ivr_strategy_overlay(
-            self, options_strategy: str, strategy_override: str, ivr: float
+            self, options_strategy: str, strategy_override: str, ivr: Optional[float]
         ) -> str: ...
 
     def _correct_wall_topology(self, metrics: dict) -> Tuple[float, float]:
@@ -1130,9 +1130,10 @@ class _AntiWashoutMixin:
         執行比例；未傳入時為現行 _MICROSTRUCTURE_TP1_RATIO，零行為變化。
         """
         spot = float(metrics.get("spot_price", 0.0))
-        # IVR 未知 (None) 以 0.0 表示：本模組既有慣例即把 0.0 視為「數據缺失」
-        # (不觸發賣方鎖死、不判 IV 泡沫，並在報告加註數據失真)。
-        ivr = float(metrics.get("ivr") or 0.0)
+        # IVR 未知保持 None (不觸發賣方鎖死、不判 IV 泡沫，並在報告加註數據
+        # 失真)；0.0 是真實值 (現值 IV 為窗口最低)，不可與未知混為一談。
+        ivr_raw = metrics.get("ivr")
+        ivr: Optional[float] = float(ivr_raw) if ivr_raw is not None else None
         iv_term_structure_status = metrics.get("iv_term_structure_status") or "N/A"
         max_pain = float(metrics.get("max_pain", 0.0))
         is_uoa_sweep = bool(metrics.get("is_uoa_sweep", False))
@@ -1198,7 +1199,7 @@ class _AntiWashoutMixin:
 
         # 數據異常註記
         data_note = ""
-        if ivr == 0.0 or spot == 0.0:
+        if ivr is None or spot == 0.0:
             data_note = " (⚠️ 數據失真或快取未更新，請留意風險)"
 
         # ━━━ 資金回收與目標核心資產買入預估 (結合風險平價口數縮放) ━━━
@@ -1275,7 +1276,7 @@ class _AntiWashoutMixin:
         # 建構標準 4 段式 Markdown
         core_report = f"""
 1. **盤勢定調**
-   - 現價: ${spot:.2f} | IV 位階: {ivr:.1f}%{data_note}
+   - 現價: ${spot:.2f} | IV 位階: {f"{ivr:.1f}%" if ivr is not None else "--"}{data_note}
    - IV 期限結構: {iv_term_structure_status}
    - 相對位置: Max Pain ${max_pain:.2f}
 2. **主力意圖拆解 (UOA/GEX 微結構)**
@@ -1647,8 +1648,9 @@ async def check_satellite_rebalancing_impl(
             spot: float = float(asset.get("spot_price", 0.0))
             call_wall: float = float(asset.get("call_wall", 0.0))
             max_pain: float = float(asset.get("max_pain", 0.0))
-            # None (IVR 未知) → 0.0：下游既有慣例視 0.0 為數據缺失 (見上方註解)。
-            ivr: float = float(asset.get("ivr") or 0.0)
+            # IVR 未知保持 None：0.0 是真實值，不可當作數據缺失。
+            ivr_raw = asset.get("ivr")
+            ivr: Optional[float] = float(ivr_raw) if ivr_raw is not None else None
             # ⚠️ 既有缺陷修正：portfolio_monitor 早已把 ivr_drop 放進 asset
             # entry，但此處的 metrics 組裝從未讀取它，導致
             # _apply_decision_matrix 的 is_ivr_fast_exit
@@ -1905,7 +1907,7 @@ async def check_satellite_rebalancing_impl(
             )
 
             # IV 泡沫防護：擺脫高波洗籌泥淖 (IV Crush 威脅)，矩陣未涵蓋的獨立保護
-            is_iv_bubble = ivr > _IV_BUBBLE_THRESHOLD
+            is_iv_bubble = ivr is not None and ivr > _IV_BUBBLE_THRESHOLD
 
             # is_extreme_breach_gate 一併納入閘門：軌道二觸發時必須確保能進入
             # 報告產生流程。目前 extreme_stop (anchor-3.0×ATR) 恆低於 Track 1

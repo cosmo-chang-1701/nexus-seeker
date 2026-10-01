@@ -471,24 +471,36 @@ async def refresh_portfolio_greeks(
             )
             return
 
-        stock_data: Dict[str, Dict[str, Any]] = {}
-        for sym in unique_symbols:
-            df = await market_data_service.get_history_df(sym, BETA_HISTORY_PERIOD)
-            quote = await market_data_service.get_quote(sym)
+        # 各標的的日線、報價、股息率並行抓取 (Semaphore(3) 限流，同其他背景
+        # 掃描)：Hedge Monitor 在 VIX spike 時會為每位使用者呼叫本函式，逐一
+        # 序列 await 會讓 N 個標的累積 3N 次網路往返。
+        sem = asyncio.Semaphore(3)
+
+        async def _load_stock(sym: str) -> tuple[str, Dict[str, Any]]:
+            async with sem:
+                df, quote, div_val = await asyncio.gather(
+                    market_data_service.get_history_df(sym, BETA_HISTORY_PERIOD),
+                    market_data_service.get_quote(sym),
+                    market_data_service.get_dividend_yield_strict(sym),
+                )
             price = float(quote.get("c") or 0.0) if quote else 0.0
             if price <= 0 and not df.empty:
                 price = float(df["Close"].iloc[-1])
+            beta_val: Optional[float]
             if sym.upper() == "BOXX":
-                beta_val: Optional[float] = 0.0
+                beta_val = 0.0
             else:
                 beta_val = calculate_beta_strict(df, spy_df)
-            div_val = await market_data_service.get_dividend_yield_strict(sym)
-            stock_data[sym] = {
+            return sym, {
                 "price": price,
                 "beta": 1.0 if beta_val is None else beta_val,
                 "beta_estimated": beta_val is None,
                 "div_yield": 0.0 if div_val is None else div_val,
             }
+
+        stock_data: Dict[str, Dict[str, Any]] = dict(
+            await asyncio.gather(*(_load_stock(sym) for sym in unique_symbols))
+        )
 
         # 🚀 構建 HOLDING 現貨成本 Map
         holding_map = {}

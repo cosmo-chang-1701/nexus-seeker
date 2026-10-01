@@ -117,9 +117,14 @@ def test_ivr_above_lockout_does_not_lock() -> None:
     assert is_selling_locked_by_ivr(100.0) is False
 
 
-def test_ivr_zero_does_not_lock() -> None:
-    """IVR == 0.0（數據缺失）→ 不觸發鎖死，由其他降級邏輯處理"""
-    assert is_selling_locked_by_ivr(0.0) is False
+def test_ivr_zero_locks() -> None:
+    """IVR == 0.0 是真實值（現值 IV 為窗口最低）→ 鎖死賣方"""
+    assert is_selling_locked_by_ivr(0.0) is True
+
+
+def test_ivr_unknown_does_not_lock() -> None:
+    """IVR 未知 (None) → 不觸發鎖死，由其他降級邏輯處理"""
+    assert is_selling_locked_by_ivr(None) is False
 
 
 def test_ivr_negative_does_not_lock() -> None:

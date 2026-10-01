@@ -300,7 +300,11 @@ def test_scrape_core_macro_metrics_closes_browser_on_exception() -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
-        assert data["data"]["rrp"] == 420.5  # fallback value
+        # 整批失敗：各欄位未知 (None)，並標示 is_fallback，不以常數冒充
+        assert data["data"]["rrp"] is None
+        assert data["data"]["sahm_rule"] is None
+        assert data["data"]["fear_greed"] is None
+        assert data["data"]["is_fallback"] is True
     assert mock_cm.mock_browser is not None
     mock_cm.mock_browser.close.assert_called_once()
 
@@ -312,7 +316,8 @@ def test_scrape_liquidity_closes_browser_on_exception() -> None:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
-        assert data["data"]["ted_spread"] == 0.15  # fallback value
+        assert data["data"]["ted_spread"] is None
+        assert data["data"]["is_fallback"] is True
     assert mock_cm.mock_browser is not None
     mock_cm.mock_browser.close.assert_called_once()
 

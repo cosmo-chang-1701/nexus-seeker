@@ -110,14 +110,14 @@ flowchart TD
 ## 5. 邊界條件、風控熔斷與例外處理
 
 ### 5.1 IVR 未知不誤殺 (Missing Data Guard)
-盤前時段、歷史樣本不足 60 筆或窗口退化時，`iv_rank` 為 `None`（未知）。顯示端一律標示「--」或「IVR 資料不足」，不得當成 $0\%$ 低 IVR 顯示；呼叫 `is_selling_locked_by_ivr()` 的路徑以 `ivr or 0.0` 傳入，由閘門的安全防護處理，避免機械式執行 `ivr < 10.0` 把所有標的錯誤鎖死：
+盤前時段、歷史樣本不足 60 筆或窗口退化時，`iv_rank` 為 `None`（未知）。顯示端一律標示「--」或「IVR 資料不足」，不得當成 $0\%$ 低 IVR 顯示。`None` 一路原樣傳到 `is_selling_locked_by_ivr()`（`MarketCondition.ivr`、`_determine_strategy_signal(ivr=...)`、`anti_washout` 的 metrics 皆為 `Optional[float]`），**不得折成 `0.0`**——$\text{IVR} = 0\%$ 是真實值（現值 IV 正是窗口最低），權利金最廉價，正是最該鎖死賣方的情境：
 ```python
-if ivr <= 0.0:
-    # IVR == 0.0 通常代表數據缺失或盤前，不由此閘門處理
+if ivr is None or ivr < 0.0:
+    # 未知或異常值不由此閘門處理
     return False
 return ivr < _IVR_SELLING_LOCKOUT
 ```
-確保資料缺失時由降級系統平滑處理，不產生偽鎖死。
+確保資料缺失時由降級系統平滑處理，不產生偽鎖死；真實的 $0\%$ 則正常鎖死。
 
 **母體重建期**：`v088` 遷移整批清空 `historical_iv`（舊母體混入無法辨識的 `HV_PROXY` 與搬運列，逐列清理無法保證乾淨），由盤中即時 IV 從頭累積。清空後約 60 個交易日內所有標的 IVR 為未知，IVR 相關閘門（賣方鎖定、Covered Call 解鎖、`target_ivr`）期間一律走上述未知路徑。
 

@@ -26,7 +26,10 @@ class MarketCondition(BaseModel):
     relative_strength: float = Field(
         1.0, description="相對強度 (Relative Strength) 指標"
     )
-    ivr: float = Field(default=0.0, description="IV Rank (0-100)", ge=0.0, le=100.0)
+    # IVR 未知時為 None (0.0 是真實值：現值 IV 為窗口最低)，IVR 賣方鎖死閘門跳過。
+    ivr: Optional[float] = Field(
+        default=None, description="IV Rank (0-100)；None 代表未知", ge=0.0, le=100.0
+    )
     sqz_mom: float = Field(default=0.0, description="Squeeze Momentum")
     # 分位未知時為 None (樣本不足或資料缺失)，下游跳過相關閘門；不補 50。
     skew_percentile: Optional[float] = Field(
@@ -67,7 +70,7 @@ class MarketCondition(BaseModel):
             v is None or (isinstance(v, float) and math.isnan(v))
         ):
             raise ValueError("VIX 未知 (None/NaN)，拒絕以預設值建構 MarketCondition")
-        if info.field_name == "skew_percentile":
+        if info.field_name in ("skew_percentile", "ivr"):
             try:
                 sp = float(v) if v is not None else None
             except (TypeError, ValueError):
@@ -106,8 +109,6 @@ class MarketCondition(BaseModel):
             return 50.0
         if info.field_name == "relative_strength" and val <= 0:
             return 1.0
-        if info.field_name == "ivr" and (val < 0 or val > 100):
-            return 0.0
 
         return val
 
@@ -121,7 +122,6 @@ class MarketCondition(BaseModel):
             "atr_14": 1.0,
             "rsi_14": 50.0,
             "relative_strength": 1.0,
-            "ivr": 0.0,
             "sqz_mom": 0.0,
         }
         return defaults.get(field_name, 0.0)

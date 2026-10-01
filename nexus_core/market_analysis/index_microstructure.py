@@ -106,7 +106,12 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
                 cached_data.get("spy_spot") == 510.0
                 and cached_data.get("gamma_flip") == 515.0
             ):
-                return {**cached_data, "_is_stale_cache": True}
+                return {
+                    **cached_data,
+                    "_is_stale_cache": True,
+                    # 無時間戳的舊快取記為 0.0 (視為已過期)
+                    "_cache_timestamp": float(cached_obj.get("timestamp") or 0.0),
+                }
         if allow_empty:
             return {}
         return fallback
@@ -180,6 +185,11 @@ async def get_market_regime() -> str:
     return regime  # type: ignore
 
 
+# 大盤 GEX last-known-good 快取供 regime 判定的最長時效：涵蓋週末/長假 (週五
+# 收盤後 edge 失敗到週一盤中約 2.5 天)，超過即視為未知——OI 結構已換手。
+_REGIME_GEX_STALE_MAX_AGE_SECONDS: float = 3 * 24 * 3600.0
+
+
 def _and3(*vals: Optional[bool]) -> Optional[bool]:
     """三值邏輯 AND：任一為 False → False；全部為 True → True；其餘 (含未知) → None。"""
     if any(v is False for v in vals):
@@ -212,6 +222,19 @@ async def _compute_market_regime_uncached() -> str:
     except Exception as e:
         logger.warning(f"獲取大盤 GEX 失敗: {e}")
         gex_data = {}
+    # last-known-good 快取超過 _REGIME_GEX_STALE_MAX_AGE_SECONDS 即視為未知：
+    # edge 停擺數週後，拿幾週前的 Flip 和即時 SPY 比較會把 regime 確定判成
+    # NORMAL (或反向誤判危機)，違反「未知就是未知」。
+    if isinstance(gex_data, dict) and gex_data.get("_is_stale_cache"):
+        try:
+            cache_age = time.time() - float(gex_data.get("_cache_timestamp") or 0.0)
+        except (TypeError, ValueError):
+            cache_age = float("inf")
+        if cache_age > _REGIME_GEX_STALE_MAX_AGE_SECONDS:
+            logger.warning(
+                f"大盤 GEX 快取已過期 ({cache_age / 3600:.1f}h)，Gamma Flip 視為未知"
+            )
+            gex_data = {}
     gamma_flip: Optional[float] = None
     try:
         gf_raw = gex_data.get("gamma_flip") if isinstance(gex_data, dict) else None
@@ -272,9 +295,17 @@ async def _compute_market_regime_uncached() -> str:
     )
     # 系統性流動性危機 (TED Spread > 0.5 且處於 Negative Gamma)
     # 這裡 0.5 (50 bps) 為 TED Spread 歷史上的警戒水位
-    liquidity_crisis = _and3(
-        (ted_spread > 0.5) if ted_spread is not None else None, below_flip
-    )
+    # 未設定 TUNNEL_URL 的部署結構上就沒有 TED 與 GEX 來源 (edge 為選配)，此
+    # 條件永遠無法評估；若仍以三值邏輯計入，regime 會恆為 UNKNOWN 而永久鎖死
+    # 新倉。此時不評估此條件，regime 僅由 VIX/VTS 條件決定。有 edge 但暫時抓
+    # 不到時仍屬「未知」。
+    liquidity_crisis: Optional[bool]
+    if not getattr(config, "TUNNEL_URL", ""):
+        liquidity_crisis = False
+    else:
+        liquidity_crisis = _and3(
+            (ted_spread > 0.5) if ted_spread is not None else None, below_flip
+        )
     if liquidity_crisis is True:
         return "SYSTEMIC_LIQUIDITY_CRISIS"
 
@@ -381,6 +412,31 @@ async def suggest_target_allocation_pct() -> float:
     return _TARGET_ALLOC_SUGGEST_BY_TIER[tier]
 
 
+# 舊版 edge (修正前) 整批失敗時回傳的常數組合。edge 與 core 分開部署，core 先
+# 上線時仍可能收到這組值；整組完全相符時視為備援 (單一欄位的常數無法與真實值
+# 區分，須升級 edge 才能根除)。
+_LEGACY_EDGE_LIQUIDITY_FALLBACK: Dict[str, float] = {
+    "ted_spread": 0.15,
+    "sofr_90": 5.3,
+    "dtb3": 5.15,
+    "high_yield_spread": 3.1,
+}
+_LEGACY_EDGE_CORE_MACRO_FALLBACK: Dict[str, float] = {
+    "rrp": 420.5,
+    "fed_balance": 7.25,
+    "uer": 4.0,
+    "sahm_rule": 0.35,
+    "fear_greed": 48.0,
+}
+
+
+def _is_edge_fallback_payload(data: Dict[str, Any], legacy: Dict[str, float]) -> bool:
+    """edge 回傳的是否為備援值：新版 edge 帶 `is_fallback`；舊版整組常數相符。"""
+    if data.get("is_fallback"):
+        return True
+    return all(data.get(k) == v for k, v in legacy.items())
+
+
 async def fetch_liquidity_metrics() -> dict:
     """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。
 
@@ -404,13 +460,18 @@ async def fetch_liquidity_metrics() -> dict:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/liquidity")
             if res.status_code == 200:
                 data = res.json()
-                if data.get("status") == "success":
-                    liq_data = data.get("data", fallback)
-                    await save_kv_cache(
-                        "macro_ted_spread", liq_data.get("ted_spread", 0.15)
+                liq_data = data.get("data") if data.get("status") == "success" else None
+                if (
+                    isinstance(liq_data, dict)
+                    and not _is_edge_fallback_payload(
+                        liq_data, _LEGACY_EDGE_LIQUIDITY_FALLBACK
                     )
+                    and liq_data.get("ted_spread") is not None
+                ):
+                    await save_kv_cache("macro_ted_spread", liq_data["ted_spread"])
                     await save_kv_cache("macro_liquidity_is_fallback", 0)
-                    return liq_data  # type: ignore
+                    return liq_data
+                logger.warning("Tunnel Scraper 回傳流動性備援值，視為未知")
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取流動性數據: {e}")
     await save_kv_cache("macro_liquidity_is_fallback", 1)
@@ -467,8 +528,14 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
             )
             if res.status_code == 200:
                 data = res.json()
-                if data.get("status") == "success":
-                    core_data = data.get("data", fallback)
+                core_data = (
+                    data.get("data") if data.get("status") == "success" else None
+                )
+                if not isinstance(core_data, dict) or _is_edge_fallback_payload(
+                    core_data, _LEGACY_EDGE_CORE_MACRO_FALLBACK
+                ):
+                    logger.warning("Tunnel Scraper 回傳核心總經備援值，視為未知")
+                else:
                     # 只快取實際存在的欄位：缺欄位時不再以常數補值寫入 KV。
                     for kv_key, field in (
                         ("macro_rrp", "rrp"),
@@ -481,7 +548,7 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
                         if core_data.get(field) is not None:
                             await save_kv_cache(kv_key, core_data.get(field))
                     await save_kv_cache("macro_core_is_fallback", 0)
-                    return core_data  # type: ignore
+                    return core_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取核心總經數據: {e}")
     await save_kv_cache("macro_core_is_fallback", 1)
@@ -1129,10 +1196,10 @@ _MACRO_ESCAPE_BREADTH_TRIGGER_RATIO: float = 0.5
 
 
 def evaluate_macro_top_escape_score(
-    vts_ratio: float | None = 0.88,
-    fear_greed: float | None = 48.0,
-    prob: float | None = 0.50,
-    is_negative_gamma: bool | None = False,
+    vts_ratio: float | None = None,
+    fear_greed: float | None = None,
+    prob: float | None = None,
+    is_negative_gamma: bool | None = None,
     satellite_euphoria_ratio: float | None = None,
 ) -> tuple[int, str, str, list[tuple[str, str]]]:
     """

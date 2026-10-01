@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import database
+import market_time
 from market_analysis import portfolio, hedging
 from services import market_data_service
 from market_analysis.risk_engine import BETA_HISTORY_PERIOD
@@ -232,7 +233,7 @@ class ReportsMixin:
 
                 if qty > 0 and w_delta != 0:
                     exp_date = datetime.strptime(exp, "%Y-%m-%d").date()
-                    dte = (exp_date - datetime.now().date()).days
+                    dte = market_time.days_to_expiry_et(exp_date)
 
                     # 獲取標的現價以進行 Greeks 換算
                     quote = await market_data_service.get_quote(sym)
