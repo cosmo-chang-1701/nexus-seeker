@@ -433,82 +433,31 @@ def force_scan(ctx: Any) -> None:
 @admin_group.command(name="force-macro-update")
 @click.pass_context
 def force_macro_update(ctx: Any) -> None:
-    """立即執行大盤與總經數據 (GEX & FedWatch) 爬取與快取更新"""
+    """立即強制刷新大盤與總經數據 (GEX、流動性、VTS、核心指標、日曆、FedWatch、CPI)"""
 
     async def _run() -> None:
-        from market_analysis.index_microstructure import fetch_gex_metrics
-        from services.calendar_service import calendar_service
+        from rich.markup import escape
+
+        from services.macro_refresh_service import refresh_macro_data
 
         rprint("[bold yellow]🚀 開始手動觸發大盤總經爬蟲...[/bold yellow]")
+        result = await refresh_macro_data(include_vts_and_core=True)
 
-        # 1. GEX & Liquidity & VIX Term Structure & Core Metrics
-        rprint("正在向 edge scraper 請求 GEX, 流動性與核心總經數據...")
-        try:
-            from market_analysis.index_microstructure import (
-                fetch_liquidity_metrics,
-                fetch_core_macro_metrics,
-            )
-            from services.market_data_service import get_vix_term_structure
-            import database
-
-            gex_data, liq_data, vts_data, core_data = await asyncio.gather(
-                fetch_gex_metrics(),
-                fetch_liquidity_metrics(),
-                get_vix_term_structure(),
-                fetch_core_macro_metrics(),
-                return_exceptions=True,
-            )
-            if isinstance(gex_data, Exception):
-                raise gex_data
-
-            if not isinstance(vts_data, Exception) and vts_data.get("vts_ratio"):
-                await database.save_kv_cache(
-                    "macro_vts_ratio", vts_data.get("vts_ratio")
-                )
-
-            if (
-                isinstance(gex_data, dict)
-                and gex_data.get("spy_spot")
-                and not gex_data.get("is_fallback")
-            ):
-                gex_stale_tag = (
-                    " ⚠️ [使用快取資料]" if gex_data.get("_is_stale_cache") else ""
-                )
-                rprint(
-                    f"[bold green]✅ GEX, 流動性, VTS與核心總經數據更新完成。[/bold green] (SPY: {gex_data.get('spy_spot')}, Flip: {gex_data.get('gamma_flip')}, TED Spread: {liq_data.get('ted_spread') if not isinstance(liq_data, Exception) else 'Error'}, RRP: {core_data.get('rrp') if not isinstance(core_data, Exception) else 'Error'}){gex_stale_tag}"
-                )
+        # 步驟訊息可能夾帶例外字串，須跳脫 Rich markup 以免被誤解析。
+        for step in result.steps:
+            name, message = escape(step.name), escape(step.message)
+            if step.ok:
+                rprint(f"[bold green]✅ {name}[/bold green]：{message}")
             else:
-                rprint("[bold red]❌ GEX 數據獲取失敗: 完全無數據[/bold red]")
-        except Exception as e:
-            rprint(f"[bold red]❌ GEX & 流動性數據更新失敗: {e}[/bold red]")
+                rprint(f"[bold red]❌ {name} 更新失敗[/bold red]：{message}")
 
-        # 2. FedWatch
-        rprint("正在向 edge scraper 請求 FedWatch 利率機率數據...")
-        try:
-            await calendar_service.update_fedwatch_probability()
-            rprint("[bold green]✅ FedWatch 數據更新並寫入資料庫完成。[/bold green]")
-        except Exception as e:
-            rprint(f"[bold red]❌ FedWatch 數據更新失敗: {e}[/bold red]")
-
-        # 3. Macro Calendar
-        rprint("正在向 edge scraper 請求 TradingView 總經日曆...")
-        try:
-            await calendar_service.prefetch_monthly_macro_cache(
-                months_ahead=1, force_fetch=True
+        if result.all_ok:
+            rprint("[bold blue]🎯 所有手動更新流程結束，全部成功。[/bold blue]")
+        else:
+            rprint(
+                f"[bold yellow]⚠️ 手動更新流程結束：{len(result.failed)} 項失敗、"
+                f"{len(result.succeeded)} 項成功。[/bold yellow]"
             )
-            rprint("[bold green]✅ 總經日曆更新並寫入快取完成。[/bold green]")
-        except Exception as e:
-            rprint(f"[bold red]❌ 總經日曆更新失敗: {e}[/bold red]")
-
-        # 4. CPI 偏差值
-        rprint("正在從總經日曆快取解析最新 CPI YoY 實際值/預測值...")
-        try:
-            await calendar_service.update_cpi_deviation()
-            rprint("[bold green]✅ CPI 偏差數據更新並寫入資料庫完成。[/bold green]")
-        except Exception as e:
-            rprint(f"[bold red]❌ CPI 偏差數據更新失敗: {e}[/bold red]")
-
-        rprint("[bold blue]🎯 所有手動更新流程結束。[/bold blue]")
 
     run_async(_run())
 

@@ -1,3 +1,4 @@
+from typing import Any
 from click.testing import CliRunner
 from unittest.mock import patch, AsyncMock
 import sys
@@ -138,94 +139,54 @@ def test_cli_watchlist_check() -> None:
         assert "```ansi" in result.output
 
 
-def test_cli_force_macro_update() -> None:
-    """測試 force-macro-update 指令"""
-    with patch("database.init_db"), patch(
-        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
-    ) as mock_fetch, patch(
-        "market_analysis.index_microstructure.fetch_liquidity_metrics",
-        new_callable=AsyncMock,
-    ) as mock_fetch_liq, patch(
-        "services.market_data_service.get_vix_term_structure",
-        new_callable=AsyncMock,
-    ) as mock_fetch_vts, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics",
-        new_callable=AsyncMock,
-    ) as mock_fetch_core, patch(
-        "services.calendar_service.calendar_service.update_fedwatch_probability",
-        new_callable=AsyncMock,
-    ) as mock_update:
-        mock_fetch.return_value = {"spy_spot": 510.0, "gamma_flip": 515.0}
-        mock_fetch_liq.return_value = {"ted_spread": 0.15}
-        mock_fetch_vts.return_value = {"vts_ratio": 1.05}
-        mock_fetch_core.return_value = {"rrp": 420.5}
+def _macro_refresh_result(*steps: tuple[str, bool, str]) -> Any:
+    from services.macro_refresh_service import MacroRefreshResult, RefreshStep
 
+    return MacroRefreshResult(steps=[RefreshStep(*step) for step in steps])
+
+
+def test_cli_force_macro_update() -> None:
+    """force-macro-update 呼叫共用刷新流程（含 VTS 與核心指標），並逐項呈現結果"""
+    result_obj = _macro_refresh_result(
+        ("GEX", True, "SPY: $510.00 / Gamma Flip: 515.00"),
+        ("流動性指標", True, "TED Spread: 0.15"),
+        ("總經日曆", True, "已重新抓取並寫入快取"),
+        ("FedWatch", True, "最新利率定價已寫入資料庫"),
+        ("CPI 偏差值", True, "最新 CPI YoY 實際值與預測值已寫入資料庫"),
+    )
+    with patch("database.init_db"), patch(
+        "services.macro_refresh_service.refresh_macro_data",
+        new_callable=AsyncMock,
+        return_value=result_obj,
+    ) as mock_refresh:
         runner = CliRunner()
         result = runner.invoke(cli, ["admin", "force-macro-update"])
         assert result.exit_code == 0
         assert "開始手動觸發大盤總經爬蟲" in result.output
-        assert "GEX, 流動性, VTS與核心總經數據更新完成" in result.output
-        assert "FedWatch 數據更新並寫入資料庫完成" in result.output
-        mock_fetch.assert_called_once()
-        mock_fetch_liq.assert_called_once()
-        mock_update.assert_called_once()
+        assert "SPY: $510.00 / Gamma Flip: 515.00" in result.output
+        assert "FedWatch" in result.output
+        assert "CPI 偏差值" in result.output
+        assert "全部成功" in result.output
+        mock_refresh.assert_awaited_once_with(include_vts_and_core=True)
 
 
-def test_cli_force_macro_update_marks_stale_cache() -> None:
-    """測試 force-macro-update 指令在 GEX 為降級快取資料時，於輸出附加標記"""
+def test_cli_force_macro_update_reports_partial_failure() -> None:
+    """任一步驟失敗時逐項標示失敗原因，並彙總成功/失敗數"""
+    result_obj = _macro_refresh_result(
+        ("GEX", False, "大盤端點與 SPY 即時估算皆無有效數據"),
+        ("總經日曆", True, "已重新抓取並寫入快取"),
+        ("CPI 偏差值", False, "日曆快取中無可用的已公布 CPI YoY 數據"),
+    )
     with patch("database.init_db"), patch(
-        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
-    ) as mock_fetch, patch(
-        "market_analysis.index_microstructure.fetch_liquidity_metrics",
+        "services.macro_refresh_service.refresh_macro_data",
         new_callable=AsyncMock,
-    ) as mock_fetch_liq, patch(
-        "services.market_data_service.get_vix_term_structure",
-        new_callable=AsyncMock,
-    ) as mock_fetch_vts, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics",
-        new_callable=AsyncMock,
-    ) as mock_fetch_core, patch(
-        "services.calendar_service.calendar_service.update_fedwatch_probability",
-        new_callable=AsyncMock,
+        return_value=result_obj,
     ):
-        mock_fetch.return_value = {
-            "spy_spot": 510.0,
-            "gamma_flip": 515.0,
-            "_is_stale_cache": True,
-        }
-        mock_fetch_liq.return_value = {"ted_spread": 0.15}
-        mock_fetch_vts.return_value = {"vts_ratio": 1.05}
-        mock_fetch_core.return_value = {"rrp": 420.5}
-
         runner = CliRunner()
         result = runner.invoke(cli, ["admin", "force-macro-update"])
         assert result.exit_code == 0
-        assert "使用快取資料" in result.output
-
-
-def test_cli_force_macro_update_handles_complete_failure() -> None:
-    """測試 force-macro-update 指令在 GEX 數據完全無數據時，直接顯示失敗而非使用預設值"""
-    with patch("database.init_db"), patch(
-        "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
-    ) as mock_fetch, patch(
-        "market_analysis.index_microstructure.fetch_liquidity_metrics",
-        new_callable=AsyncMock,
-    ) as mock_fetch_liq, patch(
-        "services.market_data_service.get_vix_term_structure",
-        new_callable=AsyncMock,
-    ) as mock_fetch_vts, patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics",
-        new_callable=AsyncMock,
-    ) as mock_fetch_core, patch(
-        "services.calendar_service.calendar_service.update_fedwatch_probability",
-        new_callable=AsyncMock,
-    ):
-        mock_fetch.return_value = {}
-        mock_fetch_liq.return_value = {"ted_spread": 0.15}
-        mock_fetch_vts.return_value = {"vts_ratio": 1.05}
-        mock_fetch_core.return_value = {"rrp": 420.5}
-
-        runner = CliRunner()
-        result = runner.invoke(cli, ["admin", "force-macro-update"])
-        assert result.exit_code == 0
-        assert "GEX 數據獲取失敗: 完全無數據" in result.output
+        assert "GEX 更新失敗" in result.output
+        assert "大盤端點與 SPY 即時估算皆無有效數據" in result.output
+        assert "CPI 偏差值 更新失敗" in result.output
+        assert "2 項失敗、1 項成功" in result.output
+        assert "全部成功" not in result.output

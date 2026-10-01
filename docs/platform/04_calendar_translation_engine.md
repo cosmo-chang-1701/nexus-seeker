@@ -10,6 +10,8 @@
 
 新增功能時，**不應**在既有日曆輔助函式已存在的情況下，繞過它直接呼叫原始市場日曆 API。
 
+月度宏觀快取重抓時，`database/calendar_cache.py::replace_macro_month_events()` 只刪除已不存在的事件，其餘以 UPSERT 寫入並保留既有的 `fedwatch_probability`（新資料有值時才覆寫），因此任何觸發日曆重抓的路徑都不會洗掉 FedWatch 定價。詳見 [`08_scheduled_jobs_and_background_pipelines.md`](08_scheduled_jobs_and_background_pipelines.md#54-總經日曆重寫與-fedwatch-欄位保留)。
+
 ## 2. 宏觀經濟日曆翻譯與正規化引擎（`market_analysis/macro_calendar_translator.py`）
 
 為徹底解決 TradingView 原始總經事件英文名稱繁雜、縮寫不一，以及聯準會官員演講解析困難的問題，系統建置了全域統一的中文化與正規化引擎：
@@ -27,3 +29,5 @@
 - `nexus_core/services/calendar_service.py`：共用日曆閘道，月度宏觀快取與標的財報快取
 - `nexus_core/market_analysis/macro_calendar_translator.py`：150+ 總經事件翻譯庫、`FED_OFFICIALS_MAP`、`translate_macro_event()`
 - `nexus_core/cogs/calendar.py`：宏觀與財報日曆指令入口，`event_checker`（每 4 小時）排程
+- `nexus_core/database/calendar_cache.py`：月度宏觀事件重寫（保留 FedWatch 欄位）、財報快取讀寫（含 `get_cached_earnings_many` 批次讀取）
+- `nexus_core/services/macro_refresh_service.py`：`/force_macro_update` 與 CLI `admin force-macro-update` 共用的強制刷新流程
