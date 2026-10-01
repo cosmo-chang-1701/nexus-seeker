@@ -285,10 +285,10 @@ class BatchScanMixin:
             )
 
         except Exception as e:
-            logger.error(f"Batch Scan Error for {scan_value}: {e}")
+            logger.exception(f"Batch Scan Error for {scan_value}: {e}")
             try:
                 await interaction.followup.send(
-                    embed=create_error_embed(f"執行批次掃描時發生錯誤: {e}"),
+                    embed=create_error_embed("執行批次掃描時發生錯誤，請稍後再試。"),
                     ephemeral=True,
                 )
             except Exception as follow_err:

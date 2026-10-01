@@ -2101,16 +2101,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
 
 def create_tactical_hedge_embed(
-    symbol: str, ivr: float, rec_strategy: str
+    symbol: str, ivr: Optional[float], rec_strategy: str
 ) -> discord.Embed:
-    """建構標的對沖防禦中心的 Embed"""
+    """建構標的對沖防禦中心的 Embed（ivr 為 None 代表樣本不足/未知，不捏造數值）"""
     embed = NexusEmbed(
         title=f"🛡️ {symbol} 對沖防禦中心 (Tactical Hedging)",
         color=discord.Color.red(),
     )
+    ivr_str = f"{ivr:.1f}%" if ivr is not None else "--% (資料不足)"
     embed.add_field(
         name="📊 當前波動率狀態 (Volatility Context)",
-        value=f"* **IV Rank:** `{ivr:.1f}%`\n* **推薦防禦策略:** `{rec_strategy}`",
+        value=f"* **IV Rank:** `{ivr_str}`\n* **推薦防禦策略:** `{rec_strategy}`",
         inline=False,
     )
     embed.add_field(

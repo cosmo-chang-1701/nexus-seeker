@@ -5,6 +5,9 @@ import asyncio
 
 from cogs.embed_builders.scan_embeds import build_unified_radar_panel_embed
 
+# Discord Select 選項上限 25，扣掉「所有標籤 (不過濾)」後可放的使用者標籤數
+_MAX_TAG_OPTIONS = 24
+
 
 class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
     max_pain_threshold: discord.ui.TextInput = discord.ui.TextInput(
@@ -173,8 +176,11 @@ class UnifiedRadarView(discord.ui.View):
 
             if tags:
                 if not self.tag_selector_added:
+                    # Discord Select 上限 25 個選項，其中一格保留給「所有標籤」，
+                    # 使用者標籤最多只能放 24 個；取 25 個會組出 26 個選項被 API 拒絕。
                     tag_options = [
-                        discord.SelectOption(label=t, value=t) for t in tags[:25]
+                        discord.SelectOption(label=t, value=t)
+                        for t in tags[:_MAX_TAG_OPTIONS]
                     ]
                     tag_options.insert(
                         0,

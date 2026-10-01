@@ -791,7 +791,9 @@ def build_radar_scan_embed(
                 else "POSITIVE_GAMMA",
                 term_structure=term_structure,
                 uoa_institutional_short_call=uoa_institutional_short_call,
-                iv_rank=iv_rank_val / 100.0 if iv_rank_val > 1.0 else iv_rank_val,
+                # iv_rank_val 上游一律為 0~100 百分點 (IVMetrics 已 clamp)；
+                # 舊的 `> 1.0 才除 100` 啟發式會把 IVR 0.9% 當成 90%。
+                iv_rank=iv_rank_val / 100.0,
                 max_pain_deviation_pct=dist_pct / 100.0,
                 can_trade_spreads=ctx_db.can_trade_spreads,
                 cash_reserve_protection=ctx_db.cash_reserve_protection,
