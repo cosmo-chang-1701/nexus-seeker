@@ -331,6 +331,10 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     # embed 呈現層 (仍僅依賴 scenario+action 決定顏色/文案)。未觸發任何分層
     # 的指令 (例如常規配置超額 REDUCE) 維持 None。
     exit_tier: Optional[str]
+    # 宏觀逃頂前瞻防禦 (macro_top_escape_defense.py) 專屬：評分分級
+    # ("WATCH"/"ELEVATED"/"CRITICAL")。三級動作相同 (買保護性 Put)，派發端以此
+    # 納入 dedup key，讓同日升級仍能再推播一次。
+    macro_tier: Optional[str]
     # 交易策略引擎 (regime_classifier.py / left_side_entry.py) 產生此指令時所依據的
     # DynamicRegime 值（例如 "REGIME_I_LEFT_CATCH"）。僅 trading_strategy=DYNAMIC 時
     # 產生的指令會攜帶此欄位，供呈現層顯示「當前 Regime」與分析用途；純右側/左側

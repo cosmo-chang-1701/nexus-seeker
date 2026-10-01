@@ -109,15 +109,14 @@ async def evaluate_margin_defense_impl(
     動作: 逐一檢查每檔 SATELLITE 持倉是否「結構性無勝率」(結構性破位 或 主力空頭封殺)。
     無勝率者強制 100% 轉倉至 BOXX 鎖定無風險利息 —— 因為大盤系統性風險發生時
     VOO 本身亦會同向下跌，唯有真正的現金等價物 BOXX 才能提供防禦；
-    仍有勝率的持倉維持不動，不強制減倉。日常的機會成本轉倉與核心衛星再平衡
-    (Scenario 2 / 3) 才以 VOO 作為預設閒置資金停泊區，兩者角色互不重疊。
+    仍有勝率的持倉維持不動，不強制減倉。
 
     此系統為現貨/純現金紙上帳戶模型，沒有真實券商槓桿或維持保證金資料，
     因此以 /stress_test 既有的現金緩衝算法作為保證金壓力代理指標。
 
-    already_flagged_symbols: 已被 Scenario 2 (機會成本轉倉) 或 Scenario 3
-    (核心衛星再平衡) 標記過的標的集合，會被跳過以避免同一標的同一輪次
-    收到互相矛盾的清倉指令。
+    already_flagged_symbols: 已被 Scenario 3 (核心衛星再平衡) 以實際減碼/
+    清倉指令標記過的標的集合 (HOLD／ADVISORY 告知卡不計入)，會被跳過以避免
+    同一標的同一輪次收到互相矛盾的清倉指令。
     """
     from market_analysis.index_microstructure import get_market_regime
 

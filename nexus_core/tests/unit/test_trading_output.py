@@ -1113,6 +1113,160 @@ async def test_monitor_real_portfolio_task_options_dry_run_off_sends_dm_for_opti
 
 
 @pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_macro_put_bypasses_options_dry_run_and_keys_by_tier() -> (
+    None
+):
+    """逃頂保護性 Put 是 opt-in 的純告知，OPTIONS_ROLLOVER_DRY_RUN=True 時仍應
+    推播；dedup key 納入 macro_tier，同日由 WATCH 升級至 CRITICAL 不會被
+    WATCH 已寫入的 key 擋下。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    from cogs.trading.portfolio_monitor import ny_tz as _ny_tz
+    from datetime import datetime as _datetime
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    cog.rollover_engine.evaluate_macro_top_escape_defense = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "SPY",
+                "action": "BUY_PROTECTIVE_PUT",
+                "sell_ratio": 0.0,
+                "target_core": "SPY",
+                "reason": "test reason",
+                "suggested_strategy": "BUY 3 × SPY PUT",
+                "scenario": "MACRO_TOP_ESCAPE_DEFENSE",
+                "instrument_type": "OPTIONS",
+                "macro_tier": "CRITICAL",
+            }
+        ]
+    )
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+    today_str = _datetime.now(_ny_tz).strftime("%Y%m%d")
+    base_key = (
+        f"rollover_alert_1_SPY_OPTIONS_MACRO_TOP_ESCAPE_DEFENSE_"
+        f"BUY_PROTECTIVE_PUT_{today_str}"
+    )
+    watch_key = f"{base_key}_WATCH"
+    save_kv_mock = AsyncMock()
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch(
+            "database.get_kv_cache",
+            side_effect=lambda key: 1 if key == watch_key else None,
+        ),
+        patch("database.save_kv_cache", save_kv_mock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch("config.OPTIONS_ROLLOVER_DRY_RUN", True),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    bot.queue_dm.assert_awaited_once()
+    saved_keys = [c.args[0] for c in save_kv_mock.await_args_list]
+    assert f"{base_key}_CRITICAL" in saved_keys
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_advisory_does_not_shield_margin_defense() -> (
+    None
+):
+    """多頭現貨一律走顧問路徑後，ADVISORY 告知卡不得讓保證金防禦跳過該標的
+    （與 HOLD 卡同理：告知不能蓋掉強制平倉防禦）；實際減碼指令仍要排除。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    margin_mock = AsyncMock(return_value=[])
+    cog.rollover_engine.evaluate_margin_defense = margin_mock  # type: ignore
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "ADVISORY",
+                "sell_ratio": 0.0,
+                "target_core": "NVDA",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+            },
+            {
+                "symbol": "TSLA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+            },
+        ]
+    )
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    margin_call = margin_mock.await_args
+    assert margin_call is not None
+    flagged = margin_call.kwargs["already_flagged_symbols"]
+    assert ("NVDA", "SPOT") not in flagged
+    assert ("TSLA", "SPOT") in flagged
+
+
+@pytest.mark.asyncio
 async def test_monitor_real_portfolio_task_notif_key_routes_margin_defense_vs_default() -> (
     None
 ):

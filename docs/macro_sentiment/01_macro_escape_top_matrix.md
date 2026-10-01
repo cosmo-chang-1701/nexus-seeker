@@ -172,7 +172,7 @@ flowchart TD
 | `_MACRO_ESCAPE_BREADTH_TRIGGER_RATIO`| `0.5` | 衛星持倉亢奮廣度門檻（超過 50% 標的觸頂則觸發因子） | `nexus_core/market_analysis/index_microstructure.py:937` |
 | `_FEAR_GREED_EXTREME_GREED_BOUND` | `75.0` | CNN 恐懼貪婪指數極度貪婪臨界值 | `nexus_core/market_analysis/constants.py:141` |
 | `_MACRO_TOP_ESCAPE_HEDGE_SYMBOL` | `"SPY"` | WATCH 級保護性 Put 的固定標的（大盤 ETF 而非個股） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_WATCH_TIER_HEDGE_RATIO` | `0.30` (30%) | WATCH 級對沖比例：對沖 30% 的組合 Beta 加權方向性曝險 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MACRO_TOP_ESCAPE_HEDGE_RATIO` | `0.30` (30%) | 對沖比例（WATCH／ELEVATED／CRITICAL 共用）：對沖 30% 的組合 Beta 加權方向性曝險 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA` | `-0.275` | WATCH 級建議合約 Delta 中位數（範圍 $-0.25\sim-0.30$） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MACRO_TOP_ESCAPE_PUT_DTE_MIN` / `_MAX` | `30` / `60` | WATCH 級建議合約 DTE 範圍 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_PROFIT_UNLOCK_TOLERANCE` | `0.005` (0.5%) | 衛星持倉現價逼近 Call Wall 的判斷容差 | `nexus_core/market_analysis/dynamic_rollover/constants.py:14` |
@@ -198,7 +198,7 @@ flowchart TD
 - **衛星持倉空集合**：當使用者投資組合中無任何 `SATELLITE` 資產時，`satellite_euphoria_ratio` 返回 `None`，五因子模型自動無縫退化為四因子模型，門檻常數保持一致。
 
 ### 5.3 減碼執行衝突隔離（Conflict Isolation）
-- 在 `dynamic_rollover` 排程派發器中，情境 6 刻意排在最後順序（3 → 2 → 5 → 4 → 6）。
+- 在 `dynamic_rollover` 排程派發器中，情境 6 刻意排在最後順序（3 → 1 → 4 → 6）。
 - 若某檔標的已在情境 3（Call Wall 亢奮獲利鎖定）、情境 4（流動性危機停損）或情境 5（核心配置超額）被標記處理，情境 6 自動將該標的加入 `already_flagged_symbols` 跳過，嚴禁對同一標的下發相互矛盾的指令。PROTECTIVE_PUT 分支是組合層級的單一建議、不逐一針對個別持倉，不受 `already_flagged_symbols` 篩選。
 - **不減碼**：情境 6 只建議組合層級的保護性 Put（固定標的 `SPY`），不針對個別持倉，因此與 Buy & Hold 策略相容。
 
@@ -207,6 +207,11 @@ flowchart TD
 
 ### 5.5 WATCH 級組合已淨平/淨空的 Fail-Safe
 `total_weighted_delta <= 0` 代表組合已無下檔方向性曝險（淨平或淨空），此時買進保護性 Put 在邏輯上是「加碼防護一個不存在的風險」，語意矛盾。系統偵測到此情形時直接回傳空指令列表，不建議任何動作。
+
+### 5.6 分級文案、同日升級與推播閘門
+- **三級同一動作、文案分級**：WATCH／ELEVATED／CRITICAL 都建議同一筆 SPY 保護性 Put（對沖比例同為 `_MACRO_TOP_ESCAPE_HEDGE_RATIO`），只有判讀文案隨分級升高（WATCH「前哨訊號初現」、ELEVATED「警戒升高」、CRITICAL「確認級」）。分級加碼比例沒有校準依據，因此不設。
+- **同日升級再推播**：指令攜帶 `macro_tier`，派發端把它併入每日 dedup key；同日由 WATCH 升至 ELEVATED／CRITICAL 會再推播一次。`total_weighted_delta` 已含使用者登錄的期權部位（含先前買進的 HEDGE Put），因此升級後重算的數量是既有對沖之上的增量。
+- **不受 `OPTIONS_ROLLOVER_DRY_RUN` 攔截**：該閘門針對尚未經實際流量驗證的期權轉倉指令；逃頂保護性 Put 是使用者 opt-in 的純告知（無執行按鈕），一律實際推播。
 
 ---
 
@@ -223,7 +228,7 @@ flowchart TD
   - `evaluate_macro_top_escape_defense_impl`: 情境 6 三級階梯化動作分派
   - `_build_protective_put_instruction`: WATCH 級保護性 Put 倉位計算與指令組裝
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`
-  - 具名常數 `_MACRO_TOP_ESCAPE_HEDGE_SYMBOL`、`_WATCH_TIER_HEDGE_RATIO`、`_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA`、`_MACRO_TOP_ESCAPE_PUT_DTE_MIN`／`_MAX`
+  - 具名常數 `_MACRO_TOP_ESCAPE_HEDGE_SYMBOL`、`_MACRO_TOP_ESCAPE_HEDGE_RATIO`、`_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA`、`_MACRO_TOP_ESCAPE_PUT_DTE_MIN`／`_MAX`
 - `nexus_core/database/user_settings.py`
   - `UserContext.total_weighted_delta`：WATCH 級 Put 倉位計算的組合 Beta 加權 Delta 來源
 - `nexus_core/cogs/embed_builders/rollover_embeds.py`

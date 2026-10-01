@@ -136,6 +136,8 @@ async def test_evaluate_macro_top_escape_defense_watch_tier_buys_protective_put(
     assert "trade_category" in ins["reason"] and "HEDGE" in ins["reason"]
     # Q = ceil(1000 * 0.30 / (0.275 * 100)) = ceil(10.909) = 11
     assert "11" in ins["suggested_strategy"]
+    assert ins["macro_tier"] == "WATCH"
+    assert "前哨階段訊號初現" in ins["reason"]
 
 
 @pytest.mark.asyncio
@@ -211,6 +213,9 @@ async def test_evaluate_macro_top_escape_defense_elevated_tier_buys_protective_p
     assert result[0]["symbol"] == "SPY"
     assert result[0]["action"] == "BUY_PROTECTIVE_PUT"
     assert result[0]["sell_ratio"] == 0.0
+    assert result[0]["macro_tier"] == "ELEVATED"
+    assert "警戒升高" in result[0]["reason"]
+    assert "前哨" not in result[0]["reason"]
 
 
 @pytest.mark.asyncio
@@ -253,6 +258,10 @@ async def test_evaluate_macro_top_escape_defense_critical_tier_buys_protective_p
     assert result[0]["sell_ratio"] == 0.0
     assert result[0]["scenario"] == "MACRO_TOP_ESCAPE_DEFENSE"
     assert "BOXX" not in result[0]["reason"]
+    # CRITICAL 不得沿用 WATCH 的「尚不足以判定逃頂」文案。
+    assert result[0]["macro_tier"] == "CRITICAL"
+    assert "確認級" in result[0]["reason"]
+    assert "前哨" not in result[0]["reason"]
 
 
 @pytest.mark.asyncio

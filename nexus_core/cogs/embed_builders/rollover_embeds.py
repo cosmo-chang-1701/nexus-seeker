@@ -1055,7 +1055,8 @@ def create_protective_put_embed(
     suggested_strategy: str,
 ) -> discord.Embed:
     """
-    產生宏觀逃頂前瞻防禦 WATCH 級「保護性 Put」的專屬 Embed。
+    產生宏觀逃頂前瞻防禦「保護性 Put」的專屬 Embed (WATCH／ELEVATED／CRITICAL
+    共用；分級判讀文案在 reason 內)。
 
     刻意不重用 create_dynamic_rollover_embed：本指令不賣出任何既有部位、沒有
     「賣出來源 → 買進目標」的轉倉框架，而是建議在大盤 ETF 上**新開**一筆
@@ -1071,7 +1072,7 @@ def create_protective_put_embed(
 
     safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
     embed.description = (
-        "**🛡️【建議動作：買進保護性 Put】前哨訊號初現，保留 100% 上檔曝險，"
+        "**🛡️【建議動作：買進保護性 Put】保留 100% 上檔曝險，"
         "改以買方合約鎖住下檔**"
         f"\n\n{safe_reason}"
     )

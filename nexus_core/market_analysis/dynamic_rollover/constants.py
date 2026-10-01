@@ -152,7 +152,7 @@ _MACRO_TOP_ESCAPE_HEDGE_SYMBOL: str = (
     "SPY"  # 大盤 ETF 而非個股：逃頂訊號是系統性的，指數 Put 的流動性與價差優於
     # 個股。沿用 market_analysis/hedging.py 既有以 SPY 作為組合對沖代理的慣例。
 )
-_WATCH_TIER_HEDGE_RATIO: float = 0.30  # 對沖比例：對沖 30% 的組合方向性曝險
+_MACRO_TOP_ESCAPE_HEDGE_RATIO: float = 0.30  # 對沖比例：對沖 30% 的組合方向性曝險
 _MACRO_TOP_ESCAPE_PUT_TARGET_DELTA: float = (
     -0.275  # 建議合約 Delta 中位數 (-0.25 ~ -0.30)，成本效率與保護力的平衡點
 )

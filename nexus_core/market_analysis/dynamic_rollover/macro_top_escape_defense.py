@@ -10,18 +10,16 @@ from .constants import (
     _MACRO_TOP_ESCAPE_PUT_TARGET_DELTA,
     _MACRO_TOP_ESCAPE_PUT_TIERS,
     _PROFIT_UNLOCK_TOLERANCE,
-    _WATCH_TIER_HEDGE_RATIO,
+    _MACRO_TOP_ESCAPE_HEDGE_RATIO,
 )
 from .models import RolloverInstruction, RolloverScenario
 
-
-class _MacroTopEscapeDefenseMixin:
-    """邏輯 (6)：宏觀逃頂前瞻防禦 (Macro Top-Escape Anticipatory Defense)。
-
-    本情境不像 Scenario 3/4 需要共用 _compute_structural_breakdown_signals 等
-    輔助方法，保留此空殼類別僅為與其餘情境的檔案結構維持一致，供
-    __init__.py 的 DynamicRolloverEngine 統一以 mixin 組裝方式繼承。
-    """
+# 三級動作相同 (買保護性 Put、對沖比例相同)，只有判讀文案隨分級升高。
+_TIER_ASSESSMENT_TEXT: Dict[str, str] = {
+    "WATCH": "前哨階段訊號初現，尚不足以判定真正逃頂。",
+    "ELEVATED": "多項逃頂因子同時亮起，警戒升高。",
+    "CRITICAL": "逃頂評分達確認級，下檔風險顯著升高。",
+}
 
 
 def _compute_satellite_euphoria_ratio(
@@ -67,19 +65,23 @@ def _compute_satellite_euphoria_ratio(
 def _build_protective_put_instruction(
     user_ctx: Any,
     score: int,
+    tier: str,
     tier_title: str,
     factor_lines: str,
     flagged: set,
 ) -> List[RolloverInstruction]:
-    """WATCH 級的核心設計：不減碼，改買保護性 Put，保留 100% 上檔曝險。
+    """WATCH／ELEVATED／CRITICAL 共用：不減碼，改買保護性 Put，保留 100% 上檔曝險。
 
-    Q_put = ceil((Δ_β-weighted × _WATCH_TIER_HEDGE_RATIO) / (|Δ_put| × 100))
+    Q_put = ceil((Δ_β-weighted × _MACRO_TOP_ESCAPE_HEDGE_RATIO) / (|Δ_put| × 100))
 
     Δ_β-weighted 直接複用 `user_ctx.total_weighted_delta`（database/user_settings.py，
     Beta 加權 Delta 的既有單一權威來源，`market_analysis/hedging.py` 對沖建議
     引擎已採同一欄位），避免另立第二套組合曝險計算。標的固定為
     _MACRO_TOP_ESCAPE_HEDGE_SYMBOL (SPY)，沿用 hedging.py 既有以 SPY 作為組合
     對沖代理的慣例——逃頂訊號是系統性的，指數 Put 的流動性與價差優於個股。
+
+    total_weighted_delta 已含使用者登錄的期權部位 (含先前買進的 HEDGE Put)，
+    因此同日由 WATCH 升級後重算的數量，是在既有對沖之上的增量。
 
     組合已淨平/淨空 (total_weighted_delta <= 0) 時無下檔方向性曝險可對沖，
     回傳空列表 (fail-safe，避免建議一筆語意上矛盾的「加碼防護」)。
@@ -91,7 +93,7 @@ def _build_protective_put_instruction(
         return []
 
     put_qty = math.ceil(
-        (total_weighted_delta * _WATCH_TIER_HEDGE_RATIO)
+        (total_weighted_delta * _MACRO_TOP_ESCAPE_HEDGE_RATIO)
         / (abs(_MACRO_TOP_ESCAPE_PUT_TARGET_DELTA) * 100.0)
     )
     if put_qty < 1:
@@ -101,10 +103,12 @@ def _build_protective_put_instruction(
         "🧭 **宏觀逃頂前瞻防禦 (Macro Top-Escape Anticipatory Defense)**\n"
         f"綜合評分：{tier_title} ({score} 分)\n"
         f"{factor_lines}\n"
-        "前哨階段訊號初現，尚不足以判定真正逃頂，減碼會放棄上檔曝險；"
+        f"{_TIER_ASSESSMENT_TEXT.get(tier, '')}"
+        "系統以買入並持有為主，減碼會放棄上檔曝險；"
         f"改為買進 {_MACRO_TOP_ESCAPE_HEDGE_SYMBOL} 保護性 Put，"
-        f"對沖組合 Beta 加權 Delta 的 {_WATCH_TIER_HEDGE_RATIO:.0%}，"
-        "保留 100% 上檔曝險的同時鎖住下檔。\n"
+        f"對沖組合 Beta 加權 Delta 的 {_MACRO_TOP_ESCAPE_HEDGE_RATIO:.0%}，"
+        "保留 100% 上檔曝險的同時鎖住下檔。"
+        "已登錄為 HEDGE 的部位已計入組合 Delta，本次數量是在既有對沖之上的增量。\n"
         f"⚠️ 請以 /add_trade 登錄本筆合約，並將 trade_category 設為 `HEDGE`"
         "——分類錯誤會讓對沖績效引擎誤判為方向性做空部位，之後在多頭共振訊號"
         "出現時建議您平掉自己的保護。"
@@ -129,12 +133,12 @@ def _build_protective_put_instruction(
             "instrument_type": "OPTIONS",
             "direction": "BTO",
             "opt_type": "PUT",
+            "macro_tier": tier,
         }
     ]
 
 
 async def evaluate_macro_top_escape_defense_impl(
-    engine: Any,
     get_full_user_context: Any,
     user_id: int,
     portfolio_assets: List[Dict[str, Any]],
@@ -221,5 +225,5 @@ async def evaluate_macro_top_escape_defense_impl(
     flagged = already_flagged_symbols or set()
     factor_lines = "\n".join(f" ├─ {name}: {val}" for name, val in factors)
     return _build_protective_put_instruction(
-        user_ctx, score, tier_title, factor_lines, flagged
+        user_ctx, score, tier, tier_title, factor_lines, flagged
     )

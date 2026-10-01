@@ -29,6 +29,7 @@ from market_analysis.dynamic_rollover import (
 )
 from market_analysis.dynamic_rollover.models import (
     DynamicRegime,
+    RolloverScenario,
     TradingStrategyMode,
 )
 from market_analysis.dynamic_rollover.constants import (
@@ -1047,13 +1048,13 @@ class PortfolioMonitorCog(commands.Cog):
 
                     # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 3 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
-                    # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
-                    # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的
-                    # 強制平倉防禦警報。
+                    # 僅排除有實際賣出/減碼動作者：Scenario 3 的 HOLD 安心防守卡
+                    # 與 ADVISORY 位階告知卡都只是告知，不應在大盤觸發系統性
+                    # 保證金風控紅線時，silently 蓋掉更高等級的強制平倉防禦警報。
                     already_flagged = {
                         (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
-                        if ins.get("action") != "HOLD"
+                        if ins.get("action") not in ("HOLD", "ADVISORY")
                     }
                     rebalance_instructions += (
                         await self.rollover_engine.evaluate_margin_defense(
@@ -1063,8 +1064,8 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在六大情境的最後一位
-                    # (3→2→5→4→6)。本情境是信心度最低、最具推測性的觸發
+                    # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在各情境的最後一位
+                    # (3→1→4→6)。本情境是信心度最低、最具推測性的觸發
                     # (機率性組合評分 vs. 其餘情境已確認的價格/保證金破位)，
                     # 必須確保不會搶在更確定的訊號之前對同一標的下指令；沿用
                     # 累積的 already_flagged 集合，保證 Scenario 3-4 對任一
@@ -1195,6 +1196,10 @@ class PortfolioMonitorCog(commands.Cog):
                                 f"advisory_exit_{u_id}_{ins['symbol']}_"
                                 f"{ins.get('exit_tier') or 'NA'}_{today_str}"
                             )
+                        if ins.get("macro_tier"):
+                            # 逃頂防禦三級動作相同，納入分級才能讓同日由 WATCH
+                            # 升級至 ELEVATED／CRITICAL 時再推播一次。
+                            dedup_key += f"_{ins['macro_tier']}"
                         if scenario == "COVERED_CALL_PROFIT_LOCK":
                             # 同一標的可能同時存在多筆不同履約價/到期日/類型的賣方
                             # 期權，通用 dedup_key 僅以 (symbol, action) 區分會讓
@@ -1306,7 +1311,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 pyramid_add_plan=ins.get("pyramid_add_plan"),
                             )
                         elif ins.get("action") == "BUY_PROTECTIVE_PUT":
-                            # 宏觀逃頂前瞻防禦 WATCH 級：買保護性 Put，不賣出
+                            # 宏觀逃頂前瞻防禦：買保護性 Put，不賣出
                             # 任何既有部位，沒有第二個轉倉標的，理由同上不套用
                             # 通用轉倉框架，也不附加互動按鈕（買方合約需自行
                             # 於券商終端下單，無法透過 RolloverActionView 試算）。
@@ -1402,10 +1407,15 @@ class PortfolioMonitorCog(commands.Cog):
                             == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
                             and config.REGIME_III_B_DRY_RUN
                         )
+                        # 逃頂保護性 Put 是使用者 opt-in 的純告知 (無執行按鈕、
+                        # 需自行下單)，不屬於上述「尚未驗證的期權轉倉指令」，
+                        # 不受 OPTIONS_ROLLOVER_DRY_RUN 攔截。
                         if (
                             (
                                 instrument_type == "OPTIONS"
                                 and config.OPTIONS_ROLLOVER_DRY_RUN
+                                and scenario
+                                != RolloverScenario.MACRO_TOP_ESCAPE_DEFENSE.value
                             )
                             or is_short_entry_dry_run
                             or is_pyramid_add_dry_run
