@@ -322,6 +322,68 @@ def test_scrape_liquidity_closes_browser_on_exception() -> None:
     mock_cm.mock_browser.close.assert_called_once()
 
 
+class _LiquidityPlaywrightMock:
+    async def __aenter__(self) -> Any:
+        mock_p = MagicMock()
+        mock_browser = AsyncMock()
+        mock_p.chromium.launch = AsyncMock(return_value=mock_browser)
+        return mock_p
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        pass
+
+
+def test_scrape_liquidity_ted_uses_cp_minus_tbill_on_common_date() -> None:
+    """TED = DCPF3M − DTB3，取兩序列共同的最新日期（DCPF3M 最新一筆尚無對應 DTB3）。"""
+    series = {
+        "DCPF3M": [("2026-10-01", 4.40), ("2026-09-30", 4.35), ("2026-09-29", 4.30)],
+        "DTB3": [("2026-09-30", 4.10), ("2026-09-29", 4.05)],
+        "BAMLH0A0HYM2": [("2026-10-01", 3.05)],
+    }
+
+    async def fake_fetch(series_id: str, context: Any) -> list[tuple[str, float]]:
+        return series[series_id]
+
+    with (
+        patch(
+            "playwright.async_api.async_playwright",
+            return_value=_LiquidityPlaywrightMock(),
+        ),
+        patch("playwright_stealth.Stealth.apply_stealth_async", new=AsyncMock()),
+        patch("local_api.macro._fetch_fred_series", side_effect=fake_fetch),
+    ):
+        response = client.get("/api/v1/scrape/macro/liquidity")
+
+    data = response.json()["data"]
+    assert data["is_fallback"] is False
+    assert data["ted_as_of"] == "2026-09-30"
+    assert data["cp_fin_3m"] == 4.35
+    assert data["dtb3"] == 4.10
+    assert data["ted_spread"] == 0.25
+    assert data["high_yield_spread"] == 3.05
+
+
+def test_scrape_liquidity_no_common_date_is_fallback() -> None:
+    async def fake_fetch(series_id: str, context: Any) -> list[tuple[str, float]]:
+        return {"DCPF3M": [("2026-10-01", 4.4)], "DTB3": [("2026-09-30", 4.1)]}.get(
+            series_id, []
+        )
+
+    with (
+        patch(
+            "playwright.async_api.async_playwright",
+            return_value=_LiquidityPlaywrightMock(),
+        ),
+        patch("playwright_stealth.Stealth.apply_stealth_async", new=AsyncMock()),
+        patch("local_api.macro._fetch_fred_series", side_effect=fake_fetch),
+    ):
+        response = client.get("/api/v1/scrape/macro/liquidity")
+
+    data = response.json()["data"]
+    assert data["ted_spread"] is None
+    assert data["is_fallback"] is True
+
+
 def test_scrape_fedwatch_realtime_zq_calculation() -> None:
     # Atlanta Fed Excel 現為 Primary 來源，需讓 requests.get 失敗才會真正落到
     # ZQ 期貨階梯算式（Secondary）這條路徑，維持本測試原本的測試意圖。

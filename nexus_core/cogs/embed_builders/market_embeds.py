@@ -53,6 +53,59 @@ from market_analysis.sentiment.skew_taxonomy import (
 
 _UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
+# 雷達表格不定長欄位的單元格上限：單列不得因上游異常字串撐破 1024 字元的
+# field，否則 _safe_clamp_field_value 會在 code block 內硬切，表格失去閉合 `|`。
+_RADAR_STO_CELL_MAX_CHARS = 24
+_RADAR_FREE_TEXT_CELL_MAX_CHARS = 72
+
+
+def _clip_cell(text: str, max_chars: int) -> str:
+    """表格單元格長度防線：超長以 `…` 截斷，並移除會破壞表格欄位的 `|` 與換行。"""
+    cleaned = text.replace("|", "/").replace("\n", " ")
+    if len(cleaned) <= max_chars:
+        return cleaned
+    return cleaned[: max_chars - 1] + "…"
+
+
+def _format_sto_cell(items: Any, price: float, max_items: int = 2) -> str:
+    """把 STO / 物理封頂履約價清單格式化為 `C$365.0 / P$300.0 +N`。
+
+    - 只接受 dict 項目；依 (C/P, strike) 去重——同一履約價跨到期日只算一檔。
+    - 價外鎖死優先 (CALL 在現價之上、PUT 在現價之下)，同組內依距現價遠近排序。
+    - 無有效項目時回傳空字串，由呼叫端退回 density / N/A 路徑。
+    """
+    if not isinstance(items, list):
+        return ""
+    seen: set[tuple[str, float]] = set()
+    unique: list[tuple[str, float]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        strike = _safe_float(item.get("strike"), 0.0)
+        if not math.isfinite(strike) or strike <= 0:
+            continue
+        opt_type = "C" if str(item.get("type", "")).upper().startswith("C") else "P"
+        key = (opt_type, strike)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(key)
+    if not unique:
+        return ""
+
+    def _sort_key(entry: tuple[str, float]) -> tuple[int, float]:
+        opt_type, strike = entry
+        is_otm = (opt_type == "C" and strike > price) or (
+            opt_type == "P" and strike < price
+        )
+        distance = abs(strike - price) if price > 0 else strike
+        return (0 if is_otm else 1, distance)
+
+    unique.sort(key=_sort_key)
+    shown = " / ".join(f"{t}${k:.1f}" for t, k in unique[:max_items])
+    extra = len(unique) - max_items
+    return f"{shown} +{extra}" if extra > 0 else shown
+
 
 def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     """建立最大痛點分析 Embed。"""
@@ -908,9 +961,13 @@ def build_radar_scan_embed(
                 sqz_mom = _safe_float(mom_field, 0.0)
 
             # --- 新增：UOA Barrier Index (做市商實質封頂/地板) ---
+            # 封頂只認現價「上方」的 CALL、地板只認現價「下方」的 PUT，且取最近
+            # 的一檔；履約價已在現價另一側 (價內) 不構成阻力/支撐。
+            # 觸發時只把 SQZ 方向降級為中性，不改動能數值——表格、警示、戰術建議
+            # 共用同一個 sqz_mom，避免過去 `sqz_mom - 1.0` 造成的 1.0 落差。
             uoa_list_safe = r.get("uoa") or []
-            uoa_barrier_cap = None
-            uoa_barrier_floor = None
+            uoa_barrier_cap: Optional[float] = None
+            uoa_barrier_floor: Optional[float] = None
 
             for u in uoa_list_safe:
                 u_vol = float(u.get("volume", 0) or 0)
@@ -918,26 +975,26 @@ def build_radar_scan_embed(
                 u_type = u.get("type", "")
                 u_strike = float(u.get("strike", 0.0) or 0.0)
 
-                if u_oi > 0 and u_vol > 5 * u_oi and u_vol > 10000:
-                    if u_type == "CALL":
-                        uoa_barrier_cap = u_strike
-                    elif u_type == "PUT":
-                        uoa_barrier_floor = u_strike
+                if price_val > 0 and u_oi > 0 and u_vol > 5 * u_oi and u_vol > 10000:
+                    if u_type == "CALL" and u_strike > price_val:
+                        if uoa_barrier_cap is None or u_strike < uoa_barrier_cap:
+                            uoa_barrier_cap = u_strike
+                    elif u_type == "PUT" and 0 < u_strike < price_val:
+                        if uoa_barrier_floor is None or u_strike > uoa_barrier_floor:
+                            uoa_barrier_floor = u_strike
 
-            if uoa_barrier_cap and sqz_mom > 0:
-                sqz_mom = max(0.0, sqz_mom - 1.0)
+            if uoa_barrier_cap is not None and sqz_mom > 0:
                 if sqz_dir == "🟢":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 {sym}: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能評級已強制下調。"
+                    f"• 🧱 {sym}: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能方向已降級為中性。"
                 )
 
-            if uoa_barrier_floor and sqz_mom < 0:
-                sqz_mom = min(0.0, sqz_mom + 1.0)
+            if uoa_barrier_floor is not None and sqz_mom < 0:
                 if sqz_dir == "🔴":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 {sym}: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能評級已強制下調。"
+                    f"• 🧱 {sym}: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能方向已降級為中性。"
                 )
 
             # --- 新增：多週期 Max Pain 引力階梯 (Multi-DTE Gravity Filter) ---
@@ -993,33 +1050,75 @@ def build_radar_scan_embed(
                     f"• 🚨 {sym}: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
                 )
 
-            # 連動 GEX PutWall (做市商底牆)
-            if put_wall > 0 and price_val > 0 and not is_fixed_income:
-                has_putwall_warning = any(
-                    "PutWall" in msg for msg in insights if sym in msg
-                )
-                if not has_putwall_warning:
-                    pw_dist = (price_val - put_wall) / put_wall * 100
-                    if 0 <= pw_dist <= 2.0:
-                        insights.append(
-                            f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
-                        )
-                    elif pw_dist < 0 and net_gex < 0 and sqz_dir == "🔴":
-                        if vol_pcr is None or vol_pcr < 1.2:
-                            insights.append(
-                                f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
-                            )
+            # 連動 GEX PutWall (做市商底牆) / CallWall (做市商頂牆)
+            # 兩道牆的「逼近」判定各自獨立時，在窄幅履約價密集區會同時觸發多空
+            # 對立的警示 (例如 PW 327.5 / CW 330 / 現價 330.32)。兩者同時成立時以
+            # 區間相對位置 (Spot−PW)/(CW−PW) 決定只發哪一側；牆體倒掛 (CW≤PW)
+            # 時改以距離較近者為準。
+            walls_active = price_val > 0 and not is_fixed_income
+            pw_dist = (
+                (price_val - put_wall) / put_wall * 100
+                if walls_active and put_wall > 0
+                else None
+            )
+            has_putwall_warning = any(
+                "PutWall" in msg for msg in insights if sym in msg
+            )
+            pw_near = (
+                pw_dist is not None and 0 <= pw_dist <= 2.0 and not has_putwall_warning
+            )
+            cw_bullish = (
+                walls_active
+                and call_wall > 0
+                and price_val >= call_wall * 0.98
+                and sqz_mom > 0
+            )
+            cw_capped = (
+                walls_active
+                and call_wall > 0
+                and price_val >= call_wall
+                and sqz_mom <= 0
+            )
+            cw_near = cw_bullish or cw_capped
+            wall_pos_note = ""
+            if pw_near and cw_near:
+                if call_wall > put_wall:
+                    wall_pos = (price_val - put_wall) / (call_wall - put_wall)
+                    prefer_call_side = wall_pos >= 0.5
+                    wall_pos_note = f"，區間位置 {wall_pos:.0%}"
+                else:
+                    prefer_call_side = abs(price_val - call_wall) < abs(
+                        price_val - put_wall
+                    )
+                if prefer_call_side:
+                    pw_near = False
+                else:
+                    cw_bullish = cw_capped = False
 
-            # 連動 GEX CallWall (做市商頂牆)
-            if call_wall > 0 and price_val > 0 and not is_fixed_income:
-                if price_val >= call_wall * 0.98 and sqz_mom > 0:
+            if pw_near:
+                insights.append(
+                    f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f}{wall_pos_note})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
+                )
+            elif (
+                pw_dist is not None
+                and pw_dist < 0
+                and not has_putwall_warning
+                and net_gex < 0
+                and sqz_dir == "🔴"
+            ):
+                if vol_pcr is None or vol_pcr < 1.2:
                     insights.append(
-                        f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，提防軋空發動，現貨重砲攻擊。"
+                        f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                     )
-                elif price_val >= call_wall and sqz_mom <= 0:
-                    insights.append(
-                        f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，建議 Sell Put 獲利落袋。"
-                    )
+
+            if cw_bullish:
+                insights.append(
+                    f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f}{wall_pos_note})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，提防軋空發動，現貨重砲攻擊。"
+                )
+            elif cw_capped:
+                insights.append(
+                    f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}{wall_pos_note}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，建議 Sell Put 獲利落袋。"
+                )
 
             if psq_result and sqz_is_squeezing:
                 if sqz_mom > 0:
@@ -1187,21 +1286,19 @@ def build_radar_scan_embed(
                     break
 
             sto_uoa_items = [
-                u for u in uoa_list if "STO" in str(u.get("action", "")).upper()
+                u
+                for u in uoa_list
+                if isinstance(u, dict) and "STO" in str(u.get("action", "")).upper()
             ]
-            if sto_uoa_items:
-                sto_parts = []
-                for u in sto_uoa_items[:2]:
-                    u_t = "C" if str(u.get("type", "")).upper().startswith("C") else "P"
-                    u_k = float(u.get("strike", 0.0) or 0.0)
-                    sto_parts.append(f"{u_t}${u_k:.1f}")
-                sto_str = " / ".join(sto_parts)
-            elif radar_cache.get("sto_strikes"):
-                sto_str = str(radar_cache["sto_strikes"])
+            sto_cell = _format_sto_cell(sto_uoa_items, price_val) or _format_sto_cell(
+                radar_cache.get("sto_strikes"), price_val
+            )
+            if sto_cell:
+                sto_str = sto_cell
             else:
                 sto_density = radar_cache.get("straddle_sto_density")
                 if sto_density is not None:
-                    sto_str = f"{float(sto_density) * 100:.1f}%"
+                    sto_str = f"{_safe_float(sto_density) * 100:.1f}%"
 
             # 4.2 IV 階級、期限結構與策略匹配 (具備負 Gamma 踩踏區風控熔斷)
             is_iv_backwardation = term_structure > 1.05
@@ -1368,23 +1465,19 @@ def build_radar_scan_embed(
                 else:
                     tactical_adv = f"🔴 ${call_wall:.1f} 物理封頂，Sell Put 獲利落袋"
             elif put_wall > 0 and price_val < put_wall:
-                has_gex_prof = bool(
-                    (r.get("gex_profile_data") or {}).get("gex_profile")
-                )
+                # 「護航網」必須有實質支撐：正 Gamma 深度或 DTE≥7 機構買盤。
+                # 過去另含「有 GEX profile」(幾乎恆真) 與「IVR<60 且期限結構正常」
+                # (那是波動率環境，不是支撐)，使跌破底牆的標的仍被建議續抱。
                 if price_val >= anti_washout_stop and (
-                    has_positive_gamma_support
-                    or (
-                        iv_rank_val is not None
-                        and iv_rank_val < 60.0
-                        and term_structure <= 1.05
-                    )
-                    or has_gex_prof
+                    has_positive_gamma_support or has_dte7_institutional_buy_support
                 ):
                     tactical_adv = f"🟡 護航網支撐，現貨續抱，防守退至 ${anti_washout_stop:.2f} (嚴守15分K收盤)"
                 elif iv_rank_val is not None and iv_rank_val >= 80.0:
                     tactical_adv = f"🟡 跌破底牆，善用 {iv_rank_val:.0f}% IVR 做 Spread 防禦或暫泊 VOO"
+                elif anti_washout_stop > 0 and price_val >= anti_washout_stop:
+                    tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，負 Gamma Delta 拋售風險，嚴守 ${anti_washout_stop:.2f} (15分K收盤)"
                 else:
-                    tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，無 UOA 護航，資金轉移"
+                    tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，已破防守位，負 Gamma Delta 拋售風險"
             elif dist_pct <= -5.0:
                 tactical_adv = f"🟢 超跌磁吸，預期向 ${max_pain_strike:.1f} 收斂"
             elif dist_pct >= 10.0:
@@ -1409,16 +1502,8 @@ def build_radar_scan_embed(
                 skew_pct_str = f"{sp_disp} ({skew_val:+.2f}%)"
             else:
                 skew_pct_str = sp_disp
-            psq_dict = r.get("psq_result")
-            if not isinstance(psq_dict, dict):
-                psq_dict = {}
-            mom_raw = psq_dict.get("momentum")
-            if mom_raw is None:
-                mom_raw = psq_dict.get("momentum_value", 0.0)
-            sqz_mom_val = _safe_float(mom_raw, 0.0)
-            sqz_vec_str = (
-                f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom_val:+.1f}"
-            )
+            # 與上方警示共用同一個 sqz_mom，不再從 psq_result 重新解析
+            sqz_vec_str = f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom:+.1f}"
 
             # 標的異常與偏離度視覺強連動標示 (⚠️ 快速識別)
             is_high_risk_or_anomaly = (
@@ -1471,7 +1556,10 @@ def build_radar_scan_embed(
             )
             sym_cell_md = f"{risk_prefix}{freshness_prefix} {sym}".strip()
 
-            md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_str} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_str} | {tactical_adv} |"
+            sto_cell_md = _clip_cell(sto_str, _RADAR_STO_CELL_MAX_CHARS)
+            top_uoa_cell_md = _clip_cell(top_uoa_str, _RADAR_FREE_TEXT_CELL_MAX_CHARS)
+            tactical_cell_md = _clip_cell(tactical_adv, _RADAR_FREE_TEXT_CELL_MAX_CHARS)
+            md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_cell_md} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_cell_md} | {tactical_cell_md} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
 

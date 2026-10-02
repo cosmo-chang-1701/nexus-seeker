@@ -25,6 +25,51 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _fetch_fred_series(series_id: str, context: Any) -> list[tuple[str, float]]:
+    """下載 FRED CSV，回傳 (日期, 值) 清單，新到舊排序；缺值列 ("." 等) 略過。"""
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+    data: list[tuple[str, float]] = []
+    try:
+        page = await context.new_page()
+        try:
+            async with page.expect_download(timeout=15000) as download_info:
+                try:
+                    await page.goto(url)
+                except Exception as e:
+                    if "Download is starting" not in str(e):
+                        raise e
+            download = await download_info.value
+            path = await download.path()
+            with open(path, "r") as f:
+                lines = f.readlines()
+                for line in reversed(lines):
+                    parts = line.strip().split(",")
+                    if len(parts) >= 2:
+                        try:
+                            data.append((parts[0].strip(), float(parts[1].strip())))
+                        except ValueError:
+                            continue
+        finally:
+            await page.close()
+    except Exception:
+        pass
+    return data
+
+
+def _latest_common_observation(
+    minuend: list[tuple[str, float]], subtrahend: list[tuple[str, float]]
+) -> Optional[tuple[str, float, float]]:
+    """取兩條 FRED 序列「共同的最新日期」，回傳 (日期, minuend 值, subtrahend 值)。
+
+    兩條序列各取最後一筆會在發布時差 / 假日缺值時拿到不同日期的值相減。
+    """
+    sub_by_date = dict(subtrahend)
+    for obs_date, value in minuend:
+        if obs_date in sub_by_date:
+            return obs_date, value, sub_by_date[obs_date]
+    return None
+
+
 def _fedwatch_today() -> date:
     """FedWatch 判定「下一次 FOMC 會議」所用的今天日期。
 
@@ -307,39 +352,8 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
         "is_fallback": True,
     }
 
-    async def fetch_fred_csv_all(
-        series_id: str, context: Any
-    ) -> list[tuple[str, float]]:
-        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        data: list[tuple[str, float]] = []
-        try:
-            page = await context.new_page()
-            try:
-                async with page.expect_download(timeout=15000) as download_info:
-                    try:
-                        await page.goto(url)
-                    except Exception as e:
-                        if "Download is starting" not in str(e):
-                            raise e
-                download = await download_info.value
-                path = await download.path()
-                with open(path, "r") as f:
-                    lines = f.readlines()
-                    for line in reversed(lines):
-                        parts = line.strip().split(",")
-                        if len(parts) >= 2:
-                            try:
-                                data.append((parts[0].strip(), float(parts[1].strip())))
-                            except ValueError:
-                                continue
-            finally:
-                await page.close()
-        except Exception:
-            pass
-        return data
-
     async def fetch_fred_csv(series_id: str, context: Any) -> float | None:
-        data = await fetch_fred_csv_all(series_id, context)
+        data = await _fetch_fred_series(series_id, context)
         return data[0][1] if data else None
 
     async def fetch_cnn_fgi() -> float | None:
@@ -373,7 +387,7 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
                 await Stealth().apply_stealth_async(context)
 
                 rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
-                    fetch_fred_csv_all("RRPONTSYD", context),
+                    _fetch_fred_series("RRPONTSYD", context),
                     fetch_fred_csv("WALCL", context),
                     fetch_fred_csv("UNRATE", context),
                     fetch_fred_csv("SAHMREALTIME", context),
@@ -420,44 +434,18 @@ async def scrape_liquidity() -> dict[str, Any]:
 
     # 同 core_metrics：抓不到就是未知 (None + is_fallback)，不以 TED 0.15 冒充
     # ——core 端的流動性危機三值邏輯會把它當成「已知未達警戒」。
+    #
+    # TED = 3M AA 金融商業本票 (DCPF3M，無擔保銀行融資成本，LIBOR 停用後最接近
+    # 原 TED 定義的代理) − 3M T-Bill (DTB3)，取兩序列共同的最新日期。過去用
+    # SOFR90DAYAVG：有擔保回購利率且為「過去 90 天」平均，與前瞻的 DTB3 口徑
+    # 不同，降息/升息循環中會出現 −0.35 這種無意義的負值。
     fallback: dict[str, Any] = {
         "ted_spread": None,
-        "sofr_90": None,
+        "cp_fin_3m": None,
         "dtb3": None,
         "high_yield_spread": None,
         "is_fallback": True,
     }
-
-    async def fetch_fred_csv(series_id: str, context: Any) -> float | None:
-        url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
-        try:
-            page = await context.new_page()
-            try:
-                async with page.expect_download(timeout=15000) as download_info:
-                    try:
-                        await page.goto(url)
-                    except Exception as e:
-                        if "Download is starting" not in str(e):
-                            raise e
-                download = await download_info.value
-                path = await download.path()
-                val = None
-                with open(path, "r") as f:
-                    lines = f.readlines()
-                    for line in reversed(lines):
-                        parts = line.strip().split(",")
-                        if len(parts) >= 2:
-                            try:
-                                val = float(parts[1].strip())
-                                break
-                            except ValueError:
-                                continue
-            finally:
-                await page.close()
-            return val
-        except Exception:
-            pass
-        return None
 
     try:
         async with async_playwright() as p:
@@ -471,25 +459,28 @@ async def scrape_liquidity() -> dict[str, Any]:
                 )
                 await Stealth().apply_stealth_async(context)
 
-                sofr_90, dtb3, hy_spread = await asyncio.gather(
-                    fetch_fred_csv("SOFR90DAYAVG", context),
-                    fetch_fred_csv("DTB3", context),
-                    fetch_fred_csv("BAMLH0A0HYM2", context),
+                cp_series, tbill_series, hy_series = await asyncio.gather(
+                    _fetch_fred_series("DCPF3M", context),
+                    _fetch_fred_series("DTB3", context),
+                    _fetch_fred_series("BAMLH0A0HYM2", context),
                 )
             finally:
                 await browser.close()
 
-        if sofr_90 is None or dtb3 is None:
+        common = _latest_common_observation(cp_series, tbill_series)
+        if common is None:
             return {"status": "success", "data": fallback}
 
-        ted_spread = round(sofr_90 - dtb3, 4)
+        obs_date, cp_fin_3m, dtb3 = common
+        hy_spread = hy_series[0][1] if hy_series else None
 
         return {
             "status": "success",
             "data": {
-                "ted_spread": ted_spread,
-                "sofr_90": round(sofr_90, 4),
+                "ted_spread": round(cp_fin_3m - dtb3, 4),
+                "cp_fin_3m": round(cp_fin_3m, 4),
                 "dtb3": round(dtb3, 4),
+                "ted_as_of": obs_date,
                 "high_yield_spread": round(hy_spread, 4)
                 if hy_spread is not None
                 else None,
