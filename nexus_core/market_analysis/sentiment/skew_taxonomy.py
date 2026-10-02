@@ -42,6 +42,12 @@ SKEW_HIGH_DEFENSE_PERCENTILE = 90.0
 # - 三重結構性風險合流的 Skew 條件
 SKEW_TRIPLE_CONFLUENCE_PERCENTILE = 98.0
 
+# Polymarket 成交量加權「看多機率」分級（0~100）。`cogs/unified_terminal/utils.py`
+# 的「巨鯨看多／巨鯨偏空」標籤與 /x 的量價／預測市場背離共用，放在本 leaf
+# module 以免 embed 層與 unified_terminal 互相匯入。
+POLYMARKET_BULLISH_PCT = 55.0
+POLYMARKET_BEARISH_PCT = 45.0
+
 # 百分位缺失或越界時的中性值：落在所有尾端門檻之外，不觸發任何防禦動作。
 SKEW_NEUTRAL_PERCENTILE = 50.0
 

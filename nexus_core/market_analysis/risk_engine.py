@@ -410,6 +410,10 @@ def kelly_position_fraction(
     return max(0.0, min(kelly_f * kelly_scale, cap))
 
 
+# 期權決策數據降級 (IV/IVR/PCR 缺失、GEX 快取、結算日引力) 時的風險額度縮減係數。
+_DATA_DEGRADED_HAIRCUT: float = 0.5
+
+
 def optimize_position_risk(
     current_delta: float,
     unit_weighted_delta: float,
@@ -425,6 +429,8 @@ def optimize_position_risk(
     skew: float = 0.0,
     event_tte_hours: Optional[float] = None,
     vix_unknown: bool = False,
+    stock_iv_unknown: bool = False,
+    data_degraded_reasons: Optional[List[str]] = None,
 ) -> OptimizationResult:
     """NRO 風險優化器：根據宏觀環境與日曆事件計算安全持倉口數。
 
@@ -436,6 +442,12 @@ def optimize_position_risk(
         pcr: 買賣權比率。
         skew: 期權偏斜度。
         event_tte_hours: 距離重大事件 (如財報) 的剩餘小時數。
+        stock_iv_unknown: 個股真實 IV 取不到（`stock_iv` 只是佔位值）。賣方新倉
+            fail-closed 為 0 口——權利金與保證金都由 IV 推導，以佔位值算出的
+            口數沒有意義；其他方向視同一項資料降級 (×_DATA_DEGRADED_HAIRCUT)。
+        data_degraded_reasons: 期權決策數據的降級原因 (IVR／PCR 缺失、GEX 快取
+            降級、結算日引力等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
+            並以繁中原因列入 warnings。
     """
     if spy_price <= 0:
         return OptimizationResult(suggested_contracts=0, exposure_pct=0.0)
@@ -463,6 +475,13 @@ def optimize_position_risk(
                 exposure_pct=0.0,
                 warnings=["VIX Extreme: 做空新倉暫停（軋空／投降區）"],
             )
+
+    if stock_iv_unknown and intent == "PREMIUM_SELL":
+        return OptimizationResult(
+            suggested_contracts=0,
+            exposure_pct=0.0,
+            warnings=["個股 IV 資料不足：暫停賣方新倉 (fail-closed)"],
+        )
 
     if vix_unknown:
         # VIX 未知：不可用備援值冒充真實 VIX 去推導倉位 (fail-closed)。
@@ -528,6 +547,14 @@ def optimize_position_risk(
     if is_high_tail_risk:
         current_risk_limit *= 0.5  # Tail risk haircut
         warnings.append("尾端風險警告: Gamma 脆性高")
+
+    # 資料降級縮減：必須在 All-in 模式重設 current_risk_limit 之後套用，否則會被覆寫。
+    degraded = list(data_degraded_reasons or [])
+    if stock_iv_unknown:
+        degraded.insert(0, "個股 IV 缺失")
+    if degraded:
+        current_risk_limit *= _DATA_DEGRADED_HAIRCUT
+        warnings.append(f"期權數據降級（{'、'.join(degraded)}）：倉位減半")
 
     # 動態 Kelly 縮放：VIX 超過 upper_10 (29.5) 時，
     # 從 1/4 Kelly 向 1/2 Kelly 線性插值。

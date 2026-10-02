@@ -21,12 +21,17 @@ from market_analysis.index_microstructure import (
     interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
+    _ROOM_RISK_MULTIPLIER,
     _ROOM_STOP_ATR_15M_MULTIPLIER,
     _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER,
     compute_dynamic_room_threshold,
     compute_reference_stop,
     evaluate_wall_buffer,
     resolve_atr_15m,
+)
+from market_analysis.sentiment.max_pain import find_settlement_gravity
+from market_analysis.dynamic_rollover.constants import (
+    _ENTRY_VOLUME_SURGE_MULTIPLIER,
 )
 from market_analysis.dynamic_rollover.structural_signals import (
     _scan_gex_walls,
@@ -41,6 +46,8 @@ from cogs.embed_builders._embed_helpers import (
     _truncate_with_boundary,
 )
 from market_analysis.sentiment.skew_taxonomy import (
+    POLYMARKET_BEARISH_PCT,
+    POLYMARKET_BULLISH_PCT,
     SKEW_BULLISH_PERCENTILE,
     SKEW_DEFENSIVE_PERCENTILE,
     SKEW_DIVERGENCE_HIGH_PERCENTILE,
@@ -480,6 +487,30 @@ def create_strategic_dash_embed(
     return embed
 
 
+# 釘住效應判定帶寬：ATR₁D 不可得時，現價距 CallWall 在此百分比內即視為貼牆。
+_PIN_FALLBACK_BAND_PCT: float = 1.0
+
+# 15m 量比「放量」門檻；沿用右側鐵律條件一的放量倍數，避免兩處漂移。
+RVOL_EXPANSION_THRESHOLD: float = _ENTRY_VOLUME_SURGE_MULTIPLIER
+
+
+_POLY_PCT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s*(?:巨鯨看多|巨鯨偏空|中性分歧)")
+
+
+def _parse_poly_bullish_pct(summary: Any) -> Optional[float]:
+    """自 `calculate_polymarket_weighted_odds()` 的標籤字串解析加權看多機率 (0~100)。"""
+    if not summary:
+        return None
+    m = _POLY_PCT_PATTERN.search(str(summary))
+    if m is None:
+        return None
+    try:
+        val = float(m.group(1))
+    except ValueError:
+        return None
+    return val if 0.0 <= val <= 100.0 else None
+
+
 def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     """
     建構標的深度分析 (Tactical Deep-Dive) Embed.
@@ -622,19 +653,36 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 1.5 ⏱️ 15分鐘微觀結構 (15m Microstructure)
     atr_15m_display_val = _to_float_or_none(data.get("atr_15m"))
     if atr_15m_display_val is not None and atr_15m_display_val > 0:
-        atr_15m_line = f" ├─ 15m ATR (EMA14): ${atr_15m_display_val:.2f}"
+        # pandas_ta.atr 預設 mamode="rma"（Wilder 平滑），不是 EMA
+        atr_15m_line = f" ├─ 15m ATR (Wilder 14): ${atr_15m_display_val:.2f}"
     else:
-        atr_15m_line = " ├─ 15m ATR (EMA14): --"
+        atr_15m_line = " ├─ 15m ATR (Wilder 14): --"
 
+    from market_time import ny_tz as _ny_tz
+
+    _today_ny = datetime.now(_ny_tz).date()
     session_vwap_val = _to_float_or_none(data.get("session_vwap"))
     if session_vwap_val is not None and session_vwap_val > 0 and c_val > 0:
         vwap_dev_pct = (c_val - session_vwap_val) / session_vwap_val * 100
+        # 盤前／休市時 yfinance period=1d 回傳前一交易日，須標明不是今日錨點
+        _vwap_date = data.get("session_vwap_date")
+        vwap_date_note = (
+            f" [前一交易日 {_vwap_date:%m-%d}]"
+            if _vwap_date is not None
+            and hasattr(_vwap_date, "strftime")
+            and _vwap_date != _today_ny
+            else ""
+        )
         session_vwap_line = (
-            f" └─ 日內錨點 (Session VWAP): ${session_vwap_val:.2f}"
+            f" └─ 日內錨點 (Session VWAP): ${session_vwap_val:.2f}{vwap_date_note}"
             f" (現價偏離: {vwap_dev_pct:+.2f}%)"
         )
     else:
         session_vwap_line = " └─ 日內錨點 (Session VWAP): -- (現價偏離: --)"
+
+    # 供背離偵測（#情緒與邊緣偵測）沿用：最新已收盤 15m K 棒方向與有效量比
+    rvol_effective: Optional[float] = None
+    bar_body_dir = 0  # +1 實體陽線 / -1 實體陰線 / 0 未知或十字
 
     bar_15m = data.get("bar_15m")
     has_explicit_15m = (
@@ -698,6 +746,18 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             rvol_val = vol_15m / sma20_15m
         else:
             rvol_val = None
+        rvol_tod_val = (
+            _to_float_or_none(data.get("rvol_15m_tod"))
+            if rvol_val is not None
+            else None
+        )
+        tod_samples = int(_to_float(data.get("tod_sample_count"), 0.0))
+        _bt = data.get("bar_15m_time")
+        is_auction_bar = isinstance(_bt, datetime) and (
+            (_bt.hour, _bt.minute) in ((9, 30), (15, 45))
+        )
+        # 供下方背離偵測沿用同一個量比判定基準
+        rvol_effective = rvol_tod_val if rvol_tod_val is not None else rvol_val
 
         if (
             o_15m is None
@@ -721,8 +781,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if c_15m is not None and o_15m is not None and c_15m > 0 and o_15m > 0:
                 if c_15m > o_15m:
                     kline_type = "實體陽線"
+                    bar_body_dir = 1
                 elif c_15m < o_15m:
                     kline_type = "實體陰線"
+                    bar_body_dir = -1
                 else:
                     kline_type = "平盤十字"
                 o_str = f"{o_15m:.2f}"
@@ -730,11 +792,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 l_str = f"{l_15m:.2f}" if (l_15m is not None and l_15m > 0) else "--"
                 c_str = f"{c_15m:.2f}"
                 bar_time_val = data.get("bar_15m_time")
-                bar_time_str = (
-                    f" @{bar_time_val:%H:%M}"
-                    if isinstance(bar_time_val, datetime)
-                    else ""
-                )
+                if isinstance(bar_time_val, datetime):
+                    if bar_time_val.date() != _today_ny:
+                        bar_time_str = f" @{bar_time_val:%m-%d %H:%M} [前一交易日]"
+                    else:
+                        bar_time_str = f" @{bar_time_val:%H:%M}"
+                else:
+                    bar_time_str = ""
                 kline_line = f" ├─ 最新 15m K棒{bar_time_str}: 開 {o_str} | 高 {h_str} | 低 {l_str} | 收 {c_str} ({kline_type})"
             else:
                 kline_line = " ├─ 最新 15m K棒: -- (數據不全)"
@@ -753,12 +817,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ " + "；".join(bar_notes) + ")"
                 )
             elif rvol_val is not None:
-                if rvol_val >= 1.5:
-                    status_str = "🟢 放量突破 >= 1.5x"
+                # 量比只代表量能，不代表價位突破（是否站上阻力見 GEX 區塊）。
+                # 狀態優先以同時段量比判定：20 根滾動均量跨越日內 U 型量能曲線，
+                # 開盤／收盤競價 K 棒對它必然「放量」。
+                status_basis = rvol_tod_val if rvol_tod_val is not None else rvol_val
+                if status_basis >= RVOL_EXPANSION_THRESHOLD:
+                    status_str = f"🟢 放量 >= {RVOL_EXPANSION_THRESHOLD}x"
                 else:
-                    status_str = "❌ 缺乏放量代償 < 1.5x"
+                    status_str = f"❌ 缺乏放量代償 < {RVOL_EXPANSION_THRESHOLD}x"
+                tod_str = ""
+                if rvol_tod_val is not None:
+                    tod_str = (
+                        f"｜同時段量比 {rvol_tod_val:.2f}x"
+                        f" (前 {tod_samples} 日同時段)"
+                    )
+                elif is_auction_bar:
+                    tod_str = "｜⚠ 開盤／收盤競價時段，量比天然偏高"
                 rvol_line = (
-                    f" ├─ 即時量比 (RVOL_15m): {rvol_val:.2f}x (狀態: {status_str})"
+                    f" ├─ 即時量比 (RVOL_15m): {rvol_val:.2f}x{tod_str}"
+                    f" (狀態: {status_str})"
                 )
             else:
                 rvol_line = " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)"
@@ -855,6 +932,36 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         divergence = "情緒背離 (散戶恐慌 vs 權利金便宜)"
         action = "考慮賣出賣權 (Cash Secured Put)"
 
+    # 「同步」只能代表「已判定且一致」：Skew 分位或 PCR 缺失時上方結構性分支
+    # 全數跳過，舊版仍印「同步」等於把「沒資料」說成「沒背離」。
+    structural_inputs_missing = skew_percentile is None or pcr_val_for_div is None
+    divergence_data_missing = False
+    if divergence == "同步":
+        # 參考級：已收盤 15m 實體 K 棒放量方向 vs Polymarket 加權看多機率。
+        # Polymarket 多為目標價型合約，Yes 機率≠方向偏好，因此只作參考，不觸發
+        # is_structural_divergence 與下方的結構背離 overlay。
+        poly_pct = _parse_poly_bullish_pct(data.get("polymarket_summary") or poly_odds)
+        is_volume_expansion = (
+            rvol_effective is not None and rvol_effective >= RVOL_EXPANSION_THRESHOLD
+        )
+        ref_note = ""
+        if is_volume_expansion and poly_pct is not None:
+            if bar_body_dir > 0 and poly_pct <= POLYMARKET_BEARISH_PCT:
+                ref_note = f"量價偏多 vs Polymarket 偏空 ({poly_pct:.1f}%)"
+            elif bar_body_dir < 0 and poly_pct >= POLYMARKET_BULLISH_PCT:
+                ref_note = f"量價偏空 vs Polymarket 偏多 ({poly_pct:.1f}%)"
+        if ref_note:
+            divergence = f"量價／預測市場背離（參考）：{ref_note}"
+            action = (
+                "Polymarket 多為目標價合約，機率≠方向偏好；僅供參考，勿單獨據以操作"
+            )
+            if structural_inputs_missing:
+                action += "（Skew 分位／PCR 缺失，結構背離未判定）"
+        elif structural_inputs_missing:
+            divergence_data_missing = True
+            divergence = "資料不足（Skew 分位／PCR 缺失）"
+            action = "數據不足，不做結構背離判定"
+
     skew_color = (
         "\u001b[1;35m"
         if skew_percentile is not None and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
@@ -873,7 +980,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else "\u001b[1;33m"
         )
     )
-    divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
+    if divergence_data_missing:
+        divergence_color = "\u001b[1;30m"
+    elif divergence.startswith("量價／預測市場背離"):
+        divergence_color = "\u001b[1;33m"
+    else:
+        divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
 
     skew_val_str = f"{skew_val:.2f}%" if skew_val is not None else "--%"
     skew_per_str = f"{skew_percentile:.1f}%" if skew_percentile is not None else "--%"
@@ -1283,6 +1395,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                     put_wall_float = _to_float(gex_putwall, 0.0) if has_putwall else 0.0
                     put_reanchored = False
+                    # 下檔／上檔兩個區塊延後到上檔空間算完才輸出：「進場甜蜜點」與盈虧比
+                    # 必須和 CallWall 空間交叉判定（docs/strategies/06 §5）。
+                    put_block_items: Optional[List[str]] = None
+                    call_block_items: Optional[List[str]] = None
+                    sweet_spot_idx: Optional[int] = None
+                    sweet_spot_prefix = ""
+                    put_stop_for_rr = 0.0
+                    alt_stop_for_rr = 0.0
+                    alt_anchor_for_rr = 0.0
+                    upside_room_pct: Optional[float] = None
+                    upside_threshold_pct: Optional[float] = None
 
                     if (
                         effective_c_val > 0
@@ -1392,10 +1515,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"{abs(put_buffer_pct):.2f}%{put_space_flag}"
                                 )
                             elif put_buffer_eval.state == "SWEET_SPOT":
-                                put_items.append(
+                                sweet_spot_prefix = (
                                     f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag} ✅ 進場甜蜜點"
+                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}"
                                 )
+                                sweet_spot_idx = len(put_items)
+                                put_items.append(f"{sweet_spot_prefix} ✅ 進場甜蜜點")
                             elif put_buffer_eval.state == "TOO_TIGHT":
                                 # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
                                 # 有公式卻無數值的誤導文案——該情境走的是降級的
@@ -1472,15 +1597,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 / effective_c_val
                                 * 100
                             )
+                            put_stop_for_rr = structural_stop
                             stop_item = (
                                 f"結構停損 (PutWall−0.5×ATR₁₅ₘ): "
                                 f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
                                 f"{fallback_marker}"
                             )
                             # docs/microstructure/02 §7：PutWall 定義統一為淨 GEX
-                            # 前須先經 calibration 比對，閘門與停損一律仍以 edge
-                            # PutWall 為準；此處只揭露錨點落在助跌區的風險，並列
-                            # 以淨 GEX 最大支撐為錨的參考停損，供使用者自行判斷。
+                            # 前須先經 calibration 比對，引擎閘門與停損一律仍以
+                            # edge PutWall 為準。PutWall 落在助跌區時呈現上改以
+                            # 淨 GEX 最大支撐為錨的停損作主行，閘門停損降為次行。
                             if alt_net_supp > 0:
                                 alt_stop = compute_reference_stop(
                                     effective_c_val, alt_net_supp, atr_15m_val, "LONG"
@@ -1488,11 +1614,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 alt_stop_pct = (
                                     (effective_c_val - alt_stop) / effective_c_val * 100
                                 )
-                                stop_item += (
-                                    "\n │  ⚠ 停損錨點位於淨 GEX 助跌區，"
-                                    "緩衝判定與停損仍以 PutWall 為準"
-                                    f"\n │  參考：以淨 GEX 最大支撐 ${alt_net_supp:.2f} 為錨 "
-                                    f"→ ${alt_stop:.2f} (↓{alt_stop_pct:.2f}%)"
+                                alt_stop_for_rr = alt_stop
+                                alt_anchor_for_rr = alt_net_supp
+                                stop_item = (
+                                    f"參考停損 (淨 GEX 支撐 ${alt_net_supp:.2f}−0.5×ATR₁₅ₘ): "
+                                    f"${alt_stop:.2f} (↓{alt_stop_pct:.2f}%)"
+                                    f"\n │  引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): "
+                                    f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
+                                    f"{fallback_marker}"
+                                    "\n │  ⚠ PutWall 位於淨 GEX 助跌區；緩衝判定與引擎"
+                                    "閘門仍以 PutWall 為準（PutWall 定義待校準）"
                                 )
                             put_items.append(stop_item)
 
@@ -1549,7 +1680,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                             " (機構掛單為單筆流量信號，非全鏈聚合曝險，僅供交叉參考)"
                                         )
 
-                        _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_items)
+                        put_block_items = put_items
 
                     gex_callwall = gex_data.get("call_wall")
                     has_callwall = False
@@ -1595,14 +1726,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     if call_vacuum:
                         # 重錨也找不到現價上方的正 GEX 牆：上方全是負 Gamma。舊牆
                         # 已被突破，不再是壓力；照印舊牆加「數據異常」只會誤導。
-                        _append_tree_block(
-                            gex_lines,
-                            "🚧 上檔壓力",
-                            [
-                                "CallWall: -- 上方無正 Gamma 牆（負 Gamma 真空，助漲助跌）",
-                                f"原 CallWall ${call_wall_float:.2f} 已被突破，不再構成壓力",
-                            ],
-                        )
+                        call_block_items = [
+                            "CallWall: -- 上方無正 Gamma 牆（負 Gamma 真空，助漲助跌）",
+                            f"原 CallWall ${call_wall_float:.2f} 已被突破，不再構成壓力",
+                        ]
                     elif has_callwall and effective_c_val > 0:
                         call_wall_depth = _safe_gex(call_wall_float)
                         call_wall_dist_pct = (
@@ -1672,7 +1799,53 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             _space_line,
                             f"深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K",
                         ]
-                        _append_tree_block(gex_lines, "🚧 上檔壓力", call_items)
+                        call_block_items = call_items
+                        if call_wall_dist_pct >= 0 or is_call_zero:
+                            upside_room_pct = max(call_wall_dist_pct, 0.0)
+                            upside_threshold_pct = _cw_threshold_pct
+
+                    # ── 下檔 × 上檔交叉判定 ──
+                    if put_block_items is not None:
+                        upside_short = (
+                            upside_room_pct is not None
+                            and upside_threshold_pct is not None
+                            and upside_room_pct < upside_threshold_pct
+                        )
+                        if sweet_spot_idx is not None and upside_short:
+                            # 停損距離合格不等於可進場：上方空間不足以支撐 2.2:1
+                            put_block_items[sweet_spot_idx] = (
+                                f"{sweet_spot_prefix} ✅ 停損距離合格"
+                                f"\n │  ❌ 上檔空間 {upside_room_pct:.2f}% 不足 "
+                                f"{upside_threshold_pct:.2f}%，非進場點"
+                            )
+                        if (
+                            upside_room_pct is not None
+                            and effective_c_val > 0
+                            and 0 < put_stop_for_rr < effective_c_val
+                        ):
+                            reward = call_wall_float - effective_c_val
+                            rr_parts: List[str] = []
+                            for _label, _stop in (
+                                ("", put_stop_for_rr),
+                                (
+                                    f"淨 GEX 支撐錨 ${alt_anchor_for_rr:.2f}",
+                                    alt_stop_for_rr,
+                                ),
+                            ):
+                                if not (0 < _stop < effective_c_val):
+                                    continue
+                                _rr = max(reward, 0.0) / (effective_c_val - _stop)
+                                _flag = "✅" if _rr >= _ROOM_RISK_MULTIPLIER else "❌"
+                                _prefix = f"{_label} " if _label else ""
+                                rr_parts.append(f"{_prefix}{_rr:.2f}:1 {_flag}")
+                            put_block_items.append(
+                                f"進場盈虧比 (至 CallWall ${call_wall_float:.2f}): "
+                                + "｜".join(rr_parts)
+                                + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
+                            )
+                        _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
+                    if call_block_items is not None:
+                        _append_tree_block(gex_lines, "🚧 上檔壓力", call_block_items)
 
                     regime_items: List[str] = []
                     net_gex_raw = gex_data.get("net_gex")
@@ -1698,6 +1871,29 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         regime_items.append(
                             f"Net GEX Regime (全鏈加總): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
                         )
+                        # 釘住效應：全鏈 Long Gamma 時做市商逆勢避險（漲賣跌買），現價貼近
+                        # 上方 CallWall 時突破難以延續——放量只代表量能，不代表能穿牆。
+                        if (
+                            net_gex_float > 50000.0
+                            and upside_room_pct is not None
+                            and effective_c_val > 0
+                        ):
+                            _pin_atr_1d = _to_float(data.get("atr_14"), 0.0)
+                            if _pin_atr_1d <= 0.0 or math.isclose(
+                                _pin_atr_1d, 0.01, abs_tol=1e-6
+                            ):
+                                _pin_atr_1d = _to_float(data.get("atr_1d"), 0.0)
+                            pin_band_pct = (
+                                _pin_atr_1d / effective_c_val * 100
+                                if _pin_atr_1d > 0.01
+                                else _PIN_FALLBACK_BAND_PCT
+                            )
+                            if upside_room_pct <= pin_band_pct:
+                                regime_items.append(
+                                    f"📌 釘住效應：Long Gamma 且距 CallWall "
+                                    f"${call_wall_float:.2f} 僅 {upside_room_pct:.2f}%"
+                                    f"（≤ 1×ATR₁D {pin_band_pct:.2f}%），做市商逆勢避險壓制突破延續"
+                                )
 
                     gamma_flip_val = estimate_symbol_gamma_flip(
                         gex_prof, effective_c_val
@@ -2023,6 +2219,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
         )
 
+    if not cb_triggered:
+        from market_time import ny_tz as _gravity_tz
+
+        gravity = find_settlement_gravity(
+            data.get("month_max_pains"), datetime.now(_gravity_tz)
+        )
+        if gravity is not None:
+            scenario_overlays.append(
+                f"⚠️ 結算日引力：{gravity['expiry']} (DTE {gravity['dte']}) 痛點 "
+                f"${gravity['max_pain']:.2f}，現價偏離 {gravity['distance_pct']:+.1f}%，"
+                "結算前 Gamma 釘住效應最強，避免追價新倉"
+            )
+
     spread_ratio = data.get("spread_ratio")
     if spread_ratio is not None and spread_ratio > 15.0:
         scenario_overlays.append(
@@ -2112,6 +2321,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 ov_color = "\u001b[1;33m"
             elif "流動性警告" in overlay:
                 label = "流動風險"
+                ov_color = "\u001b[1;31m"
+            elif "結算日引力" in overlay:
+                label = "結算引力"
                 ov_color = "\u001b[1;31m"
             else:
                 label = "附加預警"

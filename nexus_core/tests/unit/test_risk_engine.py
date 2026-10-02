@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 from unittest.mock import patch
 from market_analysis.risk_engine import (
@@ -469,3 +470,78 @@ def test_optimize_position_risk_bought_put_sizes_against_short_limit() -> None:
         -25.0, -1.0, 100000.0, 500.0, 0.2, "BTO_PUT", macro
     )
     assert flat.suggested_contracts > net_short.suggested_contracts
+
+
+def test_optimize_position_risk_stock_iv_unknown_fails_closed_for_premium_sell() -> (
+    None
+):
+    """個股真實 IV 取不到時，賣方新倉不得以 0.40 佔位 IV 算出口數 (fail-closed)。"""
+    res = optimize_position_risk(
+        current_delta=0.0,
+        unit_weighted_delta=0.16,
+        user_capital=100000.0,
+        spy_price=500.0,
+        stock_iv=0.40,
+        strategy="STO",
+        risk_limit=15.0,
+        stock_iv_unknown=True,
+    )
+    assert res.suggested_contracts == 0
+    assert any("個股 IV 資料不足" in w for w in res.warnings)
+
+
+def test_optimize_position_risk_stock_iv_unknown_halves_directional_long() -> None:
+    kwargs: dict[str, Any] = dict(
+        current_delta=0.0,
+        unit_weighted_delta=0.5,
+        user_capital=100000.0,
+        spy_price=500.0,
+        stock_iv=0.2,
+        strategy="BTO_CALL",
+        risk_limit=15.0,
+    )
+    base = optimize_position_risk(**kwargs)
+    degraded = optimize_position_risk(**kwargs, stock_iv_unknown=True)
+    assert base.suggested_contracts > 0
+    assert degraded.suggested_contracts <= base.suggested_contracts // 2 + 1
+    assert any("個股 IV 缺失" in w for w in degraded.warnings)
+
+
+def test_optimize_position_risk_data_degraded_reasons_halve_risk_budget() -> None:
+    """期權決策數據降級（IVR／PCR 缺失、GEX 快取等）時風險額度減半並列出原因。"""
+    kwargs: dict[str, Any] = dict(
+        current_delta=0.0,
+        unit_weighted_delta=0.16,
+        user_capital=100000.0,
+        spy_price=500.0,
+        stock_iv=0.4,
+        strategy="STO",
+        risk_limit=15.0,
+    )
+    base = optimize_position_risk(**kwargs)
+    degraded = optimize_position_risk(
+        **kwargs, data_degraded_reasons=["IV Rank 缺失", "GEX 快取降級"]
+    )
+    assert base.suggested_contracts >= 4
+    assert degraded.suggested_contracts <= base.suggested_contracts // 2 + 1
+    assert degraded.suggested_contracts < base.suggested_contracts
+    assert any(
+        "期權數據降級（IV Rank 缺失、GEX 快取降級）" in w for w in degraded.warnings
+    )
+
+
+def test_optimize_position_risk_defaults_unchanged_without_degradation() -> None:
+    kwargs: dict[str, Any] = dict(
+        current_delta=0.0,
+        unit_weighted_delta=0.16,
+        user_capital=100000.0,
+        spy_price=500.0,
+        stock_iv=0.4,
+        strategy="STO",
+        risk_limit=15.0,
+    )
+    base = optimize_position_risk(**kwargs)
+    explicit = optimize_position_risk(
+        **kwargs, stock_iv_unknown=False, data_degraded_reasons=[]
+    )
+    assert base == explicit

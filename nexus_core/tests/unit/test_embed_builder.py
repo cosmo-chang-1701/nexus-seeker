@@ -3602,8 +3602,8 @@ def test_create_tactical_symbol_embed_structural_stop_matches_stop_distance() ->
 def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_negative() -> (
     None
 ):
-    """PutWall 處淨 GEX 為負（助跌區）時，結構停損仍以 PutWall 為錨，
-    但須並列以淨 GEX 最大支撐為錨的參考停損（僅呈現，docs/microstructure/02 §7）。"""
+    """PutWall 處淨 GEX 為負（助跌區）時，呈現上以淨 GEX 最大支撐為錨的參考停損
+    作主行，引擎閘門停損（PutWall 錨）降為次行；閘門不變（docs/microstructure/02 §7）。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3623,11 +3623,12 @@ def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_ne
     desc = get_embed_text(create_tactical_symbol_embed(data))
     assert "實為助跌區" in desc
     assert "淨 GEX 最大支撐: $1070.00" in desc
-    # 閘門與停損不變：仍以 PutWall 1050 為錨
-    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
-    assert "停損錨點位於淨 GEX 助跌區，緩衝判定與停損仍以 PutWall 為準" in desc
     # 1070 - 0.5 * 9.70 = 1065.15；(1097.39 - 1065.15) / 1097.39 = 2.94%
-    assert "參考：以淨 GEX 最大支撐 $1070.00 為錨 → $1065.15 (↓2.94%)" in desc
+    assert "參考停損 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.15 (↓2.94%)" in desc
+    # 閘門不變：引擎停損仍以 PutWall 1050 為錨，降為次行
+    assert "引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
+    assert "緩衝判定與引擎閘門仍以 PutWall 為準" in desc
+    assert desc.index("參考停損 (淨 GEX 支撐") < desc.index("引擎閘門停損")
 
 
 def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() -> None:
