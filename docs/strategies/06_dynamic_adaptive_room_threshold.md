@@ -201,7 +201,7 @@ flowchart TD
 
 11. **「進場甜蜜點」必須與上檔空間交叉判定（呈現層）**：公式 B 的 `SWEET_SPOT` 只代表「停損距離不在雜訊帶內、也不超過 8% 上限」，**不代表可進場**——它完全不看上方空間。2026-10-02 MU 實測：現價 $\$1097.39$、PutWall $\$1050$、CallWall $\$1100$，停損距離 $4.76\%$ 落在甜蜜點，但上檔只剩 $0.24\%$（公式 A 門檻 $10.47\%$），實際 R:R 僅 $0.05:1$，舊版仍單獨印出「✅ 進場甜蜜點」。分析中心因此改為：
     - 下檔與上檔兩個區塊等 CallWall 空間算完才一起輸出；`SWEET_SPOT` 但上檔空間 $<$ 公式 A 門檻時，標籤降格為「✅ 停損距離合格｜❌ 上檔空間 X% 不足 Y%，非進場點」。
-    - 下檔區塊末行新增「進場盈虧比 (至 CallWall)」：$\text{R:R} = (\text{CallWall} - \text{Spot}) / (\text{Spot} - \text{Stop})$，Stop 與停損距離同一條線，以 `_ROOM_RISK_MULTIPLIER`（$2.2$）為 ✅／❌ 門檻；PutWall 落在淨 GEX 助跌區時並列淨 GEX 支撐錨的 R:R（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）。
+    - 下檔區塊末行新增「進場盈虧比 (至 CallWall)」：$\text{R:R} = (\text{CallWall} - \text{Spot}) / (\text{Spot} - \text{Stop})$，Stop 與停損距離同一條線，以 `_ROOM_RISK_MULTIPLIER`（$2.2$）為 ✅／❌ 門檻；PutWall 落在淨 GEX 助跌區時並列淨 GEX 支撐錨的 R:R（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）。下行緩衝判定為過窄（停損距離 $< 2.5\times\text{ATR}_{15m}$）時，原比值即使 $\ge 2.2$ 也不得印 ✅（改標「⚠ 停損過窄、比值虛高」），並另列以合格停損 $\text{Spot}\times(1-\text{min\_pct})$ 重算的 R:R。CallWall 空間不足旗標標出 `binding_term` 對應的生效項（$2.2\times$停損風險／$1.5\times\text{ATR}_{1D}$／$3.5\%$ 底線），避免與盈虧比 ✅ 看似矛盾。
     - Gamma 體制區塊在「全鏈 Long Gamma 且 $0 \le$ 上檔空間 $\le 1 \times \text{ATR}_{1D}/\text{Spot}$」（ATR₁D 不可得退回 $1\%$，`_PIN_FALLBACK_BAND_PCT`）時加註「📌 釘住效應」：做市商逆勢避險壓制突破延續。
     - 以上皆為呈現層；引擎閘門（`opportunity_cost.py` 條件三本來就交叉判定空間）不變。
 

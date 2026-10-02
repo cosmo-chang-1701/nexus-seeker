@@ -24,19 +24,36 @@ logger = logging.getLogger(__name__)
 # 被重新分類；若每次都拿**當下**現價判定價內外，股價大漲後原本的「價外投機」
 # 會被事後改寫成「價內吸籌」。以首次偵測當下的現價判定才符合下單時的真實語意。
 # 程序重啟即重置（重啟後以重啟當下為首次偵測），屬可接受的降級。
+# 只在正規交易時段建錨：盤前現價是前收、期權鏈 volume 仍是前一交易日的量，
+# 若此時建錨，當日盤中所有成交都會被以前收判定價內外。
 _uoa_spot_anchor: BoundedCache = BoundedCache(max_size=2000)
 
 
 def _anchor_spot(
-    symbol: str, expiry: str, strike: float, opt_type: str, spot: float
+    symbol: str,
+    expiry: str,
+    strike: float,
+    opt_type: str,
+    spot: float,
+    persist: bool = True,
 ) -> tuple[float, str]:
     now_ny = datetime.now(market_time.ny_tz)
     key = (symbol, expiry, round(strike, 4), str(opt_type).upper(), now_ny.date())
     anchored = _uoa_spot_anchor.get(key)
     if anchored is None:
         anchored = (spot, now_ny.strftime("%H:%M"))
-        _uoa_spot_anchor[key] = anchored
+        if persist:
+            _uoa_spot_anchor[key] = anchored
     return anchored
+
+
+def _is_regular_session() -> bool:
+    """建錨用的時段判定；行事曆查詢失敗時保守視為非交易時段（不建錨）。"""
+    try:
+        return bool(market_time.is_market_open())
+    except Exception as e:
+        logger.warning(f"NYSE 行事曆查詢失敗，UOA 錨點本次不寫入: {e}")
+        return False
 
 
 async def _fetch_and_combine_chains(
@@ -140,6 +157,7 @@ def _process_uoa_candidate_rows(
     spot_price: float,
     max_non_index_nominal: float,
     trading_day_elapsed_fraction: float = 1.0,
+    anchor_enabled: bool = True,
 ) -> List[Dict[str, Any]]:
     """對已篩選出的候選列執行風控驗證、Greeks 計算與意圖分類，回傳結果 dict 列表。
 
@@ -152,6 +170,9 @@ def _process_uoa_candidate_rows(
     並不相同；`paced_ratio = ratio / trading_day_elapsed_fraction` 換算為
     「以目前速度外推至全天收盤的預估比值」，讓門檻在一天中任何時間點的意義
     趨於一致。預設 1.0（不正規化，等同原始 ratio）以維持向後相容。
+
+    anchor_enabled: 是否允許寫入首次偵測現價錨點；呼叫端於非正規交易時段
+    傳 False（既有錨點仍會沿用）。
     """
     results: List[Dict[str, Any]] = []
 
@@ -290,7 +311,7 @@ def _process_uoa_candidate_rows(
         )
 
         anchor_spot, anchor_time = _anchor_spot(
-            symbol, exp, strike, opt_type, spot_price
+            symbol, exp, strike, opt_type, spot_price, persist=anchor_enabled
         )
         class_delta = d_val
         if anchor_spot != spot_price and iv_val > 0.02:
@@ -301,10 +322,12 @@ def _process_uoa_candidate_rows(
             trade_input, current_price=anchor_spot, delta=class_delta
         )
         intent_text = result.intent
+        basis_note = ""
         if spot_price > 0 and abs(anchor_spot - spot_price) / spot_price > 0.001:
-            intent_text += (
+            basis_note = (
                 f"（價內外判定基準：首次偵測 {anchor_time} 現價 ${anchor_spot:.2f}）"
             )
+            intent_text += basis_note
         paced_ratio = (
             result.ratio / trading_day_elapsed_fraction
             if trading_day_elapsed_fraction > 0
@@ -332,6 +355,8 @@ def _process_uoa_candidate_rows(
                 "action": result.action,
                 "intent": intent_text,
                 "classified_spot": anchor_spot,
+                # 價差標註改寫 intent 時據此保留判定基準註記
+                "moneyness_basis_note": basis_note,
                 "iv": round(iv_val, 4),
                 "trade_type": trade_type,
                 "oi_change_net": oi_change_net,
@@ -369,6 +394,7 @@ async def detect_uoa(
         # 同一次偵測呼叫內所有候選列共用同一個交易時段進度快照，避免逐列
         # 重複查詢 NYSE 行事曆 (供 paced_ratio 正規化使用)。
         elapsed_fraction = market_time.get_trading_day_elapsed_fraction()
+        in_session = _is_regular_session()
 
         for exp, df_combined, total_chain_volume in chain_data:
             df_uoa_candidates = _select_uoa_candidate_rows(
@@ -387,6 +413,7 @@ async def detect_uoa(
                     spot_price,
                     max_non_index_nominal,
                     trading_day_elapsed_fraction=elapsed_fraction,
+                    anchor_enabled=in_session,
                 )
             )
 
@@ -434,6 +461,7 @@ async def detect_uoa_with_physical_caps(
         physical_cap_strikes: List[Dict[str, Any]] = []
         today_dt = datetime.now().date()
         elapsed_fraction = market_time.get_trading_day_elapsed_fraction()
+        in_session = _is_regular_session()
 
         for exp, df_combined, total_chain_volume in chain_data:
             df_uoa_candidates = _select_uoa_candidate_rows(
@@ -450,6 +478,7 @@ async def detect_uoa_with_physical_caps(
                         spot_price,
                         max_non_index_nominal,
                         trading_day_elapsed_fraction=elapsed_fraction,
+                        anchor_enabled=in_session,
                     )
                 )
 

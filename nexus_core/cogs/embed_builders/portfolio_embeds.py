@@ -21,6 +21,8 @@ from market_analysis.index_microstructure import (
     interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
+    _ROOM_ABSOLUTE_FLOOR_PCT,
+    _ROOM_ATR_1D_MULTIPLIER,
     _ROOM_RISK_MULTIPLIER,
     _ROOM_STOP_ATR_15M_MULTIPLIER,
     _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER,
@@ -486,6 +488,13 @@ def create_strategic_dash_embed(
     embed.set_footer(text="Nexus Seeker | 戰術風險管理終端")
     return embed
 
+
+# CallWall 空間門檻 max(2.2×停損風險, 1.5×ATR₁D, 3.5%) 中實際生效的那一項
+_ROOM_BINDING_TERM_LABELS: Dict[str, str] = {
+    "RISK": f"{_ROOM_RISK_MULTIPLIER:g}×停損風險",
+    "ATR_1D": f"{_ROOM_ATR_1D_MULTIPLIER:g}×ATR₁D",
+    "FLOOR": f"{_ROOM_ABSOLUTE_FLOOR_PCT:.1%} 底線",
+}
 
 # 釘住效應判定帶寬：ATR₁D 不可得時，現價距 CallWall 在此百分比內即視為貼牆。
 _PIN_FALLBACK_BAND_PCT: float = 1.0
@@ -1263,31 +1272,48 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             catalysts = data.get("catalysts")
             if catalysts:
                 iv_lines.append(" 事件日曆防護 (Catalyst Calendar)")
-                for idx, cat in enumerate(catalysts):
-                    if idx >= 3:
-                        iv_lines.append(
-                            " └─ \u001b[1;30m...及其他事件 (已省略)\u001b[0m"
-                        )
-                        break
+                # 事件清單含發布後冷卻期 (tte_hours < 0)；已公布的不得印成「僅剩 -0.1 天」，
+                # 合併為一行置於未到事件之後，且不佔 3 筆上限。
+                released_names: List[str] = []
+                upcoming_count = 0
+                upcoming_omitted = False
+                for cat in catalysts:
                     if hasattr(cat, "date"):
                         date_str = cat.date
-                        days = cat.days_to_earnings
-                        iv_lines.append(
-                            f" └─ \u001b[1;33m⚠️ 距離財報 ({date_str[5:]}) 僅剩 {days:.1f} 天，嚴禁雙賣策略\u001b[0m"
-                        )
+                        days = _to_float(getattr(cat, "days_to_earnings", None), 0.0)
+                        if days < 0:
+                            released_names.append(f"財報 ({date_str[5:]})")
+                            continue
+                        line = f" └─ \u001b[1;33m⚠️ 距離財報 ({date_str[5:]}) 僅剩 {days:.1f} 天，嚴禁雙賣策略\u001b[0m"
                     elif hasattr(cat, "time"):
                         date_str = cat.time[:10]
                         tte_hours = _to_float_or_none(getattr(cat, "tte_hours", None))
-                        days = round((tte_hours or 0.0) / 24.0, 1)
                         # Ensure the event name is not excessively long
                         event_name = (
                             cat.event
                             if len(cat.event) <= 20
                             else cat.event[:17] + "..."
                         )
-                        iv_lines.append(
-                            f" └─ \u001b[1;33m⚠️ 距離 {event_name} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
-                        )
+                        if tte_hours is not None and tte_hours < 0:
+                            released_names.append(event_name)
+                            continue
+                        days = round((tte_hours or 0.0) / 24.0, 1)
+                        line = f" └─ \u001b[1;33m⚠️ 距離 {event_name} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
+                    else:
+                        continue
+                    if upcoming_count >= 3:
+                        upcoming_omitted = True
+                        continue
+                    iv_lines.append(line)
+                    upcoming_count += 1
+                if upcoming_omitted:
+                    iv_lines.append(" └─ \u001b[1;30m...及其他事件 (已省略)\u001b[0m")
+                if released_names:
+                    iv_lines.append(
+                        " └─ \u001b[1;32m✅ 已公布："
+                        + "、".join(dict.fromkeys(released_names))
+                        + "（市場消化中）\u001b[0m"
+                    )
 
             iv_lines.append("```")
 
@@ -1402,6 +1428,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     sweet_spot_idx: Optional[int] = None
                     sweet_spot_prefix = ""
                     put_stop_for_rr = 0.0
+                    # 停損距離過窄時的合格下界 (2.5×ATR₁₅ₘ，佔現價比例)；盈虧比須
+                    # 另以此重算，否則過窄停損會把比值灌水成 ✅。
+                    put_min_stop_frac: Optional[float] = None
                     alt_stop_for_rr = 0.0
                     alt_anchor_for_rr = 0.0
                     upside_room_pct: Optional[float] = None
@@ -1526,6 +1555,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 # 有公式卻無數值的誤導文案——該情境走的是降級的
                                 # 固定 5% 判定，應改為據實揭露降級原因。
                                 if put_buffer_eval.min_pct is not None:
+                                    put_min_stop_frac = put_buffer_eval.min_pct
                                     _note = (
                                         f"❌ 過窄 (< 2.5×ATR₁₅ₘ = "
                                         f"{put_buffer_eval.min_pct * 100:.2f}%)，易遭掃損"
@@ -1776,7 +1806,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         elif call_wall_dist_pct < _cw_threshold_pct or is_call_zero:
                             space_flag = f" ❌ 不足 {_cw_threshold_pct:.2f}%"
                             if not _cw_room.degrade_reason:
-                                space_flag += " (動態門檻)"
+                                # 標出決定門檻的那一項，免得與盈虧比 ✅ 看似矛盾
+                                _binding_label = _ROOM_BINDING_TERM_LABELS.get(
+                                    _cw_room.binding_term
+                                )
+                                space_flag += (
+                                    f" (動態門檻：{_binding_label})"
+                                    if _binding_label
+                                    else " (動態門檻)"
+                                )
                         # 降級一律揭露，不限於門檻未達時（docs/strategies/06 §5）：
                         # 空間充足的結論若建立在降級門檻上（例如底牆已失效、
                         # valid_put_stop_wall 歸 0 使 RISK 項被剔除），靜默通過等於
@@ -1836,8 +1874,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     continue
                                 _rr = max(reward, 0.0) / (effective_c_val - _stop)
                                 _flag = "✅" if _rr >= _ROOM_RISK_MULTIPLIER else "❌"
+                                if (
+                                    not _label
+                                    and put_min_stop_frac is not None
+                                    and _flag == "✅"
+                                ):
+                                    _flag = "⚠ 停損過窄、比值虛高"
                                 _prefix = f"{_label} " if _label else ""
                                 rr_parts.append(f"{_prefix}{_rr:.2f}:1 {_flag}")
+                            if put_min_stop_frac is not None and put_min_stop_frac > 0:
+                                _rr_min = max(reward, 0.0) / (
+                                    effective_c_val * put_min_stop_frac
+                                )
+                                _flag_min = (
+                                    "✅" if _rr_min >= _ROOM_RISK_MULTIPLIER else "❌"
+                                )
+                                rr_parts.append(
+                                    f"合格停損 ↓{put_min_stop_frac * 100:.2f}% "
+                                    f"{_rr_min:.2f}:1 {_flag_min}"
+                                )
                             put_block_items.append(
                                 f"進場盈虧比 (至 CallWall ${call_wall_float:.2f}): "
                                 + "｜".join(rr_parts)

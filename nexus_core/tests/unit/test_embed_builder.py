@@ -3461,7 +3461,7 @@ def test_create_tactical_symbol_embed_callwall_uses_dynamic_threshold() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "距現價空間: ↑8.00% ❌ 不足 9.90% (動態門檻)" in desc
+    assert "距現價空間: ↑8.00% ❌ 不足 9.90% (動態門檻：2.2×停損風險)" in desc
     assert "已退回 3.5% 絕對底線" not in desc
 
 
