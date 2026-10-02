@@ -144,7 +144,7 @@ def _mrna_row(**overrides: Any) -> dict[str, Any]:
             "net_gex": 2_000_000.0,
             "gex_profile": {"185.0": 1_000_000.0, "190.0": 1_000_000.0},
         },
-        atr_15m=0.5,  # 防守位 = 190 − 1.5 × 0.5 = 189.25 → 現價已跌破
+        atr_15m=0.5,  # 防守位 = 190 − 0.5 × 0.5 = 189.75 → 現價已跌破
     )
     row.update(overrides)
     return row
@@ -152,20 +152,20 @@ def _mrna_row(**overrides: Any) -> dict[str, Any]:
 
 def test_below_put_wall_without_support_is_not_escort_net() -> None:
     """MRNA：跌破 PutWall、無正 Gamma 深度、無 DTE≥7 機構買盤 → 不得建議續抱。"""
-    table, _ = _build([_mrna_row(atr_15m=0.4)])  # 防守位 189.4
+    table, _ = _build([_mrna_row(atr_15m=0.4)])  # 防守位 189.80
     assert "護航網" not in table
     assert "Delta 拋售" in table
 
 
 def test_below_put_wall_within_stop_without_support_shows_stop() -> None:
-    table, _ = _build([_mrna_row(atr_15m=1.0)])  # 防守位 188.50 < 現價
+    table, _ = _build([_mrna_row(atr_15m=3.0)])  # 防守位 188.50 < 現價
     assert "護航網" not in table
     assert "負 Gamma Delta 拋售風險，嚴守 $188.50 (15分K收盤)" in table
 
 
 def test_below_put_wall_with_positive_gamma_support_keeps_escort_net() -> None:
     row = _mrna_row(
-        atr_15m=1.0,
+        atr_15m=3.0,
         gex_profile_data={
             "put_wall": 190.0,
             "call_wall": 210.0,
@@ -261,3 +261,43 @@ def test_clip_cell() -> None:
     assert _clip_cell("abc", 5) == "abc"
     assert _clip_cell("abcdefgh", 5) == "abcd…"
     assert _clip_cell("a|b\nc", 10) == "a/b c"
+
+
+def test_anti_washout_stop_uses_engine_track_one_multiplier() -> None:
+    """雷達防守位 = PutWall − 0.5 × ATR_15m，與出場引擎軌道一同一常數。"""
+    from market_analysis.dynamic_rollover.constants import (
+        _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT,
+    )
+
+    assert _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT == 0.5
+    table, _ = _build([_mrna_row(atr_15m=2.4)])  # 190 − 0.5 × 2.4 = 188.80
+    assert "嚴守 $188.80 (15分K收盤)" in table
+
+
+def test_call_wall_insight_follows_entry_gate() -> None:
+    """AAPL 型：逼近 CallWall 但 AND-gate 未通過時，警示不得寫「現貨重砲攻擊」，
+    須與表格戰術建議「保持觀察」一致。"""
+    row = _scan_row(
+        symbol="AAPL",
+        quote={"c": 330.32, "dp": 0.5},
+        max_pain={"max_pain": 330.0},
+        gex_metrics={"put_wall": 300.0, "call_wall": 330.0, "net_gex": 5_000_000.0},
+    )
+    table, insights = _build([row])
+    assert "保持觀察" in table
+    assert "現貨重砲" not in insights
+    assert "進場訊號未全數共振" in insights
+
+
+def test_call_wall_insight_sto_veto_matches_tactical() -> None:
+    row = _scan_row(
+        symbol="AAPL",
+        quote={"c": 330.32, "dp": 0.5},
+        max_pain={"max_pain": 330.0},
+        gex_metrics={"put_wall": 300.0, "call_wall": 330.0, "net_gex": 5_000_000.0},
+        radar_cache={"physical_cap_above_spot": True},
+    )
+    table, insights = _build([row])
+    assert "⛔ 禁止進場" in table
+    assert "禁止進場" in insights
+    assert "現貨重砲" not in insights

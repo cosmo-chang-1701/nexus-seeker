@@ -207,8 +207,8 @@ def test_market_embeds_handles_invalid_call_wall_and_uses_15m_atr() -> None:
     """驗證 market_embeds 面板在 call_wall 格式畸形時安全解析為 0.0，且防洗盤停損使用 15m ATR。"""
     record: dict[str, Any] = {
         "symbol": "TEST",
-        "price": 99.0,
-        "quote": {"c": 99.0, "dp": -1.0},
+        "price": 99.6,
+        "quote": {"c": 99.6, "dp": -1.0},
         "max_pain": {"max_pain": 100.0},
         "gex_metrics": {"put_wall": 100.0, "call_wall": "INVALID_WALL"},
         "gex_profile_data": {
@@ -221,10 +221,10 @@ def test_market_embeds_handles_invalid_call_wall_and_uses_15m_atr() -> None:
     embeds = build_radar_scan_embed([record], scan_type_name="WATCHLIST", user_id=12345)
     assert len(embeds) == 1
     text = _get_embed_all_text(embeds[0])
-    # 防洗盤停損應使用 15m ATR (1.0): 100.0 - 1.5 * 1.0 = 98.50
-    # 若誤用日線 ATR (5.0)，數值會是 100.0 - 1.5 * 5.0 = 92.50
-    assert "$98.50" in text
-    assert "$92.50" not in text
+    # 防洗盤停損 (軌道一 0.5×) 應使用 15m ATR (1.0): 100.0 - 0.5 * 1.0 = 99.50
+    # 若誤用日線 ATR (5.0)，數值會是 100.0 - 0.5 * 5.0 = 97.50
+    assert "$99.50" in text
+    assert "$97.50" not in text
 
 
 # ---------------------------------------------------------------------------
