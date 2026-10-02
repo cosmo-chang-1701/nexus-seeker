@@ -4,7 +4,7 @@
 
 Nexus Seeker is a multi-tenant **Discord-first options risk-control and trading operations platform**. It combines technical structure, Black-Scholes-Merton pricing, Greeks-based portfolio risk, event-aware calendar defenses, and LLM-assisted structured commentary.
 
-Current released core version: **`1.15.0`**
+Current released core version: **`1.15.1`**
 
 The codebase is optimized for:
 - **Low-RAM VPS deployment** (1GB–2GB RAM safe, 85% RAM memory gate)
