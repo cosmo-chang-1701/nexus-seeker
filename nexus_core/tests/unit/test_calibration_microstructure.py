@@ -524,3 +524,82 @@ def test_put_wall_net_gex_stats_counts_negative_zone() -> None:
     by_sign = out["守住率_依PutWall處淨GEX正負"]
     assert by_sign["淨GEX<0"]["hold_rate"] == 0.0
     assert by_sign["淨GEX>=0"]["hold_rate"] == 1.0
+
+
+def test_calibration_features_record_gamma_flip_materiality() -> None:
+    from market_analysis.evaluation_recorder import calibration_features
+
+    profile = {"1070.0": 4.16e9, "1072.5": -9.4e6, "1075.0": 3.78e9}
+    feats = calibration_features({"gex_profile": profile}, 1075.43)
+    assert feats["gamma_flip_raw"] == 1075.0
+    assert feats["gamma_flip_ratio"] == pytest.approx(9.4e6 / 4.16e9)
+    assert feats["gamma_flip_neg_peak"] == pytest.approx(9.4e6)
+    # 沿用 `_num()` 慣例：0（排除後無 Flip）記為 None
+    assert feats["gamma_flip_material_5pct"] is None
+    # gex_profile 缺失或格式異常：不寫入欄位、也不拋例外
+    assert "gamma_flip_raw" not in calibration_features({}, 100.0)
+    bad = calibration_features({"gex_profile": {"x": "bad"}}, 100.0)
+    assert bad["gamma_flip_raw"] is None
+    assert bad["gamma_flip_ratio"] is None
+
+
+def _flip_rows(n: int, ratio: float, outcome: int) -> list[dict[str, Any]]:
+    import json
+
+    return [
+        {
+            "features_json": json.dumps(
+                {"gamma_flip_raw": 100.0, "gamma_flip_ratio": ratio}
+            ),
+            "date": f"2026-0{1 + i % 9}-{10 + i % 18}",
+            "win": 1 if outcome == 1 else 0,
+            "outcome": outcome,
+        }
+        for i in range(n)
+    ]
+
+
+def test_forward_gamma_flip_materiality_study_verdicts() -> None:
+    from calibration.forward_log import FORWARD_MIN_ROWS, build_threshold_studies
+
+    # 雜訊交叉全數逆向先觸及、重要交叉全勝 → 可提案
+    entries = pd.DataFrame(
+        _flip_rows(FORWARD_MIN_ROWS, 0.01, -1) + _flip_rows(FORWARD_MIN_ROWS, 0.5, 1)
+    )
+    study = build_threshold_studies(entries)["gamma_flip_materiality"]
+    assert study["groups"]["雜訊交叉"]["n"] == FORWARD_MIN_ROWS
+    assert study["groups"]["雜訊交叉"]["adverse_rate"] == 1.0
+    assert study["groups"]["重要交叉"]["adverse_rate"] == 0.0
+    assert "可提案" in study["判讀"]
+    assert len(study["ratio_quartiles"]) >= 2
+
+    # 樣本不足 → 維持
+    small = pd.DataFrame(_flip_rows(10, 0.01, -1) + _flip_rows(10, 0.5, 1))
+    study = build_threshold_studies(small)["gamma_flip_materiality"]
+    assert "樣本不足" in study["判讀"]
+    assert "ratio_quartiles" not in study
+
+    # 尚無欄位
+    studies = build_threshold_studies(
+        pd.DataFrame({"features_json": [None], "win": [0], "outcome": [0]})
+    )
+    assert "資料累積中" in str(studies["gamma_flip_materiality"])
+
+
+def test_micro_report_gamma_flip_materiality_stats() -> None:
+    from calibration.microstructure import gamma_flip_materiality_stats
+
+    noise = {"1070.0": 4.16e9, "1072.5": -9.4e6, "1075.0": 3.78e9}
+    reselect = {"90.0": -2e9, "92.5": 3e9, "95.0": 1e9, "97.5": -1e7, "100.0": 4e9}
+    material = {"95.0": -5e9, "100.0": 4e9, "105.0": 2e9}
+    snaps = [
+        {"spot": 1075.43, "gex": {"net_profile": noise}},
+        {"spot": 101.0, "gex": {"net_profile": reselect}},
+        {"spot": 101.0, "gex": {"net_profile": material}},
+        {"spot": 101.0, "gex": {}},  # 舊版快照無 net_profile
+    ]
+    stats = gamma_flip_materiality_stats(snaps)
+    assert stats["n_with_profile"] == 3
+    assert stats["n_raw_flip"] == 3
+    row = stats["依門檻剔除"]["5%"]
+    assert row == {"剔除": 2, "改選": 1, "消失": 1, "剔除率": round(2 / 3, 3)}

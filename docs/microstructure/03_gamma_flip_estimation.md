@@ -103,6 +103,8 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `bracket_low` | `0.7 * Spot` ($-30\%$) | 翻轉線有效候選範圍下界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
 | `bracket_high` | `1.3 * Spot` ($+30\%$) | 翻轉線有效候選範圍上界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
+| `GAMMA_FLIP_MATERIALITY_CANDIDATES` | `(0.02, 0.05, 0.10)` | 重要性比的離線比較候選門檻（§5.6），閘門不使用 | `nexus_core/market_analysis/index_microstructure.py` |
+| `GAMMA_FLIP_MATERIALITY_DISPLAY` | `0.05` | 呈現層「雜訊交叉」標註與前向記錄分組門檻；**未經校準，不得用於閘門** | `nexus_core/market_analysis/index_microstructure.py` |
 | `Gamma Flip Fallback` | `VWAP + 0.5 ATR_15m` | 當 Flip 估算為 0.0 且全鏈正 Gamma 時的替代突破門檻 | `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` |
 
 ---
@@ -130,12 +132,25 @@ flowchart TD
 5. **離散履約價格點 vs 內插零軸（呈現層）**：
    `estimate_symbol_gamma_flip()` 回傳的是 $\mathcal{Z}$ 中的履約價 $K_{(i)}$（第一個非負的格點），真正的零軸落在 $K_{(i-1)}$ 與 $K_{(i)}$ 之間。例如 $g(225)=-1{,}434{,}309\text{K}$、$g(227.5)=+18{,}108{,}163\text{K}$ 時閘門取 $227.50$，內插零軸約 $225.18$。分析中心因此將標籤寫成「Gamma Flip (轉正履約價)」，並以 `interpolate_gamma_flip_zero()`（與 §5.4 同一條內插式，只取 $(K_{(i-1)}, K_{(i)})$ 這一對）加列「相鄰履約價內插零軸 ≈ …（閘門以履約價格點為準）」。閘門維持取格點：格點版本已是所有進場閘門與 Regime 分類器共用的門檻線，改成內插值會讓「站上 Flip」提早觸發，須先經 `calibration` 比對才能改。
 
+6. **重要性門檻（呈現層＋校準中）**：
+   第二步的交叉判定沒有量級要求，夾在兩個大正值之間的一檔微小負值就會構成 Flip。實例：2026-10-02 11:15 ET 的 `/x MU`，$g(1072.5)=-9.4\text{M}$ 夾在 $g(1070)=+4.16\text{B}$ 與 $g(1075)=+3.78\text{B}$ 之間（全鏈 +42.9B），閘門判為「Gamma Flip \$1075（緩衝 +0.04%）」，內插零軸 ≈ \$1072.51 也沒有意義。
+   定義**重要性比**：
+   $$\rho = \frac{\max\{|g_{(j)}| : K_{(j)} \text{ 屬於 } K_{(i-1)} \text{ 往下的連續負值區段}\}}{\max\{|g_{(j)}| : K_{(j)} \in [0.7\,\text{Spot}, 1.3\,\text{Spot}]\}}$$
+   分母至少等於分子，所以 $\rho \in [0, 1]$。負側取「連續負值區段」的峰值而不是只看 $K_{(i-1)}$，因此 $-5\text{B}, -10\text{M}, +4\text{B}$ 這種鏈型不會因為緊鄰一檔很小就被誤判為雜訊。上例 $\rho \approx 0.2\%$。
+   - `gamma_flip_materiality()`：回傳閘門 Flip 交叉點的 $\rho$。`estimate_material_gamma_flip(profile, spot, min_ratio)`：同一套五步流程，只多一條「候選 $\rho \ge$ `min_ratio`」；`min_ratio = 0` 時與 `estimate_symbol_gamma_flip()` 逐值相同（有隨機化等價測試保護）。
+   - **呈現層**：`/x` 與 watchlist 面板在閘門 Flip 的 $\rho <$ `GAMMA_FLIP_MATERIALITY_DISPLAY`（5%）時加註「⚠️ 翻轉檔負值僅 …（視窗最大 |GEX| 的 …%），屬雜訊交叉；排除後 Flip: …（閘門仍以原值為準）」，`/x` 同時不再列內插零軸。「緩衝 %」照舊顯示，因為閘門仍用它。
+   - **前向記錄**：`features_json` 記錄 `gamma_flip_raw`、`gamma_flip_ratio`、`gamma_flip_neg_peak`、`gamma_flip_material_5pct`（見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13）。
+   - **離線報表**：`micro-report` 的 `GammaFlip重要性` 輸出 $\rho$ 分位，以及 2%／5%／10% 門檻下原始 Flip 被剔除、改選到其他履約價、完全消失的次數，用來挑選門檻；`forward-report` 的 `gamma_flip_materiality` 將閘門紀錄分成雜訊組與重要組，比較逆向先觸及率。
+   - **判讀準則**：兩組皆 $n \ge 100$，且雜訊組逆向先觸及率的 bootstrap CI（依日期叢集）下界高於重要組 CI 上界，才提案讓 `estimate_symbol_gamma_flip()` 套用門檻；否則維持無門檻定義，只保留呈現層揭露。
+   - **改閘門時的連帶工作**：右側條件一的 `VWAP + 0.5×ATR₁₅ₘ` Fallback 建立在「無交叉＝回傳 0」上，門檻會讓更多標的落入 Fallback，觸發條件須重新確認；`regime_classifier`、左側／做空進場、`opportunity_cost` 的測試夾具多以小量負值構造交叉，需逐一檢查。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`：
-  - 核心估算函式：`estimate_symbol_gamma_flip()`（第 768–849 行）
+  - 核心估算函式：`estimate_symbol_gamma_flip()`
+  - 重要性門檻（呈現與校準，§5.6）：`gamma_flip_materiality()`、`estimate_material_gamma_flip()`、`GammaFlipMateriality`
   - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
   - 內插零軸（呈現層）：`interpolate_gamma_flip_zero()`
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
@@ -143,3 +158,6 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：
   - 6-Regime 路由引用：`classify_dynamic_regime()`
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：Symbol Hub 個股 GEX Flip 線呈現
+- `nexus_core/cogs/embed_builders/_embed_helpers.py`：`gamma_flip_noise_note()` 雜訊交叉揭露文字（`portfolio_embeds.py`、`watchlist_embeds.py` 共用）
+- `nexus_core/market_analysis/evaluation_recorder.py`：`features_json` 的 Gamma Flip 重要性欄位
+- `nexus_core/calibration/microstructure.py`：`gamma_flip_materiality_stats()`；`nexus_core/calibration/forward_log.py`：`gamma_flip_materiality` 前向研究

@@ -143,3 +143,123 @@ def test_be_buffer_shows_stop_distance(put_wall: float, expect: str) -> None:
         }
     )
     assert expect in text
+
+
+# ---------------------------------------------------------------------------
+# #12 Gamma Flip 重要性門檻（docs/microstructure/03 §5.6）：呈現與校準用，閘門不變
+# ---------------------------------------------------------------------------
+
+# MU 2026-10-02 11:15 ET：$1072.5 只有 −9.4M，夾在 $1070 +4.16B 與 $1075 +3.78B 之間
+MU_NOISE_FLIP_PROFILE = {
+    "1060.0": 1_200_000_000,
+    "1065.0": 2_000_000_000,
+    "1070.0": 4_160_000_000,
+    "1072.5": -9_400_000,
+    "1075.0": 3_780_000_000,
+    "1080.0": 2_500_000_000,
+}
+MU_NOISE_SPOT = 1075.43
+
+
+def test_mu_noise_flip_has_tiny_materiality_but_gate_unchanged() -> None:
+    from market_analysis.index_microstructure import (
+        estimate_material_gamma_flip,
+        gamma_flip_materiality,
+    )
+
+    # 閘門定義不變：仍判為 Flip $1075
+    assert estimate_symbol_gamma_flip(MU_NOISE_FLIP_PROFILE, MU_NOISE_SPOT) == 1075.0
+    m = gamma_flip_materiality(MU_NOISE_FLIP_PROFILE, MU_NOISE_SPOT)
+    assert m is not None
+    assert m.flip_strike == 1075.0
+    assert m.neg_peak == pytest.approx(9_400_000)
+    assert m.window_max_abs == pytest.approx(4_160_000_000)
+    assert m.ratio == pytest.approx(9.4e6 / 4.16e9)
+    assert (
+        estimate_material_gamma_flip(MU_NOISE_FLIP_PROFILE, MU_NOISE_SPOT, 0.05) == 0.0
+    )
+
+
+def test_materiality_uses_contiguous_negative_run_peak() -> None:
+    """−5B、−10M、+4B：緊鄰一檔很小，但連續負值區段的峰值是 5B，屬重要交叉。"""
+    from market_analysis.index_microstructure import (
+        estimate_material_gamma_flip,
+        gamma_flip_materiality,
+    )
+
+    profile = {"90": 1e9, "95": -5e9, "97.5": -1e7, "100": 4e9, "105": 1e9}
+    m = gamma_flip_materiality(profile, 101.0)
+    assert m is not None and m.flip_strike == 100.0
+    assert m.neg_peak == pytest.approx(5e9)
+    assert m.ratio == pytest.approx(1.0)
+    assert estimate_material_gamma_flip(profile, 101.0, 0.05) == 100.0
+
+
+def test_material_flip_reselects_next_significant_crossing() -> None:
+    from market_analysis.index_microstructure import estimate_material_gamma_flip
+
+    profile = {"90": -2e9, "92.5": 3e9, "95": 1e9, "97.5": -1e7, "100": 4e9}
+    assert estimate_symbol_gamma_flip(profile, 101.0) == 100.0
+    assert estimate_material_gamma_flip(profile, 101.0, 0.05) == 92.5
+
+
+def test_materiality_none_when_gate_has_no_flip() -> None:
+    from market_analysis.index_microstructure import gamma_flip_materiality
+
+    assert gamma_flip_materiality(DRAM_PROFILE, 62.90) is None
+    assert gamma_flip_materiality({}, 100.0) is None
+
+
+def test_material_flip_with_zero_ratio_equals_gate_definition() -> None:
+    """min_ratio = 0 時與閘門版逐值相同：將來切換閘門的安全前提。"""
+    import random
+
+    from market_analysis.index_microstructure import estimate_material_gamma_flip
+
+    rng = random.Random(20261002)
+    for _ in range(500):
+        n = rng.randint(1, 12)
+        strikes = sorted(rng.sample(range(50, 150), n))
+        profile = {
+            str(float(k)): rng.choice([-1, 1]) * rng.uniform(0, 5e9) for k in strikes
+        }
+        if rng.random() < 0.1:
+            profile[str(float(strikes[0]))] = 0.0
+        spot = rng.choice([0.0, rng.uniform(40, 160)])
+        assert estimate_material_gamma_flip(profile, spot, 0.0) == (
+            estimate_symbol_gamma_flip(profile, spot)
+        ), (profile, spot)
+
+
+def test_noise_note_helper() -> None:
+    from cogs.embed_builders._embed_helpers import gamma_flip_noise_note
+    from market_analysis.index_microstructure import GammaFlipMateriality
+
+    noisy = GammaFlipMateriality(1075.0, 9_400_000.0, 4_160_000_000.0, 0.00226)
+    note = gamma_flip_noise_note(noisy, 0.0)
+    assert "-9400K" in note
+    assert "0.2%" in note
+    assert "排除後 Flip: 無" in note
+    assert "$1070.00" in gamma_flip_noise_note(noisy, 1070.0)
+    material = GammaFlipMateriality(100.0, 5e9, 5e9, 1.0)
+    assert gamma_flip_noise_note(material, 100.0) == ""
+    assert gamma_flip_noise_note(None, 0.0) == ""
+
+
+def test_mu_embed_flags_noise_flip_and_drops_interpolated_zero() -> None:
+    text = _text(
+        {
+            "symbol": "MU",
+            "price": MU_NOISE_SPOT,
+            "gex_profile_data": {
+                "put_wall": 1065.0,
+                "call_wall": 1080.0,
+                "net_gex": 13_630_600_000.0,
+                "gex_profile": MU_NOISE_FLIP_PROFILE,
+            },
+        }
+    )
+    assert "Gamma Flip (轉正履約價): $1075.00" in text
+    assert "屬雜訊交叉" in text
+    assert "排除後 Flip: 無" in text
+    assert "相鄰履約價內插零軸" not in text

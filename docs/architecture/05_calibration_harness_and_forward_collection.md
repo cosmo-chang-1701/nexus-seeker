@@ -430,7 +430,7 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 | 子命令 | 資料 | 用途 |
 |---|---|---|
 | `micro-snapshot` | 標的池最近一檔**未到期**（DTE ≥ 1）的期權鏈（與 edge 相同公式重算 GEX：$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM。經 `market_data_service` 抓取（edge 快照 → edge 即時 → 本地 yfinance），期權鏈不裁減履約價 | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
-| `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點） |
+| `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；`GammaFlip重要性`：閘門 Flip 的重要性比分位與 2%／5%／10% 門檻下的剔除、改選、消失次數（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6） |
 | `skew-proxy` | CBOE ^SKEW × SPY 日線（2000 年起） | 以「日級、252 交易日、只用過去資料的 midrank」計算分位，統計各門檻的觸發率、5 日報酬（bootstrap CI）與 5 日內跌幅 > 3% 的機率 |
 
 執行方式與其他子命令相同（`python -m calibration micro-snapshot --max-symbols 200`、`micro-report`、`skew-proxy`，容器內執行參數見 `AGENTS.md` 的 Testing 段落）。標的池為 watchlist ∪ 固定流動性清單，讀取 watchlist 時 `NEXUS_DB_NAME` 應指向複製的快照。
@@ -452,15 +452,18 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **前向蒐集新欄位**：`regime_evaluation_log.features_json` 於 `REGIME_CLASSIFIER` 與右側／左側進場閘門紀錄中加入 `support_wall`、`support_gex`（現價下方淨 GEX 最大正值，不套薄牆門檻）、`put_wall_gex`、`adv_dollar_20d`，以及閘門紀錄的 `skew_percentile`、`skew_percentile_source`（`CANONICAL`／`INTRADAY_FALLBACK`，雷達快速路徑可能為空，可由 `sentiment_daily_canonical` 在該日之前的筆數離線推回）。有了這些欄位，production 資料就能以事後走勢驗證牆體深度比與 Skew 門檻。
 
+此外，`gex_profile` 可用時會再記錄 Gamma Flip 重要性：`gamma_flip_raw`（閘門用的 `estimate_symbol_gamma_flip()`）、`gamma_flip_ratio`、`gamma_flip_neg_peak`、`gamma_flip_material_5pct`（排除重要性比 < 5% 的交叉後的 Flip）。沿用 `_num()` 慣例，0 記為 None，因此 `gamma_flip_raw` 有值而 `gamma_flip_material_5pct` 為空，代表排除雜訊後就沒有 Flip。
+
 **基準結果（2026-09-22 單日快照，106 檔；^SKEW 2000-01 ~ 2026-09，6,586 個交易日）**：
 
 - **D-03 週 EM**：以 1-DTE 推算的週 EM 中位數比直接量測的約 7-DTE 高 26%、3-DTE 高 20%，4–14 DTE 約 5%。已改為取最接近 7 DTE 的到期日（見 `valuation_pricing/02_expected_move_and_max_pain.md`）。
 - **D-04 牆體深度比**：94 面支撐牆的深度比中位數約 $1.6\times10^{-4}$，p10 約 $10^{-6}$；$< 10^{-5}$ 的牆幾乎都距現價 8–66%。舊 500k 絕對門檻通過率 81.9%，新門檻 76.6%。差異全部落在 ADV \$500M–\$5B 組（84.3% → 74.5%，剔除 ORCL／CRM／XOM／COST 等遠處薄牆）；ADV > \$5B 與 < \$500M 兩組不變。
 - **Skew 門檻（指數層級代理）**：日級母體下 ≥98 分位的觸發率為 4.9%（連續觸發算一次則為 146 段），高於「2%」的直覺值，因為分位序列有趨勢。高分位日之後 SPY 的 5 日跌幅 > 3% 機率（≥98：10.3%、≥90：9.9%、≥85：9.4%）**不高於**基準的 11.6%，5 日報酬 CI 都與基準重疊；反而低分位日（≤5：18.4%）的下跌風險較高（低 SKEW 常與高 VIX 的恐慌期重疊）。**結論：代理資料不支持 handoff 提議的 97.5／88／82 調降**（調降只會增加觸發、沒有預測力依據），現行門檻維持不變；是否調整以個股日級母體的前向蒐集資料為準。
 
-**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出兩張表：
+**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出三張表：
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
+- `gamma_flip_materiality`：只取閘門 Flip 存在的紀錄，依重要性比分成「雜訊交叉」（< 5%）與「重要交叉」兩組，比較勝率與逆向先觸及率（依日期叢集 bootstrap 的 95% CI），並附重要性比四分位。判讀規則見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6。
 
 每組 $n < 100$ 時標示「資料累積中」。EXIT_* 紀錄不納入（其勝率語意與進場相反）。
 

@@ -646,6 +646,59 @@ def put_wall_net_gex_stats(
     }
 
 
+def gamma_flip_materiality_stats(snaps: list[dict[str, Any]]) -> dict[str, Any]:
+    """閘門 Gamma Flip 的重要性比分佈與各候選門檻的剔除率 (docs/microstructure/03 §5.6)。
+
+    描述性統計，供挑選門檻：原始 Flip 出現率、重要性比分位，以及每個候選門檻下
+    原始 Flip 被剔除後「改選到別的履約價」與「完全消失」的次數。
+    """
+    from market_analysis.index_microstructure import (
+        GAMMA_FLIP_MATERIALITY_CANDIDATES,
+        estimate_material_gamma_flip,
+        estimate_symbol_gamma_flip,
+        gamma_flip_materiality,
+    )
+
+    n_profile = 0
+    ratios: list[float] = []
+    by_threshold: dict[str, dict[str, int]] = {
+        f"{t:.0%}": {"剔除": 0, "改選": 0, "消失": 0}
+        for t in GAMMA_FLIP_MATERIALITY_CANDIDATES
+    }
+    for s in snaps:
+        profile = (s.get("gex") or {}).get("net_profile")
+        spot = float(s.get("spot") or 0.0)
+        if not profile or spot <= 0:
+            continue
+        n_profile += 1
+        raw = estimate_symbol_gamma_flip(profile, spot)
+        m = gamma_flip_materiality(profile, spot)
+        if raw <= 0 or m is None:
+            continue
+        ratios.append(m.ratio)
+        for t in GAMMA_FLIP_MATERIALITY_CANDIDATES:
+            if m.ratio >= t:
+                continue
+            row = by_threshold[f"{t:.0%}"]
+            row["剔除"] += 1
+            row[
+                "改選" if estimate_material_gamma_flip(profile, spot, t) > 0 else "消失"
+            ] += 1
+    return {
+        "n_with_profile": n_profile,
+        "n_raw_flip": len(ratios),
+        "原始Flip出現率": round(len(ratios) / n_profile, 3) if n_profile else None,
+        "重要性比分位": _quantiles(ratios),
+        "依門檻剔除": {
+            k: {
+                **v,
+                "剔除率": round(v["剔除"] / len(ratios), 3) if ratios else None,
+            }
+            for k, v in by_threshold.items()
+        },
+    }
+
+
 def build_micro_report(
     cache_dir: Path,
     horizon_days: int = 5,
@@ -757,5 +810,6 @@ def build_micro_report(
         or f"尚無走完 {horizon_days} 個交易日觀察期的快照",
         "支撐定義比較": compare_support_definitions(labeled),
         "PutWall處淨GEX": put_wall_net_gex_stats(snaps, labeled),
+        "GammaFlip重要性": gamma_flip_materiality_stats(snaps),
         "n_labeled": len(labeled),
     }

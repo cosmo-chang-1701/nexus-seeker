@@ -16,8 +16,11 @@ from typing import List, Dict, Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 from market_analysis.index_microstructure import (
+    GAMMA_FLIP_MATERIALITY_DISPLAY,
     analyze_local_gamma_regime,
+    estimate_material_gamma_flip,
     estimate_symbol_gamma_flip,
+    gamma_flip_materiality,
     interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
@@ -44,6 +47,7 @@ from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
     _add_ansi_field_safely,
     format_runway_lines,
+    gamma_flip_noise_note,
     _chunk_ansi_table,
     _truncate_with_boundary,
 )
@@ -1961,12 +1965,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             f"Gamma Flip (轉正履約價): ${gamma_flip_val:.2f}"
                             f" (緩衝: {flip_buffer_pct:+.2f}%)"
                         )
+                        # 負側量級過小的交叉屬雜訊（docs/microstructure/03 §5.6）：
+                        # 揭露排除後的 Flip，閘門仍以原值為準；內插零軸此時無意義。
+                        noise_note = gamma_flip_noise_note(
+                            gamma_flip_materiality(gex_prof, effective_c_val),
+                            estimate_material_gamma_flip(
+                                gex_prof,
+                                effective_c_val,
+                                GAMMA_FLIP_MATERIALITY_DISPLAY,
+                            ),
+                        )
                         # 閘門取離散履約價格點（docs/microstructure/03 §2）；真正的
                         # 零軸落在前一檔與該檔之間，並列內插值避免誤讀為零軸本身。
                         flip_zero = interpolate_gamma_flip_zero(
                             gex_prof, gamma_flip_val
                         )
-                        if flip_zero > 0 and not math.isclose(
+                        if noise_note:
+                            flip_item += f"\n │  {noise_note}"
+                        elif flip_zero > 0 and not math.isclose(
                             flip_zero, gamma_flip_val, abs_tol=0.005
                         ):
                             flip_item += (

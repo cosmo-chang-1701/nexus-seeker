@@ -256,7 +256,78 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
         result["skew_percentile"] = by_source or "資料累積中 (尚無 skew_percentile)"
     else:
         result["skew_percentile"] = "資料累積中 (尚無 skew_percentile 欄位)"
+    result["gamma_flip_materiality"] = _gamma_flip_materiality_study(entries, feats)
     return result
+
+
+_FLIP_BOOT_N = 2000
+_FLIP_BOOT_SEED = 7
+
+
+def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) -> Any:
+    """閘門 Gamma Flip 為雜訊交叉 vs 重要交叉的事後表現 (docs/microstructure/03 §5.6)。
+
+    只取閘門 Flip 存在 (`gamma_flip_raw > 0`) 且有重要性比的列，以呈現層門檻
+    `GAMMA_FLIP_MATERIALITY_DISPLAY` 分兩組，另附重要性比四分位。逆向先觸及率
+    以日期叢集 bootstrap；兩組皆 n ≥ FORWARD_MIN_ROWS 且雜訊組 CI 下界高於重要組
+    CI 上界，才判讀「可提案改閘門」。
+    """
+    from calibration.stats import clustered_bootstrap_mean
+    from market_analysis.index_microstructure import GAMMA_FLIP_MATERIALITY_DISPLAY
+
+    if not {"gamma_flip_raw", "gamma_flip_ratio"}.issubset(feats.columns):
+        return "資料累積中 (尚無 gamma_flip_raw / gamma_flip_ratio 欄位)"
+    raw = pd.to_numeric(feats["gamma_flip_raw"], errors="coerce")
+    ratio = pd.to_numeric(feats["gamma_flip_ratio"], errors="coerce")
+    frame = pd.DataFrame(
+        {
+            "x": ratio,
+            "date": entries["date"] if "date" in entries.columns else "",
+            "win": entries["win"],
+            "outcome": entries["outcome"],
+        }
+    )[(raw > 0) & ratio.notna()]
+    if frame.empty:
+        return f"資料累積中 (0/{FORWARD_MIN_ROWS})"
+    frame["group"] = [
+        "雜訊交叉" if x < GAMMA_FLIP_MATERIALITY_DISPLAY else "重要交叉"
+        for x in frame["x"]
+    ]
+    groups: dict[str, Any] = {}
+    for name in ("雜訊交叉", "重要交叉"):
+        g = frame[frame["group"] == name]
+        adverse = [1.0 if o == -1 else 0.0 for o in g["outcome"]]
+        rate, lo, hi = clustered_bootstrap_mean(
+            adverse, list(g["date"]), _FLIP_BOOT_N, _FLIP_BOOT_SEED
+        )
+        groups[name] = {
+            "n": int(len(g)),
+            "n_dates": int(g["date"].nunique()),
+            "win_rate": float(g["win"].mean()) if len(g) else None,
+            "adverse_rate": rate if len(g) else None,
+            "adverse_ci95": [lo, hi] if len(g) else None,
+        }
+    noise, material = groups["雜訊交叉"], groups["重要交叉"]
+    if min(noise["n"], material["n"]) < FORWARD_MIN_ROWS:
+        verdict = (
+            f"樣本不足 (雜訊 {noise['n']}／重要 {material['n']}，"
+            f"各需 ≥ {FORWARD_MIN_ROWS})，維持單向無門檻定義"
+        )
+    elif noise["adverse_ci95"][0] > material["adverse_ci95"][1]:
+        verdict = (
+            "雜訊交叉組逆向先觸及率 CI 下界高於重要組 CI 上界，可提案閘門改用重要性門檻"
+        )
+    else:
+        verdict = "CI 重疊或雜訊組未較差，維持單向無門檻定義，只保留呈現層揭露"
+    out: dict[str, Any] = {
+        "threshold": GAMMA_FLIP_MATERIALITY_DISPLAY,
+        "groups": groups,
+        "判讀": verdict,
+    }
+    if len(frame) >= FORWARD_MIN_ROWS:
+        frame["q"] = pd.qcut(frame["x"], 4, duplicates="drop")
+        out["ratio_quartiles"] = _bucket_rows(frame, "q")
+    return out
 
 
 def _is_advisory(features_json: Any) -> bool:

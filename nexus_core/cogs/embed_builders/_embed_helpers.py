@@ -377,6 +377,25 @@ def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
         )
 
 
+def gamma_flip_noise_note(materiality: Any, filtered_flip: float) -> str:
+    """閘門 Gamma Flip 屬雜訊交叉時的揭露文字；否則回傳空字串（docs/microstructure/03 §5.6）。
+
+    `materiality` 為 `gamma_flip_materiality()` 的輸出（可為 None）；`filtered_flip`
+    為 `estimate_material_gamma_flip(..., GAMMA_FLIP_MATERIALITY_DISPLAY)`。閘門仍以
+    原 Flip 為準，這裡只揭露。
+    """
+    from market_analysis.index_microstructure import GAMMA_FLIP_MATERIALITY_DISPLAY
+
+    if materiality is None or materiality.ratio >= GAMMA_FLIP_MATERIALITY_DISPLAY:
+        return ""
+    after = f"${filtered_flip:.2f}" if filtered_flip > 0 else "無"
+    return (
+        f"⚠️ 翻轉檔負值僅 -{materiality.neg_peak / 1000:.0f}K"
+        f"（視窗最大 |GEX| 的 {materiality.ratio * 100:.1f}%），屬雜訊交叉；"
+        f"排除後 Flip: {after}（閘門仍以原值為準）"
+    )
+
+
 # ============================================================================
 # 提領跑道摘要（docs/risk_portfolio/05；唯一格式來源，各報表共用）
 # ============================================================================
