@@ -127,6 +127,9 @@ flowchart TD
    - **判讀準則**：每組 $n \ge 100$，且局部 SHORT 組的逆向先觸及率顯著較高（bootstrap CI 不重疊），才評估讓右側進場在局部負 Gamma 區降級或加嚴；否則維持 `estimate_symbol_gamma_flip()` 的單向定義。
    - **改動時的連帶工作**：右側條件一的 `VWAP + 0.5×ATR₁₅ₘ` 替代門檻（見 §4 `Gamma Flip Fallback`）是建立在「無交叉點＝回傳 0」的語意上；若閘門改用雙向交叉，必須同步重新定義替代門檻的觸發條件。
 
+5. **離散履約價格點 vs 內插零軸（呈現層）**：
+   `estimate_symbol_gamma_flip()` 回傳的是 $\mathcal{Z}$ 中的履約價 $K_{(i)}$（第一個非負的格點），真正的零軸落在 $K_{(i-1)}$ 與 $K_{(i)}$ 之間。例如 $g(225)=-1{,}434{,}309\text{K}$、$g(227.5)=+18{,}108{,}163\text{K}$ 時閘門取 $227.50$，內插零軸約 $225.18$。分析中心因此將標籤寫成「Gamma Flip (轉正履約價)」，並以 `interpolate_gamma_flip_zero()`（與 §5.4 同一條內插式，只取 $(K_{(i-1)}, K_{(i)})$ 這一對）加列「相鄰履約價內插零軸 ≈ …（閘門以履約價格點為準）」。閘門維持取格點：格點版本已是所有進場閘門與 Regime 分類器共用的門檻線，改成內插值會讓「站上 Flip」提早觸發，須先經 `calibration` 比對才能改。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -134,6 +137,7 @@ flowchart TD
 - `nexus_core/market_analysis/index_microstructure.py`：
   - 核心估算函式：`estimate_symbol_gamma_flip()`（第 768–849 行）
   - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
+  - 內插零軸（呈現層）：`interpolate_gamma_flip_zero()`
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
   - 右側突破引用與 Fallback 替代：`_confirm_entry_condition1_breakout()`（第 55–255 行）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：

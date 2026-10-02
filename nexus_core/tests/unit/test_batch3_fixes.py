@@ -108,8 +108,11 @@ def test_watchlist_signal_embed_includes_regime_and_gamma_flip() -> None:
             break
     assert gex_field is not None
     assert gex_field.value is not None
-    assert "Net GEX Regime: +150K (🟢 LONG_GAMMA (自穩定壓制波動))" in gex_field.value
-    assert "Gamma Flip:" in gex_field.value
+    assert (
+        "Net GEX Regime (全鏈加總): +150K (🟢 LONG_GAMMA (自穩定壓制波動))"
+        in gex_field.value
+    )
+    assert "Gamma Flip (轉正履約價): $150.00" in gex_field.value
 
 
 @pytest.mark.asyncio

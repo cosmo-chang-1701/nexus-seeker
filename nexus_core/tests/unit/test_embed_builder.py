@@ -3349,8 +3349,12 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime: +20000K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
-    assert "Gamma Flip: $100.00 (緩衝: +0.00%)" in desc
+    assert "Net GEX Regime (全鏈加總): +20000K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
+    assert "Gamma Flip (轉正履約價): $100.00 (緩衝: +0.00%)" in desc
+    # 閘門取離散履約價 $100；真零軸在 95 (−2M) 與 100 (+10M) 之間內插 ≈ 95.83
+    assert "相鄰履約價內插零軸 ≈ $95.83（閘門以履約價格點為準）" in desc
+    # 熱力圖只畫現價 ±3 檔，須標明非全鏈，避免與全鏈 Net GEX 比對加總
+    assert "曝險熱力圖 (現價±3檔，非全鏈)" in desc
     assert "CallWall: $108.00" in desc
     assert "距現價空間: ↑8.00%" in desc
     assert "深度: +4000K" in desc
@@ -3384,7 +3388,7 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime: -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
+    assert "Net GEX Regime (全鏈加總): -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
     assert "距現價空間: ↑3.00% ❌ 不足 3.50%" in desc
     assert "數據缺失" in desc and "已退回 3.5% 絕對底線" in desc
 

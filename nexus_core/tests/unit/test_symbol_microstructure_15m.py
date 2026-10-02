@@ -48,8 +48,9 @@ def test_15m_microstructure_exact_prompt_example() -> None:
     embed = create_tactical_symbol_embed(data)
     text = _get_embed_text(embed)
 
-    # 驗證欄位標題
+    # 驗證欄位標題（只出現在欄位名，code block 內不得再重印一次）
     assert "⏱️ 15分鐘微觀結構 (15m Microstructure)" in text
+    assert text.count("15m Microstructure") == 1
 
     # 驗證四個指標項目內容
     assert (
@@ -147,6 +148,7 @@ def test_15m_microstructure_degraded_when_bar_none() -> None:
     text = _get_embed_text(embed)
 
     assert "⏱️ 15分鐘微觀結構 (15m Microstructure)" in text
+    assert text.count("15m Microstructure") == 1
     assert "最新 15m K棒: -- (暫無數據 / 待開盤)" in text
     assert "15m 成交量: -- 股" in text
     assert "15m 均量 (SMA20): -- 股" in text

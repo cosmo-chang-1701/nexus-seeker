@@ -997,6 +997,29 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     return candidates[0]
 
 
+def interpolate_gamma_flip_zero(gex_profile: dict, flip_strike: float) -> float:
+    """`estimate_symbol_gamma_flip()` 回傳值對應的內插零軸（僅供呈現）。
+
+    閘門用的 Gamma Flip 是離散的「由負轉非負履約價」$K_{(i)}$；真正的零軸落在
+    $K_{(i-1)}$ 與 $K_{(i)}$ 之間。以與 `analyze_local_gamma_regime()` 相同的
+    相鄰履約價線性內插求出：
+        K* = K₁ + (0 − G₁)·(K₂ − K₁)/(G₂ − G₁)
+    `flip_strike` 不在 profile 中、沒有前一檔、或前一檔不為負時回傳 0.0。
+    """
+    if not gex_profile or flip_strike <= 0:
+        return 0.0
+    try:
+        points = sorted((float(k), float(v)) for k, v in gex_profile.items())
+    except (ValueError, TypeError):
+        return 0.0
+    for (k1, g1), (k2, g2) in zip(points, points[1:]):
+        if math.isclose(k2, flip_strike, abs_tol=1e-6):
+            if not (g1 < 0 <= g2) or g2 == g1 or not math.isfinite(g1 + g2):
+                return 0.0
+            return k1 + (0.0 - g1) * (k2 - k1) / (g2 - g1)
+    return 0.0
+
+
 class LocalGammaRegime(NamedTuple):
     """現價附近的局部 Gamma 體制（`analyze_local_gamma_regime` 的輸出）。"""
 
