@@ -5627,3 +5627,29 @@ def test_withdrawal_reminder_embed_day_and_cpi_note() -> None:
     sells = str(next(f.value for f in embed.fields if "賣出清單" in str(f.name)))
     assert sells.index("NVDA") < sells.index("AMD")
     assert "BOXX" not in sells
+
+
+def test_create_tactical_symbol_embed_marks_only_nearest_strike() -> None:
+    """高價股相鄰兩檔都落在現價 1% 內時，📍 只標最接近現價的那一檔。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "MU",
+        "price": 1097.4,
+        "gex_profile_data": {
+            "put_wall": 1080.0,
+            "call_wall": 1110.0,
+            "net_gex": 9e9,
+            "gex_profile": {
+                "1080.0": 4e9,
+                "1090.0": 1e9,
+                "1100.0": 7e9,
+                "1110.0": -2e9,
+            },
+        },
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+
+    assert desc.count("📍") == 1
+    assert "📍1100.00" in desc

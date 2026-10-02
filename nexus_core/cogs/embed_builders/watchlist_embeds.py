@@ -767,9 +767,13 @@ def create_watchlist_signal_embed(
                         color_prefix = "\u001b[1;30m"
                         sign = " "
 
+                    # 只標最接近現價的那一檔：高價股的履約價間距相對小，1% 容差內常
+                    # 落進兩檔以上，會同時出現多個 📍。1% 容差保留，現價遠離所有
+                    # 履約價時不標。
                     spot_marker = (
                         "📍"
-                        if abs(k - effective_c_val) < (effective_c_val * 0.01)
+                        if k == strike_keys[closest_idx]
+                        and abs(k - effective_c_val) < (effective_c_val * 0.01)
                         else "  "
                     )
                     formatted_val = f"{sign}{abs(v)/1000:.0f}K"
