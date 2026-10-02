@@ -1,3 +1,4 @@
+import time
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -768,6 +769,7 @@ async def test_all_commands_structure(
             "spy_spot": 510.0,
             "gamma_flip": 515.0,
             "_is_stale_cache": True,
+            "_cache_timestamp": time.time() - 3600.0,
         }
         await admin.force_macro_update.callback(admin, mock_interaction)  # type: ignore
         sent_embed = mock_interaction.followup.send.call_args.kwargs["embed"]
