@@ -3,6 +3,10 @@ import inspect
 import logging
 import re
 import time
+from market_analysis.sentiment.skew_taxonomy import (
+    POLYMARKET_BEARISH_PCT,
+    POLYMARKET_BULLISH_PCT,
+)
 from services.llm_service import is_memory_safe
 from services.market_data_service import BoundedCache
 
@@ -589,9 +593,9 @@ async def calculate_polymarket_weighted_odds(
     pct = agg_prob * 100.0
     vol_tag = _format_pool_volume(actual_total_vol)
 
-    if pct >= 55.0:
+    if pct >= POLYMARKET_BULLISH_PCT:
         tag = f"🟢 {pct:.1f}% 巨鯨看多"
-    elif pct <= 45.0:
+    elif pct <= POLYMARKET_BEARISH_PCT:
         tag = f"🔴 {pct:.1f}% 巨鯨偏空"
     else:
         tag = f"⚖️ {pct:.1f}% 中性分歧"

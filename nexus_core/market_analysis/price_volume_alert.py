@@ -42,6 +42,40 @@ class Confirmed15mBar:
     open: Optional[float] = None
     high: Optional[float] = None
     low: Optional[float] = None
+    # 前幾個交易日「同一時段」K 棒的均量（日內 U 型量能季節性基準）；樣本不足為 None。
+    tod_avg_volume: Optional[float] = None
+    tod_sample_count: int = 0
+
+
+# 同時段均量至少需要的前日樣本數；5d 週期最多 4 個。
+_TOD_MIN_SAMPLES: int = 3
+
+
+def compute_time_of_day_avg_volume(
+    df_confirmed: pd.DataFrame,
+) -> tuple[Optional[float], int]:
+    """計算最後一根 K 棒在前幾個交易日同一時段的均量。
+
+    20 根滾動均量跨越日內 U 型量能曲線：開盤 09:30 與收盤 15:45 這兩根本來就含
+    競價量，對前 20 根（多為午盤）必然「放量」。以同一時段的前日均量作基準，才能
+    分辨真正的異常放量與時段季節性。樣本不足 `_TOD_MIN_SAMPLES` 回傳 (None, n)。
+    """
+    try:
+        last_ts = df_confirmed.index[-1]
+        slot = last_ts.time()
+        prior = df_confirmed.iloc[:-1]
+        mask = [
+            (ts.time() == slot and ts.date() < last_ts.date()) for ts in prior.index
+        ]
+        same_slot = prior.loc[mask, "Volume"].dropna()
+        n = int(len(same_slot))
+        if n < _TOD_MIN_SAMPLES:
+            return None, n
+        avg = float(same_slot.mean())
+        return (avg if avg > 0 else None), n
+    except Exception as e:
+        logger.warning(f"同時段均量計算失敗: {e}")
+        return None, 0
 
 
 def trim_to_confirmed_15m_bars(
@@ -203,6 +237,8 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
         else None
     )
 
+    tod_avg_volume, tod_samples = compute_time_of_day_avg_volume(df_confirmed)
+
     return Confirmed15mBar(
         symbol=symbol,
         bar_time=df_confirmed.index[confirmed_pos].to_pydatetime(),
@@ -212,6 +248,8 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
         open=open_val,
         high=high_val,
         low=low_val,
+        tod_avg_volume=tod_avg_volume,
+        tod_sample_count=tod_samples,
     )
 
 

@@ -810,3 +810,62 @@ async def _calculate_max_pain_raw(
     except Exception as e:
         logger.error(f"[{symbol}] Max Pain 計算失敗: {e}")
         return {"error": str(e)}
+
+
+# 結算日痛點引力：到期 DTE <= 此值、且現價偏離痛點超過下方門檻時，視為當日
+# 做市商 Gamma 釘住引力最強的情境（docs/valuation_pricing/02 §5）。
+SETTLEMENT_GRAVITY_MAX_DTE: int = 1
+SETTLEMENT_GRAVITY_MIN_DIST_PCT: float = 3.0
+# 與 Max Pain 斷路器同一門檻：偏離過大時痛點已失去錨定意義，不再輸出引力警告。
+SETTLEMENT_GRAVITY_MAX_DIST_PCT: float = 30.0
+_EXPIRY_SETTLE_HOUR_ET: int = 16
+
+
+def find_settlement_gravity(
+    month_max_pains: Any, now_ny: datetime
+) -> Optional[Dict[str, Any]]:
+    """從 30 天內各到期日痛點中找出「結算日引力」情境；無則回傳 None。
+
+    取最近一檔 DTE <= SETTLEMENT_GRAVITY_MAX_DTE、痛點有效、且
+    SETTLEMENT_GRAVITY_MIN_DIST_PCT < |偏離| <= SETTLEMENT_GRAVITY_MAX_DIST_PCT
+    的到期日。到期當日 16:00 ET 之後該檔已結算，不再列入。
+    回傳 {"expiry", "dte", "max_pain", "distance_pct"}。
+    """
+    if not isinstance(month_max_pains, list):
+        return None
+    today = now_ny.date()
+    candidates: list[tuple[int, Dict[str, Any]]] = []
+    for item in month_max_pains:
+        if not isinstance(item, dict):
+            continue
+        try:
+            exp_dt = datetime.strptime(str(item.get("expiry", "")), "%Y-%m-%d").date()
+            mp_val = float(item.get("max_pain") or 0.0)
+            dist = float(item.get("distance_pct") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        dte = (exp_dt - today).days
+        if dte < 0 or dte > SETTLEMENT_GRAVITY_MAX_DTE or mp_val <= 0:
+            continue
+        if dte == 0 and now_ny.hour >= _EXPIRY_SETTLE_HOUR_ET:
+            continue
+        if not (
+            SETTLEMENT_GRAVITY_MIN_DIST_PCT
+            < abs(dist)
+            <= SETTLEMENT_GRAVITY_MAX_DIST_PCT
+        ):
+            continue
+        candidates.append(
+            (
+                dte,
+                {
+                    "expiry": exp_dt.isoformat(),
+                    "dte": dte,
+                    "max_pain": mp_val,
+                    "distance_pct": dist,
+                },
+            )
+        )
+    if not candidates:
+        return None
+    return min(candidates, key=lambda c: c[0])[1]

@@ -17,6 +17,7 @@ from market_analysis.atr_utils import (
 )
 from market_analysis.vwap_utils import fetch_session_stats
 from market_analysis.price_volume_alert import get_confirmed_15m_bar
+from market_analysis.sentiment.max_pain import find_settlement_gravity
 import market_math
 
 from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
@@ -521,9 +522,16 @@ class SymbolDeepDiveMixin:
             )
             result["bar_15m_time"] = bar_time
             result["bar_15m_notes"] = assessment.notes
+            tod_avg = _clean_float(_extract_val("tod_avg_volume"))
+            rvol_tod = (
+                (v_15m / tod_avg)
+                if (v_15m is not None and tod_avg is not None and tod_avg > 0)
+                else None
+            )
             if assessment.is_stale or assessment.is_anomalous:
-                # 凍結或合併的 K 棒量比沒有意義，不得當成「放量突破」呈現
+                # 凍結或合併的 K 棒量比沒有意義，不得當成「放量」呈現
                 rvol = None
+                rvol_tod = None
                 logger.warning(
                     f"[{symbol}] 15m K 棒一致性檢查未通過: {assessment.notes}"
                 )
@@ -535,6 +543,17 @@ class SymbolDeepDiveMixin:
             result["volume_15m"] = v_15m
             result["volume_15m_sma20"] = sma_15m
             result["rvol_15m"] = rvol
+            result["volume_15m_tod_avg"] = tod_avg
+            result["rvol_15m_tod"] = rvol_tod
+            result["tod_sample_count"] = _extract_val("tod_sample_count") or 0
+            # 盤前／休市時最近一根已收盤 K 棒屬於前一交易日，呈現層須標明日期
+            result["bar_15m_is_prior_session"] = (
+                bar_time is not None and bar_time.date() != now_ny.date()
+            )
+
+        result["session_vwap_date"] = (
+            session_stats.session_date if session_stats is not None else None
+        )
 
         # TDP 估值三擊判斷: 現價 < EMA 21 且 現價 < Max Pain 且 現價 < V-POC
         ema_21 = (
@@ -564,13 +583,16 @@ class SymbolDeepDiveMixin:
 
         try:
             user_capital = _safe_float(getattr(ctx, "capital", 100000.0), 100000.0)
-            risk_limit = _safe_float(getattr(ctx, "risk_limit", 0.05), 0.05)
+            # risk_limit 是百分比單位 (DB 預設 15.0)；舊備援值 0.05 會被當成 0.05%。
+            risk_limit = _safe_float(getattr(ctx, "risk_limit", 15.0), 15.0)
             raw_stock_iv = (
                 iv_metrics.get("current_iv")
                 if isinstance(iv_metrics, dict)
                 else getattr(iv_metrics, "current_iv", None)
             )
             stock_iv_val = _safe_float(raw_stock_iv, 0.0)
+            # 0.40 只是讓公式可算的佔位值；真實 IV 缺失以 stock_iv_unknown 交給引擎 fail-closed。
+            stock_iv_unknown = stock_iv_val <= 0
             stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
             # PCR 缺值為 None (NRO 不做 PCR 修正)，不補 0.8。
             vol_pcr: Optional[float] = (
@@ -579,6 +601,30 @@ class SymbolDeepDiveMixin:
                 else None
             )
             skew_val = _safe_float(safe_skew.get("skew"), 0.0)
+
+            degraded_reasons: list[str] = []
+            if result.get("iv_rank") is None:
+                degraded_reasons.append("IV Rank 缺失")
+            if vol_pcr is None:
+                degraded_reasons.append("Volume PCR 缺失")
+            # 與呈現層 (portfolio_embeds) 相同的取值與缺值定義
+            oi_pcr_raw = (
+                pcr_data.get("oi_pcr", pcr_data.get("pcr"))
+                if isinstance(pcr_data, dict)
+                else None
+            )
+            if oi_pcr_raw is None or _safe_float(oi_pcr_raw, 0.0) <= 0:
+                degraded_reasons.append("OI PCR 缺失")
+            if isinstance(gex_profile_data, dict) and gex_profile_data.get(
+                "_is_stale_cache"
+            ):
+                degraded_reasons.append("GEX 快取降級")
+            gravity = find_settlement_gravity(result.get("month_max_pains"), now_ny)
+            if gravity is not None:
+                degraded_reasons.append(
+                    f"結算日引力 DTE {gravity['dte']} 偏離痛點 "
+                    f"{gravity['distance_pct']:+.1f}%"
+                )
 
             opt_result = optimize_position_risk(
                 current_delta=0.0,
@@ -593,6 +639,8 @@ class SymbolDeepDiveMixin:
                 pcr=vol_pcr,
                 skew=skew_val,
                 vix_unknown=macro_data is None,
+                stock_iv_unknown=stock_iv_unknown,
+                data_degraded_reasons=degraded_reasons,
             )
             result["kelly_sizing"] = opt_result
         except Exception as e:

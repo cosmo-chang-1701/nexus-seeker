@@ -156,6 +156,15 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 - **3-DTE 的殘餘偏差**：縮放用的是日曆日。當最接近 7 天的到期日只有 3 DTE（例如週二看週五），$\sqrt{7/3}$ 把 3 個日曆日（可能只含 2~3 個交易日）當成 3/7 週，2026-09-22 的快照量測到中位數偏高約 20%。若 `calibration micro-report` 的「週EM相對7DTE直接量測之比值」在 DTE 4–14 組持續偏離 1.0 超過 ±10%，再評估改用交易日縮放 $\sqrt{5 / \text{交易日數}}$。
 - **退回 IV 公式的頻率**：只剩 0/1-DTE 的標的（多為週選流動性差的小型股）會退回 $S \sigma \sqrt{7/365}$；若 `[Straddle-Implied EM]` 日誌在自選標的中大量缺席，檢查到期日清單是否只含週選。
 
+### 5.2a 結算日痛點引力警告 (Settlement-Day Gravity Overlay)
+§2.3 的末日痛點階梯原本只以文字指引呈現，`/x` 的開倉評級與倉位都不受影響。現以 `max_pain.py::find_settlement_gravity()` 從 30 天內各到期日痛點中挑出最近一檔滿足下列條件者：
+- $0 \le \text{DTE} \le$ `SETTLEMENT_GRAVITY_MAX_DTE`（$1$）；到期當日 16:00 ET 之後該檔已結算，不列入。
+- `SETTLEMENT_GRAVITY_MIN_DIST_PCT`（$3\%$）$< |\text{偏離}| \le$ `SETTLEMENT_GRAVITY_MAX_DIST_PCT`（$30\%$，與 §5.1 斷路器同門檻）。
+
+命中時：(1) 分析中心「結算價操作指引」追加「結算引力」overlay（斷路器觸發時不加）；(2) Kelly 建倉額度把「結算日引力」列入資料降級原因，風險額度 ×0.5（見 [`../risk_portfolio/02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §5.1b）。
+
+**個股週一／週三到期**：Nasdaq／MIAX 自 2026-01-26 起對合格個股（含 MU 等大型股）掛牌週一、週三到期，`get_all_option_expiries()` 不做星期過濾是正確行為；DTE ≤ 7 的非週五到期標為「期中特約/末日週線」。
+
 ### 5.3 買賣價差過大與零成交量防護 (Wide Bid-Ask Spread Guard)
 若 ATM 期權無有效成交價且未提供 Bid/Ask 報價（`call_mid <= 0` 且 `put_mid <= 0`），系統自動跳過 Straddle 計算，平滑切換至 BSM 公式與歷史波動率降級管線，確保不拋出未捕捉異常。
 

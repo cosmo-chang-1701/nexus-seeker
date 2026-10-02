@@ -199,6 +199,12 @@ flowchart TD
 
 7. **降級揭露不得因判定有利而省略**：`is_degraded` 的揭露義務與判定結果無關。空間充足、緩衝落在甜蜜點等**有利**結論若建立在降級門檻上，同樣必須輸出 `degrade_reason`——否則使用者會誤以為那是完整數據下的判定。分析中心 GEX 欄位的兩側（PutWall 緩衝三態、CallWall 空間）皆已統一為「一律揭露」。
 
+11. **「進場甜蜜點」必須與上檔空間交叉判定（呈現層）**：公式 B 的 `SWEET_SPOT` 只代表「停損距離不在雜訊帶內、也不超過 8% 上限」，**不代表可進場**——它完全不看上方空間。2026-10-02 MU 實測：現價 $\$1097.39$、PutWall $\$1050$、CallWall $\$1100$，停損距離 $4.76\%$ 落在甜蜜點，但上檔只剩 $0.24\%$（公式 A 門檻 $10.47\%$），實際 R:R 僅 $0.05:1$，舊版仍單獨印出「✅ 進場甜蜜點」。分析中心因此改為：
+    - 下檔與上檔兩個區塊等 CallWall 空間算完才一起輸出；`SWEET_SPOT` 但上檔空間 $<$ 公式 A 門檻時，標籤降格為「✅ 停損距離合格｜❌ 上檔空間 X% 不足 Y%，非進場點」。
+    - 下檔區塊末行新增「進場盈虧比 (至 CallWall)」：$\text{R:R} = (\text{CallWall} - \text{Spot}) / (\text{Spot} - \text{Stop})$，Stop 與停損距離同一條線，以 `_ROOM_RISK_MULTIPLIER`（$2.2$）為 ✅／❌ 門檻；PutWall 落在淨 GEX 助跌區時並列淨 GEX 支撐錨的 R:R（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）。
+    - Gamma 體制區塊在「全鏈 Long Gamma 且 $0 \le$ 上檔空間 $\le 1 \times \text{ATR}_{1D}/\text{Spot}$」（ATR₁D 不可得退回 $1\%$，`_PIN_FALLBACK_BAND_PCT`）時加註「📌 釘住效應」：做市商逆勢避險壓制突破延續。
+    - 以上皆為呈現層；引擎閘門（`opportunity_cost.py` 條件三本來就交叉判定空間）不變。
+
 8. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
 9. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。

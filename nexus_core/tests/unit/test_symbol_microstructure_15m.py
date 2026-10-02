@@ -28,7 +28,7 @@ def test_15m_microstructure_exact_prompt_example() -> None:
     開 378.10 | 高 380.46 | 低 377.90 | 收 378.87 (實體陽線)
     15m 成交量: 1,420,500 股
     15m 均量 (SMA20): 850,000 股
-    即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量突破 >= 1.5x)
+    即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量 >= 1.5x)
     """
     bar = Confirmed15mBar(
         symbol="QQQ",
@@ -58,7 +58,7 @@ def test_15m_microstructure_exact_prompt_example() -> None:
     )
     assert "15m 成交量: 1,420,500 股" in text
     assert "15m 均量 (SMA20): 850,000 股" in text
-    assert "即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量突破 >= 1.5x)" in text
+    assert "即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量 >= 1.5x)" in text
 
 
 def test_15m_microstructure_bearish_candle_and_low_rvol() -> None:
@@ -109,7 +109,7 @@ def test_15m_microstructure_flat_doji_candle() -> None:
     )
     assert "15m 成交量: 1,500,000 股" in text
     assert "15m 均量 (SMA20): 1,000,000 股" in text
-    assert "即時量比 (RVOL_15m): 1.50x (狀態: 🟢 放量突破 >= 1.5x)" in text
+    assert "即時量比 (RVOL_15m): 1.50x (狀態: 🟢 放量 >= 1.5x)" in text
 
 
 def test_15m_microstructure_dict_input() -> None:
@@ -134,7 +134,7 @@ def test_15m_microstructure_dict_input() -> None:
     )
     assert "15m 成交量: 2,000,000 股" in text
     assert "15m 均量 (SMA20): 1,200,000 股" in text
-    assert "即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量突破 >= 1.5x)" in text
+    assert "即時量比 (RVOL_15m): 1.67x (狀態: 🟢 放量 >= 1.5x)" in text
 
 
 def test_15m_microstructure_degraded_when_bar_none() -> None:
@@ -271,7 +271,7 @@ def test_15m_atr_and_session_vwap_displayed_with_values() -> None:
     embed = create_tactical_symbol_embed(data)
     text = _get_embed_text(embed)
 
-    assert "15m ATR (EMA14): $3.47" in text
+    assert "15m ATR (Wilder 14): $3.47" in text
     # (378.87 - 376.20) / 376.20 * 100 = +0.71%
     assert "日內錨點 (Session VWAP): $376.20 (現價偏離: +0.71%)" in text
 
@@ -288,5 +288,5 @@ def test_15m_atr_and_session_vwap_degraded_when_missing() -> None:
     embed = create_tactical_symbol_embed(data)
     text = _get_embed_text(embed)
 
-    assert "15m ATR (EMA14): --" in text
+    assert "15m ATR (Wilder 14): --" in text
     assert "日內錨點 (Session VWAP): -- (現價偏離: --)" in text
