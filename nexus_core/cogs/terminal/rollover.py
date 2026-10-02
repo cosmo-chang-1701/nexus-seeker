@@ -27,7 +27,6 @@ async def execute_verify_thesis_logic(
     from cogs.embed_builders.rollover_embeds import (
         build_fundamental_broken_embed,
         create_thesis_passed_embed,
-        RolloverActionView,
     )
 
     engine = DynamicRolloverEngine()
@@ -70,8 +69,7 @@ async def execute_verify_thesis_logic(
             source_url=source_url,
             form_type=form_type,
         )
-        view = RolloverActionView(target_symbol=symbol.upper())
-        await _send_or_edit("", embed=embed, view=view)
+        await _send_or_edit("", embed=embed)
     else:
         embed = create_thesis_passed_embed(
             symbol=symbol.upper(),

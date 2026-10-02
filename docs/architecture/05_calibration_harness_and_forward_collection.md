@@ -236,7 +236,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 1. `ENTRY_RIGHT_B` 且 `decision = 1` 的已標註紀錄 $\ge 100$ 筆、橫跨 $\ge 30$ 個交易日。該路徑刻意使用**獨立的 evaluator 名稱**（而非沿用 `ENTRY_RIGHT`）：`regime_evaluation_log` 的去重鍵為 `(symbol, evaluator, source, bar_ts)`，同名會讓同一根 K 棒的嚴格／放寬兩套判定互相覆蓋，A/B 分離統計即不可能。
 2. `ENTRY_RIGHT_B` 的期望值**高於同期 `ENTRY_RIGHT`**。只贏過零不夠——若放寬後的期望值低於嚴格版，代表多出來的那些進場機會是負向的。
-3. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature iii_b` 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
+3. （離線回測已封存，此項無法再量測；改以前向資料判定）原準則為 A/B 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
@@ -258,7 +258,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 1. 乾跑期累積 $\ge 20$ 個獨立加碼事件。**資料來源是 `rollover_audit_log`（`scenario = 'PYRAMID_ADD'`），不是 `regime_evaluation_log`**——本情境沒有接前向蒐集記錄器，`forward-report` 看不到它，也沒有自動標註。
 2. 計數以「同一部位的首次觸發」為單位，而非列數。乾跑時推播被抑制，`dynamic_state_patch` 依設計不會提交（`pyramid_count`／`last_pyramid_at` 永不前進），因此同一部位只要條件持續成立，每個交易日都會被每日去重鍵放行一次、重複入列；次數上限與冷卻在乾跑期**觀察不到**。
 3. 以人工比對每個事件之後 5 個交易日的走勢：加碼價位之後先觸及原停損（`ratchet_stop`）的比例，必須低於「風險預算 ÷ 停損距離」模型隱含的損益兩平勝率。條件二不變式保證原始部位無本金風險，所以要驗證的只有**新增那一筆**的期望值。
-4. `scripts/run_rollover_backtest_2025.py --ab-compare --ab-feature pyramid` 兩個模式的索提諾比率皆不下降，且「超額報酬 vs 減碼 B&H」差異皆不為負（2026-09-23：aggressive Sortino **1.13 → 1.87**、超額 **+5.45 pp**／defensive $+0.00$、+0.03 pp，加碼僅 4／2 次，屬個位數樣本，見 §5.12，不能單獨構成證據）。
+4. （離線回測已封存，此項無法再量測）原準則為 A/B 兩個模式的索提諾比率皆不下降，且「超額報酬 vs 減碼 B&H」差異皆不為負（2026-09-23：aggressive Sortino **1.13 → 1.87**、超額 **+5.45 pp**／defensive $+0.00$、+0.03 pp，加碼僅 4／2 次，屬個位數樣本，見 §5.12，不能單獨構成證據）。
 
 > 若 1~3 項因人工比對成本過高而難以持續，應先把 `PYRAMID_ADD` 接上 `evaluation_recorder`（比照 §5.12 的 `EXIT_*`），讓 03:30 labeler 自動標註，而不是降低門檻。
 
@@ -293,16 +293,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 - 當時未採用任何建議值、維持 `SHORT_ENTRY_DRY_RUN=true`。理由：標的池偏多頭強勢股、1h 資料全落在多頭年份、GEX 條件僅為價格代理、未模擬選擇權損益。
 - 下一步的關鍵證據是前向紀錄中 `ENTRY_SHORT` 真實 GEX 條件的結果，依 §5.8 A 判定。
 
-### 5.10 2025 全年度多資產動態轉倉回測基準
-除了單一事件研究外，本模組於 `backtest_engine_2025.py` 與 `scripts/run_rollover_backtest_2025.py` 擴展了投資組合層級的動態轉倉回測架構，以 2025 年（249 交易日 / 1,731 小時 K 線）涵蓋 Alpha（`NVDA`）、Beta（`SPY`）、Other（`GLD`）三類資產，驗證 9 大情境的狀態機流轉，並支援「穩健防禦型（Defensive）」與「動能進攻型（Aggressive Momentum）」雙模式：
-
-- **回測結論**：
-  - **穩健防禦型**：實現 +14.61% 總報酬率，最大回撤 13.76%（相較靜態持有基準 16.80% 降低 18.1%），已實現勝率 79.4%、獲利因子 2.43。
-  - **動能進攻型**：解鎖晴空萬里（ATH）阻力目標動態擴展（$\max(H_{60}, Spot + 3.0 \times ATR_{1D})$）、5% 現金儲備與 TP1 30% 平倉（保留 70% 衝刺破牆 TP2/TP3），總報酬提升至 **+16.64%**，最大回撤進一步降至 **11.81%**（回撤顯著降低 **29.7%**），已實現勝率達 **83.9%**，獲利因子暴增至 **3.77**（此為引擎早期版本數字；2026-09-23 以現行程式碼與 Sortino 判準重跑：defensive Sortino 1.45、aggressive 1.13，B&H 1.73——**以 Sortino 判讀 defensive 優於 aggressive**，見 `docs/strategies/04` §2.10.1）。
-- **微觀結構驗證**：實證 2025-01-10 SL1 結構破位平倉 NVDA，成功避開隨後至 2025 年 4 月達 -37% 的深幅下殺；5 月中旬 GLD 動能衰退（PSQ=5）時資金順利輪動至突破標的 NVDA（PSQ=95, $\Delta\text{EV}=+6.5\%$），5 月下旬再次輪動回 GLD 鎖定總經牛市波段。
-- **報告產出**：全量指標與月度損益紀錄輸出於 `nexus_core/reports/report_2025_rollover.md`。
-
----
+### 5.10 2025 全年度多資產動態轉倉回測基準（已封存）
+（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）結論保留於 [`../strategies/04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10：所有動態轉倉組合的 Sortino 皆低於單純持有（B&H）。
 
 ### 5.11 自選標的進場顧問 (`WATCHLIST_ADVISOR_DRY_RUN`) 上線觀察與判讀準則
 
@@ -429,38 +421,7 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 2. 洗盤率顯著高於訊號正確率（Wilson 區間不重疊）的分層，才列為候選調整對象；調整走 `calibration/` 報告 → 人工審核 → PR。
 3. 被顧問模式丟棄的分層 (`advisory=是`) 不影響任何使用者，其統計只用來佐證同一分層在指令持倉上的結論。
 
-**回測功能開關（離線先行）**：`backtest_engine_2025.py` 是 production 的獨立複刻，階段 1A／1B／3 上線時沒有同步進來，
-因此**跨 commit 對照量不到它們**——舊版與新版回測引擎唯一的差異是 `_MACRO_TOP_ESCAPE_TRIM_RATIO`（0.25 → 0.50，
-回測以 VIX ≥ 28 代理 CRITICAL）。現改為在同一版程式碼上以開關做 A/B：
-
-| CLI 旗標 | 複刻內容 | 代理與限制 |
-| :--- | :--- | :--- |
-| `--enable-tp1-trend-exempt` | TP1 前評估豁免；豁免時不減碼、停損上推至 anchor_base | 牆遷移＝昨日 vs 前日的 10 日高點 |
-| `--enable-pyramid-add` | 八項條件；倉位直接呼叫 production `compute_pyramid_add_sizing()` | 冷卻 8 根 15m 換算為 2 根 1h |
-| `--enable-escape-tiers` | 以 production `evaluate_macro_top_escape_score()` 分級，取代 VIX ≥ 28 單級減碼；WATCH 以 BSM 定價買 SPY Put | VTS＝VIX/VIX3M、負 Gamma＝SPY 開盤 < SMA20；Fear & Greed 與 FedWatch 無歷史資料恆不計分 |
-| `--ab-compare --ab-feature {iii_b,tp1_exempt,pyramid,escape_tiers,stage_1_3}` | 同一版程式碼各跑一次（關／開），輸出兩份報告與摘要 | — |
-
-開關全關時與改動前的引擎逐位元相同（施工時以 HEAD 版引擎對照兩種模式的逐日 NAV 與全部交易紀錄驗證）。
-每份回測報告另附「出場分層洗盤率」段落，是前向資料足量前的離線先行版（只有 SL1／SL2，沒有 SL3 主力對沖）。
-
-**2026-09-23 A/B 結果**（判讀依 Sortino 為主、超額報酬 vs 下行差對齊減碼 B&H、MDD／CVaR95 為輔；Sharpe、Calmar 不參與判讀——見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。基準線：aggressive Sortino 1.13、defensive 1.45；B&H 1.73。
-
-| 功能 | aggressive：ΔSortino／Δ超額／ΔMDD／ΔCVaR95 | defensive：ΔSortino／Δ超額／ΔMDD／ΔCVaR95 | 判讀 |
-| :--- | :---: | :---: | :--- |
-| 1A TP1 趨勢豁免 | −0.01／−0.06 pp／0／0 | −0.02／−0.12 pp／+0.01 pp／0 | 個位數觸發，無法判定 |
-| 1B PYRAMID_ADD | **+0.74**／**+5.45 pp**／0／+0.02 pp（加碼 4 次） | +0.00／+0.03 pp／0／0（加碼 2 次） | aggressive + 1B 是**唯一在 Sortino 上超越 B&H 的組合**（1.87 > 1.73，超額 +1.01 pp）；仍是個位數觸發，是前向觀察的第一優先 |
-| 3 逃頂三級階梯 | **−0.92**／−2.39 pp／−3.54 pp／−0.63 pp | −0.05／+0.18 pp／−1.71 pp／−0.45 pp | 以截斷上行換取低回撤：MDD 與 CVaR 改善，但主指標 Sortino 下降；代理過鬆（WATCH 全年 122–137 天成立、權利金淨損約 $4–5k） |
-| 1A + 1B + 3 合併 | −0.08／+1.28 pp／−3.54 pp／−0.58 pp | −0.14／−0.84 pp／−1.71 pp／−0.21 pp | 由 1B 與 3 的交互作用主導；3 抵銷了 1B 的 Sortino 增益 |
-
-> 以舊判準（總波動對齊、Sharpe 參考）時，逃頂分級的「MDD −3.54 pp」曾被視為部分正面；在 Sortino 判準下它是本表最大的負向項，因為它主要砍掉的是上行。
-
-逃頂分級的負向結果主要反映**代理**的問題而非 production 設計：回測的負 Gamma 代理（SPY < SMA20）遠比 production 的
-`SHORT_GAMMA_CRITICAL` 寬鬆，而 Fear & Greed 恆不計分又讓「過熱」訊號缺席，逃頂評分在回測中退化成「回檔偵測」。
-但它指出一個 production 需要監看的風險：**若 WATCH 在 production 的成立天數也接近一半，保護性 Put 的權利金會持續流失**。
-逃頂分級本身沒有被前向蒐集（`regime_evaluation_log.macro_regime` 欄位目前無任何寫入端），上線後以已推播指令的稽核紀錄
-追蹤各級動作的實際發生天數（只涵蓋送達的指令，被通知開關或去重抑制者不在內）：
-`SELECT action, COUNT(DISTINCT date(created_at)) FROM rollover_audit_log WHERE scenario = 'MACRO_TOP_ESCAPE_DEFENSE' GROUP BY action;`
-（`BUY_PROTECTIVE_PUT` = WATCH）。
+**回測功能開關（已封存）**：（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）2026-09-23 的 A/B 結論：僅 `PYRAMID_ADD` 在 2025 單年對 aggressive 模式有正向 Sortino 變化（1.13 → 1.87），但在 2022–2025 多資產期間不成立；逃頂三級階梯以截斷上行換取低回撤，Sortino 下降。
 
 ### 5.13 微結構與 Skew 門檻校準研究 (`micro-snapshot` / `micro-report` / `skew-proxy`)
 
@@ -597,16 +558,9 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 ---
 
-### 5.16 多資產 2022–2025 回測：資料來源、資料品質判定與 BOXX 大盤退場
+### 5.16 多資產歷史資料來源與資料品質判定（Alpaca／Yahoo）
 
-2025 三標的回測（§5.10）只有一年、三檔。為了在含空頭年的期間檢驗引擎，回測引擎一般化為「核心 + N 檔衛星」（`calibration/backtest_engine_2025.py` 的 `BacktestUniverse`／`SatelliteSpec`），結果與判讀見 [`../strategies/04_dynamic_rollover_state_machine.md`](../strategies/04_dynamic_rollover_state_machine.md) §2.10.5–§2.10.6。
-
-**一般化原則**
-
-- **核心持倉**（VOO）與**大盤訊號代理**（SPY）分開：負 Gamma 代理、`MARGIN_DEFENSE` 危機判定、逃頂分級、保護性 Put 的定價與 Beta 一律用 SPY（代表指數本身，且期權流動性遠優於 VOO）；核心建倉、超額再平衡、Covered Call 收益與 BOXX 退場訊號用 VOO。
-- NVDA／GLD 專屬常數改由每檔衛星的 `SatelliteSpec` 自帶（個股沿用 NVDA、GLD 沿用 GLD 的值）；Regime V 破位追空擴及 8 檔個股；1h K 棒以時間戳交集對齊。
-- 機會成本輪動改為投組層級（§2.10.6）。
-- **回歸不變式**：預設配置（SPY／NVDA／GLD、原權重、2025）兩模式 × 四種功能開關的逐日 NAV 與全部交易紀錄與改造前逐位元相同（`tests/unit/test_backtest_regression_invariant.py`；真實 2025 資料另以雜湊比對驗證）。
+本節保留歷史 1h 資料的來源與品質判定方法（`fetch-alpaca-1h`、`alpaca-seam`）。（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）
 
 **資料來源**
 
@@ -614,7 +568,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 | :--- | :--- | :--- |
 | 日線 | Yahoo（`python -m calibration fetch`） | 回溯至上市日；200 日均線等特徵需要暖機期 |
 | 1h 線 2021-11 → 2025-12 | Alpaca SIP（`python -m calibration fetch-alpaca-1h`） | Yahoo 1h 只有最近約 730 天；多資產快取整段改由 Alpaca 提供，不與 Yahoo 1h 接合 |
-| BOXX | Yahoo 日線；2022-12-28 上市前以 BIL 日報酬代理 | 見下方 BOXX 退場 |
+| BOXX | Yahoo 日線；2022-12-28 上市前以 BIL 日報酬代理 | 供日線策略回測使用 |
 
 Alpaca 慣例：價格用 `adjustment=all`（分割 + 股息，與 Yahoo `auto_adjust` 一致）；**成交量自行做分割調整**（原始量 × raw 收盤 ÷ 僅分割調整的收盤）——Alpaca 調整後的成交量不可靠（TSLA 2022-08 分割前被多乘 3 倍）。只用 `feed=sip`（IEX 只有全市場約 2.5% 的量，會讓量比失真）。TSLA 2022-08、GOOGL 2022-07、NVDA 2024-06 三次分割前後的量連續。
 
@@ -639,38 +593,13 @@ Alpaca 慣例：價格用 `adjustment=all`（分割 + 股息，與 Yahoo `auto_a
 
 \* NVDA 2024-06-10 分割前的比值為 10.0：**Yahoo 的小時成交量沒有做分割調整**，Alpaca 才是正確的一方；分割後為 1.0。價格方面，FCX 的 Alpaca 與 Yahoo 日線有約 0.36% 的股息調整差異，其餘在 0.02% 以內。結論：繼續使用 Alpaca SIP。
 
-**BOXX 大盤退場（`enable_boxx_retreat`，預設關閉）**
+**BOXX 大盤退場實驗（已封存）**：回測顯示 6 次退場中只有 1 次真正避開下跌、其餘 5 次是 whipsaw，2022 年 Sortino 反而變差；結論與總經三態一致——擇時無效（見 [`../strategies/09_static_allocation_rebalance.md`](../strategies/09_static_allocation_rebalance.md)）。
 
-- 觸發：VOO 日收盤連續 3 個交易日低於 200 日均線 → 退場；連續 3 日站回之上 → 回場。以前一交易日收盤判定、下一交易日開盤執行（無前視）。
-- 退場：8 檔個股衛星全數轉入 BOXX，VOO 賣出一半轉入 BOXX；GLD 不動。回場：賣出 BOXX，VOO 與個股依原目標權重重新建倉。B&H 對照組不退場。
-- 退場期間暫停衛星新進場、破位追空、左側演化加碼、順勢加碼、換股與核心超額部署到衛星；停損／TP、`MARGIN_DEFENSE`、逃頂防禦與 Covered Call 收益照常。
-- BOXX 上市前以 BIL 代理：上市日之前的 BIL 價格整段乘上 k = BOXX 上市日收盤 ÷ BIL 同日收盤，代理段的每日報酬等於 BIL（含配息的總報酬），上市日同價銜接、無跳空。
-
-2022–2025 A/B（Sortino；對照為同模式、無退場）：DEFENSIVE 0.41 → 0.38、AGGRESSIVE 0.28 → 0.73、AGGRESSIVE + `PYRAMID_ADD` 0.26 → 0.78；B&H 1.17。四年退場 6 次、合計 258 個交易日：
-
-| 退場 → 回場 | 天數 | VOO 同期變化（> 0 = 錯過的反彈） | BOXX 報酬 |
-| :--- | ---: | ---: | ---: |
-| 2022-01-28 → 2022-02-02 | 3 | +5.3% | 0.00% |
-| 2022-02-23 → 2022-03-23 | 20 | +3.6% | +0.02% |
-| 2022-04-14 → 2022-12-05 | 161 | −8.2% | +1.08% |
-| 2022-12-08 → 2023-01-17 | 25 | +1.3% | +0.46% |
-| 2023-10-30 → 2023-11-06 | 5 | +5.3% | +0.12% |
-| 2025-03-13 → 2025-05-15 | 44 | +5.2% | +0.75% |
-
-判讀：
-
-1. **只有 1 次真正避開下跌**（2022-04 → 2022-12，VOO −8.2%）；另外 5 次是 whipsaw，回場價比退場價高 1.3%–5.3%。2025-04 的關稅急跌與反彈也是 whipsaw。
-2. **2022 年的 Sortino 反而變差**（DEFENSIVE −2.18 → −2.95、AGGRESSIVE −2.16 → −2.83），但 AGGRESSIVE 的 2022 虧損從 −21.8% 降到 −16.9%：退場期間曝險降到約 28%，報酬的絕對虧損變小，單位下行風險的報酬沒有改善。
-3. **AGGRESSIVE 的大幅改善主要出現在 2024 年**（+21.8% → +37.9%），而 2024 年沒有任何退場，兩者的平均曝險也幾乎相同（75.0% vs 76.4%）——差異來自回場重建後的持股路徑不同，屬路徑依賴而非退場規則的系統性效果。DEFENSIVE 沒有改善。**不足以作為上線依據**。
-
-**逐檔觀察**：VOO 核心貢獻最大（兩組都約 +$23k，幾乎全是未實現的持有報酬）。MRNA（2022–2025 自高點下跌超過 80%）是最大虧損來源：DEFENSIVE −$3.5k、AGGRESSIVE + `PYRAMID_ADD` −$13.0k，觸發 54–57 次停損——每次停損後 3 天冷卻期滿又被右側／左側進場條件買回，停損本身有效，但「停損後反覆買回」讓崩跌標的持續失血。FCX 也為負。
-
-**重現**（於 `nexus_core/` 以 AGENTS.md「Offline Calibration」的容器方式執行；Alpaca 金鑰只以環境變數 `ALPACA_API_KEY`／`ALPACA_API_SECRET` 傳入——不得把 `.env` 複製進映像檔或 worktree）：
+**重現資料抓取**（於 `nexus_core/` 以 AGENTS.md「Offline Calibration」的容器方式執行；Alpaca 金鑰只以環境變數傳入——不得把 `.env` 複製進映像）：
 
 ```bash
 python -m calibration fetch --universe VOO,SPY,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,MRNA,GLD,BIL,BOXX --cache-dir /app/.calibration_cache/multi_asset
 python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,MRNA,GLD --start 2021-11-01 --end 2025-12-31 --cache-dir /app/.calibration_cache/multi_asset
-python scripts/run_multi_asset_backtest.py --suite all
 ```
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -678,9 +607,6 @@ python scripts/run_multi_asset_backtest.py --suite all
 - **離線事件研究** (`nexus_core/calibration/`)
   - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report | macro-forward-report | fetch-alpaca-1h | alpaca-seam`）
   - `nexus_core/calibration/alpaca_history.py`：Alpaca SIP 歷史 1h 線（常規時段聚合、成交量分割調整、區間取代、同根 K 棒資料品質判定）（§5.16）
-  - `nexus_core/calibration/backtest_engine_2025.py`：`BacktestUniverse`／`SatelliteSpec`／`legacy_universe()`／`multi_asset_universe()`、`enable_boxx_retreat`（§5.16）
-  - `nexus_core/calibration/backtest_analysis.py`：逐年分列、逐檔貢獻、BOXX 退場統計（§5.16）
-  - `nexus_core/scripts/run_multi_asset_backtest.py`：多資產 2022–2025 回測報告（6 組 + 逃頂 A/B + BOXX 退場 A/B）（§5.16）
   - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
   - `nexus_core/calibration/macro_forward_report.py`：總經訊號乾跑前向報告（§5.15）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
@@ -693,9 +619,6 @@ python scripts/run_multi_asset_backtest.py --suite all
   - `nexus_core/calibration/calibrators/vix_short.py`、`kelly_priors.py`、`rsi_threshold.py`、`room_atr.py`
   - `nexus_core/calibration/forward_log.py`：前向蒐集報告
   - `nexus_core/calibration/report.py`：報告輸出與路徑限制
-  - `nexus_core/calibration/backtest_engine_2025.py`：2025 全年度多資產動態轉倉回測引擎
-  - `nexus_core/scripts/run_rollover_backtest_2025.py`：回測執行入口腳本（`--enable-trend-continuation`／`--enable-tp1-trend-exempt`／`--enable-pyramid-add`／`--enable-escape-tiers` 啟用各功能複刻；`--ab-compare --ab-feature <功能>` 在同一版程式碼上跑出基準線／啟用兩份報告與差異摘要，見 §5.12）
-  - `nexus_core/reports/report_2025_rollover.md`：2025 全量回測報告
 - **共用標註**：`nexus_core/market_analysis/outcome_labeling.py`
 - **前向蒐集 (core)**
   - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器。`_LONG_ENTRY_REGIMES` 是「會放行多頭新開倉」的 Regime 白名單——新增這類 Regime 時必須同步加入，否則它會被記成 `direction=None` / `decision=0`，該路徑的校準資料靜默歸零。`record_exit_signal()`／`HOLD_EXIT_TIERS` 為出場分層記錄（§5.12）
@@ -712,4 +635,4 @@ python scripts/run_multi_asset_backtest.py --suite all
   - `nexus_core/cogs/trading/scheduler.py`：`regime_outcome_labeler`（03:30 ET）
   - `nexus_core/cogs/trading/portfolio_monitor.py`、`nexus_core/cogs/unified_terminal/symbol_view.py`：評估來源標記與 flush
 - **前向蒐集 (edge)**：`nexus_edge_scraper/database.py`（`gex_snapshot_history`、`em_snapshot_history`）、`nexus_edge_scraper/scheduler.py`（盤中 GEX 輪詢、收盤後 `record_em_snapshot_once()`）、`nexus_edge_scraper/local_api/cache_and_sync.py`（歷史端點）
-- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`、`test_calibration_backtest_feature_flags.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`test_notification_dispatch_outcome.py`、`test_macro_signals.py`、`test_macro_signal_service.py`、`test_macro_forward_report.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/test_rollover_backtest_2025.py`
+- **測試**：`nexus_core/tests/unit/test_outcome_labeling.py`、`test_regime_evaluation_forward_collection.py`、`test_calibration_events.py`、`test_calibration_stats.py`、`test_calibration_registry.py`、`test_calibration_report_and_offline.py`.py`、`test_exit_tier_forward_collection.py`、`test_calibration_microstructure.py`、`test_calibration_edge_history.py`、`test_notification_dispatch_outcome.py`、`test_macro_signals.py`、`test_macro_signal_service.py`、`test_macro_forward_report.py`、`nexus_edge_scraper/tests/test_em_snapshot.py`、`nexus_core/tests/unit/.py`

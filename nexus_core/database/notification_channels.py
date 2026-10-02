@@ -479,7 +479,6 @@ def channel_status_tags(key: str) -> str:
 
 # 情境層級的預設頻道。SATELLITE_REBALANCE 另依 exit tier 細分（見下方）。
 ROLLOVER_SCENARIO_CHANNEL: dict[str, NotificationKey] = {
-    "OPPORTUNITY_COST": "defense_option_rollover",
     "SATELLITE_REBALANCE": "defense_option_rollover",
     "MARGIN_DEFENSE": "defense_margin_call",
     "FUNDAMENTAL_BROKEN": "defense_fundamental_thesis",

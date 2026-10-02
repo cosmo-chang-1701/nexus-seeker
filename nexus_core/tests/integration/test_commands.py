@@ -78,8 +78,7 @@ async def test_command_edit_holding_sets_allocation_and_class(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:
     """
-    /edit_holding 應能持久化 asset_class / max_allocation_pct / target_allocation_pct /
-    boxx_allocation_pct，並可透過 database.get_user_holdings() 讀回（供動態轉倉引擎
+    /edit_holding 應能持久化 asset_class / max_allocation_pct / target_allocation_pct，並可透過 database.get_user_holdings() 讀回（供動態轉倉引擎
     Scenario 3/5 使用）。
     """
     bot = MagicMock()
@@ -100,7 +99,6 @@ async def test_command_edit_holding_sets_allocation_and_class(
         asset_class=discord.app_commands.Choice(name="SATELLITE", value="SATELLITE"),
         max_allocation_pct=30.0,
         target_allocation_pct=15.0,
-        boxx_allocation_pct=70.0,
     )
 
     from database.holdings import get_user_holdings
@@ -110,14 +108,13 @@ async def test_command_edit_holding_sets_allocation_and_class(
     assert nvda["asset_class"] == "SATELLITE"
     assert nvda["max_allocation_pct"] == pytest.approx(0.30)
     assert nvda["target_allocation_pct"] == pytest.approx(0.15)
-    assert nvda["boxx_allocation_pct"] == pytest.approx(0.70)
 
 
 @pytest.mark.asyncio
-async def test_command_edit_holding_rejects_invalid_boxx_allocation_pct(
+async def test_command_edit_holding_rejects_invalid_max_allocation_pct(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:
-    """BOXX 防禦閾值超出 (0, 100] 邊界時應被拒絕，不應寫入資料庫。"""
+    """配置上限超出 (0, 100] 邊界時應被拒絕，不應寫入資料庫。"""
     bot = MagicMock()
     cog = TerminalCog(bot)
 
@@ -133,7 +130,7 @@ async def test_command_edit_holding_rejects_invalid_boxx_allocation_pct(
         cog,  # type: ignore
         mock_interaction,
         symbol="AMZN",
-        boxx_allocation_pct=150.0,
+        max_allocation_pct=150.0,
     )
 
     mock_interaction.response.send_message.assert_called_once()
@@ -144,7 +141,7 @@ async def test_command_edit_holding_rejects_invalid_boxx_allocation_pct(
 
     holdings = get_user_holdings(mock_interaction.user.id)
     amzn = next(h for h in holdings if h["symbol"] == "AMZN")
-    assert amzn["boxx_allocation_pct"] is None
+    assert amzn["max_allocation_pct"] is None
 
 
 @pytest.mark.asyncio
@@ -302,7 +299,7 @@ async def test_command_add_holding_with_full_config_params(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:
     """/add_holding 應能在建倉當下一次帶入 asset_class / max_allocation_pct /
-    target_allocation_pct / boxx_allocation_pct / acquired_at，不需再另外呼叫
+    target_allocation_pct / acquired_at，不需再另外呼叫
     /edit_holding 補設定 (供動態轉倉引擎 Scenario 3/5 使用)。"""
     bot = MagicMock()
     cog = TerminalCog(bot)
@@ -316,7 +313,6 @@ async def test_command_add_holding_with_full_config_params(
         asset_class=discord.app_commands.Choice(name="SATELLITE", value="SATELLITE"),
         max_allocation_pct=30.0,
         target_allocation_pct=15.0,
-        boxx_allocation_pct=70.0,
         acquired_at="2022-06-01",
     )
 
@@ -327,7 +323,6 @@ async def test_command_add_holding_with_full_config_params(
     assert meta["asset_class"] == "SATELLITE"
     assert meta["max_allocation_pct"] == pytest.approx(0.30)
     assert meta["target_allocation_pct"] == pytest.approx(0.15)
-    assert meta["boxx_allocation_pct"] == pytest.approx(0.70)
     assert meta["acquired_at"] == "2022-06-01"
 
 
@@ -370,7 +365,7 @@ async def test_command_add_holding_upsert_merges_config_params(
 
 
 @pytest.mark.asyncio
-async def test_command_add_holding_rejects_invalid_boxx_allocation_pct(
+async def test_command_add_holding_rejects_invalid_max_allocation_pct(
     mock_interaction: Any, db_conn: Any, mock_market_data: Any
 ) -> None:
     """/add_holding 建倉當下帶入的配置參數也應套用與 /edit_holding 相同的驗證規則。"""
@@ -383,7 +378,7 @@ async def test_command_add_holding_rejects_invalid_boxx_allocation_pct(
         symbol="ORCL",
         quantity=10,
         avg_cost=100.0,
-        boxx_allocation_pct=150.0,
+        max_allocation_pct=150.0,
     )
 
     mock_interaction.followup.send.assert_called_once()

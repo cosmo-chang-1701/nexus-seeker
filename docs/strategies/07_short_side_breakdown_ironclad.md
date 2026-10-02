@@ -13,7 +13,7 @@
 | **區間內做空** | $\text{Spot} > \text{PutWall}$ | Put Wall（做市商正 Gamma 底牆） | 頂牆 $+ 0.5 \times \text{ATR}_{15m}$ 與出場引擎停損取較遠者 | 升穿停損 |
 | **破位追空** | $\text{Spot} \le \text{PutWall}$ | 現價下方第一個顯著負 GEX 節點 | 同上 | 收復剛跌破的 Put Wall |
 
-**六重鐵律通過之後**，系統產生一筆獨立的 **`SHORT_ENTRY` 做空進場訊號**，自帶進場／停損／目標與倉位，與「賣衛星、買候選」的機會成本轉倉完全脫鉤。早期版本把做空確認丟進多頭下游：候選來源只看上漲空間、機會成本轉倉要求 PowerSqueeze $> 80$（多頭突破分數）、核心資金部署甚至會把 CORE 超額現金以 Buy Shares 部署進剛被確認要做空的標的——方向完全相反的下單。
+**六重鐵律通過之後**，系統產生一筆獨立的 **`SHORT_ENTRY` 做空進場訊號**，自帶進場／停損／目標與倉位，與多頭買進流程完全脫鉤。早期版本把做空確認丟進多頭下游（機會成本轉倉、核心資金部署），甚至會把 CORE 超額現金以 Buy Shares 部署進剛被確認要做空的標的——方向完全相反的下單；這些多頭下游已隨引擎精簡刪除，做空只走 `SHORT_ENTRY`。
 
 **適用市場環境**：Regime V 破位追空態（`DYNAMIC` 模式自動路由），或使用者於 `/settings` 手動選擇 `SHORT_SIDE`。⚠️ Regime V 要求 $\text{Spot} < \text{PutWall}$，因此 **`DYNAMIC` 只會產生「破位追空」**，「區間內做空」只能經由 `SHORT_SIDE` 觸發。**不適用**於 Regime IV 的宏觀鎖定分支——系統性流動性危機與大盤負 Gamma 踩踏下，做空同樣會被劇烈軋空，該分支對做多做空一視同仁地全面封鎖。
 
@@ -189,12 +189,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Users["SHORT_SIDE / DYNAMIC 使用者<br/>(含沒有任何持倉者)"] --> S2["Scenario 2 evaluate_opportunity_cost_for_satellites"]
-    S2 -- "SHORT_SIDE" --> Skip["回傳 SHORT 未確認<br/>不對多頭候選跑做空鐵律"]
-    S2 -- "DYNAMIC + Regime V" --> Eval["evaluate_short_entry()<br/>在衛星迴圈之前返回 SHORT 確認"]
-    Eval --> S5["Scenario 5 核心資金部署<br/>SHORT 確認視為未確認 (BOXX 防禦照常)"]
-    Eval --> Cands["做空候選清單<br/>(a) Regime V 已確認評估 (原樣沿用)<br/>(b) _find_best_short_target()"]
-    Skip --> Cands
+    Users["SHORT_SIDE / DYNAMIC 使用者<br/>(含沒有任何持倉者)"] --> Cands["做空候選清單<br/>_find_best_short_target()"]
     Cands --> Gate1{"本週期有 MARGIN_DEFENSE 指令?"}
     Gate1 -- 是 --> Suppress["抑制新開空單"]
     Gate1 -- 否 --> Gate2{"做空 VIX 乘數 = 0?<br/>(VIX >= 35)"}

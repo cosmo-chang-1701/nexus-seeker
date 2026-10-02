@@ -39,7 +39,7 @@ DEFAULT_HORIZON_SESSIONS = 20
 # 標註，滿 60 個交易日後以 60 日路徑覆寫同一列；報告兩個視窗並列。
 EXTENDED_HORIZON_SESSIONS = 60
 REPORT_HORIZONS: tuple[int, ...] = (DEFAULT_HORIZON_SESSIONS, EXTENDED_HORIZON_SESSIONS)
-# 與 calibration/backtest_engine_2025.py 相同的 MAR / 無風險利率基準
+# 與已移除的離線轉倉回測相同的 MAR / 無風險利率基準
 DEFAULT_RF_ANNUAL = 0.045
 
 _NY_TZ = ZoneInfo("America/New_York")

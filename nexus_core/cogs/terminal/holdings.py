@@ -15,14 +15,12 @@ from database.user_settings import get_full_user_context
 def _validate_holding_config_params(
     max_allocation_pct: Optional[float],
     target_allocation_pct: Optional[float],
-    boxx_allocation_pct: Optional[float],
     acquired_at: Optional[str],
 ) -> Optional[discord.Embed]:
     """驗證 /add_holding 與 /edit_holding 共用的持倉配置參數，合法回傳 None，否則回傳錯誤 Embed。"""
     for label, val in (
         ("資產配置上限", max_allocation_pct),
         ("目標配置比例", target_allocation_pct),
-        ("BOXX 防禦閾值", boxx_allocation_pct),
     ):
         if val is not None and not (0.0 < val <= 100.0):
             return create_error_embed(
@@ -49,13 +47,6 @@ def _validate_holding_config_params(
     return None
 
 
-_ADVISORY_MODE_TO_FLAG: Dict[str, Optional[bool]] = {
-    "ADVISORY": True,
-    "COMMAND": False,
-    "FOLLOW": None,  # 跟隨帳戶 portfolio_mode：以 None 表示「單檔未覆寫」
-}
-
-
 async def add_holding_impl(
     interaction: discord.Interaction,
     symbol: str,
@@ -64,10 +55,8 @@ async def add_holding_impl(
     asset_class: Optional[app_commands.Choice[str]] = None,
     max_allocation_pct: Optional[float] = None,
     target_allocation_pct: Optional[float] = None,
-    boxx_allocation_pct: Optional[float] = None,
     acquired_at: Optional[str] = None,
     dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
-    advisory_mode: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     symbol = symbol.upper()
     user_id = interaction.user.id
@@ -98,7 +87,7 @@ async def add_holding_impl(
         )
 
     config_error = _validate_holding_config_params(
-        max_allocation_pct, target_allocation_pct, boxx_allocation_pct, acquired_at
+        max_allocation_pct, target_allocation_pct, acquired_at
     )
     if config_error is not None:
         return await interaction.followup.send(embed=config_error, ephemeral=True)
@@ -122,14 +111,8 @@ async def add_holding_impl(
             existing_asset.metadata["target_allocation_pct"] = (
                 target_allocation_pct / 100.0
             )
-        if boxx_allocation_pct is not None:
-            existing_asset.metadata["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
         if acquired_at is not None:
             existing_asset.metadata["acquired_at"] = acquired_at
-        if advisory_mode is not None:
-            existing_asset.metadata["advisory_only"] = _ADVISORY_MODE_TO_FLAG.get(
-                advisory_mode.value
-            )
         if dynamic_entry_regime is not None:
             from market_analysis.dynamic_rollover.transition_engine import (
                 build_dynamic_strategy_state_for_symbol,
@@ -157,13 +140,6 @@ async def add_holding_impl(
             metadata["max_allocation_pct"] = max_allocation_pct / 100.0
         if target_allocation_pct is not None:
             metadata["target_allocation_pct"] = target_allocation_pct / 100.0
-        if boxx_allocation_pct is not None:
-            metadata["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
-        if advisory_mode is not None:
-            # FOLLOW 對新建部位等同未設定：不寫入 key 即跟隨帳戶。
-            advisory_flag = _ADVISORY_MODE_TO_FLAG.get(advisory_mode.value)
-            if advisory_flag is not None:
-                metadata["advisory_only"] = advisory_flag
         if dynamic_entry_regime is not None:
             from market_analysis.dynamic_rollover.transition_engine import (
                 build_dynamic_strategy_state_for_symbol,
@@ -216,10 +192,8 @@ async def edit_holding_impl(
     asset_class: Optional[app_commands.Choice[str]] = None,
     max_allocation_pct: Optional[float] = None,
     target_allocation_pct: Optional[float] = None,
-    boxx_allocation_pct: Optional[float] = None,
     acquired_at: Optional[str] = None,
     dynamic_entry_regime: Optional[app_commands.Choice[str]] = None,
-    advisory_mode: Optional[app_commands.Choice[str]] = None,
 ) -> Any:
     symbol = symbol.upper()
     if (
@@ -228,10 +202,8 @@ async def edit_holding_impl(
         and asset_class is None
         and max_allocation_pct is None
         and target_allocation_pct is None
-        and boxx_allocation_pct is None
         and acquired_at is None
         and dynamic_entry_regime is None
-        and advisory_mode is None
     ):
         return await interaction.response.send_message(
             embed=create_info_embed(title="系統資訊", message=" 請提供要修改的參數。"),
@@ -239,7 +211,7 @@ async def edit_holding_impl(
         )
 
     config_error = _validate_holding_config_params(
-        max_allocation_pct, target_allocation_pct, boxx_allocation_pct, acquired_at
+        max_allocation_pct, target_allocation_pct, acquired_at
     )
     if config_error is not None:
         return await interaction.response.send_message(
@@ -263,13 +235,8 @@ async def edit_holding_impl(
         updates["max_allocation_pct"] = max_allocation_pct / 100.0
     if target_allocation_pct is not None:
         updates["target_allocation_pct"] = target_allocation_pct / 100.0
-    if boxx_allocation_pct is not None:
-        updates["boxx_allocation_pct"] = boxx_allocation_pct / 100.0
     if acquired_at is not None:
         updates["acquired_at"] = acquired_at
-    if advisory_mode is not None:
-        # FOLLOW → None：明確寫入 None 以清除單檔覆寫、回到跟隨帳戶設定。
-        updates["advisory_only"] = _ADVISORY_MODE_TO_FLAG.get(advisory_mode.value)
     if dynamic_entry_regime is not None:
         from market_analysis.dynamic_rollover.transition_engine import (
             build_dynamic_strategy_state_for_symbol,
@@ -370,7 +337,6 @@ async def list_holdings_impl(interaction: discord.Interaction) -> Any:
             "asset_class": asset_class,
             "max_allocation_pct": max_alloc,
             "target_allocation_pct": target_alloc,
-            "boxx_allocation_pct": a.metadata.get("boxx_allocation_pct"),
             "acquired_at": a.metadata.get("acquired_at"),
         }
         if asset_class == "CORE" and target_alloc is None:

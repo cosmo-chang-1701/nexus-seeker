@@ -87,8 +87,8 @@ async def test_evaluate_macro_top_escape_defense_score_zero_no_action(
     mock_regime: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
-    """Gate 2: 已開啟 opt-in，但綜合評分為 0 (tier=NORMAL，不在三級階梯
-    _MACRO_TOP_ESCAPE_TIER_ACTIONS 之中) -> 不應觸發任何動作。"""
+    """Gate 2: 已開啟 opt-in，但綜合評分為 0 (tier=NORMAL，不在保護性 Put 分級
+    _MACRO_TOP_ESCAPE_PUT_TIERS 之中) -> 不應觸發任何動作。"""
     mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
     result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
     assert result == []
@@ -136,6 +136,8 @@ async def test_evaluate_macro_top_escape_defense_watch_tier_buys_protective_put(
     assert "trade_category" in ins["reason"] and "HEDGE" in ins["reason"]
     # Q = ceil(1000 * 0.30 / (0.275 * 100)) = ceil(10.909) = 11
     assert "11" in ins["suggested_strategy"]
+    assert ins["macro_tier"] == "WATCH"
+    assert "前哨階段訊號初現" in ins["reason"]
 
 
 @pytest.mark.asyncio
@@ -192,7 +194,7 @@ async def test_evaluate_macro_top_escape_defense_watch_tier_flat_portfolio_no_he
 @patch("database.cache.get_kv_cache", return_value=0.50)
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_macro_top_escape_defense_elevated_tier_trims_25pct(
+async def test_evaluate_macro_top_escape_defense_elevated_tier_buys_protective_put(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_kv: MagicMock,
@@ -201,14 +203,19 @@ async def test_evaluate_macro_top_escape_defense_elevated_tier_trims_25pct(
     mock_regime: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
-    """ELEVATED 級 (score=2：VTS 逆價差 + Fear&Greed 極度貪婪)：介於 WATCH 與
-    CRITICAL 之間的中繼防禦強度，減碼 25%（沿用原本唯一的 CRITICAL 比例）。"""
-    mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
+    """ELEVATED 級 (score=2：VTS 逆價差 + Fear&Greed 極度貪婪)：與 WATCH 相同，
+    只建議買 SPY 保護性 Put，不減碼（減碼分支已移除）。"""
+    mock_ctx.return_value = MagicMock(
+        enable_macro_top_escape_defense=True, total_weighted_delta=1000.0
+    )
     result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
     assert len(result) == 1
-    assert result[0]["action"] == "LIQUIDATE"
-    assert result[0]["sell_ratio"] == 0.25
-    assert result[0]["target_core"] == "BOXX"
+    assert result[0]["symbol"] == "SPY"
+    assert result[0]["action"] == "BUY_PROTECTIVE_PUT"
+    assert result[0]["sell_ratio"] == 0.0
+    assert result[0]["macro_tier"] == "ELEVATED"
+    assert "警戒升高" in result[0]["reason"]
+    assert "前哨" not in result[0]["reason"]
 
 
 @pytest.mark.asyncio
@@ -230,7 +237,7 @@ async def test_evaluate_macro_top_escape_defense_elevated_tier_trims_25pct(
 @patch("database.cache.get_kv_cache", return_value=_CRITICAL_PATCHES["prob"])
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_macro_top_escape_defense_triggers_bounded_trim_to_boxx(
+async def test_evaluate_macro_top_escape_defense_critical_tier_buys_protective_put_not_trim(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_kv: MagicMock,
@@ -239,21 +246,22 @@ async def test_evaluate_macro_top_escape_defense_triggers_bounded_trim_to_boxx(
     mock_regime: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
-    """兩道 Gate 皆通過 (opt-in 開啟 + 評分達 CRITICAL) -> 對 SATELLITE 持倉
-    觸發有界 50% 防禦性減碼 (三級階梯化後由 25% 提高)，轉入 BOXX，且遠低於
-    Scenario 3/4 的 90%/100%。"""
-    mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
+    """兩道 Gate 皆通過 (opt-in 開啟 + 評分達 CRITICAL) -> 同樣只建議保護性
+    Put，不對 SATELLITE 持倉減碼、不轉入 BOXX。"""
+    mock_ctx.return_value = MagicMock(
+        enable_macro_top_escape_defense=True, total_weighted_delta=1000.0
+    )
     result = await engine.evaluate_macro_top_escape_defense(1, [_satellite_asset()])
     assert len(result) == 1
-    assert result[0]["symbol"] == "NVDA"
-    assert result[0]["action"] == "LIQUIDATE"
-    assert result[0]["sell_ratio"] == 0.5
-    assert result[0]["target_core"] == "BOXX"
-    assert result[0]["sell_action"] == "STC"
-    assert "BOXX" in (result[0]["buy_action_label"] or "")
-    assert result[0]["is_manual_override_required"] is True
+    assert result[0]["symbol"] == "SPY"
+    assert result[0]["action"] == "BUY_PROTECTIVE_PUT"
+    assert result[0]["sell_ratio"] == 0.0
     assert result[0]["scenario"] == "MACRO_TOP_ESCAPE_DEFENSE"
-    assert "逃頂確認" in result[0]["reason"]
+    assert "BOXX" not in result[0]["reason"]
+    # CRITICAL 不得沿用 WATCH 的「尚不足以判定逃頂」文案。
+    assert result[0]["macro_tier"] == "CRITICAL"
+    assert "確認級" in result[0]["reason"]
+    assert "前哨" not in result[0]["reason"]
 
 
 @pytest.mark.asyncio
@@ -284,49 +292,14 @@ async def test_evaluate_macro_top_escape_defense_skips_already_flagged_symbols(
     mock_regime: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
-    """已被 Scenario 2/3/4/5 標記過的標的，Scenario 6 應跳過以避免矛盾指令。"""
-    mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
+    """對沖標的 (SPY 選擇權) 已被其他情境標記過時，Scenario 6 應跳過以避免矛盾指令。"""
+    mock_ctx.return_value = MagicMock(
+        enable_macro_top_escape_defense=True, total_weighted_delta=1000.0
+    )
     result = await engine.evaluate_macro_top_escape_defense(
         1,
         [_satellite_asset()],
-        already_flagged_symbols={("NVDA", "SPOT")},
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value=_CRITICAL_PATCHES["regime"],
-)
-@patch(
-    "services.market_data_service.get_vix_term_structure",
-    new_callable=AsyncMock,
-    return_value=_CRITICAL_PATCHES["vts"],
-)
-@patch(
-    "market_analysis.index_microstructure.fetch_core_macro_metrics",
-    new_callable=AsyncMock,
-    return_value=_CRITICAL_PATCHES["fear_greed"],
-)
-@patch("database.cache.get_kv_cache", return_value=_CRITICAL_PATCHES["prob"])
-@patch("database.orders.get_user_active_orders", return_value=[])
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_macro_top_escape_defense_excludes_core_etfs(
-    mock_ctx: MagicMock,
-    mock_orders: MagicMock,
-    mock_kv: MagicMock,
-    mock_fear_greed: AsyncMock,
-    mock_vts: AsyncMock,
-    mock_regime: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """CORE_DEFENSE_ETF_SYMBOLS (QQQ/SPY/VOO/VXX/IVV/VTI) 即使被誤標為
-    SATELLITE，也永遠不應被本情境標記減碼。"""
-    mock_ctx.return_value = MagicMock(enable_macro_top_escape_defense=True)
-    result = await engine.evaluate_macro_top_escape_defense(
-        1, [_satellite_asset(symbol="VOO")]
+        already_flagged_symbols={("SPY", "OPTIONS")},
     )
     assert result == []
 

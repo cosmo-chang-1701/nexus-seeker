@@ -29,6 +29,7 @@ from market_analysis.dynamic_rollover import (
 )
 from market_analysis.dynamic_rollover.models import (
     DynamicRegime,
+    RolloverScenario,
     TradingStrategyMode,
 )
 from market_analysis.dynamic_rollover.constants import (
@@ -362,7 +363,7 @@ class PortfolioMonitorCog(commands.Cog):
         """組裝單筆多頭期權持倉的 asset_entry，供動態轉倉引擎評估迴圈使用。
 
         選擇權合約本身恆為戰術性部位：即使標的是 CORE 防禦 ETF，也不套用
-        CORE 的無上限配置假設，避免 evaluate_core_deployment /
+        CORE 的無上限配置假設，避免
         evaluate_covered_call_overlay 誤處理。期權部位無法從既有資料推導
         單筆成本基礎 (見 anti_washout.py 的 acquired_at 估算邏輯)，
         avg_cost/acquired_at 明確降級為 0.0/None。
@@ -438,7 +439,6 @@ class PortfolioMonitorCog(commands.Cog):
             "acquired_at": None,
             "bid": bid,
             "ask": ask,
-            "boxx_allocation_pct": None,
             "uoa": metrics.get("uoa", []),
             "vwap_loss_with_volume": metrics.get("vwap_loss_with_volume", False),
             "session_vwap": metrics.get("session_vwap", 0.0),
@@ -529,7 +529,7 @@ class PortfolioMonitorCog(commands.Cog):
             all_holdings = get_all_holdings()
 
             # 🚀 動態轉倉引擎：真實期權持倉併入評估迴圈 (Feature Flag，預設關閉)。
-            # 僅納入多頭買方部位 (quantity > 0) 至 Scenario 2/3/4/5 的 SATELLITE
+            # 僅納入多頭買方部位 (quantity > 0) 至 Scenario 3/4 的 SATELLITE
             # 評估迴圈；空頭 (STO) 部位風險輪廓相反 (時間價值衰減對我方有利)，
             # 依賴權利金即時報價，故直接在下方與 long_option_trades 共用同一批
             # quote_sem (Semaphore(3)) 抓取 mid 報價後，送入獨立的
@@ -767,27 +767,6 @@ class PortfolioMonitorCog(commands.Cog):
                         sym, radar_cache_map.get(sym)
                     )
 
-                # 顧問模式 (B&H)：帳戶層 portfolio_mode 每位使用者只讀一次
-                # (不在持倉迴圈內逐檔讀 DB)，讀取失敗一律視為 COMMAND (現行行為)。
-                portfolio_mode_by_user: Dict[int, str] = {}
-
-                async def _portfolio_mode_for(uid: int) -> str:
-                    if uid not in portfolio_mode_by_user:
-                        try:
-                            ctx = await asyncio.to_thread(
-                                database.get_full_user_context, uid
-                            )
-                            portfolio_mode_by_user[uid] = str(
-                                getattr(ctx, "portfolio_mode", "COMMAND")
-                            )
-                        except Exception as e:
-                            logger.warning(
-                                f"[AdvisoryMode] 讀取 portfolio_mode 失敗 (UID: {uid})，"
-                                f"視為 COMMAND: {e}"
-                            )
-                            portfolio_mode_by_user[uid] = "COMMAND"
-                    return portfolio_mode_by_user[uid]
-
                 for h in all_holdings:
                     u_id = h["user_id"]
                     sym = h["symbol"].upper()
@@ -853,10 +832,6 @@ class PortfolioMonitorCog(commands.Cog):
                         if radar_cache_map.get(sym)
                         else {},
                         "acquired_at": h.get("acquired_at"),
-                        # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：None 時
-                        # evaluate_core_deployment() 會自動改用
-                        # suggest_boxx_allocation_pct() 的總經自動建議值。
-                        "boxx_allocation_pct": h.get("boxx_allocation_pct"),
                         # 微觀結構出場決策矩陣 (SL-主力對沖/TP3-終局平倉) 所需的
                         # 原始 UOA 清單與 VWAP 帶量失守訊號，皆由 _build_symbol_metrics
                         # 標的層級計算一次，現貨與期權部位共用同一份結果。
@@ -875,17 +850,10 @@ class PortfolioMonitorCog(commands.Cog):
                         asset_entry["target_allocation_pct"] = h.get(
                             "target_allocation_pct"
                         )
-                    # 顧問模式三態解析：單檔 advisory_only (None=跟隨帳戶、
-                    # True=顧問、False=指令)。⚠️ 不可用 `or` (會吃掉顯式 False)。
-                    # 僅為 True 時才寫入 key，預設 (COMMAND、未覆寫) 下 asset_entry
-                    # 與改動前逐位元相同；比較一律用 == "ADVISORY"。
-                    per_holding_advisory = h.get("advisory_only")
-                    if per_holding_advisory is None:
-                        per_holding_advisory = (
-                            await _portfolio_mode_for(u_id)
-                        ) == "ADVISORY"
-                    if per_holding_advisory is True:
-                        asset_entry["advisory_only"] = True
+                    # 系統以買入並持有 (B&H) 為主要策略：多頭現貨一律走顧問路徑
+                    # (只告知位階，不輸出減碼/換股指令)；空頭現貨 (quantity < 0)
+                    # 由 is_advisory_asset 排除，維持指令路徑。
+                    asset_entry["advisory_only"] = True
                     user_assets.setdefault(u_id, []).append(asset_entry)
 
                 # 🚀 期權部位併入動態轉倉評估迴圈 (Feature Flag)。此機制與
@@ -1058,82 +1026,15 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 邏輯 (2): 機會成本轉倉 — 對尚未被 Scenario 3 標記的
-                    # SATELLITE 持倉，比對單一預篩選高 EV 候選標的的機會成本
-                    # 注意：僅排除 Scenario 3 有實際賣出/減碼動作的標的；HOLD
-                    # (安心防守卡，無實際動作) 不構成矛盾指令，不應阻擋本情境評估。
-                    # 去重鍵採 (symbol, instrument_type) 複合鍵：同一標的可能
-                    # 同時存在現貨與期權部位，純 symbol 去重會讓其中一種工具
-                    # 類型的清倉指令意外壓制另一種工具類型的獨立評估。
                     already_flagged = {
                         (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
                     }
-                    candidate_symbol = self.rollover_engine._find_best_rollover_target(
-                        u_id, exclude_symbols={a["symbol"] for a in portfolio_assets}
-                    )
-                    candidate_radar = radar_cache_map.get(candidate_symbol)
-                    if (
-                        candidate_symbol != "VOO"
-                        and candidate_radar is None
-                        and terminal_cog
-                    ):
-                        try:
-                            if radar_cache_map:
-                                await asyncio.sleep(1.5)  # 沿用既有節流保護
-                            candidate_radar = (
-                                await terminal_cog._fetch_sym_radar_data_slow(
-                                    candidate_symbol
-                                )
-                            )
-                            radar_cache_map[candidate_symbol] = candidate_radar
-                        except Exception as ex:
-                            logger.error(
-                                f"Failed to fetch candidate radar data for {candidate_symbol}: {ex}"
-                            )
 
-                    (
-                        opportunity_cost_instructions,
-                        candidate_entry_confirmation,
-                    ) = await self.rollover_engine.evaluate_opportunity_cost_for_satellites(
-                        u_id,
-                        portfolio_assets,
-                        already_flagged,
-                        candidate_symbol,
-                        candidate_radar,
-                    )
-                    rebalance_instructions += opportunity_cost_instructions
-
-                    # 🚀 邏輯 (5): 核心資金部署 — 對超過使用者明確設定
-                    # target_allocation_pct 的 CORE 持倉，將超額部位部署至
-                    # 邏輯 (2) 已找到並確認突破的候選標的，重用同一份
-                    # candidate_symbol / candidate_radar，不重複掃描 watchlist；
-                    # 同時沿用邏輯 (2) 已算好的 _confirm_entry_signal 六重鐵律
-                    # 確認結果 (candidate_entry_confirmation)，避免對同一候選
-                    # 標的在同一輪次內重複驗證 (內含未快取的 get_market_regime()
-                    # 呼叫)。
-                    already_flagged = {
-                        (ins["symbol"], ins.get("instrument_type", "SPOT"))
-                        for ins in rebalance_instructions
-                        if ins.get("action") != "HOLD"
-                    }
-                    rebalance_instructions += (
-                        await self.rollover_engine.evaluate_core_deployment(
-                            u_id,
-                            portfolio_assets,
-                            already_flagged,
-                            total_val,
-                            candidate_symbol,
-                            candidate_radar,
-                            precomputed_entry_confirmation=candidate_entry_confirmation,
-                        )
-                    )
-
-                    # 🚀 邏輯 (5) 延伸: Covered Call Overlay — 與上方超額配置部署
-                    # 分支互相獨立，不要求 target_allocation_pct opt-in，只要求
-                    # CORE 持倉股數達 1 口門檻。輸出恆為 action="HOLD"（不賣出
-                    # 任何標的持股），故不需要、也不應該把它的輸出併入
+                    # 🚀 邏輯 (1): Covered Call Overlay — 不要求
+                    # target_allocation_pct opt-in，只要求 CORE 持倉股數達 1 口
+                    # 門檻。輸出恆為 action="HOLD"（不賣出任何標的持股），故不需要、也不應該把它的輸出併入
                     # already_flagged_symbols 用於排除後續分支 —— 沿用當前的
                     # already_flagged 集合即可（其僅用於避免重複評估已被標記
                     # 賣出/減碼的標的）。
@@ -1145,15 +1046,15 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 2/3/5 標記過的
+                    # 🚀 邏輯 (4): 槓桿與保證金防禦 — 排除已被 Scenario 3 標記過的
                     # 標的，避免同一標的同一輪次收到互相矛盾的清倉指令。
-                    # 同樣僅排除有實際賣出/減碼動作者；Scenario 3 的 HOLD 安心防守卡
-                    # 不應在大盤觸發系統性保證金風控紅線時，silently 蓋掉更高等級的
-                    # 強制平倉防禦警報。
+                    # 僅排除有實際賣出/減碼動作者：Scenario 3 的 HOLD 安心防守卡
+                    # 與 ADVISORY 位階告知卡都只是告知，不應在大盤觸發系統性
+                    # 保證金風控紅線時，silently 蓋掉更高等級的強制平倉防禦警報。
                     already_flagged = {
                         (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
-                        if ins.get("action") != "HOLD"
+                        if ins.get("action") not in ("HOLD", "ADVISORY")
                     }
                     rebalance_instructions += (
                         await self.rollover_engine.evaluate_margin_defense(
@@ -1163,11 +1064,11 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在六大情境的最後一位
-                    # (3→2→5→4→6)。本情境是信心度最低、最具推測性的觸發
+                    # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在各情境的最後一位
+                    # (3→1→4→6)。本情境是信心度最低、最具推測性的觸發
                     # (機率性組合評分 vs. 其餘情境已確認的價格/保證金破位)，
                     # 必須確保不會搶在更確定的訊號之前對同一標的下指令；沿用
-                    # 累積的 already_flagged 集合，保證 Scenario 2-5 對任一
+                    # 累積的 already_flagged 集合，保證 Scenario 3-4 對任一
                     # 標的永遠享有優先權。嚴格 opt-in
                     # (user_settings.enable_macro_top_escape_defense)，未開啟
                     # 的使用者這裡恆為 no-op。
@@ -1184,7 +1085,7 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
-                    # 🚀 賣方期權時間價值衰減停利 — 與 Scenario 2/3/4/5/6 完全
+                    # 🚀 賣方期權時間價值衰減停利 — 與其他情境完全
                     # 獨立，只處理既有空頭 CALL/PUT (CSP) 部位是否該提前 BTC 回補了結，
                     # 不涉及任何轉倉/開倉決策，因此不參與 already_flagged_symbols
                     # 排除邏輯，也不影響/受影響於上述任一情境。
@@ -1201,28 +1102,10 @@ class PortfolioMonitorCog(commands.Cog):
                         user_short_calls.get(u_id, []),
                     )
 
-                    # 🚀 SHORT_ENTRY：獨立的做空進場訊號。與 Scenario 2 的「賣衛星、
-                    # 買候選」完全脫鉤——後者整條下游是多頭假設。候選有兩個來源：
-                    # (a) Scenario 2 在 DYNAMIC + Regime V 已確認的做空評估 (原樣
-                    # 沿用，不重算)；(b) 依下行空間 × 空頭動能挑出的做空候選。
+                    # 🚀 SHORT_ENTRY：獨立的做空進場訊號，候選依下行空間 × 空頭動能挑出。
                     # 本週期若已有保證金防禦指令，引擎內部抑制新開空單。
                     if u_id in short_strategy_user_ids:
                         short_candidates: List[ShortCandidateInput] = []
-                        if (
-                            candidate_entry_confirmation is not None
-                            and candidate_entry_confirmation.direction == "SHORT"
-                            and candidate_entry_confirmation.short_evaluation
-                            is not None
-                        ):
-                            short_candidates.append(
-                                ShortCandidateInput(
-                                    symbol=candidate_symbol,
-                                    radar=candidate_radar,
-                                    precomputed=candidate_entry_confirmation.short_evaluation,
-                                    entry_regime=candidate_entry_confirmation.entry_regime,
-                                    rsi_15m=candidate_entry_confirmation.rsi_15m,
-                                )
-                            )
                         short_symbol = self.rollover_engine._find_best_short_target(
                             u_id,
                             {a["symbol"] for a in portfolio_assets},
@@ -1271,7 +1154,6 @@ class PortfolioMonitorCog(commands.Cog):
                     # 由 create_dynamic_rollover_embed 依 scenario 明確對照表決定，
                     # 不再依賴此處字串是否包含特定關鍵字。
                     _SCENARIO_LABELS = {
-                        "OPPORTUNITY_COST": "機會成本轉倉",
                         "SATELLITE_REBALANCE": "核心衛星再平衡",
                         "MARGIN_DEFENSE": "槓桿與保證金防禦",
                         "CORE_DEPLOYMENT": "核心資金部署",
@@ -1314,6 +1196,10 @@ class PortfolioMonitorCog(commands.Cog):
                                 f"advisory_exit_{u_id}_{ins['symbol']}_"
                                 f"{ins.get('exit_tier') or 'NA'}_{today_str}"
                             )
+                        if ins.get("macro_tier"):
+                            # 逃頂防禦三級動作相同，納入分級才能讓同日由 WATCH
+                            # 升級至 ELEVATED／CRITICAL 時再推播一次。
+                            dedup_key += f"_{ins['macro_tier']}"
                         if scenario == "COVERED_CALL_PROFIT_LOCK":
                             # 同一標的可能同時存在多筆不同履約價/到期日/類型的賣方
                             # 期權，通用 dedup_key 僅以 (symbol, action) 區分會讓
@@ -1337,7 +1223,7 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                         # 優先採用各情境引擎實際計算出的目標資產參考限價
                         # (取代過去恆為 "Market" 的佔位字串)；僅在引擎未提供
-                        # 有效數值時（例如 Scenario 2/4 尚未接上定價邏輯）才
+                        # 有效數值時（例如 Scenario 4 尚未接上定價邏輯）才
                         # 退回 "Market" 泛用字串。
                         limit_price_val = ins.get("limit_price")
                         if ins["action"] in ("HOLD", "ADVISORY"):
@@ -1425,7 +1311,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 pyramid_add_plan=ins.get("pyramid_add_plan"),
                             )
                         elif ins.get("action") == "BUY_PROTECTIVE_PUT":
-                            # 宏觀逃頂前瞻防禦 WATCH 級：買保護性 Put，不賣出
+                            # 宏觀逃頂前瞻防禦：買保護性 Put，不賣出
                             # 任何既有部位，沒有第二個轉倉標的，理由同上不套用
                             # 通用轉倉框架，也不附加互動按鈕（買方合約需自行
                             # 於券商終端下單，無法透過 RolloverActionView 試算）。
@@ -1515,18 +1401,21 @@ class PortfolioMonitorCog(commands.Cog):
                             scenario == "PYRAMID_ADD" and config.PYRAMID_ADD_DRY_RUN
                         )
                         # Regime III-B 是**跨情境**的乾跑閘門：它放寬的是進場
-                        # 判定，而由它確認出來的指令會同時出現在 OPPORTUNITY_COST
-                        # 與 CORE_DEPLOYMENT 兩個 scenario 底下。因此這道閘門
-                        # 必須以 entry_regime 為鍵，不能比照上面兩道用 scenario。
+                        # 判定，因此以 entry_regime 為鍵，不能比照上面兩道用 scenario。
                         is_regime_iii_b_dry_run = (
                             ins.get("entry_regime")
                             == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
                             and config.REGIME_III_B_DRY_RUN
                         )
+                        # 逃頂保護性 Put 是使用者 opt-in 的純告知 (無執行按鈕、
+                        # 需自行下單)，不屬於上述「尚未驗證的期權轉倉指令」，
+                        # 不受 OPTIONS_ROLLOVER_DRY_RUN 攔截。
                         if (
                             (
                                 instrument_type == "OPTIONS"
                                 and config.OPTIONS_ROLLOVER_DRY_RUN
+                                and scenario
+                                != RolloverScenario.MACRO_TOP_ESCAPE_DEFENSE.value
                             )
                             or is_short_entry_dry_run
                             or is_pyramid_add_dry_run

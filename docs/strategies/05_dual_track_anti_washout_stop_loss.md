@@ -190,7 +190,7 @@ flowchart TD
 
 ### 3.1 顧問模式後置轉換（B&H 持倉）
 
-矩陣產出 `ActTP1`/`ActTP2`/`ActTP3`/`ActSL1`（SL-結構失效）/`ActTrack2`（軌道二極端瞬時停損）/`ActReduce` 這六個分支後，若該持倉為**顧問模式**（帳戶層 `user_settings.portfolio_mode == "ADVISORY"`，或單檔 `assets.metadata.advisory_only` 三態覆寫；解析與轉換皆在 `advisory_only == True` 且為多頭現貨時才生效，空頭現貨與選擇權一律維持指令模式），指令會依 `exit_tier` 再轉換一次，**不**改動矩陣本身的判定邏輯：
+矩陣產出 `ActTP1`/`ActTP2`/`ActTP3`/`ActSL1`（SL-結構失效）/`ActTrack2`（軌道二極端瞬時停損）/`ActReduce` 這六個分支後，若該持倉為**多頭現貨**（一律顧問化；原帳戶層 `portfolio_mode` COMMAND／ADVISORY 切換與單檔 `advisory_mode` 覆寫已移除，欄位與遷移 v079 保留但不再讀寫；空頭現貨與選擇權維持指令模式），指令會依 `exit_tier` 再轉換一次，**不**改動矩陣本身的判定邏輯：
 
 | 觸發分支 / `exit_tier` | 顧問模式處置 |
 | :--- | :--- |
@@ -260,9 +260,7 @@ flowchart TD
 9. **顧問模式的轉換發生在迴圈內、而非回傳前後置過濾**：初版設計曾考慮在
    `check_satellite_rebalancing_impl` 回傳前統一過濾，但 `RolloverInstruction`
    本身不攜帶 spot／Call Wall，回傳前已無法為 TP 摺疊算出目標價；且若在回傳前
-   整批丟棄，該標的會不再被 `already_flagged` 集合壓制，導致機會成本轉倉
-   （`opportunity_cost.py`）或逃頂 ELEVATED/CRITICAL 減碼（`macro_top_escape_defense.py`）
-   對同一檔顧問持倉重新發出 LIQUIDATE。因此轉換改在 `anti_washout.py` 的兩個
+   整批丟棄，該標的會不再被 `already_flagged` 集合壓制，導致其他情境對同一檔顧問持倉重新發出 LIQUIDATE。因此轉換改在 `anti_washout.py` 的兩個
    append 點（TP/SL 分層路徑、常規比例控管路徑）就地完成，且這兩個情境的迴圈
    也各自加上 `is_advisory_asset()` 跳過。`RolloverInstruction.action` 是純
    `str` 而非 `Literal`，新增 `"ADVISORY"` 值 mypy 不會提示任何未處理分支，
@@ -292,9 +290,8 @@ flowchart TD
 - **顧問模式（見 §3.1／§5.9）**：
   - `nexus_core/market_analysis/dynamic_rollover/advisory_mode.py`：`is_advisory_asset()`、`build_advisory_instruction()`（唯一轉換邏輯，葉模組）
   - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：TP/SL 分層與常規比例控管兩個 append 點的轉換掛載
-  - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` / `macro_top_escape_defense.py`：顧問持倉跳過（`is_advisory_asset()`）
-  - `nexus_core/database/migrations/v079_add_portfolio_mode.py`：`user_settings.portfolio_mode`（預設 `COMMAND`）
-  - `nexus_core/cogs/trading/portfolio_monitor.py`：帳戶層 `portfolio_mode` 每使用者讀取一次、單檔 `advisory_only` 三態解析、`advisory_core_levels` 通知頻道與 `advisory_exit_` 去重鍵
+  - `nexus_core/database/migrations/v079_add_portfolio_mode.py`：`user_settings.portfolio_mode` 欄位（已不再讀寫）
+  - `nexus_core/cogs/trading/portfolio_monitor.py`：多頭現貨固定 `advisory_only`、`advisory_core_levels` 通知頻道與 `advisory_exit_` 去重鍵
   - `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_advisory_levels_embed()`
   - `nexus_core/tests/unit/test_advisory_mode.py`：顧問模式不變式、轉換規則、三態解析、派發回歸測試
 - **出場分層前向蒐集（SL 分層洗盤率檢討，見 `docs/architecture/05_calibration_harness_and_forward_collection.md` §5.12）**：

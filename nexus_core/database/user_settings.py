@@ -44,9 +44,6 @@ class UserContext:
         "RIGHT_SIDE"  # 交易策略模式: RIGHT_SIDE/LEFT_SIDE/SHORT_SIDE/DYNAMIC
     )
     risk_appetite: str = "DEFENSIVE"  # 風險偏好: DEFENSIVE/AGGRESSIVE
-    # 持倉管理模式: COMMAND(指令，預設=現行行為)/ADVISORY(顧問，B&H 持倉只告知位階、
-    # 不建議減碼換股)。單檔可由 assets.metadata.advisory_only 覆寫。
-    portfolio_mode: str = "COMMAND"
     # 提領跑道（docs/risk_portfolio/05）：withdrawal_amount = 0 代表未啟用
     withdrawal_amount: float = 0.0  # 每次提領額（基準月購買力，USD）
     withdrawal_anchor_month: Optional[str] = None  # 通膨調整基準月 YYYY-MM
@@ -63,7 +60,6 @@ _VALID_TRADING_STRATEGIES: frozenset[str] = frozenset(
     {"RIGHT_SIDE", "LEFT_SIDE", "SHORT_SIDE", "DYNAMIC"}
 )
 _VALID_RISK_APPETITES: frozenset[str] = frozenset({"DEFENSIVE", "AGGRESSIVE"})
-_VALID_PORTFOLIO_MODES: frozenset[str] = frozenset({"COMMAND", "ADVISORY"})
 
 
 # CPIAUCSL 自 1947-01 起有資料；基準月早於此或晚於本月都查不到 CPI，
@@ -138,7 +134,6 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "enable_macro_top_escape_defense",
             "trading_strategy",
             "risk_appetite",
-            "portfolio_mode",
             "withdrawal_amount",
             "withdrawal_anchor_month",
             "withdrawal_months",
@@ -179,9 +174,6 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                     # 必須與 dynamic_rollover.models.RiskAppetite 同步 (同上，
                     # 不直接匯入以避免循環相依)。未知值一律回退 DEFENSIVE。
                     value = value if value in _VALID_RISK_APPETITES else "DEFENSIVE"
-                elif key == "portfolio_mode":
-                    # 未知值一律回退 COMMAND (= 現行行為)，避免非法值靜默啟用顧問模式。
-                    value = value if value in _VALID_PORTFOLIO_MODES else "COMMAND"
 
                 elif key == "withdrawal_anchor_month":
                     value = _normalize_anchor_month(value)
@@ -467,7 +459,6 @@ def get_full_user_context(user_id: int) -> UserContext:
             ),
             trading_strategy=_get_val("trading_strategy", "RIGHT_SIDE"),
             risk_appetite=_get_val("risk_appetite", "DEFENSIVE"),
-            portfolio_mode=_get_val("portfolio_mode", "COMMAND"),
             withdrawal_amount=float(_get_val("withdrawal_amount", 0.0)),
             withdrawal_anchor_month=_get_val("withdrawal_anchor_month", None),
             withdrawal_months=_get_val("withdrawal_months", "1,7"),

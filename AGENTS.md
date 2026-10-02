@@ -45,7 +45,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | :--- | :--- | :--- |
 | **03:00** | `kv_cache_dedup_purge` & Maintenance | Purge stale dedup keys (3d), UOA history (10d), sentiment retention, SQLite checkpoint |
 | **03:30** | `regime_outcome_labeler` | Leader-only forward path labeling for `regime_evaluation_log` (5d) & notification dispatch (20d/60d) |
-| **08:00** | `fundamental_filing_scan` | Holdings-only SEC 10-K/10-Q/8-K automated scanning and Scenario 1 routing |
+| **08:00** | `fundamental_filing_scan` | Holdings-only SEC 10-K/10-Q/8-K automated scanning (Scenario 7: notify-only, no liquidation command) |
 | **08:30** | `daily_reddit_update` | Ingest Reddit market sentiment from edge scraper |
 | **08:45** | `pre_market_risk_monitor` | Pre-warm quant metrics, IV, Max Pain, Squeeze, and portfolio downside return series |
 | **09:00** | `pre_market_loop` | Analyst Agent pre-market outlook and macro briefings |
@@ -63,7 +63,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 ## Business Logic & Spec Index (SSOT)
 
 All quantitative models, risk matrices, and platform designs are specified in [`docs/README.md`](docs/README.md). **Always update the corresponding specification under `docs/` instead of expanding this file:**
-- **Trading Strategies** ([`docs/strategies/`](docs/strategies/)): 6-Regime routing matrix (`01`), Right-side momentum (`02`), Left-side mean-reversion (`03`), Dynamic Rollover 10 scenarios (`04`), Dual-track anti-washout SL (`05`), Dynamic adaptive room threshold (`06`), Short-side breakdown (`07`); offline-only replacement candidates for the rollover engine, not wired into production: Regime-switched momentum rotation (`08`), Static allocation & rebalance / macro 3-state switch (`09`).
+- **Trading Strategies** ([`docs/strategies/`](docs/strategies/)): 6-Regime routing matrix (`01`), Right-side momentum (`02`), Left-side mean-reversion (`03`), Dynamic Rollover slimmed scenarios (`04`), Dual-track anti-washout SL (`05`), Dynamic adaptive room threshold (`06`), Short-side breakdown (`07`); offline-only replacement candidates for the rollover engine, not wired into production: Regime-switched momentum rotation (`08`), Static allocation & rebalance / macro 3-state switch (`09`).
 - **Microstructure** ([`docs/microstructure/`](docs/microstructure/)): Net GEX topology & walls (`01`), Physical wall constraint $K < \text{Spot}$ (`02`), Gamma flip (`03`), UOA paced ratio (`04`), Volume Profile & POC (`05`), Gamma squeeze & SPEAR (`06`).
 - **Valuation & Volatility** ([`docs/valuation_pricing/`](docs/valuation_pricing/)): TDP/DDP valuation (`01`), Expected move & Max Pain gravity (`02`), Skew 25-Delta & PCR divergence (`03`), IVR & seller lockout gate (`04`).
 - **Portfolio & Risk** ([`docs/risk_portfolio/`](docs/risk_portfolio/)): Beta-weighted Greeks (`01`), VIX battle ladder & Kelly (`02`), AROC gate (`03`), DITM convexity (`04`), Runway & liquidity (`05`), Brinson attribution (`06`), Downside risk (Sortino/MDD/CVaR) (`07`).
@@ -75,10 +75,10 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 ## Codebase Architecture by Layer
 
 - `nexus_core/cogs/`: Discord presentation layer (`bot.py` bootstrap/DM queue, `trading/` schedulers & heartbeats, `analyst_agent.py`, `unified_terminal/`, `calendar.py`, `order_ui.py`, `settings_ui.py`, `hedging.py`).
-- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`intraday_pipeline/`, `dynamic_rollover/` 10 scenarios, `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`).
+- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`intraday_pipeline/`, `dynamic_rollover/` slimmed scenarios (B&H-first advisory engine), `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`).
 - `nexus_core/services/`: Asynchronous service orchestrators and I/O pipelines (`downside_risk_service.py`, `notification_dispatcher.py`, `single_flight.py` request deduplication, `alpaca_stream_service.py`, `regime_outcome_labeler.py`, `llm_service.py`).
 - `nexus_core/database/`: SQLite WAL persistence layer (`connection.py` single-writer queue worker & `connect_db()`, `core.py` migration engine, `portfolio.py`, `orders.py`, `cache.py`, `notification_channels.py`).
-- `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`backtest_engine_2025.py`, `microstructure.py`, `notif_report.py`, daily-bar strategy backtests `regime_momentum_backtest.py` / `static_allocation_backtest.py` / `macro_regime.py`; runs on dev machine only, never writes to live DB).
+- `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`microstructure.py`, `notif_report.py`, daily-bar strategy backtests `regime_momentum_backtest.py` / `static_allocation_backtest.py` / `macro_regime.py`; runs on dev machine only, never writes to live DB).
 - `nexus_edge_scraper/`: Standalone scraper and proxy microservice (Playwright scrapers, yfinance proxy endpoints, SEC section extraction).
 
 ---
@@ -102,7 +102,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
   - `classify_trade_intent()`: `PREMIUM_SELL` / `DIRECTIONAL_LONG` / `DIRECTIONAL_SHORT` (drives VIX ladder & Kelly priors). Never use `"STO"` / `"BTO"` strings.
   - `is_short_exposure_strategy()`: Boolean net short direction for display/decision (never as a Delta multiplier).
 - **Negative Portfolio Delta != Hedge**: Distinguish short alpha from hedges via `trade_category == "HEDGE"`.
-- **Directional Confirmations**: Scenario 2 returns `EntryConfirmation(direction=...)`. Confirmations with `direction == "SHORT"` must never enter buy-candidate downstream flows; short entries route solely through `SHORT_ENTRY`.
+- **Directional Confirmations**: Entry-confirmation gates return `EntryConfirmation(direction=...)`. Confirmations with `direction == "SHORT"` must never enter buy-candidate downstream flows; short entries route solely through `SHORT_ENTRY`.
 
 ### 3. Market Data & Timezone Conventions
 - **Timezone Invariant**: `get_history_df` returns **tz-naive US/Eastern** indexes (never UTC). Treating them as UTC shifts intraday bars by 4–5 hours and daily bars by one day.

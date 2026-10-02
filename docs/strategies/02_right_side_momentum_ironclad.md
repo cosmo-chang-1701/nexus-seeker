@@ -5,7 +5,7 @@
 右側動能突破交易（Right-Side Momentum Breakout）的核心哲學在於「順應做市商對沖驅動力，絕不在無結構支撐的半山腰猜測底部」。當股價向上突破關鍵結構臨界點時，做市商的 Gamma 曝險由負翻正，其避險行為將由「追漲殺跌順向砸盤」轉化為「逢低買入自穩定護盤」；若此時疊加機構主力的跨週期認可與充足的向上獲利空間，突破的勝率與期望值將達到極致。
 
 在 Nexus Seeker 系統中，右側六重鐵律是以下兩大核心業務管線的**唯一放行閘門**：
-1. **機會成本轉倉 (`OPPORTUNITY_COST`)**：當現有衛星部位動能衰退，系統欲調度資金轉向更具爆發力的候選標的（Candidate）時，該候選標的必須 100% 通過六重鐵律。
+1. **衛星 TP 輪動目標與做空候選**：機會成本換股（`OPPORTUNITY_COST`）已刪除；六重鐵律的條件函式保留給 `SATELLITE_REBALANCE` 的 TP 輪動目標挑選與 `SHORT_ENTRY` 使用，候選標的必須 100% 通過。
 2. **核心資金部署 (`CORE_DEPLOYMENT` 機會分支)**：當核心防禦資產（如 VOO）超額配置欲部署至進攻性衛星標的時，亦強制要求標的滿足六重鐵律。
 
 ### 兩種進場節奏：突破態與趨勢延續態
@@ -294,7 +294,7 @@ flowchart TD
 7. **趨勢延續變體的同一交易時段約束**：
    條件一變體的 6 根回看窗必須全屬同一交易日，否則 fail-safe 不通過。完整理由見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §5.3（`session_vwap` 為單一時段純量，跨日比較無意義）。實務效果是趨勢延續進場最早於 11:00 ET 才可能成立。
 8. **乾跑閘門為跨情境**：
-   `REGIME_III_B_DRY_RUN` 攔截的是**由 III-B 確認出來的指令**，而這些指令會同時出現在 `OPPORTUNITY_COST` 與 `CORE_DEPLOYMENT` 兩個情境底下。因此該閘門以指令的 `entry_regime` 欄位為鍵，而非比照 `SHORT_ENTRY_DRY_RUN` / `PYRAMID_ADD_DRY_RUN` 以 `scenario` 為鍵。核心資金部署的機會分支必須把 `entry_regime` 掛上指令，否則它產生的建議會繞過乾跑閘門直接推播。
+   `REGIME_III_B_DRY_RUN` 攔截的是**由 III-B 確認出來的指令**，而這些指令不限單一情境。因此該閘門以指令的 `entry_regime` 欄位為鍵，而非比照 `SHORT_ENTRY_DRY_RUN` / `PYRAMID_ADD_DRY_RUN` 以 `scenario` 為鍵。凡由 III-B 確認的指令都必須把 `entry_regime` 掛上，否則會繞過乾跑閘門直接推播。
 9. **短路展示一致性保證**：
    當前四項條件有任一項未通過時，條件五與六不會發起任何 HTTP 或資料庫查詢，但在 `reasons` 陣列中主動寫入 `條件五⏭️` 與 `條件六⏭️`，避免前端視圖只渲染四項條件造成的使用者混淆。
 

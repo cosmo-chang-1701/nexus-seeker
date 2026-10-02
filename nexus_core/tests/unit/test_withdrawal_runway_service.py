@@ -187,6 +187,42 @@ def test_parse_target_weights() -> None:
     assert parse_target_weights(json.dumps({"x": 0})) is None
 
 
+def test_resolve_target_weights_priority_and_mixing() -> None:
+    from services.withdrawal_runway_service import resolve_target_weights
+
+    syms = {"VOO": 50_000.0, "NVDA": 30_000.0, "AMD": 20_000.0}
+    # 手動覆寫最優先
+    assert resolve_target_weights({"NVDA": 1.0}, {"VOO": 0.5}, syms) == {"NVDA": 1.0}
+    # 全無目標 → None（等權）
+    assert resolve_target_weights(None, {}, syms) is None
+    # 部分設定：VOO 40%，其餘兩檔平分剩餘 60%
+    w = resolve_target_weights(None, {"VOO": 0.4}, syms)
+    assert w == pytest.approx({"VOO": 0.4, "NVDA": 0.3, "AMD": 0.3})
+    # 全部有目標且總和超過 100% → 正規化
+    w = resolve_target_weights(None, {"VOO": 0.8, "NVDA": 0.4, "AMD": 0.3}, syms)
+    assert w == pytest.approx({"VOO": 0.8 / 1.5, "NVDA": 0.4 / 1.5, "AMD": 0.3 / 1.5})
+    # 不在可賣清單者（如 BOXX 或已清空）忽略
+    assert resolve_target_weights(None, {"QQQ": 0.5}, syms) is None
+
+
+def test_resolve_target_weights_full_targets_keep_unset_at_current_share() -> None:
+    """目標已占滿 100% 時，未設目標的持股以目前占比為權重，不會被當成全額超配
+    而在提領時優先賣光（審查發現：舊規則給 0 權重）。"""
+    from market_analysis.withdrawal_runway import plan_withdrawal
+    from services.withdrawal_runway_service import resolve_target_weights
+
+    syms = {"VOO": 50_000.0, "NVDA": 30_000.0, "AMD": 20_000.0}
+    w = resolve_target_weights(None, {"VOO": 0.7, "NVDA": 0.3}, syms)
+    assert w is not None
+    assert w["AMD"] == pytest.approx(0.2)
+    assert w["VOO"] == pytest.approx(0.7 * 0.8)
+    assert w["NVDA"] == pytest.approx(0.3 * 0.8)
+
+    plan = plan_withdrawal(10_000.0, 0.0, syms, w)
+    # AMD 只按市值比例分攤，而不是整筆 10,000 都由它賣出
+    assert plan.sells.get("AMD", 0.0) < 10_000.0 * 0.5
+
+
 def test_sellable_holdings_excludes_boxx_shorts_and_missing_prices() -> None:
     out = sellable_holdings(
         {"NVDA": 10, "BOXX": 50, "TSLA": -5, "AMD": 3},

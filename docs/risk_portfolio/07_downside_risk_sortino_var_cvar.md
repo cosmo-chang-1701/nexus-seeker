@@ -18,7 +18,7 @@
 | CVaR95（1 日，Expected Shortfall） | 真正的壞日子平均虧多少 | VaR 對分位數以下的尾部形狀完全盲目；CVaR 是尾部的期望值，對肥尾敏感 |
 
 ### 1.3 適用範圍
-- 離線回測：`calibration/backtest_engine_2025.py` 的 `BacktestMetrics`、`scripts/run_rollover_backtest_2025.py` 報告與 `--ab-compare` 摘要。
+- 離線回測：2025 轉倉回測引擎已刪除（結論見 `docs/strategies/04` §2.10）；日線策略回測（`calibration/regime_momentum_backtest.py`、`static_allocation_backtest.py`）沿用同一套指標。
 - 即時投組監控：`services/downside_risk_service.py` 以使用者目前的部位建構模擬報酬序列，盤中檢查回撤、收盤檢查回撤與 CVaR，經 `risk_portfolio_downside` 頻道推播；盤後戰報與 VTR 週報附上快照欄位。
 - 任何新的績效或風險評估（包括通知成效評估）都必須呼叫同一個模組 `market_analysis/downside_risk.py`，不得另行實作。
 
@@ -151,7 +151,7 @@ flowchart TD
 | `TRADING_DAYS_PER_YEAR` | $252$ | 年化期數 | `market_analysis/downside_risk.py` |
 | `DEFAULT_VAR_CONFIDENCE` | $0.95$ | VaR / CVaR 信賴水準 | 同上 |
 | `MIN_VAR_SAMPLES` | $60$ | 歷史模擬的最低樣本數；95% 下左尾僅 3 筆，再少只是在描述單一事件 | 同上 |
-| 回測 MAR / $R_f$ | $4.5\%$ | 2025 年無風險利率基準，兼作 Sortino 的 MAR | `calibration/backtest_engine_2025.py::calculate_metrics` |
+| 回測 MAR / $R_f$ | $4.5\%$ | 2025 年無風險利率基準，兼作 Sortino 的 MAR | `calibration/static_allocation_backtest.py` |
 | 減碼權重上限 | $w \le 1$ | 本引擎不使用槓桿，$w > 1$ 只會是估計雜訊，放行會讓對照組憑空虛增 | 同上 |
 | `LOOKBACK_DAYS` | $252$ | 模擬報酬序列長度 | `market_analysis/downside_monitor.py` |
 | `SORTINO_WINDOWS` | $(63, 252)$ | 戰報顯示的 Sortino 視窗（一季、一年） | 同上 |
@@ -185,10 +185,7 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/downside_risk.py`：下行差、Sortino、MDD、歷史模擬 VaR / CVaR 的單一權威實作（numpy 葉模組）；`sharpe_ratio()` 僅供回測描述。
-- `nexus_core/calibration/backtest_engine_2025.py`：`BacktestMetrics` 判讀欄位（`sortino_ratio`、`max_drawdown`、`var_95`、`cvar_95`、下行差對齊的 `excess_return_vs_scaled`）與描述欄位（`sharpe_ratio`、`calmar_ratio`、`excess_return_vs_vol_scaled`）。
-- `nexus_core/scripts/run_rollover_backtest_2025.py`：報告與 `--ab-compare` 摘要以 Sortino 為首列，Sharpe / Calmar 移至描述性指標區。
 - `nexus_core/tests/unit/test_downside_risk.py`：全樣本分母、MAR 界線、上行波動不影響 Sortino、VaR / CVaR 手算、下行差線性縮放性質。
-- `nexus_core/tests/unit/test_rollover_backtest_2025.py`：端到端回測的判讀欄位有限性與下行差對齊權重。
 - `nexus_core/market_analysis/downside_monitor.py`：即時監控的純邏輯（快照、回撤階梯與重新武裝、CVaR 預算與體制轉換、NAV 快照報酬還原）與 PRE_CALIBRATION 常數。
 - `nexus_core/services/downside_risk_service.py`：持倉曝險讀取、模擬報酬序列與快取、盤中 / 收盤檢查、NAV 快照寫入、戰報快照。
 - `nexus_core/database/migrations/v082_add_portfolio_nav_daily.py`：`portfolio_nav_daily` 表。

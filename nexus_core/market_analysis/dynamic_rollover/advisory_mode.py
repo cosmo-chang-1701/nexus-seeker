@@ -8,10 +8,9 @@
 
 開關
 ----
-帳戶層 ``user_settings.portfolio_mode`` 與單檔 ``assets.metadata.advisory_only``
-（三態）由派發端 (``cogs/trading/portfolio_monitor.py``) 解析成單一布林，僅在為
-True 時寫入 ``asset["advisory_only"]``。本模組只讀該旗標，因此預設 (COMMAND、
-未覆寫) 下引擎行為與改動前逐位元一致。
+已無開關：系統以 B&H 為主要策略，派發端 (``cogs/trading/portfolio_monitor.py``) 對
+所有現貨持倉一律寫入 ``asset["advisory_only"] = True``，由 ``is_advisory_asset``
+再排除空頭股數。原帳戶層 ``portfolio_mode`` 與單檔 ``advisory_only`` 設定已移除。
 
 設計約束
 --------

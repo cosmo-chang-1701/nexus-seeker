@@ -28,10 +28,7 @@ from .constants import CORE_DEFENSE_ETF_SYMBOLS  # noqa: E402
 from .core_deployment import _CoreDeploymentMixin  # noqa: E402
 from .covered_call_profit_lock import _CoveredCallProfitLockMixin  # noqa: E402
 from .fundamental_thesis import evaluate_fundamental_thesis_impl  # noqa: E402
-from .macro_top_escape_defense import (  # noqa: E402
-    _MacroTopEscapeDefenseMixin,
-    evaluate_macro_top_escape_defense_impl,
-)
+from .macro_top_escape_defense import evaluate_macro_top_escape_defense_impl  # noqa: E402
 from .margin_defense import _MarginDefenseMixin, evaluate_margin_defense_impl  # noqa: E402
 from .models import (  # noqa: E402
     FundamentalThesisResult,
@@ -63,7 +60,6 @@ class DynamicRolloverEngine(
     _AntiWashoutMixin,
     _MarginDefenseMixin,
     _CoreDeploymentMixin,
-    _MacroTopEscapeDefenseMixin,
     _CoveredCallProfitLockMixin,
     _ShortEntryMixin,
 ):
@@ -196,7 +192,6 @@ class DynamicRolloverEngine(
         邏輯 (6): 宏觀逃頂前瞻防禦 (Macro Top-Escape Anticipatory Defense)
         """
         return await evaluate_macro_top_escape_defense_impl(
-            self,
             get_full_user_context,
             user_id,
             portfolio_assets,

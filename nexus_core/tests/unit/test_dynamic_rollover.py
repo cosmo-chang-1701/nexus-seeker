@@ -24,8 +24,6 @@ from market_analysis.dynamic_rollover.structural_signals import (
     evaluate_option_dte_tier,
     _scan_resistance_wall_above_spot,
 )
-from market_analysis.dynamic_rollover.models import DynamicRegime, RegimeMarketData
-from tests.unit.short_entry_helpers import make_short_entry_evaluation
 from cogs.embed_builders.rollover_embeds import (
     create_dynamic_rollover_embed,
     create_covered_call_overlay_embed,
@@ -71,74 +69,6 @@ def _mock_entry_condition1_vwap() -> Any:
         return_value=50.0,
     ):
         yield
-
-
-def test_evaluate_opportunity_cost(engine: DynamicRolloverEngine) -> None:
-    # Scenario 1: Should rollover (EV spread > 5%, target breakout, holding decay)
-    res = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,  # < 20 (decaying)
-        current_holding_profit_pct=0.4,  # > 0.3 (highly profitable)
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,  # > 80 (breakout)
-        target_expected_value=0.25,
-        current_holding_expected_value=0.10,  # EV spread = 15%
-    )
-    assert res["should_rollover"] is True
-    assert res["rollover_ratio"] == 0.5
-    assert "PLTR" in res["reason"]
-
-    # Scenario 2: Should rollover but lower ratio (profit < 30%)
-    res2 = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,
-        current_holding_profit_pct=0.1,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,
-        target_expected_value=0.25,
-        current_holding_expected_value=0.10,
-    )
-    assert res2["should_rollover"] is True
-    assert res2["rollover_ratio"] == 0.3
-
-    # Scenario 3: Should NOT rollover (EV spread too small)
-    res3 = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,
-        current_holding_profit_pct=0.4,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,
-        target_expected_value=0.12,
-        current_holding_expected_value=0.10,  # Spread = 2%
-    )
-    assert res3["should_rollover"] is False
-
-
-def test_evaluate_opportunity_cost_friction_cost_pct_is_load_bearing(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Phase D 回歸鎖定：friction_cost_pct 須實際影響 EV 門檻判定，而非僅是
-    未被使用的裝飾性參數。ev_spread=0.06 在預設靜態摩擦成本 (0.3%) 下應通過
-    門檻 (0.05+0.003=0.053 &lt; 0.06)，但傳入較寬的動態摩擦成本 (2%，模擬候選
-    標的近價期權點差極寬的高波環境) 後，門檻拉高至 0.07，應反轉為不通過。"""
-    kwargs = dict(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,
-        current_holding_profit_pct=0.4,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,
-        target_expected_value=0.16,
-        current_holding_expected_value=0.10,  # ev_spread = 0.06
-    )
-
-    res_default = engine.evaluate_opportunity_cost(**kwargs)  # type: ignore[arg-type]
-    assert res_default["should_rollover"] is True
-
-    res_wide_friction = engine.evaluate_opportunity_cost(
-        **kwargs,  # type: ignore[arg-type]
-        friction_cost_pct=0.02,
-    )
-    assert res_wide_friction["should_rollover"] is False
 
 
 @pytest.mark.asyncio
@@ -463,17 +393,17 @@ def test_build_fundamental_broken_embed_simple_markdown() -> None:
         source_url="https://sec.gov/10k",
         form_type="10-K",
     )
-    assert embed.title == "💥 原型假設破滅: AMD → VOO"
+    assert embed.title == "💥 基本面假設破滅: AMD"
     assert embed.color == discord.Color.red()
     assert embed.description is not None
     assert "### 📊 評估摘要" in embed.description
     assert "### 🧠 護城河分析與歸因" in embed.description
-    assert "### 🎯 轉倉執行建議" in embed.description
+    assert "### 🎯 後續建議" in embed.description
     assert "🔴 **假設破滅 (Moat Broken)**" in embed.description
     assert "90%" in embed.description
     assert "[10-K 申報文件](https://sec.gov/10k)" in embed.description
-    assert "賣出平倉" in embed.description
-    assert "VOO" in embed.description
+    assert "賣出平倉" not in embed.description
+    assert "VOO" not in embed.description
     assert "```ansi" not in embed.description
 
 
@@ -541,7 +471,7 @@ def test_create_dynamic_rollover_embed_renders_extreme_stop_loss_line() -> None:
 
 
 def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None:
-    """extreme_stop_loss 未提供 (既有情境，例如 OPPORTUNITY_COST/MARGIN_DEFENSE)
+    """extreme_stop_loss 未提供 (既有情境，例如 MARGIN_DEFENSE)
     時，不應新增檢核清單欄位，維持既有 embed 結構向下相容。"""
     embed = create_dynamic_rollover_embed(
         rollover_type="機會成本轉倉",
@@ -553,7 +483,7 @@ def test_create_dynamic_rollover_embed_omits_checklist_field_when_none() -> None
         suggested_price="Market",
         strike="N/A",
         expiry="N/A",
-        scenario="OPPORTUNITY_COST",
+        scenario="SATELLITE_REBALANCE",
     )
     checklist_field = next(
         (f for f in embed.fields if f.name == "🛡️ 防洗盤實戰策略檢核清單"), None
@@ -998,67 +928,6 @@ async def test_check_satellite_rebalancing_dte_lockout_allows_existing_risk_moni
 
 
 @pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-async def test_evaluate_opportunity_cost_for_satellites_dte_lockout_skips(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """evaluate_opportunity_cost_for_satellites：1<dte<7 的 OPTIONS 持倉應被
-    DTE LOCKOUT 靜默跳過，不產生機會成本轉倉指令（即使進場鐵律已放行）。"""
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "XYZ":
-            return {
-                "reference_spot_price": 50.0,
-                "expected_move_upper": 51.0,  # EV ≈ 0.02 (低，動能衰退中的原持倉)
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return {
-            "reference_spot_price": 100.0,
-            "expected_move_upper": 120.0,  # EV = 0.20 (高，候選標的)
-            "is_stale": 0,
-            "is_degraded": 0,
-        }
-
-    mock_cache.side_effect = cache_side_effect
-    portfolio_assets = [
-        {
-            "symbol": "XYZ",
-            "asset_class": "SATELLITE",
-            "instrument_type": "OPTIONS",
-            "quantity": 1.0,
-            "current_value": 500.0,
-            "spot_price": 50.0,
-            "avg_cost": 40.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Short"},
-            "dte": 3,
-        }
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "Release", "signal_direction": "Long"},
-        "quote": {"c": 100.0},
-        "iv_metrics": {},
-        "gex_profile_data": {},
-        "uoa": [],
-    }
-    instructions, _confirmation = await engine.evaluate_opportunity_cost_for_satellites(
-        user_id=1,
-        portfolio_assets=portfolio_assets,
-        already_flagged_symbols=set(),
-        candidate_symbol="ABC",
-        candidate_radar=candidate_radar,
-    )
-    assert instructions == []
-
-
-@pytest.mark.asyncio
 async def test_lvn_secondary_hvn_snapping(engine: DynamicRolloverEngine) -> None:
     """測試 LVN 拓撲吸附：絕對吸附至次級 HVN 上緣 + 0.2*ATR，禁止固定 1.5% 平移"""
     metrics = {
@@ -1499,54 +1368,6 @@ async def test_microstructure_whale_put_falls_back_to_raw_ratio_without_paced_fi
 # ==========================================
 
 
-@patch("database.market_cache.get_market_cache")
-@patch("database.watchlist.get_user_watchlist")
-def test_find_best_rollover_target_picks_high_ev_candidate(
-    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
-) -> None:
-    mock_watchlist.return_value = [("XYZ", True)]
-    mock_cache.return_value = {
-        "reference_spot_price": 100.0,
-        "expected_move_upper": 110.0,  # EV = 0.10 > 0.05 門檻
-        "is_stale": 0,
-        "is_degraded": 0,
-    }
-    assert engine._find_best_rollover_target(1) == "XYZ"
-
-
-@patch("database.market_cache.get_market_cache")
-@patch("database.watchlist.get_user_watchlist")
-def test_find_best_rollover_target_ignores_stale_or_low_ev(
-    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
-) -> None:
-    mock_watchlist.return_value = [("XYZ", True)]
-
-    # is_stale=1 -> 視為不可信快取
-    mock_cache.return_value = {
-        "reference_spot_price": 100.0,
-        "expected_move_upper": 110.0,
-        "is_stale": 1,
-        "is_degraded": 0,
-    }
-    assert engine._find_best_rollover_target(1) == "VOO"
-
-    # EV 未達 0.05 門檻
-    mock_cache.return_value = {
-        "reference_spot_price": 100.0,
-        "expected_move_upper": 102.0,
-        "is_stale": 0,
-        "is_degraded": 0,
-    }
-    assert engine._find_best_rollover_target(1) == "VOO"
-
-
-def test_find_best_rollover_target_no_watchlist_returns_voo(
-    engine: DynamicRolloverEngine,
-) -> None:
-    with patch("database.watchlist.get_user_watchlist", return_value=[]):
-        assert engine._find_best_rollover_target(1) == "VOO"
-
-
 @pytest.mark.parametrize(
     "psq,expected",
     [
@@ -1590,798 +1411,8 @@ def test_normalize_power_squeeze_mapping(
     assert engine._normalize_power_squeeze(psq) == expected
 
 
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_no_candidate(
-    engine: DynamicRolloverEngine,
-) -> None:
-    # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不強制轉倉
-    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
-        1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "VOO", None
-    )
-    assert result == []
-    assert entry_confirmation is None
-
-    # 有候選標的但 radar 資料為空 -> 不強制轉倉
-    (
-        result2,
-        entry_confirmation2,
-    ) = await engine.evaluate_opportunity_cost_for_satellites(
-        1, [{"symbol": "NVDA", "asset_class": "SATELLITE"}], set(), "SMCI", None
-    )
-    assert result2 == []
-    assert entry_confirmation2 is None
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-@pytest.mark.slow
-async def test_evaluate_opportunity_cost_for_satellites_triggers(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,  # EV ≈ 0.025 (低)
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 50.0,  # EV = 0.25 (高)
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,  # profit_pct = 0.2 (< 0.3)
-            "psq_result": {
-                "squeeze_level": "Release",
-                "signal_direction": "Neutral",
-            },  # normalized score = 10 (< 20 動能衰退)
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },  # normalized score = 95 (> 80 突破待發)
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
-        1, portfolio, set(), "SMCI", candidate_radar
-    )
-    assert len(result) == 1
-    assert result[0]["symbol"] == "NVDA"
-    assert result[0]["target_core"] == "SMCI"
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (True, "mocked")
-    assert result[0]["action"] == "REDUCE"
-    assert result[0]["sell_ratio"] == 0.3
-    assert result[0]["scenario"] == "OPPORTUNITY_COST"
-    assert result[0]["is_manual_override_required"] is False
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-@pytest.mark.slow
-async def test_evaluate_opportunity_cost_for_satellites_options_holding_wide_spread_flags_manual_override(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """問題二迴歸鎖定：期權部位 (instrument_type="OPTIONS") 若帶有過寬的 bid/ask
-    點差，機會成本轉倉建議必須附加流動性警告並強制手動確認 (is_manual_override_
-    required=True)。修正前 opportunity_cost.py:697 誤讀頂層 asset_class 欄位
-    (該迴圈已預先過濾成只剩 asset_class == "SATELLITE"，故此判斷式恆假)，導致
-    此分支自寫下起從未真正生效。"""
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,  # EV ≈ 0.025 (低)
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 50.0,  # EV = 0.25 (高)
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "instrument_type": "OPTIONS_CONTRACT",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,  # profit_pct = 0.2 (< 0.3)
-            "psq_result": {
-                "squeeze_level": "Release",
-                "signal_direction": "Neutral",
-            },  # normalized score = 10 (< 20 動能衰退)
-            "bid": 1.00,
-            "ask": 1.50,  # 點差 (1.5-1.0)/1.25 = 40% >> 15% 閾值
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    result, _entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
-        1, portfolio, set(), "SMCI", candidate_radar
-    )
-    assert len(result) == 1
-    assert result[0]["symbol"] == "NVDA"
-    assert result[0]["is_manual_override_required"] is True
-    assert "流動性警告" in result[0]["reason"]
-    assert result[0]["instrument_type"] == "OPTIONS"
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-async def test_evaluate_opportunity_cost_for_satellites_wide_option_spread_suppresses_rollover(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Phase D 回歸鎖定：候選標的近價期權合約點差極寬時，動態摩擦成本應拉高
-    EV 門檻，使原本在靜態 0.3% 下會通過的邊際 ev_spread (0.06) 反轉為不通過。"""
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,  # EV ≈ 0.025
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 43.4,  # EV = 0.085 -> ev_spread = 0.06
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    with patch(
-        "market_analysis.strategy.find_best_contract",
-        new_callable=AsyncMock,
-        # spread_pct = (3.0-1.0)/40.0 = 0.05 -> friction = 0.05*1.5 = 0.075
-        # 門檻 = 0.05 + 0.075 = 0.125 > ev_spread(0.06)
-        return_value={"strike": 42.0, "expiry": "2026-10-16", "bid": 1.0, "ask": 3.0},
-    ) as mock_find_contract:
-        (
-            result,
-            _entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            1, portfolio, set(), "SMCI", candidate_radar
-        )
-
-    mock_find_contract.assert_awaited_once()
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-@patch("database.market_cache.get_market_cache")
-async def test_evaluate_opportunity_cost_for_satellites_option_fetch_failure_falls_back_to_static_friction(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Phase D 回歸鎖定：近價期權合約抓取失敗時應靜默退回靜態 0.3% 摩擦成本，
-    而非中斷評估或誤將邊際 ev_spread 判定為不通過。"""
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 43.4,  # ev_spread = 0.06，僅在靜態 0.3% 下通過
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    with patch(
-        "market_analysis.strategy.find_best_contract",
-        new_callable=AsyncMock,
-        side_effect=Exception("network error"),
-    ) as mock_find_contract:
-        (
-            result,
-            _entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            1, portfolio, set(), "SMCI", candidate_radar
-        )
-
-    mock_find_contract.assert_awaited_once()
-    assert len(result) == 1
-    assert result[0]["symbol"] == "NVDA"
-
-
 # ==========================================
-# 邏輯 (5)：核心資金部署 (evaluate_core_deployment)
-# ==========================================
-
-
-@pytest.mark.asyncio
-async def test_evaluate_core_deployment_no_candidate(
-    engine: DynamicRolloverEngine,
-) -> None:
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            # 明確設定防禦閾值 < 50，確保走機會分支（避免呼叫真實的
-            # suggest_boxx_allocation_pct() 總經自動建議，維持測試決定性）。
-            "boxx_allocation_pct": 0.0,
-        },
-    ]
-    # candidate_symbol == "VOO" (未找到高 EV 候選標的) -> 不部署，即使有合格 CORE 持倉
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "VOO", None
-    )
-    assert result == []
-
-    # 有候選標的但 radar 資料為空 -> 不部署
-    result2 = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", None
-    )
-    assert result2 == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_no_target_allocation_is_noop(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """滿倉 VOO、從未透過 /edit_holding 設定 target_allocation_pct -> 必須永遠是
-    no-op，不可意外觸發部署（嚴格 opt-in 設計，關鍵回歸測試）。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            # 刻意不設定 target_allocation_pct
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_triggers(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,  # 使用者設定：VOO 只想保留 50%
-            "boxx_allocation_pct": 0.0,  # 明確設定防禦閾值 < 50，走機會分支
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    # total_account_value = 10000 (全倉 VOO) -> current_alloc = 1.0
-    # excess_alloc = 1.0 - 0.5 = 0.5 -> excess_value = 5000
-    # 狀態 A 僅部署超額資金的 50% (_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO)
-    # -> opportunity_excess_value = 2500 -> sell_ratio = 2500 / 10000 = 0.25
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert len(result) == 1
-    assert result[0]["symbol"] == "VOO"
-    assert result[0]["target_core"] == "SPCX"
-    assert result[0]["action"] == "REDUCE"
-    assert result[0]["sell_ratio"] == 0.25
-    assert result[0]["scenario"] == "CORE_DEPLOYMENT"
-    assert result[0]["is_manual_override_required"] is False
-    assert result[0]["limit_price"] == 40.0
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_boxx_defense_manual_threshold(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """使用者手動設定 boxx_allocation_pct >= 50 -> 超額資金整筆防禦轉入 BOXX，
-    且完全不需候選標的通過六重進場鐵律（_confirm_entry_signal 不應被呼叫）。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            "boxx_allocation_pct": 0.7,  # 70 >= _BOXX_DEFENSE_THRESHOLD (50)
-        },
-    ]
-    # 候選標的完全無效 (radar=None) 也不影響 BOXX 防禦分支
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", None
-    )
-    assert len(result) == 1
-    assert result[0]["symbol"] == "VOO"
-    assert result[0]["target_core"] == "BOXX"
-    assert result[0]["action"] == "REDUCE"
-    assert result[0]["sell_ratio"] == 0.5
-    assert result[0]["scenario"] == "CORE_DEPLOYMENT"
-    assert result[0]["is_manual_override_required"] is False
-    assert result[0]["limit_price"] is None
-    mock_entry_gate.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.index_microstructure.suggest_boxx_allocation_pct",
-    new_callable=AsyncMock,
-    return_value=70.0,
-)
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_boxx_defense_auto_suggested(
-    mock_entry_gate: AsyncMock,
-    mock_suggest_boxx: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """使用者未設定 boxx_allocation_pct，且總經數據自動建議值 >= 50 ->
-    比照手動設定達標的行為，整筆防禦轉入 BOXX，不需候選標的確認。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            # 刻意不設定 boxx_allocation_pct
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert len(result) == 1
-    assert result[0]["target_core"] == "BOXX"
-    assert result[0]["sell_ratio"] == 0.5
-    mock_suggest_boxx.assert_awaited_once()
-    mock_entry_gate.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.index_microstructure.suggest_boxx_allocation_pct",
-    new_callable=AsyncMock,
-    return_value=30.0,
-)
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_boxx_auto_suggested_below_threshold(
-    mock_entry_gate: AsyncMock,
-    mock_suggest_boxx: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """使用者未設定 boxx_allocation_pct，且總經數據自動建議值 < 50 ->
-    沿用既有行為，部署至候選標的（回歸測試：向下相容多數正常市況）。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert len(result) == 1
-    assert result[0]["target_core"] == "SPCX"
-    # 機會分支僅部署超額資金的 50% (_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO)
-    assert result[0]["sell_ratio"] == 0.25
-    mock_suggest_boxx.assert_awaited_once()
-    mock_entry_gate.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(False, "mocked fail", None),
-)
-async def test_evaluate_core_deployment_blocked_by_entry_gate(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """即使 CORE 配置明顯超額，進場訊號六重過濾未通過時應靜默略過，
-    不產生任何指令。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            "boxx_allocation_pct": 0.0,  # 明確設定防禦閾值 < 50，走機會分支
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert result == []
-    mock_entry_gate.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_below_min_trade_size_is_noop(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.997,  # 超額僅 0.3%，低於 0.5% 雜訊門檻
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_already_flagged_symbol_skipped(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, {("VOO", "SPOT")}, 10000.0, "SPCX", candidate_radar
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "mocked", None),
-)
-async def test_evaluate_core_deployment_satellite_asset_ignored(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """SATELLITE 持倉即使設了 target_allocation_pct，也不應被本情境當成來源腳
-    （角色不可顛倒，來源必須是 CORE；SATELLITE 的配置控管屬於 Scenario 3）。"""
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.1,
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-    result = await engine.evaluate_core_deployment(
-        1, portfolio, set(), 10000.0, "SPCX", candidate_radar
-    )
-    assert result == []
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "confirmed", None),
-)
-@patch("database.market_cache.get_market_cache", return_value=None)
-@pytest.mark.slow
-async def test_scenario2_and_scenario5_reuse_confirm_entry_signal_result(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Phase 2 回歸鎖定：Scenario 2 (機會成本轉倉) 與 Scenario 5 (核心資金部署)
-    在同一輪次對同一 candidate_symbol/candidate_radar 評估時，_confirm_entry_signal
-    只應被實際呼叫一次 (由 Scenario 5 沿用 Scenario 2 已算好的結果並透過
-    precomputed_entry_confirmation 傳入)，而非各自獨立呼叫兩次。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            "boxx_allocation_pct": 0.0,  # < 50，走機會分支，需 _confirm_entry_signal
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    (
-        _opportunity_cost_instructions,
-        entry_confirmation,
-    ) = await engine.evaluate_opportunity_cost_for_satellites(
-        1, portfolio, set(), "SPCX", candidate_radar
-    )
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (True, "confirmed")
-
-    core_deployment_instructions = await engine.evaluate_core_deployment(
-        1,
-        portfolio,
-        set(),
-        10000.0,
-        "SPCX",
-        candidate_radar,
-        precomputed_entry_confirmation=entry_confirmation,
-    )
-
-    assert len(core_deployment_instructions) == 1
-    assert core_deployment_instructions[0]["target_core"] == "SPCX"
-    mock_entry_gate.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(True, "confirmed independently", None),
-)
-async def test_evaluate_core_deployment_confirms_independently_when_no_precomputed_result(
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """Phase 2 回歸鎖定：當呼叫端未提供 precomputed_entry_confirmation (例如
-    Scenario 2 當輪未觸及 _confirm_entry_signal，如 candidate_symbol 為 VOO)，
-    Scenario 5 仍應照舊獨立呼叫 _confirm_entry_signal 自行確認，而非因收到
-    None 就靜默跳過部署。"""
-    portfolio = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            "boxx_allocation_pct": 0.0,
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    result = await engine.evaluate_core_deployment(
-        1,
-        portfolio,
-        set(),
-        10000.0,
-        "SPCX",
-        candidate_radar,
-        precomputed_entry_confirmation=None,
-    )
-
-    assert len(result) == 1
-    mock_entry_gate.assert_awaited_once()
-
-
-# ==========================================
-# 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay)
+# 邏輯 (1)：Covered Call Overlay (evaluate_covered_call_overlay)
 # ==========================================
 
 _CAPPED_SIGNAL = {
@@ -3194,7 +2225,6 @@ def test_scenario_style_distinguishes_all_five_scenarios() -> None:
             scenario=scenario,
         )
         for scenario in (
-            "OPPORTUNITY_COST",
             "SATELLITE_REBALANCE",
             "MARGIN_DEFENSE",
             "FUNDAMENTAL_BROKEN",
@@ -3203,7 +2233,7 @@ def test_scenario_style_distinguishes_all_five_scenarios() -> None:
         )
     }
     combos = {(e.title, e.color) for e in embeds.values()}
-    assert len(combos) == 6, "六大情境的 (標題, 顏色) 組合必須互不相同"
+    assert len(combos) == 5, "五大情境的 (標題, 顏色) 組合必須互不相同"
     # 最危險的兩個情境 (保證金防禦 / 基本面破滅) 必須共享同一種危急紅色
     assert embeds["MARGIN_DEFENSE"].color == embeds["FUNDAMENTAL_BROKEN"].color
     assert embeds["MARGIN_DEFENSE"].color == discord.Color(0xE74C3C)
@@ -3498,73 +2528,6 @@ async def test_compute_structural_breakdown_signals_neither_triggered(
     )
     assert is_breakdown is False
     assert is_whale_block is False
-
-
-def test_evaluate_opportunity_cost_extreme_asymmetric_forces_full_rollover(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """
-    條件二「極致不對稱勝率」(低 IVR + 貼近 put_wall + UOA sweep) 觸發時，
-    應強制 rollover_ratio=1.0 並採用 "Shares + ITM Call" 策略。
-    """
-    res = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,  # < 20 (動能衰退)
-        current_holding_profit_pct=0.1,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,  # > 80 (突破待發)
-        target_expected_value=0.25,
-        current_holding_expected_value=0.10,  # EV spread = 15% > 5%
-        target_ivr=20.0,  # 0 < 20 < 30 (低 IVR)
-        target_uoa_sweep=True,
-        target_spot=100.0,
-        target_put_wall=100.5,  # |100-100.5|/100.5 ≈ 0.5% <= 1%
-    )
-    assert res["should_rollover"] is True
-    assert res["rollover_ratio"] == 1.0
-    assert res["strategy"] == "Shares + ITM Call"
-
-
-def test_evaluate_opportunity_cost_blocked_when_ev_spread_below_cost_floor(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """
-    #8: EV spread 落在原始 5% 門檻之上、但扣除保守往返交易成本 (0.3%) 後低於
-    實質門檻時，不應觸發轉倉，避免扣成本後實質虧損。
-    """
-    res = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,
-        current_holding_profit_pct=0.4,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,
-        target_expected_value=0.152,
-        current_holding_expected_value=0.10,  # EV spread = 5.2% > 5% 但 < 5.3% 成本門檻
-    )
-    assert res["should_rollover"] is False
-
-
-def test_evaluate_opportunity_cost_extreme_asymmetric_blocked_below_cost_floor(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """
-    #8: 極致不對稱勝率分支巢狀於同一 ev_spread 門檻之內，成本地板同樣適用，
-    ev_spread 不足時即使低 IVR/貼近 put_wall/UOA sweep 條件齊備也不應強制全倉轉移。
-    """
-    res = engine.evaluate_opportunity_cost(
-        current_holding_symbol="PLTR",
-        current_holding_power_squeeze=15.0,
-        current_holding_profit_pct=0.1,
-        target_watchlist_symbol="SMCI",
-        target_power_squeeze=85.0,
-        target_expected_value=0.152,
-        current_holding_expected_value=0.10,  # EV spread = 5.2%，低於 5.3% 成本門檻
-        target_ivr=20.0,
-        target_uoa_sweep=True,
-        target_spot=100.0,
-        target_put_wall=100.5,
-    )
-    assert res["should_rollover"] is False
 
 
 def test_apply_ivr_strategy_overlay_override_suppresses_ivr_suffix(
@@ -5866,114 +4829,6 @@ async def test_confirm_entry_signal_structure_directive_none_when_condition6_fai
 
 
 @pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
-    new_callable=AsyncMock,
-    return_value=(False, "mocked: entry not confirmed", None),
-)
-@patch("database.market_cache.get_market_cache")
-async def test_evaluate_opportunity_cost_for_satellites_blocked_by_entry_gate(
-    mock_cache: MagicMock,
-    mock_entry_gate: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """即使 EV/PSQ 判斷會觸發轉倉，進場訊號四重過濾未通過時應靜默略過，
-    不產生任何指令。"""
-
-    def cache_side_effect(symbol: str, expiry: str = None):  # type: ignore
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 200.0,
-                "expected_move_upper": 205.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SMCI":
-            return {
-                "reference_spot_price": 40.0,
-                "expected_move_upper": 50.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    mock_cache.side_effect = cache_side_effect
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 240.0,
-            "avg_cost": 200.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
-        },
-    ]
-    candidate_radar = {
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "quote": {"c": 40.0},
-        "iv_metrics": {"iv_rank": 20.0},
-        "gex_profile_data": {"put_wall": 0.0},
-        "uoa": [],
-    }
-
-    result, entry_confirmation = await engine.evaluate_opportunity_cost_for_satellites(
-        1, portfolio, set(), "SMCI", candidate_radar
-    )
-    assert result == []
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (False, "mocked: entry not confirmed")
-    mock_entry_gate.assert_awaited_once()
-
-
-@patch(
-    "database.market_cache.get_market_cache",
-    return_value={"reference_spot_price": 100.0, "expected_move_upper": 110.0},
-)
-def test_skew_adjusted_ev_proxy_downside_penalty(
-    mock_cache: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """測試 Skew-Adjusted EV：當 Skew Percentile < 50%（市場定價極端下行尾部風險）時，EV 應依據 Skew 進行折價扣減。"""
-    # 正常無 Skew 恐慌的情境 (skew_percentile = 70.0%)
-    ev_normal = engine._calculate_ev_proxy(
-        symbol="TEST",
-        skew_percentile=70.0,
-    )
-    assert ev_normal == pytest.approx(0.10, rel=1e-3)
-
-    # 存在下行尾部恐慌 (skew_percentile = 30.0%)
-    # penalty = (50 - 30) / 50 * 0.5 = 0.20
-    # adjusted_ev = 0.10 * (1 - 0.20) = 0.08
-    ev_penalized = engine._calculate_ev_proxy(
-        symbol="TEST",
-        skew_percentile=30.0,
-    )
-    assert ev_penalized == pytest.approx(0.08, rel=1e-3)
-    assert ev_penalized < ev_normal
-
-
-@patch("database.watchlist.get_user_watchlist", return_value=[("NVDA", None)])
-@patch("database.calendar_cache.get_cached_earnings")
-def test_find_best_rollover_target_filters_earnings_pre_event(
-    mock_earnings: MagicMock,
-    mock_watchlist: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """測試候選標的預篩選：3 天內即將發布財報的標的應被過濾，防止跳空雙殺。"""
-    from datetime import datetime, timedelta
-
-    near_earnings_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
-    mock_earnings.return_value = {"earnings_date": near_earnings_date}
-
-    best_sym = engine._find_best_rollover_target(user_id=1, exclude_symbols={"AMD"})
-    assert best_sym == "VOO"
-
-
-@pytest.mark.asyncio
 @patch("database.calendar_cache.get_cached_earnings", return_value=None)
 @patch(
     "market_analysis.index_microstructure.get_market_regime",
@@ -6345,436 +5200,6 @@ def test_create_covered_call_profit_lock_embed_renders_details() -> None:
 # ============================================================================
 
 
-@pytest.mark.asyncio
-@patch("database.calendar_cache.get_cached_earnings", return_value=None)
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value="NORMAL",
-)
-@patch(
-    "services.market_data_service.get_all_option_expiries",
-    new_callable=AsyncMock,
-    return_value=_FAR_EXPIRIES,
-)
-async def test_evaluate_opportunity_cost_for_satellites_right_side_default_matches_existing_behavior(
-    mock_expiries: AsyncMock,
-    mock_regime: AsyncMock,
-    mock_earnings: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy 未設定 (預設 RIGHT_SIDE，未在 user_settings 建立過紀錄
-    的使用者) 時，entry_confirmation 必須與改動前的既有六重鐵律行為位元對位
-    一致 (回歸測試)，證明 Section 4 的三分支 wiring 對未選擇策略的既有使用者
-    零行為變化。"""
-    with patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=_GREEN_15M_DF,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999001,
-            portfolio_assets=[],
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    assert entry_confirmation is not None
-    confirmed, reason = entry_confirmation[:2]
-    assert confirmed is True
-    assert "條件一✅" in reason
-    assert "左側" not in reason
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_left_side_routes_to_left_gate(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=LEFT_SIDE 時應完全略過右側六重鐵律，改呼叫
-    left_side_entry._confirm_left_entry_signal。"""
-    with (
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="LEFT_SIDE"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
-            new_callable=AsyncMock,
-            return_value=(True, "左側測試通過", "測試策略指令"),
-        ) as mock_left_gate,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999002,
-            portfolio_assets=[],
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    mock_left_gate.assert_awaited_once()
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (True, "左側測試通過")
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_short_side_skips_long_candidate(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=SHORT_SIDE 時，Scenario 2 的候選來自
-    _find_best_rollover_target()——依「上漲」期望值排序的多頭候選。對它跑做空
-    鐵律在建構上就是錯的對象，故不得呼叫任何進場閘門，直接回傳 SHORT 方向的
-    未確認結果，做空候選改由 SHORT_ENTRY 情境獨立挑選與評估。
-
-    ⚠️ SHORT_SIDE 是本系統唯一的空頭方向進場路徑；LEFT_SIDE 雖然技術定義與
-    右側相反，本質仍是做多。"""
-    with (
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="SHORT_SIDE"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.short_side_entry.evaluate_short_entry",
-            new_callable=AsyncMock,
-        ) as mock_short_gate,
-        patch(
-            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
-            new_callable=AsyncMock,
-        ) as mock_left_gate,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999005,
-            portfolio_assets=[],
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    mock_short_gate.assert_not_awaited()
-    mock_left_gate.assert_not_awaited()
-    assert entry_confirmation is not None
-    assert entry_confirmation.is_confirmed is False
-    assert entry_confirmation.direction == "SHORT"
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_v_routes_to_short_gate(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=DYNAMIC 且分類為 Regime V (破位追空態) 時，應路由至
-    做空六重鐵律，並原樣沿用分類階段已抓取的資料快照。做空確認一律在衛星迴圈
-    **之前**返回 (direction="SHORT")，即使確認通過、且有可轉倉的衛星持倉，也
-    絕不產生任何 Buy Shares 機會成本指令。"""
-    from market_analysis.dynamic_rollover.models import (
-        DynamicRegime,
-        RegimeMarketData,
-    )
-
-    market_data = RegimeMarketData(
-        df_15m=_GREEN_15M_DF, session_vwap=99.0, atr_15m=1.5, rsi_15m=38.0
-    )
-    short_ev = make_short_entry_evaluation(all_passed=True)
-    satellites = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "quantity": 10,
-            "spot_price": 500.0,
-            "avg_cost": 400.0,
-            "psq_result": {"squeeze_level": "Normal"},
-        }
-    ]
-    with (
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="DYNAMIC"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
-            new_callable=AsyncMock,
-            return_value=(
-                DynamicRegime.REGIME_V_BREAKDOWN_CHASE,
-                "結構破位負 Gamma 順勢助跌確認",
-                market_data,
-            ),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.short_side_entry.evaluate_short_entry",
-            new_callable=AsyncMock,
-            return_value=short_ev,
-        ) as mock_short_gate,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999006,
-            portfolio_assets=satellites,
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    mock_short_gate.assert_awaited_once()
-    # 分類階段的快照必須原樣傳入，不得讓做空鐵律重抓一次
-    assert mock_short_gate.await_args is not None
-    kwargs = mock_short_gate.await_args.kwargs
-    assert kwargs["df_15m"] is _GREEN_15M_DF
-    assert kwargs["session_vwap"] == 99.0
-    assert kwargs["atr_15m"] == 1.5
-    assert entry_confirmation is not None
-    assert entry_confirmation.is_confirmed is True
-    assert entry_confirmation.direction == "SHORT"
-    assert entry_confirmation.short_evaluation is short_ev
-    assert entry_confirmation.entry_regime == "REGIME_V_BREAKDOWN_CHASE"
-    assert entry_confirmation.rsi_15m == 38.0
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_core_deployment_ignores_short_confirmation_but_boxx_still_fires(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """核心資金部署收到 SHORT 方向的確認時，機會分支必須視為未確認——把 CORE
-    超額現金以 Buy Shares 部署進剛被確認要做空的標的是方向相反的下單。
-    BOXX 防禦分支不依賴候選確認，照常觸發。"""
-    from market_analysis.dynamic_rollover.models import EntryConfirmation
-
-    short_confirmation = EntryConfirmation(
-        True,
-        "做空六重鐵律通過",
-        "SHORT",
-        short_evaluation=make_short_entry_evaluation(all_passed=True),
-    )
-    candidate_radar = {"quote": {"c": 40.0}, "gex_profile_data": {}, "uoa": []}
-    opportunity_holding = [
-        {
-            "symbol": "VOO",
-            "asset_class": "CORE",
-            "current_value": 10000.0,
-            "target_allocation_pct": 0.5,
-            "boxx_allocation_pct": 0.0,
-        }
-    ]
-    with patch.object(
-        engine, "_confirm_entry_signal", new_callable=AsyncMock
-    ) as mock_long_gate:
-        opportunity = await engine.evaluate_core_deployment(
-            1,
-            opportunity_holding,
-            set(),
-            10000.0,
-            "SPCX",
-            candidate_radar,
-            precomputed_entry_confirmation=short_confirmation,
-        )
-    assert opportunity == []
-    mock_long_gate.assert_not_awaited()
-
-    boxx_holding = [dict(opportunity_holding[0], boxx_allocation_pct=80.0)]
-    boxx = await engine.evaluate_core_deployment(
-        1,
-        boxx_holding,
-        set(),
-        10000.0,
-        "SPCX",
-        candidate_radar,
-        precomputed_entry_confirmation=short_confirmation,
-    )
-    assert len(boxx) == 1
-    assert boxx[0]["target_core"] == "BOXX"
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_dynamic_routes_via_regime_classifier(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=DYNAMIC 時應先呼叫 4-Regime 分類器，Regime I (左側接刀
-    態) 路由至左側六重鐵律，且產生的指令需攜帶 entry_regime 與左側條件六的
-    structure_directive（獨立欄位，不覆寫 suggested_strategy——後者是
-    _calculate_rollover_decision 自行決策的工具別）。"""
-
-    def cache_side_effect(symbol: str, expiry: Optional[str] = None) -> Optional[dict]:
-        if symbol.upper() == "XYZ":
-            return {
-                "reference_spot_price": 50.0,
-                "expected_move_upper": 51.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return {
-            "reference_spot_price": 100.0,
-            "expected_move_upper": 120.0,
-            "is_stale": 0,
-            "is_degraded": 0,
-        }
-
-    portfolio_assets = [
-        {
-            "symbol": "XYZ",
-            "asset_class": "SATELLITE",
-            "instrument_type": "SPOT",
-            "quantity": 10.0,
-            "current_value": 500.0,
-            "spot_price": 50.0,
-            "avg_cost": 40.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Short"},
-        }
-    ]
-    candidate_radar = {
-        "psq_result": {"squeeze_level": "High", "signal_direction": "Long"},
-        "quote": {"c": 100.0},
-        "iv_metrics": {},
-        "gex_profile_data": {},
-        "uoa": [],
-    }
-
-    with (
-        patch("database.market_cache.get_market_cache", side_effect=cache_side_effect),
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="DYNAMIC"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
-            new_callable=AsyncMock,
-            return_value=(
-                DynamicRegime.REGIME_I_LEFT_CATCH,
-                "測試regime",
-                RegimeMarketData(),
-            ),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
-            new_callable=AsyncMock,
-            return_value=(True, "左側測試通過", "測試策略指令"),
-        ),
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999003,
-            portfolio_assets=portfolio_assets,
-            already_flagged_symbols=set(),
-            candidate_symbol="ABC",
-            candidate_radar=candidate_radar,
-        )
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (True, "左側測試通過")
-    assert len(instructions) == 1
-    assert instructions[0]["entry_regime"] == "REGIME_I_LEFT_CATCH"
-    assert instructions[0]["structure_directive"] == "測試策略指令"
-    # 🔒 迴歸鎖定：建議結構不得覆寫 _calculate_rollover_decision 決定的工具別，
-    # 否則 "Shares + ITM Call" 連同它自帶的 ITM 70Δ 履約價/DTE 指引會一起被抹掉。
-    assert instructions[0]["suggested_strategy"] == "Buy Shares"
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_iii_reuses_market_data(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=DYNAMIC 時，Regime III (右側動能態) 應將分類階段已抓取的
-    15m frame / Session VWAP 原樣傳給 _confirm_entry_signal，避免對同一標的重複
-    發起 15m K 線與 Session VWAP 的網路請求（比照 Regime I 左側鐵律既有的重用
-    模式）。"""
-    sentinel_df_15m = pd.DataFrame({"Close": [1.0]})
-
-    with (
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="DYNAMIC"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
-            new_callable=AsyncMock,
-            return_value=(
-                DynamicRegime.REGIME_III_RIGHT_MOMENTUM,
-                "測試regime",
-                RegimeMarketData(
-                    df_15m=sentinel_df_15m, session_vwap=123.45, atr_15m=1.0
-                ),
-            ),
-        ),
-        patch.object(
-            engine,
-            "_confirm_entry_signal",
-            new_callable=AsyncMock,
-            return_value=(True, "右側測試通過", None),
-        ) as mock_confirm,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999005,
-            portfolio_assets=[],
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    mock_confirm.assert_awaited_once()
-    _args, kwargs = mock_confirm.call_args
-    assert kwargs["df_15m"] is sentinel_df_15m
-    assert kwargs["session_vwap"] == 123.45
-    assert entry_confirmation is not None
-    assert entry_confirmation[:2] == (True, "右側測試通過")
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_evaluate_opportunity_cost_for_satellites_dynamic_regime_ii_blocks_entry(
-    engine: DynamicRolloverEngine,
-) -> None:
-    """trading_strategy=DYNAMIC 時，Regime II (混沌泥淖態) 應直接判定未通過，
-    完全不呼叫左側或右側六重鐵律。"""
-    with (
-        patch(
-            "market_analysis.dynamic_rollover.opportunity_cost.get_full_user_context",
-            return_value=MagicMock(trading_strategy="DYNAMIC"),
-        ),
-        patch(
-            "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
-            new_callable=AsyncMock,
-            return_value=(
-                DynamicRegime.REGIME_II_CHAOS_STANDASIDE,
-                "無人區過渡震盪",
-                None,
-            ),
-        ) as mock_classify,
-        patch(
-            "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
-            new_callable=AsyncMock,
-        ) as mock_left_gate,
-    ):
-        (
-            instructions,
-            entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=999999004,
-            portfolio_assets=[],
-            already_flagged_symbols=set(),
-            candidate_symbol="TEST",
-            candidate_radar=_green_candidate_radar(),
-        )
-    mock_classify.assert_awaited_once()
-    mock_left_gate.assert_not_awaited()
-    assert entry_confirmation is not None
-    confirmed, reason = entry_confirmation[:2]
-    assert confirmed is False
-    assert "REGIME_II_CHAOS_STANDASIDE" in reason
-    assert instructions == []
-
-
 # ============================================================================
 # 阻力牆向上遷移 (TP2 Call Wall Migration) 與 CSP 賣方停利 (Cash-Secured Put)
 # ============================================================================
@@ -7123,3 +5548,95 @@ async def test_radar_data_persists_call_wall_and_previous_call_wall() -> None:
             tf.close()
         except Exception:
             pass
+
+
+@patch("database.market_cache.get_market_cache")
+@patch("database.watchlist.get_user_watchlist")
+def test_find_best_rollover_target_picks_high_ev_candidate(
+    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    mock_watchlist.return_value = [("XYZ", True)]
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 110.0,  # EV = 0.10 > 0.05 門檻
+        "is_stale": 0,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "XYZ"
+
+
+@patch("database.market_cache.get_market_cache")
+@patch("database.watchlist.get_user_watchlist")
+def test_find_best_rollover_target_ignores_stale_or_low_ev(
+    mock_watchlist: MagicMock, mock_cache: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    mock_watchlist.return_value = [("XYZ", True)]
+
+    # is_stale=1 -> 視為不可信快取
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 110.0,
+        "is_stale": 1,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "VOO"
+
+    # EV 未達 0.05 門檻
+    mock_cache.return_value = {
+        "reference_spot_price": 100.0,
+        "expected_move_upper": 102.0,
+        "is_stale": 0,
+        "is_degraded": 0,
+    }
+    assert engine._find_best_rollover_target(1) == "VOO"
+
+
+def test_find_best_rollover_target_no_watchlist_returns_voo(
+    engine: DynamicRolloverEngine,
+) -> None:
+    with patch("database.watchlist.get_user_watchlist", return_value=[]):
+        assert engine._find_best_rollover_target(1) == "VOO"
+
+
+@patch(
+    "database.market_cache.get_market_cache",
+    return_value={"reference_spot_price": 100.0, "expected_move_upper": 110.0},
+)
+def test_skew_adjusted_ev_proxy_downside_penalty(
+    mock_cache: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試 Skew-Adjusted EV：當 Skew Percentile < 50%（市場定價極端下行尾部風險）時，EV 應依據 Skew 進行折價扣減。"""
+    # 正常無 Skew 恐慌的情境 (skew_percentile = 70.0%)
+    ev_normal = engine._calculate_ev_proxy(
+        symbol="TEST",
+        skew_percentile=70.0,
+    )
+    assert ev_normal == pytest.approx(0.10, rel=1e-3)
+
+    # 存在下行尾部恐慌 (skew_percentile = 30.0%)
+    # penalty = (50 - 30) / 50 * 0.5 = 0.20
+    # adjusted_ev = 0.10 * (1 - 0.20) = 0.08
+    ev_penalized = engine._calculate_ev_proxy(
+        symbol="TEST",
+        skew_percentile=30.0,
+    )
+    assert ev_penalized == pytest.approx(0.08, rel=1e-3)
+    assert ev_penalized < ev_normal
+
+
+@patch("database.watchlist.get_user_watchlist", return_value=[("NVDA", None)])
+@patch("database.calendar_cache.get_cached_earnings")
+def test_find_best_rollover_target_filters_earnings_pre_event(
+    mock_earnings: MagicMock,
+    mock_watchlist: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """測試候選標的預篩選：3 天內即將發布財報的標的應被過濾，防止跳空雙殺。"""
+    from datetime import datetime, timedelta
+
+    near_earnings_date = (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")
+    mock_earnings.return_value = {"earnings_date": near_earnings_date}
+
+    best_sym = engine._find_best_rollover_target(user_id=1, exclude_symbols={"AMD"})
+    assert best_sym == "VOO"

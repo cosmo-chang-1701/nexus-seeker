@@ -272,11 +272,6 @@ def create_holdings_embed(
                     f" • {h['symbol']}：建議目標配置 {suggested_target:.0f}%"
                     "（依當前總經市況自動評估，未生效，需自行以 /edit_holding 設定）"
                 )
-        # 核心資金部署引擎 (Scenario 5) 的 BOXX 防禦閾值：僅使用者設定過才顯示，
-        # 未設定時由引擎依總經數據自動評估，不在此表格中顯示估算值。
-        boxx_alloc = h.get("boxx_allocation_pct")
-        if boxx_alloc is not None:
-            alloc_str += f" 🧱{boxx_alloc * 100:.0f}%"
         alloc_fmt = _pad_string(alloc_str, 20, "right")
         acquired_fmt = _pad_string(h.get("acquired_at") or "—", 10, "right")
 

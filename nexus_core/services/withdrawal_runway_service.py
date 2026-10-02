@@ -168,6 +168,51 @@ def sellable_holdings(
     return out
 
 
+def resolve_target_weights(
+    manual: Optional[Mapping[str, float]],
+    holding_targets: Mapping[str, float],
+    sellable: Mapping[str, float],
+) -> Optional[dict[str, float]]:
+    """提領再平衡權重：手動覆寫 > 持倉 target_allocation_pct > 等權（回傳 None）。
+
+    混合規則：有設目標的持股用其目標占比，未設者平分剩餘 (1−Σ目標)，最後在可賣持股間
+    正規化。目標已占滿 100%（沒有剩餘可分）時，未設者以目前市值占比作為權重（中性，
+    不因權重 0 被當成全額超配而優先賣光），有設者按目標比例分配其餘占比。
+    全無目標時回傳 None，由 `plan_withdrawal` 走等權。`holding_targets` 只含 >0 的目標
+    （由 `load_holding_targets` 過濾）；`sellable` 為可賣持股市值。
+    """
+    if manual:
+        return dict(manual)
+    targets = {s: float(holding_targets[s]) for s in sellable if s in holding_targets}
+    if not targets:
+        return None
+    unset = [s for s in sellable if s not in targets]
+    rest = 1.0 - sum(targets.values())
+    weights = dict(targets)
+    if unset and rest > 0:
+        for sym in unset:
+            weights[sym] = rest / len(unset)
+    elif unset:
+        total_value = sum(sellable.values())
+        unset_share = {sym: sellable[sym] / total_value for sym in unset}
+        room = max(1.0 - sum(unset_share.values()), 0.0)
+        target_sum = sum(targets.values())
+        weights = {sym: t / target_sum * room for sym, t in targets.items()}
+        weights.update(unset_share)
+    total = sum(weights.values())
+    return {sym: w / total for sym, w in weights.items()} if total > 0 else None
+
+
+def load_holding_targets(user_id: int) -> dict[str, float]:
+    """現貨持倉已設定的 target_allocation_pct（小數，如 0.2）；未設者不出現。"""
+    out: dict[str, float] = {}
+    for h in database.get_user_holdings(user_id):
+        pct = h.get("target_allocation_pct")
+        if pct is not None and float(pct) > 0:
+            out[str(h["symbol"]).upper()] = float(pct)
+    return out
+
+
 def cpi_at(observations: Sequence[Observation], as_of: date) -> Optional[float]:
     """`as_of` 當天已公布的最新 CPI；無資料 → None。"""
     seen = usable(observations, as_of)
@@ -377,12 +422,20 @@ async def _notify_reminder(
     if due is None:
         return
     kind, target = due
-    exposure = await asyncio.to_thread(load_portfolio_exposure, user_id)
+    exposure, holding_targets = await asyncio.gather(
+        asyncio.to_thread(load_portfolio_exposure, user_id),
+        asyncio.to_thread(load_holding_targets, user_id),
+    )
+    sellable = sellable_holdings(exposure.stock_shares, nav_snapshot.closes)
     plan = plan_withdrawal(
         snap.next_withdrawal,
         snap.boxx_value,
-        sellable_holdings(exposure.stock_shares, nav_snapshot.closes),
-        parse_target_weights(ctx.withdrawal_target_weights),
+        sellable,
+        resolve_target_weights(
+            parse_target_weights(ctx.withdrawal_target_weights),
+            holding_targets,
+            sellable,
+        ),
     )
     sent = await notify(
         bot,
@@ -497,7 +550,9 @@ __all__ = [
     "is_snapshot_stale",
     "next_withdrawal_date",
     "parse_target_weights",
+    "load_holding_targets",
     "reminder_due",
+    "resolve_target_weights",
     "run_withdrawal_runway_job",
     "sellable_holdings",
 ]

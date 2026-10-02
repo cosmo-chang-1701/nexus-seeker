@@ -67,7 +67,6 @@ def test_every_rollover_scenario_has_a_channel() -> None:
             {"scenario": "SATELLITE_REBALANCE", "exit_tier": None},
             "defense_option_rollover",
         ),
-        ({"scenario": "OPPORTUNITY_COST"}, "defense_option_rollover"),
         # 顧問模式：結構失效告知走左尾防護，目標區走位階顧問
         (
             {

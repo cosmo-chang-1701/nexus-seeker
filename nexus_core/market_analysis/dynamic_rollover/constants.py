@@ -17,21 +17,8 @@ CORE_DEFENSE_ETF_SYMBOLS: frozenset[str] = frozenset(
 # 使用的最終備援估計值（僅用於股數建議粗估，非交易執行依據）。
 _FALLBACK_TARGET_PRICE_ESTIMATE = 500.0
 
-# evaluate_opportunity_cost 中，機會成本轉倉的 EV Spread 門檻須額外扣除的保守
-# 往返交易成本估計值 (佣金 + 預期滑價)，避免轉倉在扣除交易成本後實質虧損。
-# 非逐券商精算，僅作保守閘門，涵蓋常規轉倉與極致不對稱勝率強制全倉分支
-# (後者巢狀於同一 ev_spread 門檻之內，故單一常數即可覆蓋兩者)。
-_ESTIMATED_ROUND_TRIP_COST_PCT: float = 0.003
-
 # --- 決策門檻具名常數 (純重構，零行為變化；不串接 risk_limit 或新增 per-user 設定) ---
-_MOMENTUM_DECAY_THRESHOLD: float = 20.0  # PowerSqueeze < 此值視為原持倉動能衰退
-_BREAKOUT_READY_THRESHOLD: float = 80.0  # PowerSqueeze > 此值視為新標的突破待發
-_EV_SPREAD_MIN_THRESHOLD: float = 0.05  # 機會成本轉倉最低期望值差距門檻
-_ROLLOVER_RATIO_HIGH_PROFIT: float = 0.5  # 原持倉獲利 > 30% 時的機會成本轉倉比例
-_ROLLOVER_RATIO_STANDARD: float = 0.3  # 原持倉獲利一般/虧損時的機會成本轉倉比例
-_PROFIT_LOCK_PROFIT_PCT_THRESHOLD: float = 0.3  # 判定「獲利豐厚」的持倉獲利率門檻
-_LOW_IVR_UPPER_BOUND: float = 30.0  # 極致不對稱勝率條件之「低 IVR」上限
-_PUT_WALL_PROXIMITY_TOLERANCE: float = 0.01  # 極致不對稱勝率條件之貼近 put_wall 容差
+_EV_SPREAD_MIN_THRESHOLD: float = 0.05  # 最低期望值門檻（多空候選挑選）
 # ⚠️ 注意：_PROFIT_UNLOCK_TOLERANCE 與 _EUPHORIA_SKEW_PERCENTILE 已不再是
 # Scenario 3 (anti_washout.py) 的清倉閘門條件——該角色已由下方「微觀結構出場
 # 決策矩陣」的 TP1/TP2/SL-主力對沖 取代。兩者現僅由 Scenario 6
@@ -49,18 +36,8 @@ _DEFAULT_MAX_ALLOCATION_PCT: float = (
     0.3  # 未設定 max_allocation_pct 時的預設衛星部位上限
 )
 
-# --- 邏輯 (5)：核心資金部署 (evaluate_core_deployment) 具名常數 ---
-_CORE_EXCESS_MIN_TRADE_PCT: float = 0.005  # CORE 超額配置低於此幅度 (0.5%) 視為誤差雜訊，不觸發部署轉倉，避免 dust trade
-_BOXX_DEFENSE_THRESHOLD: float = 50.0  # boxx_allocation_pct (0-100) >= 此值時，超額資金優先防禦轉入 BOXX 而非候選標的
-# 機會分支（State A）通過既有六重鐵律 _confirm_entry_signal 後，僅動用超額
-# 資金的這個比例部署至候選標的；剩餘部分維持現金/緩衝，不生成第二筆分流
-# 指令。BOXX 防禦分支不受此常數影響，仍為 100% 部署。
-_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO: float = 0.5
-
-# --- 邏輯 (5) 延伸：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
-# 與 evaluate_core_deployment 的兩個既有分支不同，本分支刻意不要求
-# target_allocation_pct opt-in (詳見該函式 docstring)，只要求 CORE 持倉股數
-# 達 1 口門檻，故獨立於上方兩個常數之外另立一組。
+# --- 邏輯 (1)：Covered Call Overlay (evaluate_covered_call_overlay) 具名常數 ---
+# 只要求 CORE 持倉股數達 1 口門檻，不要求 target_allocation_pct opt-in。
 _COVERED_CALL_MIN_SHARES: int = 100  # 1 口最低股數門檻
 _COVERED_CALL_MAX_LOTS: int = (
     1  # 使用者明確規格：固定 1 口，未來若放寬為 N 口只需調整此常數
@@ -162,41 +139,20 @@ _EARNINGS_PRE_EVENT_BUFFER_DAYS: int = (
 )
 
 # --- 邏輯 (6)：宏觀逃頂前瞻防禦 (evaluate_macro_top_escape_defense) 具名常數 ---
-# 三級階梯化：WATCH (前哨) 買保護性 Put 不賣股，ELEVATED (警戒) 與 CRITICAL
-# (確認) 才實際減碼——三者共用同一組 evaluate_macro_top_escape_score() 分級輸出，
-# 差別只在動作強度。校準基準：Scenario 3 (反應式，個股結構已破) 用 90%；
-# Scenario 4 (反應式，系統性 regime + 保證金壓力已雙重確認) 用 100%；本情境即使
-# 是三級中最果斷的 CRITICAL，仍是「領先訊號」(組合式機率評分，尚無任何個股結構
-# 真正破位)，假陽性風險明顯高於前兩者，故上限仍遠低於它們。
-#
-# ⚠️ _MACRO_TOP_ESCAPE_TRIM_RATIO 由 calibration/backtest_engine_2025.py 直接
-# 匯入以維持回測與生產環境的參數一致性 (scanner replica parity)，其 2025 回測
-# 引擎目前僅複製 CRITICAL 單一分級的行為 (無 WATCH/ELEVATED 分支)，改動本值會
-# 直接反映在下次回測執行的 CRITICAL 分支結果中，這是刻意保留的行為，非孤兒常數。
-_MACRO_TOP_ESCAPE_TRIM_RATIO: float = 0.50  # CRITICAL：既有 WATCH/ELEVATED 已各自
-# 承擔前哨與初階防禦，CRITICAL 應對應更果斷的動作，由既有的 25% 提高至 50%，
-# 否則三級階梯只是把同一個 25% 拆成三次發送。
-_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO: float = 0.25  # ELEVATED：沿用原本唯一的
-# CRITICAL 減碼比例，作為介於 WATCH 與新版 CRITICAL 之間的中繼防禦強度。
+# 宏觀逃頂評分達 WATCH 以上的任一分級，都只建議買保護性 Put、不賣股
+# （原 ELEVATED／CRITICAL 級的減碼轉 BOXX 分支已移除）。NORMAL 不在集合內，
+# 代表無動作。
+_MACRO_TOP_ESCAPE_PUT_TIERS: frozenset[str] = frozenset(
+    {"WATCH", "ELEVATED", "CRITICAL"}
+)
 
-# tier -> (trim_ratio, action_kind)。trim_ratio 僅 TRIM 動作有意義，
-# PROTECTIVE_PUT 恆為 0.0（不賣股，改買保護）。NORMAL 未列於表中，代表無動作
-# （既有 `tier not in _MACRO_TOP_ESCAPE_TIER_ACTIONS` 短路判斷）。
-_MACRO_TOP_ESCAPE_TIER_ACTIONS: dict[str, tuple[float, str]] = {
-    "WATCH": (0.00, "PROTECTIVE_PUT"),
-    "ELEVATED": (_MACRO_TOP_ESCAPE_ELEVATED_TRIM_RATIO, "TRIM"),
-    "CRITICAL": (_MACRO_TOP_ESCAPE_TRIM_RATIO, "TRIM"),
-}
-
-# --- WATCH 級 Protective Put 分支具名常數 ---
-# 保留 100% 上檔曝險（不減碼），只付出權利金成本買保護——與 ELEVATED/CRITICAL
-# 的「放棄上檔換取下檔保護」策略互補，回答的是「前哨階段還不確定要不要砍倉時，
-# 如何先鎖住下檔」。
+# --- 保護性 Put 分支具名常數 ---
+# 保留 100% 上檔曝險（不減碼），只付出權利金成本買保護。
 _MACRO_TOP_ESCAPE_HEDGE_SYMBOL: str = (
     "SPY"  # 大盤 ETF 而非個股：逃頂訊號是系統性的，指數 Put 的流動性與價差優於
     # 個股。沿用 market_analysis/hedging.py 既有以 SPY 作為組合對沖代理的慣例。
 )
-_WATCH_TIER_HEDGE_RATIO: float = 0.30  # 對沖比例：對沖 30% 的組合方向性曝險
+_MACRO_TOP_ESCAPE_HEDGE_RATIO: float = 0.30  # 對沖比例：對沖 30% 的組合方向性曝險
 _MACRO_TOP_ESCAPE_PUT_TARGET_DELTA: float = (
     -0.275  # 建議合約 Delta 中位數 (-0.25 ~ -0.30)，成本效率與保護力的平衡點
 )
@@ -207,7 +163,7 @@ _MACRO_TOP_ESCAPE_PUT_DTE_MAX: int = 60  # 建議 DTE 上限：避開近月 Thet
 # 僅對 OPTIONS 部位有意義。與既有 _ENTRY_UOA_MIN_DTE(7)/_ENTRY_CANDIDATE_MIN_DTE(1)
 # 刻意分開命名而不合併重用：後兩者是「候選標的」進場確認條件的一部分，本組常數
 # 是「既有持倉」本身的到期日分級門檻，語意不同，數值恰好相同純屬巧合。
-_HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，Scenario 2 的機會成本轉倉
+_HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，TP 輪動目標的轉倉
 # 與 Scenario 3 Euphoria 分支的「開立全新 Bear Call Spread」判定一律封鎖 (末日
 # 流動性雜訊，不適合用於驅動新開倉/轉倉決策)；既有部位的雙軌停損監控不受影響。
 _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD: int = 1  # dte <= 此值時，無論停損是否
@@ -487,7 +443,7 @@ _SHORT_ENTRY_KELLY_SCALE: float = 0.5
 _SHORT_ENTRY_KELLY_CAP: float = 0.01
 # 每位使用者每個 15 分鐘週期最多產生的做空進場指令數。
 _SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE: int = 1
-# 每週期最多評估的做空候選數 (含 Scenario 2 預先確認的候選)。
+# 每週期最多評估的做空候選數 (僅 _find_best_short_target 挑選)。
 _SHORT_ENTRY_MAX_CANDIDATES: int = 2
 
 # --- PYRAMID_ADD 情境 (pyramid_add.py) 具名常數 ---
@@ -517,9 +473,9 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 # --- 風險偏好參數化 (RiskAppetite / RiskProfile)，見 models.py::RiskAppetite ---
 #
-# 單一權威查表，取代原本散落於 TP 階梯／EV 轉倉門檻／核心資金部署比例三處的
+# 單一權威查表，取代原本散落於 TP 階梯等處的
 # 固定常數。DEFENSIVE 組原樣保留現行已上線的個別常數值，AGGRESSIVE 組取自
-# calibration/backtest_engine_2025.py 的 aggressive 模式。⚠️ 採用依據「報酬/MDD/
+# 已移除的離線轉倉回測（backtest_engine_2025）的 aggressive 模式。⚠️ 採用依據「報酬/MDD/
 # Sharpe 三項皆優於 DEFENSIVE」來自早期引擎；2026-09-23 以 Sortino 為主的判準
 # 重跑後 DEFENSIVE (1.45) 優於 AGGRESSIVE (1.13)
 # (docs/strategies/04_dynamic_rollover_state_machine.md §2.10.1)，數值待人工決策。
@@ -530,18 +486,6 @@ _REGIME_V_VOLUME_SURGE_MULT: float = 1.5
 
 class RiskProfile(NamedTuple):
     tp1_ratio: float  # anti_washout.py TP1 執行比例，取代 _MICROSTRUCTURE_TP1_RATIO
-    ev_hurdle: float  # opportunity_cost.py 機會成本轉倉 EV Spread 門檻的「基礎」
-    # 分量，取代 _EV_SPREAD_MIN_THRESHOLD。⚠️ 刻意不是
-    # _EV_SPREAD_MIN_THRESHOLD + _ESTIMATED_ROUND_TRIP_COST_PCT 的合併值：
-    # evaluate_opportunity_cost() 的 friction_cost_pct 參數在高波動環境下會由
-    # 呼叫端動態覆寫為近價期權合約的實際 Bid-Ask 點差 (見
-    # evaluate_opportunity_cost_for_satellites)，若把往返成本併進本欄位，會讓
-    # 那組已驗證的動態摩擦成本機制在 gate 運算式裡被靜態覆蓋、失去自動放大
-    # 效果。維持「基礎門檻 + 動態摩擦成本」兩項相加的既有運算式不變，本欄位
-    # 只替換其中的基礎門檻分量。
-    rotation_cooldown_days: int  # 保留欄位，供後續階段串接既有輪動冷卻邏輯
-    core_deploy_ratio: float  # core_deployment.py 機會分支部署比例，取代
-    # _CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO
     max_satellite_budget_pct: float  # 單筆衛星預算上限，由 pyramid_add.py 條件七
     # (加碼後總曝險不得超過此比例，超過時降量) 消費
 
@@ -549,16 +493,10 @@ class RiskProfile(NamedTuple):
 _RISK_PROFILES: dict[str, RiskProfile] = {
     "DEFENSIVE": RiskProfile(
         tp1_ratio=_MICROSTRUCTURE_TP1_RATIO,  # 0.50，現行行為
-        ev_hurdle=_EV_SPREAD_MIN_THRESHOLD,  # 0.05，現行行為
-        rotation_cooldown_days=5,
-        core_deploy_ratio=_CORE_DEPLOYMENT_OPPORTUNITY_DEPLOY_RATIO,  # 0.50，現行行為
         max_satellite_budget_pct=0.15,
     ),
     "AGGRESSIVE": RiskProfile(
         tp1_ratio=0.30,
-        ev_hurdle=0.02,
-        rotation_cooldown_days=3,
-        core_deploy_ratio=0.80,
         max_satellite_budget_pct=0.25,
     ),
 }

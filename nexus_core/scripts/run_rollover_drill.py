@@ -4,8 +4,8 @@ Nexus Seeker - Dynamic Rollover Engine Real-Time Simulation Drill (動態轉倉�
 =============================================================================
 This script simulates and prints step-by-step telemetry, decision matrices,
 and resulting Discord Embed notifications for:
-  - Scenario 1: NVDA turns weak, SPCX turns strong and passes all 6 entry gates.
-  - Scenario 2: NVDA turns weak, no candidate meets criteria (Hold / Blocked / VOO / BOXX).
+  - Scenario 2: NVDA (long spot, B&H advisory mode) turns weak: structure intact ->
+    silent; structure break -> advisory notice only; margin crisis -> BOXX defense.
   - Scenario 3: TSLA breaks below the Put Wall (Regime V) -> standalone SHORT_ENTRY
     instruction with levels and sizing; long-only downstream paths stay silent.
 """
@@ -14,20 +14,20 @@ import argparse
 import asyncio
 import os
 import sys
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, patch
+from typing import Any
 
 # Ensure root of nexus_core is in sys.path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import pandas as pd
 
-from cogs.embed_builders.rollover_embeds import create_dynamic_rollover_embed
+from cogs.embed_builders.rollover_embeds import (
+    create_advisory_levels_embed,
+    create_dynamic_rollover_embed,
+)
 from market_analysis.dynamic_rollover import (
-    DynamicRolloverEngine,
     RolloverScenario,
 )
+from market_analysis.dynamic_rollover.advisory_mode import _structure_reason
 
 # ANSI Color Codes for Terminal Output
 C_RESET = "\033[0m"
@@ -60,248 +60,44 @@ def print_embed_preview(embed: Any) -> None:
         print(f"{C_BOLD}【{f.name}】{C_RESET}\n{f.value}\n")
 
 
-async def run_scenario_1() -> None:
-    print_banner("情境一演練：NVDA 轉弱，SPCX 轉強符合轉倉條件 (Opportunity Cost)")
-
-    engine = DynamicRolloverEngine()
-
-    print_section("1. 持倉與市場微結構遙測 (NVDA)")
-    print(f" • 標的: {C_YELLOW}NVDA{C_RESET} (SATELLITE 現貨持倉)")
-    print(
-        " • 持倉現值: $15,000.00 | 股數: 77 股 | 成本: $180.00 | 現價: $195.00 (+8.3%)"
-    )
-    print(f" • PowerSqueeze: {C_RED}10.0 (Release / Neutral - 動能衰退 ⚠️){C_RESET}")
-    print(" • Skew-Adjusted EV: Base 1.54% - 40% Skew 懲罰 = 1.23%")
-    print(" • 做市商結構: PutWall $190.00 | CallWall $210.00 | 15m K 線未破位")
-
-    print_section("2. 候選標的掃描與突破評估 (SPCX)")
-    print(f" • 候選標的: {C_GREEN}SPCX{C_RESET} (Watchlist 最佳高 EV 現貨標的)")
-    print(" • 即時現價: $85.00 | Expected Move Upper: $105.00")
-    print(
-        f" • PowerSqueeze: {C_GREEN}95.0 (High Squeeze + Long + Breakout Long - 突破待發 🚀){C_RESET}"
-    )
-    print(" • Skew-Adjusted EV: (105-85)/85 = 23.50%")
-    print(f" • 期望值利差 (EV Spread): {C_GREEN}+22.27%{C_RESET} (大幅超越 5.5% 門檻)")
-
-    print_section("3. 防洗盤進場訊號六重嚴格過濾鐵律檢驗")
-    gates = [
-        (
-            "條件一",
-            "結構性右側突破",
-            "15m 實體收盤 $85.50 > Gamma Flip $80.00，量能 2.5x 均量",
-            "通過 ✅",
-        ),
-        (
-            "條件二",
-            "做市商正 Gamma 底牆",
-            "Support GEX Wall $80.00 (+1.5M)，牆距 5.9% 落在動態緩衝雙邊界內",
-            "通過 ✅",
-        ),
-        (
-            "條件三",
-            "UOA 無實質物理封頂",
-            "Call Wall $95.00 (空間 11.8% > 動態門檻 8.2%)，無 STO 蓋頂",
-            "通過 ✅",
-        ),
-        (
-            "條件四",
-            "主力 UOA 買盤",
-            "偵測到 $90C BTO 主力買盤，DTE = 21 天 (>= 7 天)",
-            "通過 ✅",
-        ),
-        ("條件五", "總經與財報風控", "距財報 45 天，大盤處於 NORMAL 模式", "通過 ✅"),
-        ("條件六", "效期雜訊過濾", "最近效期選擇權 DTE = 5 天 (> 1 天)", "通過 ✅"),
-    ]
-    for g_num, g_name, g_desc, g_res in gates:
-        print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}{g_res}{C_RESET}")
-
-    portfolio_assets: List[Dict[str, Any]] = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "spot_price": 195.0,
-            "avg_cost": 180.0,
-            "quantity": 77.0,
-            "current_value": 15000.0,
-            "skew_percentile": 40.0,
-            "psq_result": {"squeeze_level": "Release", "signal_direction": "Neutral"},
-        }
-    ]
-
-    candidate_radar: Dict[str, Any] = {
-        "quote": {"c": 85.0},
-        "iv_metrics": {"iv_rank": 25.0},
-        "psq_result": {
-            "squeeze_level": "High",
-            "signal_direction": "Long",
-            "is_breakout_long": True,
-        },
-        "gex_profile_data": {
-            "gex_profile": {"75.0": -500000.0, "80.0": 1500000.0, "95.0": -500000.0},
-            "call_wall": 95.0,
-            "put_wall": 80.0,
-        },
-        "uoa": [
-            {
-                "type": "CALL",
-                "action": "BTO",
-                "strike": 90.0,
-                "expiry": (datetime.now() + timedelta(days=21)).strftime("%Y-%m-%d"),
-                "ratio": 1.5,
-            }
-        ],
-    }
-
-    def cache_side_effect(
-        symbol: str, expiry: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
-        if symbol.upper() == "NVDA":
-            return {
-                "reference_spot_price": 195.0,
-                "expected_move_upper": 198.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        if symbol.upper() == "SPCX":
-            return {
-                "reference_spot_price": 85.0,
-                "expected_move_upper": 105.0,
-                "is_stale": 0,
-                "is_degraded": 0,
-            }
-        return None
-
-    df_data: Dict[str, List[float]] = {
-        "Close": [80.0] * 20 + [85.50],
-        "Volume": [10000.0] * 20 + [25000.0],
-    }
-
-    with patch(
-        "database.market_cache.get_market_cache", side_effect=cache_side_effect
-    ), patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=pd.DataFrame(df_data),
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=[(datetime.now() + timedelta(days=5)).strftime("%Y-%m-%d")],
-    ), patch(
-        "database.calendar_cache.get_cached_earnings",
-        return_value={
-            "earnings_date": (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
-        },
-    ), patch(
-        "market_analysis.index_microstructure.get_market_regime",
-        new_callable=AsyncMock,
-        return_value="NORMAL",
-    ):
-        (
-            instructions,
-            _entry_confirmation,
-        ) = await engine.evaluate_opportunity_cost_for_satellites(
-            user_id=101,
-            portfolio_assets=portfolio_assets,
-            already_flagged_symbols=set(),
-            candidate_symbol="SPCX",
-            candidate_radar=candidate_radar,
-        )
-
-    print_section("4. 轉倉決策輸出")
-    ins = instructions[0]
-    print(f" • 觸發情境: {C_YELLOW}{ins['scenario']}{C_RESET}")
-    print(
-        f" • 執行動作: {C_GREEN}{ins['action']}{C_RESET} (減碼 {ins['sell_ratio']:.0%})"
-    )
-    print(f" • 轉入資產: {C_GREEN}{ins['target_core']}{C_RESET}")
-    print(f" • 建議限價: ${ins['limit_price']:.2f}")
-    print(f" • 回收資金: {ins['cash_impact']}")
-
-    embed = create_dynamic_rollover_embed(
-        rollover_type="機會成本轉倉",
-        sell_symbol=ins["symbol"],
-        sell_ratio=ins["sell_ratio"],
-        buy_symbol=ins["target_core"],
-        reason=ins["reason"],
-        suggested_strategy=ins["suggested_strategy"],
-        suggested_price=f"${ins['limit_price']:.2f} (限價)",
-        strike="N/A",
-        expiry="N/A",
-        direction="BUY",
-        sell_action="SELL",
-        scenario=ins["scenario"],
-        cash_impact=ins["cash_impact"],
-        asset_class="SPOT",
-    )
-    print_embed_preview(embed)
-
-
 async def run_scenario_2() -> None:
-    print_banner("情境二演練：NVDA 轉弱，沒有標的符合轉倉條件")
+    print_banner("情境二演練：NVDA 轉弱（多頭現股一律走 B&H 顧問模式）")
 
-    print_section("子情境 2A：Watchlist 無候選標的 ➔ S2 早退，S3 安心防守 (HOLD)")
-    print(" • Watchlist 所有標的 EV <= 0.05 或 3 天內有財報，目標鎖定 VOO")
-    print(" • S2 機會成本引擎: 直接早退，不發送無效雜訊")
+    print_section("子情境 2A：結構完好 ➔ 不推播")
     print(
         " • S3 持倉檢驗: NVDA 現價 $195.00 > Stop Loss $185.50 (PutWall $190 - 1.5x ATR $3.0)"
     )
-    print(" • 決策: 產出安心防守卡，嚴守 15 分鐘實體 K 線收盤撤退線")
+    print(" • 顧問模式: HOLD 不推播，只在結構失效／抵達目標區時告知")
 
-    embed_2a = create_dynamic_rollover_embed(
-        rollover_type="持倉防守 (核心衛星再平衡)",
-        sell_symbol="NVDA",
-        sell_ratio=0.0,
-        buy_symbol="NVDA",
-        reason="微結構判定: GEX Wall $190.00 護城河完好，阻力天花板 $210.00\n防守機制: 建議設置防守委託單 停損: $185.50",
-        suggested_strategy="HOLD (維持現狀續抱)",
-        suggested_price="N/A (維持現狀)",
-        strike="N/A",
-        expiry="N/A",
-        direction="HOLD",
-        scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-        asset_class="SPOT",
+    print_section("子情境 2B：NVDA 實體跌破防守線 (結構破位) ➔ 僅告知，不下賣出指令")
+    print(" • NVDA 15m 實體收盤 $184.00 跌破防守線 $185.50，觸發 SL_STRUCTURAL")
+    print(" • 顧問模式: 轉為結構失效告知，是否處置由使用者依自己的論點決定")
+
+    embed_2b = create_advisory_levels_embed(
+        symbol="NVDA",
+        reason=_structure_reason("NVDA", "SL_STRUCTURAL", 184.0, 185.5),
+        advisory_plan={
+            "kind": "STRUCTURE_FAILURE",
+            "spot": 184.0,
+            "stop_loss": 185.5,
+            "call_wall": None,
+            "target": None,
+            "is_blue_sky": False,
+        },
+        exit_tier="SL_STRUCTURAL",
     )
-    print_embed_preview(embed_2a)
+    print_embed_preview(embed_2b)
 
-    print_section("子情境 2B：候選標的被六重進場鐵律攔截 ➔ 系統靜默早退")
-    print(
-        " • Watchlist 有 SPCX，但在 $88.00 爆出單筆 ratio=4.0x OI 的 STO Call 巨量壓頂"
-    )
-    print(f" • 條件三判定: {C_RED}❌ 偵測到 STO Call 物理封頂 @ $88.00{C_RESET}")
-    print(" • 系統行為: 靜默早退，阻擋追高與踩入主力出貨陷阱")
-
-    print_section("子情境 2C：NVDA 實體跌破防守線 (結構破位) ➔ 強制 100% 撤退回防 VOO")
-    print(" • NVDA 15m 實體收盤 $184.00 跌破防守線 $185.50，Gamma Cliff 確認崩塌")
-    print(
-        " • 機構風控鐵律: 強制 100% 清倉 (LIQUIDATE)，撤退回防大盤核心 VOO，嚴禁追逐高波衛星標的"
-    )
-
-    embed_2c = create_dynamic_rollover_embed(
-        rollover_type="核心衛星再平衡",
-        sell_symbol="NVDA",
-        sell_ratio=1.0,
-        buy_symbol="VOO",
-        reason="1. 盤勢定調: 現價 $184.00 | IV 位階: 45.0%\n2. 主力意圖: GEX Wall $190.00 失守\n3. 建議: 🚨 15m 實體破位確認：15 分鐘實體收盤跌破 $185.50，負 Gamma 助跌啟動，強制 100% 轉入 VOO 防禦。",
-        suggested_strategy="100% LIQUIDATE (轉入 VOO)",
-        suggested_price="Market",
-        strike="N/A",
-        expiry="N/A",
-        direction="BUY",
-        sell_action="SELL",
-        scenario=RolloverScenario.SATELLITE_REBALANCE.value,
-        cash_impact="$14,168",
-        asset_class="SPOT",
-    )
-    print_embed_preview(embed_2c)
-
-    print_section("子情境 2D：大盤負 Gamma 踩踏 + 保證金危機 ➔ 強制 100% 轉入 BOXX")
+    print_section("子情境 2C：大盤負 Gamma 踩踏 + 保證金危機 ➔ 強制 100% 轉入 BOXX")
     print(" • 大盤進入 SHORT_GAMMA_CRITICAL 負 Gamma 踩踏模式，帳戶存在保證金赤字")
-    print(" • NVDA 判定無邊際優勢 (No-Edge)，觸發 Scenario 4 保證金防禦")
+    print(
+        " • NVDA 判定無邊際優勢 (No-Edge)，觸發 Scenario 4 保證金防禦 (帳戶生存線，不受顧問模式影響)"
+    )
     print(
         " • 機構風控鐵律: 強制 100% 清倉轉入純現金等價物 BOXX 鎖定無風險利息 (絕非 VOO)"
     )
 
-    embed_2d = create_dynamic_rollover_embed(
+    embed_2c = create_dynamic_rollover_embed(
         rollover_type="槓桿與保證金防禦",
         sell_symbol="NVDA",
         sell_ratio=1.0,
@@ -318,7 +114,7 @@ async def run_scenario_2() -> None:
         cash_impact="$14,168",
         asset_class="SPOT",
     )
-    print_embed_preview(embed_2d)
+    print_embed_preview(embed_2c)
 
 
 async def run_scenario_3() -> None:
@@ -368,10 +164,7 @@ async def run_scenario_3() -> None:
         print(f" • {g_num}【{g_name}】: {g_desc} ➔ {C_GREEN}通過 ✅{C_RESET}")
 
     from cogs.embed_builders.rollover_embeds import create_short_entry_embed
-    from market_analysis.dynamic_rollover.models import (
-        EntryConfirmation,
-        ShortEntryEvaluation,
-    )
+    from market_analysis.dynamic_rollover.models import ShortEntryEvaluation
     from market_analysis.dynamic_rollover.short_entry_sizing import (
         build_short_entry_levels,
         build_short_entry_plan,
@@ -397,38 +190,10 @@ async def run_scenario_3() -> None:
         ivr=20.0,
     )
 
-    print_section("3. 下游隔離：做空確認不進入任何多頭路徑")
-    engine = DynamicRolloverEngine()
-    confirmation = EntryConfirmation(
-        True,
-        ev.reason,
-        "SHORT",
-        short_evaluation=ev,
-        entry_regime="REGIME_V_BREAKDOWN_CHASE",
-    )
-    core = await engine.evaluate_core_deployment(
-        101,
-        [
-            {
-                "symbol": "VOO",
-                "asset_class": "CORE",
-                "current_value": 60000.0,
-                "target_allocation_pct": 0.5,
-                "boxx_allocation_pct": 0.0,
-            }
-        ],
-        set(),
-        100000.0,
-        "TSLA",
-        {"quote": {"c": 92.0}},
-        precomputed_entry_confirmation=confirmation,
-    )
+    print_section("3. 下游隔離：做空確認只走 SHORT_ENTRY")
     print(
-        f" • Scenario 2 機會成本轉倉：{C_GREEN}0 筆{C_RESET} (做空確認在衛星迴圈前返回)"
-    )
-    print(
-        f" • Scenario 5 核心資金部署：{C_GREEN}{len(core)} 筆{C_RESET} "
-        "(SHORT 確認不得把 CORE 現金 Buy Shares 進做空標的)"
+        f" • 做空確認 ➔ {C_GREEN}僅由 SHORT_ENTRY 情境產生獨立的做空進場訊號{C_RESET}"
+        "（不進入任何多頭買進路徑）"
     )
 
     print_section("4. SHORT_ENTRY 價位與倉位計算")
@@ -477,19 +242,18 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="Nexus Seeker 動態轉倉演練執行工具")
     parser.add_argument(
         "--scenario",
-        choices=["1", "2", "3", "all"],
+        choices=["2", "3", "all"],
         default="all",
-        help="指定演練情境 (1: SPCX轉強, 2: 無標的符合, 3: TSLA破位追空, all: 全部)",
+        help="指定演練情境 (2: NVDA 轉弱顧問告知, 3: TSLA破位追空, all: 全部)",
     )
     args = parser.parse_args()
 
-    # 逐情境隔離：本演練腳本會對真實市場資料源發動請求，而情境一/二使用的是
-    # 示範用代號 (SPCX)，在真實資料源上取不到 K 線就會拋例外。早期版本沒有
+    # 逐情境隔離：本演練腳本可能對真實市場資料源發動請求，示範用代號在真實
+    # 資料源上取不到 K 線就會拋例外。早期版本沒有
     # 隔離，任何一個情境的資料層失敗都會中止整個 main()，讓後續情境**完全
     # 不會執行**——演練工具的價值正在於一次跑完所有情境並比對，故改為逐個
     # 捕捉、印出失敗原因後繼續。
     scenarios = (
-        ("1", run_scenario_1),
         ("2", run_scenario_2),
         ("3", run_scenario_3),
     )

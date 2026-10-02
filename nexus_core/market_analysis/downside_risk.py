@@ -1,7 +1,7 @@
 """下行風險指標的單一權威定義：Sortino、最大回撤 (MDD)、歷史模擬 VaR / CVaR。
 
 本模組是刻意只依賴 numpy 的葉模組（比照 `room_threshold.py` / `sentiment/skew_taxonomy.py`），
-離線回測（`calibration/backtest_engine_2025.py`）與日後的即時投組下行風險監控共用同一份
+離線回測與日後的即時投組下行風險監控共用同一份
 定義，避免兩處各自實作而數字對不起來。
 
 評估優先序（見 `docs/risk_portfolio/07_downside_risk_sortino_var_cvar.md`）：
