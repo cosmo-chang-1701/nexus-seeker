@@ -412,7 +412,9 @@ def _is_edge_fallback_payload(data: Dict[str, Any], legacy: Dict[str, float]) ->
 
 
 async def fetch_liquidity_metrics() -> dict:
-    """呼叫邊緣爬蟲獲取 TED Spread, SOFR, DTB3 與 High Yield Spread 等跨資產流動性指標。
+    """呼叫邊緣爬蟲獲取 TED Spread, 3M 金融商業本票 (DCPF3M), DTB3 與 High Yield Spread 等跨資產流動性指標。
+
+    TED Spread 由 edge 端計算：DCPF3M − DTB3，取兩序列共同的最新日期。
 
     無法取得即時數據時回傳靜態常數備援值，並附帶 `_is_fallback: True` 標記
     （語意同 fetch_gex_metrics() 的 `_is_stale_cache`），讓需要如實呈現資料
@@ -420,7 +422,7 @@ async def fetch_liquidity_metrics() -> dict:
     僅讀取 `ted_spread` 等數值欄位的呼叫端不受影響。"""
     fallback = {
         "ted_spread": 0.15,
-        "sofr_90": 5.3,
+        "cp_fin_3m": 5.3,
         "dtb3": 5.15,
         "high_yield_spread": 3.1,
     }
