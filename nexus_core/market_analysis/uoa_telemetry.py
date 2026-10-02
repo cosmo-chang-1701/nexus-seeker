@@ -439,10 +439,9 @@ def _match_side(short_leg: dict, side: list[dict]) -> list[dict]:
 
 
 def _strikes_label(legs: list[dict]) -> str:
+    # 逐檔列出：「$1085~$1100」會被讀成含中間的 $1090/$1095，那兩檔可能是賣出腿
     strikes = sorted(float(e.get("strike", 0.0)) for e in legs)
-    if len(strikes) == 1:
-        return f"${strikes[0]:g}"
-    return f"${strikes[0]:g}~${strikes[-1]:g}"
+    return "+".join(f"${k:g}" for k in strikes)
 
 
 def annotate_spread_structures(entries: list[dict]) -> None:
@@ -485,11 +484,16 @@ def annotate_spread_structures(entries: list[dict]) -> None:
 
             short_tag = f"${k:g}"
             if below and above:
+                # 兩側各自 1:1 配對，買入總量約為賣出量的兩倍，實為淨買入
+                matched = below + above
+                vs = _leg_volume(short_leg)
+                long_ratio = (
+                    sum(_leg_volume(e) for e in matched) / vs if vs > 0 else 0.0
+                )
                 label = (
                     f"多腿組合（買 {_strikes_label(below)}、{_strikes_label(above)}"
-                    f" ／賣 {short_tag} {opt_type}）"
+                    f" ／賣 {short_tag} {opt_type}，買賣量 {long_ratio:.1f}:1）"
                 )
-                matched = below + above
             elif below:
                 # 買低賣高：CALL 為牛市借方價差；PUT 為牛市貸方價差
                 name = (
@@ -510,10 +514,20 @@ def annotate_spread_structures(entries: list[dict]) -> None:
 
             short_leg["spread_role"] = "SHORT_LEG"
             short_leg["spread_label"] = label
+            # 末段子句是單腿解讀（如「物理封頂鎖死上方天花板」），價差下改寫；
+            # 價內外判定基準註記接在句尾，須先拿掉再截、最後接回。
+            basis_note = str(short_leg.get("moneyness_basis_note") or "")
             intent = str(short_leg.get("intent", ""))
+            if basis_note and intent.endswith(basis_note):
+                intent = intent[: -len(basis_note)]
             head = intent.rsplit("，", 1)[0] if "，" in intent else intent
+            role_note = (
+                "代表價差獲利上限而非機構獨立封頂"
+                if is_call
+                else "屬價差結構邊界，非機構獨立承接地板"
+            )
             short_leg["intent"] = (
-                f"{head}，🔗 屬{label}的賣出腿，代表價差獲利上限而非機構獨立封頂"
+                f"{head}，🔗 屬{label}的賣出腿，{role_note}{basis_note}"
             )
             for leg in matched:
                 leg["spread_role"] = "LONG_LEG"

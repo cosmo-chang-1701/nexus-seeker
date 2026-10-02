@@ -161,8 +161,8 @@ flowchart TD
 5. **意圖語義的四道防線**（`uoa_telemetry.py` / `uoa_detector.py`）：
    - **價內外分級**：`check_uoa_moneyness()` 先以 `UOA_ATM_BAND_PCT` 劃出平價帶，再以 Delta 區分深價內吸籌與淺價內方向性押注。距現價 < 2.5% 的末日合約 Delta 約 0.4~0.65，是高槓桿方向性博弈，不是鎖定高 Delta 的吸籌。
    - **STO 只有價外才是牆**：「物理封頂天花板／支撐地板」只適用於賣出**價外**合約；價內 STO CALL 是備兌鎖利或多方平倉，價內 STO PUT 是空方平倉，文案據實改寫。進場閘門 `detect_uoa_sto_call_physical_cap()` 原本就以 `strike > ref` 約束，行為不變。
-   - **價差配對**：`annotate_spread_structures()` 在截斷前 5 大**之前**，把同到期日、同類型、成交量 1:1（容差 `SPREAD_VOLUME_RATIO_TOL`，可由近而遠累加多腿）的 BTO／STO 腿標記為垂直價差或多腿組合。賣出腿標 `spread_role="SHORT_LEG"`，代表價差獲利上限，`detect_uoa_sto_call_physical_cap()` 不再把它計為物理封頂。
-   - **首次偵測現價錨點**：期權鏈的 volume 是全日累積量，同一筆大單會被反覆重新分類。`_uoa_spot_anchor`（`BoundedCache`，鍵含美東日期）記錄合約首次成為 UOA 時的現價，價內外一律以該錨點判定，避免股價大漲後把原本的價外投機「事後改寫」為價內吸籌；錨點與現價不同時意圖文案會註明判定基準。程序重啟即重置，屬可接受的降級。
+   - **價差配對**：`annotate_spread_structures()` 在截斷前 5 大**之前**，把同到期日、同類型、成交量 1:1（容差 `SPREAD_VOLUME_RATIO_TOL`，可由近而遠累加多腿）的 BTO／STO 腿標記為垂直價差或多腿組合。賣出腿標 `spread_role="SHORT_LEG"`，CALL 腿代表價差獲利上限、PUT 腿屬價差結構邊界（非機構獨立承接地板），`detect_uoa_sto_call_physical_cap()` 不再把它計為物理封頂。標籤逐檔列出履約價（`$1070+$1075`，不用區間寫法，避免把中間的賣出腿讀成買入）；兩側皆配對的多腿組合附註買賣量比（約 2:1 即實為淨買入）。改寫賣出腿意圖時保留句尾的價內外判定基準註記（`moneyness_basis_note`）。
+   - **首次偵測現價錨點**：期權鏈的 volume 是全日累積量，同一筆大單會被反覆重新分類。`_uoa_spot_anchor`（`BoundedCache`，鍵含美東日期）記錄合約首次成為 UOA 時的現價，價內外一律以該錨點判定，避免股價大漲後把原本的價外投機「事後改寫」為價內吸籌；錨點與現價不同時意圖文案會註明判定基準。**只在正規交易時段（`market_time.is_market_open()`）寫入錨點**：盤前現價是前收、期權鏈 volume 仍是前一交易日的量，若此時建錨，當日盤中所有成交都會被以前收判定價內外；非交易時段沿用當日既有錨點、但不新建，行事曆查詢失敗時視為非交易時段。程序重啟即重置，屬可接受的降級。
 6. **無套利下界**：`sanitize_option_trade_price()` 剔除低於內含價值（容差 $\max(0.05, 0.5\%\times\text{內含})$）的 `lastPrice`——那是現價大幅移動之前的舊成交。先退回當下 bid/ask 中價（方向分類隨之歸為 MIDPOINT），中價也不合理則剔除該合約。
 
 ## 6. 核心程式碼檔案路徑關聯

@@ -134,7 +134,7 @@ def test_mu_multi_leg_aggregation() -> None:
     ]
     annotate_spread_structures([short_leg, *longs])
     assert short_leg["spread_role"] == "SHORT_LEG"
-    assert "$1070~$1080/$1100" in short_leg["spread_label"]
+    assert "$1070+$1075+$1080/$1100" in short_leg["spread_label"]
     assert all(leg["spread_role"] == "LONG_LEG" for leg in longs)
 
 
@@ -145,6 +145,36 @@ def test_mu_two_sided_combo() -> None:
     annotate_spread_structures([short_leg, lo, hi])
     assert short_leg["spread_role"] == "SHORT_LEG"
     assert "多腿組合" in short_leg["spread_label"]
+    # 兩側各自 1:1 配對：買入合計 2.67 萬口 vs 賣出 1.2 萬口，須揭露為淨買入
+    assert "買賣量 2.2:1" in short_leg["spread_label"]
+
+
+def test_mu_put_combo_label_lists_strikes_and_keeps_basis_note() -> None:
+    """MU 2026-10-02 盤中：賣 $1080P 1.14 萬口，下方買 $1070/$1075P、上方買 $1085/$1100P。
+
+    舊標籤「$1085~$1100」會被讀成含中間的 $1090/$1095（實為賣出腿）；PUT 賣出腿
+    不得用 CALL 的「封頂」語意；價內外判定基準註記不得被改寫截掉。
+    """
+    note = "（價內外判定基準：首次偵測 09:45 現價 $1097.39）"
+    short_leg = _entry(1080.0, STO, 11418, opt="PUT")
+    short_leg["intent"] = (
+        f"🛡️ 在 $1080 賣出平價 PUT，短線承接現價附近賣壓，非遠端地板{note}"
+    )
+    short_leg["moneyness_basis_note"] = note
+    longs = [
+        _entry(1070.0, BTO, 5000, opt="PUT"),
+        _entry(1075.0, BTO, 6000, opt="PUT"),
+        _entry(1085.0, BTO, 7135, opt="PUT"),
+        _entry(1100.0, BTO, 6216, opt="PUT"),
+        _entry(1090.0, STO, 9484, opt="PUT"),
+    ]
+    annotate_spread_structures([short_leg, *longs])
+    label = short_leg["spread_label"]
+    assert "買 $1070+$1075、$1085+$1100" in label
+    assert "~" not in label
+    assert "封頂" not in short_leg["intent"]
+    assert "非機構獨立承接地板" in short_leg["intent"]
+    assert short_leg["intent"].endswith(note)
 
 
 def test_unmatched_volume_is_not_paired() -> None:
@@ -207,3 +237,30 @@ def test_moneyness_is_anchored_to_first_detection_spot() -> None:
     assert "吸籌" not in later[0]["intent"]
     assert later[0]["classified_spot"] == 1700.0
     assert "首次偵測" in later[0]["intent"]
+
+
+def test_pre_market_detection_does_not_anchor_moneyness() -> None:
+    """MU 2026-10-02：08:46 ET 盤前偵測以前收 $1097.39 建錨，盤中成交全被以前收判價內外。
+
+    非正規時段 (anchor_enabled=False) 不得寫入錨點；開盤後首次偵測才建錨。
+    """
+    today = datetime.now().date()
+    exp = (today + timedelta(days=7)).isoformat()
+
+    pre = _process_uoa_candidate_rows(
+        "SNDK", exp, today, _chain_row(), 1e9, 1700.0, 5e8, anchor_enabled=False
+    )
+    assert pre[0]["classified_spot"] == 1700.0
+
+    opened = _process_uoa_candidate_rows(
+        "SNDK", exp, today, _chain_row(), 1e9, 1881.0, 5e8, anchor_enabled=True
+    )
+    assert opened[0]["classified_spot"] == 1881.0
+    assert "首次偵測" not in opened[0]["intent"]
+
+    # 收盤後沿用當日盤中錨點
+    after = _process_uoa_candidate_rows(
+        "SNDK", exp, today, _chain_row(), 1e9, 1850.0, 5e8, anchor_enabled=False
+    )
+    assert after[0]["classified_spot"] == 1881.0
+    assert after[0]["moneyness_basis_note"] in after[0]["intent"]

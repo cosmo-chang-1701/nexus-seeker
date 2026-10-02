@@ -232,3 +232,62 @@ def test_compute_time_of_day_avg_volume() -> None:
     assert avg == 2_250_000.0
     avg_short, n_short = compute_time_of_day_avg_volume(df.iloc[-4:])
     assert avg_short is None and n_short == 1
+
+
+def _mu_intraday_case(**overrides: Any) -> dict[str, Any]:
+    """2026-10-02 11:15 ET 盤中實測：PutWall $1070 為淨 GEX 正支撐，停損距離過窄。"""
+    data: dict[str, Any] = {
+        "symbol": "MU",
+        "price": 1075.47,
+        "gex_profile_data": {
+            "put_wall": 1070.0,
+            "call_wall": 1100.0,
+            "net_gex": 42_922_638_000,
+            "gex_profile": {
+                "1070.0": 4_162_210_000,
+                "1075.0": 3_780_095_000,
+                "1100.0": 12_756_674_000,
+            },
+        },
+        # 1070 − 0.5 × 9.59 = 1065.205；停損距離 0.95% < 2.5×ATR₁₅ₘ = 2.23%
+        "atr_15m": 9.59,
+        "atr_14": 47.32,
+    }
+    data.update(overrides)
+    return data
+
+
+def test_rr_not_green_when_stop_too_tight() -> None:
+    desc = _embed_text(_mu_intraday_case())
+    assert "❌ 過窄 (< 2.5×ATR₁₅ₘ = 2.23%)" in desc
+    # (1100 − 1075.47) / (1075.47 − 1065.205) = 2.39，但停損過窄，不得給 ✅
+    assert "2.39:1 ⚠ 停損過窄、比值虛高" in desc
+    assert "2.39:1 ✅" not in desc
+    # 合格停損 2.23%：24.53 / 23.975 = 1.02
+    assert "合格停損 ↓2.23% 1.02:1 ❌" in desc
+
+
+def test_callwall_threshold_names_binding_term() -> None:
+    desc = _embed_text(_mu_intraday_case())
+    # max(2.2×0.95%, 1.5×4.40%, 3.5%) = 6.60%，由單日波幅項決定
+    assert "❌ 不足 6.60% (動態門檻：1.5×ATR₁D)" in desc
+
+
+def test_released_catalysts_are_not_shown_with_negative_days() -> None:
+    from types import SimpleNamespace
+
+    catalysts = [
+        SimpleNamespace(
+            time="2026-10-02T12:30:00Z", event="非農就業人數", tte_hours=-2.7
+        ),
+        SimpleNamespace(time="2026-10-02T12:30:00Z", event="失業率", tte_hours=-2.7),
+        SimpleNamespace(
+            time="2026-10-05T14:00:00Z", event="ISM 服務業 PMI", tte_hours=69.6
+        ),
+    ]
+    desc = _embed_text(
+        _mu_intraday_case(catalysts=catalysts, iv_data={"current_iv": 0.357})
+    )
+    assert "-0.1 天" not in desc
+    assert "距離 ISM 服務業 PMI (10-05) 僅剩 2.9 天" in desc
+    assert "✅ 已公布：非農就業人數、失業率（市場消化中）" in desc
