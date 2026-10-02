@@ -32,7 +32,7 @@ from cogs.embed_builders.market_embeds import build_radar_scan_embed
 
 
 def test_stx_sto_high_oi_ratio_classification() -> None:
-    """驗證 STX 08/28 $885C 在 Bid 側成交 304 口 (OI 96, 佔比 3.16x) 精準判定為 STO 築頂收租而非 BTO 點火。"""
+    """驗證 STX 08/28 $885C 在 Bid 側成交 304 口 (OI 96, 佔比 3.17x) 精準判定為 STO 築頂收租而非 BTO 點火。"""
     trade = UOATradeInput(
         strike_price=885.0,
         option_type="CALL",
@@ -40,7 +40,7 @@ def test_stx_sto_high_oi_ratio_classification() -> None:
         bid_price=5.20,  # 發生在 Bid 側
         ask_price=5.60,
         volume=304,
-        open_interest=96,  # 佔比 3.16x OI
+        open_interest=96,  # 佔比 3.17x OI (304/96 = 3.1667，四捨五入)
         expiry="2026-08-28",
         symbol="STX",
     )
@@ -48,7 +48,7 @@ def test_stx_sto_high_oi_ratio_classification() -> None:
 
     assert result.action == "🔴 賣出開倉 (STO - Bid)"
     assert result.ratio >= 3.0
-    assert "3.16x" in result.ratio_str
+    assert "3.17x" in result.ratio_str
     assert "🛡️" in result.intent
     assert "[STX]" in result.intent
     assert "$885.00" in result.intent

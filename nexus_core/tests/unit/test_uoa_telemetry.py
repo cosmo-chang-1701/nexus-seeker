@@ -1,3 +1,5 @@
+import pytest
+
 from market_analysis.uoa_telemetry import (
     UOATradeInput,
     classify_uoa_trade,
@@ -98,7 +100,7 @@ def test_spacex_intent_and_ascii_table() -> None:
     r3 = classify_uoa_trade(trade3, reference_date="2026-06-05")
 
     assert r2.action == "🟢 買入開倉 (BTO - Ask)"
-    assert r2.ratio_str == "19.82x"
+    assert r2.ratio_str == "19.83x"  # 13741/693 = 19.828，四捨五入
     # Dynamic intent: no more hardcoded SpaceX string, now uses data binding
     assert "🚀" in r2.intent
     assert "[SPACEX]" in r2.intent
@@ -295,3 +297,32 @@ def test_classify_uoa_trade_whale_hedge_deep_itm_put() -> None:
         call_trade, reference_date="2026-06-05", current_price=136.85, delta=0.90
     )
     assert "Whale_Hedge" not in result_call.intent
+
+
+@pytest.mark.parametrize(
+    ("volume", "open_interest", "expected"),
+    [
+        # /x 實測回報的四組 (Volume, OI)：舊實作截斷為 4.83x / 0.44x / 6.16x / 13.04x
+        (256_096, 52_943, "4.84x"),
+        (34_959, 78_065, "0.45x"),
+        (82_676, 13_408, "6.17x"),
+        (10_505, 805, "13.05x"),
+    ],
+)
+def test_ratio_str_rounds_instead_of_truncating(
+    volume: int, open_interest: int, expected: str
+) -> None:
+    """Vol/OI 比例字串須四捨五入至兩位小數，不得截斷。"""
+    trade = UOATradeInput(
+        strike_price=232.5,
+        option_type="CALL",
+        trade_price=5.00,
+        bid_price=4.90,
+        ask_price=5.00,
+        volume=volume,
+        open_interest=open_interest,
+        expiry="2026-10-02",
+        symbol="NVDA",
+    )
+    result = classify_uoa_trade(trade, reference_date="2026-10-02")
+    assert result.ratio_str == expected
