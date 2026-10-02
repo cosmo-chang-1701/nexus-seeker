@@ -20,7 +20,10 @@ from market_analysis.index_microstructure import (
     estimate_symbol_gamma_flip,
 )
 from market_analysis.room_threshold import (
+    _ROOM_STOP_ATR_15M_MULTIPLIER,
+    _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER,
     compute_dynamic_room_threshold,
+    compute_reference_stop,
     evaluate_wall_buffer,
     resolve_atr_15m,
 )
@@ -1347,6 +1350,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 f"⚠ 該履約價淨 GEX -{abs(put_wall_net)/1000:.0f}K 為負"
                                 "（Put 端 Gamma 最大 ≠ 淨支撐，實為助跌區）"
                             )
+                        # PutWall 落在淨 GEX 助跌區時，供下方結構停損並列「以淨
+                        # GEX 支撐為錨」的參考停損；僅呈現，閘門不變。
+                        alt_net_supp: float = 0.0
                         if effective_c_val > 0:
                             net_supp, _, _, _ = _scan_gex_walls(
                                 symbol, gex_data, spot=effective_c_val
@@ -1364,6 +1370,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 put_items.append(
                                     f"最近淨 GEX 支撐: ${net_supp:.2f} (↓{net_supp_pct:.2f}%)"
                                 )
+                                if put_wall_net < 0 and net_supp < effective_c_val:
+                                    alt_net_supp = net_supp
                         _pw_atr_15m: float = 0.0
 
                         if effective_c_val > 0:
@@ -1472,17 +1480,52 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             if _pw_atr_15m > 0
                             else _to_float(data.get("atr_15m"), 0.0)
                         )
-                        if atr_15m_val > 0:
-                            anti_washout_stop = put_wall_float - 1.5 * atr_15m_val
-                            fallback_marker = ""
-                            if anti_washout_stop >= effective_c_val:
-                                anti_washout_stop = effective_c_val - 2.0 * atr_15m_val
-                                fallback_marker = (
-                                    " [PutWall異常降級：改用現價-2×ATR_15m]"
-                                )
-                            put_items.append(
-                                f"防洗盤停損 (PutWall-1.5×ATR_15m): ${anti_washout_stop:.2f}{fallback_marker}"
+                        if atr_15m_val > 0 and effective_c_val > 0:
+                            # 與上方「停損距離」同一條線：引擎軌道一的結構停損
+                            # (PutWall − 0.5×ATR₁₅ₘ)。不得改回自選心跳買點緩衝的
+                            # 1.5×（ANTI_WASHOUT_ATR_MULT）——那不是停損，並列時
+                            # 會出現停損價與停損距離對不上的矛盾。
+                            structural_stop = compute_reference_stop(
+                                effective_c_val, put_wall_float, atr_15m_val, "LONG"
                             )
+                            fallback_marker = ""
+                            if (
+                                put_wall_float
+                                - _ROOM_STOP_ATR_15M_MULTIPLIER * atr_15m_val
+                                >= effective_c_val
+                            ):
+                                fallback_marker = (
+                                    " [PutWall異常降級：改用現價−"
+                                    f"{_ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER:.0f}×ATR₁₅ₘ]"
+                                )
+                            stop_dist_pct = (
+                                (effective_c_val - structural_stop)
+                                / effective_c_val
+                                * 100
+                            )
+                            stop_item = (
+                                f"結構停損 (PutWall−0.5×ATR₁₅ₘ): "
+                                f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
+                                f"{fallback_marker}"
+                            )
+                            # docs/microstructure/02 §7：PutWall 定義統一為淨 GEX
+                            # 前須先經 calibration 比對，閘門與停損一律仍以 edge
+                            # PutWall 為準；此處只揭露錨點落在助跌區的風險，並列
+                            # 以淨 GEX 支撐為錨的參考停損，供使用者自行判斷。
+                            if alt_net_supp > 0:
+                                alt_stop = compute_reference_stop(
+                                    effective_c_val, alt_net_supp, atr_15m_val, "LONG"
+                                )
+                                alt_stop_pct = (
+                                    (effective_c_val - alt_stop) / effective_c_val * 100
+                                )
+                                stop_item += (
+                                    "\n │  ⚠ 停損錨點位於淨 GEX 助跌區，"
+                                    "緩衝判定與停損仍以 PutWall 為準"
+                                    f"\n │  參考：以淨 GEX 支撐 ${alt_net_supp:.2f} 為錨 "
+                                    f"→ ${alt_stop:.2f} (↓{alt_stop_pct:.2f}%)"
+                                )
+                            put_items.append(stop_item)
 
                         if effective_c_val > 0:
                             sto_strikes = data.get("sto_physical_cap_strikes") or []
@@ -2191,7 +2234,7 @@ _ENTRY_RULES_DETAIL_LEFT = [
     "•做市商 Put Wall / 負 Gamma 吸附牆密著截擊",
     "•現價距 Put Wall 須落在 −1.0% ~ +1.5% 區間 (允許微幅穿刺洗盤或提前掛單)",
     "•防禦厚度：該履約價絕對 GEX 曝險量級 ≥ $5,000,000",
-    "•下檔緩衝雙邊界 (防 Liquidity Sweep)：停損距離 (現價−(PutWall−1.5×ATR₁₅ₘ))/現價",
+    "•下檔緩衝雙邊界 (防 Liquidity Sweep)：停損距離 (現價−(PutWall−0.5×ATR₁₅ₘ))/現價",
     "  須落在 [0.5×ATR₁₅ₘ, 絕對 8%] 之內。量停損距離而非牆距——條件二本來",
     "  就要求密著 Put Wall，牆距趨近於零，量牆距會把理想進場點誤判為緩衝過窄",
     "•左側下界 0.5× 與停損墊片 0.5× 綁定：貼牆時停損距離恆等於 0.5×ATR₁₅ₘ，",

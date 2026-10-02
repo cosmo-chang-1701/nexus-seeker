@@ -3269,7 +3269,7 @@ def test_create_tactical_symbol_embed_string_expected_move() -> None:
 
 def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> None:
     """atr_15m 有值且成功抓到 PutWall 時，GEX 欄位應附上
-    PutWall - 1.5×ATR_15m 的防洗盤停損參考行。"""
+    PutWall − 0.5×ATR₁₅ₘ 的結構停損行（與停損距離同一條線）。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3292,12 +3292,13 @@ def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> 
 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
-    # PutWall(100.0) - 1.5 * ATR_15m(2.0) = 97.0
-    assert "防洗盤停損 (PutWall-1.5×ATR_15m): $97.00" in desc
+    # PutWall(100.0) - 0.5 * ATR_15m(2.0) = 99.0；(105 - 99) / 105 = 5.71%
+    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $99.00 (↓5.71%)" in desc
+    assert "1.5×ATR" not in desc
 
 
 def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() -> None:
-    """atr_15m 缺失或為 0（抓取失敗）時，不應顯示防洗盤停損參考行，
+    """atr_15m 缺失或為 0（抓取失敗）時，不應顯示結構停損行，
     以免印出誤導性的 $0.00 或以現價當作 ATR 計算基礎。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
@@ -3321,7 +3322,7 @@ def test_create_tactical_symbol_embed_omits_anti_washout_stop_without_atr_15m() 
 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
-    assert "防洗盤停損" not in desc
+    assert "結構停損" not in desc
     assert "PutWall: $100.00" in desc
 
 
@@ -3508,8 +3509,8 @@ def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_
 def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensical() -> (
     None
 ):
-    """PutWall - 1.5×ATR_15m ≥ 現價（開倉即觸發的矛盾停損）時應改用
-    「現價 - 2×ATR_15m」並附上降級標記。"""
+    """PutWall − 0.5×ATR₁₅ₘ ≥ 現價（開倉即觸發的矛盾停損）時應改用
+    「現價 − 2×ATR₁₅ₘ」並附上降級標記（compute_reference_stop 的拓撲逆轉降級）。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3525,12 +3526,66 @@ def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensi
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    # 101.0 - 1.5*0.2 = 100.7 >= 100.0 (現價) -> 觸發 fallback
+    # 101.0 - 0.5*0.2 = 100.9 >= 100.0 (現價) -> 觸發 fallback
     # fallback: 100.0 - 2*0.2 = 99.60
     assert (
-        "防洗盤停損 (PutWall-1.5×ATR_15m): $99.60"
-        " [PutWall異常降級：改用現價-2×ATR_15m]" in desc
+        "結構停損 (PutWall−0.5×ATR₁₅ₘ): $99.60 (↓0.40%)"
+        " [PutWall異常降級：改用現價−2×ATR₁₅ₘ]" in desc
     )
+
+
+def test_create_tactical_symbol_embed_structural_stop_matches_stop_distance() -> None:
+    """/x 實測回報 (MU)：結構停損價必須與「停損距離」同一條線，
+    即 停損價 = 現價 × (1 − 停損距離)，不得再並列 1.5× 的另一條停損。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "MU",
+        "price": 1097.39,
+        "gex_profile_data": {
+            "put_wall": 1050.0,
+            "gex_profile": {"1050.0": 3_000_000, "1100.0": -1_000_000},
+        },
+        "atr_15m": 9.70,
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+    # 1050 - 0.5 * 9.70 = 1045.15；(1097.39 - 1045.15) / 1097.39 = 4.76%
+    assert "停損距離 4.76%" in desc
+    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
+    assert "防洗盤停損" not in desc
+    assert "助跌區" not in desc
+
+
+def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_negative() -> (
+    None
+):
+    """PutWall 處淨 GEX 為負（助跌區）時，結構停損仍以 PutWall 為錨，
+    但須並列以最近淨 GEX 支撐為錨的參考停損（僅呈現，docs/microstructure/02 §7）。"""
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data = {
+        "symbol": "MU",
+        "price": 1097.39,
+        "gex_profile_data": {
+            "put_wall": 1050.0,
+            "gex_profile": {
+                "1050.0": -138_988_000,
+                "1070.0": 200_000_000,
+                "1100.0": -1_000_000,
+            },
+        },
+        "atr_15m": 9.70,
+    }
+
+    desc = get_embed_text(create_tactical_symbol_embed(data))
+    assert "實為助跌區" in desc
+    assert "最近淨 GEX 支撐: $1070.00" in desc
+    # 閘門與停損不變：仍以 PutWall 1050 為錨
+    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
+    assert "停損錨點位於淨 GEX 助跌區，緩衝判定與停損仍以 PutWall 為準" in desc
+    # 1070 - 0.5 * 9.70 = 1065.15；(1097.39 - 1065.15) / 1097.39 = 2.94%
+    assert "參考：以淨 GEX 支撐 $1070.00 為錨 → $1065.15 (↓2.94%)" in desc
 
 
 def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() -> None:
