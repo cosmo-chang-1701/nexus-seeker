@@ -313,40 +313,66 @@ def add_reddit_field(embed: Any, reddit_text: Any):  # type: ignore
         embed.add_field(name="📰 Reddit 討論", value=reddit_context, inline=False)
 
 
-def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
-    """將包含 ANSI 碼的字串陣列安全地加入 embed，若超過長度限制則自動切分為多個 Field。"""
-    current_chunk = ["```ansi"]
-    current_length = 8  # len("```ansi\n")
-    part = 1
+# 「```ansi\n」(8) 起算，加上收尾「```」(3) 與「\n\u200b」(2) 仍落在 Discord
+# 單欄 1024 字元上限內。
+_ANSI_FIELD_BODY_LIMIT = 1018
 
+# 續欄的欄位名：零寬字元讓續段看起來是同一章節的延續，而不是另起一個「(續 N)」。
+ANSI_CONTINUATION_FIELD_NAME = "\u200b"
+
+
+def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
+    """將包含 ANSI 碼的字串陣列安全地加入 embed，超過單欄上限時自動切分為多個 Field。
+
+    以空行分隔的段落（樹狀區塊、表格與註腳）為裝箱單位：放不下就整段移到下一欄，
+    不從段落中間截斷；只有單一段落本身就超過上限時才退回逐行切。續欄沿用
+    `ANSI_CONTINUATION_FIELD_NAME`，不印「(續 N)」。
+    """
+    paragraphs: list[list[str]] = [[]]
     for line in lines:
         if line == "```ansi" or line == "```":
             continue
+        if line == "":
+            if paragraphs[-1]:
+                paragraphs.append([])
+            continue
+        paragraphs[-1].append(line)
+    paragraphs = [p for p in paragraphs if p]
 
-        line_len = len(line) + 1
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    current_length = 8  # len("```ansi\n")
 
-        if current_length + line_len > 1018:
-            current_chunk.append("```")
-            field_name = name if part == 1 else f"{name} (續 {part})"
-            embed.add_field(
-                name=field_name,
-                value="\n".join(current_chunk) + "\n\u200b",
-                inline=False,
-            )
-
-            part += 1
-            current_chunk = ["```ansi", line]
-            current_length = 8 + line_len
-        else:
-            current_chunk.append(line)
+    for para in paragraphs:
+        # 欄內非首段時，段落前補回一個空行分隔
+        sep_len = 1 if current else 0
+        para_len = sum(len(line) + 1 for line in para)
+        if current_length + sep_len + para_len <= _ANSI_FIELD_BODY_LIMIT:
+            if current:
+                current.append("")
+            current.extend(para)
+            current_length += sep_len + para_len
+            continue
+        if current:
+            chunks.append(current)
+        current = []
+        current_length = 8
+        # 單段超長才逐行切
+        for line in para:
+            line_len = len(line) + 1
+            if current and current_length + line_len > _ANSI_FIELD_BODY_LIMIT:
+                chunks.append(current)
+                current = []
+                current_length = 8
+            current.append(line)
             current_length += line_len
+    if current:
+        chunks.append(current)
 
-    if len(current_chunk) > 1:
-        current_chunk.append("```")
-        field_name = name if part == 1 else f"{name} (續 {part})"
+    for idx, chunk in enumerate(chunks):
         embed.add_field(
-            name=field_name,
-            value="\n".join(current_chunk) + "\n\u200b",
+            name=name if idx == 0 else ANSI_CONTINUATION_FIELD_NAME,
+            value="```ansi\n" + "\n".join(chunk) + "\n```\n\u200b",
             inline=False,
         )
 

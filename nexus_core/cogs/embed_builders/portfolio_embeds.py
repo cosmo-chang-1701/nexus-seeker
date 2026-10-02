@@ -18,6 +18,7 @@ from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_tab
 from market_analysis.index_microstructure import (
     analyze_local_gamma_regime,
     estimate_symbol_gamma_flip,
+    interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
     _ROOM_STOP_ATR_15M_MULTIPLIER,
@@ -34,6 +35,7 @@ from market_analysis.dynamic_rollover.structural_signals import (
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
+    _add_ansi_field_safely,
     format_runway_lines,
     _chunk_ansi_table,
     _truncate_with_boundary,
@@ -164,44 +166,6 @@ def _format_uoa_field(uoa_data: list) -> str:
 # ---------------------------------------------------------------------------
 # Public embed builders
 # ---------------------------------------------------------------------------
-
-
-def _add_ansi_field_safely(embed: discord.Embed, name: str, lines: list) -> None:
-    """將包含 ANSI 碼的字串陣列安全地加入 embed，若超過長度限制則自動切分為多個 Field。"""
-    current_chunk = ["```ansi"]
-    current_length = 8  # len("```ansi\n")
-    part = 1
-
-    for line in lines:
-        if line == "```ansi" or line == "```":
-            continue
-
-        line_len = len(line) + 1
-
-        if current_length + line_len > 1018:
-            current_chunk.append("```")
-            field_name = name if part == 1 else f"{name} (續 {part})"
-            embed.add_field(
-                name=field_name,
-                value="\n".join(current_chunk) + "\n\u200b",
-                inline=False,
-            )
-
-            part += 1
-            current_chunk = ["```ansi", line]
-            current_length = 8 + line_len
-        else:
-            current_chunk.append(line)
-            current_length += line_len
-
-    if len(current_chunk) > 1:
-        current_chunk.append("```")
-        field_name = name if part == 1 else f"{name} (續 {part})"
-        embed.add_field(
-            name=field_name,
-            value="\n".join(current_chunk) + "\n\u200b",
-            inline=False,
-        )
 
 
 def create_holdings_embed(
@@ -744,7 +708,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ):
             micro_lines = [
                 "```ansi",
-                " 15分鐘微觀結構 (15m Microstructure)",
                 " ├─ 最新 15m K棒: -- (暫無數據 / 待開盤)",
                 " ├─ 15m 成交量: -- 股",
                 " ├─ 15m 均量 (SMA20): -- 股",
@@ -802,7 +765,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             micro_lines = [
                 "```ansi",
-                " 15分鐘微觀結構 (15m Microstructure)",
                 kline_line,
                 vol_line,
                 sma20_line,
@@ -1277,7 +1239,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     max_abs_gex = max([abs(_safe_gex(k)) for k in display_strikes])
                     max_abs_gex = max(max_abs_gex, 1.0)
 
-                    gex_lines = ["```ansi", " ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]"]
+                    gex_lines = [
+                        "```ansi",
+                        " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [K]",
+                    ]
                     for i, k in enumerate(reversed(display_strikes)):
                         v = _safe_gex(k)
                         bars = int((abs(v) / max_abs_gex) * 10)
@@ -1292,9 +1257,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             color_prefix = "\u001b[1;30m"
                             sign = " "
 
+                        # 只標最接近現價的那一檔：高價股的履約價間距相對小，1% 容差內常
+                        # 落進兩檔以上，會同時出現多個 📍。1% 容差保留，現價遠離所有
+                        # 履約價時不標。
                         spot_marker = (
                             "📍"
-                            if abs(k - effective_c_val) < (effective_c_val * 0.01)
+                            if k == strike_keys[closest_idx]
+                            and abs(k - effective_c_val) < (effective_c_val * 0.01)
                             else "  "
                         )
                         formatted_val = f"{sign}{abs(v)/1000:.0f}K"
@@ -1727,7 +1696,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             else ("-" if net_gex_float < 0 else "")
                         )
                         regime_items.append(
-                            f"Net GEX Regime: {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+                            f"Net GEX Regime (全鏈加總): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
                         )
 
                     gamma_flip_val = estimate_symbol_gamma_flip(
@@ -1737,9 +1706,23 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         flip_buffer_pct = (
                             (effective_c_val - gamma_flip_val) / effective_c_val * 100
                         )
-                        regime_items.append(
-                            f"Gamma Flip: ${gamma_flip_val:.2f} (緩衝: {flip_buffer_pct:+.2f}%)"
+                        flip_item = (
+                            f"Gamma Flip (轉正履約價): ${gamma_flip_val:.2f}"
+                            f" (緩衝: {flip_buffer_pct:+.2f}%)"
                         )
+                        # 閘門取離散履約價格點（docs/microstructure/03 §2）；真正的
+                        # 零軸落在前一檔與該檔之間，並列內插值避免誤讀為零軸本身。
+                        flip_zero = interpolate_gamma_flip_zero(
+                            gex_prof, gamma_flip_val
+                        )
+                        if flip_zero > 0 and not math.isclose(
+                            flip_zero, gamma_flip_val, abs_tol=0.005
+                        ):
+                            flip_item += (
+                                f"\n │  相鄰履約價內插零軸 ≈ ${flip_zero:.2f}"
+                                "（閘門以履約價格點為準）"
+                            )
+                        regime_items.append(flip_item)
                     else:
                         regime_items.append("Gamma Flip: -- (無法估算)")
 

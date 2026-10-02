@@ -68,6 +68,43 @@ def test_portfolio_embed_net_gex_neutral_deadband() -> None:
         ), f"Expected {expected_label} in embed for net_gex={net_gex_val}"
 
 
+def test_watchlist_signal_embed_marks_only_nearest_strike() -> None:
+    """熱力圖 📍 只標最接近現價的那一檔，即使相鄰履約價也落在 1% 容差內。"""
+    metrics = EnhancedWatchlistMetrics(
+        symbol="MU",
+        exchange="NASDAQ",
+        current_price=1097.4,
+        beta=1.0,
+        buy_zone_status="WATCH",
+        buy_price_phase1=1050.0,
+        buy_price_phase2=1040.0,
+        buy_price_phase3=1030.0,
+        sell_zone_status="WATCH",
+        sell_price_phase1=1120.0,
+        sell_price_phase2=1130.0,
+        sell_price_phase3=1140.0,
+        volume_poc=1090.0,
+        relative_strength_spy=1.0,
+        option_skew_state="平穩",
+    )
+    symbol_gex = {
+        "spot": 1097.4,
+        "net_gex": 9e9,
+        "call_wall": 1110.0,
+        "put_wall": 1080.0,
+        "gex_profile": {1080.0: 4e9, 1090.0: 1e9, 1100.0: 7e9, 1110.0: -2e9},
+    }
+    embed = create_watchlist_signal_embed(
+        symbol="MU", metrics=metrics, symbol_gex=symbol_gex, alert_level="green"
+    )
+    assert embed is not None
+    gex_value = next(
+        str(f.value) for f in embed.fields if f.name and "Gamma 曝險分布" in f.name
+    )
+    assert gex_value.count("📍") == 1
+    assert "📍1100.00" in gex_value
+
+
 def test_watchlist_signal_embed_includes_regime_and_gamma_flip() -> None:
     """ISSUE-4.4: 驗證 Heartbeat 2.0 Embed 在 Block 4 包含 Net GEX Regime 與 Gamma Flip。"""
     metrics = EnhancedWatchlistMetrics(
@@ -108,8 +145,11 @@ def test_watchlist_signal_embed_includes_regime_and_gamma_flip() -> None:
             break
     assert gex_field is not None
     assert gex_field.value is not None
-    assert "Net GEX Regime: +150K (🟢 LONG_GAMMA (自穩定壓制波動))" in gex_field.value
-    assert "Gamma Flip:" in gex_field.value
+    assert (
+        "Net GEX Regime (全鏈加總): +150K (🟢 LONG_GAMMA (自穩定壓制波動))"
+        in gex_field.value
+    )
+    assert "Gamma Flip (轉正履約價): $150.00" in gex_field.value
 
 
 @pytest.mark.asyncio

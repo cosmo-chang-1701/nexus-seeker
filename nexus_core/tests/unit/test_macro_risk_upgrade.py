@@ -2260,3 +2260,28 @@ async def test_macro_embed_displays_fetch_failed_when_completely_no_data() -> No
                 found_failure = True
                 break
         assert found_failure is True
+
+
+def test_interpolate_gamma_flip_zero_audit_example() -> None:
+    """稽查實例：閘門 Flip 為 $227.50，相鄰履約價內插零軸 ≈ $225.18。"""
+    profile = {"222.5": 3_000_000.0, "225.0": -1_434_309.0, "227.5": 18_108_163.0}
+    assert index_microstructure.estimate_symbol_gamma_flip(profile, 228.0) == 227.5
+    zero = index_microstructure.interpolate_gamma_flip_zero(profile, 227.5)
+    assert zero == pytest.approx(225.1835, abs=1e-3)
+
+
+@pytest.mark.parametrize(
+    "profile, flip",
+    [
+        ({"100.0": 5.0, "105.0": 10.0}, 105.0),  # 前一檔不為負
+        ({"100.0": 5.0}, 100.0),  # 沒有前一檔
+        ({"100.0": -5.0, "105.0": 10.0}, 110.0),  # flip 不在 profile 中
+        ({}, 100.0),
+        ({"100.0": -5.0, "105.0": 10.0}, 0.0),
+        ({"bad": "x"}, 100.0),
+    ],
+)
+def test_interpolate_gamma_flip_zero_invalid_returns_zero(
+    profile: dict, flip: float
+) -> None:
+    assert index_microstructure.interpolate_gamma_flip_zero(profile, flip) == 0.0

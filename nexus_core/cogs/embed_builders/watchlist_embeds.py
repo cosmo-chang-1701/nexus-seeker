@@ -728,7 +728,7 @@ def create_watchlist_signal_embed(
                     net_gex_sign = (
                         "+" if net_gex_float > 0 else ("-" if net_gex_float < 0 else "")
                     )
-                    regime_line = f"Net GEX Regime: {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+                    regime_line = f"Net GEX Regime (全鏈加總): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
 
                 from market_analysis.index_microstructure import (
                     estimate_symbol_gamma_flip,
@@ -741,7 +741,7 @@ def create_watchlist_signal_embed(
                         (effective_c_val - gamma_flip_val) / effective_c_val * 100
                     )
                     flip_sign = "+" if flip_buffer_pct >= 0 else ""
-                    flip_line = f"Gamma Flip: ${gamma_flip_val:.2f} (緩衝: {flip_sign}{flip_buffer_pct:.1f}%)"
+                    flip_line = f"Gamma Flip (轉正履約價): ${gamma_flip_val:.2f} (緩衝: {flip_sign}{flip_buffer_pct:.1f}%)"
                 elif gamma_flip_val == 0.0:
                     flip_line = "Gamma Flip: -- (無零交叉點)"
 
@@ -750,7 +750,9 @@ def create_watchlist_signal_embed(
                     gex_lines.append(f" ├─ {regime_line}")
                 if flip_line:
                     gex_lines.append(f" ├─ {flip_line}")
-                gex_lines.append(" ┌─ 履約價(Strike) ─ 曝險熱力圖 ─ [K]")
+                gex_lines.append(
+                    " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [K]"
+                )
                 for i, k in enumerate(reversed(display_strikes)):
                     v = _safe_gex(k)
                     bars = int((abs(v) / max_abs_gex) * 10)
@@ -765,9 +767,13 @@ def create_watchlist_signal_embed(
                         color_prefix = "\u001b[1;30m"
                         sign = " "
 
+                    # 只標最接近現價的那一檔：高價股的履約價間距相對小，1% 容差內常
+                    # 落進兩檔以上，會同時出現多個 📍。1% 容差保留，現價遠離所有
+                    # 履約價時不標。
                     spot_marker = (
                         "📍"
-                        if abs(k - effective_c_val) < (effective_c_val * 0.01)
+                        if k == strike_keys[closest_idx]
+                        and abs(k - effective_c_val) < (effective_c_val * 0.01)
                         else "  "
                     )
                     formatted_val = f"{sign}{abs(v)/1000:.0f}K"
