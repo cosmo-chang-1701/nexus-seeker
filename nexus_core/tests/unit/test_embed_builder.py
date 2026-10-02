@@ -2031,9 +2031,9 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     assert "🔴賣方禁售" in desc_crwv
     assert "-1.6%" in desc_crwv
     # 跌破底牆且無正 Gamma 深度、無 DTE≥7 機構買盤：IVR<60 不構成「護航網」，
-    # 不得建議續抱 (無 ATR → 防守位 108 × 0.96 = 103.68)。
+    # 不得建議續抱。無 ATR 時防守位即 PutWall 本身 (同出場引擎軌道一)，現價已跌破。
     assert "現貨續抱" not in desc_crwv
-    assert "負 Gamma Delta 拋售風險，嚴守 $103.68 (15分K收盤)" in desc_crwv
+    assert "跌破底牆 $108.0，已破防守位，負 Gamma Delta 拋售風險" in desc_crwv
 
 
 @contextmanager

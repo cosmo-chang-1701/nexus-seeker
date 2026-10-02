@@ -45,6 +45,9 @@ from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 # 只是一次 sys.modules 字典查詢，不值得換掉一個全套件共用的 patch 介面。
 import database
 from market_analysis.gex_wall_depth import thin_wall_threshold
+from market_analysis.dynamic_rollover.constants import (
+    _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT,
+)
 from market_analysis.sentiment.skew_taxonomy import (
     SKEW_DIVERGENCE_HIGH_PERCENTILE,
     SKEW_HIGH_DEFENSE_PERCENTILE,
@@ -1050,6 +1053,66 @@ def build_radar_scan_embed(
                     f"• 🚨 {sym}: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
                 )
 
+            radar_cache = r.get("radar_cache")
+            if not isinstance(radar_cache, dict):
+                radar_cache = {}
+
+            # 訊號融合層嚴格布林 AND-gate (Entry Trigger)
+            # 須在牆體警示之前算出：CallWall 軋空警示與下方灰階戰術建議共用同一個
+            # 判定，避免警示寫「現貨重砲攻擊」而戰術建議卻是「保持觀察」。
+            # 「現貨重砲」等進場建議須四規則同時成立才可輸出激進語句，
+            # 任一規則為 False 僅能降級為「保持觀察」或「禁止進場」。
+            oi_pcr_val = (
+                _safe_float(r.get("oi_pcr")) if r.get("oi_pcr") is not None else None
+            )
+            rule1_no_sto_veto = not bool(
+                radar_cache.get("physical_cap_above_spot", False)
+            )
+
+            gex_prof_data_dict = r.get("gex_profile_data")
+            gex_profile_gate = (
+                gex_prof_data_dict.get("gex_profile", {})
+                if isinstance(gex_prof_data_dict, dict)
+                else {}
+            ) or {}
+            gamma_flip_est_gate = estimate_symbol_gamma_flip(
+                gex_profile_gate, price_val
+            )
+            from database.cache import get_kv_cache
+
+            prev_iv_rank_gate = get_kv_cache(f"iv_rank_prev_{sym.upper()}")
+            iv_rising_with_price_gate = (
+                prev_iv_rank_gate is not None
+                and iv_rank_val is not None
+                and iv_rank_val > float(prev_iv_rank_gate)
+            )
+            crossed_gamma_flip_up_gate = (
+                gamma_flip_est_gate > 0
+                and price_val > gamma_flip_est_gate
+                and net_gex > 0
+            )
+            pcr_confirms_gate = oi_pcr_val is not None and oi_pcr_val >= 1.0
+            rule2_gamma_flip_squeeze = (
+                crossed_gamma_flip_up_gate
+                and pcr_confirms_gate
+                and iv_rising_with_price_gate
+            )
+
+            # Rule 3 刻意採用「成交量 PCR」而非 Rule 2 已使用的「未平倉 OI PCR」：
+            # OI PCR>=1.0 是 Rule 2 判定軋空籌碼燃料是否存在的必要條件，若 Rule 3
+            # 也對同一個 OI PCR 要求 <1.0，會與 Rule 2 邏輯矛盾導致此 AND-gate 永
+            # 遠無法為真。改採當日實際成交流的 Volume PCR，並沿用本函式既有的
+            # 破位殺盤閾值 (>=1.2，見「案例 1」)，確認當日盤中賣壓未惡化。
+            rule3_pcr_ok = vol_pcr is None or vol_pcr < 1.2
+            rule4_term_structure_ok = term_structure <= 1.05
+
+            entry_trigger_confirmed = (
+                rule1_no_sto_veto
+                and rule2_gamma_flip_squeeze
+                and rule3_pcr_ok
+                and rule4_term_structure_ok
+            )
+
             # 連動 GEX PutWall (做市商底牆) / CallWall (做市商頂牆)
             # 兩道牆的「逼近」判定各自獨立時，在窄幅履約價密集區會同時觸發多空
             # 對立的警示 (例如 PW 327.5 / CW 330 / 現價 330.32)。兩者同時成立時以
@@ -1111,13 +1174,27 @@ def build_radar_scan_embed(
                         f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                     )
 
+            # 行動建議與下方灰階戰術建議同一套 AND-gate 分支，兩處措辭不得互相矛盾
             if cw_bullish:
+                if entry_trigger_confirmed:
+                    cw_action = "提防軋空發動，現貨重砲攻擊"
+                elif not rule1_no_sto_veto:
+                    cw_action = "但偵測到 STO 物理封頂，機構鎖死上方空間，禁止進場"
+                else:
+                    cw_action = (
+                        "進場訊號未全數共振 (Gamma Flip/PCR/IV 期限結構)，保持觀察"
+                    )
                 insights.append(
-                    f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f}{wall_pos_note})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，提防軋空發動，現貨重砲攻擊。"
+                    f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f}{wall_pos_note})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，{cw_action}。"
                 )
             elif cw_capped:
+                cw_action = (
+                    "建議 Sell Put 獲利落袋"
+                    if rule1_no_sto_veto
+                    else "且偵測到 STO 物理封頂，禁止進場"
+                )
                 insights.append(
-                    f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}{wall_pos_note}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，建議 Sell Put 獲利落袋。"
+                    f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}{wall_pos_note}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，{cw_action}。"
                 )
 
             if psq_result and sqz_is_squeezing:
@@ -1175,9 +1252,6 @@ def build_radar_scan_embed(
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
-            radar_cache = r.get("radar_cache")
-            if not isinstance(radar_cache, dict):
-                radar_cache = {}
             hvn = _safe_float(radar_cache.get("hvn_price"), 0.0)
             lvn = _safe_float(radar_cache.get("lvn_price"), 0.0)
             if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
@@ -1346,66 +1420,17 @@ def build_radar_scan_embed(
             if atr_1d <= 0.0:
                 atr_1d = _safe_float(r.get("atr_1d"), 0.0)
             atr_15m_res = resolve_atr_15m(_safe_float(r.get("atr_15m"), 0.0), atr_1d)
-            if put_wall > 0 and atr_15m_res > 0:
-                anti_washout_stop = round(put_wall - 1.5 * atr_15m_res, 2)
-            elif put_wall > 0:
-                anti_washout_stop = round(put_wall * 0.96, 2)
+            # 與出場引擎軌道一同一公式 (docs/strategies/05 §2.2)：
+            # PutWall − _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT (0.5) × ATR_15m；
+            # ATR 缺失時停損即錨點本身 (同 anti_washout.py)。過去雷達自用 1.5×，
+            # 且缺 ATR 時改用 PutWall × 0.96，顯示的防守位比引擎實際停損寬 3 倍。
+            if put_wall > 0:
+                anti_washout_stop = round(
+                    put_wall - _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT * atr_15m_res,
+                    2,
+                )
             else:
                 anti_washout_stop = 0.0
-
-            # 6.5 訊號融合層嚴格布林 AND-gate (Entry Trigger)
-            # 「現貨重砲」等進場建議須四規則同時成立才可輸出激進語句，
-            # 任一規則為 False 僅能降級為「保持觀察」或「禁止進場」。
-            oi_pcr_val = (
-                _safe_float(r.get("oi_pcr")) if r.get("oi_pcr") is not None else None
-            )
-            rule1_no_sto_veto = not bool(
-                radar_cache.get("physical_cap_above_spot", False)
-            )
-
-            gex_prof_data_dict = r.get("gex_profile_data")
-            gex_profile_gate = (
-                gex_prof_data_dict.get("gex_profile", {})
-                if isinstance(gex_prof_data_dict, dict)
-                else {}
-            ) or {}
-            gamma_flip_est_gate = estimate_symbol_gamma_flip(
-                gex_profile_gate, price_val
-            )
-            from database.cache import get_kv_cache
-
-            prev_iv_rank_gate = get_kv_cache(f"iv_rank_prev_{sym.upper()}")
-            iv_rising_with_price_gate = (
-                prev_iv_rank_gate is not None
-                and iv_rank_val is not None
-                and iv_rank_val > float(prev_iv_rank_gate)
-            )
-            crossed_gamma_flip_up_gate = (
-                gamma_flip_est_gate > 0
-                and price_val > gamma_flip_est_gate
-                and net_gex > 0
-            )
-            pcr_confirms_gate = oi_pcr_val is not None and oi_pcr_val >= 1.0
-            rule2_gamma_flip_squeeze = (
-                crossed_gamma_flip_up_gate
-                and pcr_confirms_gate
-                and iv_rising_with_price_gate
-            )
-
-            # Rule 3 刻意採用「成交量 PCR」而非 Rule 2 已使用的「未平倉 OI PCR」：
-            # OI PCR>=1.0 是 Rule 2 判定軋空籌碼燃料是否存在的必要條件，若 Rule 3
-            # 也對同一個 OI PCR 要求 <1.0，會與 Rule 2 邏輯矛盾導致此 AND-gate 永
-            # 遠無法為真。改採當日實際成交流的 Volume PCR，並沿用本函式既有的
-            # 破位殺盤閾值 (>=1.2，見「案例 1」)，確認當日盤中賣壓未惡化。
-            rule3_pcr_ok = vol_pcr is None or vol_pcr < 1.2
-            rule4_term_structure_ok = term_structure <= 1.05
-
-            entry_trigger_confirmed = (
-                rule1_no_sto_veto
-                and rule2_gamma_flip_squeeze
-                and rule3_pcr_ok
-                and rule4_term_structure_ok
-            )
 
             # 7. 灰階戰術建議 (Multi-dimensional Gray-scale Evaluation)
             tactical_adv = "⚪ 區間震盪，觀察籌碼堆疊"

@@ -139,7 +139,7 @@ flowchart TD
 | 常數 | 值 | 語意 | 檔案 |
 | :--- | :--- | :--- | :--- |
 | `ANTI_WASHOUT_ATR_MULT` | `1.5` | **自選標的心跳**的建議買/賣點緩衝（`suitable_buy -= 1.5 × ATR`）。這是給尚未持倉的觀察標的算進場價位用的，不是停損 | `market_analysis/signal_calculator.py` |
-| `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` | `0.5` | **既有持倉**雙軌停損的軌道一實際停損（`anchor ∓ 0.5 × ATR₁₅ₘ`） | `dynamic_rollover/constants.py` |
+| `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` | `0.5` | **既有持倉**雙軌停損的軌道一實際停損（`anchor ∓ 0.5 × ATR₁₅ₘ`）。`/x` 雷達灰階戰術建議的「防守位」（`PutWall − 0.5 × ATR₁₅ₘ`，缺 ATR 時即 PutWall）也直接引用此常數，顯示值與引擎實際停損一致 | `dynamic_rollover/constants.py` |
 | `_ROOM_STOP_ATR_15M_MULTIPLIER` | `0.5` | **動態空間門檻**推導 `Risk_actual` 用的停損墊片 | `market_analysis/room_threshold.py` |
 
 後兩者**必須恆等**（見 [`../strategies/06_dynamic_adaptive_room_threshold.md`](../strategies/06_dynamic_adaptive_room_threshold.md) §5.4 的同步不變式，有單元測試鎖定）；第一個與它們**無關**，改動任一個都不該連動其餘兩個。此處的處理原則比照本專案對多種 `gamma_cliff_level` 公式的既有慣例：概念不同的模型不應為了去重而強行統一。
