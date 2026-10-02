@@ -1342,8 +1342,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         ]
                         # edge 的 PutWall 取「Put 端 Gamma 最大」的履約價，熱力圖畫的
                         # 卻是淨 GEX；兩者不同源。PutWall 處淨 GEX 為負代表做市商在那
-                        # 裡要跟著賣現貨避險（助跌），不是支撐——據實揭露，並另列最近
-                        # 的淨 GEX 正支撐。僅影響呈現，引擎閘門仍以 edge PutWall 為準。
+                        # 裡要跟著賣現貨避險（助跌），不是支撐——據實揭露，並另列現價下方
+                        # 淨 GEX 最大的正支撐。僅影響呈現，引擎閘門仍以 edge PutWall 為準。
                         put_wall_net = _safe_gex(put_wall_float)
                         if put_wall_net < 0:
                             put_items.append(
@@ -1368,7 +1368,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     (effective_c_val - net_supp) / effective_c_val * 100
                                 )
                                 put_items.append(
-                                    f"最近淨 GEX 支撐: ${net_supp:.2f} (↓{net_supp_pct:.2f}%)"
+                                    f"淨 GEX 最大支撐: ${net_supp:.2f} (↓{net_supp_pct:.2f}%)"
                                 )
                                 if put_wall_net < 0 and net_supp < effective_c_val:
                                     alt_net_supp = net_supp
@@ -1511,7 +1511,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             # docs/microstructure/02 §7：PutWall 定義統一為淨 GEX
                             # 前須先經 calibration 比對，閘門與停損一律仍以 edge
                             # PutWall 為準；此處只揭露錨點落在助跌區的風險，並列
-                            # 以淨 GEX 支撐為錨的參考停損，供使用者自行判斷。
+                            # 以淨 GEX 最大支撐為錨的參考停損，供使用者自行判斷。
                             if alt_net_supp > 0:
                                 alt_stop = compute_reference_stop(
                                     effective_c_val, alt_net_supp, atr_15m_val, "LONG"
@@ -1522,7 +1522,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 stop_item += (
                                     "\n │  ⚠ 停損錨點位於淨 GEX 助跌區，"
                                     "緩衝判定與停損仍以 PutWall 為準"
-                                    f"\n │  參考：以淨 GEX 支撐 ${alt_net_supp:.2f} 為錨 "
+                                    f"\n │  參考：以淨 GEX 最大支撐 ${alt_net_supp:.2f} 為錨 "
                                     f"→ ${alt_stop:.2f} (↓{alt_stop_pct:.2f}%)"
                                 )
                             put_items.append(stop_item)

@@ -4,7 +4,7 @@ tests/unit/test_gex_display_consistency.py
 GEX 呈現層一致性（fixture 取自實盤回報的 DRAM / RKLB / MU / BE）：
   #7  CallWall 低於現價且上方全為負 GEX → 顯示負 Gamma 真空，不印舊牆
   #8  全鏈 LONG_GAMMA 但現價已落入負 Gamma 區 → 揭露局部體制與雙向翻轉線
-  #10 PutWall 處淨 GEX 為負 → 揭露助跌區並列出最近淨 GEX 支撐
+  #10 PutWall 處淨 GEX 為負 → 揭露助跌區並列出淨 GEX 最大支撐
   #11 下行緩衝同時顯示牆距與停損距離，判定依停損距離
 並確認 `estimate_symbol_gamma_flip()`（進場閘門共用）行為不變。
 """
@@ -92,7 +92,7 @@ def test_mu_putwall_on_negative_net_gex_is_disclosed() -> None:
     )
     assert "PutWall: $1045.00" in text
     assert "淨 GEX -39414K 為負" in text
-    assert "最近淨 GEX 支撐: $1040.00" in text
+    assert "淨 GEX 最大支撐: $1040.00" in text
 
 
 def test_healthy_putwall_has_no_extra_disclosure() -> None:
@@ -113,7 +113,7 @@ def test_healthy_putwall_has_no_extra_disclosure() -> None:
         }
     )
     assert "為負（Put 端" not in text
-    assert "最近淨 GEX 支撐" not in text
+    assert "淨 GEX 最大支撐" not in text
 
 
 @pytest.mark.parametrize(

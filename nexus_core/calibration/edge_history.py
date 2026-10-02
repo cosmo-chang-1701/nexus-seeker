@@ -300,6 +300,8 @@ def build_edge_snapshots(
                     "put_wall": float(g.get("put_wall") or 0.0),
                     "call_wall": float(g.get("call_wall") or 0.0),
                     "net_gex": float(g.get("net_gex") or 0.0),
+                    # 供 micro-report 重算 PutWall 處淨 GEX 與「最近強牆」
+                    "net_profile": g.get("gex_profile") or {},
                 }
             if gex and adv is None:
                 # 沒有成交額就無法算深度比；EM 仍可使用

@@ -157,6 +157,9 @@ def compute_gex_profile(contracts: list[Contract], spot: float) -> dict[str, Any
         "call_wall": call_wall,
         "call_wall_gex": call_wall_gex,
         "n_contracts": len(chain),
+        # 逐履約價淨 GEX：報表在讀取時以現行薄牆門檻重算「最近強牆」與 PutWall 處
+        # 淨 GEX，門檻重新校準後舊快照仍可用（與 edge `gex_profile` 同格式）。
+        "net_profile": {str(k): round(v, 2) for k, v in net_by_strike.items()},
     }
 
 
@@ -389,6 +392,92 @@ def _quantiles(values: list[float]) -> dict[str, float]:
     }
 
 
+# 支撐牆定義（docs/microstructure/02 §7）。鍵值即報表欄位名稱。
+SUPPORT_DEFINITIONS: tuple[str, ...] = (
+    "edge_PutWall",  # Put 端單側 Gamma 最大（現行閘門）
+    "淨GEX最大",  # 現價下方淨 GEX 最大正值，無門檻
+    "淨GEX最大_過薄牆門檻",  # 同上並套薄牆門檻＝`_scan_gex_walls()`／`/x` 參考支撐
+    "淨GEX最近強牆",  # 現價下方、過薄牆門檻的最近正淨 GEX（統一定義候選）
+)
+
+
+def _profile_items(profile: Any) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for k, v in (profile or {}).items():
+        try:
+            strike, val = float(k), float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(strike) and math.isfinite(val):
+            out.append((strike, val))
+    return out
+
+
+def net_gex_at_strike(profile: Any, strike: float) -> Optional[float]:
+    """剖面中該履約價的淨 GEX；剖面缺失或沒有該履約價時回傳 None。"""
+    if strike <= 0:
+        return None
+    for k, v in _profile_items(profile):
+        if math.isclose(k, strike, abs_tol=5e-3):
+            return v
+    return None
+
+
+def nearest_strong_wall(
+    profile: Any, spot: float, threshold: float
+) -> tuple[float, float]:
+    """現價下方、淨 GEX ≥ 薄牆門檻的**最近**履約價；找不到時回傳 (0.0, 0.0)。"""
+    best_k, best_v = 0.0, 0.0
+    for k, v in _profile_items(profile):
+        if (
+            k < spot
+            and not math.isclose(k, spot, abs_tol=1e-4)
+            and v > 0
+            and v >= threshold
+            and k > best_k
+        ):
+            best_k, best_v = k, v
+    return best_k, best_v
+
+
+def support_definitions(snap: dict[str, Any]) -> dict[str, tuple[float, float]]:
+    """快照 → {定義: (履約價, 該處淨 GEX)}；該定義沒有牆時不列入。
+
+    PutWall 的第二個值是該履約價的**淨** GEX（不是 Put 端 Gamma），剖面缺失時
+    為 NaN。舊版 micro-snapshot 沒有 `net_profile`，只能比較前兩種定義。
+    """
+    from market_analysis.gex_wall_depth import thin_wall_threshold
+
+    g = snap.get("gex") or {}
+    profile = g.get("net_profile")
+    spot = float(snap.get("spot") or 0.0)
+    threshold = thin_wall_threshold(snap.get("adv_dollar_20d"))
+    out: dict[str, tuple[float, float]] = {}
+
+    put_wall = float(g.get("put_wall") or 0.0)
+    if put_wall > 0:
+        pw_net = net_gex_at_strike(profile, put_wall)
+        out["edge_PutWall"] = (put_wall, math.nan if pw_net is None else pw_net)
+    support = float(g.get("support_strike") or 0.0)
+    support_gex = float(g.get("support_gex") or 0.0)
+    if support > 0:
+        out["淨GEX最大"] = (support, support_gex)
+        if support_gex >= threshold:
+            out["淨GEX最大_過薄牆門檻"] = (support, support_gex)
+    if profile and spot > 0:
+        k, v = nearest_strong_wall(profile, spot, threshold)
+        if k > 0:
+            out["淨GEX最近強牆"] = (k, v)
+    return out
+
+
+def _wall_outcome(
+    wall: float, atr: float, lows: list[float], closes: list[float]
+) -> dict[str, bool]:
+    tested = min(lows) <= wall + 0.5 * atr
+    return {"tested": tested, "held": tested and min(closes) >= wall}
+
+
 def label_wall_holds(
     snapshots: list[dict[str, Any]], horizon_days: int = 5
 ) -> list[dict[str, Any]]:
@@ -396,13 +485,17 @@ def label_wall_holds(
 
     - tested：後續 `horizon_days` 個交易日內，最低價曾進入牆上方 0.5 × ATR 以內
     - held：tested 且期間收盤價從未跌破牆
+
+    頂層的 tested／held 是「淨 GEX 最大」支撐（深度四分位表沿用）；`walls` 以同一段
+    觀察期標註 `SUPPORT_DEFINITIONS` 的每一種定義。
     """
     import yfinance as yf
 
     by_symbol: dict[str, list[dict[str, Any]]] = {}
     for s in snapshots:
-        if s["gex"].get("support_strike", 0) > 0:
-            by_symbol.setdefault(s["symbol"], []).append(s)
+        defs = support_definitions(s)
+        if defs:
+            by_symbol.setdefault(s["symbol"], []).append({**s, "_defs": defs})
 
     labeled: list[dict[str, Any]] = []
     for sym, snaps in by_symbol.items():
@@ -414,30 +507,143 @@ def label_wall_holds(
             continue
         if hist is None or hist.empty:
             continue
-        idx_dates = [ts.date().isoformat() for ts in hist.index]
-        for s in snaps:
-            after = [i for i, d in enumerate(idx_dates) if d > s["date"]][:horizon_days]
-            if len(after) < horizon_days:
-                continue  # 尚未走完觀察期
-            wall = float(s["gex"]["support_strike"])
-            band = wall + 0.5 * float(s.get("atr_1d") or 0.0)
-            lows = [float(hist["Low"].iloc[i]) for i in after]
-            closes = [float(hist["Close"].iloc[i]) for i in after]
-            tested = min(lows) <= band
-            labeled.append(
-                {
-                    "symbol": sym,
-                    "date": s["date"],
-                    "support_gex": s["gex"]["support_gex"],
-                    "depth_ratio": depth_ratio(
-                        s["gex"]["support_gex"], s["adv_dollar_20d"]
-                    ),
-                    "tested": tested,
-                    "held": tested and min(closes) >= wall,
-                }
-            )
+        labeled.extend(_label_symbol(snaps, hist, horizon_days))
         time.sleep(0.3)
     return labeled
+
+
+def _label_symbol(
+    snaps: list[dict[str, Any]], hist: Any, horizon_days: int
+) -> list[dict[str, Any]]:
+    idx_dates = [ts.date().isoformat() for ts in hist.index]
+    out: list[dict[str, Any]] = []
+    for s in snaps:
+        after = [i for i, d in enumerate(idx_dates) if d > s["date"]][:horizon_days]
+        if len(after) < horizon_days:
+            continue  # 尚未走完觀察期
+        lows = [float(hist["Low"].iloc[i]) for i in after]
+        closes = [float(hist["Close"].iloc[i]) for i in after]
+        atr = float(s.get("atr_1d") or 0.0)
+        spot = float(s.get("spot") or 0.0)
+        walls: dict[str, dict[str, Any]] = {}
+        for name, (strike, gex) in s["_defs"].items():
+            walls[name] = {
+                "strike": strike,
+                "net_gex": gex,
+                "dist_pct": (spot - strike) / spot * 100 if spot > 0 else None,
+                **_wall_outcome(strike, atr, lows, closes),
+            }
+        rec: dict[str, Any] = {"symbol": s["symbol"], "date": s["date"], "walls": walls}
+        support = walls.get("淨GEX最大")
+        if support is not None:
+            rec.update(
+                support_gex=s["gex"]["support_gex"],
+                depth_ratio=depth_ratio(s["gex"]["support_gex"], s["adv_dollar_20d"]),
+                tested=support["tested"],
+                held=support["held"],
+            )
+        out.append(rec)
+    return out
+
+
+# 統一定義的判讀門檻（docs/microstructure/02 §7）
+_MIN_LABELED_DATES = 20
+_MIN_TESTED_PER_DEFINITION = 30
+_BOOTSTRAP_N = 2000
+_BOOTSTRAP_SEED = 7
+
+
+def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
+    """events = [(日期, held)]，只含 tested；CI 依日期叢集 bootstrap。"""
+    from calibration.stats import clustered_bootstrap_mean
+
+    if not events:
+        return {"tested": 0, "held": 0, "n_dates": 0, "hold_rate": None, "ci95": None}
+    rate, lo, hi = clustered_bootstrap_mean(
+        [1.0 if h else 0.0 for _, h in events],
+        [d for d, _ in events],
+        _BOOTSTRAP_N,
+        _BOOTSTRAP_SEED,
+    )
+    return {
+        "tested": len(events),
+        "held": sum(1 for _, h in events if h),
+        "n_dates": len({d for d, _ in events}),
+        "hold_rate": round(rate, 3),
+        "ci95": [round(lo, 3), round(hi, 3)],
+    }
+
+
+def compare_support_definitions(labeled: list[dict[str, Any]]) -> dict[str, Any]:
+    """各支撐定義以同一觀察期的守住率並列，並給出是否可改閘門的判讀。"""
+    table: dict[str, Any] = {}
+    for name in SUPPORT_DEFINITIONS:
+        rows = [
+            x["walls"][name] | {"date": x["date"]}
+            for x in labeled
+            if name in x.get("walls", {})
+        ]
+        dists = [r["dist_pct"] for r in rows if r["dist_pct"] is not None]
+        table[name] = {
+            "n_with_wall": len(rows),
+            "tested_rate": round(sum(r["tested"] for r in rows) / len(rows), 3)
+            if rows
+            else None,
+            "距現價中位數%": round(statistics.median(dists), 2) if dists else None,
+            **_hold_rate_stats([(r["date"], r["held"]) for r in rows if r["tested"]]),
+        }
+
+    n_dates = len({x["date"] for x in labeled})
+    short = [
+        n
+        for n in SUPPORT_DEFINITIONS
+        if table[n]["tested"] < _MIN_TESTED_PER_DEFINITION
+    ]
+    if n_dates < _MIN_LABELED_DATES or short:
+        verdict = (
+            f"樣本不足（可標註日期 {n_dates}/{_MIN_LABELED_DATES}；"
+            f"tested < {_MIN_TESTED_PER_DEFINITION} 的定義：{', '.join(short) or '無'}）"
+            "，不判讀，維持 edge PutWall"
+        )
+    else:
+        cand_lo = table["淨GEX最近強牆"]["ci95"][0]
+        base_hi = table["edge_PutWall"]["ci95"][1]
+        verdict = (
+            "淨GEX最近強牆 守住率 CI 下界高於 edge_PutWall CI 上界，可提案統一定義"
+            if cand_lo > base_hi
+            else "CI 重疊或淨 GEX 定義未較佳，維持 edge PutWall，只保留呈現層揭露"
+        )
+    return {"n_labeled_dates": n_dates, "定義比較": table, "判讀": verdict}
+
+
+def put_wall_net_gex_stats(
+    snaps: list[dict[str, Any]], labeled: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """edge PutWall 處淨 GEX < 0（助跌區）的發生比例，及兩組的守住率。"""
+    known = [
+        (s["date"], d["edge_PutWall"][1])
+        for s in snaps
+        if (d := support_definitions(s)).get("edge_PutWall")
+        and math.isfinite(d["edge_PutWall"][1])
+    ]
+    n_neg = sum(1 for _, v in known if v < 0)
+    by_sign: dict[str, list[tuple[str, bool]]] = {"淨GEX<0": [], "淨GEX>=0": []}
+    for x in labeled:
+        w = x.get("walls", {}).get("edge_PutWall")
+        if w is None or not w["tested"] or not math.isfinite(w["net_gex"]):
+            continue
+        by_sign["淨GEX<0" if w["net_gex"] < 0 else "淨GEX>=0"].append(
+            (x["date"], w["held"])
+        )
+    return {
+        "n_put_wall_with_profile": len(known),
+        "n_dates": len({d for d, _ in known}),
+        "n_net_gex_negative": n_neg,
+        "淨GEX<0比例": round(n_neg / len(known), 3) if known else None,
+        "守住率_依PutWall處淨GEX正負": {
+            k: _hold_rate_stats(v) for k, v in by_sign.items()
+        },
+    }
 
 
 def build_micro_report(
@@ -519,12 +725,12 @@ def build_micro_report(
     hold_table: dict[str, Any] = {}
     if labeled:
         valid = sorted(
-            x["depth_ratio"] for x in labeled if x["depth_ratio"] is not None
+            x["depth_ratio"] for x in labeled if x.get("depth_ratio") is not None
         )
         if len(valid) >= 4:
             cuts = [valid[len(valid) * i // 4] for i in (1, 2, 3)]
             for x in labeled:
-                if x["depth_ratio"] is None or not x["tested"]:
+                if x.get("depth_ratio") is None or not x["tested"]:
                     continue
                 qi = sum(1 for c in cuts if x["depth_ratio"] >= c)
                 h = hold_table.setdefault(f"Q{qi + 1}", {"tested": 0, "held": 0})
@@ -549,5 +755,7 @@ def build_micro_report(
         },
         "支撐牆守住率_依深度四分位": hold_table
         or f"尚無走完 {horizon_days} 個交易日觀察期的快照",
+        "支撐定義比較": compare_support_definitions(labeled),
+        "PutWall處淨GEX": put_wall_net_gex_stats(snaps, labeled),
         "n_labeled": len(labeled),
     }
