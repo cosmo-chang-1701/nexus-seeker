@@ -197,6 +197,35 @@ def _support_wall(
     return best_k, (best_v if best_k is not None else None)
 
 
+def _gamma_flip_features(profile: Any, spot: float) -> dict[str, Optional[float]]:
+    """Gamma Flip 重要性 (docs/microstructure/03 §5.6)：閘門用的原始 Flip 與其
+    相對量級，供 forward-report 比較「雜訊交叉」與「重要交叉」的事後表現。
+    沿用 `_num()` 慣例，0（無 Flip／排除後無 Flip）記為 None。"""
+    if not isinstance(profile, Mapping) or not profile:
+        return {}
+    try:
+        from market_analysis.index_microstructure import (
+            GAMMA_FLIP_MATERIALITY_DISPLAY,
+            estimate_material_gamma_flip,
+            estimate_symbol_gamma_flip,
+            gamma_flip_materiality,
+        )
+
+        prof = dict(profile)
+        m = gamma_flip_materiality(prof, spot)
+        return {
+            "gamma_flip_raw": _num(estimate_symbol_gamma_flip(prof, spot)),
+            "gamma_flip_ratio": _num(m.ratio) if m is not None else None,
+            "gamma_flip_neg_peak": _num(m.neg_peak) if m is not None else None,
+            "gamma_flip_material_5pct": _num(
+                estimate_material_gamma_flip(prof, spot, GAMMA_FLIP_MATERIALITY_DISPLAY)
+            ),
+        }
+    except Exception as e:  # 記錄器永不影響交易路徑
+        logger.debug(f"[EvalRecorder] gamma flip 特徵計算失敗: {e}")
+        return {}
+
+
 def calibration_features(
     gex_profile_data: Any,
     spot: float,
@@ -213,6 +242,7 @@ def calibration_features(
     if isinstance(gex_profile_data, Mapping):
         feats["put_wall_gex"] = _num(gex_profile_data.get("put_wall_gex"))
         feats["adv_dollar_20d"] = _num(gex_profile_data.get("adv_dollar_20d"))
+        feats.update(_gamma_flip_features(gex_profile_data.get("gex_profile"), spot))
     if candidate_radar:
         feats["skew_percentile"] = _num(candidate_radar.get("skew_percentile"))
         feats["skew_percentile_source"] = candidate_radar.get("skew_percentile_source")

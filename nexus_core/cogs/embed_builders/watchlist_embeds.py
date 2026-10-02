@@ -14,7 +14,10 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
-from cogs.embed_builders._embed_helpers import _safe_embed_field_value
+from cogs.embed_builders._embed_helpers import (
+    _safe_embed_field_value,
+    gamma_flip_noise_note,
+)
 from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
     NexusEmbed,
@@ -731,17 +734,28 @@ def create_watchlist_signal_embed(
                     regime_line = f"Net GEX Regime (全鏈加總): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
 
                 from market_analysis.index_microstructure import (
+                    GAMMA_FLIP_MATERIALITY_DISPLAY,
+                    estimate_material_gamma_flip,
                     estimate_symbol_gamma_flip,
+                    gamma_flip_materiality,
                 )
 
                 gamma_flip_val = estimate_symbol_gamma_flip(gex_prof, effective_c_val)
                 flip_line = ""
+                flip_noise_note = ""
                 if gamma_flip_val > 0 and effective_c_val > 0:
                     flip_buffer_pct = (
                         (effective_c_val - gamma_flip_val) / effective_c_val * 100
                     )
                     flip_sign = "+" if flip_buffer_pct >= 0 else ""
                     flip_line = f"Gamma Flip (轉正履約價): ${gamma_flip_val:.2f} (緩衝: {flip_sign}{flip_buffer_pct:.1f}%)"
+                    # 雜訊交叉揭露（docs/microstructure/03 §5.6），閘門仍以原值為準
+                    flip_noise_note = gamma_flip_noise_note(
+                        gamma_flip_materiality(gex_prof, effective_c_val),
+                        estimate_material_gamma_flip(
+                            gex_prof, effective_c_val, GAMMA_FLIP_MATERIALITY_DISPLAY
+                        ),
+                    )
                 elif gamma_flip_val == 0.0:
                     flip_line = "Gamma Flip: -- (無零交叉點)"
 
@@ -750,6 +764,8 @@ def create_watchlist_signal_embed(
                     gex_lines.append(f" ├─ {regime_line}")
                 if flip_line:
                     gex_lines.append(f" ├─ {flip_line}")
+                if flip_noise_note:
+                    gex_lines.append(f" │   {flip_noise_note}")
                 gex_lines.append(
                     " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [K]"
                 )

@@ -1082,6 +1082,140 @@ def analyze_local_gamma_regime(
     )
 
 
+# Gamma Flip 重要性門檻（docs/microstructure/03 §5.6）。離線比較的候選門檻；
+# 閘門仍用 `estimate_symbol_gamma_flip()` 的無門檻定義，切換前須經 calibration。
+GAMMA_FLIP_MATERIALITY_CANDIDATES: tuple[float, ...] = (0.02, 0.05, 0.10)
+# 呈現層「雜訊交叉」標註門檻：未經校準、只用於呈現與前向記錄分組，不得用於閘門。
+GAMMA_FLIP_MATERIALITY_DISPLAY = 0.05
+
+
+class GammaFlipMateriality(NamedTuple):
+    """閘門 Gamma Flip 交叉點的重要性（`gamma_flip_materiality` 的輸出）。"""
+
+    flip_strike: float  # estimate_symbol_gamma_flip() 的結果（閘門用）
+    neg_peak: float  # 交叉點下方連續負值區段的最大 |GEX|
+    window_max_abs: float  # spot ± 30% 視窗內最大 |GEX|（至少為 neg_peak）
+    ratio: float  # neg_peak / window_max_abs，介於 0–1
+
+
+def _gamma_flip_crossings(
+    sorted_strikes: list[tuple[float, float]], bracket_low: float, bracket_high: float
+) -> list[tuple[float, float]]:
+    """負轉非負交叉點與其負側峰值：[(K_i, 連續負值區段最大 |GEX|)]。
+
+    交叉判定與 `estimate_symbol_gamma_flip()` 完全相同（`g(K_{i-1}) < 0 <= g(K_i)`
+    且 K_i 在 bracket 內）；負側峰值取 K_{i-1} 往下延伸的連續負值區段，避免
+    「−5B、−10M、+4B」這種鏈型因緊鄰一檔很小而被誤判為雜訊。
+    """
+    out: list[tuple[float, float]] = []
+    prev_gex: Optional[float] = None
+    run_peak = 0.0
+    for strike, gex in sorted_strikes:
+        if prev_gex is not None and prev_gex < 0 <= gex:
+            if bracket_low <= strike <= bracket_high:
+                out.append((strike, run_peak))
+        if gex < 0:
+            run_peak = max(
+                run_peak if prev_gex is not None and prev_gex < 0 else 0.0, -gex
+            )
+        prev_gex = gex
+    return out
+
+
+def _parse_flip_inputs(
+    gex_profile: dict, spot: float
+) -> Optional[tuple[list[tuple[float, float]], float, float]]:
+    """與 `estimate_symbol_gamma_flip()` 相同的解析與 bracket；無效時回傳 None。"""
+    if not gex_profile:
+        return None
+    try:
+        sorted_strikes = sorted((float(k), float(v)) for k, v in gex_profile.items())
+    except (ValueError, TypeError):
+        return None
+    if not sorted_strikes:
+        return None
+    if spot > 0:
+        return sorted_strikes, spot * 0.7, spot * 1.3
+    return sorted_strikes, float("-inf"), float("inf")
+
+
+def gamma_flip_materiality(
+    gex_profile: dict, spot: float
+) -> Optional[GammaFlipMateriality]:
+    """閘門 Gamma Flip 交叉點的相對量級重要性（僅供呈現與校準）。
+
+    ratio = 交叉點下方連續負值區段最大 |GEX| ÷ spot ± 30% 視窗內最大 |GEX|。
+    例：MU $1072.5 為 −9.4M、夾在 $1070 +4.16B 與 $1075 +3.78B 之間，ratio ≈ 0.2%，
+    閘門仍判為 Flip $1075。閘門 Flip 為 0 或 profile 無效時回傳 None。
+    """
+    flip = estimate_symbol_gamma_flip(gex_profile, spot)
+    if flip <= 0:
+        return None
+    parsed = _parse_flip_inputs(gex_profile, spot)
+    if parsed is None:
+        return None
+    sorted_strikes, low, high = parsed
+    neg_peak = next(
+        (
+            peak
+            for strike, peak in _gamma_flip_crossings(sorted_strikes, low, high)
+            if math.isclose(strike, flip, abs_tol=1e-6)
+        ),
+        None,
+    )
+    if neg_peak is None or not math.isfinite(neg_peak):
+        return None
+    window_abs = [
+        abs(g) for k, g in sorted_strikes if low <= k <= high and math.isfinite(g)
+    ]
+    window_max = max([neg_peak, *window_abs])
+    ratio = neg_peak / window_max if window_max > 0 else 0.0
+    return GammaFlipMateriality(
+        flip_strike=flip, neg_peak=neg_peak, window_max_abs=window_max, ratio=ratio
+    )
+
+
+def estimate_material_gamma_flip(
+    gex_profile: dict, spot: float, min_ratio: float
+) -> float:
+    """過濾雜訊交叉後的 Gamma Flip（僅供呈現與校準，不得用於閘門）。
+
+    與 `estimate_symbol_gamma_flip()` 同一套五步流程（bracket、方向一致性、
+    最近距離），只多一條：交叉候選的重要性比（見 `gamma_flip_materiality`）
+    須 ≥ `min_ratio`。`min_ratio <= 0` 時結果與閘門版完全相同。
+    """
+    parsed = _parse_flip_inputs(gex_profile, spot)
+    if parsed is None:
+        return 0.0
+    sorted_strikes, low, high = parsed
+    crossings = _gamma_flip_crossings(sorted_strikes, low, high)
+    if min_ratio > 0:
+        window_abs = [
+            abs(g) for k, g in sorted_strikes if low <= k <= high and math.isfinite(g)
+        ]
+        window_max = max(window_abs, default=0.0)
+        crossings = [
+            (k, peak)
+            for k, peak in crossings
+            if math.isfinite(peak)
+            and (peak / max(window_max, peak) if peak > 0 else 0.0) >= min_ratio
+        ]
+    candidates = [k for k, _ in crossings]
+
+    total_gex = sum(gex for _, gex in sorted_strikes)
+    if spot > 0 and total_gex != 0:
+        if total_gex > 0:
+            candidates = [s for s in candidates if s <= spot]
+        else:
+            candidates = [s for s in candidates if s >= spot]
+
+    if not candidates:
+        return 0.0
+    if spot > 0:
+        return min(candidates, key=lambda k: abs(k - spot))
+    return candidates[0]
+
+
 def evaluate_escape_window_regime(
     prob: float | None = None,
     cpi_dev: float | None = None,
