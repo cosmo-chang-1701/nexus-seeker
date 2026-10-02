@@ -53,6 +53,7 @@ $$
 \text{paced\_ratio} = \frac{\text{Volume} / \text{OI}}{\hat{f}_{\text{elapsed}}}
 $$
 - **統計意義**：`paced_ratio` 衡量的是「若標的在全天剩餘時間維持當前流速，收盤時預計將達到的 Volume/OI 比值」。
+- **顯示捨入**：UOA 表格的 `ratio_str`（`uoa_telemetry.classify_uoa_trade()`）以**四捨五入**保留兩位小數（如 $256{,}096 / 52{,}943 = 4.837 \to$ `4.84x`），與其他呈現路徑的 `:.2f` 一致；所有門檻判斷一律讀浮點 `ratio`，不讀字串。
 - **架構原則**：`paced_ratio` 為純附加欄位，專供微觀結構出場（如 `SL-主力對沖`）進行橫跨全天的均勻靈敏度捕捉；既有已校準的各項常規門檻（如進場鐵律的 `ratio >= 0.8x`）維持原始 `ratio` 不變，實現零破壞性升級。
 
 ### 2.4 SWEEP / BLOCK / CROSS 三分類訂單流標籤

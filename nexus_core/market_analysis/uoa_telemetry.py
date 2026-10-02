@@ -115,8 +115,9 @@ def classify_uoa_trade(
         ratio = trade.volume / trade.open_interest
     else:
         ratio = 0.0
-    # 使用截斷方式保留兩位小數以符合 UOA 表格規範
-    ratio_str = f"{int(ratio * 100) / 100.0:.2f}x"
+    # 四捨五入至兩位小數，與其他 UOA 呈現路徑 (portfolio_embeds / sentiment_scan
+    # 的 `:.2f`) 一致；截斷會讓 4.837x 顯示成 4.83x，與獨立驗算對不上。
+    ratio_str = f"{ratio:.2f}x"
 
     # 2. 規則分類 (Midpoint/Spread Matrix)
     midpoint = (trade.bid_price + trade.ask_price) / 2.0
