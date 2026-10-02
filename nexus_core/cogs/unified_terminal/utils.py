@@ -16,6 +16,20 @@ _macro_overview_cache = BoundedCache(max_size=10)
 # 時間戳卻是當下），誤導風控判讀。超過此年齡即視同冷快取，照常完整重算。
 _MACRO_OVERVIEW_STALE_MAX_AGE_SECONDS = 900.0
 
+# 核心總經指標（edge core_metrics 一次寫入）的 kv 鍵
+_CORE_MACRO_KV_KEYS: tuple[str, ...] = (
+    "macro_rrp",
+    "macro_fed_balance",
+    "macro_fear_greed",
+    "macro_uer",
+    "macro_sahm_rule",
+)
+# 需追蹤快取年齡的 kv 鍵（一次查詢取得）
+_MACRO_AGE_TRACKED_KEYS: tuple[str, ...] = _CORE_MACRO_KV_KEYS + (
+    "macro_spy_gamma_flip",
+    "macro_vts_ratio",
+)
+
 
 def _cache_clock() -> float:
     """快取年齡用的單調時鐘（獨立成函式以便測試替換，不必 patch 全域 time）。"""
@@ -138,19 +152,62 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     sahm_rule = get_kv_cache("macro_sahm_rule")
     rrp_change_30d = get_kv_cache("macro_rrp_change_30d")
 
-    if not rrp or not fed_balance or not fear_greed:
+    # 各 kv 快取的年齡（秒）：快取值本身不帶時效，edge 或排程停擺時舊值會被
+    # 當成現況顯示（曾出現恐懼與貪婪 65 vs 實際 28、GEX Flip 停在 24 天前）。
+    from database.cache import get_kv_cache_many
+    from market_analysis.index_microstructure import MACRO_GEX_STALE_MAX_AGE_SECONDS
+
+    kv_ages = {
+        key: age
+        for key, (_value, age) in get_kv_cache_many(_MACRO_AGE_TRACKED_KEYS).items()
+    }
+
+    def _max_known_age(keys: tuple[str, ...]) -> float | None:
+        known = [kv_ages[k] for k in keys if kv_ages.get(k) is not None]
+        return max(cast(list[float], known)) if known else None
+
+    core_cache_age = _max_known_age(_CORE_MACRO_KV_KEYS)
+    core_missing = rrp is None or fed_balance is None or fear_greed is None
+    core_expired = (
+        core_cache_age is not None and core_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
+    if core_missing or core_expired:
         try:
             from market_analysis.index_microstructure import fetch_core_macro_metrics
 
             core_data = await fetch_core_macro_metrics()
-            rrp = rrp or core_data.get("rrp")
-            fed_balance = fed_balance or core_data.get("fed_balance")
-            fear_greed = fear_greed or core_data.get("fear_greed")
-            uer = uer or core_data.get("uer")
-            sahm_rule = sahm_rule or core_data.get("sahm_rule")
-            rrp_change_30d = rrp_change_30d or core_data.get("rrp_change_30d")
+            if isinstance(core_data, dict) and not core_data.get("_is_fallback"):
+
+                def _pick(field: str, old: Any) -> Any:
+                    new = core_data.get(field)
+                    return new if new is not None else old
+
+                rrp = _pick("rrp", rrp)
+                fed_balance = _pick("fed_balance", fed_balance)
+                fear_greed = _pick("fear_greed", fear_greed)
+                uer = _pick("uer", uer)
+                sahm_rule = _pick("sahm_rule", sahm_rule)
+                rrp_change_30d = _pick("rrp_change_30d", rrp_change_30d)
+                if any(
+                    core_data.get(f) is not None
+                    for f in ("rrp", "fed_balance", "fear_greed", "uer", "sahm_rule")
+                ):
+                    core_cache_age = 0.0
         except Exception:
             pass
+    core_is_expired = (
+        core_cache_age is not None and core_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
+
+    # 大盤 GEX 快取超過時效：數值仍顯示，但不納入零 Gamma 與逃頂窗口判定
+    # （與 get_market_regime() 的 MACRO_GEX_STALE_MAX_AGE_SECONDS 一致）。
+    # 此處不重抓：GEX 走 edge Playwright 爬蟲，edge 失效時每次渲染都會白等。
+    gex_cache_age = kv_ages.get("macro_spy_gamma_flip")
+    gex_is_expired = (
+        spy_gamma_flip is not None
+        and gex_cache_age is not None
+        and gex_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
 
     if not gamma_flip_line or not spy_gamma_flip:
         try:
@@ -227,6 +284,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         vts_val = float(vts_raw) if vts_raw is not None else None
     except (ValueError, TypeError):
         vts_val = None
+    vts_cache_age = kv_ages.get("macro_vts_ratio")
+    if vts_cache_age is not None and vts_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS:
+        # 過期的期限結構視為未知：backwardation 改依 VIX 判定、逃頂窗口不計分
+        vts_val = None
 
     vix_val_safe = float(vix) if vix is not None else 18.0
     is_backwardation = (
@@ -237,27 +298,28 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     # 零 Gamma 踩踏 Regime 判定
     # 評估 SPY 現貨價相對於 SPY Gamma Flip（與 index_microstructure.get_market_regime 一致，消除 10x basis 失真）
-    is_negative_gamma_spy = (
-        (float(spy_spot) < float(spy_gamma_flip))
-        if (
-            spy_spot is not None
-            and spy_gamma_flip is not None
-            and float(spy_spot) > 0.0
-            and float(spy_gamma_flip) > 0.0
-        )
-        else (
-            float(spx) < float(gamma_flip_line)
-            if (
-                spx is not None
-                and gamma_flip_line is not None
-                and float(spx) > 0.0
-                and float(gamma_flip_line) > 0.0
-            )
-            else False
-        )
-    )
+    # None = 未知（Flip 缺值或快取過期），不可當成「正 Gamma」計入寬鬆
+    is_negative_gamma_spy: bool | None
+    if gex_is_expired:
+        is_negative_gamma_spy = None
+    elif (
+        spy_spot is not None
+        and spy_gamma_flip is not None
+        and float(spy_spot) > 0.0
+        and float(spy_gamma_flip) > 0.0
+    ):
+        is_negative_gamma_spy = float(spy_spot) < float(spy_gamma_flip)
+    elif (
+        spx is not None
+        and gamma_flip_line is not None
+        and float(spx) > 0.0
+        and float(gamma_flip_line) > 0.0
+    ):
+        is_negative_gamma_spy = float(spx) < float(gamma_flip_line)
+    else:
+        is_negative_gamma_spy = None
     short_gamma_critical = (
-        is_negative_gamma_spy
+        is_negative_gamma_spy is True
         and (vix is not None and float(vix) > 20.0)
         and is_backwardation
     )
@@ -302,7 +364,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         cpi_dev=cpi_dev,
         wti=wti,
         vts_ratio=vts_val,
-        is_negative_gamma=short_gamma_critical or is_negative_gamma_spy,
+        is_negative_gamma=is_negative_gamma_spy,
     )
 
     result_data: dict[str, Any] = {
@@ -336,6 +398,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "is_degraded": is_degraded,
         "served_stale_cache": False,
         "gex_is_fallback": gex_is_fallback,
+        "gex_is_expired": gex_is_expired,
+        "gex_cache_age_seconds": gex_cache_age,
+        "core_is_expired": core_is_expired,
+        "core_cache_age_seconds": core_cache_age,
     }
 
     # Save to memory cache

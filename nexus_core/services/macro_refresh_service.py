@@ -90,6 +90,21 @@ def _positive_float(value: Any) -> float:
     return num if num > 0 else 0.0
 
 
+def _expired_stale_cache_age(gex_data: dict[str, Any]) -> float | None:
+    """`gex_data` 為超過 MACRO_GEX_STALE_MAX_AGE_SECONDS 的 last-known-good 快取時
+    回傳其年齡（秒），否則回傳 None。無時間戳的舊快取視為已過期。"""
+    from market_analysis.index_microstructure import MACRO_GEX_STALE_MAX_AGE_SECONDS
+
+    if not gex_data.get("_is_stale_cache"):
+        return None
+    try:
+        cache_ts = float(gex_data.get("_cache_timestamp") or 0.0)
+    except (TypeError, ValueError):
+        cache_ts = 0.0
+    age = time.time() - cache_ts
+    return age if age > MACRO_GEX_STALE_MAX_AGE_SECONDS else None
+
+
 async def _fetch_spy_live_gex_fallback() -> dict[str, float] | None:
     """大盤 GEX 端點完全無資料（連 last-known-good 快取都沒有）時，改以 SPY
     個股期權鏈即時估算 Gamma Flip，並以單一交易寫回大盤 GEX 快取。
@@ -173,9 +188,19 @@ async def _refresh_gex_and_liquidity(result: MacroRefreshResult) -> None:
         elif isinstance(gex_res, BaseException):
             logger.warning(f"強制刷新大盤 GEX 抓取失敗: {gex_res}")
 
-        if _positive_float(gex_data.get("spy_spot")) <= 0:
-            gex_data = await _fetch_spy_live_gex_fallback() or {}
-            source = "spy_live"
+        # last-known-good 快取超過 MACRO_GEX_STALE_MAX_AGE_SECONDS 已不可信
+        # （OI 結構已換手），同樣改走 SPY 即時估算；估算也失敗時如實回報失敗，
+        # 不可把數週前的 Flip 當成「更新成功」。
+        expired_age = _expired_stale_cache_age(gex_data)
+        if _positive_float(gex_data.get("spy_spot")) <= 0 or expired_age is not None:
+            live_gex = await _fetch_spy_live_gex_fallback()
+            if live_gex is not None:
+                gex_data = live_gex
+                source = "spy_live"
+                expired_age = None
+            elif expired_age is None:
+                gex_data = {}
+                source = "spy_live"
 
         # 流動性：備援常數（`_is_fallback`）不可當作即時值呈現。
         ted_spread: float | None = None
@@ -193,7 +218,18 @@ async def _refresh_gex_and_liquidity(result: MacroRefreshResult) -> None:
         invalidate_market_regime_cache()
 
         spy_spot = _positive_float(gex_data.get("spy_spot"))
-        if spy_spot > 0:
+        if expired_age is not None:
+            result.steps.append(
+                RefreshStep(
+                    STEP_GEX,
+                    False,
+                    "大盤端點與 SPY 即時估算皆失敗；最後有效快取已是 "
+                    f"{expired_age / 86400:.1f} 天前（SPY: ${spy_spot:.2f} / "
+                    f"Gamma Flip: {_positive_float(gex_data.get('gamma_flip')):.2f}），"
+                    "已過期不納入判定",
+                )
+            )
+        elif spy_spot > 0:
             snapshot = GexSnapshot(
                 spy_spot=spy_spot,
                 gamma_flip=_positive_float(gex_data.get("gamma_flip")),

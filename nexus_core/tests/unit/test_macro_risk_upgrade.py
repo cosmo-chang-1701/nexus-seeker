@@ -1589,6 +1589,195 @@ def test_evaluate_escape_window_regime_matrix() -> None:
     assert "🟢 後推 5 天" in status
 
 
+def test_evaluate_escape_window_regime_unknown_gamma_is_not_scored() -> None:
+    """Gamma Flip 未知 (None，例如大盤 GEX 快取過期) 時不計入收縮也不計入寬鬆。
+    回歸：2026-10 GEX 快取停在 24 天前，舊 Flip 被判成負 Gamma，把窗口誤推為前移。"""
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    common: dict[str, Any] = {
+        "prob": 0.6385,
+        "cpi_dev": 0.0,
+        "wti": 92.57,
+        "vts_ratio": 0.888,
+    }
+    t_unknown, e_unknown, direction, shift, *_ = evaluate_escape_window_regime(
+        **common, is_negative_gamma=None
+    )
+    assert (t_unknown, e_unknown) == (1, 1)
+    assert direction == "維持"
+    assert shift == 0
+
+    t_neg, e_neg, direction_neg, *_ = evaluate_escape_window_regime(
+        **common, is_negative_gamma=True
+    )
+    assert (t_neg, e_neg) == (2, 1)
+    assert direction_neg == "前移"
+
+    t_pos, e_pos, *_ = evaluate_escape_window_regime(**common, is_negative_gamma=False)
+    assert (t_pos, e_pos) == (1, 2)
+
+
+def _overview_patches(
+    kv: dict[str, Any], ages: dict[str, float], core: dict[str, Any]
+) -> list[Any]:
+    return [
+        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
+        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
+        patch("database.get_kv_cache", side_effect=lambda key: kv.get(key)),
+        patch(
+            "database.cache.get_kv_cache_many",
+            side_effect=lambda keys: {
+                k: (kv.get(k), ages[k]) for k in keys if k in ages
+            },
+        ),
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            side_effect=Exception("offline"),
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+        patch(
+            "services.calendar_service.calendar_service.prefetch_monthly_macro_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value=core,
+        ),
+    ]
+
+
+_STALE_OVERVIEW_KV: dict[str, Any] = {
+    "macro_spx": 7666.45,
+    "macro_spy_spot": 763.99,
+    "macro_spy_gamma_flip": 769.98,
+    "macro_gamma_flip_line": 7699.8,
+    "macro_vix": 16.38,
+    "macro_us10y": 5.24,
+    "macro_wti": 92.57,
+    "macro_vts_ratio": 0.888,
+    "macro_rrp": 0.2,
+    "macro_fed_balance": 6.76,
+    "macro_fear_greed": 65.0,
+    "macro_uer": 4.1,
+    "macro_sahm_rule": -0.03,
+    "macro_gex_is_fallback": 1,
+}
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_expired_caches_are_not_used_as_live() -> None:
+    """GEX 快取逾 3 天：Flip 仍顯示但不納入判定；核心指標逾 3 天：觸發即時重抓。"""
+    from contextlib import ExitStack
+
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    day = 86400.0
+    ages = {
+        "macro_spy_gamma_flip": 24 * day,
+        "macro_vts_ratio": 73 * day,
+        "macro_rrp": 48 * day,
+        "macro_fed_balance": 48 * day,
+        "macro_fear_greed": 48 * day,
+        "macro_uer": 48 * day,
+        "macro_sahm_rule": 48 * day,
+    }
+    live_core = {
+        "rrp": 0.3,
+        "rrp_change_30d": 10.4,
+        "fed_balance": 6.74,
+        "uer": 4.1,
+        "sahm_rule": -0.07,
+        "fear_greed": 28.0,
+    }
+    with ExitStack() as stack:
+        mocks = [
+            stack.enter_context(p)
+            for p in _overview_patches(_STALE_OVERVIEW_KV, ages, live_core)
+        ]
+        data = await get_macro_overview_data(4242)
+    mocks[-1].assert_awaited_once()
+
+    assert data["gex_is_expired"] is True
+    assert data["spy_gamma_flip"] == 769.98  # 仍顯示
+    assert data["short_gamma_critical"] is False
+    # 舊 Flip (769.98 > SPY 763.99) 不得再把窗口判成「前移」
+    assert data["escape_window_direction"] == "維持"
+    assert data["fear_greed"] == 28.0
+    assert data["rrp_change_30d"] == 10.4
+    assert data["core_is_expired"] is False
+
+    embed = build_market_macro_overview_embed(data)
+    text = "\n".join(str(f.value) for f in embed.fields)
+    assert "[24.0 天前快取・不納入判定]" in text
+    assert "未知 (GEX 快取過期" in text
+    assert "即時抓取失敗" not in text
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_discloses_expired_core_when_refetch_fails() -> None:
+    from contextlib import ExitStack
+
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    ages = {
+        k: 48 * 86400.0
+        for k in (
+            "macro_rrp",
+            "macro_fed_balance",
+            "macro_fear_greed",
+            "macro_uer",
+            "macro_sahm_rule",
+        )
+    }
+    with ExitStack() as stack:
+        for p in _overview_patches(
+            _STALE_OVERVIEW_KV, ages, {"rrp": None, "_is_fallback": True}
+        ):
+            stack.enter_context(p)
+        data = await get_macro_overview_data(4243)
+
+    assert data["fear_greed"] == 65.0  # 沿用快取
+    assert data["core_is_expired"] is True
+    embed = build_market_macro_overview_embed(data)
+    text = "\n".join(str(f.value) for f in embed.fields)
+    assert "失業率為 48.0 天前快取（即時抓取失敗）" in text
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_fresh_caches_skip_core_refetch() -> None:
+    from contextlib import ExitStack
+
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    ages = {
+        k: 600.0
+        for k in (
+            "macro_spy_gamma_flip",
+            "macro_vts_ratio",
+            "macro_rrp",
+            "macro_fed_balance",
+            "macro_fear_greed",
+            "macro_uer",
+            "macro_sahm_rule",
+        )
+    }
+    with ExitStack() as stack:
+        mocks = [
+            stack.enter_context(p)
+            for p in _overview_patches(_STALE_OVERVIEW_KV, ages, {})
+        ]
+        data = await get_macro_overview_data(4244)
+    mocks[-1].assert_not_awaited()
+    assert data["gex_is_expired"] is False
+    assert data["core_is_expired"] is False
+    # 新鮮的 Flip 769.98 > SPY 763.99 → 負 Gamma 計入收縮 (WTI>85 + 負 Gamma = 2)
+    assert data["escape_window_direction"] == "前移"
+
+
 def test_evaluate_macro_top_escape_score_matrix() -> None:
     """測試宏觀逃頂綜合評分 (獨立於 evaluate_escape_window_regime 的四因子矩陣，
     額外疊加 Fear & Greed 與可選的衛星持倉亢奮廣度)"""

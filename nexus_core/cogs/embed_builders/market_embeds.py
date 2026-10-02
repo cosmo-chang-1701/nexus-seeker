@@ -1691,6 +1691,15 @@ def build_radar_scan_embed(
     return embeds
 
 
+def _format_cache_age(age_seconds: Any) -> str:
+    """把快取年齡（秒）轉成「N 天前」/「N 小時前」；未知時回傳「過期」。"""
+    if not isinstance(age_seconds, (int, float)) or age_seconds < 0:
+        return "過期"
+    if age_seconds >= 86400:
+        return f"{age_seconds / 86400:.1f} 天前"
+    return f"{max(1, round(age_seconds / 3600))} 小時前"
+
+
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     """
     建立美股總體經濟與大盤風險防禦指標 (Macro & Risk Dashboard) Embed。
@@ -1733,7 +1742,14 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
 
     # 狀態標記
     gex_is_fallback = macro_data.get("gex_is_fallback", False)
-    gex_suffix = " \u001b[1;33m[備援/快取]\u001b[0m" if gex_is_fallback else ""
+    gex_is_expired = bool(macro_data.get("gex_is_expired", False))
+    if gex_is_expired:
+        gex_age_text = _format_cache_age(macro_data.get("gex_cache_age_seconds"))
+        gex_suffix = f" \u001b[1;33m[{gex_age_text}快取・不納入判定]\u001b[0m"
+    elif gex_is_fallback:
+        gex_suffix = " \u001b[1;33m[備援/快取]\u001b[0m"
+    else:
+        gex_suffix = ""
 
     short_gamma_desc = (
         "🚨 CRITICAL (網格步長 1.5x 已生效)"
@@ -1743,11 +1759,12 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     if gex_is_fallback:
         short_gamma_desc += " [備援估算]"
 
-    short_gamma_status = (
-        f"\u001b[1;31m{short_gamma_desc}\u001b[0m"
-        if macro_data.get("short_gamma_critical", False)
-        else f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
-    )
+    if gex_is_expired:
+        short_gamma_status = "\u001b[1;33m⚪ 未知 (GEX 快取過期，不納入判定)\u001b[0m"
+    elif macro_data.get("short_gamma_critical", False):
+        short_gamma_status = f"\u001b[1;31m{short_gamma_desc}\u001b[0m"
+    else:
+        short_gamma_status = f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
     recession_status = (
         "\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效)\u001b[0m"
         if macro_data.get("recession_warning", False)
@@ -1951,6 +1968,15 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",
         f" └─ 美國失業率 (UER): {uer_val_str}",
         "",
+    ]
+    if macro_data.get("core_is_expired", False):
+        core_age_text = _format_cache_age(macro_data.get("core_cache_age_seconds"))
+        macro_lines += [
+            f" \u001b[1;33m⚠️ RRP / 資產負債表 / 恐懼與貪婪 / 失業率為 {core_age_text}"
+            "快取（即時抓取失敗）\u001b[0m",
+            "",
+        ]
+    macro_lines += [
         " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
         "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。",
     ]
