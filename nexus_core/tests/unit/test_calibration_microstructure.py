@@ -362,3 +362,165 @@ async def test_snapshot_symbol_drops_chain_with_zero_open_interest() -> None:
         patch("calibration.microstructure.asyncio.sleep", new=AsyncMock()),
     ):
         assert await snapshot_symbol("TEST", datetime(2026, 9, 21).date()) is None
+
+
+# ---------------------------------------------------------------------------
+# PutWall 定義比較（docs/microstructure/02 §7）
+# ---------------------------------------------------------------------------
+
+
+def _wall_snap(day: str = "2026-09-22") -> dict[str, Any]:
+    # ADV $1B → 薄牆門檻 max(500k, 1e-5 × 1e9 × 100) = 1e6
+    return {
+        "date": day,
+        "symbol": "MU",
+        "spot": 1100.0,
+        "adv_dollar_20d": 1e9,
+        "atr_1d": 10.0,
+        "gex": {
+            "put_wall": 1050.0,
+            "support_strike": 1000.0,
+            "support_gex": 9e6,
+            "net_profile": {
+                "1090.0": 4e5,  # 最近但未過薄牆門檻
+                "1070.0": 2e6,  # 最近強牆
+                "1050.0": -3e6,  # PutWall 處淨 GEX 為負（助跌區）
+                "1000.0": 9e6,  # 淨 GEX 最大
+                "1150.0": 8e6,  # 現價上方不列入
+            },
+        },
+    }
+
+
+def test_support_definitions_separate_max_and_nearest_strong_wall() -> None:
+    from calibration.microstructure import support_definitions
+
+    defs = support_definitions(_wall_snap())
+    assert defs["edge_PutWall"] == (1050.0, -3e6)
+    assert defs["淨GEX最大"] == (1000.0, 9e6)
+    assert defs["淨GEX最大_過薄牆門檻"] == (1000.0, 9e6)
+    assert defs["淨GEX最近強牆"] == (1070.0, 2e6)
+
+
+def test_support_definitions_without_profile_keeps_legacy_fields() -> None:
+    from calibration.microstructure import support_definitions
+
+    snap = _wall_snap()
+    del snap["gex"]["net_profile"]
+    snap["gex"]["support_gex"] = 6e5  # 低於門檻 1e6
+    defs = support_definitions(snap)
+    assert math.isnan(defs["edge_PutWall"][1])
+    assert "淨GEX最大" in defs
+    assert "淨GEX最大_過薄牆門檻" not in defs
+    assert "淨GEX最近強牆" not in defs
+
+
+def test_compute_gex_profile_exposes_net_profile() -> None:
+    t = 7 / 365
+    g = compute_gex_profile(
+        [Contract(95.0, 1000, 0.3, t, False), Contract(95.0, 3000, 0.3, t, True)],
+        100.0,
+    )
+    assert set(g["net_profile"]) == {"95.0"}
+    assert g["net_profile"]["95.0"] == pytest.approx(g["support_gex"], rel=1e-6)
+
+
+def test_label_symbol_scores_each_definition_on_same_window() -> None:
+    from calibration.microstructure import _label_symbol, support_definitions
+
+    snap = _wall_snap("2026-09-21")
+    snap["_defs"] = support_definitions(snap)
+    idx = pd.bdate_range("2026-09-21", periods=6)
+    # 觀察期最低 1060（觸及 1070 帶、未到 1050/1000 帶），收盤最低 1065（跌破 1070）
+    hist = pd.DataFrame(
+        {
+            "Low": [1095.0, 1080.0, 1060.0, 1075.0, 1090.0, 1092.0],
+            "Close": [1098.0, 1085.0, 1065.0, 1080.0, 1095.0, 1096.0],
+        },
+        index=idx,
+    )
+    (rec,) = _label_symbol([snap], hist, horizon_days=5)
+    w = rec["walls"]
+    assert w["淨GEX最近強牆"]["tested"] and not w["淨GEX最近強牆"]["held"]
+    assert not w["edge_PutWall"]["tested"]
+    assert not w["淨GEX最大"]["tested"]
+    assert rec["tested"] is False  # 頂層＝淨 GEX 最大，供深度四分位表
+    assert w["淨GEX最近強牆"]["dist_pct"] == pytest.approx(30 / 1100 * 100)
+
+
+def _labeled(
+    day: str, put_held: bool, near_held: bool, put_net: float
+) -> dict[str, Any]:
+    walls = {
+        name: {
+            "strike": 1.0,
+            "net_gex": 1.0,
+            "dist_pct": 2.0,
+            "tested": True,
+            "held": True,
+        }
+        for name in ("淨GEX最大", "淨GEX最大_過薄牆門檻")
+    }
+    walls["edge_PutWall"] = {
+        "strike": 1.0,
+        "net_gex": put_net,
+        "dist_pct": 5.0,
+        "tested": True,
+        "held": put_held,
+    }
+    walls["淨GEX最近強牆"] = {
+        "strike": 1.0,
+        "net_gex": 1.0,
+        "dist_pct": 1.0,
+        "tested": True,
+        "held": near_held,
+    }
+    return {"symbol": "X", "date": day, "walls": walls}
+
+
+def test_compare_support_definitions_requires_sample_floor() -> None:
+    from calibration.microstructure import compare_support_definitions
+
+    labeled = [_labeled(f"2026-09-{d:02d}", False, True, 1.0) for d in range(1, 11)]
+    out = compare_support_definitions(labeled)
+    assert out["n_labeled_dates"] == 10
+    assert out["判讀"].startswith("樣本不足")
+    assert out["定義比較"]["淨GEX最近強牆"]["hold_rate"] == 1.0
+    assert out["定義比較"]["edge_PutWall"]["hold_rate"] == 0.0
+
+
+def test_compare_support_definitions_needs_non_overlapping_ci() -> None:
+    from calibration.microstructure import compare_support_definitions
+
+    days = [f"d{i:02d}" for i in range(25)]
+    better = [
+        _labeled(d, i % 4 == 0, True, 1.0) for i, d in enumerate(days) for _ in (0, 1)
+    ]
+    assert "可提案統一定義" in compare_support_definitions(better)["判讀"]
+
+    tied = [
+        _labeled(d, i % 2 == 0, i % 2 == 1, 1.0)
+        for i, d in enumerate(days)
+        for _ in (0, 1)
+    ]
+    assert "維持 edge PutWall" in compare_support_definitions(tied)["判讀"]
+
+
+def test_put_wall_net_gex_stats_counts_negative_zone() -> None:
+    from calibration.microstructure import put_wall_net_gex_stats
+
+    neg = _wall_snap("2026-09-21")
+    pos = _wall_snap("2026-09-22")
+    pos["gex"]["net_profile"]["1050.0"] = 5e5
+    no_profile = _wall_snap("2026-09-23")
+    del no_profile["gex"]["net_profile"]
+    labeled = [
+        _labeled("2026-09-21", False, True, -3e6),
+        _labeled("2026-09-22", True, True, 5e5),
+    ]
+    out = put_wall_net_gex_stats([neg, pos, no_profile], labeled)
+    assert out["n_put_wall_with_profile"] == 2
+    assert out["淨GEX<0比例"] == 0.5
+    by_sign = out["守住率_依PutWall處淨GEX正負"]
+    assert by_sign["淨GEX<0"]["hold_rate"] == 0.0
+    assert by_sign["淨GEX>=0"]["hold_rate"] == 1.0

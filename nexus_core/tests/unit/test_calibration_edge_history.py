@@ -233,3 +233,23 @@ def test_micro_report_accepts_edge_snapshots(tmp_path: Path, monkeypatch: Any) -
     report = microstructure.build_micro_report(tmp_path, snapshots=snaps)
     assert report["n_snapshots"] == 1
     assert report["n_with_support_wall"] == 1
+
+
+def test_edge_snapshots_carry_net_profile(tmp_path: Path) -> None:
+    db = tmp_path / "edge_cache.db"
+    _make_edge_db(db)
+    idx = pd.bdate_range(end="2026-09-22", periods=60)
+    hist = pd.DataFrame(
+        {
+            "High": [101.0] * 60,
+            "Low": [99.0] * 60,
+            "Close": [100.0] * 60,
+            "Volume": [4e6] * 60,
+        },
+        index=idx,
+    )
+    snaps = build_edge_snapshots(
+        EdgeHistorySource(db_path=db), history_loader=lambda s, d: hist
+    )
+    profile = snaps[1]["gex"]["net_profile"]
+    assert {float(k): v for k, v in profile.items()}[95.0] == 2e6
