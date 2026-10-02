@@ -438,6 +438,50 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
         )
 
 
+def test_scrape_fedwatch_zq_anchors_on_post_month_when_prior_month_has_meeting() -> (
+    None
+):
+    """2026-10-28 會議的前月 9 月本身有 9/16 會議，9 月合約均價混合了會前/會後利率，
+    不能當 R_start；應改以無會議的 11 月合約均價作為會後利率 R_end 反推。
+    數值取自 2026-10-01 實際收盤：ZQV26 96.115、ZQX26 96.055。"""
+    import pandas as pd
+
+    def _df(price: float) -> "pd.DataFrame":
+        return pd.DataFrame({"Close": [price]}, index=[pd.Timestamp.now()])
+
+    requested: list[str] = []
+
+    def mock_ticker(sym: str) -> MagicMock:
+        requested.append(sym)
+        t = MagicMock()
+        prices = {
+            "^IRX": 3.80,
+            "ZQV26.CBT": 96.115,
+            "ZQX26.CBT": 96.055,
+            # 若誤用 9 月合約當 R_start，會算出荒謬的 +570% 加息
+            "ZQU26.CBT": 96.253,
+        }
+        t.history.return_value = _df(prices[sym])
+        return t
+
+    with (
+        patch("yfinance.Ticker", side_effect=mock_ticker),
+        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        patch("local_api.macro._fedwatch_today", return_value=date(2026, 10, 2)),
+    ):
+        response = client.get("/api/v1/scrape/macro/fedwatch")
+
+    res_data = response.json()["data"]
+    assert res_data["source"] == "CME 30-Day Fed Funds Futures (ZQ)"
+    assert res_data["meeting_date"] == "10/28"
+    assert "ZQU26.CBT" not in requested
+    # R_end = 100 - 96.055 = 3.945；R_start = (31*3.885 - 3*3.945)/28 ≈ 3.8786
+    # delta ≈ +6.64bp → 加息 26.6%
+    assert res_data["prob_hike"] == 26.6
+    assert res_data["prob_maintain"] == 73.4
+    assert res_data["prob_cut"] == 0.0
+
+
 def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> None:
     """驗證 ZQ 期貨階梯算式在隱含降息幅度跨過一整碼 (25bp) 邊界時，不會再像修正前
     那樣把 prob_maintain 硬壓成孤立無說明的 0.0、prob_cut 硬壓成孤立無說明的 100.0，
