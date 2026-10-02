@@ -185,9 +185,10 @@ async def get_market_regime() -> str:
     return regime  # type: ignore
 
 
-# 大盤 GEX last-known-good 快取供 regime 判定的最長時效：涵蓋週末/長假 (週五
+# 大盤 GEX last-known-good 快取供判定使用的最長時效：涵蓋週末/長假 (週五
 # 收盤後 edge 失敗到週一盤中約 2.5 天)，超過即視為未知——OI 結構已換手。
-_REGIME_GEX_STALE_MAX_AGE_SECONDS: float = 3 * 24 * 3600.0
+# regime 判定、/market 面板與 /force_macro_update 共用此門檻。
+MACRO_GEX_STALE_MAX_AGE_SECONDS: float = 3 * 24 * 3600.0
 
 
 def _and3(*vals: Optional[bool]) -> Optional[bool]:
@@ -222,7 +223,7 @@ async def _compute_market_regime_uncached() -> str:
     except Exception as e:
         logger.warning(f"獲取大盤 GEX 失敗: {e}")
         gex_data = {}
-    # last-known-good 快取超過 _REGIME_GEX_STALE_MAX_AGE_SECONDS 即視為未知：
+    # last-known-good 快取超過 MACRO_GEX_STALE_MAX_AGE_SECONDS 即視為未知：
     # edge 停擺數週後，拿幾週前的 Flip 和即時 SPY 比較會把 regime 確定判成
     # NORMAL (或反向誤判危機)，違反「未知就是未知」。
     if isinstance(gex_data, dict) and gex_data.get("_is_stale_cache"):
@@ -230,7 +231,7 @@ async def _compute_market_regime_uncached() -> str:
             cache_age = time.time() - float(gex_data.get("_cache_timestamp") or 0.0)
         except (TypeError, ValueError):
             cache_age = float("inf")
-        if cache_age > _REGIME_GEX_STALE_MAX_AGE_SECONDS:
+        if cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS:
             logger.warning(
                 f"大盤 GEX 快取已過期 ({cache_age / 3600:.1f}h)，Gamma Flip 視為未知"
             )
@@ -1086,7 +1087,7 @@ def evaluate_escape_window_regime(
     cpi_dev: float | None = None,
     wti: float | None = None,
     vts_ratio: float | None = None,
-    is_negative_gamma: bool = False,
+    is_negative_gamma: bool | None = False,
 ) -> tuple[int, int, str, int, str, str]:
     """
     評估四因子宏觀流動性矩陣與逃頂窗口狀態。
@@ -1096,7 +1097,8 @@ def evaluate_escape_window_regime(
         cpi_dev: CPI 偏差值 (%)
         wti: WTI 原油價格
         vts_ratio: VIX 期限結構比例 (VIX / VIX3M)
-        is_negative_gamma: 是否處於負 Gamma 踩踏區間
+        is_negative_gamma: 是否處於負 Gamma 踩踏區間；None 表示 Gamma Flip 未知
+            （如大盤 GEX 快取過期），該因子不計分
 
     任一因子輸入未知 (None) 時，該因子不計入收縮或寬鬆分數——不再以 CPI 0、
     WTI 75、VTS 0.88 之類偏寬鬆的常數補值，以免把「資料缺失」算成寬鬆而延後
@@ -1152,14 +1154,14 @@ def evaluate_escape_window_regime(
     elif vts_known is not None and vts_known < 0.90:
         easing_score += 1
 
-    # Factor 4: 大盤微觀結構 Net GEX
-    if is_negative_gamma:
+    # Factor 4: 大盤微觀結構 Net GEX（未知不計分）
+    if is_negative_gamma is True:
         tightening_score += 1
-    else:
+    elif is_negative_gamma is False:
         easing_score += 1
 
     # 三階矩陣狀態評估
-    if tightening_score >= 2 or (is_hawkish and is_negative_gamma):
+    if tightening_score >= 2 or (is_hawkish and is_negative_gamma is True):
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
@@ -1173,7 +1175,7 @@ def evaluate_escape_window_regime(
         direction = "維持"
         shift_days = 0
         tier_title = "🟡 中性平衡 (Neutral Balance)"
-        if not is_negative_gamma and is_hawkish:
+        if is_negative_gamma is False and is_hawkish:
             short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
         else:
             short_status_desc = "🟢 正常窗口 (均衡定價)"

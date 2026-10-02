@@ -16,6 +16,7 @@ Discord 指令為入口，同時驗證共用流程與 embed 呈現。
 
 from __future__ import annotations
 
+import time
 from contextlib import ExitStack
 from typing import Any, Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -153,10 +154,47 @@ async def test_stale_macro_cache_is_tagged_without_spy_fallback(env: _Env) -> No
         "spy_spot": 600.0,
         "gamma_flip": 590.0,
         "_is_stale_cache": True,
+        "_cache_timestamp": time.time() - 3600.0,
     }
     _, desc = await _run()
     assert "使用快取資料" in desc
     env.spy.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_expired_macro_cache_falls_back_to_spy_live(env: _Env) -> None:
+    """last-known-good 快取超過時效 (3 天) 時改走 SPY 即時估算。"""
+    env.gex.return_value = {
+        "spy_spot": 770.19,
+        "gamma_flip": 769.98,
+        "_is_stale_cache": True,
+        "_cache_timestamp": time.time() - 24 * 86400.0,
+    }
+    title, desc = await _run()
+    assert "系統控制" in title
+    assert "SPY: $505.00 / Gamma Flip: 500.00 (SPY 即時估算)" in desc
+    env.spy.assert_awaited_once_with("SPY", force_live=True)
+    env.save_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_expired_macro_cache_without_live_fallback_is_failure(
+    env: _Env,
+) -> None:
+    """過期快取 + SPY 即時估算失敗：不得回報「更新成功」，須揭露快取年齡。"""
+    env.gex.return_value = {
+        "spy_spot": 770.19,
+        "gamma_flip": 769.98,
+        "_is_stale_cache": True,
+        "_cache_timestamp": time.time() - 24 * 86400.0,
+    }
+    env.spy.side_effect = RuntimeError("scrape down")
+    title, desc = await _run()
+    assert "更新部分失敗" in title
+    assert "GEX 更新失敗" in desc
+    assert "24.0 天前" in desc
+    assert "**GEX**" not in desc
+    env.save_many.assert_not_awaited()
 
 
 @pytest.mark.asyncio

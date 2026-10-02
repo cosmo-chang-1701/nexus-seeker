@@ -201,7 +201,7 @@ flowchart TD
 6. **大盤總經 API 異常防禦**：
    `get_market_regime()` 回傳 `SYSTEMIC_LIQUIDITY_CRISIS`／`SHORT_GAMMA_CRITICAL`／`NORMAL`／`UNKNOWN` 四值。VIX、VTS、SPY 現價、Gamma Flip、TED Spread 任一抓不到時**不再補備援常數**（過去補 VIX $18$、VTS $0.95$、SPY $510$、Flip $515$——SPY 實際約 $670$ 時「SPY < Flip」永遠不成立，危機 Regime 永遠不會觸發）。各危機條件以三值邏輯判定：能確定成立 → 對應危機；能確定不成立 → `NORMAL`；無法確定 → `UNKNOWN`。進場確認（條件五）把 `UNKNOWN` 視同無法排除危機，fail-closed 不開新倉、不加碼；排程本身不因外部 API 抖動中斷。
    - **無 edge 部署**：未設定 `TUNNEL_URL` 時 TED Spread 與大盤 GEX 結構上沒有資料來源（edge 為選配），系統性流動性危機條件**不評估**（視為不成立），Regime 僅由 VIX／VTS／Gamma 危機條件決定——否則 Regime 會恆為 `UNKNOWN` 而永久鎖死新倉。有 edge 但暫時抓不到時仍屬未知。
-   - **GEX 快取時效**：`fetch_gex_metrics()` 的 last-known-good 快取超過 `_REGIME_GEX_STALE_MAX_AGE_SECONDS`（3 天，涵蓋週末）即視為 Gamma Flip 未知，不拿數週前的 Flip 與即時 SPY 比較。
+   - **GEX 快取時效**：`fetch_gex_metrics()` 的 last-known-good 快取超過 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天，涵蓋週末）即視為 Gamma Flip 未知，不拿數週前的 Flip 與即時 SPY 比較。`/market` 面板的零 Gamma／逃頂窗口判定與 `/force_macro_update` 的 GEX 步驟共用同一門檻：後者遇到過期快取會改走 SPY 即時估算，估算失敗時回報「更新失敗」並揭露快取年齡。
    - **TED Spread 定義**：$\text{TED} = \text{DCPF3M} - \text{DTB3}$（FRED 3 個月 AA 級金融機構商業本票利率 − 3 個月 T-Bill），取兩序列**共同的最新日期**相減，由 edge `/macro/liquidity` 計算。LIBOR 停用後以無擔保的金融 CP 作為銀行融資成本代理，正常環境為正值，$0.5$ 的危機警戒水位沿用。過去用 `SOFR90DAYAVG`（有擔保回購利率的過去 90 天平均）與前瞻的 DTB3 相減，口徑不一致，利率循環中會出現負值。
    - **edge 備援值**：edge 的 `/macro/core_metrics` 與 `/macro/liquidity` 抓不到的欄位回傳 `None`，整批失敗附 `is_fallback: true`；core 端遇到 `is_fallback`（或舊版 edge 的整組常數）一律視為未知，不寫入 KV。
 7. **極端單邊 Gamma 分佈 Fallback**：

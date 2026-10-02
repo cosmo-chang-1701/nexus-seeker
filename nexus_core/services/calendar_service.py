@@ -89,6 +89,28 @@ class EconomicEventList(list):
     is_fallback: bool = False
 
 
+# FedWatch 定價只屬於「下一次利率決議」本身：排除會議紀要、記者會等同名事件
+# （過去以 LIKE '%FOMC%' 比對，會把機率寫進 10/07 FOMC Minutes 與之後所有會議），
+# 並清除其他未來事件殘留的舊定價，避免 /calendar 讀到過期值。
+_UPDATE_NEXT_DECISION_FEDWATCH_SQL = """
+UPDATE economic_calendar_events
+SET fedwatch_probability = CASE WHEN rowid IN (
+        SELECT rowid FROM economic_calendar_events
+        WHERE (event LIKE '%利率決策%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%Rate Decision%')
+          AND event NOT LIKE '%記者會%' AND event NOT LIKE '%Press%'
+          AND event NOT LIKE '%Minutes%' AND event NOT LIKE '%紀要%'
+          AND event_time = (
+              SELECT MIN(event_time) FROM economic_calendar_events
+              WHERE (event LIKE '%利率決策%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%Rate Decision%')
+                AND event NOT LIKE '%記者會%' AND event NOT LIKE '%Press%'
+                AND event NOT LIKE '%Minutes%' AND event NOT LIKE '%紀要%'
+                AND event_time >= date('now')
+          )
+    ) THEN ? ELSE NULL END
+WHERE event_time >= date('now')
+"""
+
+
 class CalendarService:
     """
     Service for monitoring major economic events (CPI, FOMC) and equity earnings.
@@ -660,13 +682,7 @@ class CalendarService:
                             return False
 
                         await execute_write_async(
-                            """
-                            UPDATE economic_calendar_events
-                            SET fedwatch_probability = ?
-                            WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%利率決策%' OR event LIKE '%聯準會%')
-                              AND event_time >= date('now')
-                            """,
-                            (prob,),
+                            _UPDATE_NEXT_DECISION_FEDWATCH_SQL, (prob,)
                         )
                         await save_kv_cache("macro_fedwatch_probability", prob)
                         await save_kv_cache("macro_fedwatch_details", json.dumps(data))
@@ -780,7 +796,9 @@ class CalendarService:
                     """
                     SELECT fedwatch_probability
                     FROM economic_calendar_events
-                    WHERE (event LIKE '%FOMC%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%利率決策%' OR event LIKE '%聯準會%')
+                    WHERE (event LIKE '%利率決策%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%Rate Decision%')
+                      AND event NOT LIKE '%記者會%' AND event NOT LIKE '%Press%'
+                      AND event NOT LIKE '%Minutes%' AND event NOT LIKE '%紀要%'
                       AND fedwatch_probability IS NOT NULL
                       AND fedwatch_probability > 0.01
                       AND fedwatch_probability < 0.99
@@ -817,21 +835,34 @@ class CalendarService:
                 details = {}
 
         if not details or is_fallback:
-            # 建立安全且結構完整的 Fallback 明細字典
-            p_maintain = round(prob * 100, 1) if prob <= 0.70 else 50.0
-            p_cut = round(max(0.0, 100.0 - p_maintain), 1)
+            # 備援明細：以 edge 端壓縮公式 prob = (50 + (加息 - 降息) / 2) / 100
+            # 反推單邊機率，三桶加總恆為 100%，且決策與數字方向一致（過去
+            # prob > 0.70 會產生「決策=加息、加息 0% / 降息 50%」的矛盾明細）。
+            if prob >= 0.5:
+                p_hike = round(min(100.0, (prob - 0.5) * 200.0), 1)
+                p_cut = 0.0
+            else:
+                p_hike = 0.0
+                p_cut = round(min(100.0, (0.5 - prob) * 200.0), 1)
+            p_maintain = round(100.0 - p_hike - p_cut, 1)
+            if p_hike >= 50.0:
+                decision = "hike"
+            elif p_cut >= 50.0:
+                decision = "cut"
+            else:
+                decision = "maintain"
             details = {
                 "probability": prob,
                 "meeting_date": details.get("meeting_date", "")
                 if isinstance(details, dict)
                 else "",
-                "current_target": "4.25%-4.50%",
+                # 備援時無從得知現行目標區間，留空而非寫死過時的數字
+                "current_target": "",
                 "prob_maintain": p_maintain,
-                "prob_hike": 0.0,
+                "prob_hike": p_hike,
                 "prob_cut": p_cut,
-                "decision": "maintain"
-                if 0.40 <= prob <= 0.70
-                else ("cut" if prob < 0.40 else "hike"),
+                "decision": decision,
+                "source": "fallback",
             }
         return prob, is_fallback, details
 

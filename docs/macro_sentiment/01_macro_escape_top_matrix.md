@@ -29,7 +29,13 @@ $$\bar{R} = 100.0 - P_{ZQ}$$
 設當前目標 FOMC 會議月份的總日曆天數為 $N$。會議召開於該月第 $d_{prior}$ 天，則會議前維持舊利率 $R_1$ 之天數為 $d_{prior}$ 天，會議後新基準利率 $R_2$ 之生效天數為：
 $$d_{post} = \max(1, N - d_{prior})$$
 
-其中舊基準利率 $R_1$ 由前一月份連續期貨合約報價錨定：$R_1 = 100.0 - P_{prior}$；若無前月報價，則以 13 週美國國庫券利率（`^IRX`）動態推導之利率區間中位數作為錨點。
+會議月份取自 `fomc_schedule` 中第一個不早於今天的**決議日**（兩日會議的第二天，依 [Fed 官方日程](https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm) 逐年維護，目前涵蓋至 2028-01-26）。日程用盡時直接拋錯轉備援，不推估日期——錯一週就會錨錯合約月份（2026-10 曾把 10/28 寫成 11/04）。
+
+$R_1$／$R_2$ 的錨定依 CME 慣例分兩種：
+- **(a) 前一月份無會議**：前月合約均價即進入會議月時的利率，$R_1 = 100.0 - P_{prior}$，再以下式反推 $R_2$。
+- **(b) 前一月份本身有會議、且次月無會議**：前月均價混合了會前與會後利率，不能當 $R_1$；改以次月合約均價作為會後利率 $R_2 = 100.0 - P_{post}$，反推 $R_1 = (N \cdot \bar{R} - d_{post} \cdot R_2) / d_{prior}$。例：2026-10-28 會議的前月 9 月有 9/16 會議，必須走 (b)；誤用 9 月合約會算出 +570% 加息。
+
+兩者皆無報價時，以 13 週美國國庫券利率（`^IRX`）動態推導之利率區間中位數作為 $R_1$ 錨點。注意 $R_1$ 取自期貨隱含均價而非 EFFR 實際值，與 CME 官網 FedWatch 可能有約 10pp 的落差。
 
 根據日曆加權平均等式：
 $$N \cdot \bar{R} = d_{prior} \cdot R_1 + d_{post} \cdot R_2$$
@@ -72,7 +78,9 @@ $$prob = \begin{cases}
 4. **因子 4：大盤微觀結構 Net GEX 狀態**
    $$\text{緊縮評分 } T_4 = \mathbb{I}(is\_negative\_gamma = \text{True}), \quad \text{寬鬆評分 } E_4 = \mathbb{I}(is\_negative\_gamma = \text{False})$$
 
-**未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被算成寬鬆而延後逃頂窗口。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
+   `/market` 面板（`cogs/unified_terminal/utils.py`）的 $is\_negative\_gamma$ 以 SPY 現價對 SPY Gamma Flip 判定；Flip 快取逾 3 天時傳入 `None`（面板仍顯示 Flip 並標示「N 天前快取・不納入判定」）。VTS 快取逾 3 天同樣視為 `None`。
+
+**未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗、`is_negative_gamma` 因 Gamma Flip 缺值或大盤 GEX 快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）而無法判定）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被算成寬鬆而延後逃頂窗口。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
 
 加總總緊縮分 $T = \sum_{i=1}^4 T_i$ 與總寬鬆分 $E = \sum_{i=1}^4 E_i$。窗口位移天數 $\Delta D_{shift}$ 與狀態分級遵循：
 $$\Delta D_{shift} = \begin{cases}

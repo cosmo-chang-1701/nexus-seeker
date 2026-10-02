@@ -522,34 +522,30 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
     def _fetch_and_calculate_zq_futures() -> dict[str, Any]:
         """從 CBOT 30 天期聯邦基金期貨 (ZQ) 報價即時計算 CME FedWatch 利率定價機率。"""
+        # 決議日 = 兩日會議的第二天。來源：federalreserve.gov/monetarypolicy/fomccalendars.htm
+        # （2026-10 查核）。2028 年目前僅公布 1 月；之後的日期待 Fed 公布再補，
+        # 切勿自行推估（錯一週就會錨錯期貨合約月份）。
         fomc_schedule: list[date] = [
             # 2026
             date(2026, 1, 28),
             date(2026, 3, 18),
-            date(2026, 5, 6),
+            date(2026, 4, 29),
             date(2026, 6, 17),
             date(2026, 7, 29),
             date(2026, 9, 16),
-            date(2026, 11, 4),
-            date(2026, 12, 16),
+            date(2026, 10, 28),
+            date(2026, 12, 9),
             # 2027
             date(2027, 1, 27),
             date(2027, 3, 17),
-            date(2027, 5, 5),
-            date(2027, 6, 16),
+            date(2027, 4, 28),
+            date(2027, 6, 9),
             date(2027, 7, 28),
-            date(2027, 9, 22),
-            date(2027, 11, 3),
-            date(2027, 12, 15),
+            date(2027, 9, 15),
+            date(2027, 10, 27),
+            date(2027, 12, 8),
             # 2028
             date(2028, 1, 26),
-            date(2028, 3, 15),
-            date(2028, 5, 3),
-            date(2028, 6, 14),
-            date(2028, 7, 26),
-            date(2028, 9, 20),
-            date(2028, 11, 1),
-            date(2028, 12, 13),
         ]
         month_codes: dict[int, str] = {
             1: "F",
@@ -568,20 +564,34 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
         today = _fedwatch_today()
         future_meetings = [m for m in fomc_schedule if m >= today]
-        next_meeting = min(future_meetings) if future_meetings else date(2026, 9, 16)
+        if not future_meetings:
+            # 日程表已過期：寧可整段失敗轉備援，也不要錨到錯誤的會議月份。
+            raise ValueError("FOMC schedule exhausted; update fomc_schedule")
+        next_meeting = min(future_meetings)
+        meeting_months = {(m.year, m.month) for m in fomc_schedule}
 
-        m_code = month_codes.get(next_meeting.month, "U")
-        y_suffix = str(next_meeting.year)[-2:]
-        ticker_symbol = f"ZQ{m_code}{y_suffix}.CBT"
+        def _zq_symbol(year: int, month: int) -> str:
+            return f"ZQ{month_codes[month]}{str(year)[-2:]}.CBT"
 
-        # CME 官方定價邏輯：獲取前一個月 (Prior Month) 期貨合約以獲取進入會議月時的精確預期利率 R_start
+        def _latest_close(symbol: str) -> float | None:
+            try:
+                hist_df = yf.Ticker(symbol).history(period="5d")
+                if not hist_df.empty:
+                    return float(hist_df["Close"].iloc[-1])
+            except Exception:
+                pass
+            return None
+
+        ticker_symbol = _zq_symbol(next_meeting.year, next_meeting.month)
+
         prior_month = 12 if next_meeting.month == 1 else next_meeting.month - 1
         prior_year = (
             next_meeting.year - 1 if next_meeting.month == 1 else next_meeting.year
         )
-        prior_m_code = month_codes.get(prior_month, "Q")
-        prior_y_suffix = str(prior_year)[-2:]
-        prior_ticker_symbol = f"ZQ{prior_m_code}{prior_y_suffix}.CBT"
+        post_month = 1 if next_meeting.month == 12 else next_meeting.month + 1
+        post_year = (
+            next_meeting.year + 1 if next_meeting.month == 12 else next_meeting.year
+        )
 
         ticker = yf.Ticker(ticker_symbol)
         hist = ticker.history(period="5d")
@@ -597,16 +607,23 @@ async def scrape_fedwatch() -> dict[str, Any]:
         r1 = 3.625
         current_target = "3.50%-3.75%"
 
-        # 優先從前一個月連續期貨獲取精確 R_start (CME 官方錨定法)
+        _, days_in_month = calendar.monthrange(next_meeting.year, next_meeting.month)
+        d_prior = next_meeting.day
+        d_post = max(1, days_in_month - d_prior)
+        implied_avg = 100.0 - latest_price
+
+        # CME 錨定法：
+        # (a) 前一個月沒有會議 → 前月合約均價即進入會議月時的利率 R_start，
+        #     再以會議月均價反推會後利率 R_end。
+        # (b) 前一個月本身有會議（其均價混合了會前/會後利率，不能當 R_start）
+        #     且下一個月沒有會議 → 次月合約均價即 R_end，反推 R_start。
+        # 例：2026-10-28 會議的前月 9 月有 9/16 會議，必須走 (b)。
         prior_price: float | None = None
-        try:
-            prior_ticker = yf.Ticker(prior_ticker_symbol)
-            prior_hist = prior_ticker.history(period="5d")
-            if not prior_hist.empty:
-                prior_price = float(prior_hist["Close"].iloc[-1])
-                r1 = 100.0 - prior_price
-        except Exception:
-            pass
+        post_price: float | None = None
+        if (prior_year, prior_month) not in meeting_months:
+            prior_price = _latest_close(_zq_symbol(prior_year, prior_month))
+        elif (post_year, post_month) not in meeting_months:
+            post_price = _latest_close(_zq_symbol(post_year, post_month))
 
         try:
             irx_hist = yf.Ticker("^IRX").history(period="5d")
@@ -616,19 +633,19 @@ async def scrape_fedwatch() -> dict[str, Any]:
                     b_idx = round((irx_val - 0.125) / 0.25)
                     low_r = b_idx * 0.25
                     high_r = low_r + 0.25
-                    if prior_price is None:
-                        r1 = (low_r + high_r) / 2.0
+                    r1 = (low_r + high_r) / 2.0
                     current_target = f"{low_r:.2f}%-{high_r:.2f}%"
         except Exception:
             pass
 
-        _, days_in_month = calendar.monthrange(next_meeting.year, next_meeting.month)
-        d_prior = next_meeting.day
-        d_post = max(1, days_in_month - d_prior)
-        implied_avg = 100.0 - latest_price
-
-        # CME 階梯權重反推會議後目標利率 R2
-        r2 = (days_in_month * implied_avg - d_prior * r1) / d_post
+        if post_price is not None:
+            r2 = 100.0 - post_price
+            r1 = (days_in_month * implied_avg - d_post * r2) / d_prior
+        else:
+            if prior_price is not None:
+                r1 = 100.0 - prior_price
+            # 以會議月均價依天數權重反推會後利率 R2
+            r2 = (days_in_month * implied_avg - d_prior * r1) / d_post
         delta_r = r2 - r1
 
         # 階梯內插：把隱含變動幅度（以 25bp 為一階）拆解成「已完全定價的整數階」
