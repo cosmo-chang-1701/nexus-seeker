@@ -267,6 +267,18 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             else None
         )
     )
+    # SPX/SPY 實際比值約 10.03（SPY 配息與費用率造成的基差），固定 ×10 會讓
+    # SPX 尺度的翻轉線低估約 25–30 點。兩者報價皆在時改用實際比值換算；
+    # 比值落在合理區間外（報價時點不一致等）則維持 ×10。
+    if (
+        spy_gamma_flip is not None
+        and spx is not None
+        and spy_spot is not None
+        and float(spy_spot) > 0
+    ):
+        spx_spy_ratio = float(spx) / float(spy_spot)
+        if 9.8 <= spx_spy_ratio <= 10.3:
+            gamma_flip_line = round(float(spy_gamma_flip) * spx_spy_ratio, 2)
 
     # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
     # （若有呼叫的話）：該呼叫只在 macro_gamma_flip_line 快取未命中時才會執行，

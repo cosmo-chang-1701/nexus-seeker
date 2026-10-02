@@ -1778,6 +1778,24 @@ async def test_macro_overview_fresh_caches_skip_core_refetch() -> None:
     assert data["escape_window_direction"] == "前移"
 
 
+@pytest.mark.asyncio
+async def test_macro_overview_flip_line_uses_actual_spx_spy_ratio() -> None:
+    """SPX 尺度翻轉線改用實際 SPX/SPY 比值換算（約 10.03），不再固定 ×10。"""
+    from contextlib import ExitStack
+
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    ages = {"macro_spy_gamma_flip": 600.0}
+    with ExitStack() as stack:
+        for p in _overview_patches(_STALE_OVERVIEW_KV, ages, {}):
+            stack.enter_context(p)
+        data = await get_macro_overview_data(4245)
+
+    expected = round(769.98 * (7666.45 / 763.99), 2)
+    assert data["gamma_flip_line"] == pytest.approx(expected)
+    assert data["gamma_flip_line"] > 7699.8  # 舊 ×10 換算會低估約 27 點
+
+
 def test_evaluate_macro_top_escape_score_matrix() -> None:
     """測試宏觀逃頂綜合評分 (獨立於 evaluate_escape_window_regime 的四因子矩陣，
     額外疊加 Fear & Greed 與可選的衛星持倉亢奮廣度)"""

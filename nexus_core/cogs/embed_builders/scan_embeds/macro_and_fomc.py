@@ -7,6 +7,7 @@ from typing import Any, List, Optional
 
 from cogs.embed_builders._ansi_utils import _pad_string
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import fedwatch_source_note
 
 
 def create_macro_scan_embed(
@@ -106,6 +107,7 @@ def create_fomc_escape_window_embed(
     top_escape_score: int | None = None,
     top_escape_tier: str | None = None,
     top_escape_factors: list[tuple[str, str]] | None = None,
+    fedwatch_source: str | None = None,
 ) -> discord.Embed:
     """建立全維度宏觀流動性逃頂推演矩陣 Embed (繁體中文)"""
     if direction == "前移":
@@ -135,10 +137,7 @@ def create_fomc_escape_window_embed(
             lines.append(f" ├─ {name}: {val}")
         lines[-1] = lines[-1].replace("├─", "└─")
         lines.append("")
-        lines.append(
-            " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
-            "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。"
-        )
+        lines.append(" " + fedwatch_source_note(fedwatch_source))
         panel = "```ansi\n" + "\n".join(lines) + "\n```"
         embed.add_field(
             name="📊 多因子監測結果",
@@ -151,8 +150,7 @@ def create_fomc_escape_window_embed(
             name="📊 利率鷹派傾向分數 (FedWatch)",
             value=(
                 f"下週 FOMC 鷹派傾向分數：**{prob * 100:.1f}%**{prob_suffix}\n"
-                "⚠️ 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
-                "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。"
+                + fedwatch_source_note(fedwatch_source)
             ),
             inline=False,
         )

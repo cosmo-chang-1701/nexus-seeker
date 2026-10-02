@@ -436,4 +436,5 @@ async def run_fomc_escape_window_analysis(
         top_escape_score=top_escape_score,
         top_escape_tier=top_escape_tier_title,
         top_escape_factors=top_escape_factors,
+        fedwatch_source=fedwatch_details.get("source"),
     )

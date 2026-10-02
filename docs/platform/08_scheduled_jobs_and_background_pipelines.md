@@ -143,6 +143,10 @@ $$p_{\text{fedwatch}}' = \text{COALESCE}(p_{\text{new}},\ p_{\text{old}})$$
 
 事件改期（`event_time` 變動）視為新事件，FedWatch 欄位留空，由下一輪 FedWatch 更新補上，不會把舊時點的定價錯接到新事件。
 
+`update_fedwatch_probability()` 的寫入範圍只限**下一次利率決議**事件本身（事件名含「利率決策」／`Fed Interest Rate`／`Federal Funds Rate`／`Rate Decision`，且排除記者會、`Press`、`Minutes`、會議紀要），其餘未來事件的 `fedwatch_probability` 同時清為 NULL。FedWatch 定價只對應下一次會議；過去以 `LIKE '%FOMC%'` 比對，會把同一個機率寫進 FOMC 會議紀要與之後所有會議，`/calendar` 便會讀到會議紀要列上的過期定價。
+
+FedWatch 資料源說明依明細的 `source` 欄位產生（`cogs/embed_builders/_embed_helpers.py::fedwatch_source_note`）：Atlanta Fed MPT、CBOT ZQ 期貨反推、備援估算各有對應文字，不再一律宣稱取自 Atlanta Fed。備援明細以 edge 端壓縮公式反推單邊機率，三桶加總為 100%，且決策方向與數字一致。
+
 ### 5.5 手動強制刷新（`/force_macro_update` 與 CLI `admin force-macro-update`）
 兩個入口共用 `services/macro_refresh_service.py::refresh_macro_data()`，只負責呈現其回傳的逐項結果（`MacroRefreshResult`）。刷新順序與成敗判定：
 

@@ -1437,6 +1437,42 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         assert "SPY 零 Gamma 線" not in text
 
 
+def test_build_radar_scan_embed_tags_expired_gex_flip_age() -> None:
+    """全域 GEX Flip 快取逾 3 天時，交易員終端表頭須標示快取年齡。"""
+    scan_results = [
+        {
+            "symbol": "SPY",
+            "quote": {"c": 500.0, "dp": 0.5},
+            "iv_metrics": {"iv_rank": 20.0, "expected_move_weekly": 5.0},
+            "max_pain": {"max_pain": 500.0},
+        }
+    ]
+
+    def _kv(k: str) -> Any:
+        return "515.00" if k == "macro_spy_gamma_flip" else None
+
+    with (
+        patch("database.cache.get_kv_cache", side_effect=_kv),
+        patch(
+            "database.cache.get_kv_cache_with_age",
+            return_value=("515.00", 24 * 86400.0),
+        ),
+    ):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 1)[0])
+    assert "515.00" in text
+    assert "[24.0 天前快取]" in text
+
+    with (
+        patch("database.cache.get_kv_cache", side_effect=_kv),
+        patch(
+            "database.cache.get_kv_cache_with_age",
+            return_value=("515.00", 3600.0),
+        ),
+    ):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 1)[0])
+    assert "天前快取" not in text
+
+
 def test_build_radar_scan_embed_with_none_values() -> None:
     """Verify that build_radar_scan_embed handles None values in dictionaries gracefully."""
     scan_results = [

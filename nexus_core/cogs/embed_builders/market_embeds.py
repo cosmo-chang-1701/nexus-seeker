@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 import market_time
 
 from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
+from cogs.embed_builders._embed_helpers import fedwatch_source_note
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
@@ -483,9 +484,13 @@ def build_radar_scan_embed(
         # 讀取全域快取指標 (TED Spread & GEX Flip)
         macro_ansi_header = []
         try:
-            from database.cache import get_kv_cache
+            from database.cache import get_kv_cache, get_kv_cache_with_age
+            from market_analysis.index_microstructure import (
+                MACRO_GEX_STALE_MAX_AGE_SECONDS,
+            )
 
             gex_flip = get_kv_cache("macro_spy_gamma_flip")
+            _, gex_flip_age = get_kv_cache_with_age("macro_spy_gamma_flip")
             ted_spread = get_kv_cache("macro_ted_spread")
 
             if gex_flip is not None or ted_spread is not None:
@@ -500,6 +505,14 @@ def build_radar_scan_embed(
 
                 if gex_val is not None and gex_val > 0:
                     gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_val:.2f}\u001b[0m"
+                    if (
+                        gex_flip_age is not None
+                        and gex_flip_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+                    ):
+                        gex_str += (
+                            " \u001b[1;33m["
+                            f"{_format_cache_age(gex_flip_age)}快取]\u001b[0m"
+                        )
                 elif gex_flip is not None:
                     gex_str = (
                         "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m"
@@ -1935,7 +1948,8 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     )
     rrp_val_str = (
         f"\u001b[1;36m${float(rrp):,.1f}B\u001b[0m{rrp_change_str}"
-        if (rrp is not None and float(rrp) > 0)
+        # RRP 餘額趨近 0 是真實狀態（2026 年約 $0.2–0.3B），0 不代表抓取失敗
+        if (rrp is not None and float(rrp) >= 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
     fed_bal_str = (
@@ -1977,8 +1991,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             "",
         ]
     macro_lines += [
-        " ⚠️ FedWatch 資料源: 主要取自 Atlanta Fed 選擇權隱含機率分佈 (非 CME 期貨線性反推)，"
-        "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。",
+        " " + fedwatch_source_note(fedwatch_details.get("source")),
     ]
     macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
 
