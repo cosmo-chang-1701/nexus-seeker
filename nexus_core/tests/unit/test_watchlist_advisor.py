@@ -648,3 +648,27 @@ async def test_squeeze_long_maps_result_and_records_forward_data() -> None:
     assert advice.regime == "REGIME_II_CHAOS_STANDASIDE"
     assert "上方壓力區" in advice.reason
     assert evaluation_recorder.pending_count() == 1
+
+
+async def test_squeeze_advice_pushes_squeeze_embed() -> None:
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    p = _make_pipeline()
+    result = SqueezeEntryResult("ENTRY", 1, 1.0, 95.0, "✅ T1：5m Green Dot")
+    advice = _advice(
+        tier=1,
+        size_pct=1.0,
+        squeeze=SqueezeEvaluation(result, {}, None),
+        target=None,
+        rr_ratio=None,
+    )
+    with patch(
+        "cogs.embed_builders.squeeze_entry_embeds.create_squeeze_entry_embed",
+        wraps=None,
+    ) as builder:
+        builder.return_value = MagicMock()
+        await _dispatch(p, advice)
+    builder.assert_called_once()
+    assert builder.call_args.kwargs["passed"] is True
+    p.bot.queue_dm.assert_awaited_once()

@@ -112,6 +112,7 @@ from cogs.embed_builders.portfolio_embeds import (
     create_tactical_hedge_embed,
     create_entry_rules_embed,
 )
+from cogs.embed_builders.squeeze_entry_embeds import create_squeeze_entry_embed
 
 # ── Watchlist Embeds ──────────────────────────────────────────────────────────
 from cogs.embed_builders.watchlist_embeds import (
@@ -272,6 +273,7 @@ __all__ = [
     "create_tactical_symbol_embed",
     "create_tactical_hedge_embed",
     "create_entry_rules_embed",
+    "create_squeeze_entry_embed",
     # Watchlist embeds
     "create_watchlist_embed",
     "create_watchlist_signal_embed",

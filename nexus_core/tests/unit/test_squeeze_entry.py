@@ -442,3 +442,57 @@ async def test_macro_escape_tier_fails_closed_to_unknown() -> None:
         AsyncMock(side_effect=RuntimeError("net")),
     ):
         assert await compute_macro_escape_tier() == "UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# Embed
+# ---------------------------------------------------------------------------
+def test_squeeze_entry_embed_renders_matrix_verdict_and_sizing() -> None:
+    from cogs.embed_builders.squeeze_entry_embeds import create_squeeze_entry_embed
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    m = _matrix(
+        D={"green_dot": True, "green_dot_bars_ago": 1, "momentum_color": "LightBlue"},
+        **{
+            "3D": {
+                "turbo": True,
+                "preview_squeeze_level": "Mid",
+                "preview_momentum_color": "LightBlue",
+            }
+        },
+    )
+    del m["5m"]
+    zone = ResistanceZone(292.0, 293.3, 3)
+    res = ResistanceContext(atr_1d=6.0, overhead=zone, is_approaching=True, broken=None)
+    result = SqueezeEntryResult(
+        STATUS_ENTRY, 3, 2.5, 280.0, "✅ T3：D Green Dot", ["D Green Dot"], 2
+    )
+    embed = create_squeeze_entry_embed(
+        "BE",
+        SqueezeEvaluation(result, m, res),
+        passed=True,
+        reason=result.reason,
+        entry_price=290.0,
+        stop_loss=280.0,
+    )
+    text = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert "Green Dot" in text and "（1 根前）" in text
+    assert "Turbo" in text and "盤中未收盤預覽" in text
+    assert " 5m  │ 資料不足" in text
+    assert "T3（2.5%）" in text and "總資產 2.5%" in text
+    assert "衝擊中" in text and "$293.30" in text
+    assert "$280.00" in text
+
+
+def test_squeeze_entry_embed_without_levels_has_no_price_field() -> None:
+    from cogs.embed_builders.squeeze_entry_embeds import create_squeeze_entry_embed
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    result = SqueezeEntryResult(STATUS_NO_DATA, None, None, None, "⛔ 缺少 D/W")
+    embed = create_squeeze_entry_embed(
+        "CRML", SqueezeEvaluation(result, {}, None), passed=False, reason=result.reason
+    )
+    names = [f.name for f in embed.fields]
+    assert "💰 價位與部位建議" not in names

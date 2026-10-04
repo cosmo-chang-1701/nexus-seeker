@@ -594,20 +594,35 @@ class IntradayScanPipeline:
                 return
 
             from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
-
-            embed = create_entry_rules_embed(
-                ticker.upper(),
-                advice.passed,
-                advice.reason.split(" | ") if advice.reason else [],
-                trading_strategy=advice.strategy,
-                dynamic_regime=advice.regime,
-                dynamic_regime_reason=advice.regime_reason,
-                structure_directive=advice.structure_directive,
-                entry_price=advice.entry_price,
-                stop_loss=advice.stop_loss,
-                target=advice.target,
-                rr_ratio=advice.rr_ratio,
+            from cogs.embed_builders.squeeze_entry_embeds import (
+                create_squeeze_entry_embed,
             )
+
+            if advice.squeeze is not None:
+                embed = create_squeeze_entry_embed(
+                    ticker.upper(),
+                    advice.squeeze,
+                    passed=advice.passed,
+                    reason=advice.reason,
+                    entry_price=advice.entry_price,
+                    stop_loss=advice.stop_loss,
+                    trading_strategy=advice.strategy,
+                    dynamic_regime=advice.regime,
+                )
+            else:
+                embed = create_entry_rules_embed(
+                    ticker.upper(),
+                    advice.passed,
+                    advice.reason.split(" | ") if advice.reason else [],
+                    trading_strategy=advice.strategy,
+                    dynamic_regime=advice.regime,
+                    dynamic_regime_reason=advice.regime_reason,
+                    structure_directive=advice.structure_directive,
+                    entry_price=advice.entry_price,
+                    stop_loss=advice.stop_loss,
+                    target=advice.target,
+                    rr_ratio=advice.rr_ratio,
+                )
             from services.notification_dispatcher import notify
             from services.notification_dispatch_recorder import DispatchRecord
 

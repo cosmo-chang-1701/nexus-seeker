@@ -120,51 +120,103 @@ async def test_symbol_hub_hedge_tolerates_string_iv_rank(  # type: ignore
 
 
 @pytest.mark.asyncio
-async def test_symbol_hub_entry_rules_calls_six_rule_check(  # type: ignore
+async def test_symbol_hub_entry_rules_uses_squeeze_check(  # type: ignore
     mock_interaction: Any, mock_bot: Any
 ):
-    """進場鐵律檢核按鈕：應呼叫六重鐵律 (DynamicRolloverEngine._confirm_entry_signal,
-    含 I/O)，並將結果帶入 create_entry_rules_embed。"""
+    """右側交易（預設）：進場檢核按鈕走多時間框架擠壓規則（與進場顧問同一份
+    判定），並以 create_squeeze_entry_embed 呈現。"""
+    from market_analysis.intraday_pipeline.entry_advisor import EntryAdvice
+
     view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
-    view.base_data = {
-        "symbol": "AAPL",
-        "price": 101.0,
-        "gex_profile_data": {"put_wall": 95.0, "call_wall": 110.0},
-        "uoa": [
-            {"type": "CALL", "action": "BTO", "ratio": 1.2, "expiry": "2099-01-01"}
-        ],
-        "close_15m": 101.5,
-        "volume_15m": 5000.0,
-        "volume_15m_sma20": 3000.0,
-    }
+    view.base_data = {"symbol": "AAPL", "price": 101.0}
+    advice = EntryAdvice(
+        passed=True,
+        reason="✅ T2：3 個時間框架擠壓",
+        structure_directive=None,
+        strategy="RIGHT_SIDE",
+        entry_price=101.0,
+        stop_loss=95.0,
+        tier=2,
+        size_pct=1.5,
+        squeeze=SimpleNamespace(result=None, matrix={}, resistance=None),
+    )
 
     with patch(
-        "cogs.unified_terminal.symbol_view.create_entry_rules_embed"
+        "cogs.unified_terminal.symbol_view.create_squeeze_entry_embed"
     ) as mock_builder, patch(
-        "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+        "cogs.unified_terminal.symbol_view.create_entry_rules_embed"
+    ) as mock_rules_builder, patch(
+        "cogs.unified_terminal.symbol_view.database.get_full_user_context"
+    ) as mock_ctx, patch(
+        "market_analysis.intraday_pipeline.entry_advisor._evaluate_squeeze_long",
         new_callable=AsyncMock,
-    ) as mock_six_rule:
-        mock_six_rule.return_value = (
-            False,
-            "條件一✅：ok | 條件二❌：no support wall",
-            None,
+    ) as mock_squeeze:
+        mock_ctx.return_value = SimpleNamespace(trading_strategy="RIGHT_SIDE")
+        mock_squeeze.return_value = advice
+        mock_builder.return_value = MagicMock(spec=discord.Embed)
+
+        await view.btn_entry_rules.callback(mock_interaction)
+
+        mock_squeeze.assert_called_once_with("RIGHT_SIDE", "AAPL", 101.0)
+        mock_rules_builder.assert_not_called()
+        mock_builder.assert_called_once_with(
+            "AAPL",
+            advice.squeeze,
+            passed=True,
+            reason="✅ T2：3 個時間框架擠壓",
+            entry_price=101.0,
+            stop_loss=95.0,
+            trading_strategy="RIGHT_SIDE",
+            dynamic_regime=None,
+        )
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        assert last_kwargs["embed"] is mock_builder.return_value
+
+
+@pytest.mark.asyncio
+async def test_symbol_hub_entry_rules_dynamic_non_left_short_uses_squeeze(  # type: ignore
+    mock_interaction: Any, mock_bot: Any
+):
+    """動態調整：Regime II／III／III-B／IV 皆改走擠壓規則，並帶入 Regime。"""
+    from market_analysis.dynamic_rollover.models import DynamicRegime, RegimeMarketData
+    from market_analysis.intraday_pipeline.entry_advisor import EntryAdvice
+
+    view = SymbolHubView(symbol="AAPL", user_id=123, bot=mock_bot)
+    view.base_data = {"symbol": "AAPL", "price": 101.0}
+    with patch(
+        "cogs.unified_terminal.symbol_view.create_squeeze_entry_embed"
+    ) as mock_builder, patch(
+        "cogs.unified_terminal.symbol_view.database.get_full_user_context"
+    ) as mock_ctx, patch(
+        "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
+        new_callable=AsyncMock,
+    ) as mock_classify, patch(
+        "market_analysis.intraday_pipeline.entry_advisor._evaluate_squeeze_long",
+        new_callable=AsyncMock,
+    ) as mock_squeeze:
+        mock_ctx.return_value = SimpleNamespace(trading_strategy="DYNAMIC")
+        mock_classify.return_value = (
+            DynamicRegime.REGIME_II_CHAOS_STANDASIDE,
+            "休眠",
+            RegimeMarketData(),
+        )
+        mock_squeeze.return_value = EntryAdvice(
+            passed=False,
+            reason="⏸️",
+            structure_directive=None,
+            strategy="DYNAMIC",
+            regime="REGIME_II_CHAOS_STANDASIDE",
         )
         mock_builder.return_value = MagicMock(spec=discord.Embed)
 
         await view.btn_entry_rules.callback(mock_interaction)
 
-        mock_six_rule.assert_called_once_with(view.symbol, view.base_data, 101.0)
-        mock_builder.assert_called_once_with(
-            "AAPL",
-            False,
-            ["條件一✅：ok", "條件二❌：no support wall"],
-            trading_strategy="RIGHT_SIDE",
-            dynamic_regime=None,
-            dynamic_regime_reason=None,
-            structure_directive=None,
+        mock_squeeze.assert_called_once_with(
+            "DYNAMIC", "AAPL", 101.0, "REGIME_II_CHAOS_STANDASIDE", "休眠"
         )
-        _, last_kwargs = mock_interaction.edit_original_response.call_args
-        assert last_kwargs["embed"] is mock_builder.return_value
+        assert mock_builder.call_args.kwargs["dynamic_regime"] == (
+            "REGIME_II_CHAOS_STANDASIDE"
+        )
 
 
 @pytest.mark.asyncio
@@ -184,7 +236,7 @@ async def test_symbol_hub_entry_rules_routes_to_left_side_gate(  # type: ignore
         "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal",
         new_callable=AsyncMock,
     ) as mock_left_rule, patch(
-        "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal",
+        "market_analysis.intraday_pipeline.entry_advisor._evaluate_squeeze_long",
         new_callable=AsyncMock,
     ) as mock_right_rule:
         mock_ctx.return_value = SimpleNamespace(trading_strategy="LEFT_SIDE")
