@@ -10,6 +10,8 @@
 
 * 策略分派與 `symbol_view.py` **逐位元一致**（同一個問題不該有兩套答案）：
   `RIGHT_SIDE`／`LEFT_SIDE`／`SHORT_SIDE`／`DYNAMIC`(依 Regime 路由)。
+  多頭建倉（`RIGHT_SIDE`，以及 `DYNAMIC` 中非左側、非做空的 Regime）一律走
+  多時間框架擠壓規則（`market_analysis/squeeze_entry/`），已取代右側六重鐵律。
 * 結果與使用者無關（只取決於標的、策略與當下市況），以
   `(strategy:symbol, 15 分鐘 bar)` 記憶，同一輪多位使用者自選同一標的時不重複
   發動網路 I/O。快取鍵**必含 strategy**：同一檔標的在不同策略下走不同鐵律。
@@ -52,6 +54,11 @@ class EntryAdvice(NamedTuple):
     stop_loss: Optional[float] = None
     target: Optional[float] = None
     rr_ratio: Optional[float] = None
+    # 多時間框架擠壓進場（多頭右側路徑）專屬欄位；其餘路徑皆為 None。
+    tier: Optional[int] = None
+    size_pct: Optional[float] = None
+    squeeze_status: Optional[str] = None
+    squeeze: Optional[Any] = None  # squeeze_entry.SqueezeEvaluation（面板顯示用）
 
 
 _ADVICE_CACHE: BoundedCache = BoundedCache(max_size=_ADVICE_CACHE_MAX_SIZE)
@@ -136,6 +143,50 @@ async def _compute_long_levels(
     return _r(entry), _r(stop), _r(target), _r(rr)
 
 
+async def _evaluate_squeeze_long(
+    strategy: str,
+    symbol: str,
+    spot: float,
+    regime_value: Optional[str] = None,
+    regime_reason: Optional[str] = None,
+) -> EntryAdvice:
+    """多頭建倉：多時間框架擠壓規則（取代右側六重鐵律，見 docs/strategies/10）。
+
+    只需要 K 線，不依賴期權鏈；否決／降級沿用 `squeeze_entry.vetoes`。價位只給
+    進場（現價）與參考停損——B&H 建倉不設目標價，盈虧比因此留空。
+    """
+    from market_analysis import evaluation_recorder
+    from market_analysis.squeeze_entry import evaluate_symbol
+    from market_analysis.squeeze_entry.vetoes import resolve_long_entry_vetoes
+
+    vetoes, downgrade = await resolve_long_entry_vetoes(symbol)
+    ev = await evaluate_symbol(symbol, spot, vetoes, downgrade)
+    r = ev.result
+    evaluation_recorder.record_squeeze_entry(
+        symbol, spot, r, ev.matrix, ev.resistance, regime=regime_value
+    )
+    reason = r.reason
+    if r.resistance_note:
+        reason = f"{reason} | {r.resistance_note}"
+    return EntryAdvice(
+        passed=r.passed,
+        reason=reason,
+        structure_directive=None,
+        strategy=strategy,
+        regime=regime_value,
+        regime_reason=regime_reason,
+        direction="LONG",
+        entry_price=round(spot, 2) if r.passed else None,
+        stop_loss=r.stop,
+        target=None,
+        rr_ratio=None,
+        tier=r.tier,
+        size_pct=r.size_pct,
+        squeeze_status=r.status,
+        squeeze=ev,
+    )
+
+
 async def _evaluate_uncached(
     strategy: str,
     symbol: str,
@@ -143,7 +194,6 @@ async def _evaluate_uncached(
     spot: float,
     phase1_price: Optional[float],
 ) -> EntryAdvice:
-    from market_analysis.dynamic_rollover import DynamicRolloverEngine
     from market_analysis.dynamic_rollover.left_side_entry import (
         _confirm_left_entry_signal,
     )
@@ -157,7 +207,6 @@ async def _evaluate_uncached(
     )
     from market_analysis.dynamic_rollover.short_side_entry import evaluate_short_entry
 
-    engine = DynamicRolloverEngine()
     regime_value: Optional[str] = None
     regime_reason: Optional[str] = None
     direction: AdviceDirection = "LONG"
@@ -186,24 +235,7 @@ async def _evaluate_uncached(
         )
         regime_value = regime.value
         df_15m = market_data.df_15m
-        if regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
-            passed, reason, directive = await engine._confirm_entry_signal(
-                symbol,
-                radar,
-                spot,
-                df_15m=market_data.df_15m,
-                session_vwap=market_data.session_vwap,
-            )
-        elif regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION:
-            passed, reason, directive = await engine._confirm_entry_signal(
-                symbol,
-                radar,
-                spot,
-                df_15m=market_data.df_15m,
-                session_vwap=market_data.session_vwap,
-                trend_continuation=True,
-            )
-        elif regime == DynamicRegime.REGIME_I_LEFT_CATCH:
+        if regime == DynamicRegime.REGIME_I_LEFT_CATCH:
             is_left_catch = True
             passed, reason, directive = await _confirm_left_entry_signal(
                 symbol,
@@ -224,18 +256,14 @@ async def _evaluate_uncached(
                 atr_15m=market_data.atr_15m,
             )
         else:
-            return EntryAdvice(
-                passed=False,
-                reason=f"⛔ Regime `{regime_value}`：{regime_reason}",
-                structure_directive=None,
-                strategy=strategy,
-                regime=regime_value,
-                regime_reason=regime_reason,
+            # Regime III／III-B／II／IV：多頭建倉一律交給擠壓規則。宏觀鎖定
+            # （Regime IV 宏觀分支）由擠壓路徑的否決條件獨立判定；個股 Call Wall
+            # 封頂改由擠壓路徑的壓力區閘門處理（見 docs/strategies/10 §1）。
+            return await _evaluate_squeeze_long(
+                strategy, symbol, spot, regime_value, regime_reason
             )
     else:
-        passed, reason, directive = await engine._confirm_entry_signal(
-            symbol, radar, spot
-        )
+        return await _evaluate_squeeze_long(strategy, symbol, spot)
 
     if direction == "SHORT":
         assert short_ev is not None
@@ -309,8 +337,16 @@ async def evaluate_entry_advice(
     以 `(strategy:symbol, 15 分鐘 bar)` 記憶；例外一律 fail-safe 回傳未通過，
     且失敗結果不入快取（下一輪仍可重試）。
     """
+    from market_analysis.dynamic_rollover.models import TradingStrategyMode
+
     sym = symbol.upper()
-    if spot <= 0 or not radar:
+    # 擠壓規則只需要 K 線：RIGHT_SIDE／DYNAMIC 沒有雷達（期權資料）也照常評估，
+    # 否則期權流動性差的小型股永遠收不到建議。左側與做空鐵律仍依賴 GEX。
+    needs_radar = strategy in (
+        TradingStrategyMode.LEFT_SIDE.value,
+        TradingStrategyMode.SHORT_SIDE.value,
+    )
+    if spot <= 0 or (needs_radar and not radar):
         return _fail_safe(strategy, "⛔ 缺少有效現價或雷達資料，本輪略過")
 
     cache_key = (f"{strategy}:{sym}", current_bar_ts())

@@ -387,3 +387,58 @@ def test_build_matrix_all_six_timeframes() -> None:
     assert m["5m"].bar_ts == "2026-10-01 12:00:00"
     assert m["65m"].bar_ts == "2026-10-01 10:35:00"
     assert m["D"].preview_squeeze_level is not None
+
+
+# ---------------------------------------------------------------------------
+# 否決與降級
+# ---------------------------------------------------------------------------
+async def _run_vetoes(c5: Any, vts: float, tier: str) -> Any:
+    from unittest.mock import AsyncMock, patch
+
+    from market_analysis.squeeze_entry import vetoes as mod
+
+    with (
+        patch(
+            "market_analysis.dynamic_rollover.opportunity_cost."
+            "_confirm_entry_condition5_macro_earnings_gate",
+            c5,
+        ),
+        patch(
+            "services.market_data_service.get_vix_term_structure",
+            AsyncMock(return_value={"vts_ratio": vts, "is_valid": True}),
+        ),
+        patch.object(mod, "compute_macro_escape_tier", AsyncMock(return_value=tier)),
+    ):
+        return await mod.resolve_long_entry_vetoes("NVDA")
+
+
+async def test_vetoes_clean_environment() -> None:
+    from unittest.mock import AsyncMock
+
+    vetoes, downgrade = await _run_vetoes(
+        AsyncMock(return_value=(True, None)), 0.9, "NORMAL"
+    )
+    assert vetoes == [] and downgrade is None
+
+
+async def test_vetoes_earnings_backwardation_and_escape_tier() -> None:
+    async def _c5(symbol: str, prior: bool, reasons: list) -> Any:
+        reasons.append("條件五❌：即將於 2 天內發布財報，避開高波事件風險")
+        return False, 2
+
+    vetoes, downgrade = await _run_vetoes(_c5, 1.15, "WATCH")
+    assert vetoes[0] == "即將於 2 天內發布財報，避開高波事件風險"
+    assert any("深度倒掛" in v for v in vetoes)
+    assert downgrade == "逃頂警戒 WATCH"
+
+
+async def test_macro_escape_tier_fails_closed_to_unknown() -> None:
+    from unittest.mock import AsyncMock, patch
+
+    from market_analysis.squeeze_entry.vetoes import compute_macro_escape_tier
+
+    with patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        AsyncMock(side_effect=RuntimeError("net")),
+    ):
+        assert await compute_macro_escape_tier() == "UNKNOWN"
