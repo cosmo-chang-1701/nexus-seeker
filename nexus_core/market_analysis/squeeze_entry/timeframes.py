@@ -35,10 +35,9 @@ GREEN_DOT_LOOKBACK: Dict[str, int] = {
     "5m": 3,
 }
 
-# 3D K 棒的固定錨點：以此日起算的 NYSE 交易日序號 // 3 分組，讓分組邊界每天
-# 不變（若以資料視窗起點分組，每多一天整串 3D K 棒都會位移）。與 TradingView
-# 的錨點不保證一致，需人工比對（見規格書 §5）。
-_THREE_DAY_ANCHOR = date(2020, 1, 2)
+# 3D K 棒比照 TradingView 的 Bar alignment：只計交易日，從每年第一個交易日
+# 起算、每年重新計數，因此年底最後一根可能不足 3 天。分組邊界每天不變（若以
+# 資料視窗起點分組，每多一天整串 3D K 棒都會位移）。
 
 _DAILY_PERIOD = "2y"  # W 需 ≥ 40 根已收盤週線（PSQ length × 2）
 _INTRADAY_15M_PERIOD = "5d"  # 與 atr_utils.fetch_atr_15m 同 key，可共乘快取
@@ -127,10 +126,13 @@ def resample_weekly(df_daily: pd.DataFrame, today: date) -> Tuple[pd.DataFrame, 
 def three_day_group_keys(
     index: pd.Index, session_ordinal: Dict[date, int]
 ) -> pd.Series:
-    """依固定錨點的交易日序號 // 3 分組；找不到序號的日期回傳 -1（會被丟棄）。"""
+    """`session_ordinal` 為「當年第幾個交易日」（0 起算）；分組鍵 = 年 × 1000 +
+    序號 // 3。找不到序號的日期回傳 -1（會被丟棄）。"""
     return pd.Series(
         [
-            session_ordinal[ts.date()] // 3 if ts.date() in session_ordinal else -1
+            ts.year * 1000 + session_ordinal[ts.date()] // 3
+            if ts.date() in session_ordinal
+            else -1
             for ts in index
         ],
         index=index,
@@ -142,7 +144,8 @@ def resample_three_day(
 ) -> Tuple[pd.DataFrame, bool]:
     """日線 → 3D 線。回傳 (已收盤 3D 線, 最後一組是否未完成)。
 
-    最後一組若尚未湊滿 3 個交易日、或含今日，視為未確認。
+    最後一組若含今日，或當年尚未結束且未湊滿 3 個交易日，視為未確認；已結束
+    年度的年底短組（不足 3 日）視為已完成，與 TradingView 一致。
     """
     if df_daily.empty:
         return df_daily, False
@@ -156,7 +159,8 @@ def resample_three_day(
     counts = keys.value_counts()
     last_key = int(keys.iloc[-1])
     last_dates = [ts.date() for ts in df.index[keys == last_key]]
-    live = int(counts.get(last_key, 0)) < 3 or today in last_dates
+    year_open = last_key // 1000 >= today.year
+    live = today in last_dates or (int(counts.get(last_key, 0)) < 3 and year_open)
     out = grouped.iloc[:-1] if live else grouped
     # 以每組最後一個交易日當作索引，方便顯示
     last_ts = df.groupby(keys).apply(lambda g: g.index[-1])
@@ -295,15 +299,18 @@ def build_matrix(
 
 
 def _session_ordinals(start: date, end: date) -> Dict[date, int]:
-    """固定錨點起算的 NYSE 交易日序號。"""
+    """每個 NYSE 交易日是「當年第幾個交易日」（0 起算）。"""
     from market_time import nyse_calendar
 
-    days = nyse_calendar.valid_days(start_date=_THREE_DAY_ANCHOR, end_date=end)
+    days = nyse_calendar.valid_days(start_date=date(start.year, 1, 1), end_date=end)
     out: Dict[date, int] = {}
-    for i, ts in enumerate(days):
+    year, i = -1, 0
+    for ts in days:
         d = ts.date()
-        if d >= start:
-            out[d] = i
+        if d.year != year:
+            year, i = d.year, 0
+        out[d] = i
+        i += 1
     return out
 
 

@@ -267,7 +267,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 1. 前向紀錄（`regime_evaluation_log`，`evaluator = 'ENTRY_SQUEEZE'`、`decision = 1`）累積 $\ge 30$ 個獨立事件（同標的同等級 10 個交易日內只計第一次），且三個等級各自 $\ge 5$ 個。
 2. 以 03:30 labeler 的前向標註比較「`decision = 1`」與同期間 `decision = 0` 的 20 日報酬：超額報酬不得為負。
 3. 日線事件研究（[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) §3.2）已顯示 W／3D／D 層級**沒有**顯著擇時優勢；盤中時間框架（65m／15m／5m）只能靠前向紀錄證明。若前向結果同樣 $|t| < 2$，推播的價值僅止於「把使用者自己的判斷規則自動化、省去看盤」，翻轉與否由使用者決定，不得宣稱有 alpha。
-4. 3D／W 重採樣錨點已與使用者的看盤軟體逐欄比對一致。
+4. 抽查至少 3 檔標的的 W／3D／65m K 棒與 TradingView 一致（切分規則已依 TradingView Bar alignment 實作，此項只防資料源差異）。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 

@@ -165,9 +165,9 @@ $$
 
 **倉位模型**：直接沿用 `short_entry_sizing.py`（`07_short_side_breakdown_ironclad.md` §2.6）已驗證的「風險預算 ÷ 停損距離」模型，方向反轉：
 $$
-\text{risk}_{\text{usd}} = \text{NAV} \times \min(\text{\_PYRAMID\_ACCOUNT\_RISK\_PCT},\, f_{\text{kelly}}) \times m_{\text{VIX}}, \qquad d_{\text{stop}} = \text{Spot} - \text{RatchetStop}, \qquad Q_{\text{add}} = \left\lfloor \frac{\text{risk}_{\text{usd}}}{d_{\text{stop}}} \right\rfloor
+\text{risk}_{\text{usd}} = \text{NAV} \times \min(\text{\_PYRAMID\_ACCOUNT\_RISK\_PCT},\, f_{\text{kelly}}), \qquad d_{\text{stop}} = \text{Spot} - \text{Stop}_{\text{squeeze}}, \qquad Q_{\text{add}} = \left\lfloor \frac{\text{risk}_{\text{usd}}}{d_{\text{stop}}} \right\rfloor
 $$
-其中 $f_{\text{kelly}}$ 取自 `kelly_priors.get_win_rate_prior("LONG", rsi)`，$m_{\text{VIX}}$ 採 `config.get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")`——沿用 `market_analysis/strategy/analyze.py` 已建立的 `DIRECTIONAL_LONG` 呼叫慣例（賣方階梯 `sizing_multiplier`），而非做空專用的倒 U 形乘數，因為此處是多頭順勢加碼，語意與方向性做空的軋空風險不同。
+其中 $f_{\text{kelly}}$ 取自 `kelly_priors.get_win_rate_prior("LONG", rsi)`。2026-10-04 起**不再乘 VIX 倍數**（使用者決定）：原本的 `get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")` 是賣方階梯，VIX < 15 時乘數為 0，會讓加碼股數恆為 0；`vix_multiplier` 欄位固定 1.0，VIX 階梯只作顯示。
 
 **狀態延後提交**：狀態刻意不在引擎內落地——沿用 `transition_engine.py` 既有設計，指令附帶 `dynamic_state_patch = {"pyramid_count": count+1, "last_pyramid_at": <ISO8601 UTC>}` 與 `asset_id`，由 `portfolio_monitor.py` 派發迴圈在確認送達後才呼叫 `set_asset_dynamic_state()` 提交，避免通知開關／dedup／`PYRAMID_ADD_DRY_RUN`（預設 `true`）任一道閘門抑制推播時，加碼額度永久燒掉。
 

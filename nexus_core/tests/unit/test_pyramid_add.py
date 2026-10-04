@@ -412,3 +412,14 @@ async def test_end_to_end_via_check_satellite_rebalancing(
     assert len(pyramid_instructions) == 1
     assert pyramid_instructions[0]["action"] == "OPEN_PYRAMID"
     assert pyramid_instructions[0]["asset_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_low_vix_does_not_zero_out_add_size() -> None:
+    """VIX < 15（賣方階梯乘數為 0 的區間）仍須產出加碼股數：VIX 不再調整倉位。"""
+    low = await _evaluate(_asset(), _metrics(), vix_spot=12.0)
+    normal = await _evaluate(_asset(), _metrics(), vix_spot=20.0)
+    assert len(low) == 1 and len(normal) == 1
+    low_plan = low[0]["pyramid_add_plan"]
+    assert low_plan["share_qty"] == normal[0]["pyramid_add_plan"]["share_qty"] > 0
+    assert low_plan["vix_multiplier"] == 1.0

@@ -81,3 +81,24 @@ def test_summarize_counts_independent_events_per_symbol() -> None:
     assert abs(t3.mean - 0.15) < 1e-12
     # 超額 = 報酬 − 同標的平均：A 平均 0.05、B 平均 0.10
     assert abs(t3.excess_mean - ((0.05 * 2 + 0.10 * 2) / 4)) < 1e-12
+
+
+def test_three_day_bars_reset_each_year() -> None:
+    idx = pd.DatetimeIndex(
+        [
+            "2025-12-29",
+            "2025-12-30",
+            "2025-12-31",
+            "2026-01-02",
+            "2026-01-05",
+            "2026-01-06",
+            "2026-01-07",
+        ]
+    )
+    close = np.arange(1, len(idx) + 1, dtype=float)
+    daily = pd.DataFrame(
+        {"Open": close, "High": close, "Low": close, "Close": close}, index=idx
+    )
+    t = three_day_bars(daily)
+    # 2025 年三天一組；2026 年從 1/2 重新起算，最後一組（1/7）未滿 3 日丟棄
+    assert list(t.index) == [pd.Timestamp("2025-12-31"), pd.Timestamp("2026-01-06")]

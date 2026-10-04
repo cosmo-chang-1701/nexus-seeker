@@ -115,25 +115,25 @@ def evaluate_squeeze_entry(
         hard_vetoes: 任何一項成立即不給建議（Regime IV 宏觀鎖定、財報／總經閥）。
         downgrade_reason: 非 None 時等級降一級（逃頂警戒 tier != NORMAL）。
     """
-    if "D" not in matrix or "W" not in matrix:
-        missing = [tf for tf in ("D", "W") if tf not in matrix]
+    if "D" not in matrix:
         return SqueezeEntryResult(
-            STATUS_NO_DATA,
-            None,
-            None,
-            None,
-            f"⛔ 缺少 {'/'.join(missing)} 擠壓資料，不給建議",
+            STATUS_NO_DATA, None, None, None, "⛔ 缺少 D 擠壓資料，不給建議"
         )
 
-    d, w = matrix["D"], matrix["W"]
+    # W 缺席只會是「上市未滿 40 週」：D 存在代表日線抓取成功，週線由同一份
+    # 日線重採樣而來。新上市股略過 W 條件（使用者 2026-10-04 決定），並在理由中
+    # 揭露，而不是永遠不給建議。
+    d, w = matrix["D"], matrix.get("W")
+    w_note = "（上市未滿 40 週，略過週線條件）" if w is None else ""
     atr = resistance.atr_1d if resistance is not None else 0.0
     stop = _reference_stop(matrix, atr)
 
-    if d.momentum_value <= 0 or w.momentum_color == "Red":
+    w_red = w is not None and w.momentum_color == "Red"
+    if d.momentum_value <= 0 or w_red:
         why = []
         if d.momentum_value <= 0:
             why.append("D 動能 ≤ 0")
-        if w.momentum_color == "Red":
+        if w_red:
             why.append("W 動能轉弱（紅）")
         count = sum(1 for st in matrix.values() if st.is_squeezing)
         return SqueezeEntryResult(
@@ -178,10 +178,10 @@ def evaluate_squeeze_entry(
             note,
         )
 
-    downgrade_text = ""
+    downgrade_text = w_note
     if downgrade_reason:
         tier -= 1
-        downgrade_text = f"（{downgrade_reason}，降一級）"
+        downgrade_text = f"（{downgrade_reason}，降一級）{w_note}"
         if tier < 1:
             return SqueezeEntryResult(
                 STATUS_WATCH,

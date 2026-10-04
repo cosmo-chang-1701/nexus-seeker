@@ -286,11 +286,20 @@ def test_bearish_preconditions_block_all_tiers() -> None:
     assert evaluate_squeeze_entry(m2, _NO_RES).status == STATUS_NONE
 
 
-def test_missing_daily_or_weekly_fails_closed() -> None:
+def test_missing_daily_fails_closed() -> None:
     m = _matrix()
-    del m["W"]
+    del m["D"]
     r = evaluate_squeeze_entry(m, _NO_RES)
     assert r.status == STATUS_NO_DATA and not r.passed
+
+
+def test_missing_weekly_skips_weekly_condition_for_new_listings() -> None:
+    """NASA 情境：上市未滿 40 週、沒有週線 → 略過 W 條件並在理由中揭露。"""
+    m = _matrix(D={"green_dot": True, "green_dot_bars_ago": 0})
+    del m["W"]
+    r = evaluate_squeeze_entry(m, _NO_RES)
+    assert r.status == STATUS_ENTRY and r.tier == 3
+    assert "上市未滿 40 週" in r.reason
 
 
 def test_be_pending_breakout_at_resistance() -> None:
@@ -509,3 +518,41 @@ def test_squeeze_entry_embed_without_levels_has_no_price_field() -> None:
     )
     names = [f.name for f in embed.fields]
     assert "💰 價位與部位建議" not in names
+
+
+def test_three_day_resets_each_year_like_tradingview() -> None:
+    """TradingView Bar alignment：3D 從每年第一個交易日起算、每年重新計數，
+    年底不足 3 天的短組在年度結束後視為完成。"""
+    dates = pd.DatetimeIndex(
+        [
+            "2025-12-26",
+            "2025-12-29",
+            "2025-12-30",
+            "2025-12-31",  # 當年第 0..3 日（測試用序號）
+            "2026-01-02",
+            "2026-01-05",
+            "2026-01-06",
+            "2026-01-07",
+        ]
+    )
+    ords = {
+        **{d.date(): i for i, d in enumerate(dates[:4])},
+        **{d.date(): i for i, d in enumerate(dates[4:])},
+    }
+    df = _daily(dates)
+    out, live = resample_three_day(df, ords, date(2026, 1, 8))
+    # 2025：[0,1,2] 一組、[3] 為年底短組（已完成）；2026：[0,1,2] 一組、[3] 進行中
+    assert [ts.date() for ts in out.index] == [
+        date(2025, 12, 30),
+        date(2025, 12, 31),
+        date(2026, 1, 6),
+    ]
+    assert live is True
+    assert out.loc[pd.Timestamp("2025-12-31"), "Close"] == df["Close"].iloc[3]
+
+
+def test_three_day_short_group_in_current_year_is_live() -> None:
+    dates = pd.bdate_range("2026-01-02", periods=5)
+    ords = {d.date(): i for i, d in enumerate(dates)}
+    out, live = resample_three_day(_daily(dates), ords, date(2026, 1, 9))
+    assert live is True and len(out) == 1

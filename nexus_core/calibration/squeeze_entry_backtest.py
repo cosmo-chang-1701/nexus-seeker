@@ -71,10 +71,14 @@ def weekly_bars(daily: pd.DataFrame) -> pd.DataFrame:
 
 
 def three_day_bars(daily: pd.DataFrame) -> pd.DataFrame:
-    """3D 線：以資料內交易日序號 // 3 分組，丟掉未滿 3 日的最後一組。"""
-    keys = pd.Series(np.arange(len(daily)) // 3, index=daily.index)
+    """3D 線（比照 TradingView）：每年從第一個交易日起算、每 3 個交易日一組，
+    年底短組視為完成；只丟掉資料最後一組未滿 3 日者（尚在成型）。"""
+    years = pd.Series(daily.index.year, index=daily.index)
+    pos_in_year = years.groupby(years).cumcount()
+    keys = years * 1000 + pos_in_year // 3
     t = _ohlc_agg(daily, keys)
-    t = t[t["_count"] == 3]
+    if len(t) and t["_count"].iloc[-1] < 3:
+        t = t.iloc[:-1]
     t.index = pd.DatetimeIndex(t["_last_date"])
     return t.drop(columns=["_last_date", "_count"])
 

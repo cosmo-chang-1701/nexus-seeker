@@ -26,7 +26,7 @@ import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional
 
-from config import get_vix_tier, get_vix_sizing_multiplier
+from config import get_vix_tier
 from market_analysis.kelly_priors import KELLY_PRIOR_ODDS, get_win_rate_prior
 from market_analysis.risk_engine import kelly_position_fraction
 
@@ -57,9 +57,7 @@ class PyramidAddSizing(NamedTuple):
     vix_tier_name: str
     vix_multiplier: float
     kelly_fraction: float
-    binding_constraint: (
-        str  # RISK_PCT / KELLY / EXPOSURE_CAP / VIX_ZERO / NO_EDGE / INVALID_INPUT
-    )
+    binding_constraint: str  # RISK_PCT / KELLY / EXPOSURE_CAP / NO_EDGE / INVALID_INPUT
 
 
 def compute_pyramid_add_sizing(
@@ -72,15 +70,15 @@ def compute_pyramid_add_sizing(
 ) -> PyramidAddSizing:
     """計算加碼股數（風險預算 ÷ 停損距離，方向反轉自 short_entry_sizing.py）。
 
-    risk_usd = capital × min(_PYRAMID_ACCOUNT_RISK_PCT, f_kelly) × m_vix
-    qty      = min(⌊risk_usd / (spot − ratchet_stop)⌋, ⌊capital × risk_limit% / spot⌋)
+    risk_usd = capital × min(_PYRAMID_ACCOUNT_RISK_PCT, f_kelly)
+    qty      = min(⌊risk_usd / (spot − stop)⌋, ⌊capital × risk_limit% / spot⌋)
 
-    VIX 乘數刻意採 `config.get_vix_sizing_multiplier(vix_spot, "DIRECTIONAL_LONG")`
-    （沿用 `market_analysis/strategy/analyze.py` 已建立的 DIRECTIONAL_LONG 呼叫
-    慣例），而非 `short_entry_sizing.py` 的倒 U 形做空乘數——後者是為「VIX 極端
-    區軋空風險」設計的方向性做空語意，不適用於多頭順勢加碼。
+    **不套用 VIX 倉位乘數**（使用者 2026-10-04 決定）：原本採用的
+    `get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")` 是賣方階梯，VIX < 15 時
+    乘數為 0，會讓平靜行情（擠壓最常出現的時候）的加碼股數恆為 0。VIX 階梯
+    只保留作顯示；`vix_multiplier` 欄位固定為 1.0 以維持計畫結構相容。
     """
-    m_vix = get_vix_sizing_multiplier(vix_spot, "DIRECTIONAL_LONG")
+    m_vix = 1.0
     vix_known = vix_spot is not None and not math.isnan(vix_spot)
     vix_tier_name = get_vix_tier(vix_spot)["name"] if vix_known else "未知"
 
@@ -103,8 +101,6 @@ def compute_pyramid_add_sizing(
 
     if not _is_positive(capital) or stop_distance <= 0 or spot <= 0:
         return _result(0.0, 0, 0.0, "INVALID_INPUT")
-    if m_vix <= 0:
-        return _result(0.0, 0, 0.0, "VIX_ZERO")
 
     win_prob = get_win_rate_prior("LONG", rsi_15m)
     kelly_f = kelly_position_fraction(
@@ -120,7 +116,7 @@ def compute_pyramid_add_sizing(
         risk_fraction, binding = kelly_f, "KELLY"
     else:
         risk_fraction, binding = _PYRAMID_ACCOUNT_RISK_PCT, "RISK_PCT"
-    risk_usd = capital * risk_fraction * m_vix
+    risk_usd = capital * risk_fraction
 
     qty_risk = int(math.floor(risk_usd / stop_distance))
     qty_cap = (
