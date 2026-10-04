@@ -155,9 +155,9 @@ $$
 八項觸發條件全部為 AND：
 
 1. **部位已獲利**：$\dfrac{\text{Spot} - \text{AvgCost}}{\text{AvgCost}} \ge \text{\_PYRAMID\_PROFIT\_THRESHOLD\_PCT} = 3\%$
-2. **停損已在成本之上（不變式，任何修改都不得放寬）**：$\text{dynamic\_strategy\_state}[\text{"ratchet\_stop"}] \ge \text{AvgCost}$——這是加碼只動用「已實現的帳面利潤」承險、不增加原始本金曝險的唯一保證，也是金字塔加碼與盲目攤平的分界。
-3. **趨勢結構完好**：$\text{Spot} > \text{SessionVWAP} \;\wedge\; \text{Spot} > \text{GammaFlip} \;\wedge\; \text{NetGEX} > 0$（`NetGEX` 缺失視為未知，fail-closed 不通過——這是承擔新曝險的閘門，與既有部位出場判定的 fail-open 哲學刻意不同）
-4. **上方仍有空間**：晴空萬里有效目標天花板（[`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 D）距現價空間 $\ge$ 動態自適應波動率門檻（公式 A）
+2. **停損已在成本之上（不變式，任何修改都不得放寬）**：擠壓參考停損 $\min(\text{D 擠壓區間低點}, \text{SMA}^{D}_{20}) - 0.5\times\text{ATR}_{1D} \ge \text{AvgCost}$（算不出來 fail-closed）——這是加碼只動用「已實現的帳面利潤」承險、不增加原始本金曝險的唯一保證，也是金字塔加碼與盲目攤平的分界。2026-10 前讀取 `dynamic_strategy_state["ratchet_stop"]`，但顧問模式丟棄 HOLD 指令的狀態補丁，該值對所有多頭現貨永遠不會寫入，條件二恆不成立；改為即時計算，不變式語意不變（見 [`10_multi_timeframe_squeeze_entry.md`](10_multi_timeframe_squeeze_entry.md) §1.2）。
+3. **趨勢延續訊號**：D 動能 $> 0$，且 65m／D／3D／W 任一出現 Green Dot（擠壓剛解除），或收盤站上自動偵測的壓力區（`10` §2.3）
+4. **壓力區只標註、不擋**：現價若進入「尚未突破的壓力區下緣 $0.5\times\text{ATR}_{1D}$ 以內」，加碼理由附上警示，不阻擋加碼（使用者 2026-10-04 決定，與建倉判定一致）
 5. **加碼次數未達上限**：$\text{pyramid\_count} < \text{\_PYRAMID\_MAX\_ADDS} = 2$
 6. **距上次加碼已冷卻**：$\text{now} - \text{last\_pyramid\_at} \ge \text{\_PYRAMID\_COOLDOWN\_BARS} = 8$ 根 15m bar（2 小時）；從未加碼過視為冷卻已滿足
 7. **加碼後總曝險未超過預算上限**：超過 `profile.max_satellite_budget_pct`（[`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §4.4）時降量而非直接拒絕
@@ -165,9 +165,9 @@ $$
 
 **倉位模型**：直接沿用 `short_entry_sizing.py`（`07_short_side_breakdown_ironclad.md` §2.6）已驗證的「風險預算 ÷ 停損距離」模型，方向反轉：
 $$
-\text{risk}_{\text{usd}} = \text{NAV} \times \min(\text{\_PYRAMID\_ACCOUNT\_RISK\_PCT},\, f_{\text{kelly}}) \times m_{\text{VIX}}, \qquad d_{\text{stop}} = \text{Spot} - \text{RatchetStop}, \qquad Q_{\text{add}} = \left\lfloor \frac{\text{risk}_{\text{usd}}}{d_{\text{stop}}} \right\rfloor
+\text{risk}_{\text{usd}} = \text{NAV} \times \min(\text{\_PYRAMID\_ACCOUNT\_RISK\_PCT},\, f_{\text{kelly}}), \qquad d_{\text{stop}} = \text{Spot} - \text{Stop}_{\text{squeeze}}, \qquad Q_{\text{add}} = \left\lfloor \frac{\text{risk}_{\text{usd}}}{d_{\text{stop}}} \right\rfloor
 $$
-其中 $f_{\text{kelly}}$ 取自 `kelly_priors.get_win_rate_prior("LONG", rsi)`，$m_{\text{VIX}}$ 採 `config.get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")`——沿用 `market_analysis/strategy/analyze.py` 已建立的 `DIRECTIONAL_LONG` 呼叫慣例（賣方階梯 `sizing_multiplier`），而非做空專用的倒 U 形乘數，因為此處是多頭順勢加碼，語意與方向性做空的軋空風險不同。
+其中 $f_{\text{kelly}}$ 取自 `kelly_priors.get_win_rate_prior("LONG", rsi)`。2026-10-04 起**不再乘 VIX 倍數**（使用者決定）：原本的 `get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")` 是賣方階梯，VIX < 15 時乘數為 0，會讓加碼股數恆為 0；`vix_multiplier` 欄位固定 1.0，VIX 階梯只作顯示。
 
 **狀態延後提交**：狀態刻意不在引擎內落地——沿用 `transition_engine.py` 既有設計，指令附帶 `dynamic_state_patch = {"pyramid_count": count+1, "last_pyramid_at": <ISO8601 UTC>}` 與 `asset_id`，由 `portfolio_monitor.py` 派發迴圈在確認送達後才呼叫 `set_asset_dynamic_state()` 提交，避免通知開關／dedup／`PYRAMID_ADD_DRY_RUN`（預設 `true`）任一道閘門抑制推播時，加碼額度永久燒掉。
 
@@ -272,7 +272,7 @@ flowchart TD
    - **總經逃頂防禦事件去重（10-Day Event Dedup）**：同一輪危機事件窗口內僅觸發一次防禦減碼，避免 VIX 長期處於高位時連續減碼削皮。
    - **底牆支撐緩衝雙邊界（Wall Buffer Guard）**：進場前嚴格整合 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 B 要求 $P_{\text{close}} \ge \text{PutWall} + 0.5 \times \text{ATR}_{15m}$。
 
-8. **`PYRAMID_ADD` 條件二不變式禁止放寬**：`ratchet_stop >= avg_cost` 是加碼機制與盲目攤平的唯一分界。任一資料缺失導致無法判定的條件（NetGEX 未知、`ratchet_stop` 缺失視為 $0$）一律 fail-closed 不加碼，因為本情境是**承擔新曝險**的決策，與既有部位「是否該出場」的 fail-open 慣例刻意不同。
+8. **`PYRAMID_ADD` 條件二不變式禁止放寬**：擠壓參考停損 $\ge$ `avg_cost` 是加碼機制與盲目攤平的唯一分界。任一資料缺失導致無法判定的條件（D／W K 線缺失、參考停損算不出來）一律 fail-closed 不加碼，因為本情境是**承擔新曝險**的決策，與既有部位「是否該出場」的 fail-open 慣例刻意不同。
 9. **`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 的插入位置**：`PYRAMID_ADD` 評估插入 `check_satellite_rebalancing_impl` 的 per-asset 迴圈中、`TRANSITION_ENGINE` 之後、SL/TP 階梯計算之前，重用同一輪已算好的 `spot`／`session_vwap`／`gamma_flip`／`net_gex` 等 metrics，避免重複抓取；條件四的 60 日高點抓取延遲至條件一~三皆通過後才發動，條件八的宏觀逃頂評分延遲至條件一~四皆通過後才發動（後者由呼叫端提供一個每位使用者記憶化一次的 async callable，避免對每個持倉重複計算）。
 10. **`PYRAMID_ADD` 曝險超限降量而非拒絕**：條件七超過 `profile.max_satellite_budget_pct` 時，以剩餘預算重新反推可加碼股數上限（`binding_constraint = "EXPOSURE_CAP"`），不足 1 股才拒絕，與 `short_entry_sizing.py` 既有的曝險上限降量邏輯一致。
 11. **多頭現貨一律顧問化**：多頭現貨持倉的情境三（`SATELLITE_REBALANCE`）指令固定摺疊為位階告知或丟棄（原 `portfolio_mode` COMMAND／ADVISORY 切換已移除，欄位與遷移 v079 保留但不再讀寫），情境四（`MARGIN_DEFENSE`，帳戶生存線）不受影響。轉換規則、丟棄項與唯一防護（`RolloverInstruction.action` 為純 `str`）詳見 [`05_dual_track_anti_washout_stop_loss.md`](05_dual_track_anti_washout_stop_loss.md) §3.1／§5.9。`PYRAMID_ADD`（情境十）刻意**不**受影響：加碼是新增曝險而非減碼，與 B&H 策略相容。
@@ -295,7 +295,7 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`evaluate_option_dte_tier()`
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`evaluate_short_entry_opportunity()`（情境九）
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：做空價位與倉位
-- `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：`evaluate_pyramid_add_impl()`（情境十，八項條件）、`compute_pyramid_add_sizing()`、`build_pyramid_add_plan()`
+- `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：`evaluate_pyramid_add_impl()`（情境十，八項條件；條件二～四呼叫 `squeeze_entry.evaluate_symbol()`）、`compute_pyramid_add_sizing()`、`build_pyramid_add_plan()`
 - `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_transition_pyramid_embed()`（依 `scenario` 分流 `TRANSITION_ENGINE`／`PYRAMID_ADD` 文案與倉位欄位）
 - `nexus_core/tests/unit/test_pyramid_add.py`：八項條件逐項測試、條件二不變式、次數上限、冷卻、曝險降量、空頭排除、狀態延後提交、端到端整合測試
 - `nexus_core/cogs/trading/portfolio_monitor.py`：十大情境的評估順序、通知頻道分流與 dry-run 閘門

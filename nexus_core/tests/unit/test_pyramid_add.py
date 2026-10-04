@@ -1,12 +1,14 @@
 """PYRAMID_ADD 順勢金字塔加碼 (pyramid_add.py) 單元測試。
 
-涵蓋 handoff.md §3.2 列出的八項條件逐項 pass/fail，以及最高優先的條件二
-不變式（`ratchet_stop >= avg_cost`，放寬即退化為攤平）、次數上限、冷卻、
-曝險降量、空頭部位排除、狀態延後提交等回歸測項。
+涵蓋八項條件逐項 pass/fail，以及最高優先的條件二不變式（擠壓參考停損
+>= avg_cost，放寬即退化為攤平）、次數上限、冷卻、曝險降量、空頭部位排除、
+狀態延後提交，以及顧問模式現貨持倉（無 ratchet_stop）可走到評估等回歸測項。
+條件二～四的多時間框架擠壓判定以 `squeeze_entry.evaluate_symbol` 注入。
 """
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,6 +19,10 @@ from market_analysis.dynamic_rollover.constants import (
     resolve_risk_profile,
 )
 from market_analysis.dynamic_rollover.pyramid_add import evaluate_pyramid_add_impl
+from market_analysis.squeeze_entry import SqueezeEvaluation
+from market_analysis.squeeze_entry.resistance import ResistanceContext, ResistanceZone
+from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+from market_analysis.squeeze_entry.timeframes import TimeframeState
 
 _PROFILE = resolve_risk_profile("DEFENSIVE")  # max_satellite_budget_pct = 0.15
 
@@ -36,25 +42,58 @@ def _asset(**overrides: Any) -> Dict[str, Any]:
         "quantity": 100.0,
         "current_value": 1_000.0,
         "avg_cost": 100.0,
-        "dynamic_strategy_state": {"ratchet_stop": 100.0, "pyramid_count": 0},
+        # 顧問模式現貨持倉的實際狀態：ratchet_stop 從未寫入
+        "dynamic_strategy_state": {"pyramid_count": 0},
+        "advisory_only": True,
     }
     asset.update(overrides)
     return asset
 
 
 def _metrics(**overrides: Any) -> Dict[str, Any]:
-    metrics: Dict[str, Any] = {
-        "spot_price": 110.0,
-        "call_wall": 120.0,
-        "put_wall": 108.0,
-        "atr_15m": 1.0,
-        "atr_14": 2.0,
-        "session_vwap": 105.0,
-        "gamma_flip": 104.0,
-        "net_gex": 500_000.0,
-    }
+    metrics: Dict[str, Any] = {"spot_price": 110.0}
     metrics.update(overrides)
     return metrics
+
+
+def _tf(tf: str, **kw: Any) -> TimeframeState:
+    base = TimeframeState(
+        timeframe=tf,
+        squeeze_level="Release",
+        is_squeezing=False,
+        momentum_value=1.0,
+        momentum_color="LightBlue",
+        green_dot=False,
+        green_dot_bars_ago=None,
+        turbo=False,
+        squeeze_range_low=None,
+        sma_20=104.0,
+        last_close=110.0,
+        bar_ts="2026-10-01",
+    )
+    return replace(base, **kw)
+
+
+def _squeeze(
+    *,
+    stop: Optional[float] = 101.0,
+    d_mom: float = 1.0,
+    green: tuple = ("D",),
+    broken: Optional[ResistanceZone] = None,
+    approaching: Optional[ResistanceZone] = None,
+) -> SqueezeEvaluation:
+    matrix = {
+        tf: _tf(tf, green_dot=tf in green, momentum_value=d_mom if tf == "D" else 1.0)
+        for tf in ("W", "3D", "D", "65m", "15m", "5m")
+    }
+    res = ResistanceContext(
+        atr_1d=2.0,
+        overhead=approaching,
+        is_approaching=approaching is not None,
+        broken=broken,
+    )
+    result = SqueezeEntryResult("WATCH", None, None, stop, "x")
+    return SqueezeEvaluation(result, matrix, res)
 
 
 async def _evaluate(
@@ -65,12 +104,12 @@ async def _evaluate(
     risk_limit_pct: float = 15.0,
     vix_spot: float = 20.0,
     resolve_macro_tier: Any = _normal_tier,
-    high_60d: float = 0.0,
+    squeeze: Optional[SqueezeEvaluation] = None,
 ) -> list:
     with patch(
-        "market_analysis.atr_utils.fetch_high_60d",
+        "market_analysis.squeeze_entry.evaluate_symbol",
         new_callable=AsyncMock,
-        return_value=high_60d,
+        return_value=squeeze if squeeze is not None else _squeeze(),
     ):
         return await evaluate_pyramid_add_impl(
             engine=None,
@@ -98,7 +137,8 @@ async def test_all_conditions_pass_produces_instruction() -> None:
     assert "last_pyramid_at" in ins["dynamic_state_patch"]
     plan = ins["pyramid_add_plan"]
     assert plan["share_qty"] >= 1
-    assert plan["stop_price"] == pytest.approx(100.0)
+    assert plan["stop_price"] == pytest.approx(101.0)
+    assert "D Green Dot" in ins["reason"]
 
 
 @pytest.mark.asyncio
@@ -109,60 +149,94 @@ async def test_condition1_profit_threshold_not_met() -> None:
 
 
 @pytest.mark.asyncio
-async def test_condition2_ratchet_stop_below_avg_cost_never_produces_instruction() -> (
-    None
-):
-    """最高優先測項：ratchet_stop < avg_cost 時絕對不得產生指令，即使其餘
-    七項條件全數通過。放寬此不變式即退化為盲目攤平。"""
-    asset = _asset(dynamic_strategy_state={"ratchet_stop": 90.0, "pyramid_count": 0})
-    instructions = await _evaluate(asset, _metrics())
+async def test_condition2_stop_below_avg_cost_never_produces_instruction() -> None:
+    """最高優先測項：擠壓參考停損 < avg_cost 時絕對不得產生指令，即使其餘
+    條件全數通過（放寬即退化為攤平）。"""
+    instructions = await _evaluate(_asset(), _metrics(), squeeze=_squeeze(stop=99.0))
     assert instructions == []
 
 
 @pytest.mark.asyncio
-async def test_condition2_missing_ratchet_stop_never_produces_instruction() -> None:
-    """ratchet_stop 完全缺失 (0.0) 同樣視為未滿足條件二。"""
-    asset = _asset(dynamic_strategy_state={})
-    instructions = await _evaluate(asset, _metrics())
+async def test_condition2_missing_stop_never_produces_instruction() -> None:
+    """參考停損算不出來（None）同樣視為未滿足條件二（fail-closed）。"""
+    instructions = await _evaluate(_asset(), _metrics(), squeeze=_squeeze(stop=None))
     assert instructions == []
 
 
 @pytest.mark.asyncio
-async def test_condition3_fails_when_net_gex_non_positive() -> None:
-    """條件三：NetGEX <= 0 -> 不加碼（承擔新曝險的閘門，fail-closed）。"""
-    instructions = await _evaluate(_asset(), _metrics(net_gex=-100.0))
+async def test_condition2_ignores_legacy_ratchet_stop() -> None:
+    """舊的 ratchet_stop 即使 >= 成本，也不能取代擠壓參考停損。"""
+    asset = _asset(dynamic_strategy_state={"ratchet_stop": 105.0, "pyramid_count": 0})
+    instructions = await _evaluate(asset, _metrics(), squeeze=_squeeze(stop=95.0))
     assert instructions == []
 
 
 @pytest.mark.asyncio
-async def test_condition3_fails_when_net_gex_missing() -> None:
-    """條件三：NetGEX 資料缺失 (None) -> fail-closed 不加碼。"""
-    metrics = _metrics()
-    metrics["net_gex"] = None
-    instructions = await _evaluate(_asset(), metrics)
+async def test_condition3_fails_when_daily_momentum_non_positive() -> None:
+    instructions = await _evaluate(_asset(), _metrics(), squeeze=_squeeze(d_mom=-0.1))
     assert instructions == []
 
 
 @pytest.mark.asyncio
-async def test_condition3_fails_when_spot_below_vwap() -> None:
-    instructions = await _evaluate(_asset(), _metrics(session_vwap=115.0))
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_condition3_fails_when_spot_below_gamma_flip() -> None:
-    instructions = await _evaluate(_asset(), _metrics(gamma_flip=115.0))
-    assert instructions == []
-
-
-@pytest.mark.asyncio
-async def test_condition4_fails_when_room_insufficient() -> None:
-    """條件四：上方空間不足動態門檻 -> 不加碼。call_wall 貼近現價、且提供
-    遠高於現價的 60 日高點停用晴空萬里擴展，確保天花板就是裸 call_wall。"""
+async def test_condition3_fails_without_continuation_signal() -> None:
+    """只有 15m/5m 的 Green Dot 不算（需 65m 以上），也沒有壓力區突破。"""
     instructions = await _evaluate(
-        _asset(), _metrics(call_wall=112.0), high_60d=1_000.0
+        _asset(), _metrics(), squeeze=_squeeze(green=("15m", "5m"))
     )
     assert instructions == []
+
+
+@pytest.mark.asyncio
+async def test_condition3_resistance_breakout_counts_as_continuation() -> None:
+    zone = ResistanceZone(107.0, 108.0, 2)
+    instructions = await _evaluate(
+        _asset(), _metrics(), squeeze=_squeeze(green=(), broken=zone)
+    )
+    assert len(instructions) == 1
+    assert "站上壓力區 $108.00" in instructions[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_condition4_pressing_resistance_only_annotates() -> None:
+    """條件四只標註、不擋：仍產出加碼指令，理由附上衝擊警示。"""
+    zone = ResistanceZone(110.5, 111.0, 3)
+    instructions = await _evaluate(
+        _asset(), _metrics(), squeeze=_squeeze(approaching=zone)
+    )
+    assert len(instructions) == 1
+    assert "正在衝擊壓力區 $110.50–$111.00" in instructions[0]["reason"]
+
+
+@pytest.mark.asyncio
+async def test_condition4_lower_breakout_still_warns_next_zone() -> None:
+    lower = ResistanceZone(105.0, 106.0, 2)
+    upper = ResistanceZone(110.5, 111.0, 3)
+    instructions = await _evaluate(
+        _asset(), _metrics(), squeeze=_squeeze(broken=lower, approaching=upper)
+    )
+    assert len(instructions) == 1
+    reason = instructions[0]["reason"]
+    assert "站上壓力區 $106.00" in reason and "$111.00，尚未突破" in reason
+
+
+@pytest.mark.asyncio
+async def test_squeeze_fetch_skipped_when_cheap_conditions_fail() -> None:
+    """條件一／五／六未通過時不得發動多時間框架 K 線抓取。"""
+    with patch(
+        "market_analysis.squeeze_entry.evaluate_symbol", new_callable=AsyncMock
+    ) as mock_eval:
+        await evaluate_pyramid_add_impl(
+            engine=None,
+            user_id=1,
+            asset=_asset(),
+            metrics=_metrics(spot_price=101.0),
+            profile=_PROFILE,
+            capital=100_000.0,
+            risk_limit_pct=15.0,
+            vix_spot=20.0,
+            resolve_macro_tier=_normal_tier,
+        )
+    mock_eval.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -170,7 +244,6 @@ async def test_condition5_max_adds_reached_rejects_third_add() -> None:
     """條件五：第 3 次加碼必須被拒絕（pyramid_count 已達 _PYRAMID_MAX_ADDS=2）。"""
     asset = _asset(
         dynamic_strategy_state={
-            "ratchet_stop": 100.0,
             "pyramid_count": _PYRAMID_MAX_ADDS,
         }
     )
@@ -184,7 +257,6 @@ async def test_condition6_cooldown_blocks_second_trigger_within_window() -> None
     recent = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
     asset = _asset(
         dynamic_strategy_state={
-            "ratchet_stop": 100.0,
             "pyramid_count": 0,
             "last_pyramid_at": recent,
         }
@@ -199,7 +271,6 @@ async def test_condition6_cooldown_elapsed_allows_trigger() -> None:
     old = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
     asset = _asset(
         dynamic_strategy_state={
-            "ratchet_stop": 100.0,
             "pyramid_count": 0,
             "last_pyramid_at": old,
         }
@@ -285,9 +356,9 @@ async def test_state_patch_not_committed_inside_evaluator() -> None:
     return_value={"fear_greed": 40.0},
 )
 @patch(
-    "market_analysis.atr_utils.fetch_high_60d",
+    "market_analysis.squeeze_entry.evaluate_symbol",
     new_callable=AsyncMock,
-    return_value=0.0,
+    return_value=_squeeze(),
 )
 @patch(
     "database.cache.get_kv_cache",
@@ -299,7 +370,7 @@ async def test_state_patch_not_committed_inside_evaluator() -> None:
 )
 async def test_end_to_end_via_check_satellite_rebalancing(
     _mock_kv: MagicMock,
-    _mock_high_60d: AsyncMock,
+    _mock_squeeze: AsyncMock,
     _mock_fear_greed: AsyncMock,
     _mock_vts: AsyncMock,
     _mock_regime: AsyncMock,
@@ -308,7 +379,8 @@ async def test_end_to_end_via_check_satellite_rebalancing(
 ) -> None:
     """端到端：`check_satellite_rebalancing` 正確解析 capital/risk_limit、把
     VIX 即時值與記憶化的宏觀逃頂 tier 解析器一路傳進 `evaluate_pyramid_add_impl`，
-    對符合條件的多頭 SATELLITE 部位產出 PYRAMID_ADD 指令。"""
+    對符合條件的多頭 SATELLITE 部位產出 PYRAMID_ADD 指令——包含顧問模式
+    （advisory_only=True、從未寫入 ratchet_stop）的 B&H 現貨持倉。"""
     mock_get_user.return_value = MagicMock(
         risk_appetite="DEFENSIVE", capital=100_000.0, risk_limit=15.0
     )
@@ -329,7 +401,8 @@ async def test_end_to_end_via_check_satellite_rebalancing(
             "session_vwap": 105.0,
             "gamma_flip": 104.0,
             "gex_profile_data": {"net_gex": 500_000.0},
-            "dynamic_strategy_state": {"ratchet_stop": 100.0, "pyramid_count": 0},
+            "dynamic_strategy_state": {"pyramid_count": 0},
+            "advisory_only": True,
         },
     ]
 
@@ -343,3 +416,14 @@ async def test_end_to_end_via_check_satellite_rebalancing(
     assert len(pyramid_instructions) == 1
     assert pyramid_instructions[0]["action"] == "OPEN_PYRAMID"
     assert pyramid_instructions[0]["asset_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_low_vix_does_not_zero_out_add_size() -> None:
+    """VIX < 15（賣方階梯乘數為 0 的區間）仍須產出加碼股數：VIX 不再調整倉位。"""
+    low = await _evaluate(_asset(), _metrics(), vix_spot=12.0)
+    normal = await _evaluate(_asset(), _metrics(), vix_spot=20.0)
+    assert len(low) == 1 and len(normal) == 1
+    low_plan = low[0]["pyramid_add_plan"]
+    assert low_plan["share_qty"] == normal[0]["pyramid_add_plan"]["share_qty"] > 0
+    assert low_plan["vix_multiplier"] == 1.0

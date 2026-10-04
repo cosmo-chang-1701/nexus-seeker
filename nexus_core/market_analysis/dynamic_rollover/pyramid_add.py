@@ -11,22 +11,24 @@
 
 八項觸發條件全部為 AND（見 `evaluate_pyramid_add_impl` docstring）。倉位模型
 直接沿用 `short_entry_sizing.py` 已驗證的「風險預算 ÷ 停損距離」模型，方向
-反轉：停損距離為 `Spot − RatchetStop`。條件二已保證 `ratchet_stop >= avg_cost`，
-因此加碼只動用「已實現的帳面利潤」承險，不增加原始部位的本金曝險——這是金字塔
-加碼與盲目攤平的唯一分界，任何修改都不得放寬條件二。
+反轉：停損距離為 `Spot − 參考停損`。條件二保證參考停損 >= avg_cost，因此加碼只
+動用「已實現的帳面利潤」承險，不增加原始部位的本金曝險——這是金字塔加碼與盲目
+攤平的唯一分界，任何修改都不得放寬條件二。
+
+條件二～四自 2026-10 起改由多時間框架擠壓判定（`market_analysis/squeeze_entry/`，
+規格 docs/strategies/10）：原本讀取的 `dynamic_strategy_state["ratchet_stop"]` 在
+顧問模式下永遠不會寫入（`advisory_mode.py` 丟棄 HOLD 指令的狀態補丁，而所有多頭
+現貨皆為顧問模式），導致條件二恆不成立；改以擠壓參考停損即時計算，不變式語意
+（停損 >= 成本）不變。
 """
 
 import math
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Dict, List, NamedTuple, Optional
 
-from config import get_vix_tier, get_vix_sizing_multiplier
+from config import get_vix_tier
 from market_analysis.kelly_priors import KELLY_PRIOR_ODDS, get_win_rate_prior
 from market_analysis.risk_engine import kelly_position_fraction
-from market_analysis.room_threshold import (
-    compute_dynamic_room_threshold,
-    resolve_effective_target,
-)
 
 from .constants import (
     _PYRAMID_ACCOUNT_RISK_PCT,
@@ -55,9 +57,7 @@ class PyramidAddSizing(NamedTuple):
     vix_tier_name: str
     vix_multiplier: float
     kelly_fraction: float
-    binding_constraint: (
-        str  # RISK_PCT / KELLY / EXPOSURE_CAP / VIX_ZERO / NO_EDGE / INVALID_INPUT
-    )
+    binding_constraint: str  # RISK_PCT / KELLY / EXPOSURE_CAP / NO_EDGE / INVALID_INPUT
 
 
 def compute_pyramid_add_sizing(
@@ -70,15 +70,15 @@ def compute_pyramid_add_sizing(
 ) -> PyramidAddSizing:
     """計算加碼股數（風險預算 ÷ 停損距離，方向反轉自 short_entry_sizing.py）。
 
-    risk_usd = capital × min(_PYRAMID_ACCOUNT_RISK_PCT, f_kelly) × m_vix
-    qty      = min(⌊risk_usd / (spot − ratchet_stop)⌋, ⌊capital × risk_limit% / spot⌋)
+    risk_usd = capital × min(_PYRAMID_ACCOUNT_RISK_PCT, f_kelly)
+    qty      = min(⌊risk_usd / (spot − stop)⌋, ⌊capital × risk_limit% / spot⌋)
 
-    VIX 乘數刻意採 `config.get_vix_sizing_multiplier(vix_spot, "DIRECTIONAL_LONG")`
-    （沿用 `market_analysis/strategy/analyze.py` 已建立的 DIRECTIONAL_LONG 呼叫
-    慣例），而非 `short_entry_sizing.py` 的倒 U 形做空乘數——後者是為「VIX 極端
-    區軋空風險」設計的方向性做空語意，不適用於多頭順勢加碼。
+    **不套用 VIX 倉位乘數**（使用者 2026-10-04 決定）：原本採用的
+    `get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")` 是賣方階梯，VIX < 15 時
+    乘數為 0，會讓平靜行情（擠壓最常出現的時候）的加碼股數恆為 0。VIX 階梯
+    只保留作顯示；`vix_multiplier` 欄位固定為 1.0 以維持計畫結構相容。
     """
-    m_vix = get_vix_sizing_multiplier(vix_spot, "DIRECTIONAL_LONG")
+    m_vix = 1.0
     vix_known = vix_spot is not None and not math.isnan(vix_spot)
     vix_tier_name = get_vix_tier(vix_spot)["name"] if vix_known else "未知"
 
@@ -101,8 +101,6 @@ def compute_pyramid_add_sizing(
 
     if not _is_positive(capital) or stop_distance <= 0 or spot <= 0:
         return _result(0.0, 0, 0.0, "INVALID_INPUT")
-    if m_vix <= 0:
-        return _result(0.0, 0, 0.0, "VIX_ZERO")
 
     win_prob = get_win_rate_prior("LONG", rsi_15m)
     kelly_f = kelly_position_fraction(
@@ -118,7 +116,7 @@ def compute_pyramid_add_sizing(
         risk_fraction, binding = kelly_f, "KELLY"
     else:
         risk_fraction, binding = _PYRAMID_ACCOUNT_RISK_PCT, "RISK_PCT"
-    risk_usd = capital * risk_fraction * m_vix
+    risk_usd = capital * risk_fraction
 
     qty_risk = int(math.floor(risk_usd / stop_distance))
     qty_cap = (
@@ -165,13 +163,13 @@ async def evaluate_pyramid_add_impl(
     """情境十：順勢金字塔加碼。八項條件全部為 AND：
 
     1. 部位已獲利 (Spot-AvgCost)/AvgCost >= _PYRAMID_PROFIT_THRESHOLD_PCT (3%)
-    2. 停損已在成本之上：dynamic_strategy_state["ratchet_stop"] >= avg_cost
-       （不變式，任何修改都不得放寬——這是加碼只動用帳面利潤承險的唯一保證）
-    3. 趨勢結構完好：Spot > SessionVWAP、Spot > GammaFlip、NetGEX > 0
-       （NetGEX 缺失 (None) 視為未知，fail-closed 不通過——這是承擔新曝險的
-       閘門，與「已有部位是否出場」的 fail-open 哲學不同）
-    4. 上方仍有空間：晴空萬里有效目標天花板 (room_threshold.py 公式 D) 距現價
-       空間 >= 動態自適應波動率門檻 (公式 A)
+    2. 停損已在成本之上：擠壓參考停損（D 擠壓區間低點與 20SMA 較低者 −
+       0.5×ATR₁D）>= avg_cost（不變式，任何修改都不得放寬——這是加碼只動用帳面
+       利潤承險的唯一保證；參考停損算不出來一律 fail-closed）
+    3. 趨勢延續訊號：D 動能 > 0，且 65m／D／3D／W 任一出現 Green Dot（擠壓剛
+       解除），或收盤站上壓力區（壓力區突破）
+    4. 壓力區只標註、不擋：現價若在尚未突破的壓力區下緣 0.5×ATR₁D 以內，於理由
+       附上警示（使用者 2026-10-04 決定，與建倉判定一致）
     5. 加碼次數未達上限：pyramid_count < _PYRAMID_MAX_ADDS (2)
     6. 距上次加碼已冷卻：now - last_pyramid_at >= _PYRAMID_COOLDOWN_BARS (8 根
        15m bar = 2 小時)；從未加碼過視為冷卻已滿足
@@ -200,26 +198,6 @@ async def evaluate_pyramid_add_impl(
     if profit_pct < _PYRAMID_PROFIT_THRESHOLD_PCT:
         return []
 
-    # 條件二：停損已在成本之上（不變式，任何修改都不得放寬）
-    ratchet_stop = float(state.get("ratchet_stop", 0.0) or 0.0)
-    if ratchet_stop < avg_cost:
-        return []
-
-    # 條件三：趨勢結構完好
-    session_vwap = float(metrics.get("session_vwap", 0.0))
-    gamma_flip = float(metrics.get("gamma_flip", 0.0))
-    net_gex_raw = metrics.get("net_gex")
-    net_gex: Optional[float] = float(net_gex_raw) if net_gex_raw is not None else None
-    if not (
-        session_vwap > 0
-        and spot > session_vwap
-        and gamma_flip > 0
-        and spot > gamma_flip
-        and net_gex is not None
-        and net_gex > 0.0
-    ):
-        return []
-
     # 條件五：加碼次數上限
     pyramid_count = int(state.get("pyramid_count", 0) or 0)
     if pyramid_count >= _PYRAMID_MAX_ADDS:
@@ -240,24 +218,44 @@ async def evaluate_pyramid_add_impl(
         except ValueError:
             pass  # 無法解析的時間戳視為未曾加碼，不阻擋
 
-    # 條件四：晴空萬里有效目標天花板空間（需要 60 日高點，延遲至此才發動網路
-    # 抓取——前面較便宜的條件已先行過濾，避免對明顯不合格的部位浪費請求）
+    # 條件二～四需要多時間框架 K 線（三次抓取），延遲到便宜的條件一／五／六
+    # 都通過後才發動。
     symbol = str(asset.get("symbol", ""))
-    call_wall = float(metrics.get("call_wall", 0.0))
-    put_wall = float(metrics.get("put_wall", 0.0))
-    atr_15m = float(metrics.get("atr_15m", 0.0))
-    atr_1d = float(metrics.get("atr_14", 0.0))
+    from market_analysis import squeeze_entry
 
-    from market_analysis.atr_utils import fetch_high_60d
+    ev = await squeeze_entry.evaluate_symbol(symbol, spot)
 
-    high_60d = await fetch_high_60d(symbol)
-    eff_target = resolve_effective_target(spot, call_wall, high_60d, atr_1d)
-    room = compute_dynamic_room_threshold(
-        spot, put_wall, atr_15m, atr_1d, direction="LONG"
-    )
-    room_pct = (eff_target.target - spot) / spot if eff_target.target > 0 else 0.0
-    if room_pct < room.threshold_pct:
+    # 條件二：停損已在成本之上（不變式，任何修改都不得放寬）
+    ref_stop = ev.result.stop
+    if ref_stop is None or ref_stop < avg_cost:
         return []
+
+    # 條件三：趨勢延續訊號
+    d_state = ev.matrix.get("D")
+    if d_state is None or d_state.momentum_value <= 0:
+        return []
+    continuation = [
+        f"{tf} Green Dot"
+        for tf in ("65m", "D", "3D", "W")
+        if tf in ev.matrix and ev.matrix[tf].green_dot
+    ]
+    resistance = ev.resistance
+    if resistance is not None and resistance.broken is not None:
+        continuation.append(f"站上壓力區 ${resistance.broken.top:.2f}")
+    if not continuation:
+        return []
+
+    # 條件四：壓力區只標註、不擋（衝擊中的 overhead 必然尚未突破）
+    resistance_warning = ""
+    if (
+        resistance is not None
+        and resistance.is_approaching
+        and resistance.overhead is not None
+    ):
+        resistance_warning = (
+            f"\n⚠️ 正在衝擊壓力區 ${resistance.overhead.bottom:.2f}–"
+            f"${resistance.overhead.top:.2f}，尚未突破（只提示，是否等突破由你決定）。"
+        )
 
     # 條件八：非逃頂警戒。刻意放在條件一~七之後才呼叫（宏觀評分呼叫端有自己的
     # 快取，但仍涉及 VTS/Fear&Greed/FedWatch 三次資料抓取），前面已先行過濾掉
@@ -270,7 +268,7 @@ async def evaluate_pyramid_add_impl(
     rsi_15m = metrics.get("rsi_15m")
     rsi_val = float(rsi_15m) if rsi_15m is not None else None
     sizing = compute_pyramid_add_sizing(
-        spot, ratchet_stop, capital, risk_limit_pct, vix_spot, rsi_val
+        spot, ref_stop, capital, risk_limit_pct, vix_spot, rsi_val
     )
     if sizing.share_qty < 1:
         return []
@@ -296,15 +294,15 @@ async def evaluate_pyramid_add_impl(
         "pyramid_count": pyramid_count + 1,
         "last_pyramid_at": now_iso,
     }
-    plan = build_pyramid_add_plan(sizing, spot, ratchet_stop, pyramid_count + 1)
+    plan = build_pyramid_add_plan(sizing, spot, ref_stop, pyramid_count + 1)
 
     reason = (
         "📈 **順勢金字塔加碼 (PYRAMID_ADD)**\n"
-        f"{symbol} 部位獲利 {profit_pct:+.1%}（棘輪停損 ${ratchet_stop:.2f} 已鎖定於成本"
-        f"${avg_cost:.2f} 之上），現價 ${spot:.2f} 站穩 Session VWAP ${session_vwap:.2f} 與 "
-        f"Gamma Flip ${gamma_flip:.2f}、NetGEX {net_gex:+,.0f} 仍為正，上方空間 "
-        f"{room_pct:+.2%} 達動態門檻 {room.threshold_pct:.2%}，判定趨勢延伸中。"
+        f"{symbol} 部位獲利 {profit_pct:+.1%}（擠壓參考停損 ${ref_stop:.2f} 位於成本 "
+        f"${avg_cost:.2f} 之上），D 動能仍為正，趨勢延續訊號："
+        f"{'、'.join(continuation)}。"
         f"本次為第 {pyramid_count + 1}/{_PYRAMID_MAX_ADDS} 次加碼。"
+        f"{resistance_warning}"
     )
 
     instruction: RolloverInstruction = {

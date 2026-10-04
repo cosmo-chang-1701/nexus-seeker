@@ -357,6 +357,61 @@ def record_gate_reason(
         logger.debug(f"[EvalRecorder] gate 記錄失敗: {e}")
 
 
+def record_squeeze_entry(
+    symbol: str,
+    spot: float,
+    result: Any,
+    matrix: Mapping[str, Any],
+    resistance: Any = None,
+    regime: Optional[str] = None,
+) -> None:
+    """記錄多時間框架擠壓進場判定（`SqueezeEntryResult` 以 duck typing 讀取）。
+
+    `sub_mode` 存狀態（ENTRY／WATCH／…），`conditions_mask` 存等級
+    （1–3，未達為 None）；矩陣與壓力區壓縮進 `features_json` 供離線校準。
+    """
+    try:
+        status = getattr(result, "status", None)
+        features: dict[str, Any] = {
+            "tier": getattr(result, "tier", None),
+            "size_pct": getattr(result, "size_pct", None),
+            "squeeze_count": getattr(result, "squeeze_count", None),
+            "triggers": ",".join(getattr(result, "triggers", []) or []),
+        }
+        for tf, st in matrix.items():
+            features[f"{tf}_lvl"] = getattr(st, "squeeze_level", None)
+            features[f"{tf}_mom"] = getattr(st, "momentum_color", None)
+            features[f"{tf}_gd"] = bool(getattr(st, "green_dot", False))
+            features[f"{tf}_turbo"] = bool(getattr(st, "turbo", False))
+        overhead = getattr(resistance, "overhead", None)
+        if overhead is not None:
+            features["res_bottom"] = getattr(overhead, "bottom", None)
+            features["res_top"] = getattr(overhead, "top", None)
+        broken = getattr(resistance, "broken", None)
+        if broken is not None:
+            features["res_broken_top"] = getattr(broken, "top", None)
+        features["at_resistance"] = bool(getattr(resistance, "is_approaching", False))
+        _append(
+            {
+                "symbol": symbol.upper(),
+                "evaluator": "ENTRY_SQUEEZE",
+                "regime": regime,
+                "direction": "LONG",
+                "sub_mode": status,
+                "decision": 1 if status == "ENTRY" else 0,
+                "conditions_mask": getattr(result, "tier", None),
+                "spot": _num(spot),
+                "atr_1d": _num(getattr(resistance, "atr_1d", None)),
+                "entry_price": _num(spot) if status == "ENTRY" else None,
+                "stop_price": _num(getattr(result, "stop", None)),
+                "reason_digest": getattr(result, "reason", None),
+                "features_json": features,
+            }
+        )
+    except Exception as e:
+        logger.debug(f"[EvalRecorder] squeeze 記錄失敗: {e}")
+
+
 # 本輪「不出場、改抬棘輪停損」的分層：訊號押注的是**續抱**，方向與部位相同。
 # 其餘分層 (SL 平倉、TP 減碼、極端熔斷、IV 驟降) 押注的是**離場**，方向與部位相反。
 HOLD_EXIT_TIERS: frozenset[str] = frozenset(

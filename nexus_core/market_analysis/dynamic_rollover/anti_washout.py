@@ -1557,53 +1557,11 @@ async def check_satellite_rebalancing_impl(
     async def _resolve_macro_tier() -> str:
         if "tier" in _macro_tier_cache:
             return _macro_tier_cache["tier"]
-        try:
-            from market_analysis.index_microstructure import (
-                evaluate_macro_top_escape_score,
-                fetch_core_macro_metrics,
-                get_market_regime,
-            )
-            from services.market_data_service import get_vix_term_structure
+        from market_analysis.squeeze_entry.vetoes import compute_macro_escape_tier
 
-            regime = await get_market_regime()
-            # 未知一律傳 None (不補 0.88 / 48 備援值)：evaluate_macro_top_escape_score
-            # 會把「無法確定為常態」回傳為 UNKNOWN，條件八隨之 fail-closed。
-            is_negative_gamma: Optional[bool] = (
-                None
-                if regime == "UNKNOWN"
-                else regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS")
-            )
-            vts_data = await get_vix_term_structure()
-            vts_ratio: Optional[float] = (
-                float(vts_data["vts_ratio"])
-                if vts_data.get("is_valid", False)
-                and vts_data.get("vts_ratio") is not None
-                else None
-            )
-            core_metrics = await fetch_core_macro_metrics()
-            fg_raw = core_metrics.get("fear_greed")
-            fear_greed: Optional[float] = (
-                float(fg_raw)
-                if fg_raw is not None and not core_metrics.get("_is_fallback")
-                else None
-            )
-            from database.cache import get_kv_cache
-
-            prob = get_kv_cache("macro_fedwatch_probability")
-            _, tier, _, _ = evaluate_macro_top_escape_score(
-                vts_ratio=vts_ratio,
-                fear_greed=fear_greed,
-                prob=prob,
-                is_negative_gamma=is_negative_gamma,
-                satellite_euphoria_ratio=None,
-            )
-        except Exception as e:
-            # PYRAMID_ADD 是「承擔新曝險」的決策，與其餘條件一致採 fail-closed：
-            # 宏觀評分算不出來時不得加碼，故意回傳非 NORMAL 值使條件八不通過。
-            logger.warning(
-                f"PYRAMID_ADD 條件八宏觀逃頂評分計算失敗，fail-closed 暫停加碼: {e}"
-            )
-            tier = "UNKNOWN"
+        # PYRAMID_ADD 是「承擔新曝險」的決策：評分算不出來時回傳 UNKNOWN，
+        # 條件八隨之 fail-closed。
+        tier = await compute_macro_escape_tier()
         _macro_tier_cache["tier"] = tier
         return tier
 

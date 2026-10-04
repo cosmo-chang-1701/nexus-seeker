@@ -4902,36 +4902,6 @@ def test_create_entry_rules_embed_left_side_uses_left_legend() -> None:
     assert "結構性右側放量突破確認" not in blob
 
 
-def test_create_entry_rules_embed_right_side_keeps_existing_legend() -> None:
-    """未選擇策略 (預設 RIGHT_SIDE) 時維持既有右側說明，確保零行為變化。"""
-    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
-
-    embed = create_entry_rules_embed("NVDA", True, ["條件一✅：ok"])
-    blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
-    assert "結構性右側放量突破確認" in blob
-    assert "結構性空頭力竭與極值乖離確認" not in blob
-
-
-def test_create_entry_rules_embed_dynamic_regime_iv_shows_no_gate_notice() -> None:
-    """動態調整判定為 Regime IV (全面鎖倉) 時兩套鐵律都沒發動，不得貼上任一套的
-    條件說明誤導使用者。"""
-    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
-
-    embed = create_entry_rules_embed(
-        "NVDA",
-        False,
-        ["⛔ Regime `REGIME_IV_STRUCTURAL_CAP_CRISIS`：Call Wall 空間不足"],
-        trading_strategy="DYNAMIC",
-        dynamic_regime="REGIME_IV_STRUCTURAL_CAP_CRISIS",
-        dynamic_regime_reason="Call Wall 空間不足",
-    )
-    blob = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
-    assert "三套六重鐵律皆未發動判定" in blob
-    assert "結構性右側放量突破確認" not in blob
-    assert "結構性空頭力竭與極值乖離確認" not in blob
-    assert "結構性放量破位確認" not in blob
-
-
 def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None:
     """停損上移指令雖然 sell_ratio=0，卻確實需要使用者手動操作，不得沿用通用
     轉倉 embed——後者的 is_hold 判定會渲染成「安全續抱、無需任何手動操作」，

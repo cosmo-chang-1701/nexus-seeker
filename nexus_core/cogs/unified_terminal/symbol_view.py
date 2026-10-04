@@ -13,6 +13,7 @@ from cogs.embed_builder import (
     create_tactical_symbol_embed,
     create_tactical_hedge_embed,
     create_entry_rules_embed,
+    create_squeeze_entry_embed,
 )
 
 logger = logging.getLogger(__name__)
@@ -283,7 +284,7 @@ class SymbolHubView(discord.ui.View):
             await self._reset_loading(interaction, embed=embed)
 
     @discord.ui.button(
-        label="🔐 進場鐵律檢核",
+        label="🔐 進場檢核",
         style=discord.ButtonStyle.secondary,
         custom_id="btn_entry_rules",
         row=1,
@@ -292,12 +293,13 @@ class SymbolHubView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """
-        進場鐵律檢核頁籤：依使用者 /settings 選擇的交易策略模式 (右側交易/左側
-        交易/動態調整) 呈現對應的六重鐵律 (dynamic_rollover/opportunity_cost.py::
-        _confirm_entry_signal 或 left_side_entry.py::_confirm_left_entry_signal，
-        動態調整模式另由 regime_classifier.py::classify_dynamic_regime 先行路由)
-        的判定結果，串接方式比照 opportunity_cost.py::
-        evaluate_opportunity_cost_for_satellites 既有的三分支邏輯。
+        進場檢核頁籤：依使用者 /settings 選擇的交易策略模式呈現對應判定。
+
+        * 多頭建倉（右側交易，以及動態調整中非左側、非做空的 Regime）：多時間框架
+          擠壓規則（`intraday_pipeline/entry_advisor.py::_evaluate_squeeze_long`，
+          與進場顧問推播同一份判定）。
+        * 左側交易／動態調整 Regime I：左側六重鐵律。
+        * 做空交易／動態調整 Regime V：做空六重鐵律。
         """
         await interaction.response.defer()
         await self._set_loading(interaction)
@@ -308,10 +310,13 @@ class SymbolHubView(discord.ui.View):
         # 「之後」才批次寫入，不拖慢互動回應。
         eval_source_token = evaluation_recorder.set_evaluation_source("SYMBOL_VIEW")
         try:
-            from market_analysis.dynamic_rollover import DynamicRolloverEngine
             from market_analysis.dynamic_rollover.models import (
                 DynamicRegime,
                 TradingStrategyMode,
+            )
+            from market_analysis.intraday_pipeline.entry_advisor import (
+                EntryAdvice,
+                _evaluate_squeeze_long,
             )
 
             _quote = self.base_data.get("quote") or {}
@@ -333,8 +338,8 @@ class SymbolHubView(discord.ui.View):
                     f"退回右側交易預設: {e}"
                 )
 
-            engine = DynamicRolloverEngine()
             dynamic_regime: Any = None
+            squeeze_advice: Optional[EntryAdvice] = None
             dynamic_regime_reason = None
             # 兩套鐵律的入口簽章現已完全收斂，皆回傳 (是否通過, 原因, 建議結構)。
             structure_directive: Optional[str] = None
@@ -383,37 +388,7 @@ class SymbolHubView(discord.ui.View):
                 ) = await classify_dynamic_regime(
                     self.symbol, target_spot, gex_profile_data, uoa_list
                 )
-                if dynamic_regime == DynamicRegime.REGIME_III_RIGHT_MOMENTUM:
-                    (
-                        six_rule_passed,
-                        six_rule_reason,
-                        structure_directive,
-                    ) = await engine._confirm_entry_signal(
-                        self.symbol,
-                        self.base_data,
-                        target_spot,
-                        # 原樣沿用分類階段已抓取的 15m frame / Session VWAP，
-                        # 避免對同一標的重複發起網路請求 (比照下方 REGIME_I
-                        # 分支既有作法)。
-                        df_15m=regime_market_data.df_15m,
-                        session_vwap=regime_market_data.session_vwap,
-                    )
-                elif dynamic_regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION:
-                    # 同一套右側鐵律，條件一/四放寬（見 opportunity_cost.py::
-                    # _confirm_entry_signal 的 trend_continuation 說明）。
-                    (
-                        six_rule_passed,
-                        six_rule_reason,
-                        structure_directive,
-                    ) = await engine._confirm_entry_signal(
-                        self.symbol,
-                        self.base_data,
-                        target_spot,
-                        df_15m=regime_market_data.df_15m,
-                        session_vwap=regime_market_data.session_vwap,
-                        trend_continuation=True,
-                    )
-                elif dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
+                if dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                     (
                         six_rule_passed,
                         six_rule_reason,
@@ -440,19 +415,30 @@ class SymbolHubView(discord.ui.View):
                         atr_15m=regime_market_data.atr_15m,
                     )
                 else:
-                    six_rule_passed = False
-                    six_rule_reason = (
-                        f"⛔ Regime `{dynamic_regime.value}`：{dynamic_regime_reason}"
+                    squeeze_advice = await _evaluate_squeeze_long(
+                        trading_strategy,
+                        self.symbol,
+                        target_spot,
+                        dynamic_regime.value,
+                        dynamic_regime_reason,
                     )
-                    structure_directive = None
             else:
-                (
-                    six_rule_passed,
-                    six_rule_reason,
-                    structure_directive,
-                ) = await engine._confirm_entry_signal(
-                    self.symbol, self.base_data, target_spot
+                squeeze_advice = await _evaluate_squeeze_long(
+                    trading_strategy, self.symbol, target_spot
                 )
+
+            if squeeze_advice is not None:
+                embed = create_squeeze_entry_embed(
+                    self.symbol,
+                    squeeze_advice.squeeze,
+                    passed=squeeze_advice.passed,
+                    reason=squeeze_advice.reason,
+                    entry_price=squeeze_advice.entry_price,
+                    stop_loss=squeeze_advice.stop_loss,
+                    trading_strategy=trading_strategy,
+                    dynamic_regime=squeeze_advice.regime,
+                )
+                return
 
             six_rule_reasons = six_rule_reason.split(" | ") if six_rule_reason else []
 
@@ -470,7 +456,7 @@ class SymbolHubView(discord.ui.View):
         except Exception as e:
             logger.exception(f"[{self.symbol}] Entry rules check failed: {e}")
             await interaction.followup.send(
-                embed=create_error_embed("進場鐵律檢核失敗，請稍後再試。"),
+                embed=create_error_embed("進場檢核失敗，請稍後再試。"),
                 ephemeral=True,
             )
         finally:

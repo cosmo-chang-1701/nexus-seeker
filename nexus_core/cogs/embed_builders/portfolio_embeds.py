@@ -2613,9 +2613,8 @@ def create_entry_rules_embed(
     """
     建構標的深度分析中心「🔐 進場鐵律檢核」頁籤 Embed。
 
-    彙總呈現進場六重鐵律 (`market_analysis/dynamic_rollover/opportunity_cost.py::
-    _confirm_entry_signal`) 的即時 Pass/Fail 判定：本專案既有機會成本轉倉候選
-    標的確認的生產路徑，含總經/財報安全閥與 candidate 自身 DTE 檢查等 I/O。
+    彙總呈現左側／做空六重鐵律的即時 Pass/Fail 判定。多頭建倉（右側）已改由
+    多時間框架擠壓規則判定，改用 `squeeze_entry_embeds.create_squeeze_entry_embed`。
 
     :param trading_strategy: 呼叫端使用者當前 /settings 選擇的交易策略模式
         (RIGHT_SIDE/LEFT_SIDE/SHORT_SIDE/DYNAMIC)。僅 "DYNAMIC" 且提供 dynamic_regime 時
@@ -2624,10 +2623,8 @@ def create_entry_rules_embed(
     :param dynamic_regime: `regime_classifier.py::classify_dynamic_regime`
         回傳的 DynamicRegime 值 (例如 "REGIME_I_LEFT_CATCH")。
     :param dynamic_regime_reason: 對應的分類理由文字。
-    :param structure_directive: 左右兩套鐵律條件六依「當下市況」現算的建議合約
-        天期與部位結構字串 (右側來自 opportunity_cost.py::
-        _derive_entry_structure_directive，左側來自 left_side_entry.py 的 IVR
-        分流)。天期刻意設計為每輪重評都重算的輸出參數，而非在進場當下蓋章後
+    :param structure_directive: 鐵律條件六依「當下市況」現算的建議合約天期與
+        部位結構字串 (左側來自 left_side_entry.py 的 IVR 分流)。天期刻意設計為每輪重評都重算的輸出參數，而非在進場當下蓋章後
         永不更新的部位標籤。預設 None 時不渲染此欄位，向下相容既有呼叫端。
     :param entry_price / stop_loss / target / rr_ratio: 自選標的進場顧問推播
         (intraday_pipeline/entry_advisor.py) 附帶的價位建議。四者皆為 None (預設，
@@ -2640,37 +2637,17 @@ def create_entry_rules_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    # 實際發動的是哪一套鐵律，完全由 trading_strategy + dynamic_regime 決定，
-    # 不需要呼叫端額外傳參：LEFT_SIDE 走左側、SHORT_SIDE 走做空；DYNAMIC 依分類
-    # 結果路由 (Regime I 走左側、III 與 III-B 走右側、V 走做空、II/IV 皆不發動)；
-    # 其餘走右側。
+    # 本 Embed 只剩左側與做空兩套六重鐵律使用（多頭建倉已改由多時間框架擠壓
+    # 規則判定，見 squeeze_entry_embeds.py）：SHORT_SIDE／DYNAMIC Regime V 走做空，
+    # 其餘（LEFT_SIDE／DYNAMIC Regime I）走左側。
     if trading_strategy == "SHORT_SIDE" or (
         trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_V_BREAKDOWN_CHASE"
     ):
         _effective_gate = "SHORT"
         _gate_label = "做空交易：結構破位追空"
-    elif trading_strategy == "LEFT_SIDE" or (
-        trading_strategy == "DYNAMIC" and dynamic_regime == "REGIME_I_LEFT_CATCH"
-    ):
+    else:
         _effective_gate = "LEFT"
         _gate_label = "左側交易：逆勢均值回歸 (做多)"
-    elif trading_strategy == "DYNAMIC" and dynamic_regime in (
-        "REGIME_II_CHAOS_STANDASIDE",
-        "REGIME_IV_STRUCTURAL_CAP_CRISIS",
-    ):
-        _effective_gate = "NONE"
-        _gate_label = "本輪未發動判定"
-    elif (
-        trading_strategy == "DYNAMIC"
-        and dynamic_regime == "REGIME_III_B_TREND_CONTINUATION"
-    ):
-        # 走的是同一套右側鐵律，但條件一/四已放寬，標籤必須誠實揭露——否則使用者
-        # 看到「順勢動能突破」卻在面板上讀到「本路徑不要求放量與實體陽線」。
-        _effective_gate = "RIGHT"
-        _gate_label = "右側交易：趨勢延續 (條件一/四已放寬)"
-    else:
-        _effective_gate = "RIGHT"
-        _gate_label = "右側交易：順勢動能突破"
 
     if trading_strategy == "DYNAMIC" and dynamic_regime:
         _regime_display = {
@@ -2739,95 +2716,14 @@ def create_entry_rules_embed(
             ],
         )
 
-    if _effective_gate == "NONE":
-        # 動態調整判定為 Regime II (全系統休眠) / IV (全面鎖倉) 時，兩套鐵律都
-        # 沒有實際發動，貼上任一套的條件說明都會誤導使用者。
-        _add_ansi_field_safely(
-            embed,
-            "📖 判定說明",
-            [
-                "```ansi",
-                " 目前 Regime 禁止任何方向開倉，三套六重鐵律皆未發動判定。",
-                " 待盤勢結構回到 Regime I (左側接刀態)、III (右側動能態) 或",
-                " V (破位追空態) 時，系統才會套用對應的六重鐵律並在此列出",
-                " 逐項 Pass/Fail。",
-                "```",
-            ],
-        )
-        embed.set_footer(
-            text="🔗 進場六重鐵律：機會成本轉倉候選標的確認，僅供進場前快速核對。"
-        )
-        return embed
-
-    if _effective_gate == "SHORT":
-        detail_lines = _ENTRY_RULES_DETAIL_SHORT
-    else:
-        detail_lines = (
-            _ENTRY_RULES_DETAIL_LEFT
-            if _effective_gate == "LEFT"
-            else [
-                "```ansi",
-                " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
-                " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
-                " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
-                " ----------------------------------",
-                "條件一",
-                "•結構性右側放量突破確認",
-                "•15m 實體K棒收盤價 > Gamma Flip 估算門檻 (若全鏈動態 Net GEX > 0 且無交叉點，改以站穩 Session VWAP + 0.5 × ATR₁₅ₘ 替代門檻)",
-                "•若全鏈動態 Net GEX < 0 且無交叉點：確認處於全域 Short Gamma 泥淖，結構性空頭直接判定未通過",
-                "•15m 成交量 ≥ 前20根均量 × 1.5倍 (放量確認)",
-                "•K棒須為實體陽線 (close > open)，排除陰線放量摜壓假突破",
-                "•15m 收盤價須站穩 Session VWAP",
-                "•突破要素同時滿足才通過，避免誤殺全域 Long Gamma 或誤判空頭摜壓",
-                "",
-                "條件二",
-                "•做市商正 Gamma 底牆完好",
-                "•支撐牆強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot} (Net GEX(K))",
-                "•避免將現價上方的阻力牆 (Call Wall) 誤當成下方的防禦底牆",
-                "•現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未偵測到有效支撐牆 (未通過)",
-                "•現價須 > 支撐牆，且停損距離落在動態雙邊界之內",
-                "•量的是停損距離 (現價 → 支撐牆 − 0.5×ATR₁₅ₘ，即軌道一真正會掛的線)，非牆距",
-                "•下界 2.5×ATR₁₅ₘ：停損落在日內雜訊帶內會先被掃穿再回頭 (Liquidity Sweep)",
-                "•上界 絕對 8%：純粹的絕對風險兜底。刻意不用 ATR 縮放——那會與條件三的",
-                "  2.2×Risk 重複定價同一風險，且低波標的的可接受帶會窄於一個履約價間距",
-                "•ATR₁₅ₘ 不可得時退回舊版的 0 < 牆距 ≤ 5% 單邊判定",
-                "",
-                "條件三",
-                "•UOA 無實質物理封頂",
-                "•無單筆 STO Call ratio(成交量/OI) > 1.5x 且 strike 位於 Call Wall 上方的物理封頂",
-                "•Call Wall 距現價空間 (call_wall−現價)/現價 ≥ 動態自適應波動率門檻",
-                "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
-                "  Risk = (現價 − (PutWall − 0.5×ATR₁₅ₘ)) / 現價 (與引擎軌道一停損一致)",
-                "•帶正負號；現價已觸及或跌破 Call Wall 同樣視為空間不足，而非「已站上、無封頂」",
-                "•資料缺失時退回 3.5% 絕對底線，並在對應欄位揭露降級原因",
-                "•兩項條件須同時成立",
-                "",
-                "條件四",
-                "•主力跨週期買盤認證與雜訊過濾",
-                "•掃描 UOA 清單 (依權利金金額/名目價值降序)",
-                "•尋找 CALL BTO 買盤，且 DTE ≥ 7、ratio(成交量/OI) ≥ 0.8x、權利金名目金額 ≥ $200,000、strike ≥ 現價 (排除深實值避險單)",
-                "•找到第一筆同時符合四項門檻者即判定通過",
-                "",
-                "條件五",
-                "•總經負 Gamma 與財報黑天鵝防禦閘門",
-                "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
-                "•candidate 3 天內即將發布財報 -> 直接判定未通過",
-                "•大盤 Regime 為 SHORT_GAMMA_CRITICAL 或 SYSTEMIC_LIQUIDITY_CRISIS -> 直接判定未通過",
-                "•財報行事曆/總經 Regime 任一資料抓取失敗，安全起見一律判定未通過 (fail-safe，不預設放行)",
-                "",
-                "條件六",
-                "•candidate 自身到期日雜訊過濾",
-                "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
-                "•candidate 自身最近效期選擇權 DTE 須 > 1 (避開 0/1 DTE 結算日前夕/當日雜訊)",
-                "•無法取得到期日清單或解析失敗，同樣一律判定未通過",
-                "```",
-            ]
-        )
+    detail_lines = (
+        _ENTRY_RULES_DETAIL_SHORT
+        if _effective_gate == "SHORT"
+        else _ENTRY_RULES_DETAIL_LEFT
+    )
     _add_ansi_field_safely(
         embed, f"📖 條件一～六判定說明 ({_gate_label}指標定義)", detail_lines
     )
 
-    embed.set_footer(
-        text="🔗 進場六重鐵律：機會成本轉倉候選標的確認，僅供進場前快速核對。"
-    )
+    embed.set_footer(text="🔗 進場六重鐵律（左側／做空），僅供進場前快速核對。")
     return embed

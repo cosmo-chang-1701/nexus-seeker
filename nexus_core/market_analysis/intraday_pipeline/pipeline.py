@@ -515,10 +515,7 @@ class IntradayScanPipeline:
             import config
             import database
             from market_analysis import evaluation_recorder
-            from market_analysis.dynamic_rollover.models import (
-                DynamicRegime,
-                TradingStrategyMode,
-            )
+            from market_analysis.dynamic_rollover.models import TradingStrategyMode
             from market_analysis.intraday_pipeline.entry_advisor import (
                 evaluate_entry_advice,
             )
@@ -533,7 +530,13 @@ class IntradayScanPipeline:
 
             radar = await self._resolve_candidate_radar(ticker)
             if not radar:
-                return
+                # 擠壓規則只需要 K 線；左側／做空鐵律才依賴雷達的 GEX 資料。
+                if strategy in (
+                    TradingStrategyMode.LEFT_SIDE.value,
+                    TradingStrategyMode.SHORT_SIDE.value,
+                ):
+                    return
+                radar = {}
             quote = radar.get("quote")
             spot = 0.0
             if isinstance(quote, dict):
@@ -561,14 +564,12 @@ class IntradayScanPipeline:
             if not advice.passed:
                 return
 
-            is_iii_b = (
-                advice.regime == DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
-            )
+            is_squeeze = advice.tier is not None
             dry_run_tag: Optional[str] = None
             if config.WATCHLIST_ADVISOR_DRY_RUN:
                 dry_run_tag = "WatchlistAdvisor"
-            elif is_iii_b and config.REGIME_III_B_DRY_RUN:
-                dry_run_tag = "RegimeIIIB"
+            elif is_squeeze and config.SQUEEZE_ENTRY_DRY_RUN:
+                dry_run_tag = "SqueezeEntry"
             elif advice.direction == "SHORT" and config.SHORT_ENTRY_DRY_RUN:
                 dry_run_tag = "ShortEntry"
             if dry_run_tag is not None:
@@ -579,28 +580,49 @@ class IntradayScanPipeline:
                 )
                 return
 
+            # 擠壓路徑以等級入鍵：同日 T1 升級為 T3 是新的、更強的訊號。
+            signal_key = (
+                f"SQZ_T{advice.tier}"
+                if is_squeeze
+                else (advice.regime or advice.strategy)
+            )
             cache_key = (
                 f"advisory_entry_{user_id}_{ticker.upper()}_"
-                f"{advice.regime or advice.strategy}_{now_ny.strftime('%Y%m%d')}"
+                f"{signal_key}_{now_ny.strftime('%Y%m%d')}"
             )
             if database.get_kv_cache(cache_key):
                 return
 
             from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
-
-            embed = create_entry_rules_embed(
-                ticker.upper(),
-                advice.passed,
-                advice.reason.split(" | ") if advice.reason else [],
-                trading_strategy=advice.strategy,
-                dynamic_regime=advice.regime,
-                dynamic_regime_reason=advice.regime_reason,
-                structure_directive=advice.structure_directive,
-                entry_price=advice.entry_price,
-                stop_loss=advice.stop_loss,
-                target=advice.target,
-                rr_ratio=advice.rr_ratio,
+            from cogs.embed_builders.squeeze_entry_embeds import (
+                create_squeeze_entry_embed,
             )
+
+            if advice.squeeze is not None:
+                embed = create_squeeze_entry_embed(
+                    ticker.upper(),
+                    advice.squeeze,
+                    passed=advice.passed,
+                    reason=advice.reason,
+                    entry_price=advice.entry_price,
+                    stop_loss=advice.stop_loss,
+                    trading_strategy=advice.strategy,
+                    dynamic_regime=advice.regime,
+                )
+            else:
+                embed = create_entry_rules_embed(
+                    ticker.upper(),
+                    advice.passed,
+                    advice.reason.split(" | ") if advice.reason else [],
+                    trading_strategy=advice.strategy,
+                    dynamic_regime=advice.regime,
+                    dynamic_regime_reason=advice.regime_reason,
+                    structure_directive=advice.structure_directive,
+                    entry_price=advice.entry_price,
+                    stop_loss=advice.stop_loss,
+                    target=advice.target,
+                    rr_ratio=advice.rr_ratio,
+                )
             from services.notification_dispatcher import notify
             from services.notification_dispatch_recorder import DispatchRecord
 

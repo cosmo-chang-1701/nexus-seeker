@@ -102,6 +102,12 @@ SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() =
 # docs/architecture/05 §5.8 F 檢視後，才由人工決定翻轉。注意本情境的前向
 # 資料在 rollover_audit_log，不在 forward-report 的 regime_evaluation_log。
 PYRAMID_ADD_DRY_RUN = get_env_or_secret("PYRAMID_ADD_DRY_RUN", "true").lower() == "true"
+# 多時間框架擠壓進場 dry-run (預設開啟)：判定與前向紀錄 (regime_evaluation_log
+# evaluator=ENTRY_SQUEEZE) 照常進行，但不推播進場 DM。等級門檻與部位比例皆未經
+# 回測校準，依 docs/architecture/05 的翻轉準則檢視前向樣本後才由人工決定翻轉。
+SQUEEZE_ENTRY_DRY_RUN = (
+    get_env_or_secret("SQUEEZE_ENTRY_DRY_RUN", "true").lower() == "true"
+)
 # Regime III-B 趨勢延續進場路徑 dry-run (預設開啟)：由 III-B 確認的機會成本轉倉／
 # 核心資金部署指令只寫稽核軌跡、不推播 DM。本路徑刻意放寬右側條件一與條件四，
 # 必然提高交易頻率與摩擦成本，依 docs/architecture/05 §5.8 的不對稱原則，

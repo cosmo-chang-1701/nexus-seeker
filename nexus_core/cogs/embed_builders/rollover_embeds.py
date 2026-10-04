@@ -877,10 +877,10 @@ def create_transition_pyramid_embed(
             f"（名目 {_money('notional_usd')}）",
             f"風險預算：`{_money('risk_budget_usd')}`",
             f"停損距離：`{_money('stop_distance_usd')}`"
-            f"（棘輪停損 `{_money('stop_price')}`）",
+            f"（擠壓參考停損 `{_money('stop_price')}`）",
             f"約束來源：{_PYRAMID_ADD_BINDING_LABELS.get(binding, binding or 'N/A')}",
-            f"VIX `{vix_text}`｜{pyramid_add_plan.get('vix_tier_name') or 'N/A'}｜"
-            f"倉位乘數 `{float(pyramid_add_plan.get('vix_multiplier') or 0.0):.2f}x`",
+            f"VIX `{vix_text}`｜{pyramid_add_plan.get('vix_tier_name') or 'N/A'}"
+            "（僅供參考，不調整倉位）",
             f"第 `{int(pyramid_add_plan.get('pyramid_count_after') or 0)}` 次加碼",
         ]
         embed.add_field(

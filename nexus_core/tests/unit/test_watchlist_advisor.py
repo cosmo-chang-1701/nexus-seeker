@@ -94,7 +94,7 @@ async def _dispatch(
     kv: Optional[_Kv] = None,
     notif: bool = True,
     advisor_dry: bool = False,
-    iii_b_dry: bool = False,
+    squeeze_dry: bool = False,
     short_dry: bool = False,
     uid: int = 42,
 ) -> _Kv:
@@ -106,7 +106,7 @@ async def _dispatch(
         patch("database.get_kv_cache", side_effect=kv.get),
         patch("database.save_kv_cache", side_effect=kv.save),
         patch.object(config, "WATCHLIST_ADVISOR_DRY_RUN", advisor_dry),
-        patch.object(config, "REGIME_III_B_DRY_RUN", iii_b_dry),
+        patch.object(config, "SQUEEZE_ENTRY_DRY_RUN", squeeze_dry),
         patch.object(config, "SHORT_ENTRY_DRY_RUN", short_dry),
         patch(
             "market_analysis.intraday_pipeline.entry_advisor.evaluate_entry_advice",
@@ -192,25 +192,26 @@ async def test_advisor_dry_run_blocks_push_and_does_not_burn_flag() -> None:
     assert not kv.saved
 
 
-async def test_regime_iii_b_dry_run_blocks_but_still_records_forward_data() -> None:
+async def test_squeeze_dry_run_blocks_but_still_records_forward_data() -> None:
     p = _make_pipeline()
-    iii_b = DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
 
     async def _fake(*a: Any, **k: Any) -> EntryAdvice:
-        evaluation_recorder.record_gate_reason("ENTRY_RIGHT", "NVDA", 100.0, True, "x")
-        return _advice(strategy="DYNAMIC", regime=iii_b)
+        evaluation_recorder.record_gate_reason(
+            "ENTRY_SQUEEZE", "NVDA", 100.0, True, "x"
+        )
+        return _advice(tier=2, size_pct=1.5)
 
-    kv = await _dispatch(p, _fake, strategy="DYNAMIC", iii_b_dry=True)
+    kv = await _dispatch(p, _fake, squeeze_dry=True)
     p.bot.queue_dm.assert_not_awaited()
     assert not kv.saved
     assert evaluation_recorder.pending_count() == 1  # 乾跑仍記錄
 
 
-async def test_regime_iii_b_pushes_when_its_dry_run_is_off() -> None:
+async def test_squeeze_pushes_when_its_dry_run_is_off() -> None:
     p = _make_pipeline()
-    iii_b = DynamicRegime.REGIME_III_B_TREND_CONTINUATION.value
-    await _dispatch(p, _advice(strategy="DYNAMIC", regime=iii_b), strategy="DYNAMIC")
+    kv = await _dispatch(p, _advice(tier=1, size_pct=1.0))
     p.bot.queue_dm.assert_awaited_once()
+    assert kv.saved == {"advisory_entry_42_NVDA_SQZ_T1_20260921"}
 
 
 async def test_short_direction_blocked_by_short_entry_dry_run() -> None:
@@ -233,19 +234,11 @@ async def test_same_day_same_regime_is_deduped() -> None:
     assert p.bot.queue_dm.await_count == 1
 
 
-async def test_regime_upgrade_iii_b_to_iii_is_not_deduped() -> None:
+async def test_squeeze_tier_upgrade_is_not_deduped() -> None:
     p = _make_pipeline()
     kv = _Kv()
-    for regime in (
-        DynamicRegime.REGIME_III_B_TREND_CONTINUATION,
-        DynamicRegime.REGIME_III_RIGHT_MOMENTUM,
-    ):
-        await _dispatch(
-            p,
-            _advice(strategy="DYNAMIC", regime=regime.value),
-            strategy="DYNAMIC",
-            kv=kv,
-        )
+    for tier in (1, 3):
+        await _dispatch(p, _advice(tier=tier, size_pct=1.0), kv=kv)
     assert p.bot.queue_dm.await_count == 2
     assert len(kv.saved) == 2
 
@@ -325,24 +318,49 @@ async def test_missing_terminal_cog_or_failed_fetch_returns_none() -> None:
     assert await p._resolve_candidate_radar("NVDA") is None
 
 
-async def test_no_radar_means_no_evaluation() -> None:
+async def test_no_radar_skips_left_and_short_strategies() -> None:
     p = _make_pipeline()
     p.bot._latest_radar_cache_time = 0.0
     p.bot.get_cog.return_value = None
-    fake = AsyncMock(return_value=_advice())
-    await _dispatch(p, fake)
-    fake.assert_not_awaited()
+    for strategy in ("LEFT_SIDE", "SHORT_SIDE"):
+        fake = AsyncMock(return_value=_advice())
+        await _dispatch(p, fake, strategy=strategy)
+        fake.assert_not_awaited()
     p.bot.queue_dm.assert_not_awaited()
+
+
+async def test_no_radar_still_evaluates_squeeze_path() -> None:
+    """擠壓規則只需要 K 線：沒有雷達時以空 radar 與心跳現價照常評估。"""
+    p = _make_pipeline()
+    p.bot._latest_radar_cache_time = 0.0
+    p.bot.get_cog.return_value = None
+    fake = AsyncMock(return_value=_advice(tier=1, size_pct=1.0))
+    await _dispatch(p, fake, strategy="RIGHT_SIDE")
+    fake.assert_awaited_once()
+    args = fake.await_args
+    assert args is not None
+    assert args.args[2] == {} and args.args[3] == 100.0
 
 
 # ── entry_advisor：策略分派（與 /x 一致）＋記憶化 ─────────────────
 
 
 _OK = (True, "條件一✅", "Long Call")
-_NO = (False, "條件一❌", None)
-_PATH_ENGINE = (
-    "market_analysis.dynamic_rollover.DynamicRolloverEngine._confirm_entry_signal"
+_SQZ_OK = EntryAdvice(
+    passed=True,
+    reason="✅ T2",
+    structure_directive=None,
+    strategy="RIGHT_SIDE",
+    tier=2,
+    size_pct=1.5,
 )
+_SQZ_NO = EntryAdvice(
+    passed=False,
+    reason="⏸️ 尚未形成擠壓進場條件",
+    structure_directive=None,
+    strategy="RIGHT_SIDE",
+)
+_PATH_SQUEEZE = "market_analysis.intraday_pipeline.entry_advisor._evaluate_squeeze_long"
 _PATH_LEFT = (
     "market_analysis.dynamic_rollover.left_side_entry._confirm_left_entry_signal"
 )
@@ -362,14 +380,14 @@ def _mkt() -> Any:
 @pytest.fixture
 def gates() -> Iterator[Dict[str, AsyncMock]]:
     mocks = {
-        "right": AsyncMock(return_value=_OK),
+        "right": AsyncMock(return_value=_SQZ_OK),
         "left": AsyncMock(return_value=_OK),
         "short": AsyncMock(return_value=make_short_entry_evaluation()),
         "classify": AsyncMock(),
         "levels": AsyncMock(return_value=(100.0, 95.0, 112.0, 2.4)),
     }
     with (
-        patch(_PATH_ENGINE, mocks["right"]),
+        patch(_PATH_SQUEEZE, mocks["right"]),
         patch(_PATH_LEFT, mocks["left"]),
         patch(_PATH_SHORT, mocks["short"]),
         patch(_PATH_CLASSIFY, mocks["classify"]),
@@ -398,48 +416,29 @@ async def test_strategy_dispatch_matches_symbol_view(
 
 
 @pytest.mark.parametrize(
-    "regime,expected,trend",
+    "regime,expected",
     [
-        (DynamicRegime.REGIME_III_RIGHT_MOMENTUM, "right", False),
-        (DynamicRegime.REGIME_III_B_TREND_CONTINUATION, "right", True),
-        (DynamicRegime.REGIME_I_LEFT_CATCH, "left", None),
-        (DynamicRegime.REGIME_V_BREAKDOWN_CHASE, "short", None),
+        (DynamicRegime.REGIME_III_RIGHT_MOMENTUM, "right"),
+        (DynamicRegime.REGIME_III_B_TREND_CONTINUATION, "right"),
+        (DynamicRegime.REGIME_II_CHAOS_STANDASIDE, "right"),
+        (DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS, "right"),
+        (DynamicRegime.REGIME_I_LEFT_CATCH, "left"),
+        (DynamicRegime.REGIME_V_BREAKDOWN_CHASE, "short"),
     ],
 )
 async def test_dynamic_regime_routing(
-    gates: Dict[str, AsyncMock],
-    regime: DynamicRegime,
-    expected: str,
-    trend: Optional[bool],
+    gates: Dict[str, AsyncMock], regime: DynamicRegime, expected: str
 ) -> None:
+    """多頭建倉（非左側、非做空的 Regime）一律走擠壓規則；宏觀鎖定改由擠壓
+    路徑的否決條件判定，不再在路由層直接拒絕。"""
     gates["classify"].return_value = (regime, "理由", _mkt())
-    advice = await evaluate_entry_advice("DYNAMIC", "NVDA", _RADAR, 100.0)
-    assert gates[expected].await_count == 1
-    assert advice.regime == regime.value
-    right_call = gates["right"].await_args
-    if trend is True:
-        assert right_call is not None
-        assert right_call.kwargs["trend_continuation"] is True
-    if trend is False:
-        assert right_call is not None
-        assert "trend_continuation" not in right_call.kwargs
-
-
-@pytest.mark.parametrize(
-    "regime",
-    [
-        DynamicRegime.REGIME_II_CHAOS_STANDASIDE,
-        DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS,
-    ],
-)
-async def test_dynamic_regime_ii_iv_never_pass(
-    gates: Dict[str, AsyncMock], regime: DynamicRegime
-) -> None:
-    gates["classify"].return_value = (regime, "休眠", _mkt())
-    advice = await evaluate_entry_advice("DYNAMIC", "NVDA", _RADAR, 100.0)
-    assert advice.passed is False
+    await evaluate_entry_advice("DYNAMIC", "NVDA", _RADAR, 100.0)
     for name in ("right", "left", "short"):
-        gates[name].assert_not_awaited()
+        assert (gates[name].await_count == 1) == (name == expected), name
+    if expected == "right":
+        call = gates["right"].await_args
+        assert call is not None
+        assert call.args[3] == regime.value
 
 
 async def test_two_users_same_symbol_classify_once(
@@ -466,7 +465,7 @@ async def test_cache_key_includes_strategy(gates: Dict[str, AsyncMock]) -> None:
 async def test_exception_is_fail_safe_and_not_cached(
     gates: Dict[str, AsyncMock],
 ) -> None:
-    gates["right"].side_effect = [RuntimeError("net"), _OK]
+    gates["right"].side_effect = [RuntimeError("net"), _SQZ_OK]
     first = await evaluate_entry_advice("RIGHT_SIDE", "NVDA", _RADAR, 100.0)
     assert first.passed is False
     second = await evaluate_entry_advice("RIGHT_SIDE", "NVDA", _RADAR, 100.0)
@@ -477,14 +476,19 @@ async def test_invalid_spot_or_radar_is_fail_safe(gates: Dict[str, AsyncMock]) -
     assert (
         await evaluate_entry_advice("RIGHT_SIDE", "NVDA", _RADAR, 0.0)
     ).passed is False
-    assert (
-        await evaluate_entry_advice("RIGHT_SIDE", "NVDA", {}, 100.0)
-    ).passed is False
     gates["right"].assert_not_awaited()
+    for strategy in ("LEFT_SIDE", "SHORT_SIDE"):
+        assert (
+            await evaluate_entry_advice(strategy, "NVDA", {}, 100.0)
+        ).passed is False
+    gates["left"].assert_not_awaited()
+    gates["short"].assert_not_awaited()
+    # 擠壓路徑不需要雷達
+    assert (await evaluate_entry_advice("RIGHT_SIDE", "NVDA", {}, 100.0)).passed is True
 
 
 async def test_failed_gate_skips_level_computation(gates: Dict[str, AsyncMock]) -> None:
-    gates["right"].return_value = _NO
+    gates["right"].return_value = _SQZ_NO
     advice = await evaluate_entry_advice("RIGHT_SIDE", "NVDA", _RADAR, 100.0)
     assert advice.passed is False and advice.entry_price is None
     gates["levels"].assert_not_awaited()
@@ -589,3 +593,81 @@ def test_embed_rr_none_renders_na() -> None:
     )
     body = " ".join(str(f.value) for f in embed.fields if "價位建議" in str(f.name))
     assert "$100.00" in body and "N/A" in body
+
+
+# ── 擠壓路徑轉接（_evaluate_squeeze_long）──────────────────────────
+
+
+async def test_squeeze_long_maps_result_and_records_forward_data() -> None:
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.resistance import (
+        ResistanceContext,
+        ResistanceZone,
+    )
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    res = ResistanceContext(
+        atr_1d=4.0,
+        overhead=ResistanceZone(108.0, 109.0, 2),
+        is_approaching=False,
+        broken=None,
+    )
+    result = SqueezeEntryResult(
+        "ENTRY",
+        3,
+        2.5,
+        95.5,
+        "✅ T3：D Green Dot",
+        ["D Green Dot"],
+        3,
+        "上方壓力區 $108.00–$109.00（觸及 2 次）",
+    )
+    vetoes = AsyncMock(return_value=(["財報"], "逃頂警戒 WATCH"))
+    evaluate = AsyncMock(return_value=SqueezeEvaluation(result, {}, res))
+    token = evaluation_recorder.set_evaluation_source("WATCHLIST_ADVISOR")
+    try:
+        with (
+            patch(
+                "market_analysis.squeeze_entry.vetoes.resolve_long_entry_vetoes",
+                vetoes,
+            ),
+            patch("market_analysis.squeeze_entry.evaluate_symbol", evaluate),
+        ):
+            advice = await entry_advisor._evaluate_squeeze_long(
+                "DYNAMIC", "NVDA", 100.0, "REGIME_II_CHAOS_STANDASIDE", "休眠"
+            )
+    finally:
+        evaluation_recorder.reset_evaluation_source(token)
+
+    args = evaluate.await_args
+    assert args is not None
+    assert args.args == ("NVDA", 100.0, ["財報"], "逃頂警戒 WATCH")
+    assert advice.passed is True and advice.tier == 3 and advice.size_pct == 2.5
+    assert advice.entry_price == 100.0 and advice.stop_loss == 95.5
+    assert advice.target is None and advice.rr_ratio is None
+    assert advice.regime == "REGIME_II_CHAOS_STANDASIDE"
+    assert "上方壓力區" in advice.reason
+    assert evaluation_recorder.pending_count() == 1
+
+
+async def test_squeeze_advice_pushes_squeeze_embed() -> None:
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    p = _make_pipeline()
+    result = SqueezeEntryResult("ENTRY", 1, 1.0, 95.0, "✅ T1：5m Green Dot")
+    advice = _advice(
+        tier=1,
+        size_pct=1.0,
+        squeeze=SqueezeEvaluation(result, {}, None),
+        target=None,
+        rr_ratio=None,
+    )
+    with patch(
+        "cogs.embed_builders.squeeze_entry_embeds.create_squeeze_entry_embed",
+    ) as builder:
+        builder.return_value = MagicMock()
+        await _dispatch(p, advice)
+    builder.assert_called_once()
+    assert builder.call_args.kwargs["passed"] is True
+    p.bot.queue_dm.assert_awaited_once()
