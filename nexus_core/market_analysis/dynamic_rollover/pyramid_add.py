@@ -248,12 +248,9 @@ async def evaluate_pyramid_add_impl(
     if not continuation:
         return []
 
-    # 條件四：不在尚未突破的壓力區下緣
-    if (
-        resistance is not None
-        and resistance.is_approaching
-        and resistance.broken is None
-    ):
+    # 條件四：不在尚未突破的壓力區下緣（衝擊中的 overhead 必然尚未突破；
+    # 剛突破較低的壓力區不能豁免上方下一個壓力區）
+    if resistance is not None and resistance.is_approaching:
         return []
 
     # 條件八：非逃頂警戒。刻意放在條件一~七之後才呼叫（宏觀評分呼叫端有自己的

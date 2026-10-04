@@ -194,11 +194,13 @@ def evaluate_squeeze_entry(
                 note,
             )
 
+    # 衝擊中的壓力區一定尚未突破（overhead 定義為 top >= 現價）。即使剛突破
+    # 一個較低的壓力區（breakout 觸發），只要又頂到上方下一個壓力區，仍要等
+    # 收盤站上才放行——突破較低的區不代表上方的區已經讓路。
     if (
         resistance is not None
         and resistance.is_approaching
         and resistance.overhead is not None
-        and not breakout
     ):
         return SqueezeEntryResult(
             STATUS_PENDING_BREAKOUT,

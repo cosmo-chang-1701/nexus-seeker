@@ -206,6 +206,16 @@ async def test_condition4_fails_when_pressing_unbroken_resistance() -> None:
 
 
 @pytest.mark.asyncio
+async def test_condition4_lower_breakout_does_not_exempt_next_zone() -> None:
+    lower = ResistanceZone(105.0, 106.0, 2)
+    upper = ResistanceZone(110.5, 111.0, 3)
+    instructions = await _evaluate(
+        _asset(), _metrics(), squeeze=_squeeze(broken=lower, approaching=upper)
+    )
+    assert instructions == []
+
+
+@pytest.mark.asyncio
 async def test_squeeze_fetch_skipped_when_cheap_conditions_fail() -> None:
     """條件一／五／六未通過時不得發動多時間框架 K 線抓取。"""
     with patch(

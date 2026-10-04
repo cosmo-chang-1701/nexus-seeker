@@ -302,6 +302,19 @@ def test_be_pending_breakout_at_resistance() -> None:
     assert r.size_pct is None and "293.30" in r.reason
 
 
+def test_lower_breakout_does_not_exempt_next_overhead_zone() -> None:
+    """SMCI 情境：剛突破較低的壓力區，但又頂到上方下一個壓力區 → 仍待突破。"""
+    lower = ResistanceZone(41.0, 42.0, 2)
+    upper = ResistanceZone(43.76, 44.59, 2)
+    res = ResistanceContext(
+        atr_1d=2.0, overhead=upper, is_approaching=True, broken=lower
+    )
+    m = _matrix(W=_SQ, D={**_SQ, "momentum_color": "LightBlue"}, **{"65m": _SQ})
+    r = evaluate_squeeze_entry(m, res)
+    assert r.status == STATUS_PENDING_BREAKOUT and r.size_pct is None
+    assert "44.59" in r.reason
+
+
 def test_breakout_acts_as_trigger_and_lifts_pending() -> None:
     zone = ResistanceZone(292.0, 293.3, 3)
     res = ResistanceContext(
