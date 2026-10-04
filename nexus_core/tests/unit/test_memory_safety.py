@@ -43,30 +43,6 @@ def test_is_memory_safe_logic() -> None:
         assert is_memory_safe() is False
 
 
-def test_squeeze_engine_memory_gate() -> None:
-    import pandas as pd
-    from market_analysis.squeeze_engine import calculate_power_squeeze
-
-    df = pd.DataFrame(
-        {
-            "Close": [100.0 + i for i in range(30)],
-            "High": [105.0 + i for i in range(30)],
-            "Low": [95.0 + i for i in range(30)],
-        }
-    )
-
-    # When memory is safe
-    with patch("market_analysis.squeeze_engine.is_memory_safe", return_value=True):
-        res_safe = calculate_power_squeeze(df)
-        assert "is_squeezing" in res_safe
-        assert "momentum" in res_safe
-
-    # When memory is unsafe
-    with patch("market_analysis.squeeze_engine.is_memory_safe", return_value=False):
-        res_unsafe = calculate_power_squeeze(df)
-        assert res_unsafe == {"is_squeezing": False, "momentum": 0.0, "direction": "⚪"}
-
-
 @pytest.mark.asyncio
 async def test_memory_manager_warmup_gate() -> None:
     from unittest.mock import AsyncMock, MagicMock

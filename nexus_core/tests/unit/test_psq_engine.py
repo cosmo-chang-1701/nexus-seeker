@@ -83,3 +83,103 @@ def test_fast_rolling_linreg_short() -> None:
     s = pd.Series([1.0, 2.0, 3.0])
     res = _fast_rolling_linreg(s, length=20)
     assert res.isna().all()
+
+
+def _squeeze_then_breakout(n_flat: int = 60, n_up: int = 6) -> pd.DataFrame:
+    """前段窄幅盤整（BB 縮入 KC，擠壓中），後段連續放大陽線向上突破（擠壓解除）。"""
+    rng = np.random.default_rng(7)
+    flat = 100 + rng.normal(0, 0.05, n_flat)
+    up = flat[-1] + np.cumsum(np.full(n_up, 2.5))
+    close = np.concatenate([flat, up])
+    high = close + 0.6
+    low = close - 0.6
+    return pd.DataFrame({"Open": close, "High": high, "Low": low, "Close": close})
+
+
+def _first_release_index(df: pd.DataFrame) -> int:
+    """回傳第一根「前一根擠壓、本根解除」的 K 棒位置（以逐根截斷重算判定）。"""
+    for end in range(41, len(df) + 1):
+        prev = analyze_psq(df.iloc[: end - 1])
+        cur = analyze_psq(df.iloc[:end])
+        if prev is not None and cur is not None:
+            if prev.is_squeezing and not cur.is_squeezing:
+                return end
+    raise AssertionError("fixture 未產生擠壓解除")
+
+
+def test_green_dot_only_on_release_bar_by_default() -> None:
+    df = _squeeze_then_breakout()
+    end = _first_release_index(df)
+
+    at_release = analyze_psq(df.iloc[:end])
+    assert at_release is not None
+    assert at_release.momentum_value > 0
+    assert at_release.green_dot is True
+    assert at_release.green_dot_bars_ago == 0
+
+    one_bar_later = analyze_psq(df.iloc[: end + 1])
+    assert one_bar_later is not None
+    assert not one_bar_later.is_squeezing
+    assert one_bar_later.green_dot is False
+
+
+def test_green_dot_lookback_window() -> None:
+    df = _squeeze_then_breakout()
+    end = _first_release_index(df)
+
+    res = analyze_psq(df.iloc[: end + 2], green_dot_lookback=3)
+    assert res is not None
+    assert res.green_dot is True
+    assert res.green_dot_bars_ago == 2
+
+    too_late = analyze_psq(df.iloc[: end + 3], green_dot_lookback=3)
+    assert too_late is not None
+    assert too_late.green_dot is False
+
+
+def test_green_dot_requires_positive_momentum() -> None:
+    df = _squeeze_then_breakout()
+    # 鏡像成向下突破：擠壓解除但動能為負，不算 green dot
+    mirrored = df.copy()
+    for col in ("Open", "High", "Low", "Close"):
+        mirrored[col] = 200 - df[col]
+    mirrored["High"], mirrored["Low"] = 200 - df["Low"], 200 - df["High"]
+    end = _first_release_index(mirrored)
+    res = analyze_psq(mirrored.iloc[:end], green_dot_lookback=3)
+    assert res is not None
+    assert res.momentum_value < 0
+    assert res.green_dot is False
+
+
+def test_squeeze_range_low_tracks_latest_squeeze_run() -> None:
+    df = _squeeze_then_breakout()
+    end = _first_release_index(df)
+    res = analyze_psq(df.iloc[:end])
+    assert res is not None
+    assert res.squeeze_range_low is not None
+    # 擠壓區間在盤整段內，最低價應落在盤整段的 Low 範圍
+    flat_low = float(df["Low"].iloc[:60].min())
+    assert flat_low <= res.squeeze_range_low <= float(df["Low"].iloc[:60].max())
+
+
+def test_turbo_flags_flip_back_to_light_blue() -> None:
+    # 上漲 → 回落（動能轉弱為深藍）→ 再度加速（翻回淺藍）
+    up1 = np.linspace(100, 120, 40)
+    pause = np.linspace(120, 116, 8)
+    up2 = 116 + np.cumsum(np.full(5, 2.0))
+    close = np.concatenate([up1, pause, up2])
+    df = pd.DataFrame(
+        {"Open": close, "High": close + 0.5, "Low": close - 0.5, "Close": close}
+    )
+    seen_turbo = False
+    for end in range(42, len(df) + 1):
+        res = analyze_psq(df.iloc[:end])
+        prev = analyze_psq(df.iloc[: end - 1])
+        if res is None or prev is None:
+            continue
+        expected = (
+            res.momentum_color == "LightBlue" and prev.momentum_color != "LightBlue"
+        )
+        assert res.turbo is expected
+        seen_turbo = seen_turbo or res.turbo
+    assert seen_turbo

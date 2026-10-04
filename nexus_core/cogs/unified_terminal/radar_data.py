@@ -247,7 +247,7 @@ class RadarDataMixin:
                                 s, period="6mo", interval="1d"
                             )
                             if df_hist is not None and not df_hist.empty:
-                                psq_obj = analyze_psq(df_hist, vix_spot=18.0)
+                                psq_obj = analyze_psq(df_hist)
                                 if psq_obj:
                                     p_is_sq = psq_obj.is_squeezing
                                     p_m = psq_obj.momentum_value
@@ -822,7 +822,7 @@ class RadarDataMixin:
                     "signal_direction": sc.get("direction", "⚪"),
                 }
             else:
-                psq_obj = analyze_psq(df_hist, vix_spot=18.0)
+                psq_obj = analyze_psq(df_hist)
                 if psq_obj:
                     psq_res = {
                         "is_squeezing": psq_obj.is_squeezing,

@@ -21,6 +21,15 @@ class PSQResult:
     sma_20: float  # 20SMA 價格
     # VIX 戰情標記
     vix_momentum_label: str = "NORMAL"  # VIX 短期動能標籤
+    # Green Dot：近 green_dot_lookback 根內由擠壓（任一等級）轉為解除，當前仍為
+    # 解除狀態且動能 > 0。與 is_breakout_long（僅限前一根為高強度擠壓、且必須是
+    # 當根解除）不同，供多時間框架擠壓進場規則使用。
+    green_dot: bool = False
+    green_dot_bars_ago: Optional[int] = None  # 0 = 當根解除
+    # Turbo：動能柱由非淺藍翻回淺藍（動能 > 0 且重新上升）。
+    turbo: bool = False
+    # 最近一段連續擠壓區間的最低價（含當前仍在擠壓的區段）；從未擠壓則為 None。
+    squeeze_range_low: Optional[float] = None
 
     @property
     def is_breakout_high(self) -> bool:
@@ -71,6 +80,7 @@ def analyze_psq(
     kc_mults: list = [1.0, 1.5, 2.0],
     near_pct: float = 1.5,
     vix_spot: float | None = None,
+    green_dot_lookback: int = 1,
 ) -> Optional[PSQResult]:
     """
     計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2 - Vectorized High Performance)。
@@ -79,6 +89,10 @@ def analyze_psq(
     Args:
         vix_spot: VIX 即時價格。用於動能標記（OVEREXTENDED_RISK / HIGH_CONVICTION_RECOVERY）
                   以及低波環境時間框架建議。
+        green_dot_lookback: Green Dot 回看根數（1 = 只認當根解除）。
+
+    呼叫端若在盤中使用，須自行截掉尚未收盤的最後一根，否則擠壓與動能判定會
+    隨每一次 tick 抖動。
     """
     if df is None or df.empty or len(df) < length * 2:
         return None
@@ -178,6 +192,35 @@ def analyze_psq(
             prev_sqz_high and (not curr_sqz_any) and (curr_mom < 0)
         )
 
+        # Green Dot：近 N 根內出現「擠壓 → 解除」的轉換，且當前仍為解除、動能 > 0。
+        sq_vals = is_squeezing.to_numpy(dtype=bool)
+        n_bars = len(sq_vals)
+        green_dot = False
+        green_dot_bars_ago: Optional[int] = None
+        if n_bars >= 2 and not sq_vals[-1] and curr_mom > 0:
+            lookback = max(1, int(green_dot_lookback))
+            for ago in range(0, min(lookback, n_bars - 1)):
+                j = n_bars - 1 - ago
+                if sq_vals[j - 1] and not sq_vals[j]:
+                    green_dot = True
+                    green_dot_bars_ago = ago
+                    break
+
+        # Turbo：動能柱由非淺藍翻回淺藍。
+        prev_diff = mom_diff.iloc[-2] if len(mom_diff) > 1 else np.nan
+        prev_is_light_blue = bool(prev_mom > 0 and prev_diff > 0)
+        turbo = bool(mom_color == "LightBlue" and not prev_is_light_blue)
+
+        # 最近一段連續擠壓區間的最低價。
+        squeeze_range_low: Optional[float] = None
+        sq_idx = np.flatnonzero(sq_vals)
+        if sq_idx.size > 0:
+            end = int(sq_idx[-1])
+            start = end
+            while start > 0 and sq_vals[start - 1]:
+                start -= 1
+            squeeze_range_low = float(low.iloc[start : end + 1].min())
+
         # ---------- VIX 動能標記 (VIX Momentum Labeling) ----------
         vix_momentum_label = "NORMAL"
 
@@ -209,6 +252,10 @@ def analyze_psq(
             sma_distance_pct=float(sma_distance_pct.iloc[-1]),
             sma_20=float(basis.iloc[-1]),
             vix_momentum_label=vix_momentum_label,
+            green_dot=green_dot,
+            green_dot_bars_ago=green_dot_bars_ago,
+            turbo=turbo,
+            squeeze_range_low=squeeze_range_low,
         )
     except Exception as e:
         import logging
