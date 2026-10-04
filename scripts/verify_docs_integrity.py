@@ -6,13 +6,13 @@ documentation repository under `docs/` according to PROJECT.md and ORIGINAL_REQU
 
 Verification Batteries:
 1. [CLEANUP] Obsolete documentation cleanup (STRATEGY.md, architecture.md, etc. must not exist).
-2. [STRUCTURE] Directory taxonomy and file count (all 35 specifications + docs/README.md).
+2. [STRUCTURE] Directory taxonomy and file count (all 36 specifications + docs/README.md).
 3. [SECTIONS] 6-part specification structure (Headers, LaTeX math, Mermaid diagrams,
    named constants table, and valid repository source code paths).
 4. [LANGUAGE] 100% Traditional Chinese purity (zero tolerance for Simplified Chinese).
 5. [SEPARATION] Separation from root README.md (no Docker commands, .env tables, slash command lists).
 6. [LINKS] Internal markdown link and anchor integrity (no broken relative links or dead anchors).
-7. [INDEX] Master index coverage (docs/README.md references all 35 specification documents).
+7. [INDEX] Master index coverage (docs/README.md references all 36 specification documents).
 
 Exit Code:
 - 0: All checks passed.
@@ -54,6 +54,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "07_short_side_breakdown_ironclad.md",
         "08_regime_momentum_rotation.md",
         "09_static_allocation_rebalance.md",
+        "10_multi_timeframe_squeeze_entry.md",
     ],
     "docs/microstructure": [
         "01_gex_topology_and_walls.md",
@@ -93,7 +94,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
     ],
 }
 
-# Required section definitions for 35 specification documents
+# Required section definitions for 36 specification documents
 REQUIRED_SECTIONS: list[tuple[int, str, re.Pattern[str]]] = [
     (
         1,
@@ -526,7 +527,7 @@ class DocsVerifier:
     def battery_structure_and_count(self) -> BatteryResult:
         result: BatteryResult = BatteryResult(
             category="STRUCTURE",
-            description="Directory taxonomy and 35 specification documents + README existence",
+            description="Directory taxonomy and 36 specification documents + README existence",
         )
 
         # Check master README
@@ -551,7 +552,7 @@ class DocsVerifier:
         else:
             result.passed_checks += 1
 
-        # Check all 35 specification documents
+        # Check all 36 specification documents
         expected_total_specs: int = 0
         for category_dir, spec_files in EXPECTED_SPECIFICATIONS.items():
             dir_path: Path = self.repo_root / category_dir
@@ -1122,7 +1123,7 @@ def run_self_tests() -> int:
         dummy_py.parent.mkdir(parents=True)
         dummy_py.write_text("# Test module\n", encoding="utf-8")
 
-        # 2. Populate all 35 specification documents + README with compliant content
+        # 2. Populate all 36 specification documents + README with compliant content
         compliant_content_template: str = """# Specification Test Document
 
 ## 1. 核心哲學與適用市場環境

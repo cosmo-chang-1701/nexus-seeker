@@ -4,6 +4,8 @@
 
 在多變的美股量化交易實務中，單一指標或固定偏向的操盤模型（例如純順勢突破或純逆勢抄底）在市場結構轉換時往往遭受重大虧損。當市場處於強趨勢時，逆勢接刀將面臨連續追殺；而在區間震盪或流動性陷阱中，追漲買突破則容易落入做市商假突破洗盤。更危險的是，當系統性流動性危機爆發或上方存在龐大期權實體封頂時，任何未經環境過濾的多頭進場皆屬致命風險。
 
+> 2026-10 起，`DYNAMIC` 模式下除了 Regime I（左側）與 Regime V（做空）以外的所有 Regime（III、III-B、II、IV），多頭建倉一律交給 [`10_multi_timeframe_squeeze_entry.md`](10_multi_timeframe_squeeze_entry.md) 的擠壓規則判定；宏觀鎖定改由擠壓路徑的否決條件獨立判定，個股 Call Wall 封頂改由擠壓路徑的壓力區閘門處理。下文描述的 III／III-B 路由至右側六重鐵律，僅為歷史設計；分類器本身與前向紀錄仍保留。
+
 Nexus Seeker 的核心架構導入了 **6-Regime 市場結構動態路由矩陣**（`DynamicRegime`），將市場行情精確劃分為六種微觀拓撲狀態（依判定優先序列出）：
 1. **Regime IV 宏觀鎖定分支（最高優先級，壓過一切）**：當大盤爆發系統性流動性危機（`SYSTEMIC_LIQUIDITY_CRISIS`）、做市商集體翻入負 Gamma 順向踩踏（`SHORT_GAMMA_CRITICAL`）、或 VIX 期限結構深度倒掛（Front-month 溢價超過 10%）時觸發。此狀態下系統硬性凍結**一切方向**的新開倉——包含做空：系統性流動性危機下空頭同樣會被劇烈軋空，不是安全的方向。此分支刻意在 15m K 線與 ATR 抓取**之前**判定，能早退就不為它多發一次網路請求。
 2. **Regime V（破位追空態）**：標的現價同時跌破 Gamma Flip、Session VWAP 與 Put Wall，做市商翻入負 Gamma 並對下跌順勢助跌；上方阻力頂牆完好且牆距落在緩衝雙邊界內；下方至次級負 Gamma 節點尚有 $\ge 2.0 \times \text{ATR}_{1D}$ 的空間；伴隨 15 分鐘實體陰線與 1.5 倍放量，RSI 位於弱勢空頭區間（$< 45$）。此狀態路由至「做空破位追空六重鐵律」；通過後產生**獨立的 `SHORT_ENTRY` 做空進場訊號**（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md)），絕不進入機會成本轉倉或核心資金部署的多頭下游。由於 Regime V 要求跌破 Put Wall，`DYNAMIC` 模式只會產生「破位追空」子模式。
