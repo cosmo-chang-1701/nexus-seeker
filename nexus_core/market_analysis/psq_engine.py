@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 from numpy.lib.stride_tricks import sliding_window_view
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -73,6 +73,58 @@ def _fast_rolling_linreg(series: pd.Series, length: int = 20) -> pd.Series:
     return pd.Series(out, index=series.index)
 
 
+def _psq_core(
+    df: pd.DataFrame, length: int, bb_mult: float, kc_mults: list
+) -> Tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
+    """PSQ 逐根序列核心：回傳 (20SMA, 高強度擠壓, 中強度擠壓, 一般擠壓, 動能)。
+
+    全部為因果計算（rolling／EMA／線性回歸只用當根以前的資料），`analyze_psq`
+    取最後一根、`compute_psq_series` 取整段，兩者共用同一份實作。
+    """
+    close = df["Close"]
+    high = df["High"]
+    low = df["Low"]
+
+    # 1. Bollinger Bands (20, 2)
+    basis = close.rolling(length).mean()
+    rolling_std = close.rolling(length).std(ddof=1)
+    bb_lower = basis - bb_mult * rolling_std
+    bb_upper = basis + bb_mult * rolling_std
+
+    # 2. Keltner Channels (using TA-Lib compatible True Range + EMA)
+    prev_close = close.shift(1)
+    tr1 = high - low
+    tr2 = (high - prev_close).abs()
+    tr3 = (low - prev_close).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    tr.iloc[0] = high.iloc[0] - low.iloc[0]
+
+    kc_basis = _fast_ema(close, length)
+    band = _fast_ema(tr, length)
+
+    kc1_lower = kc_basis - kc_mults[0] * band
+    kc1_upper = kc_basis + kc_mults[0] * band
+    kc2_lower = kc_basis - kc_mults[1] * band
+    kc2_upper = kc_basis + kc_mults[1] * band
+    kc3_lower = kc_basis - kc_mults[2] * band
+    kc3_upper = kc_basis + kc_mults[2] * band
+
+    # 判定各級別的擠壓狀態
+    sqz_high = (bb_lower > kc1_lower) & (bb_upper < kc1_upper)  # 高強度 (紅)
+    sqz_mid = (bb_lower > kc2_lower) & (bb_upper < kc2_upper)  # 中強度 (橘)
+    sqz_normal = (bb_lower > kc3_lower) & (bb_upper < kc3_upper)  # 一般強度 (粉)
+
+    # 3. Momentum (線性回歸動能)
+    high_max = high.rolling(length).max()
+    low_min = low.rolling(length).min()
+    avg_price = (high_max + low_min) / 2.0
+
+    momentum_source = close - (avg_price + basis) / 2.0
+    momentum_value = _fast_rolling_linreg(momentum_source, length=length)
+
+    return basis, sqz_high, sqz_mid, sqz_normal, momentum_value
+
+
 def analyze_psq(
     df: pd.DataFrame,
     length: int = 20,
@@ -98,48 +150,11 @@ def analyze_psq(
         return None
 
     try:
-        close = df["Close"]
-        high = df["High"]
         low = df["Low"]
-
-        # 1. Bollinger Bands (20, 2)
-        basis = close.rolling(length).mean()
-        rolling_std = close.rolling(length).std(ddof=1)
-        bb_lower = basis - bb_mult * rolling_std
-        bb_upper = basis + bb_mult * rolling_std
-
-        # 2. Keltner Channels (using TA-Lib compatible True Range + EMA)
-        prev_close = close.shift(1)
-        tr1 = high - low
-        tr2 = (high - prev_close).abs()
-        tr3 = (low - prev_close).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        tr.iloc[0] = high.iloc[0] - low.iloc[0]
-
-        kc_basis = _fast_ema(close, length)
-        band = _fast_ema(tr, length)
-
-        kc1_lower = kc_basis - kc_mults[0] * band
-        kc1_upper = kc_basis + kc_mults[0] * band
-        kc2_lower = kc_basis - kc_mults[1] * band
-        kc2_upper = kc_basis + kc_mults[1] * band
-        kc3_lower = kc_basis - kc_mults[2] * band
-        kc3_upper = kc_basis + kc_mults[2] * band
-
-        # 判定各級別的擠壓狀態
-        sqz_high = (bb_lower > kc1_lower) & (bb_upper < kc1_upper)  # 高強度 (紅)
-        sqz_mid = (bb_lower > kc2_lower) & (bb_upper < kc2_upper)  # 中強度 (橘)
-        sqz_normal = (bb_lower > kc3_lower) & (bb_upper < kc3_upper)  # 一般強度 (粉)
-
+        basis, sqz_high, sqz_mid, sqz_normal, momentum_value = _psq_core(
+            df, length, bb_mult, kc_mults
+        )
         is_squeezing = sqz_normal  # 只要 BB 縮入最寬的 2.0 KC 內，即屬擠壓狀態
-
-        # 3. Momentum (線性回歸動能)
-        high_max = high.rolling(length).max()
-        low_min = low.rolling(length).min()
-        avg_price = (high_max + low_min) / 2.0
-
-        momentum_source = close - (avg_price + basis) / 2.0
-        momentum_value = _fast_rolling_linreg(momentum_source, length=length)
 
         if momentum_value is None or momentum_value.isna().all():
             return None
@@ -262,3 +277,56 @@ def analyze_psq(
 
         logging.getLogger(__name__).error(f"PSQ 計算發生錯誤: {e}")
         return None
+
+
+def compute_psq_series(
+    df: pd.DataFrame,
+    length: int = 20,
+    bb_mult: float = 2.0,
+    kc_mults: list = [1.0, 1.5, 2.0],
+    green_dot_lookback: int = 1,
+) -> Optional[pd.DataFrame]:
+    """逐根 PSQ 序列（離線回測用）：與 `analyze_psq` 的最後一根判定逐欄一致。
+
+    欄位：squeeze_level、is_squeezing、momentum_value、momentum_color、green_dot、
+    turbo、sma_20。全部為因果計算，第 t 列只用到第 t 根（含）以前的資料。
+    """
+    if df is None or df.empty or len(df) < length * 2:
+        return None
+    basis, sqz_high, sqz_mid, sqz_normal, mom = _psq_core(df, length, bb_mult, kc_mults)
+    diff = mom.diff()
+    level = np.select(
+        [sqz_high.to_numpy(), sqz_mid.to_numpy(), sqz_normal.to_numpy()],
+        ["High", "Mid", "Normal"],
+        default="Release",
+    )
+    color = np.select(
+        [
+            (mom > 0) & (diff > 0),
+            mom > 0,
+            (mom < 0) & (diff < 0),
+            mom < 0,
+        ],
+        ["LightBlue", "DarkBlue", "Red", "Golden"],
+        default="Neutral",
+    )
+    sq = sqz_normal.astype(bool)
+    released = sq.shift(1, fill_value=False) & ~sq
+    lookback = max(1, int(green_dot_lookback))
+    recent_release = released.rolling(lookback, min_periods=1).max().astype(bool)
+    green_dot = (~sq) & (mom > 0) & recent_release
+    color_s = pd.Series(color, index=df.index)
+    light = color_s == "LightBlue"
+    turbo = light & ~light.shift(1, fill_value=False)
+    return pd.DataFrame(
+        {
+            "squeeze_level": level,
+            "is_squeezing": sq,
+            "momentum_value": mom,
+            "momentum_color": color_s,
+            "green_dot": green_dot,
+            "turbo": turbo,
+            "sma_20": basis,
+        },
+        index=df.index,
+    )

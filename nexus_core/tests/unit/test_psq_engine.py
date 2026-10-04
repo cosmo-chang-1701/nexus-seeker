@@ -183,3 +183,27 @@ def test_turbo_flags_flip_back_to_light_blue() -> None:
         assert res.turbo is expected
         seen_turbo = seen_turbo or res.turbo
     assert seen_turbo
+
+
+def test_compute_psq_series_matches_analyze_psq_last_bar() -> None:
+    """逐根序列的每一列，必須等於把資料截到該列再呼叫 analyze_psq 的結果。"""
+    from market_analysis.psq_engine import compute_psq_series
+
+    rng = np.random.default_rng(3)
+    n = 140
+    close = 100 + np.cumsum(rng.normal(0, 1, n))
+    close[60:90] = close[60] + rng.normal(0, 0.05, 30)  # 製造一段擠壓
+    df = pd.DataFrame(
+        {"Open": close, "High": close + 0.7, "Low": close - 0.7, "Close": close}
+    )
+    series = compute_psq_series(df, green_dot_lookback=3)
+    assert series is not None
+    for end in range(45, n + 1):
+        res = analyze_psq(df.iloc[:end], green_dot_lookback=3)
+        assert res is not None
+        row = series.iloc[end - 1]
+        assert row["squeeze_level"] == res.squeeze_level, end
+        assert bool(row["is_squeezing"]) == res.is_squeezing, end
+        assert row["momentum_color"] == res.momentum_color, end
+        assert bool(row["green_dot"]) == res.green_dot, end
+        assert bool(row["turbo"]) == res.turbo, end
