@@ -28,7 +28,6 @@ _MOM_TEXT = {
 }
 _STATUS_TEXT = {
     "ENTRY": "\u001b[1;32m✅ 建議建倉\u001b[0m",
-    "PENDING_BREAKOUT": "\u001b[1;33m🧱 待突破壓力區\u001b[0m",
     "WATCH": "\u001b[1;34m👀 觀察中\u001b[0m",
     "NONE": "⏸️ 尚無訊號",
     "VETOED": "\u001b[1;31m⛔ 否決\u001b[0m",
@@ -111,7 +110,14 @@ def create_squeeze_entry_embed(
         verdict.append(
             f" ├─ 目前 Regime: {dynamic_regime}（僅供參考，多頭建倉改由擠壓規則判定）"
         )
-    verdict.append(f" └─ 說明: {reason.split(' | ')[0] if reason else 'N/A'}")
+    verdict.append(
+        f" {'├' if getattr(result, 'resistance_warning', None) else '└'}─ 說明: {reason.split(' | ')[0] if reason else 'N/A'}"
+    )
+    warning = getattr(result, "resistance_warning", None)
+    if warning:
+        verdict.append(
+            f" └─ \u001b[1;33m{warning}（只提示、不影響判定，是否等突破由你決定）\u001b[0m"
+        )
     verdict.append("```")
     _add_ansi_field_safely(embed, "🎯 進場判定", verdict)
 

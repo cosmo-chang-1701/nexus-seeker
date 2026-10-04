@@ -18,7 +18,6 @@ from market_analysis.squeeze_entry.rules import (
     STATUS_ENTRY,
     STATUS_NO_DATA,
     STATUS_NONE,
-    STATUS_PENDING_BREAKOUT,
     STATUS_VETOED,
     STATUS_WATCH,
     evaluate_squeeze_entry,
@@ -302,17 +301,30 @@ def test_missing_weekly_skips_weekly_condition_for_new_listings() -> None:
     assert "上市未滿 40 週" in r.reason
 
 
-def test_be_pending_breakout_at_resistance() -> None:
+def test_pressing_resistance_only_annotates_not_blocks() -> None:
+    """壓力區只標註、不擋：照常給等級與部位，理由附上衝擊警示。"""
     m = _matrix(W=_SQ, D=_SQ, **{"3D": {**_SQ, "turbo": True}})
     zone = ResistanceZone(292.0, 293.3, 3)
     res = ResistanceContext(atr_1d=6.0, overhead=zone, is_approaching=True, broken=None)
     r = evaluate_squeeze_entry(m, res)
-    assert r.status == STATUS_PENDING_BREAKOUT and not r.passed
-    assert r.size_pct is None and "293.30" in r.reason
+    assert r.status == STATUS_ENTRY and r.passed and r.tier == 3
+    assert r.size_pct == 2.5
+    assert r.resistance_warning is not None and "293.30" in r.resistance_warning
+    assert "尚未突破" in r.reason
+
+
+def test_no_warning_when_not_pressing_resistance() -> None:
+    m = _matrix(D={"green_dot": True})
+    zone = ResistanceZone(320.0, 321.0, 1)
+    res = ResistanceContext(
+        atr_1d=6.0, overhead=zone, is_approaching=False, broken=None
+    )
+    r = evaluate_squeeze_entry(m, res)
+    assert r.passed and r.resistance_warning is None
 
 
 def test_lower_breakout_does_not_exempt_next_overhead_zone() -> None:
-    """SMCI 情境：剛突破較低的壓力區，但又頂到上方下一個壓力區 → 仍待突破。"""
+    """SMCI 情境：剛突破較低的壓力區，但又頂到上方下一個壓力區 → 仍要標註。"""
     lower = ResistanceZone(41.0, 42.0, 2)
     upper = ResistanceZone(43.76, 44.59, 2)
     res = ResistanceContext(
@@ -320,8 +332,8 @@ def test_lower_breakout_does_not_exempt_next_overhead_zone() -> None:
     )
     m = _matrix(W=_SQ, D={**_SQ, "momentum_color": "LightBlue"}, **{"65m": _SQ})
     r = evaluate_squeeze_entry(m, res)
-    assert r.status == STATUS_PENDING_BREAKOUT and r.size_pct is None
-    assert "44.59" in r.reason
+    assert r.status == STATUS_ENTRY and r.size_pct == 1.5
+    assert r.resistance_warning is not None and "44.59" in r.resistance_warning
 
 
 def test_breakout_acts_as_trigger_and_lifts_pending() -> None:
@@ -556,3 +568,19 @@ def test_three_day_short_group_in_current_year_is_live() -> None:
     ords = {d.date(): i for i, d in enumerate(dates)}
     out, live = resample_three_day(_daily(dates), ords, date(2026, 1, 9))
     assert live is True and len(out) == 1
+
+
+def test_squeeze_entry_embed_shows_resistance_warning() -> None:
+    from cogs.embed_builders.squeeze_entry_embeds import create_squeeze_entry_embed
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+
+    zone = ResistanceZone(43.76, 44.59, 2)
+    res = ResistanceContext(atr_1d=2.0, overhead=zone, is_approaching=True, broken=None)
+    m = _matrix(W=_SQ, D={**_SQ, "momentum_color": "LightBlue"}, **{"65m": _SQ})
+    result = evaluate_squeeze_entry(m, res)
+    embed = create_squeeze_entry_embed(
+        "SMCI", SqueezeEvaluation(result, m, res), passed=True, reason=result.reason
+    )
+    text = "\n".join(str(f.value) for f in embed.fields)
+    assert "正在衝擊壓力區 $43.76–$44.59，尚未突破" in text
+    assert "只提示、不影響判定" in text

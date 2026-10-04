@@ -157,7 +157,7 @@ $$
 1. **部位已獲利**：$\dfrac{\text{Spot} - \text{AvgCost}}{\text{AvgCost}} \ge \text{\_PYRAMID\_PROFIT\_THRESHOLD\_PCT} = 3\%$
 2. **停損已在成本之上（不變式，任何修改都不得放寬）**：擠壓參考停損 $\min(\text{D 擠壓區間低點}, \text{SMA}^{D}_{20}) - 0.5\times\text{ATR}_{1D} \ge \text{AvgCost}$（算不出來 fail-closed）——這是加碼只動用「已實現的帳面利潤」承險、不增加原始本金曝險的唯一保證，也是金字塔加碼與盲目攤平的分界。2026-10 前讀取 `dynamic_strategy_state["ratchet_stop"]`，但顧問模式丟棄 HOLD 指令的狀態補丁，該值對所有多頭現貨永遠不會寫入，條件二恆不成立；改為即時計算，不變式語意不變（見 [`10_multi_timeframe_squeeze_entry.md`](10_multi_timeframe_squeeze_entry.md) §1.2）。
 3. **趨勢延續訊號**：D 動能 $> 0$，且 65m／D／3D／W 任一出現 Green Dot（擠壓剛解除），或收盤站上自動偵測的壓力區（`10` §2.3）
-4. **不在壓力區下緣**：現價未進入「尚未突破的壓力區下緣 $0.5\times\text{ATR}_{1D}$ 以內」
+4. **壓力區只標註、不擋**：現價若進入「尚未突破的壓力區下緣 $0.5\times\text{ATR}_{1D}$ 以內」，加碼理由附上警示，不阻擋加碼（使用者 2026-10-04 決定，與建倉判定一致）
 5. **加碼次數未達上限**：$\text{pyramid\_count} < \text{\_PYRAMID\_MAX\_ADDS} = 2$
 6. **距上次加碼已冷卻**：$\text{now} - \text{last\_pyramid\_at} \ge \text{\_PYRAMID\_COOLDOWN\_BARS} = 8$ 根 15m bar（2 小時）；從未加碼過視為冷卻已滿足
 7. **加碼後總曝險未超過預算上限**：超過 `profile.max_satellite_budget_pct`（[`02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §4.4）時降量而非直接拒絕

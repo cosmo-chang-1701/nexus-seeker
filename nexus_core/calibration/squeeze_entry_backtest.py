@@ -164,9 +164,7 @@ def build_daily_signals(
                 "date": idx[i],
                 "status": result.status,
                 "tier": result.tier if result.status == "ENTRY" else None,
-                "pending_tier": result.tier
-                if result.status == "PENDING_BREAKOUT"
-                else None,
+                "at_resistance": bool(result.resistance_warning),
                 "squeeze_count": result.squeeze_count,
                 "triggers": ",".join(result.triggers),
             }
@@ -215,7 +213,7 @@ class BucketStats:
 def summarize(
     panel: pd.DataFrame, horizons: Iterable[int] = HORIZONS, cooldown: int = 10
 ) -> List[BucketStats]:
-    """panel 欄位：symbol、status、tier、pending_tier、ret_h…（每列一個標的日，
+    """panel 欄位：symbol、status、tier、at_resistance、ret_h…（每列一個標的日，
     索引唯一且同一標的內依日期排序）。"""
     out: List[BucketStats] = []
     buckets = {
@@ -223,7 +221,8 @@ def summarize(
         "T2": panel["tier"] == 2,
         "T3": panel["tier"] == 3,
         "任一等級 (ENTRY)": panel["status"] == "ENTRY",
-        "待突破 (PENDING)": panel["status"] == "PENDING_BREAKOUT",
+        "ENTRY 且衝擊壓力區中": (panel["status"] == "ENTRY") & panel["at_resistance"],
+        "ENTRY 且未在壓力區": (panel["status"] == "ENTRY") & ~panel["at_resistance"],
         "觀察 (WATCH)": panel["status"] == "WATCH",
         "全部交易日 (基準)": pd.Series(True, index=panel.index),
     }

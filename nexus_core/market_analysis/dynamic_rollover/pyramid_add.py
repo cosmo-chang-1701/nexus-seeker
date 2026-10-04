@@ -168,7 +168,8 @@ async def evaluate_pyramid_add_impl(
        利潤承險的唯一保證；參考停損算不出來一律 fail-closed）
     3. 趨勢延續訊號：D 動能 > 0，且 65m／D／3D／W 任一出現 Green Dot（擠壓剛
        解除），或收盤站上壓力區（壓力區突破）
-    4. 不在壓力區下緣：現價未進入「尚未突破的壓力區下緣 0.5×ATR₁D 以內」
+    4. 壓力區只標註、不擋：現價若在尚未突破的壓力區下緣 0.5×ATR₁D 以內，於理由
+       附上警示（使用者 2026-10-04 決定，與建倉判定一致）
     5. 加碼次數未達上限：pyramid_count < _PYRAMID_MAX_ADDS (2)
     6. 距上次加碼已冷卻：now - last_pyramid_at >= _PYRAMID_COOLDOWN_BARS (8 根
        15m bar = 2 小時)；從未加碼過視為冷卻已滿足
@@ -244,10 +245,17 @@ async def evaluate_pyramid_add_impl(
     if not continuation:
         return []
 
-    # 條件四：不在尚未突破的壓力區下緣（衝擊中的 overhead 必然尚未突破；
-    # 剛突破較低的壓力區不能豁免上方下一個壓力區）
-    if resistance is not None and resistance.is_approaching:
-        return []
+    # 條件四：壓力區只標註、不擋（衝擊中的 overhead 必然尚未突破）
+    resistance_warning = ""
+    if (
+        resistance is not None
+        and resistance.is_approaching
+        and resistance.overhead is not None
+    ):
+        resistance_warning = (
+            f"\n⚠️ 正在衝擊壓力區 ${resistance.overhead.bottom:.2f}–"
+            f"${resistance.overhead.top:.2f}，尚未突破（只提示，是否等突破由你決定）。"
+        )
 
     # 條件八：非逃頂警戒。刻意放在條件一~七之後才呼叫（宏觀評分呼叫端有自己的
     # 快取，但仍涉及 VTS/Fear&Greed/FedWatch 三次資料抓取），前面已先行過濾掉
@@ -294,6 +302,7 @@ async def evaluate_pyramid_add_impl(
         f"${avg_cost:.2f} 之上），D 動能仍為正，趨勢延續訊號："
         f"{'、'.join(continuation)}。"
         f"本次為第 {pyramid_count + 1}/{_PYRAMID_MAX_ADDS} 次加碼。"
+        f"{resistance_warning}"
     )
 
     instruction: RolloverInstruction = {

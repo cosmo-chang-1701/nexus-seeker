@@ -197,22 +197,26 @@ async def test_condition3_resistance_breakout_counts_as_continuation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_condition4_fails_when_pressing_unbroken_resistance() -> None:
+async def test_condition4_pressing_resistance_only_annotates() -> None:
+    """條件四只標註、不擋：仍產出加碼指令，理由附上衝擊警示。"""
     zone = ResistanceZone(110.5, 111.0, 3)
     instructions = await _evaluate(
         _asset(), _metrics(), squeeze=_squeeze(approaching=zone)
     )
-    assert instructions == []
+    assert len(instructions) == 1
+    assert "正在衝擊壓力區 $110.50–$111.00" in instructions[0]["reason"]
 
 
 @pytest.mark.asyncio
-async def test_condition4_lower_breakout_does_not_exempt_next_zone() -> None:
+async def test_condition4_lower_breakout_still_warns_next_zone() -> None:
     lower = ResistanceZone(105.0, 106.0, 2)
     upper = ResistanceZone(110.5, 111.0, 3)
     instructions = await _evaluate(
         _asset(), _metrics(), squeeze=_squeeze(broken=lower, approaching=upper)
     )
-    assert instructions == []
+    assert len(instructions) == 1
+    reason = instructions[0]["reason"]
+    assert "站上壓力區 $106.00" in reason and "$111.00，尚未突破" in reason
 
 
 @pytest.mark.asyncio

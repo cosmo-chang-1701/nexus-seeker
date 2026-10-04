@@ -12,7 +12,6 @@ from market_analysis.squeeze_entry.resistance import (
 from market_analysis.squeeze_entry.rules import (
     STATUS_ENTRY,
     STATUS_NO_DATA,
-    STATUS_PENDING_BREAKOUT,
     STATUS_VETOED,
     STATUS_WATCH,
     TIER_SIZE_PCT,
@@ -34,7 +33,6 @@ __all__ = [
     "detect_resistance",
     "STATUS_ENTRY",
     "STATUS_NO_DATA",
-    "STATUS_PENDING_BREAKOUT",
     "STATUS_VETOED",
     "STATUS_WATCH",
     "TIER_SIZE_PCT",

@@ -9,7 +9,10 @@
 | T2 | ≥ 3 個時間框架擠壓中（含 D），且 D 動能上升（淺藍） | 1.5% |
 | T3 | D Green Dot，或 3D Turbo 且 ≥ 3 個時間框架擠壓中 | 2.5% |
 
-壓力區：現價在最近壓力區下緣 0.5×ATR 以內且未突破 → 一律降為「待突破」不推播。
+壓力區：現價在最近壓力區下緣 0.5×ATR 以內且未突破 → **只標註、不擋**（照常建議與
+推播，理由與 `resistance_warning` 附上「正在衝擊壓力區」）。日線事件研究顯示被擋下
+的訊號報酬不比放行的差，且自動偵測的價位不一定是使用者認定的那條線，由使用者
+看圖決定比替他擋掉合適（使用者 2026-10-04 決定）。
 """
 
 from dataclasses import dataclass, field
@@ -30,7 +33,6 @@ _STOP_ATR_BUFFER = 0.5
 
 # 狀態值（供推播、前向記錄與面板共用）
 STATUS_ENTRY = "ENTRY"  # 達 T1 以上且無否決 → 可推播
-STATUS_PENDING_BREAKOUT = "PENDING_BREAKOUT"  # 條件成立但正在衝擊壓力區
 STATUS_WATCH = "WATCH"  # 多時間框架擠壓中，尚無觸發
 STATUS_NONE = "NONE"
 STATUS_VETOED = "VETOED"
@@ -47,6 +49,8 @@ class SqueezeEntryResult:
     triggers: List[str] = field(default_factory=list)
     squeeze_count: int = 0
     resistance_note: Optional[str] = None
+    # 正在衝擊尚未突破的壓力區時的警示文字（只標註、不影響判定）；否則為 None。
+    resistance_warning: Optional[str] = None
 
     @property
     def passed(self) -> bool:
@@ -195,32 +199,29 @@ def evaluate_squeeze_entry(
             )
 
     # 衝擊中的壓力區一定尚未突破（overhead 定義為 top >= 現價）。即使剛突破
-    # 一個較低的壓力區（breakout 觸發），只要又頂到上方下一個壓力區，仍要等
-    # 收盤站上才放行——突破較低的區不代表上方的區已經讓路。
+    # 一個較低的壓力區，又頂到上方下一個壓力區時同樣要標註。只標註、不擋。
+    warning: Optional[str] = None
     if (
         resistance is not None
         and resistance.is_approaching
         and resistance.overhead is not None
     ):
-        return SqueezeEntryResult(
-            STATUS_PENDING_BREAKOUT,
-            tier,
-            None,
-            stop,
-            f"🧱 {TIER_LABEL[tier]} 條件成立，但正在衝擊壓力區，"
-            f"待收盤站上 ${resistance.overhead.top:.2f}{downgrade_text}",
-            triggers,
-            count,
-            note,
+        warning = (
+            f"⚠️ 正在衝擊壓力區 ${resistance.overhead.bottom:.2f}–"
+            f"${resistance.overhead.top:.2f}，尚未突破"
         )
 
+    reason = f"✅ {TIER_LABEL[tier]}：{'、'.join(triggers)}{downgrade_text}"
+    if warning:
+        reason = f"{reason} | {warning}"
     return SqueezeEntryResult(
         STATUS_ENTRY,
         tier,
         TIER_SIZE_PCT[tier],
         stop,
-        f"✅ {TIER_LABEL[tier]}：{'、'.join(triggers)}{downgrade_text}",
+        reason,
         triggers,
         count,
         note,
+        warning,
     )

@@ -70,7 +70,7 @@ def test_summarize_counts_independent_events_per_symbol() -> None:
             "symbol": ["A"] * 4 + ["B"] * 4,
             "status": ["ENTRY", "ENTRY", "NONE", "NONE"] * 2,
             "tier": [3, 3, None, None] * 2,
-            "pending_tier": [None] * 8,
+            "at_resistance": [False] * 8,
             "ret_5": [0.1, 0.1, 0.0, 0.0, 0.2, 0.2, 0.0, 0.0],
         }
     )

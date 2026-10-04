@@ -36,7 +36,7 @@ class ResistanceContext:
 
     atr_1d: float
     overhead: Optional[ResistanceZone]  # 現價上方（或正在區內）最近的壓力區
-    is_approaching: bool  # 現價已進入 overhead 下緣 0.5×ATR 以內，待突破
+    is_approaching: bool  # 現價已進入 overhead 下緣 0.5×ATR 以內（衝擊中，只標註）
     broken: Optional[ResistanceZone]  # 最近 N 根內收盤站上的壓力區（突破觸發）
 
 

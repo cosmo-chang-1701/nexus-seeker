@@ -130,7 +130,7 @@ flowchart TB
 | 07 | [`07_short_side_breakdown_ironclad.md`](strategies/07_short_side_breakdown_ironclad.md) | 做空交易六重嚴格過濾鐵律與 SHORT_ENTRY 做空進場訊號 | 15m 實體陰線放量 1.5x, 頂牆 $K > \text{Spot}$, 破位追空次級節點 $\ge 2.0\times\text{ATR}_{1D}$, DTE $\ge 14$, 倉位 $\min(0.5\%, f_{\text{kelly}}) \times m_{\text{VIX}}^{\text{short}}$ ÷ 停損距離 | `market_analysis/dynamic_rollover/short_side_entry.py` |
 | 07b | [`08_regime_momentum_rotation.md`](strategies/08_regime_momentum_rotation.md) | 大盤三態切換 + 12-1 動能輪動（取代動態轉倉引擎的**候選**策略；2007–2025 日線回測**未通過**及格標準） | SPY 50／200 日均線三態＋連續 3 日確認, GOOD：動能前 5 名等權、VOO 0%, WEAK：防禦 ETF 前 2 名＋VOO, BAD：BOXX, 持有期間高點回落 25% 出場、不設停利 | `calibration/regime_momentum_backtest.py` |
 | 07c | [`09_static_allocation_rebalance.md`](strategies/09_static_allocation_rebalance.md) | 固定比例配置 + 定期再平衡（選項 A）：不擇時，股票／BOXX 固定比例，依可承受回撤查表挑比例（2007–2025 日線回測） | $w_{\text{TECH}} = E \cdot T$、$w_{\text{VOO}} = E(1-T)$、$w_{\text{BOXX}} = 1-E$；每年／每季／偏離 ≥5pp 再平衡；目標 MDD 查表 | `calibration/static_allocation_backtest.py` |
-| 07d | [`10_multi_timeframe_squeeze_entry.md`](strategies/10_multi_timeframe_squeeze_entry.md) | 多時間框架擠壓進場與加碼（取代右側六重鐵律的多頭建倉判定與 `PYRAMID_ADD` 條件二～四；乾跑中，日線事件研究無顯著擇時優勢） | W／3D／D／65m／15m／5m PSQ 矩陣、只用已收盤 K 棒；T1 1%／T2 1.5%／T3 2.5%；壓力區 $\pm 0.5\times\text{ATR}_{1D}$ 群聚、衝擊未突破即待突破 | `market_analysis/squeeze_entry/` |
+| 07d | [`10_multi_timeframe_squeeze_entry.md`](strategies/10_multi_timeframe_squeeze_entry.md) | 多時間框架擠壓進場與加碼（取代右側六重鐵律的多頭建倉判定與 `PYRAMID_ADD` 條件二～四；乾跑中，日線事件研究無顯著擇時優勢） | W／3D／D／65m／15m／5m PSQ 矩陣、只用已收盤 K 棒；T1 1%／T2 1.5%／T3 2.5%；壓力區 $\pm 0.5\times\text{ATR}_{1D}$ 群聚、衝擊未突破只標註、不擋 | `market_analysis/squeeze_entry/` |
 
 ---
 

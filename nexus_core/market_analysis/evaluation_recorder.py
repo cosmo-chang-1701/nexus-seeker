@@ -367,7 +367,7 @@ def record_squeeze_entry(
 ) -> None:
     """記錄多時間框架擠壓進場判定（`SqueezeEntryResult` 以 duck typing 讀取）。
 
-    `sub_mode` 存狀態（ENTRY／PENDING_BREAKOUT／WATCH／…），`conditions_mask` 存等級
+    `sub_mode` 存狀態（ENTRY／WATCH／…），`conditions_mask` 存等級
     （1–3，未達為 None）；矩陣與壓力區壓縮進 `features_json` 供離線校準。
     """
     try:
@@ -390,6 +390,7 @@ def record_squeeze_entry(
         broken = getattr(resistance, "broken", None)
         if broken is not None:
             features["res_broken_top"] = getattr(broken, "top", None)
+        features["at_resistance"] = bool(getattr(resistance, "is_approaching", False))
         _append(
             {
                 "symbol": symbol.upper(),
