@@ -665,7 +665,6 @@ async def test_squeeze_advice_pushes_squeeze_embed() -> None:
     )
     with patch(
         "cogs.embed_builders.squeeze_entry_embeds.create_squeeze_entry_embed",
-        wraps=None,
     ) as builder:
         builder.return_value = MagicMock()
         await _dispatch(p, advice)

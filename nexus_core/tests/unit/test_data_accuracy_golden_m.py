@@ -508,13 +508,3 @@ async def test_unknown_ivr_does_not_fake_iv_crush() -> None:
     assert m["ivr"] is None
     assert m["ivr_drop"] == 0.0
     save.assert_not_awaited()  # 不以未知覆寫前值
-
-
-def test_unknown_ivr_entry_directive_prefers_spread() -> None:
-    from market_analysis.dynamic_rollover.opportunity_cost import (
-        _derive_entry_structure_directive,
-    )
-
-    # IVR 20 (≤ 門檻) → Long Call；IVR 未知 (舊版當 0 → Long Call) → 價差
-    assert "Long Call" in _derive_entry_structure_directive(0.12, 20.0, None)
-    assert "Bull Call Spread" in _derive_entry_structure_directive(0.12, None, None)

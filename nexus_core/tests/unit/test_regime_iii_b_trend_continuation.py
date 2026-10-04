@@ -4,13 +4,12 @@
 發生的事件（條件一的放量實體陽線、條件四的當下 UOA），而趨勢的續航段是縮量、
 陰陽交錯的——錯過啟動那一根就整波進不去。III-B 只放寬這兩項，其餘四項風控逐字不動。
 
-最高優先測項（若其一失效，整條路徑不是失效就是危險）：
+右側六重鐵律已由多時間框架擠壓規則取代（docs/strategies/10），本檔只保留分類器
+與共用演算法的測項：III-B 仍是 Regime 分類器的一態（前向紀錄與 /x 顯示會用到）。
+
+最高優先測項：
   * `test_regime_iii_takes_priority_over_iii_b` —— III-B 若搶在 III 之前，突破態會被
-    降級成放寬態，UOA 時間窗會被錯誤套用到突破上。
-  * `test_gate_condition1_strict_mode_rejects_same_data` —— 證明通過是「放寬」造成的，
-    不是 fixture 本來就會過；沒有這支，條件一的放寬等於沒被測到。
-  * `test_condition4_lookback_recomputes_dte_against_today` / `..._strike_against_spot`
-    —— 時間窗只放寬「何時觀測到」，不放寬「現在是否仍然成立」。
+    降級成放寬態。
 """
 
 from datetime import datetime, timedelta
@@ -21,10 +20,6 @@ import pandas as pd
 import pytest
 
 from market_analysis.dynamic_rollover.models import DynamicRegime
-from market_analysis.dynamic_rollover.opportunity_cost import (
-    _confirm_entry_condition1_breakout,
-    _confirm_entry_condition4_uoa_dte,
-)
 from market_analysis.dynamic_rollover.regime_classifier import classify_dynamic_regime
 from market_analysis.dynamic_rollover.structural_signals import (
     count_structure_held_bars,
@@ -292,82 +287,7 @@ class TestForwardCollection:
 
 
 # ---------------------------------------------------------------------------
-# 4. 六重鐵律條件一：放量實體陽線 → 持續站穩
-# ---------------------------------------------------------------------------
-class TestGateCondition1:
-    @pytest.mark.asyncio
-    async def test_trend_mode_passes_without_volume_surge_or_bullish_candle(
-        self,
-    ) -> None:
-        reasons: list[str] = []
-        passed = await _confirm_entry_condition1_breakout(
-            "TEST",
-            100.0,
-            _gex_iii_b()["gex_profile"],
-            reasons,
-            net_gex=800_000.0,
-            df_15m=_TREND_DF,
-            session_vwap=98.0,
-            trend_continuation=True,
-        )
-        assert passed is True
-        assert "[趨勢延續]" in reasons[0]
-        assert "本路徑不要求放量與實體陽線" in reasons[0]
-
-    @pytest.mark.asyncio
-    async def test_strict_mode_rejects_same_data(self) -> None:
-        """⚠️ 最高優先測項：同一份資料在嚴格模式下必須**不通過**。
-
-        沒有這支測試，上一支的「通過」可能只是因為 fixture 本身就滿足舊條件，
-        條件一的放寬等於完全沒被驗證到。
-        """
-        reasons: list[str] = []
-        passed = await _confirm_entry_condition1_breakout(
-            "TEST",
-            100.0,
-            _gex_iii_b()["gex_profile"],
-            reasons,
-            net_gex=800_000.0,
-            df_15m=_TREND_DF,
-            session_vwap=98.0,
-        )
-        assert passed is False
-        assert "[趨勢延續]" not in reasons[0]
-
-    @pytest.mark.asyncio
-    async def test_trend_mode_rejects_insufficient_held_bars(self) -> None:
-        reasons: list[str] = []
-        passed = await _confirm_entry_condition1_breakout(
-            "TEST",
-            100.0,
-            _gex_iii_b()["gex_profile"],
-            reasons,
-            net_gex=800_000.0,
-            df_15m=_WEAK_DF,
-            session_vwap=98.0,
-            trend_continuation=True,
-        )
-        assert passed is False
-
-    @pytest.mark.asyncio
-    async def test_trend_mode_still_requires_standing_above_vwap(self) -> None:
-        """站穩結構與站穩 VWAP 兩項**不放寬**——放寬等於容許在負 Gamma 區追多。"""
-        reasons: list[str] = []
-        passed = await _confirm_entry_condition1_breakout(
-            "TEST",
-            100.0,
-            _gex_iii_b()["gex_profile"],
-            reasons,
-            net_gex=800_000.0,
-            df_15m=_TREND_DF,
-            session_vwap=120.0,
-            trend_continuation=True,
-        )
-        assert passed is False
-
-
-# ---------------------------------------------------------------------------
-# 5. 六重鐵律條件四：UOA 5 交易日回看窗
+# 4. uoa_history 存取層
 # ---------------------------------------------------------------------------
 def _uoa(
     days_to_expiry: int = 30,
@@ -389,76 +309,6 @@ def _uoa(
     }
 
 
-class TestGateCondition4Lookback:
-    def test_historical_record_satisfies_condition(self) -> None:
-        reasons: list[str] = []
-        assert (
-            _confirm_entry_condition4_uoa_dte(
-                [], 100.0, reasons, historical_uoa=[_uoa()]
-            )
-            is True
-        )
-        assert "回看窗" in reasons[0]
-
-    def test_without_lookback_same_data_fails(self) -> None:
-        """Regime III（突破態）不傳歷史清單，語意維持「當下必須存在」。"""
-        reasons: list[str] = []
-        assert _confirm_entry_condition4_uoa_dte([], 100.0, reasons) is False
-        assert "回看窗" not in reasons[0]
-
-    def test_recomputes_dte_against_today(self) -> None:
-        """5 天前的 DTE 14 合約今天只剩 9 天；若今天已跌破門檻就不該再算數。
-        時間窗放寬的是「何時觀測到」，不是「現在是否仍然成立」。"""
-        reasons: list[str] = []
-        assert (
-            _confirm_entry_condition4_uoa_dte(
-                [], 100.0, reasons, historical_uoa=[_uoa(days_to_expiry=3)]
-            )
-            is False
-        )
-
-    def test_recomputes_strike_against_current_spot(self) -> None:
-        """主力當初買的價外 Call，若現價已衝過該履約價，那筆買盤已完成使命，
-        不構成對「再往上」的背書。"""
-        reasons: list[str] = []
-        assert (
-            _confirm_entry_condition4_uoa_dte(
-                [], 120.0, reasons, historical_uoa=[_uoa(strike=105.0)]
-            )
-            is False
-        )
-
-    def test_historical_records_still_face_all_four_filters(self) -> None:
-        reasons: list[str] = []
-        assert (
-            _confirm_entry_condition4_uoa_dte(
-                [],
-                100.0,
-                reasons,
-                historical_uoa=[
-                    _uoa(action="STO"),
-                    _uoa(opt_type="PUT"),
-                    _uoa(ratio=0.1),
-                    _uoa(notional=1_000.0),
-                ],
-            )
-            is False
-        )
-
-    def test_live_snapshot_takes_precedence_in_reason_text(self) -> None:
-        reasons: list[str] = []
-        assert (
-            _confirm_entry_condition4_uoa_dte(
-                [_uoa()], 100.0, reasons, historical_uoa=[_uoa(notional=900_000.0)]
-            )
-            is True
-        )
-        assert "回看窗" in reasons[0]
-
-
-# ---------------------------------------------------------------------------
-# 6. uoa_history 存取層
-# ---------------------------------------------------------------------------
 class TestUoaHistoryRows:
     def test_maps_detect_uoa_payload(self) -> None:
         from database.uoa_history import _to_rows
