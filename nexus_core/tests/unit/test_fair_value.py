@@ -191,3 +191,46 @@ def test_integrate_fair_value_fallbacks() -> None:
     )
     assert res_none.fair_value is None
     assert res_none.method == "NONE"
+
+
+def test_calculate_cost_of_equity_low_yield_boundary() -> None:
+    # 測試歷史低利率環境 (例如 2020 年 COVID 0.85% 國債殖利率)
+    # 0.85% 應正確辨識為百分比並轉為 0.0085，而非 0.85 (85%)
+    r_low, erp = calculate_cost_of_equity(us10y=0.85, nfci=0.0, beta=1.0)
+    assert pytest.approx(r_low, rel=1e-4) == 0.0085 + 1.0 * 0.045
+
+    # 1.0% 也應正確除以 100 -> 0.010
+    r_one_pct, _ = calculate_cost_of_equity(us10y=1.0, nfci=0.0, beta=1.0)
+    assert pytest.approx(r_one_pct, rel=1e-4) == 0.010 + 1.0 * 0.045
+
+    # 0.0425 小數形式應直接保留為 0.0425
+    r_decimal, _ = calculate_cost_of_equity(us10y=0.0425, nfci=0.0, beta=1.0)
+    assert pytest.approx(r_decimal, rel=1e-4) == 0.0425 + 1.0 * 0.045
+
+
+def test_calculate_dcf_spread_floating_point_tolerance() -> None:
+    # 恰好利差 100 bps (r = 0.035, g_T = 0.025)，因浮點數減法可能有微小誤差，需容差保護通過
+    inputs = DCFInputs(
+        fcf_per_share=4.0,
+        growth_rate_1y=0.05,
+        cost_of_equity=0.035,
+        perpetual_growth_rate=0.025,
+    )
+    res = calculate_dcf_value(inputs)
+    assert res.is_valid is True
+    assert res.dcf_value is not None
+    assert res.dcf_value > 0
+
+
+def test_calculate_comps_value_optional_nfci() -> None:
+    # nfci 為 None 時應安全退回 0.0 懲罰 (penalty factor = 1.0)
+    inputs = CompsInputs(
+        forward_eps=5.0,
+        peer_pes=[20.0, 22.0, 24.0],
+        nfci=None,
+    )
+    res = calculate_comps_value(inputs)
+    assert res.is_valid is True
+    assert res.median_pe == 22.0
+    assert pytest.approx(res.liquidity_penalty_factor, rel=1e-4) == 1.0
+    assert pytest.approx(res.comps_value, rel=1e-2) == 110.0

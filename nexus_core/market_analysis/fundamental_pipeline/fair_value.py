@@ -68,11 +68,11 @@ def calculate_cost_of_equity(
 ) -> tuple[float, float]:
     """計算資產權益資本成本 (Cost of Equity, r) 與動態 ERP。
 
-    - us10y: 若大於 1.0 則自動除以 100 轉為小數 (例如 4.25% -> 0.0425)。
+    - us10y: 若大於 0.20 則視為百分比自動除以 100 轉為小數 (例如 4.25% -> 0.0425, 0.85% -> 0.0085)。
     - beta: 箝制於 [0.5, 2.0]，缺失時預設 1.0。
     回傳 (r, erp)。
     """
-    dgs10 = us10y / 100.0 if us10y > 1.0 else us10y
+    dgs10 = us10y / 100.0 if us10y > 0.20 else us10y
     erp = calculate_equity_risk_premium(nfci)
     eff_beta = max(0.5, min(2.0, beta if beta is not None else 1.0))
     r = dgs10 + eff_beta * erp
@@ -85,7 +85,7 @@ def calculate_dcf_value(inputs: DCFInputs) -> DCFResult:
     拒絕條件：
     1. FCF_0 <= 0 (非正現金流)。
     2. r <= 0 (無意義折現率)。
-    3. r - g_T < 0.010 (分母利差過窄防禦)。
+    3. r - g_T < 0.010 (分母利差過窄防禦，含 1e-9 浮點容差保護)。
     """
     fcf_0 = inputs.fcf_per_share
     if fcf_0 <= 0:
@@ -105,7 +105,7 @@ def calculate_dcf_value(inputs: DCFInputs) -> DCFResult:
 
     g_t = inputs.perpetual_growth_rate
     spread = r - g_t
-    if spread < MIN_SPREAD_THRESHOLD:
+    if spread < MIN_SPREAD_THRESHOLD - 1e-9:
         return DCFResult(
             dcf_value=None,
             is_valid=False,
@@ -174,7 +174,8 @@ def calculate_comps_value(inputs: CompsInputs) -> CompsResult:
         )
 
     # 芝加哥聯準會 NFCI 流動性懲罰乘數: exp(-0.10 * clip(NFCI, -1.0, 2.0))
-    clipped_nfci = max(-1.0, min(2.0, inputs.nfci))
+    nfci_val = inputs.nfci if inputs.nfci is not None else 0.0
+    clipped_nfci = max(-1.0, min(2.0, nfci_val))
     penalty_factor = math.exp(-0.10 * clipped_nfci)
 
     comps_val = fwd_eps * med_pe * penalty_factor

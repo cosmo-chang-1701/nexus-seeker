@@ -121,3 +121,89 @@ def test_register_valuation_clock_jobs() -> None:
     assert job is not None
     assert job.job_id == "fundamental_watch_candidate_2000"
     assert job.priority == 50
+
+
+@pytest.mark.asyncio
+async def test_watch_candidates_high_severity_and_missing_fv(db_conn: Any) -> None:
+    # 建立一筆 HIGH 治理紅旗標的 INTC (Item 5.02 高管解職)
+    high_flag = GovernanceFlagRecord(
+        symbol="INTC",
+        source_accession="000456-26-00002",
+        flag_kind="5.02",
+        severity="HIGH",
+        detail_json="{}",
+        expires_at="2026-11-05",
+    )
+    await save_governance_flags([high_flag])
+
+    mock_val_service = AsyncMock()
+
+    async def mock_compute(symbol: str, as_of_date: Any = None) -> tuple[Any, Any]:
+        if symbol == "NO_FV":
+            # 無可用估值數據 (DCF 與 Comps 皆失效)，但動能極高
+            fv = FairValueResult(
+                fair_value=None,
+                margin_of_safety=None,
+                dcf_value=None,
+                comps_value=None,
+                discount_rate=0.08,
+                equity_risk_premium=0.045,
+                is_deep_value=False,
+                flags=[],
+                method="NONE",
+            )
+            rev = RevisionMomentumResult(
+                score_30d=80.0,
+                breadth_ratio=1.0,
+                is_pead_aligned=False,
+                slopes={},
+                up_count=5,
+                down_count=0,
+                details={},
+            )
+            return fv, rev
+        else:
+            fv = FairValueResult(
+                fair_value=120.0,
+                margin_of_safety=0.15,
+                dcf_value=120.0,
+                comps_value=120.0,
+                discount_rate=0.08,
+                equity_risk_premium=0.045,
+                is_deep_value=False,
+                flags=[],
+                method="BLENDED",
+            )
+            rev = RevisionMomentumResult(
+                score_30d=20.0,
+                breadth_ratio=0.5,
+                is_pead_aligned=False,
+                slopes={},
+                up_count=2,
+                down_count=1,
+                details={},
+            )
+            return fv, rev
+
+    mock_val_service.compute_and_save_valuation.side_effect = mock_compute
+
+    with patch(
+        "services.fundamental_clock_service.get_fundamental_universe",
+        AsyncMock(return_value=["INTC", "NO_FV"]),
+    ):
+        candidates = await generate_and_save_watch_candidates(
+            as_of_date=date(2026, 10, 6),
+            valuation_service=mock_val_service,
+        )
+
+        assert len(candidates) == 2
+
+        # 1. INTC 觸發 HIGH 治理紅旗 (Item 5.02) 必須列為 EXCLUDED
+        c_intc = next(c for c in candidates if c.symbol == "INTC")
+        assert c_intc.status == "EXCLUDED"
+        assert c_intc.excluded_reason is not None
+        assert "HIGH" in c_intc.excluded_reason
+
+        # 2. NO_FV 雖然動能高，但無有效估值 (fair_value is None)，不可晉升為 CANDIDATE，應為 WATCH
+        c_nofv = next(c for c in candidates if c.symbol == "NO_FV")
+        assert c_nofv.status == "WATCH"

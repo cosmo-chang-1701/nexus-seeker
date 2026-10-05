@@ -78,3 +78,71 @@ async def test_valuation_service_compute_and_save(db_conn: Any) -> None:
     assert saved_rev.symbol == "AAPL"
     assert saved_rev.trading_date == "2026-10-05"
     assert saved_rev.score_30d == rev_res.score_30d
+
+
+@pytest.mark.asyncio
+async def test_valuation_service_snapshot_fwd_eps_fallback_and_governance(
+    db_conn: Any,
+) -> None:
+    from database.fundamental_pipeline import (
+        save_eps_estimate_snapshots,
+        save_governance_flags,
+    )
+    from market_analysis.fundamental_pipeline.models import (
+        EPSEstimateSnapshotRecord,
+        GovernanceFlagRecord,
+    )
+
+    # 1. 預存分析師共識快照 (0y = 5.0)
+    snaps = [
+        EPSEstimateSnapshotRecord(
+            symbol="TEST",
+            snapshot_date="2026-10-05",
+            horizon="0y",
+            source="finnhub",
+            eps_mean=5.0,
+        ),
+    ]
+    await save_eps_estimate_snapshots(snaps)
+
+    # 2. 存入 REVIEW 治理紅旗
+    gov_flag = GovernanceFlagRecord(
+        symbol="TEST",
+        source_accession="000999-26-00003",
+        flag_kind="INSIDER_SALE",
+        severity="REVIEW",
+        detail_json="{}",
+        expires_at="2026-11-05",
+    )
+    await save_governance_flags([gov_flag])
+
+    class NoFwdEpsProvider:
+        async def get_company_metrics(self, symbol: str) -> dict[str, Any]:
+            if symbol == "TEST":
+                return {
+                    "fcfPerShareTTM": 0.0,  # 強制 DCF 失效，依賴 Comps
+                    "epsGrowth3Y": 12.0,  # 備援成長率
+                    # 無 epsNormalizedAnnual / epsTTM
+                }
+            return {"peTTM": 20.0}
+
+        async def get_peers(self, symbol: str) -> list[str]:
+            return ["P1", "P2", "P3"]
+
+        async def get_spot_price(self, symbol: str) -> float | None:
+            return 70.0
+
+    service = ValuationService(data_provider=NoFwdEpsProvider())
+    fv_res, rev_res = await service.compute_and_save_valuation(
+        symbol="TEST", as_of_date=date(2026, 10, 5)
+    )
+
+    # 驗證成功從快照 0y 補足 forward_eps = 5.0，Comps 估值成功
+    assert fv_res.comps_value is not None
+    assert fv_res.fair_value is not None
+    assert fv_res.method == "COMPS_ONLY"
+    assert pytest.approx(fv_res.comps_value, rel=1e-2) == 5.0 * 20.0
+
+    # 驗證治理問題成功壓制 deep value
+    assert fv_res.is_deep_value is False
+    assert "GOVERNANCE_RISK" in fv_res.flags

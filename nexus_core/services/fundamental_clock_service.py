@@ -68,13 +68,16 @@ async def generate_and_save_watch_candidates(
             flags = await asyncio.to_thread(get_active_governance_flags, sym_upper)
             gov_status = evaluate_governance_status(sym_upper, flags)
 
-            # 若觸發 CRITICAL 級別重大治理紅旗，直接列入排除名單
-            if not gov_status.is_clean and gov_status.max_severity == "CRITICAL":
+            # 若觸發 CRITICAL 或 HIGH 級別重大治理紅旗 (4.02 財報重編 / 5.02 高管解職)，直接列入排除名單
+            if not gov_status.is_clean and gov_status.max_severity in (
+                "CRITICAL",
+                "HIGH",
+            ):
                 excluded_candidates.append(
                     {
                         "symbol": sym_upper,
                         "status": "EXCLUDED",
-                        "excluded_reason": "CRITICAL_GOVERNANCE_FLAG: 觸發重大治理風控審查 (4.02/5.02)",
+                        "excluded_reason": f"{gov_status.max_severity}_GOVERNANCE_FLAG: 觸發重大治理風控審查 (4.02/5.02)",
                         "reasons": {
                             "governance_clean": False,
                             "severity": gov_status.max_severity,
@@ -131,9 +134,15 @@ async def generate_and_save_watch_candidates(
 
     for item in scored_candidates:
         c_score = float(item["composite_score"])
-        # 前 5 名且綜合分數 > 0 評為 CANDIDATE，其餘評為 WATCH
+        # 前 5 名且綜合分數 > 0 且具備有效公允價值評為 CANDIDATE，其餘評為 WATCH
+        has_valid_fv = bool(
+            item["reasons"].get("fair_value") is not None
+            and item["reasons"].get("fair_value", 0) > 0
+        )
         status_val: WatchCandidateStatus = (
-            "CANDIDATE" if current_rank <= 5 and c_score > 0.0 else "WATCH"
+            "CANDIDATE"
+            if current_rank <= 5 and c_score > 0.0 and has_valid_fv
+            else "WATCH"
         )
         records.append(
             WatchCandidateRecord(

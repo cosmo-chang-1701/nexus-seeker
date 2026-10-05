@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 from market_analysis.fundamental_pipeline.models import GovernanceFlagRecord
 
 _ET_ZONE = ZoneInfo("America/New_York")
@@ -41,11 +42,12 @@ def build_fa_terminal_embed(
     )
 
     for header, content in sections:
-        # 確保結尾具備空行美化
+        # 確保結尾具備空行美化並受 1024 字元邊界保護
         val = content.strip()
-        if not val.endswith("\u200b"):
-            val = f"{val}\n\u200b"
-        embed.add_field(name=header, value=val, inline=False)
+        safe_val = _safe_embed_field_value(val, "無資料", max_len=1020)
+        if not safe_val.endswith("\u200b"):
+            safe_val = f"{safe_val}\n\u200b"
+        embed.add_field(name=header[:256], value=safe_val, inline=False)
 
     footer_text = (
         footer_note if footer_note else "基本面管線純顧問診斷 • 零自動交易執行"

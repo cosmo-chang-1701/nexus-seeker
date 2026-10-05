@@ -65,7 +65,7 @@ def calculate_breadth(up_count: int, down_count: int, epsilon: float = 1e-6) -> 
     total = up_count + down_count
     if total <= 0:
         return 0.0
-    raw_breadth = (up_count - down_count) / (float(total) + epsilon)
+    raw_breadth = (up_count - down_count) / float(total)
     return max(-1.0, min(1.0, raw_breadth))
 
 
@@ -78,7 +78,7 @@ def calculate_revision_score(slopes: Mapping[str, float], breadth: float) -> flo
     """
     valid_slopes: dict[str, float] = {}
     for h, s in slopes.items():
-        if h in HORIZON_WEIGHTS and not math.isnan(s):
+        if h in HORIZON_WEIGHTS and math.isfinite(s):
             valid_slopes[h] = s
 
     if valid_slopes:
@@ -113,6 +113,9 @@ def is_pead_aligned(
     if surprise_score is None or revision_score is None or days_since_surprise is None:
         return False
 
+    if not math.isfinite(surprise_score) or not math.isfinite(revision_score):
+        return False
+
     if days_since_surprise < 0 or days_since_surprise > PEAD_MAX_DAYS:
         return False
 
@@ -138,19 +141,28 @@ def evaluate_revision_momentum(
     若未直接提供分析師個別調幅計數 (analyst_up/down_count)，
     則以各期斜率方向作為廣度比率依據。
     """
-    prior_by_horizon: dict[str, float] = {
-        s.horizon: s.eps_mean for s in prior_snapshots if s.horizon
-    }
+    prior_by_horizon: dict[str, float] = {}
+    for s in prior_snapshots:
+        if (
+            s.horizon
+            and s.horizon not in prior_by_horizon
+            and math.isfinite(s.eps_mean)
+        ):
+            prior_by_horizon[s.horizon] = s.eps_mean
+
+    curr_by_horizon: dict[str, float] = {}
+    for s in current_snapshots:
+        if s.horizon and s.horizon not in curr_by_horizon and math.isfinite(s.eps_mean):
+            curr_by_horizon[s.horizon] = s.eps_mean
 
     slopes: dict[str, float] = {}
     detected_up = 0
     detected_down = 0
 
-    for curr in current_snapshots:
-        h = curr.horizon
+    for h, curr_eps in curr_by_horizon.items():
         if h in prior_by_horizon:
             p_val = prior_by_horizon[h]
-            slope_val = calculate_horizon_slope(curr.eps_mean, p_val)
+            slope_val = calculate_horizon_slope(curr_eps, p_val)
             slopes[h] = slope_val
             if slope_val > 0.001:
                 detected_up += 1

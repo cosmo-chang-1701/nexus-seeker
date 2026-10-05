@@ -388,7 +388,7 @@ class CompsInputs:
 
     forward_eps: float
     peer_pes: list[float]
-    nfci: float
+    nfci: float | None = None
 
 
 @dataclass(frozen=True)

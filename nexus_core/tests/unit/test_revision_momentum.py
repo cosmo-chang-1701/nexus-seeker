@@ -168,3 +168,49 @@ def test_evaluate_revision_momentum_end_to_end() -> None:
     assert len(res.slopes) == 4
     assert res.up_count == 4
     assert res.down_count == 0
+
+
+def test_evaluate_revision_momentum_deduplicates_horizons() -> None:
+    # 測試若同一天包含重複來源的相同 horizon (例如 2 筆 0q)，不應重複加總 up_count
+    curr_snaps = [
+        EPSEstimateSnapshotRecord(
+            symbol="NVDA",
+            snapshot_date="2026-10-05",
+            horizon="0q",
+            source="finnhub",
+            eps_mean=0.90,
+        ),
+        EPSEstimateSnapshotRecord(
+            symbol="NVDA",
+            snapshot_date="2026-10-05",
+            horizon="0q",
+            source="bloomberg",
+            eps_mean=0.90,
+        ),
+    ]
+    prior_snaps = [
+        EPSEstimateSnapshotRecord(
+            symbol="NVDA",
+            snapshot_date="2026-09-05",
+            horizon="0q",
+            source="finnhub",
+            eps_mean=0.80,
+        ),
+    ]
+
+    res = evaluate_revision_momentum(
+        current_snapshots=curr_snaps,
+        prior_snapshots=prior_snaps,
+    )
+    # 僅 1 個 horizon (0q)，up_count 應為 1 而非 2
+    assert res.up_count == 1
+    assert res.down_count == 0
+    assert res.breadth_ratio == 1.0
+
+
+def test_is_pead_aligned_nan_inf_protection() -> None:
+    # 傳入 NaN 或 Inf 不應拋出異常且應回傳 False
+    assert is_pead_aligned(float("nan"), 30.0, 15) is False
+    assert is_pead_aligned(25.0, float("nan"), 15) is False
+    assert is_pead_aligned(float("inf"), 30.0, 15) is False
+    assert is_pead_aligned(25.0, float("-inf"), 15) is False

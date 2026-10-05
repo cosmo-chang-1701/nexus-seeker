@@ -183,7 +183,12 @@ class ValuationService:
         raw_beta = metrics.get("beta")
         beta = _safe_float(raw_beta)
 
-        raw_growth = metrics.get("epsGrowthTTMYoy")
+        raw_growth = (
+            metrics.get("epsGrowthTTMYoy")
+            or metrics.get("epsGrowth3Y")
+            or metrics.get("epsGrowth5Y")
+            or metrics.get("revenueGrowthTTMYoy")
+        )
         growth_float = _safe_float(raw_growth)
         growth_1y = (growth_float / 100.0) if growth_float is not None else 0.05
 
@@ -195,7 +200,43 @@ class ValuationService:
         )
         fwd_eps = _safe_float(raw_fwd_eps) or 0.0
 
-        # 3. 獲取同業本益比 (上限 10 檔)
+        # 3. 獲取分析師共識快照 (供動能計算與 Forward EPS 備援)
+        curr_snapshots = await asyncio.to_thread(get_eps_estimate_snapshots, sym_upper)
+        if not curr_snapshots:
+            try:
+                from services.fundamental_providers import (
+                    FinnhubConsensusProvider,
+                )
+
+                provider = FinnhubConsensusProvider()
+                fetched_snaps = await provider.get_estimate_snapshots(sym_upper)
+                if fetched_snaps:
+                    await save_eps_estimate_snapshots(fetched_snaps)
+                    curr_snapshots = fetched_snaps
+            except Exception as e:
+                logger.debug(f"[ValuationService] 快照補抓失敗 ({sym_upper}): {e}")
+
+        # 若 metrics 缺乏有效 Forward EPS，以分析師共識 0y 或 +1y 預估中值備援
+        if fwd_eps <= 0 and curr_snapshots:
+            snap_0y = next(
+                (s for s in curr_snapshots if s.horizon == "0y" and s.eps_mean > 0),
+                None,
+            )
+            if snap_0y:
+                fwd_eps = snap_0y.eps_mean
+            else:
+                snap_1y = next(
+                    (
+                        s
+                        for s in curr_snapshots
+                        if s.horizon == "+1y" and s.eps_mean > 0
+                    ),
+                    None,
+                )
+                if snap_1y:
+                    fwd_eps = snap_1y.eps_mean
+
+        # 4. 獲取同業本益比 (上限 10 檔)
         peers = await self.data_provider.get_peers(sym_upper)
         peer_pes: list[float] = []
         if peers:
@@ -213,7 +254,7 @@ class ValuationService:
                 if pe_val is not None and pe_val > 0:
                     peer_pes.append(pe_val)
 
-        # 4. 計算折現率、DCF 與 Comps
+        # 5. 計算折現率、DCF 與 Comps
         cost_of_equity, erp = calculate_cost_of_equity(
             us10y=us10y, nfci=nfci, beta=beta
         )
@@ -232,11 +273,11 @@ class ValuationService:
             )
         )
 
-        # 5. 治理閘門審查
+        # 6. 治理閘門審查
         gov_flags = await asyncio.to_thread(get_active_governance_flags, sym_upper)
         gov_status = evaluate_governance_status(sym_upper, gov_flags)
 
-        # 6. 整合公允價值與安全邊際
+        # 7. 整合公允價值與安全邊際
         fv_res = integrate_fair_value(
             spot_price=spot_val,
             dcf_res=dcf_res,
@@ -246,24 +287,8 @@ class ValuationService:
             is_governance_clean=gov_status.is_clean,
         )
 
-        # 7. 分析師共識快照與修正動能計算
-        curr_snapshots = await asyncio.to_thread(get_eps_estimate_snapshots, sym_upper)
-        if not curr_snapshots:
-            try:
-                from services.fundamental_providers import (
-                    FinnhubConsensusProvider,
-                )
-
-                provider = FinnhubConsensusProvider()
-                fetched_snaps = await provider.get_estimate_snapshots(sym_upper)
-                if fetched_snaps:
-                    await save_eps_estimate_snapshots(fetched_snaps)
-                    curr_snapshots = fetched_snaps
-            except Exception as e:
-                logger.debug(f"[ValuationService] 快照補抓失敗 ({sym_upper}): {e}")
-
-        # 獲取約 30 天前歷史快照
-        before_30d = (target_date - timedelta(days=20)).isoformat()
+        # 8. 獲取約 30 天前 (28-35 天視角) 歷史快照並計算修正動能
+        before_30d = (target_date - timedelta(days=28)).isoformat()
         prior_snapshots = await asyncio.to_thread(
             get_prior_eps_estimate_snapshots, sym_upper, before_30d
         )
