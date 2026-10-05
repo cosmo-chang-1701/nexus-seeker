@@ -524,6 +524,27 @@ def _parse_poly_bullish_pct(summary: Any) -> Optional[float]:
     return val if 0.0 <= val <= 100.0 else None
 
 
+def _format_psq_freshness(
+    bar_date: Any, is_live: bool, fetched_at: Any
+) -> Optional[str]:
+    """擠壓欄位的資料時間行：計算所用的最後一根日線＋日線抓取時刻 (ET)。
+
+    盤中最後一根是今日仍在成型的 K 棒（數值會隨盤中變動），須與已收盤定案的
+    K 棒區分；兩項資訊皆缺時回傳 None，不顯示該行。
+    """
+    parts: List[str] = []
+    if bar_date is not None and hasattr(bar_date, "isoformat"):
+        bar_str = bar_date.isoformat()
+        parts.append(
+            f"日線 {bar_str}（盤中成型中）" if is_live else f"日線 {bar_str} 收盤"
+        )
+    if isinstance(fetched_at, datetime):
+        parts.append(f"抓取於 {fetched_at.strftime('%m/%d %H:%M')} ET")
+    if not parts:
+        return None
+    return " 🕒 資料時間: " + " │ ".join(parts)
+
+
 def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     """
     建構標的深度分析 (Tactical Deep-Dive) Embed.
@@ -2044,8 +2065,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             logger.debug(f"GEX Profile rendering skipped: {e}")
 
     # 3.8 🌊 動能與擠壓狀態 (Momentum & Squeeze)
-    # Exposes the identical SQZ MOM value and directional status used in the
-    # batch radar summary, ensuring data symmetry for the trader.
+    # 以每次 /x 強制重抓的 1y 日線計算（盤中含今日成型中的 K 棒，數值會隨盤中
+    # 變動）；批次雷達讀的是 squeeze_cache，兩者時點不同，不保證同值。
+    # 資料時間行標明所用 K 棒日期與抓取時刻。
     psq_raw = data.get("psq_result") or {}
     # Support both PSQResult dataclass and plain dict (e.g. from squeeze cache)
     if hasattr(psq_raw, "is_squeezing"):
@@ -2143,6 +2165,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         if sqz_vix_note:
             sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
+
+        freshness_line = _format_psq_freshness(
+            data.get("psq_bar_date"),
+            bool(data.get("psq_bar_is_live", False)),
+            data.get("psq_fetched_at"),
+        )
+        if freshness_line:
+            sqz_lines.append(freshness_line)
 
         sqz_lines.append("```")
         _add_ansi_field_safely(
