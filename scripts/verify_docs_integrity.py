@@ -87,6 +87,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "04_polymarket_vwbp_sentiment_radar.md",
         "05_liquidity_regime_and_macro_surprise.md",
         "06_sec_event_stream_and_governance_gate.md",
+        "07_alt_data_and_channel_checks.md",
     ],
     "docs/architecture": [
         "01_dual_watchlist_pipelines.md",

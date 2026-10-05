@@ -17,6 +17,7 @@ import discord
 from cogs.embed_builders.fundamental_embeds import build_fa_terminal_embed
 from database.fundamental_pipeline import (
     get_active_governance_flags,
+    get_channel_checks_by_symbol,
     get_eps_estimate_snapshots,
     get_insider_transactions,
     get_latest_earnings_surprise,
@@ -36,6 +37,9 @@ from market_analysis.fundamental_pipeline.insider_signal import (
 )
 from market_analysis.fundamental_pipeline.models import (
     GuidanceExtraction,
+)
+from market_analysis.fundamental_pipeline.supply_chain_map import (
+    get_links_for_symbol,
 )
 
 logger = logging.getLogger(__name__)
@@ -244,11 +248,61 @@ class EarningsSurpriseSection:
         return header, "\n".join(lines)
 
 
+class ChannelCheckSection:
+    """PR4: 實體產業鏈交叉驗證區塊。"""
+
+    @property
+    def section_id(self) -> str:
+        return "channel_checks"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "🔗 實體產業鏈交叉驗證 (Channel Checks)"
+
+        # 查詢與該標的相關之產業鏈
+        links = get_links_for_symbol(sym_upper)
+        if not links:
+            return header, "• 產業鏈定位: 未涵蓋於當前 17 條核心產業鏈矩陣中"
+
+        # 讀取資料庫中與該標的相關之最新交叉驗證日誌
+        logs = await asyncio.to_thread(get_channel_checks_by_symbol, sym_upper, 20)
+        logs_by_key = {log.link_key: log for log in logs}
+
+        lines: list[str] = []
+        for link in links:
+            tag = f"[{link.link_type}{' 🧪' if link.experimental else ''}]"
+            log = logs_by_key.get(link.link_key)
+            if log is not None:
+                icon = (
+                    "🟢"
+                    if log.verdict == "CONFIRM"
+                    else ("🔴" if log.verdict == "DIVERGE" else "⚪")
+                )
+                detail_parts: list[str] = []
+                if log.driver_growth is not None:
+                    detail_parts.append(f"驅動 {log.driver_growth:+.1f}%")
+                if log.follower_growth is not None:
+                    detail_parts.append(f"跟隨 {log.follower_growth:+.1f}%")
+                if log.divergence_pp is not None:
+                    detail_parts.append(f"偏差 {log.divergence_pp:+.1f}pp")
+                detail_str = " ｜ ".join(detail_parts) if detail_parts else "數據觀測中"
+                lines.append(
+                    f"• {tag} {link.link_key}: {icon} **{log.verdict}** ({detail_str})"
+                )
+            else:
+                lines.append(
+                    f"• {tag} {link.link_key}: ⚪ **INSUFFICIENT** (待高頻與財務數據更新)"
+                )
+
+        return header, "\n".join(lines)
+
+
 # 全域單例區塊註冊中心
 fa_section_registry = FaSectionRegistry()
 fa_section_registry.register(MacroLiquiditySection())
 fa_section_registry.register(GovernanceGateSection())
 fa_section_registry.register(EarningsSurpriseSection())
+fa_section_registry.register(ChannelCheckSection())
 
 
 # ============================================================================

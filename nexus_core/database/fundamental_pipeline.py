@@ -12,6 +12,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
+    ChannelCheckVerdict,
     EarningsSurpriseDTO,
     EarningsSurpriseStatus,
     EpsBasis,
@@ -24,8 +26,10 @@ from market_analysis.fundamental_pipeline.models import (
     GovernanceSeverity,
     GuidanceExtractionDTO,
     InsiderTxRecord,
+    LinkType,
     LiquidityReading,
     MacroSurpriseReading,
+    NowcastDirection,
 )
 
 from database.connection import (
@@ -904,5 +908,262 @@ def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
             data_json=row[6],
             created_at=row[7] if row[7] else "",
         )
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR4 實體產業鏈交叉驗證持久化
+# ============================================================================
+
+_UPSERT_CHANNEL_CHECK_LOG_SQL = """
+INSERT INTO channel_check_log (
+    link_key,
+    as_of_period,
+    link_type,
+    experimental,
+    driver_growth,
+    follower_growth,
+    divergence_pp,
+    nowcast_direction,
+    nowcast_hit,
+    correlation,
+    verdict,
+    members_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(link_key, as_of_period) DO UPDATE SET
+    link_type = excluded.link_type,
+    experimental = excluded.experimental,
+    driver_growth = excluded.driver_growth,
+    follower_growth = excluded.follower_growth,
+    divergence_pp = excluded.divergence_pp,
+    nowcast_direction = excluded.nowcast_direction,
+    nowcast_hit = excluded.nowcast_hit,
+    correlation = excluded.correlation,
+    verdict = excluded.verdict,
+    members_json = excluded.members_json
+"""
+
+
+async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
+    """寫入或更新單筆產業鏈交叉驗證日誌。"""
+    params = (
+        record.link_key,
+        record.as_of_period,
+        record.link_type,
+        1 if record.experimental else 0,
+        record.driver_growth,
+        record.follower_growth,
+        record.divergence_pp,
+        record.nowcast_direction,
+        (1 if record.nowcast_hit else 0) if record.nowcast_hit is not None else None,
+        record.correlation,
+        record.verdict,
+        record.members_json,
+    )
+    await execute_write_async(_UPSERT_CHANNEL_CHECK_LOG_SQL, params)
+
+
+async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
+    """批次寫入產業鏈交叉驗證日誌。"""
+    if not records:
+        return
+    rows = [
+        (
+            r.link_key,
+            r.as_of_period,
+            r.link_type,
+            1 if r.experimental else 0,
+            r.driver_growth,
+            r.follower_growth,
+            r.divergence_pp,
+            r.nowcast_direction,
+            (1 if r.nowcast_hit else 0) if r.nowcast_hit is not None else None,
+            r.correlation,
+            r.verdict,
+            r.members_json,
+        )
+        for r in records
+    ]
+    await execute_write_many_async([(_UPSERT_CHANNEL_CHECK_LOG_SQL, rows, True)])
+
+
+def get_channel_check(link_key: str, as_of_period: str) -> ChannelCheckLogRecord | None:
+    """讀取特定鏈條與週期之產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE link_key = ? AND as_of_period = ?
+            """,
+            (link_key, as_of_period),
+        ).fetchone()
+        if not row:
+            return None
+        return ChannelCheckLogRecord(
+            link_key=row[0],
+            as_of_period=row[1],
+            link_type=cast(LinkType, row[2]),
+            experimental=bool(row[3]),
+            driver_growth=float(row[4]) if row[4] is not None else None,
+            follower_growth=float(row[5]) if row[5] is not None else None,
+            divergence_pp=float(row[6]) if row[6] is not None else None,
+            nowcast_direction=cast(NowcastDirection, row[7])
+            if row[7] is not None
+            else None,
+            nowcast_hit=bool(row[8]) if row[8] is not None else None,
+            correlation=float(row[9]) if row[9] is not None else None,
+            verdict=cast(ChannelCheckVerdict, row[10]),
+            members_json=row[11],
+            created_at=row[12] if row[12] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_channel_checks_for_period(
+    as_of_period: str,
+) -> list[ChannelCheckLogRecord]:
+    """讀取某週期所有產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE as_of_period = ?
+            ORDER BY link_key ASC
+            """,
+            (as_of_period,),
+        ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_latest_channel_checks(
+    verdict: str | None = None, limit: int = 50
+) -> list[ChannelCheckLogRecord]:
+    """讀取最新發布的產業鏈交叉驗證日誌清單。"""
+    conn = get_read_connection()
+    try:
+        if verdict is not None:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                WHERE verdict = ?
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (verdict, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_channel_checks_by_symbol(
+    symbol: str, limit: int = 20
+) -> list[ChannelCheckLogRecord]:
+    """根據標的代碼（包含在上游驅動或下游跟隨端）查詢相關之最新交叉驗證日誌。"""
+    conn = get_read_connection()
+    try:
+        sym_pattern = f'%"{symbol.upper()}"%'
+        rows = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE members_json LIKE ?
+            ORDER BY as_of_period DESC, created_at DESC
+            LIMIT ?
+            """,
+            (sym_pattern, limit),
+        ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
     finally:
         conn.close()

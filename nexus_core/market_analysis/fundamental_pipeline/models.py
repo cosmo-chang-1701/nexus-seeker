@@ -303,3 +303,66 @@ class GuidanceDeltaSummary:
     margin_trend: str
     verdict: GuidanceVerdict
     summary_text: str
+
+
+# ============================================================================
+# PR4 實體替代數據與產業鏈因果檢驗資料模型
+# ============================================================================
+
+LinkType = Literal["CAUSAL", "NOWCAST"]
+ChannelCheckVerdict = Literal["CONFIRM", "DIVERGE", "INSUFFICIENT"]
+NowcastDirection = Literal["NOWCAST_UP", "NOWCAST_DOWN", "FLAT"]
+
+
+@dataclass(frozen=True)
+class SupplyChainLink:
+    """產業鏈因果與臨近預測對照結構。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    pillar: str
+    drivers: list[str]
+    followers: list[str]
+    description: str
+    lead_lag_quarters: str = "1-2Q"
+
+
+@dataclass(frozen=True)
+class ChannelCheckLogRecord:
+    """產業鏈交叉驗證日誌記錄 (對應 channel_check_log 資料表)。"""
+
+    link_key: str
+    as_of_period: str
+    link_type: LinkType
+    experimental: bool
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    members_json: str
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ChannelCheckResult:
+    """產業鏈交叉驗證即時評估結果。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    as_of_period: str
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    summary_text: str
+    members: dict[str, Any]

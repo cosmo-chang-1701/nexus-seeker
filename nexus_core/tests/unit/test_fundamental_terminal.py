@@ -9,10 +9,12 @@ import discord
 import pytest
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders.fundamental_embeds import (
+    build_channel_check_overview_embed,
     build_fa_terminal_embed,
     build_governance_flag_embed,
 )
 from cogs.fundamental_terminal import (
+    ChannelCheckSection,
     EarningsSurpriseSection,
     FaSectionRegistry,
     FundamentalTerminalCog,
@@ -20,6 +22,8 @@ from cogs.fundamental_terminal import (
     MacroLiquiditySection,
 )
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
+    ChannelCheckResult,
     EarningsSurpriseDTO,
     EPSEstimateSnapshotRecord,
     GovernanceFlagRecord,
@@ -284,3 +288,90 @@ async def test_earnings_surprise_section_render_with_guidance_details() -> None:
         _, body = await sec.render("AAPL")
         assert "指引方向: **RAISED**" in body
         assert "利潤率擴張" in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_render_with_data() -> None:
+    """測試 ChannelCheckSection 渲染標的關聯產業鏈與日誌狀態。"""
+    sec = ChannelCheckSection()
+    assert sec.section_id == "channel_checks"
+
+    mock_record = ChannelCheckLogRecord(
+        link_key="ADV_AUTO_MOBILITY_TW_NOWCAST",
+        as_of_period="2026-09",
+        link_type="NOWCAST",
+        experimental=False,
+        driver_growth=8.1,
+        follower_growth=6.5,
+        divergence_pp=-1.6,
+        nowcast_direction="NOWCAST_UP",
+        nowcast_hit=True,
+        correlation=0.85,
+        verdict="CONFIRM",
+        members_json="{}",
+    )
+
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol",
+        return_value=[mock_record],
+    ):
+        header, body = await sec.render("TSLA")
+        assert "🔗 實體產業鏈交叉驗證" in header
+        assert "ADV_AUTO_MOBILITY_TW_NOWCAST" in body
+        assert "🟢" in body
+        assert "CONFIRM" in body
+        assert "驅動 +8.1%" in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_render_unmapped_symbol() -> None:
+    """測試未映射標的之提示訊息。"""
+    sec = ChannelCheckSection()
+    _header, body = await sec.render("UNMAPPED_SYMBOL_XYZ")
+    assert "未涵蓋於當前 17 條核心產業鏈矩陣中" in body
+
+
+def test_build_channel_check_overview_embed() -> None:
+    """測試 build_channel_check_overview_embed 全景分組展示。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        LINK_AI_CAPEX,
+        LINK_SPACE_CONSTELLATION_LAUNCH,
+    )
+
+    r1 = ChannelCheckResult(
+        link_key="AI_CAPEX",
+        title=LINK_AI_CAPEX.title,
+        link_type="CAUSAL",
+        experimental=False,
+        as_of_period="2026-Q2",
+        driver_growth=25.0,
+        follower_growth=22.0,
+        divergence_pp=-3.0,
+        nowcast_direction=None,
+        nowcast_hit=None,
+        correlation=None,
+        verdict="CONFIRM",
+        summary_text="傳導共振確認",
+        members={"pillar": "MACRO_CORE"},
+    )
+    r2 = ChannelCheckResult(
+        link_key="SPACE_CONSTELLATION_LAUNCH",
+        title=LINK_SPACE_CONSTELLATION_LAUNCH.title,
+        link_type="CAUSAL",
+        experimental=False,
+        as_of_period="2026-Q2",
+        driver_growth=30.0,
+        follower_growth=10.0,
+        divergence_pp=-20.0,
+        nowcast_direction=None,
+        nowcast_hit=None,
+        correlation=None,
+        verdict="CONFIRM",
+        summary_text="傳導共振確認",
+        members={"pillar": "SPACE_DEFENSE"},
+    )
+
+    embed = build_channel_check_overview_embed([r1, r2], as_of_period="2026-Q2")
+    assert isinstance(embed, NexusEmbed)
+    assert "2026-Q2" in (embed.title or "")
+    assert len(embed.fields) >= 2
