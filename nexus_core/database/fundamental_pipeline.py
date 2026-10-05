@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
@@ -17,6 +18,7 @@ from market_analysis.fundamental_pipeline.models import (
     EpsBasis,
     EPSEstimateSnapshotRecord,
     EstimateHorizon,
+    FairValueRecord,
     FilingCursorRecord,
     FilingEventRecord,
     FilingSession,
@@ -26,6 +28,9 @@ from market_analysis.fundamental_pipeline.models import (
     InsiderTxRecord,
     LiquidityReading,
     MacroSurpriseReading,
+    RevisionScoreRecord,
+    WatchCandidateRecord,
+    WatchCandidateStatus,
 )
 
 from database.connection import (
@@ -832,6 +837,52 @@ def get_eps_estimate_snapshots(
         conn.close()
 
 
+def get_prior_eps_estimate_snapshots(
+    symbol: str, before_date: str
+) -> list[EPSEstimateSnapshotRecord]:
+    """讀取特定標的在指定日期 (含) 之前最新一筆快照日期之預估快照。"""
+    conn = get_read_connection()
+    try:
+        max_row = conn.execute(
+            """
+            SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
+            WHERE symbol = ? AND snapshot_date <= ?
+            """,
+            (symbol.upper(), before_date),
+        ).fetchone()
+        if not max_row or not max_row[0]:
+            empty_list: list[EPSEstimateSnapshotRecord] = []
+            return empty_list
+        target_date = max_row[0]
+
+        rows = conn.execute(
+            """
+            SELECT symbol, snapshot_date, horizon, source,
+                   eps_mean, eps_high, eps_low, analyst_count, created_at
+            FROM eps_estimate_snapshot
+            WHERE symbol = ? AND snapshot_date = ?
+            ORDER BY CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
+            """,
+            (symbol.upper(), target_date),
+        ).fetchall()
+        return [
+            EPSEstimateSnapshotRecord(
+                symbol=r[0],
+                snapshot_date=r[1],
+                horizon=cast(EstimateHorizon, r[2]),
+                source=r[3],
+                eps_mean=float(r[4]),
+                eps_high=float(r[5]) if r[5] is not None else None,
+                eps_low=float(r[6]) if r[6] is not None else None,
+                analyst_count=int(r[7]) if r[7] is not None else None,
+                created_at=r[8] if r[8] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
 async def save_guidance_extraction(extraction: GuidanceExtractionDTO) -> None:
     """寫入或更新單筆管理層前瞻指引擷取記錄。"""
     params = (
@@ -904,5 +955,370 @@ def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
             data_json=row[6],
             created_at=row[7] if row[7] else "",
         )
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR5 分析師修正動能、公允價值與次日基本面候選名單持久層
+# ============================================================================
+
+_UPSERT_REVISION_SCORE_SQL = """
+INSERT INTO revision_score_log (
+    symbol,
+    trading_date,
+    score_30d,
+    breadth_ratio,
+    is_pead_aligned,
+    detail_json
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, trading_date) DO UPDATE SET
+    score_30d = excluded.score_30d,
+    breadth_ratio = excluded.breadth_ratio,
+    is_pead_aligned = excluded.is_pead_aligned,
+    detail_json = excluded.detail_json
+"""
+
+_UPSERT_FAIR_VALUE_SQL = """
+INSERT INTO fair_value_log (
+    symbol,
+    trading_date,
+    dcf_value,
+    comps_value,
+    fair_value,
+    margin_of_safety,
+    discount_rate,
+    equity_risk_premium,
+    flags_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, trading_date) DO UPDATE SET
+    dcf_value = excluded.dcf_value,
+    comps_value = excluded.comps_value,
+    fair_value = excluded.fair_value,
+    margin_of_safety = excluded.margin_of_safety,
+    discount_rate = excluded.discount_rate,
+    equity_risk_premium = excluded.equity_risk_premium,
+    flags_json = excluded.flags_json
+"""
+
+_UPSERT_WATCH_CANDIDATE_SQL = """
+INSERT INTO fundamental_watch_candidate (
+    trading_date,
+    symbol,
+    rank,
+    status,
+    reasons_json,
+    excluded_reason
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(trading_date, symbol) DO UPDATE SET
+    rank = excluded.rank,
+    status = excluded.status,
+    reasons_json = excluded.reasons_json,
+    excluded_reason = excluded.excluded_reason
+"""
+
+
+async def save_revision_score(record: RevisionScoreRecord) -> None:
+    """寫入或更新單筆分析師修正動能分數。"""
+    params = (
+        record.symbol.upper(),
+        record.trading_date,
+        record.score_30d,
+        record.breadth_ratio,
+        1 if record.is_pead_aligned else 0,
+        record.detail_json,
+    )
+    await execute_write_async(_UPSERT_REVISION_SCORE_SQL, params)
+
+
+async def save_revision_scores(records: Sequence[RevisionScoreRecord]) -> None:
+    """批次寫入或更新分析師修正動能分數。"""
+    if not records:
+        return
+    params_list = [
+        (
+            r.symbol.upper(),
+            r.trading_date,
+            r.score_30d,
+            r.breadth_ratio,
+            1 if r.is_pead_aligned else 0,
+            r.detail_json,
+        )
+        for r in records
+    ]
+    await execute_write_many_async([(_UPSERT_REVISION_SCORE_SQL, params_list, True)])
+
+
+def get_revision_score(symbol: str, trading_date: str) -> RevisionScoreRecord | None:
+    """讀取特定標的與交易日之修正動能記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, trading_date, score_30d, breadth_ratio,
+                   is_pead_aligned, detail_json, created_at
+            FROM revision_score_log
+            WHERE symbol = ? AND trading_date = ?
+            """,
+            (symbol.upper(), trading_date),
+        ).fetchone()
+        if not row:
+            return None
+        return RevisionScoreRecord(
+            symbol=row[0],
+            trading_date=row[1],
+            score_30d=float(row[2]),
+            breadth_ratio=float(row[3]),
+            is_pead_aligned=bool(row[4]),
+            detail_json=row[5],
+            created_at=row[6] if row[6] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_revision_score(symbol: str) -> RevisionScoreRecord | None:
+    """讀取特定標的最新一筆修正動能記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, trading_date, score_30d, breadth_ratio,
+                   is_pead_aligned, detail_json, created_at
+            FROM revision_score_log
+            WHERE symbol = ?
+            ORDER BY trading_date DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return RevisionScoreRecord(
+            symbol=row[0],
+            trading_date=row[1],
+            score_30d=float(row[2]),
+            breadth_ratio=float(row[3]),
+            is_pead_aligned=bool(row[4]),
+            detail_json=row[5],
+            created_at=row[6] if row[6] else "",
+        )
+    finally:
+        conn.close()
+
+
+async def save_fair_value(record: FairValueRecord) -> None:
+    """寫入或更新單筆公允價值與安全邊際記錄。"""
+    params = (
+        record.symbol.upper(),
+        record.trading_date,
+        record.dcf_value,
+        record.comps_value,
+        record.fair_value,
+        record.margin_of_safety,
+        record.discount_rate,
+        record.equity_risk_premium,
+        record.flags_json,
+    )
+    await execute_write_async(_UPSERT_FAIR_VALUE_SQL, params)
+
+
+async def save_fair_values(records: Sequence[FairValueRecord]) -> None:
+    """批次寫入或更新公允價值記錄。"""
+    if not records:
+        return
+    params_list = [
+        (
+            r.symbol.upper(),
+            r.trading_date,
+            r.dcf_value,
+            r.comps_value,
+            r.fair_value,
+            r.margin_of_safety,
+            r.discount_rate,
+            r.equity_risk_premium,
+            r.flags_json,
+        )
+        for r in records
+    ]
+    await execute_write_many_async([(_UPSERT_FAIR_VALUE_SQL, params_list, True)])
+
+
+def get_fair_value(symbol: str, trading_date: str) -> FairValueRecord | None:
+    """讀取特定標的與交易日之公允價值記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
+                   margin_of_safety, discount_rate, equity_risk_premium,
+                   flags_json, created_at
+            FROM fair_value_log
+            WHERE symbol = ? AND trading_date = ?
+            """,
+            (symbol.upper(), trading_date),
+        ).fetchone()
+        if not row:
+            return None
+        return FairValueRecord(
+            symbol=row[0],
+            trading_date=row[1],
+            dcf_value=float(row[2]) if row[2] is not None else None,
+            comps_value=float(row[3]) if row[3] is not None else None,
+            fair_value=float(row[4]),
+            margin_of_safety=float(row[5]),
+            discount_rate=float(row[6]),
+            equity_risk_premium=float(row[7]),
+            flags_json=row[8],
+            created_at=row[9] if row[9] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_fair_value(symbol: str) -> FairValueRecord | None:
+    """讀取特定標的最新一筆公允價值記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
+                   margin_of_safety, discount_rate, equity_risk_premium,
+                   flags_json, created_at
+            FROM fair_value_log
+            WHERE symbol = ?
+            ORDER BY trading_date DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return FairValueRecord(
+            symbol=row[0],
+            trading_date=row[1],
+            dcf_value=float(row[2]) if row[2] is not None else None,
+            comps_value=float(row[3]) if row[3] is not None else None,
+            fair_value=float(row[4]),
+            margin_of_safety=float(row[5]),
+            discount_rate=float(row[6]),
+            equity_risk_premium=float(row[7]),
+            flags_json=row[8],
+            created_at=row[9] if row[9] else "",
+        )
+    finally:
+        conn.close()
+
+
+async def save_watch_candidates(candidates: Sequence[WatchCandidateRecord]) -> None:
+    """批次寫入或更新基本面次日候選名單。"""
+    if not candidates:
+        return
+    params_list = [
+        (
+            c.trading_date,
+            c.symbol.upper(),
+            c.rank,
+            c.status,
+            c.reasons_json,
+            c.excluded_reason,
+        )
+        for c in candidates
+    ]
+    await execute_write_many_async([(_UPSERT_WATCH_CANDIDATE_SQL, params_list, True)])
+
+
+def get_watch_candidates(
+    trading_date: str | None = None, status: str | None = None
+) -> list[WatchCandidateRecord]:
+    """查詢次日基本面候選名單。未指定 trading_date 時取最新交易日。"""
+    conn = get_read_connection()
+    try:
+        if trading_date is None:
+            max_row = conn.execute(
+                "SELECT MAX(trading_date) FROM fundamental_watch_candidate"
+            ).fetchone()
+            if not max_row or not max_row[0]:
+                empty_candidates: list[WatchCandidateRecord] = []
+                return empty_candidates
+            target_date = max_row[0]
+        else:
+            target_date = trading_date
+
+        if status is not None:
+            rows = conn.execute(
+                """
+                SELECT trading_date, symbol, rank, status,
+                       reasons_json, excluded_reason, created_at
+                FROM fundamental_watch_candidate
+                WHERE trading_date = ? AND status = ?
+                ORDER BY rank ASC
+                """,
+                (target_date, status),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT trading_date, symbol, rank, status,
+                       reasons_json, excluded_reason, created_at
+                FROM fundamental_watch_candidate
+                WHERE trading_date = ?
+                ORDER BY rank ASC
+                """,
+                (target_date,),
+            ).fetchall()
+
+        return [
+            WatchCandidateRecord(
+                trading_date=r[0],
+                symbol=r[1],
+                rank=int(r[2]),
+                status=cast(WatchCandidateStatus, r[3]),
+                reasons_json=r[4],
+                excluded_reason=r[5],
+                created_at=r[6] if r[6] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_latest_watch_candidates(limit: int = 10) -> list[WatchCandidateRecord]:
+    """讀取最新交易日前 N 名基本面候選名單。"""
+    conn = get_read_connection()
+    try:
+        max_row = conn.execute(
+            "SELECT MAX(trading_date) FROM fundamental_watch_candidate"
+        ).fetchone()
+        if not max_row or not max_row[0]:
+            empty_list: list[WatchCandidateRecord] = []
+            return empty_list
+        target_date = max_row[0]
+
+        rows = conn.execute(
+            """
+            SELECT trading_date, symbol, rank, status,
+                   reasons_json, excluded_reason, created_at
+            FROM fundamental_watch_candidate
+            WHERE trading_date = ?
+            ORDER BY rank ASC
+            LIMIT ?
+            """,
+            (target_date, limit),
+        ).fetchall()
+
+        return [
+            WatchCandidateRecord(
+                trading_date=r[0],
+                symbol=r[1],
+                rank=int(r[2]),
+                status=cast(WatchCandidateStatus, r[3]),
+                reasons_json=r[4],
+                excluded_reason=r[5],
+                created_at=r[6] if r[6] else "",
+            )
+            for r in rows
+        ]
     finally:
         conn.close()

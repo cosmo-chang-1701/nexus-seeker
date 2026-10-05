@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Protocol
 
@@ -20,8 +21,11 @@ from database.fundamental_pipeline import (
     get_eps_estimate_snapshots,
     get_insider_transactions,
     get_latest_earnings_surprise,
+    get_latest_fair_value,
     get_latest_guidance_extraction,
     get_latest_liquidity_regime,
+    get_latest_revision_score,
+    get_watch_candidates,
 )
 from discord import app_commands
 from discord.ext import commands
@@ -241,7 +245,118 @@ class EarningsSurpriseSection:
         else:
             lines.append("• 分析師共識快照: 待下輪市場共識同步")
 
+        # 讀取分析師修正動能與 PEAD
+        rev_record = await asyncio.to_thread(get_latest_revision_score, sym_upper)
+        if rev_record is not None:
+            pead_str = "✅ PEAD_ALIGNED" if rev_record.is_pead_aligned else "⚪ 未共振"
+            lines.append(
+                f"• 分析師修正動能: **{rev_record.score_30d:+.1f}** ｜ PEAD 共振: {pead_str}"
+            )
+
         return header, "\n".join(lines)
+
+
+class ValuationEngineSection:
+    """PR5: 內在價值與安全邊際 (Valuation Engine) 區塊。"""
+
+    @property
+    def section_id(self) -> str:
+        return "valuation_engine"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "💰 內在價值與安全邊際 (Valuation Engine)"
+
+        fv_record = await asyncio.to_thread(get_latest_fair_value, sym_upper)
+        if fv_record is None or fv_record.fair_value <= 0:
+            return (
+                header,
+                "• 公允價值: 暫無可用現金流或同業倍數數據 (待估值時鐘排定同步)",
+            )
+
+        dcf_str = (
+            f"${fv_record.dcf_value:.2f}"
+            if fv_record.dcf_value is not None
+            else "無效/退回"
+        )
+        comps_str = (
+            f"${fv_record.comps_value:.2f}"
+            if fv_record.comps_value is not None
+            else "無效/同業不足"
+        )
+        mos = fv_record.margin_of_safety
+
+        if mos >= 0.25:
+            val_tag = "🟢 深度折價 (安全邊際充足)"
+        elif mos >= 0.10:
+            val_tag = "🟢 中度折價"
+        elif mos >= -0.10:
+            val_tag = "⚪ 合理估值區間"
+        else:
+            val_tag = "🔴 明顯溢價"
+
+        lines = [
+            f"• 公允價值中樞: **${fv_record.fair_value:.2f}** (DCF: `{dcf_str}` ｜ 同業倍數: `{comps_str}`)",
+            f"• 安全邊際 (MOS): **{mos:+.2%}** ({val_tag})",
+            f"• 權益資本成本: `{fv_record.discount_rate:.2%}` (隱含 ERP: `{fv_record.equity_risk_premium:.2%}`)",
+        ]
+        return header, "\n".join(lines)
+
+
+class WatchCandidateSection:
+    """PR5: 基本面次日候選名單與時鐘映射區塊。"""
+
+    @property
+    def section_id(self) -> str:
+        return "watch_candidate"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "📋 綜合評級與時鐘映射"
+
+        candidates = await asyncio.to_thread(get_watch_candidates)
+        cand = next((c for c in candidates if c.symbol == sym_upper), None)
+
+        if cand is None:
+            return (
+                header,
+                (
+                    "• 次日排定狀態: ⚪ 候選池常態輪巡中 (待盤後 20:00 估值時鐘排定)\n"
+                    "• 顧問說明: 標的處於基本面池日常覆蓋，未觸發重大風控排除。"
+                ),
+            )
+
+        if cand.status == "EXCLUDED":
+            return (
+                header,
+                (
+                    f"• 次日排定狀態: ⛔ **EXCLUDED (風控排除)** (排名: #{cand.rank})\n"
+                    f"• 排除原因: {cand.excluded_reason or '未符合基本面池準入標準'}"
+                ),
+            )
+
+        status_icon = "🎯" if cand.status == "CANDIDATE" else "👀"
+        reasons_detail = ""
+        if cand.reasons_json:
+            try:
+                r_dict = json.loads(cand.reasons_json)
+                c_score = r_dict.get("composite_score")
+                mos_val = r_dict.get("margin_of_safety")
+                pead_val = r_dict.get("pead_aligned")
+                pead_str = "✅ PEAD 共振" if pead_val else "⚪ 未共振"
+                score_str = f"{c_score:+.1f}" if c_score is not None else "--"
+                mos_str = f"{mos_val:+.1%}" if mos_val is not None else "--%"
+                reasons_detail = f"\n• 綜合評估分: **{score_str}** (安全邊際: `{mos_str}` ｜ {pead_str})"
+            except Exception:
+                pass
+
+        return (
+            header,
+            (
+                f"• 次日排定狀態: {status_icon} **{cand.status}** (排名: #{cand.rank})"
+                f"{reasons_detail}"
+            ),
+        )
 
 
 # 全域單例區塊註冊中心
@@ -249,6 +364,8 @@ fa_section_registry = FaSectionRegistry()
 fa_section_registry.register(MacroLiquiditySection())
 fa_section_registry.register(GovernanceGateSection())
 fa_section_registry.register(EarningsSurpriseSection())
+fa_section_registry.register(ValuationEngineSection())
+fa_section_registry.register(WatchCandidateSection())
 
 
 # ============================================================================

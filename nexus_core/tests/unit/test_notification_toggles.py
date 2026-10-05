@@ -1,17 +1,18 @@
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import discord
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from database.notification_channels import TRADING_MODULES
 from database.notifications import (
-    get_user_notification_settings,
-    set_user_notification_setting,
-    set_all_user_notification_settings,
-    apply_preset_settings,
-    is_notification_enabled,
     ALL_NOTIFICATION_KEYS,
     DEFAULT_NOTIFICATION_SETTINGS,
     LEGACY_KEY_ALIASES,
+    apply_preset_settings,
+    get_user_notification_settings,
+    is_notification_enabled,
+    set_all_user_notification_settings,
+    set_user_notification_setting,
     set_user_notification_settings_bulk,
 )
 
@@ -30,7 +31,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 28
+    assert len(ALL_NOTIFICATION_KEYS) == 29
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = key != "system_lifecycle"
@@ -87,7 +88,7 @@ def test_legacy_key_aliases(db_conn: Any):  # type: ignore
     assert LEGACY_KEY_ALIASES["margin_and_api_alert"] == "defense_margin_call"
 
     # 驗證所有別名都有映射到新 key
-    for old_k, new_k in LEGACY_KEY_ALIASES.items():
+    for new_k in LEGACY_KEY_ALIASES.values():
         assert new_k in ALL_NOTIFICATION_KEYS
 
 
@@ -206,8 +207,8 @@ async def test_bh_defense_button_always_marked_recommended(
 @pytest.mark.asyncio
 async def test_account_settings_polymarket_configuration(db_conn: Any):  # type: ignore
     """測試在帳戶全域設定 (/settings) 中修改 Polymarket 門檻與 AI 分析開關"""
-    from cogs.settings_ui import AccountSettingsView, AccountSettingsModal
     import database
+    from cogs.settings_ui import AccountSettingsModal, AccountSettingsView
 
     user_id = 999666
     view = AccountSettingsView(user_id)
@@ -244,7 +245,7 @@ async def test_account_settings_polymarket_configuration(db_conn: Any):  # type:
 @pytest.mark.asyncio
 async def test_category_navigation_and_embed_marker(db_conn: Any):  # type: ignore
     """測試 NotificationSettingsView 在 6 個模組之間切換導航與 Embed 標記反應"""
-    from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
+    from cogs.settings_ui import TRADING_MODULES, NotificationSettingsView
 
     user_id = 999777
     view = NotificationSettingsView(user_id)
@@ -317,7 +318,7 @@ def test_bulk_setter_is_single_transaction_and_resolves_aliases(db_conn: Any) ->
 @pytest.mark.asyncio
 async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  # type: ignore
     """測試 6 個模組各自執行本區開啟/關閉時的獨立性與精確性"""
-    from cogs.settings_ui import NotificationSettingsView, TRADING_MODULES
+    from cogs.settings_ui import TRADING_MODULES, NotificationSettingsView
 
     user_id = 999999
     view = NotificationSettingsView(user_id)
@@ -336,12 +337,12 @@ async def test_module_level_batch_enable_disable_all_categories(db_conn: Any):  
         mock_btn.response.edit_message = AsyncMock()
         await view.on_disable_module(mock_btn)
 
-        for item_key in mod_data["items"].keys():
+        for item_key in mod_data["items"]:
             assert is_notification_enabled(user_id, item_key) is False
 
         # 3. 點擊「開啟本區所有設定」
         await view.on_enable_module(mock_btn)
-        for item_key in mod_data["items"].keys():
+        for item_key in mod_data["items"]:
             assert is_notification_enabled(user_id, item_key) is True
 
 
@@ -497,6 +498,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "alpha_price_volume_watch": True,
         "alpha_polymarket": False,
         "alpha_wti_oil": True,
+        "intel_fundamental_events": False,
         "briefing_pre_market": True,
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,

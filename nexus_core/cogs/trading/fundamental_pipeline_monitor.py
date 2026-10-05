@@ -84,6 +84,10 @@ def register_default_fundamental_jobs() -> None:
         )
     )
 
+    from services.fundamental_clock_service import register_valuation_clock_jobs
+
+    register_valuation_clock_jobs()
+
 
 class FundamentalPipelineMonitorCog(commands.Cog):
     """基本面分析管線事件時鐘監控 Cog。"""

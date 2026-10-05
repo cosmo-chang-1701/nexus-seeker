@@ -1,21 +1,22 @@
 """盤前綜合宏觀與自選股報告 Embed 建構函式。"""
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import discord
-
-from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 
 
 def build_pre_market_briefing_embed(
     macro_data: dict,
-    alerts: Optional[List[Any]] = None,
-    earnings_alerts: Optional[List[Dict[str, Any]]] = None,
-    scanned_symbols: Optional[List[str]] = None,
+    alerts: list[Any] | None = None,
+    earnings_alerts: list[dict[str, Any]] | None = None,
+    scanned_symbols: list[str] | None = None,
     warning_days: int = 2,
+    fundamental_candidates: Sequence[Any] | None = None,
 ) -> discord.Embed:
     """建立盤前綜合宏觀與自選股報告 Embed (🌅 盤前綜合宏觀與自選股報告)"""
     has_portfolio_earnings = any(
@@ -188,6 +189,29 @@ def build_pre_market_briefing_embed(
             value=_safe_embed_field_value("\n".join(safe_lines), "安全過關"),
             inline=False,
         )
+
+    # 4. 基本面次日焦點候選名單
+    if fundamental_candidates:
+        active_candidates = [
+            c
+            for c in fundamental_candidates
+            if getattr(c, "status", "") in ("CANDIDATE", "WATCH")
+        ]
+        if active_candidates:
+            cand_lines = ["```ansi"]
+            for c in active_candidates[:5]:
+                sym = getattr(c, "symbol", "")
+                rk = getattr(c, "rank", 0)
+                st = getattr(c, "status", "WATCH")
+                st_color = "\u001b[1;32m" if st == "CANDIDATE" else "\u001b[0;33m"
+                tag = f"{st_color}[{st} #{rk}]\u001b[0m"
+                cand_lines.append(f" 🎯 {sym} {tag}")
+            cand_lines.append("```")
+            embed.add_field(
+                name="📋 基本面次日焦點候選 (Fundamental Watch)",
+                value=_safe_embed_field_value("\n".join(cand_lines), "無候選"),
+                inline=False,
+            )
 
     embed.set_footer(text="🌌 Nexus Seeker • 盤前綜合簡報")
     return embed

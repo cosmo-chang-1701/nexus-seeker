@@ -6,13 +6,13 @@ import dataclasses
 import logging
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from calibration.config import CalibrationConfig
 from calibration.data_store import DataStore
 
 
-def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
+def _parse(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m calibration",
         description="回測校準工具 (只產出報告，不修改程式碼)",
@@ -29,6 +29,7 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
             "skew-proxy",
             "notif-report",
             "macro-forward-report",
+            "fundamental-forward-report",
             "fetch-alpaca-1h",
             "alpaca-seam",
             "fetch-fred",
@@ -58,7 +59,7 @@ def _parse(argv: Optional[list[str]]) -> argparse.Namespace:
         "--snapshot-db",
         default=None,
         help=(
-            "notif-report / macro-forward-report：以唯讀模式讀取複製來的 production 快照；"
+            "notif-report / macro-forward-report / fundamental-forward-report：以唯讀模式讀取複製來的 production 快照；"
             "未指定時用 NEXUS_DB_NAME"
         ),
     )
@@ -131,6 +132,7 @@ async def _main(args: argparse.Namespace) -> int:
 
     if args.command == "macro-forward-report":
         import config
+
         from calibration.macro_forward_report import (
             BOXX_SYMBOL,
             VOO_SYMBOL,
@@ -150,6 +152,18 @@ async def _main(args: argparse.Namespace) -> int:
         )
         target = write_report(Path(cfg.out_dir), result)
         print(f"報告已輸出：{target}")
+        return 0
+
+    if args.command == "fundamental-forward-report":
+        from calibration.fundamental_forward_report import (
+            run_fundamental_forward_report,
+        )
+
+        report_text = run_fundamental_forward_report(
+            snapshot_db=Path(args.snapshot_db) if args.snapshot_db else None,
+            out_dir=Path(cfg.out_dir) if cfg.out_dir else None,
+        )
+        print(report_text)
         return 0
 
     if args.command == "fetch-fred":
@@ -290,7 +304,7 @@ async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
                     )
                     return 2
                 source = EdgeHistorySource(base_url=str(TUNNEL_URL))
-            edge_symbols: Optional[list[str]] = (
+            edge_symbols: list[str] | None = (
                 [s.strip().upper() for s in args.universe.split(",") if s.strip()]
                 if args.universe
                 else None
@@ -310,7 +324,7 @@ async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
     return 0
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = _parse(argv)
     if not args.force:

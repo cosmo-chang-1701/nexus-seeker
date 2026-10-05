@@ -303,3 +303,128 @@ class GuidanceDeltaSummary:
     margin_trend: str
     verdict: GuidanceVerdict
     summary_text: str
+
+
+# ============================================================================
+# PR5 分析師修正動能、兩段式 DCF / Comps 估值與次日觀察名單模型
+# ============================================================================
+
+WatchCandidateStatus = Literal["CANDIDATE", "WATCH", "EXCLUDED"]
+
+
+@dataclass(frozen=True)
+class RevisionScoreRecord:
+    """分析師修正動能評分記錄。"""
+
+    symbol: str
+    trading_date: str
+    score_30d: float
+    breadth_ratio: float
+    is_pead_aligned: bool
+    detail_json: str
+    created_at: str = ""
+
+
+RevisionScoreDTO = RevisionScoreRecord
+
+
+@dataclass(frozen=True)
+class FairValueRecord:
+    """內在公允價值與安全邊際記錄。"""
+
+    symbol: str
+    trading_date: str
+    dcf_value: float | None
+    comps_value: float | None
+    fair_value: float
+    margin_of_safety: float
+    discount_rate: float
+    equity_risk_premium: float
+    flags_json: str
+    created_at: str = ""
+
+
+FairValueDTO = FairValueRecord
+
+
+@dataclass(frozen=True)
+class WatchCandidateRecord:
+    """基本面次日候選觀察名單記錄。"""
+
+    trading_date: str
+    symbol: str
+    rank: int
+    status: WatchCandidateStatus
+    reasons_json: str
+    excluded_reason: str | None = None
+    created_at: str = ""
+
+
+WatchCandidateDTO = WatchCandidateRecord
+
+
+@dataclass(frozen=True)
+class DCFInputs:
+    """兩段式現金流折現 (2-Stage DCF) 計算輸入。"""
+
+    fcf_per_share: float
+    growth_rate_1y: float
+    cost_of_equity: float
+    perpetual_growth_rate: float = 0.025
+
+
+@dataclass(frozen=True)
+class DCFResult:
+    """兩段式現金流折現計算結果。"""
+
+    dcf_value: float | None
+    is_valid: bool
+    rejection_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class CompsInputs:
+    """流動性折讓同業乘數法計算輸入。"""
+
+    forward_eps: float
+    peer_pes: list[float]
+    nfci: float
+
+
+@dataclass(frozen=True)
+class CompsResult:
+    """同業乘數法計算結果。"""
+
+    comps_value: float | None
+    median_pe: float | None
+    liquidity_penalty_factor: float
+    is_valid: bool
+    rejection_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class FairValueResult:
+    """公允價值綜合計算與安全邊際結果。"""
+
+    fair_value: float | None
+    margin_of_safety: float | None
+    dcf_value: float | None
+    comps_value: float | None
+    discount_rate: float
+    equity_risk_premium: float
+    is_deep_value: bool
+    flags: list[str]
+    method: str
+
+
+@dataclass(frozen=True)
+class RevisionMomentumResult:
+    """分析師修正動能綜合計算結果。"""
+
+    score_30d: float
+    breadth_ratio: float
+    is_pead_aligned: bool
+    slopes: dict[str, float]
+    up_count: int
+    down_count: int
+    details: dict[str, Any]
