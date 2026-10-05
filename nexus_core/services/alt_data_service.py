@@ -108,11 +108,11 @@ class AltDataService:
                         html_text = resp.text
 
                     # 正則萃取最近 28 筆客流數字與去年同期數字
-                    # 匹配表格列 <td>Date</td><td>Current Year</td><td>Prior Year</td>
+                    # 匹配表格列 <td>Date</td><td>Current Year</td><td>Prior Year</td> (相容帶 class/屬性標籤)
                     row_pattern = re.compile(
-                        r"<tr>\s*<td>\s*(\d{1,2}/\d{1,2}/\d{4})\s*</td>\s*"
-                        r"<td>\s*([\d,]+)\s*</td>\s*"
-                        r"<td>\s*([\d,]+)\s*</td>",
+                        r"<tr[^>]*>\s*<td[^>]*>\s*(\d{1,2}/\d{1,2}/\d{4})\s*</td>\s*"
+                        r"<td[^>]*>\s*([\d,]+)\s*</td>\s*"
+                        r"<td[^>]*>\s*([\d,]+)\s*</td>",
                         re.IGNORECASE,
                     )
                     matches = row_pattern.findall(html_text)
@@ -165,21 +165,31 @@ class AltDataService:
                 "RAILFRTCARLOADSD11", today_date, kind="monthly_rail"
             )
             usable_obs = usable(obs, today_date)
-            if len(usable_obs) < 13:
-                if len(usable_obs) >= 2:
-                    # 樣本不足 13 個月時退回月增率 (MoM)
-                    latest = usable_obs[-1].value
-                    prev = usable_obs[-2].value
-                    if prev > 0:
-                        return round(((latest - prev) / prev) * 100.0, 2)
+            if len(usable_obs) < 2:
                 return None
 
             latest = usable_obs[-1].value
-            year_ago = usable_obs[-13].value
-            if year_ago <= 0:
-                return None
-            growth_pct = round(((latest - year_ago) / year_ago) * 100.0, 2)
-            return growth_pct
+            latest_date = usable_obs[-1].obs_date
+
+            # 優先搜尋距離約 1 年 (330 ~ 400 天) 之對應觀測
+            year_ago_val: float | None = None
+            for o in reversed(usable_obs[:-1]):
+                delta_days = (latest_date - o.obs_date).days
+                if 330 <= delta_days <= 400:
+                    year_ago_val = o.value
+                    break
+
+            if year_ago_val is None and len(usable_obs) >= 13:
+                year_ago_val = usable_obs[-13].value
+
+            if year_ago_val is not None and year_ago_val > 0:
+                return round(((latest - year_ago_val) / year_ago_val) * 100.0, 2)
+
+            # 若無法取得 1 年前觀測，退回最近一期之月增率 (MoM)
+            prev = usable_obs[-2].value
+            if prev > 0:
+                return round(((latest - prev) / prev) * 100.0, 2)
+            return None
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[AltData] 拉取 FRED 鐵路貨運數據失敗: {e}")
             return None
@@ -192,20 +202,31 @@ class AltDataService:
         try:
             obs = await fetch_fred_series("TOTALSA", today_date, kind="monthly_auto")
             usable_obs = usable(obs, today_date)
-            if len(usable_obs) < 13:
-                if len(usable_obs) >= 2:
-                    latest = usable_obs[-1].value
-                    prev = usable_obs[-2].value
-                    if prev > 0:
-                        return round(((latest - prev) / prev) * 100.0, 2)
+            if len(usable_obs) < 2:
                 return None
 
             latest = usable_obs[-1].value
-            year_ago = usable_obs[-13].value
-            if year_ago <= 0:
-                return None
-            growth_pct = round(((latest - year_ago) / year_ago) * 100.0, 2)
-            return growth_pct
+            latest_date = usable_obs[-1].obs_date
+
+            # 優先搜尋距離約 1 年 (330 ~ 400 天) 之對應觀測
+            year_ago_val: float | None = None
+            for o in reversed(usable_obs[:-1]):
+                delta_days = (latest_date - o.obs_date).days
+                if 330 <= delta_days <= 400:
+                    year_ago_val = o.value
+                    break
+
+            if year_ago_val is None and len(usable_obs) >= 13:
+                year_ago_val = usable_obs[-13].value
+
+            if year_ago_val is not None and year_ago_val > 0:
+                return round(((latest - year_ago_val) / year_ago_val) * 100.0, 2)
+
+            # 若無法取得 1 年前觀測，退回最近一期之月增率 (MoM)
+            prev = usable_obs[-2].value
+            if prev > 0:
+                return round(((latest - prev) / prev) * 100.0, 2)
+            return None
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[AltData] 拉取 FRED 汽車總銷量數據失敗: {e}")
             return None
@@ -243,14 +264,37 @@ class AltDataService:
                         for item in data:
                             if not isinstance(item, dict):
                                 continue
-                            code = str(item.get("公司代號", "")).strip()
-                            yoy_str = item.get("營業收入-去年同月增減(%)")
-                            if code and yoy_str is not None:
-                                try:
-                                    yoy_val = float(str(yoy_str).replace(",", ""))
-                                    res[code] = yoy_val
-                                except ValueError:
-                                    continue
+                            code = str(
+                                item.get("公司代號")
+                                or item.get("SecuritiesCompanyCode")
+                                or item.get("CompanyCode")
+                                or ""
+                            ).strip()
+                            yoy_raw = (
+                                item.get("營業收入-去年同月增減(%)")
+                                or item.get("營業收入-去年同月增減（％）")
+                                or item.get("去年同月增減(%)")
+                                or item.get("去年同月增減（％）")
+                            )
+                            if code and yoy_raw is not None:
+                                raw_str = (
+                                    str(yoy_raw)
+                                    .replace(",", "")
+                                    .replace("%", "")
+                                    .strip()
+                                )
+                                if raw_str and raw_str not in (
+                                    "--",
+                                    "-",
+                                    "N/A",
+                                    "null",
+                                    "None",
+                                    "不適用",
+                                ):
+                                    try:
+                                        res[code] = float(raw_str)
+                                    except ValueError:
+                                        continue
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"[AltData] 抓取 TWSE 月營收失敗: {e}")
                 return res
@@ -289,14 +333,37 @@ class AltDataService:
                         for item in data:
                             if not isinstance(item, dict):
                                 continue
-                            code = str(item.get("公司代號", "")).strip()
-                            yoy_str = item.get("營業收入-去年同月增減(%)")
-                            if code and yoy_str is not None:
-                                try:
-                                    yoy_val = float(str(yoy_str).replace(",", ""))
-                                    res[code] = yoy_val
-                                except ValueError:
-                                    continue
+                            code = str(
+                                item.get("公司代號")
+                                or item.get("SecuritiesCompanyCode")
+                                or item.get("CompanyCode")
+                                or ""
+                            ).strip()
+                            yoy_raw = (
+                                item.get("營業收入-去年同月增減(%)")
+                                or item.get("營業收入-去年同月增減（％）")
+                                or item.get("去年同月增減(%)")
+                                or item.get("去年同月增減（％）")
+                            )
+                            if code and yoy_raw is not None:
+                                raw_str = (
+                                    str(yoy_raw)
+                                    .replace(",", "")
+                                    .replace("%", "")
+                                    .strip()
+                                )
+                                if raw_str and raw_str not in (
+                                    "--",
+                                    "-",
+                                    "N/A",
+                                    "null",
+                                    "None",
+                                    "不適用",
+                                ):
+                                    try:
+                                        res[code] = float(raw_str)
+                                    except ValueError:
+                                        continue
                 except Exception as e:  # noqa: BLE001
                     logger.warning(f"[AltData] 抓取 TPEx 月營收失敗: {e}")
                 return res
@@ -355,17 +422,34 @@ class AltDataService:
         if not cached:
             return None
 
-        # 嘗試從快取中讀取指標增長率
-        growth_key = f"{metric}_growth_yoy"
-        if growth_key in cached and cached[growth_key] is not None:
-            try:
-                return round(float(cached[growth_key]), 2)
-            except (ValueError, TypeError):
-                pass
+        # 嘗試從快取中讀取指標增長率（相容單元測試 mock 與 Finnhub 實際欄位）
+        candidate_keys: list[str] = [f"{metric}_growth_yoy"]
+        if metric == "capex":
+            candidate_keys.extend(
+                ["capexGrowthTTMYoy", "capexGrowthAnnual", "capex_growth"]
+            )
+        elif metric == "revenue":
+            candidate_keys.extend(
+                ["revenueGrowthTTMYoy", "revenueGrowthAnnual", "revenue_growth_ttm"]
+            )
+        elif metric == "dio":
+            candidate_keys.extend(["dio_growth", "inventoryTurnoverTTMYoy"])
+        elif metric == "rpo":
+            candidate_keys.extend(["rpoGrowthYoy", "rpo_growth"])
+
+        for k in candidate_keys:
+            if k in cached and cached[k] is not None:
+                try:
+                    return round(float(cached[k]), 2)
+                except (ValueError, TypeError):
+                    pass
 
         if metric == "revenue" and "revenue_growth" in cached:
             try:
-                return round(float(cached["revenue_growth"]) * 100.0, 2)
+                raw_rev = float(cached["revenue_growth"])
+                if -1.0 <= raw_rev <= 1.0:
+                    return round(raw_rev * 100.0, 2)
+                return round(raw_rev, 2)
             except (ValueError, TypeError):
                 pass
 

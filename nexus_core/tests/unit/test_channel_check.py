@@ -43,6 +43,18 @@ def test_pearson_correlation_calculation() -> None:
     assert corr is not None
     assert round(corr, 1) == 1.0
 
+    # 包含 None 與非數值型別的序列過濾
+    x_none: list[float | None] = [10.0, None, 20.0, 30.0, 40.0]
+    y_none: list[float | None] = [15.0, 99.0, 25.0, 35.0, 45.0]
+    corr_none = compute_pearson_correlation(x_none, y_none)
+    assert corr_none is not None
+    assert round(corr_none, 1) == 1.0
+
+    # 兩組數列皆為常數 (雙重零變異數)
+    assert (
+        compute_pearson_correlation([3.0, 3.0, 3.0, 3.0], [7.0, 7.0, 7.0, 7.0]) == 0.0
+    )
+
 
 def test_causal_link_insufficient_data() -> None:
     """測試因果傳導鏈在數據缺失時判定為 INSUFFICIENT。"""
@@ -207,3 +219,22 @@ def test_result_to_log_record() -> None:
     parsed_members = json.loads(record.members_json)
     assert parsed_members["link_key"] == "AI_CAPEX"
     assert "NVDA" in parsed_members["followers"]
+
+
+def test_channel_check_members_dict_completeness() -> None:
+    """測試 evaluate_channel_check 產出之 members_dict 包含完整的 pillar 與 symbols。"""
+    res = evaluate_channel_check(
+        LINK_AI_CAPEX, "2026-Q2", driver_growth=25.0, follower_growth=22.0
+    )
+    assert res.members["pillar"] == "MACRO_CORE"
+    assert "MSFT" in res.members["symbols"]
+    assert "NVDA" in res.members["symbols"]
+    assert "2382" in res.members["symbols"]
+
+    # 驗證 NOWCAST 鏈條
+    nowcast_res = evaluate_channel_check(
+        LINK_AIR_TRAVEL, "2026-Q2", driver_growth=5.0, follower_growth=4.0
+    )
+    assert nowcast_res.members["pillar"] == "MACRO_CORE"
+    assert "DAL" in nowcast_res.members["symbols"]
+    assert "UAL" in nowcast_res.members["symbols"]

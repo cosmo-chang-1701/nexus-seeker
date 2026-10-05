@@ -324,6 +324,50 @@ async def test_channel_check_section_render_with_data() -> None:
 
 
 @pytest.mark.asyncio
+async def test_channel_check_section_render_multiple_periods_retains_latest() -> None:
+    """測試當同產業鏈有多期日誌時，正確保留最新一期（首筆）而非被舊期數覆蓋。"""
+    sec = ChannelCheckSection()
+
+    record_new = ChannelCheckLogRecord(
+        link_key="ADV_AUTO_MOBILITY_TW_NOWCAST",
+        as_of_period="2026-Q3",
+        link_type="NOWCAST",
+        experimental=False,
+        driver_growth=12.0,
+        follower_growth=10.0,
+        divergence_pp=-2.0,
+        nowcast_direction="NOWCAST_UP",
+        nowcast_hit=True,
+        correlation=0.9,
+        verdict="CONFIRM",
+        members_json="{}",
+    )
+    record_old = ChannelCheckLogRecord(
+        link_key="ADV_AUTO_MOBILITY_TW_NOWCAST",
+        as_of_period="2026-Q2",
+        link_type="NOWCAST",
+        experimental=False,
+        driver_growth=4.0,
+        follower_growth=3.0,
+        divergence_pp=-1.0,
+        nowcast_direction="NOWCAST_UP",
+        nowcast_hit=True,
+        correlation=0.8,
+        verdict="CONFIRM",
+        members_json="{}",
+    )
+
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol",
+        return_value=[record_new, record_old],
+    ):
+        _, body = await sec.render("TSLA")
+        # 應顯示最新 Q3 之 12.0%，絕不能被 Q2 之 4.0% 覆寫
+        assert "驅動 +12.0%" in body
+        assert "驅動 +4.0%" not in body
+
+
+@pytest.mark.asyncio
 async def test_channel_check_section_render_unmapped_symbol() -> None:
     """測試未映射標的之提示訊息。"""
     sec = ChannelCheckSection()

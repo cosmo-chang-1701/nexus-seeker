@@ -146,3 +146,23 @@ def test_get_links_by_pillar() -> None:
     frontier = get_links_by_pillar("FRONTIER_TECH")
     # 7 條核心 + 1 條量子運算擴充
     assert len(frontier) == 8
+
+
+def test_extract_symbols_from_link() -> None:
+    """測試從產業鏈驅動端與跟隨端萃取所有代碼清單。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        LINK_AI_CAPEX,
+        LINK_AIR_TRAVEL,
+        extract_symbols_from_link,
+    )
+
+    ai_symbols = extract_symbols_from_link(LINK_AI_CAPEX)
+    assert "MSFT" in ai_symbols
+    assert "NVDA" in ai_symbols
+    assert "2382" in ai_symbols
+
+    air_symbols = extract_symbols_from_link(LINK_AIR_TRAVEL)
+    assert "DAL" in air_symbols
+    assert "UAL" in air_symbols
+    assert "LUV" in air_symbols
+    assert "TSA" not in air_symbols

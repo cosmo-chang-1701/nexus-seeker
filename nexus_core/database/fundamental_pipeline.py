@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 from market_analysis.fundamental_pipeline.models import (
     ChannelCheckLogRecord,
@@ -965,7 +965,7 @@ async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
 
 
 async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
-    """批次寫入產業鏈交叉驗證日誌。"""
+    """批次寫入產業鏈交叉驗證日誌（支援分批分塊防止 1GB VPS 記憶體暴增）。"""
     if not records:
         return
     rows = [
@@ -985,7 +985,11 @@ async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
         )
         for r in records
     ]
-    await execute_write_many_async([(_UPSERT_CHANNEL_CHECK_LOG_SQL, rows, True)])
+    # 分塊 100 筆寫入，符合低記憶體守衛
+    chunk_size = 100
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        await execute_write_many_async([(_UPSERT_CHANNEL_CHECK_LOG_SQL, chunk, True)])
 
 
 def get_channel_check(link_key: str, as_of_period: str) -> ChannelCheckLogRecord | None:
@@ -1129,22 +1133,54 @@ def get_channel_checks_by_symbol(
     symbol: str, limit: int = 20
 ) -> list[ChannelCheckLogRecord]:
     """根據標的代碼（包含在上游驅動或下游跟隨端）查詢相關之最新交叉驗證日誌。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        get_links_for_symbol,
+    )
+
+    clean_sym = symbol.strip().upper()
+    if ":" in clean_sym:
+        clean_sym = clean_sym.split(":")[-1]
+
+    # 取得靜態映射中包含該標的之鏈條代碼
+    related_links = get_links_for_symbol(clean_sym)
+    link_keys = [link.link_key for link in related_links]
+
     conn = get_read_connection()
     try:
-        sym_pattern = f'%"{symbol.upper()}"%'
-        rows = conn.execute(
+        quoted_pattern = f'%"{clean_sym}"%'
+        raw_pattern = f"%{clean_sym}%"
+
+        if link_keys:
+            placeholders = ",".join("?" for _ in link_keys)
+            query = f"""
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE link_key IN ({placeholders})
+               OR members_json LIKE ?
+               OR members_json LIKE ?
+            ORDER BY as_of_period DESC, created_at DESC
+            LIMIT ?
             """
+            params: list[Any] = [*link_keys, quoted_pattern, raw_pattern, limit]
+            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            rows = conn.execute(query, params).fetchall()
+        else:
+            query = """
             SELECT link_key, as_of_period, link_type, experimental,
                    driver_growth, follower_growth, divergence_pp,
                    nowcast_direction, nowcast_hit, correlation,
                    verdict, members_json, created_at
             FROM channel_check_log
             WHERE members_json LIKE ?
+               OR members_json LIKE ?
             ORDER BY as_of_period DESC, created_at DESC
             LIMIT ?
-            """,
-            (sym_pattern, limit),
-        ).fetchall()
+            """
+            rows = conn.execute(query, (quoted_pattern, raw_pattern, limit)).fetchall()
+
         return [
             ChannelCheckLogRecord(
                 link_key=r[0],

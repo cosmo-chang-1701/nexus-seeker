@@ -36,6 +36,7 @@ from market_analysis.fundamental_pipeline.insider_signal import (
     evaluate_insider_signal,
 )
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
     GuidanceExtraction,
 )
 from market_analysis.fundamental_pipeline.supply_chain_map import (
@@ -264,30 +265,33 @@ class ChannelCheckSection:
         if not links:
             return header, "• 產業鏈定位: 未涵蓋於當前 17 條核心產業鏈矩陣中"
 
-        # 讀取資料庫中與該標的相關之最新交叉驗證日誌
+        # 讀取資料庫中與該標的相關之最新交叉驗證日誌 (第一筆為最新週期)
         logs = await asyncio.to_thread(get_channel_checks_by_symbol, sym_upper, 20)
-        logs_by_key = {log.link_key: log for log in logs}
+        logs_by_key: dict[str, ChannelCheckLogRecord] = {}
+        for log in logs:
+            if log.link_key not in logs_by_key:
+                logs_by_key[log.link_key] = log
 
         lines: list[str] = []
         for link in links:
             tag = f"[{link.link_type}{' 🧪' if link.experimental else ''}]"
-            log = logs_by_key.get(link.link_key)
-            if log is not None:
+            matched_log = logs_by_key.get(link.link_key)
+            if matched_log is not None:
                 icon = (
                     "🟢"
-                    if log.verdict == "CONFIRM"
-                    else ("🔴" if log.verdict == "DIVERGE" else "⚪")
+                    if matched_log.verdict == "CONFIRM"
+                    else ("🔴" if matched_log.verdict == "DIVERGE" else "⚪")
                 )
                 detail_parts: list[str] = []
-                if log.driver_growth is not None:
-                    detail_parts.append(f"驅動 {log.driver_growth:+.1f}%")
-                if log.follower_growth is not None:
-                    detail_parts.append(f"跟隨 {log.follower_growth:+.1f}%")
-                if log.divergence_pp is not None:
-                    detail_parts.append(f"偏差 {log.divergence_pp:+.1f}pp")
+                if matched_log.driver_growth is not None:
+                    detail_parts.append(f"驅動 {matched_log.driver_growth:+.1f}%")
+                if matched_log.follower_growth is not None:
+                    detail_parts.append(f"跟隨 {matched_log.follower_growth:+.1f}%")
+                if matched_log.divergence_pp is not None:
+                    detail_parts.append(f"偏差 {matched_log.divergence_pp:+.1f}pp")
                 detail_str = " ｜ ".join(detail_parts) if detail_parts else "數據觀測中"
                 lines.append(
-                    f"• {tag} {link.link_key}: {icon} **{log.verdict}** ({detail_str})"
+                    f"• {tag} {link.link_key}: {icon} **{matched_log.verdict}** ({detail_str})"
                 )
             else:
                 lines.append(

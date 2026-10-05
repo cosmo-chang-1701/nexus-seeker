@@ -316,6 +316,8 @@ LINK_ADV_QUANTUM_COMPUTING = SupplyChainLink(
     lead_lag_quarters="0-1Q (NOWCAST)",
 )
 
+LINK_ROBOTICS_EMBODIED_NOWCAST: SupplyChainLink = LINK_ADV_ROBOTICS_EMBODIED_NOWCAST
+
 # 核心 17 條產業鏈列表 (5 總體 + 5 太空 + 7 先進科技)
 CORE_SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = [
     # 3.1 總體核心 (5 條)
@@ -337,7 +339,7 @@ CORE_SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = [
     LINK_ADV_ENERGY_THERMAL_GRID,
     LINK_ADV_AUTO_MOBILITY_TW_NOWCAST,
     LINK_ADV_AUTO_FLEET_DEMAND,
-    LINK_ROBOTICS_EMBODIED_NOWCAST := LINK_ADV_ROBOTICS_EMBODIED_NOWCAST,
+    LINK_ROBOTICS_EMBODIED_NOWCAST,
 ]
 
 # 預設產業鏈列表（精準 17 條）
@@ -378,6 +380,20 @@ def _extract_ticker_symbols(identifier: str) -> list[str]:
     if ident == "TSM":
         return ["TSM", "2330"]
     return [ident]
+
+
+def extract_symbols_from_link(link: SupplyChainLink) -> list[str]:
+    """從產業鏈之驅動端與跟隨端識別碼萃取所有關聯股票代碼清單（去重並排序）。"""
+    symbols_set: set[str] = set()
+    for ident in link.drivers:
+        for sym in _extract_ticker_symbols(ident):
+            if sym and not sym.startswith(("TSA", "FRED")):
+                symbols_set.add(sym)
+    for ident in link.followers:
+        for sym in _extract_ticker_symbols(ident):
+            if sym and not sym.startswith(("TSA", "FRED")):
+                symbols_set.add(sym)
+    return sorted(symbols_set)
 
 
 def get_links_for_symbol(symbol: str) -> list[SupplyChainLink]:

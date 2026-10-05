@@ -23,6 +23,9 @@ from market_analysis.fundamental_pipeline.models import (
     NowcastDirection,
     SupplyChainLink,
 )
+from market_analysis.fundamental_pipeline.supply_chain_map import (
+    extract_symbols_from_link,
+)
 
 # 關鍵量化門檻常數
 DEFAULT_CAUSAL_DIVERGENCE_THRESHOLD_PP: float = 25.0
@@ -31,18 +34,25 @@ MIN_CORRELATION_SAMPLE_SIZE: int = 4
 
 
 def compute_pearson_correlation(
-    series_x: Sequence[float], series_y: Sequence[float]
+    series_x: Sequence[float | None], series_y: Sequence[float | None]
 ) -> float | None:
     """計算兩組數列之皮爾森積差相關係數 (自由度 N >= 4)。"""
     if len(series_x) != len(series_y) or len(series_x) < MIN_CORRELATION_SAMPLE_SIZE:
         return None
 
-    # 過濾包含 NaN 或 Inf 的異常值
+    # 過濾包含 None, NaN 或 Inf 的異常值
     cleaned: list[tuple[float, float]] = []
     for x, y in zip(series_x, series_y):
-        if math.isnan(x) or math.isinf(x) or math.isnan(y) or math.isinf(y):
+        if x is None or y is None:
             continue
-        cleaned.append((x, y))
+        try:
+            x_f = float(x)
+            y_f = float(y)
+        except (ValueError, TypeError):
+            continue
+        if math.isnan(x_f) or math.isinf(x_f) or math.isnan(y_f) or math.isinf(y_f):
+            continue
+        cleaned.append((x_f, y_f))
 
     n = len(cleaned)
     if n < MIN_CORRELATION_SAMPLE_SIZE:
@@ -76,8 +86,13 @@ def evaluate_causal_link(
     members = members_data if members_data is not None else {}
     members_dict = {
         "link_key": link.link_key,
+        "title": link.title,
+        "pillar": link.pillar,
+        "lead_lag_quarters": link.lead_lag_quarters,
+        "description": link.description,
         "drivers": link.drivers,
         "followers": link.followers,
+        "symbols": extract_symbols_from_link(link),
         **members,
     }
 
@@ -166,8 +181,8 @@ def evaluate_nowcast_link(
     as_of_period: str,
     driver_growth: float | None,
     follower_growth: float | None = None,
-    driver_history: Sequence[float] | None = None,
-    follower_history: Sequence[float] | None = None,
+    driver_history: Sequence[float | None] | None = None,
+    follower_history: Sequence[float | None] | None = None,
     direction_threshold_pct: float = DEFAULT_NOWCAST_DIRECTION_THRESHOLD_PCT,
     allow_nowcast_preview: bool = True,
     members_data: dict[str, Any] | None = None,
@@ -176,8 +191,13 @@ def evaluate_nowcast_link(
     members = members_data if members_data is not None else {}
     members_dict = {
         "link_key": link.link_key,
+        "title": link.title,
+        "pillar": link.pillar,
+        "lead_lag_quarters": link.lead_lag_quarters,
+        "description": link.description,
         "drivers": link.drivers,
         "followers": link.followers,
+        "symbols": extract_symbols_from_link(link),
         **members,
     }
 
@@ -277,8 +297,8 @@ def evaluate_channel_check(
     as_of_period: str,
     driver_growth: float | None,
     follower_growth: float | None = None,
-    driver_history: Sequence[float] | None = None,
-    follower_history: Sequence[float] | None = None,
+    driver_history: Sequence[float | None] | None = None,
+    follower_history: Sequence[float | None] | None = None,
     divergence_threshold_pp: float = DEFAULT_CAUSAL_DIVERGENCE_THRESHOLD_PP,
     direction_threshold_pct: float = DEFAULT_NOWCAST_DIRECTION_THRESHOLD_PCT,
     allow_nowcast_preview: bool = True,

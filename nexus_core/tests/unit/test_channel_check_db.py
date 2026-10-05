@@ -163,3 +163,65 @@ async def test_database_channel_check_logs_batch_and_queries() -> None:
     dal_records = get_channel_checks_by_symbol("DAL")
     assert len(dal_records) >= 1
     assert dal_records[0].link_key == "AIR_TRAVEL"
+
+
+@pytest.mark.asyncio
+async def test_get_channel_checks_by_symbol_prefixed_and_tw() -> None:
+    """測試包含前綴代碼 (XBRL:MSFT:capex, TWSE:2382) 之標的能被精確查詢。"""
+    record = ChannelCheckLogRecord(
+        link_key="AI_CAPEX",
+        as_of_period="2026-Q3",
+        link_type="CAUSAL",
+        experimental=False,
+        driver_growth=32.0,
+        follower_growth=28.0,
+        divergence_pp=-4.0,
+        nowcast_direction=None,
+        nowcast_hit=None,
+        correlation=None,
+        verdict="CONFIRM",
+        members_json=json.dumps(
+            {
+                "drivers": ["XBRL:MSFT:capex", "XBRL:AMZN:capex"],
+                "followers": ["NVDA", "TWSE:2382"],
+                "symbols": ["MSFT", "AMZN", "NVDA", "2382"],
+            }
+        ),
+    )
+    await save_channel_check_log(record)
+
+    # 1. 查詢驅動端 MSFT (原為 XBRL:MSFT:capex)
+    msft_results = get_channel_checks_by_symbol("MSFT")
+    assert any(r.link_key == "AI_CAPEX" for r in msft_results)
+
+    # 2. 查詢台股代碼 2382 (原為 TWSE:2382)
+    tw_results = get_channel_checks_by_symbol("2382")
+    assert any(r.link_key == "AI_CAPEX" for r in tw_results)
+
+
+@pytest.mark.asyncio
+async def test_save_channel_check_logs_chunking() -> None:
+    """測試超過 100 筆的大批次寫入經分塊處理無異常。"""
+    large_batch = [
+        ChannelCheckLogRecord(
+            link_key=f"LINK_CHUNK_{i}",
+            as_of_period="2026-Q1",
+            link_type="CAUSAL",
+            experimental=False,
+            driver_growth=10.0,
+            follower_growth=12.0,
+            divergence_pp=2.0,
+            nowcast_direction=None,
+            nowcast_hit=None,
+            correlation=None,
+            verdict="CONFIRM",
+            members_json="{}",
+        )
+        for i in range(125)
+    ]
+    await save_channel_check_logs(large_batch)
+
+    # 驗證首尾與中間筆數均寫入成功
+    assert get_channel_check("LINK_CHUNK_0", "2026-Q1") is not None
+    assert get_channel_check("LINK_CHUNK_99", "2026-Q1") is not None
+    assert get_channel_check("LINK_CHUNK_124", "2026-Q1") is not None
