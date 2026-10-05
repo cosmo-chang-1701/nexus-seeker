@@ -8,7 +8,6 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-import database.financials as db_financials
 from services.market_data_service._core import (
     _execute_api_call,
     _get_client,
@@ -31,6 +30,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 async def get_basic_financials(symbol: str, expiry_hours: int = 24) -> Dict[str, Any]:
     """取得基本面指標，優先從資料庫讀取快取。"""
+    import database.financials as db_financials
+
     symbol = _sanitize_ticker(symbol)
 
     # 1. 優先檢查 SQLite 持久化快取，並用 to_thread 避免阻塞 event loop

@@ -92,6 +92,15 @@ from .fundamental_pipeline import (
     save_macro_surprises,
     get_macro_surprises_for_event,
     get_latest_macro_surprises,
+    upsert_sec_filing_cursor,
+    get_sec_filing_cursor,
+    save_sec_filing_event,
+    save_sec_filing_events,
+    get_recent_sec_events,
+    save_insider_transactions,
+    get_insider_transactions,
+    save_governance_flags,
+    get_active_governance_flags,
 )
 
 __all__ = [
@@ -173,4 +182,13 @@ __all__ = [
     "save_macro_surprises",
     "get_macro_surprises_for_event",
     "get_latest_macro_surprises",
+    "upsert_sec_filing_cursor",
+    "get_sec_filing_cursor",
+    "save_sec_filing_event",
+    "save_sec_filing_events",
+    "get_recent_sec_events",
+    "save_insider_transactions",
+    "get_insider_transactions",
+    "save_governance_flags",
+    "get_active_governance_flags",
 ]

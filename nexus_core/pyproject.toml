@@ -23,6 +23,7 @@ dependencies = [
     "httpx",
     "finnhub-python>=2.4.20",
     "aiolimiter>=1.1.0",
+    "defusedxml>=0.7.1",
     "websockets>=12.0",
     "psutil>=5.9.0",
     "click>=8.1.0",
@@ -75,7 +76,8 @@ module = [
     "dotenv.*",
     "psutil.*",
     "pytest",
-    "httpx"
+    "httpx",
+    "defusedxml.*"
 ]
 ignore_missing_imports = true
 
