@@ -150,7 +150,9 @@ def nav_from_returns(
 ) -> np.ndarray:
     """由單期報酬累積出淨值序列（首點為 `start`）。"""
     arr = _as_array(returns)
-    return np.concatenate(([start], start * np.cumprod(1.0 + arr)))
+    return np.concatenate(
+        (np.array([start], dtype=float), start * np.cumprod(1.0 + arr))
+    )
 
 
 def historical_var_cvar(
