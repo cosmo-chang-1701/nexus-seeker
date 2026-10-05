@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import math
+
 from market_analysis.fundamental_pipeline.models import LiquidityRegime
 
 # 具名量化常數
@@ -34,8 +36,15 @@ def calculate_net_liquidity(
 
 
 def calculate_13w_change(current: float, base_13w_ago: float | None) -> float | None:
-    """計算 13 週 (約一季) 動態變更百分比。若基期數值缺失或為 0 則回傳 None。"""
-    if base_13w_ago is None or abs(base_13w_ago) < 1e-9:
+    """計算 13 週 (約一季) 動態變更百分比。若基期數值缺失、非有限或為 0 則回傳 None。"""
+    if (
+        base_13w_ago is None
+        or math.isnan(current)
+        or math.isinf(current)
+        or math.isnan(base_13w_ago)
+        or math.isinf(base_13w_ago)
+        or abs(base_13w_ago) < 1e-9
+    ):
         return None
     return ((current - base_13w_ago) / abs(base_13w_ago)) * 100.0
 
@@ -48,9 +57,16 @@ def classify_liquidity_regime(
     - TIGHT: NFCI >= 0.0 或 13w 變更率 <= -3.0%
     - EASY: NFCI <= -0.5 且 13w 變更率 >= 0.0%
     - NEUTRAL: 其他正常情況
-    - UNKNOWN: 關鍵觀測值缺失
+    - UNKNOWN: 關鍵觀測值缺失或非有限數值
     """
-    if nfci is None or net_liq_chg_13w is None:
+    if (
+        nfci is None
+        or net_liq_chg_13w is None
+        or math.isnan(nfci)
+        or math.isinf(nfci)
+        or math.isnan(net_liq_chg_13w)
+        or math.isinf(net_liq_chg_13w)
+    ):
         return "UNKNOWN"
     if nfci >= NFCI_TIGHT_THRESHOLD or net_liq_chg_13w <= NET_LIQ_13W_TIGHT_PCT:
         return "TIGHT"
@@ -67,9 +83,9 @@ def calculate_dynamic_erp(
     """計算經 NFCI 線性擾動校準後的動態股權風險溢價 (ERP)。
 
     ERP_t = ERP_BASE + lambda_NFCI * clip(NFCI_t, -1.0, +2.0)
-    若 NFCI 缺失則回傳 None。
+    若 NFCI 缺失或非有限則回傳 None。
     """
-    if nfci is None:
+    if nfci is None or math.isnan(nfci) or math.isinf(nfci):
         return None
     clipped_nfci = min(max(nfci, NFCI_CLIP_MIN), NFCI_CLIP_MAX)
     return base_erp + lambda_nfci * clipped_nfci

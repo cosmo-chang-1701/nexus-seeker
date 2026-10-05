@@ -98,3 +98,19 @@ def test_calculate_dynamic_erp() -> None:
 
     # 數值缺失回傳 None
     assert calculate_dynamic_erp(None) is None
+
+
+def test_liquidity_regime_nan_inf_guards() -> None:
+    """測試非有限浮點數 (NaN / Inf) 防禦，確保不會因比較失敗誤判為 NEUTRAL。"""
+    # 1. 體制判定：NaN 必須安全降級為 UNKNOWN
+    assert classify_liquidity_regime(float("nan"), 2.0) == "UNKNOWN"
+    assert classify_liquidity_regime(-0.6, float("nan")) == "UNKNOWN"
+    assert classify_liquidity_regime(float("inf"), 2.0) == "UNKNOWN"
+
+    # 2. ERP 計算：NaN 必須回傳 None
+    assert calculate_dynamic_erp(float("nan")) is None
+    assert calculate_dynamic_erp(float("inf")) is None
+
+    # 3. 13w 變更率：NaN 必須回傳 None
+    assert calculate_13w_change(float("nan"), 100.0) is None
+    assert calculate_13w_change(100.0, float("nan")) is None

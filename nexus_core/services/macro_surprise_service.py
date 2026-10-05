@@ -10,7 +10,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import math
 
 from database.connection import get_read_connection
 from database.fundamental_pipeline import (
@@ -41,7 +43,8 @@ def parse_calendar_metric_value(raw: str | None) -> float | None:
     # 處理百分比 (如 "3.2%") -> 3.2
     if cleaned.endswith("%"):
         try:
-            return float(cleaned[:-1].strip())
+            val = float(cleaned[:-1].strip())
+            return None if math.isnan(val) or math.isinf(val) else val
         except ValueError:
             return None
 
@@ -58,7 +61,10 @@ def parse_calendar_metric_value(raw: str | None) -> float | None:
         cleaned = cleaned[:-1].strip()
 
     try:
-        return float(cleaned) * multiplier
+        val = float(cleaned) * multiplier
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return val
     except ValueError:
         return None
 
@@ -97,7 +103,7 @@ def _load_calendar_events_with_actuals() -> list[dict[str, str]]:
 
 async def process_macro_surprises() -> list[MacroSurpriseReading]:
     """掃描已公布的總經事件並計算其標準化預期差。"""
-    events = _load_calendar_events_with_actuals()
+    events = await asyncio.to_thread(_load_calendar_events_with_actuals)
     if not events:
         logger.debug("[MacroSurpriseService] 目前無具備實際值與共識值的總經事件")
         return []
@@ -116,8 +122,10 @@ async def process_macro_surprises() -> list[MacroSurpriseReading]:
             continue
 
         release_time = item["event_time"]
-        # 讀取該事件過往歷史預期差樣本
-        prior_surprises = get_macro_surprises_for_event(defn.event_key, limit=12)
+        # 讀取該事件過往歷史預期差樣本（非同步委派避免阻塞 event loop）
+        prior_surprises = await asyncio.to_thread(
+            get_macro_surprises_for_event, defn.event_key, 12
+        )
         # 排除相同發布時間的舊記錄避免自我干擾
         historical_diffs = [
             s.raw_diff for s in prior_surprises if s.release_time_utc != release_time

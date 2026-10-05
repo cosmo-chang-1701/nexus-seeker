@@ -119,12 +119,17 @@ def match_macro_event(raw_event_name: str) -> MacroEventDefinition | None:
 
 
 def calculate_sample_std(diffs: Sequence[float]) -> float | None:
-    """計算樣本標準差 (自由度 N - 1)。若樣本數 < 2 則回傳 None。"""
-    n = len(diffs)
+    """計算樣本標準差 (自由度 N - 1)。若有效樣本數 < 2 則回傳 None。"""
+    clean_diffs = [
+        float(x)
+        for x in diffs
+        if x is not None and not math.isnan(x) and not math.isinf(x)
+    ]
+    n = len(clean_diffs)
     if n < 2:
         return None
-    mean = sum(diffs) / n
-    variance = sum((x - mean) ** 2 for x in diffs) / (n - 1)
+    mean = sum(clean_diffs) / n
+    variance = sum((x - mean) ** 2 for x in clean_diffs) / (n - 1)
     if variance < 0:
         return 0.0
     return math.sqrt(variance)
@@ -144,16 +149,31 @@ def calculate_standardized_surprise(
 
     回傳：(raw_diff, z_score)
     """
+    if (
+        math.isnan(actual)
+        or math.isinf(actual)
+        or math.isnan(forecast)
+        or math.isinf(forecast)
+    ):
+        return (0.0, None)
+
     raw_diff = actual - forecast
-    # 取最近最多 12 筆歷史樣本
-    samples = list(historical_diffs[-MAX_SURPRISE_LOOKBACK:])
+    # 取最近最多 12 筆歷史樣本，排除非有限數值
+    clean_history = [
+        float(x)
+        for x in historical_diffs
+        if x is not None and not math.isnan(x) and not math.isinf(x)
+    ]
+    samples = clean_history[-MAX_SURPRISE_LOOKBACK:]
     if len(samples) < MIN_SURPRISE_SAMPLES:
         return (raw_diff, None)
 
     sigma = calculate_sample_std(samples)
-    if sigma is None or sigma <= EPSILON_STD:
+    if sigma is None or math.isnan(sigma) or sigma <= EPSILON_STD:
         return (raw_diff, None)
 
     z = raw_diff / sigma
+    if math.isnan(z) or math.isinf(z):
+        return (raw_diff, None)
     z_clipped = min(max(z, Z_SCORE_CLIP_MIN), Z_SCORE_CLIP_MAX)
     return (raw_diff, z_clipped)

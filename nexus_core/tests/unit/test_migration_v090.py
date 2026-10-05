@@ -13,6 +13,7 @@ from database.fundamental_pipeline import (
     get_macro_surprises_for_event,
     save_liquidity_regime,
     save_macro_surprise,
+    save_macro_surprises,
 )
 from database.migrations import v090_add_liquidity_and_macro_surprise as mig
 from market_analysis.fundamental_pipeline.models import (
@@ -95,3 +96,37 @@ async def test_database_fundamental_pipeline_roundtrip() -> None:
 
     latest_surprises = get_latest_macro_surprises(limit=10)
     assert len(latest_surprises) >= 1
+
+
+@pytest.mark.asyncio
+async def test_save_macro_surprises_batch_execution() -> None:
+    """測試 save_macro_surprises 批次多筆寫入與衝突更新。"""
+    readings = [
+        MacroSurpriseReading(
+            event_key="NFP",
+            release_time_utc="2026-09-04T12:30:00Z",
+            actual=142000.0,
+            forecast=160000.0,
+            raw_diff=-18000.0,
+            z_score=-0.45,
+            growth_sign=1,
+        ),
+        MacroSurpriseReading(
+            event_key="NFP",
+            release_time_utc="2026-10-02T12:30:00Z",
+            actual=254000.0,
+            forecast=150000.0,
+            raw_diff=104000.0,
+            z_score=2.15,
+            growth_sign=1,
+        ),
+    ]
+
+    # 若 is_many 錯誤設定為 False，此處將觸發 sqlite3.ProgrammingError
+    await save_macro_surprises(readings)
+
+    fetched = get_macro_surprises_for_event("NFP", limit=5)
+    assert len(fetched) >= 2
+    nfp_oct = next(r for r in fetched if r.release_time_utc == "2026-10-02T12:30:00Z")
+    assert nfp_oct.actual == 254000.0
+    assert nfp_oct.z_score == 2.15

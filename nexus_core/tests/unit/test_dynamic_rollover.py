@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional, cast
+from zoneinfo import ZoneInfo
 
 import discord
 import pandas as pd
@@ -3882,7 +3883,9 @@ async def test_evaluate_covered_call_profit_lock_dte_forced_settlement(
     positions = [
         {
             "symbol": "AAPL",
-            "expiry": (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "expiry": (
+                datetime.now(ZoneInfo("America/New_York")).date() + timedelta(days=1)
+            ).strftime("%Y-%m-%d"),
             "strike": 200.0,
             "quantity": -1.0,
             "entry_price": 5.0,
@@ -4132,7 +4135,9 @@ async def test_short_option_profit_lock_csp_dte_forced_settlement(
     positions = [
         {
             "symbol": "NVDA",
-            "expiry": (datetime.now().date() + timedelta(days=1)).strftime("%Y-%m-%d"),
+            "expiry": (
+                datetime.now(ZoneInfo("America/New_York")).date() + timedelta(days=1)
+            ).strftime("%Y-%m-%d"),
             "strike": 100.0,
             "quantity": -1,
             "opt_type": "PUT",

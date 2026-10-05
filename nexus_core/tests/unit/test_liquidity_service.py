@@ -115,3 +115,69 @@ async def test_run_liquidity_pipeline_mocked() -> None:
         assert reading.regime == "EASY"
         assert reading.equity_risk_premium is not None
         mock_save.assert_awaited_once()
+
+
+def test_compute_net_liquidity_series_unsorted_and_available_date() -> None:
+    """測試 WTREGEN 順序混亂時能正確對齊，且複合可用日取所有組件的最大可用日。"""
+    d1 = date(2026, 1, 7)
+    d2 = date(2026, 1, 14)
+
+    walcl_obs = [
+        Observation(d1, 7_000_000.0, d1 + timedelta(days=2)),
+        Observation(d2, 7_100_000.0, d2 + timedelta(days=2)),
+    ]
+    # 故意倒序傳入 WTREGEN
+    wtregen_obs = [
+        Observation(d2, 850_000.0, d2 + timedelta(days=3)),
+        Observation(d1, 800_000.0, d1 + timedelta(days=4)),
+    ]
+    rrp_obs = [
+        Observation(d1, 200.0, d1 + timedelta(days=1)),
+        Observation(d2, 220.0, d2 + timedelta(days=5)),
+    ]
+
+    series = compute_net_liquidity_series(walcl_obs, wtregen_obs, rrp_obs)
+    assert len(series) == 2
+    # 對齊 d1: 7000 - 800 - 200 = 6000
+    assert pytest.approx(series[0].value, 1e-4) == 6000.0
+    # available_date 應為 max(d1+2, d1+4, d1+1) = d1+4
+    assert series[0].available_date == d1 + timedelta(days=4)
+
+    # 對齊 d2: 7100 - 850 - 220 = 6030
+    assert pytest.approx(series[1].value, 1e-4) == 6030.0
+    # available_date 應為 max(d2+2, d2+3, d2+5) = d2+5
+    assert series[1].available_date == d2 + timedelta(days=5)
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_missing_history_is_unknown() -> None:
+    """測試歷史樣本不足以計算 13w 變更率時，淨流動性季增率為 None 且體制降級為 UNKNOWN。"""
+    today = date(2026, 10, 5)
+
+    def mock_fetch_short(
+        sid: str, t: date, kind: str | None = None
+    ) -> list[Observation]:
+        avail = today - timedelta(days=1)
+        # 僅提供當週資料，無 13 週前基期
+        if sid == "NFCI":
+            return [Observation(today - timedelta(days=7), -0.65, avail)]
+        if sid == "WALCL":
+            return [Observation(today - timedelta(days=7), 7_000_000.0, avail)]
+        if sid == "WTREGEN":
+            return [Observation(today - timedelta(days=7), 800_000.0, avail)]
+        if sid == "RRPONTSYD":
+            return [Observation(today - timedelta(days=7), 200.0, avail)]
+        return []
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch_short
+    ), patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ), patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ):
+        reading = await run_liquidity_pipeline(today)
+        # 季增率必須為 None，不得被強制降級或短路為 0.0
+        assert reading.net_liquidity_chg_13w_pct is None
+        # 關鍵指標缺失時，體制必須判定為 UNKNOWN (而非因 0.0 >= 0 誤判為 EASY)
+        assert reading.regime == "UNKNOWN"

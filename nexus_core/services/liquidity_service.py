@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import date, timedelta
 
 from database.fundamental_pipeline import save_liquidity_regime
@@ -52,7 +53,13 @@ def _find_prior_obs(
     window_days: int = 21,
 ) -> float | None:
     """在 target_date 附近尋找最貼近的歷史觀測值。"""
-    candidates = [o for o in obs if abs((o.obs_date - target_date).days) <= window_days]
+    candidates = [
+        o
+        for o in obs
+        if abs((o.obs_date - target_date).days) <= window_days
+        and not math.isnan(o.value)
+        and not math.isinf(o.value)
+    ]
     if not candidates:
         return None
     # 選擇與 target_date 差距最小者
@@ -69,30 +76,49 @@ def compute_net_liquidity_series(
     if not walcl_obs or not wtregen_obs or not rrp_obs:
         return []
 
+    # 排序各觀測序列以保證時間單調性並過濾非有限數值
+    walcl_sorted = sorted(
+        [o for o in walcl_obs if not math.isnan(o.value) and not math.isinf(o.value)],
+        key=lambda o: o.obs_date,
+    )
+    wtregen_sorted = sorted(
+        [o for o in wtregen_obs if not math.isnan(o.value) and not math.isinf(o.value)],
+        key=lambda o: o.obs_date,
+    )
+    rrp_sorted = sorted(
+        [o for o in rrp_obs if not math.isnan(o.value) and not math.isinf(o.value)],
+        key=lambda o: o.obs_date,
+    )
+
+    if not walcl_sorted or not wtregen_sorted or not rrp_sorted:
+        return []
+
     # 建立日期索引字典
-    wtregen_dict: dict[date, float] = {o.obs_date: o.value for o in wtregen_obs}
-    rrp_sorted = sorted(rrp_obs, key=lambda o: o.obs_date)
+    wtregen_dict: dict[date, Observation] = {o.obs_date: o for o in wtregen_sorted}
 
     net_liq_series: list[Observation] = []
-    for w in walcl_obs:
+    for w in walcl_sorted:
         # 1. 尋找當日或最近可用的 WTREGEN
-        tga_val = wtregen_dict.get(w.obs_date)
-        if tga_val is None:
+        tga_obs = wtregen_dict.get(w.obs_date)
+        if tga_obs is None:
             # 尋找前一個可用的 TGA
-            prev_tgas = [o.value for o in wtregen_obs if o.obs_date <= w.obs_date]
+            prev_tgas = [o for o in wtregen_sorted if o.obs_date <= w.obs_date]
             if not prev_tgas:
                 continue
-            tga_val = prev_tgas[-1]
+            tga_obs = prev_tgas[-1]
 
         # 2. 尋找當日或最近可用的 RRPONTSYD
-        prev_rrps = [o.value for o in rrp_sorted if o.obs_date <= w.obs_date]
+        prev_rrps = [o for o in rrp_sorted if o.obs_date <= w.obs_date]
         if not prev_rrps:
             continue
-        rrp_val = prev_rrps[-1]
+        rrp_obs_match = prev_rrps[-1]
 
-        liq_bn = calculate_net_liquidity(w.value, tga_val, rrp_val)
-        # 淨流動性可用日取 WALCL 的可用日
-        net_liq_series.append(Observation(w.obs_date, liq_bn, w.available_date))
+        liq_bn = calculate_net_liquidity(w.value, tga_obs.value, rrp_obs_match.value)
+        # 淨流動性可用日取 WALCL、TGA、RRP 之最大可用日以防範前視偏差
+        eff_avail = max(
+            w.available_date, tga_obs.available_date, rrp_obs_match.available_date
+        )
+        net_liq_series.append(Observation(w.obs_date, liq_bn, eff_avail))
 
     return sorted(net_liq_series, key=lambda o: o.obs_date)
 
@@ -138,9 +164,9 @@ async def run_liquidity_pipeline(today: date) -> LiquidityReading:
         target_13w_date = latest_obs.obs_date - timedelta(days=91)
         base_13w_liq = _find_prior_obs(net_liq_series, target_13w_date)
         if base_13w_liq is not None:
-            net_liq_chg_13w = round(
-                calculate_13w_change(latest_net_liq, base_13w_liq) or 0.0, 3
-            )
+            raw_chg = calculate_13w_change(latest_net_liq, base_13w_liq)
+            if raw_chg is not None:
+                net_liq_chg_13w = round(raw_chg, 3)
 
     # 4. 計算銀行準備金 (WRESBAL) 13 週變更率
     reserves_usable = series_data.get("WRESBAL", [])
@@ -150,9 +176,9 @@ async def run_liquidity_pipeline(today: date) -> LiquidityReading:
         target_13w_res = latest_res.obs_date - timedelta(days=91)
         base_res = _find_prior_obs(reserves_usable, target_13w_res)
         if base_res is not None:
-            reserves_chg_13w = round(
-                calculate_13w_change(latest_res.value, base_res) or 0.0, 3
-            )
+            raw_res_chg = calculate_13w_change(latest_res.value, base_res)
+            if raw_res_chg is not None:
+                reserves_chg_13w = round(raw_res_chg, 3)
 
     # 5. 體制判定與動態 ERP
     regime = classify_liquidity_regime(latest_nfci, net_liq_chg_13w)

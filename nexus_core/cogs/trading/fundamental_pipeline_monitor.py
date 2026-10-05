@@ -121,14 +121,14 @@ class FundamentalPipelineMonitorCog(commands.Cog):
             return
 
         for job in due_jobs:
-            # 依工作 ID 與 15 分鐘區間進行去重
-            time_bucket = f"{now_et.strftime('%Y-%m-%d-%H')}-{now_et.minute // 15}"
-            dedup_key = f"{job.job_id}:{time_bucket}"
+            now_ts = now_et.timestamp()
+            last_run = self._dedup_cache.get(job.job_id)
+            if last_run is not None and isinstance(last_run, (int, float)):
+                cooldown = getattr(job, "cooldown_seconds", 1800.0)
+                if (now_ts - last_run) < cooldown:
+                    continue
 
-            if dedup_key in self._dedup_cache:
-                continue
-
-            self._dedup_cache[dedup_key] = True
+            self._dedup_cache[job.job_id] = now_ts
             logger.info(
                 f"[FundamentalPipelineMonitor] 觸發排程任務: {job.name} ({job.job_id})"
             )

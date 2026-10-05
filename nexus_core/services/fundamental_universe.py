@@ -131,9 +131,17 @@ def is_etf_or_index(symbol: str) -> bool:
     sym = symbol.strip().upper()
     if not sym:
         return False
-    if sym.startswith("^") or "=" in sym or "/" in sym or "." in sym:
+    if sym.startswith("^") or "=" in sym or "/" in sym:
         return True
     return sym in KNOWN_ETF_SYMBOLS
+
+
+def is_valid_equity_symbol(symbol: str) -> bool:
+    """判定代號是否符合個股代號格式（相容雙重股權 Class A/B 如 BRK.B / BRK-B）。"""
+    s = symbol.strip().upper()
+    if not s or len(s) > 10:
+        return False
+    return any(c.isalnum() for c in s) and all(c.isalnum() or c in ".-" for c in s)
 
 
 def filter_universe_symbols(
@@ -154,7 +162,7 @@ def filter_universe_symbols(
     # 1. 優先加入持倉個股
     for raw in holding_symbols:
         s = raw.strip().upper()
-        if not s or s in seen or is_etf_or_index(s) or not s.isalnum():
+        if not s or s in seen or is_etf_or_index(s) or not is_valid_equity_symbol(s):
             continue
         seen.add(s)
         selected.append(s)
@@ -164,7 +172,7 @@ def filter_universe_symbols(
     # 2. 加入自選個股
     for raw in watchlist_symbols:
         s = raw.strip().upper()
-        if not s or s in seen or is_etf_or_index(s) or not s.isalnum():
+        if not s or s in seen or is_etf_or_index(s) or not is_valid_equity_symbol(s):
             continue
         seen.add(s)
         selected.append(s)

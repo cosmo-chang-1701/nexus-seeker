@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, ClassVar
 
 logger = logging.getLogger(__name__)
@@ -28,6 +28,7 @@ class ClockJob:
     is_due_fn: Callable[[datetime], bool]
     priority: int = 100
     description: str = ""
+    cooldown_seconds: float = 1800.0
 
     def is_due(self, dt: datetime) -> bool:
         """判定給定時間是否到達觸發條件。"""
@@ -92,12 +93,13 @@ class ClockJobRegistry:
 def daily_at(
     hour: int, minute: int, window_minutes: int = 10
 ) -> Callable[[datetime], bool]:
-    """每日指定時間視窗內觸發。"""
+    """每日指定時間視窗內觸發（支援跨午夜視窗防護）。"""
 
     def _checker(dt: datetime) -> bool:
         target_minutes = hour * 60 + minute
         curr_minutes = dt.hour * 60 + dt.minute
-        return target_minutes <= curr_minutes < target_minutes + window_minutes
+        elapsed = (curr_minutes - target_minutes) % 1440
+        return 0 <= elapsed < window_minutes
 
     return _checker
 
@@ -105,14 +107,21 @@ def daily_at(
 def weekday_at(
     hour: int, minute: int, window_minutes: int = 10
 ) -> Callable[[datetime], bool]:
-    """僅平日（週一至週五）指定時間視窗內觸發。"""
+    """僅平日（週一至週五）指定時間視窗內觸發（支援跨午夜視窗防護）。"""
 
     def _checker(dt: datetime) -> bool:
-        if dt.weekday() >= 5:
-            return False
         target_minutes = hour * 60 + minute
         curr_minutes = dt.hour * 60 + dt.minute
-        return target_minutes <= curr_minutes < target_minutes + window_minutes
+        elapsed = (curr_minutes - target_minutes) % 1440
+        if not (0 <= elapsed < window_minutes):
+            return False
+        # 若發生跨午夜（當前分鐘數小於目標分鐘數），有效營業日參照前一日
+        target_weekday = (
+            (dt.date() - timedelta(days=1)).weekday()
+            if curr_minutes < target_minutes
+            else dt.weekday()
+        )
+        return target_weekday < 5
 
     return _checker
 

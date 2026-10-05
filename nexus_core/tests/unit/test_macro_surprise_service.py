@@ -32,6 +32,9 @@ def test_parse_calendar_metric_value() -> None:
     assert parse_calendar_metric_value("") is None
     assert parse_calendar_metric_value("-") is None
     assert parse_calendar_metric_value("N/A") is None
+    assert parse_calendar_metric_value("nan") is None
+    assert parse_calendar_metric_value("NaN") is None
+    assert parse_calendar_metric_value("inf") is None
 
 
 @pytest.mark.asyncio

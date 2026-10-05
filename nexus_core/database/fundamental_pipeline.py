@@ -173,7 +173,7 @@ async def save_macro_surprises(readings: list[MacroSurpriseReading]) -> None:
         )
         for r in readings
     ]
-    await execute_write_many_async([(_UPSERT_MACRO_SURPRISE_SQL, rows, False)])
+    await execute_write_many_async([(_UPSERT_MACRO_SURPRISE_SQL, rows, True)])
 
 
 def get_macro_surprises_for_event(

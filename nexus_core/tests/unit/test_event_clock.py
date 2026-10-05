@@ -152,3 +152,22 @@ def test_clock_job_registry_due_jobs() -> None:
     due = ClockJobRegistry.due_jobs(dt_16)
     assert len(due) == 1
     assert due[0].job_id == "due_job"
+
+
+def test_schedule_condition_midnight_wrap_around() -> None:
+    """測試跨午夜視窗 (例如 23:55 觸發，視窗 15 分鐘至次日 00:10)。"""
+    ny_tz = ZoneInfo("America/New_York")
+    d_checker = daily_at(23, 55, window_minutes=15)
+
+    # 當日 23:58:00 -> 視窗內
+    assert d_checker(datetime(2026, 10, 5, 23, 58, 0, tzinfo=ny_tz)) is True
+    # 次日 00:05:00 -> 視窗內 (跨午夜)
+    assert d_checker(datetime(2026, 10, 6, 0, 5, 0, tzinfo=ny_tz)) is True
+    # 次日 00:12:00 -> 超出視窗
+    assert d_checker(datetime(2026, 10, 6, 0, 12, 0, tzinfo=ny_tz)) is False
+
+    w_checker = weekday_at(23, 55, window_minutes=15)
+    # 週五 23:58 (2026-10-09) -> 平日
+    assert w_checker(datetime(2026, 10, 9, 23, 58, 0, tzinfo=ny_tz)) is True
+    # 週六 00:05 (2026-10-10) -> 跨午夜視窗，所屬目標營業日為週五，仍判定為 True
+    assert w_checker(datetime(2026, 10, 10, 0, 5, 0, tzinfo=ny_tz)) is True

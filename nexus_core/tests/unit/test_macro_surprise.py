@@ -107,3 +107,21 @@ def test_match_macro_event() -> None:
 
     unknown = match_macro_event("Some Random Local Survey")
     assert unknown is None
+
+
+def test_macro_surprise_nan_and_inf_handling() -> None:
+    """測試非有限浮點數 (NaN / Inf) 輸入防禦，避免污染資料庫。"""
+    # 1. 樣本中混入 NaN / Inf 應被乾淨剔除
+    std_nan = calculate_sample_std([1.0, 2.0, 3.0, float("nan"), float("inf")])
+    assert std_nan is not None
+    # 剩餘 [1.0, 2.0, 3.0]，標準差為 1.0
+    assert pytest.approx(std_nan, 1e-4) == 1.0
+
+    # 2. actual 或 forecast 為 NaN
+    diff, z = calculate_standardized_surprise(float("nan"), 2.0, [0.1] * 10)
+    assert z is None
+
+    # 3. 歷史資料中含 NaN 導致有效資料不足 6 筆
+    history_with_nans = [0.1, 0.2, float("nan"), 0.3, float("inf"), 0.4]
+    _, z_insufficient = calculate_standardized_surprise(1.0, 0.5, history_with_nans)
+    assert z_insufficient is None
