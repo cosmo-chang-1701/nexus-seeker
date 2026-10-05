@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Protocol, cast
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from market_analysis.fundamental_pipeline.models import (
@@ -21,6 +21,24 @@ from market_analysis.fundamental_pipeline.models import (
 
 logger = logging.getLogger(__name__)
 _ET_ZONE = ZoneInfo("America/New_York")
+
+
+def _safe_float(val: Any) -> float | None:
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_int(val: Any) -> int | None:
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -119,20 +137,29 @@ class FinnhubConsensusProvider:
             # 優先嘗試 Finnhub earnings calendar
             cal_entries = await get_earnings_calendar(
                 sym_upper,
-                from_date=(now_et.replace(year=now_et.year - 1)).strftime("%Y-%m-%d"),
-                to_date=(now_et.replace(year=now_et.year + 1)).strftime("%Y-%m-%d"),
+                from_date=(now_et - timedelta(days=365)).strftime("%Y-%m-%d"),
+                to_date=(now_et + timedelta(days=365)).strftime("%Y-%m-%d"),
             )
             for entry in cal_entries:
                 yr = entry.get("year")
                 qtr = entry.get("quarter")
-                p_str = f"{yr}-Q{qtr}" if yr and qtr else str(entry.get("date", ""))
+                if yr and qtr:
+                    p_str = f"{yr}-Q{qtr}"
+                else:
+                    date_val = str(entry.get("date") or "")
+                    try:
+                        d = date.fromisoformat(date_val)
+                        p_str = f"{d.year}-Q{(d.month - 1) // 3 + 1}"
+                    except Exception:
+                        p_str = date_val
+
                 if fiscal_period is not None and p_str != fiscal_period:
                     continue
 
-                act_eps = entry.get("epsActual")
-                est_eps = entry.get("epsEstimate")
-                act_rev = entry.get("revenueActual")
-                est_rev = entry.get("revenueEstimate")
+                act_eps = _safe_float(entry.get("epsActual"))
+                est_eps = _safe_float(entry.get("epsEstimate"))
+                act_rev = _safe_float(entry.get("revenueActual"))
+                est_rev = _safe_float(entry.get("revenueEstimate"))
                 hour_raw = str(entry.get("hour") or "").strip().lower()
                 session_val = (
                     "BMO"
@@ -149,12 +176,10 @@ class FinnhubConsensusProvider:
                     return ConsensusData(
                         symbol=sym_upper,
                         fiscal_period=p_str,
-                        actual_eps=float(act_eps) if act_eps is not None else None,
-                        consensus_eps=float(est_eps) if est_eps is not None else None,
-                        actual_revenue=float(act_rev) if act_rev is not None else None,
-                        consensus_revenue=float(est_rev)
-                        if est_rev is not None
-                        else None,
+                        actual_eps=act_eps,
+                        consensus_eps=est_eps,
+                        actual_revenue=act_rev,
+                        consensus_revenue=est_rev,
                         session=session_val,
                         source="finnhub",
                         snapshot_date=today_str,
@@ -180,13 +205,16 @@ class FinnhubConsensusProvider:
                     if fiscal_period is not None and p_str != fiscal_period:
                         continue
 
-                    act_eps = item.get("actual")
-                    est_eps = item.get("estimate")
+                    act_eps = _safe_float(item.get("actual"))
+                    est_eps = _safe_float(item.get("estimate"))
+                    if act_eps is None and est_eps is None:
+                        continue
+
                     return ConsensusData(
                         symbol=sym_upper,
                         fiscal_period=p_str,
-                        actual_eps=float(act_eps) if act_eps is not None else None,
-                        consensus_eps=float(est_eps) if est_eps is not None else None,
+                        actual_eps=act_eps,
+                        consensus_eps=est_eps,
                         actual_revenue=None,
                         consensus_revenue=None,
                         session="UNKNOWN",
@@ -219,15 +247,23 @@ class FinnhubConsensusProvider:
             )
             data_list = q_data.get("data", []) if isinstance(q_data, dict) else []
             if data_list:
-                # 排序日期
+                # 排序日期並優先過濾掉過於久遠的歷史期別 (90 天前以前)
                 sorted_q = sorted(data_list, key=lambda x: str(x.get("period", "")))
+                cutoff_date = (now_et - timedelta(days=90)).strftime("%Y-%m-%d")
+                future_or_recent_q = [
+                    item
+                    for item in sorted_q
+                    if str(item.get("period", "")) >= cutoff_date
+                ]
+                active_q = future_or_recent_q if future_or_recent_q else sorted_q
+
                 # 0q: 當季預估, +1q: 次季預估
                 for idx, h in enumerate([("0q", 0), ("+1q", 1)]):
                     h_code = cast(EstimateHorizon, h[0])
                     item_idx = h[1]
-                    if item_idx < len(sorted_q):
-                        item = sorted_q[item_idx]
-                        mean_val = item.get("epsAvg")
+                    if item_idx < len(active_q):
+                        item = active_q[item_idx]
+                        mean_val = _safe_float(item.get("epsAvg"))
                         if mean_val is not None:
                             snapshots.append(
                                 EPSEstimateSnapshotRecord(
@@ -235,16 +271,10 @@ class FinnhubConsensusProvider:
                                     snapshot_date=today_str,
                                     horizon=h_code,
                                     source="finnhub",
-                                    eps_mean=float(mean_val),
-                                    eps_high=float(item["epsHigh"])
-                                    if item.get("epsHigh") is not None
-                                    else None,
-                                    eps_low=float(item["epsLow"])
-                                    if item.get("epsLow") is not None
-                                    else None,
-                                    analyst_count=int(item["numberAnalysts"])
-                                    if item.get("numberAnalysts") is not None
-                                    else None,
+                                    eps_mean=mean_val,
+                                    eps_high=_safe_float(item.get("epsHigh")),
+                                    eps_low=_safe_float(item.get("epsLow")),
+                                    analyst_count=_safe_int(item.get("numberAnalysts")),
                                 )
                             )
 
@@ -255,12 +285,18 @@ class FinnhubConsensusProvider:
             a_list = a_data.get("data", []) if isinstance(a_data, dict) else []
             if a_list:
                 sorted_a = sorted(a_list, key=lambda x: str(x.get("period", "")))
+                cutoff_a = (now_et - timedelta(days=365)).strftime("%Y-%m-%d")
+                future_or_recent_a = [
+                    item for item in sorted_a if str(item.get("period", "")) >= cutoff_a
+                ]
+                active_a = future_or_recent_a if future_or_recent_a else sorted_a
+
                 for idx, h in enumerate([("0y", 0), ("+1y", 1)]):
                     h_code = cast(EstimateHorizon, h[0])
                     item_idx = h[1]
-                    if item_idx < len(sorted_a):
-                        item = sorted_a[item_idx]
-                        mean_val = item.get("epsAvg")
+                    if item_idx < len(active_a):
+                        item = active_a[item_idx]
+                        mean_val = _safe_float(item.get("epsAvg"))
                         if mean_val is not None:
                             snapshots.append(
                                 EPSEstimateSnapshotRecord(
@@ -268,16 +304,10 @@ class FinnhubConsensusProvider:
                                     snapshot_date=today_str,
                                     horizon=h_code,
                                     source="finnhub",
-                                    eps_mean=float(mean_val),
-                                    eps_high=float(item["epsHigh"])
-                                    if item.get("epsHigh") is not None
-                                    else None,
-                                    eps_low=float(item["epsLow"])
-                                    if item.get("epsLow") is not None
-                                    else None,
-                                    analyst_count=int(item["numberAnalysts"])
-                                    if item.get("numberAnalysts") is not None
-                                    else None,
+                                    eps_mean=mean_val,
+                                    eps_high=_safe_float(item.get("epsHigh")),
+                                    eps_low=_safe_float(item.get("epsLow")),
+                                    analyst_count=_safe_int(item.get("numberAnalysts")),
                                 )
                             )
         except Exception as e:
@@ -294,7 +324,7 @@ class FinnhubConsensusProvider:
 
                 cal_entries = await get_earnings_calendar(sym_upper)
                 for entry in cal_entries:
-                    est = entry.get("epsEstimate")
+                    est = _safe_float(entry.get("epsEstimate"))
                     if est is not None:
                         snapshots.append(
                             EPSEstimateSnapshotRecord(
@@ -302,7 +332,7 @@ class FinnhubConsensusProvider:
                                 snapshot_date=today_str,
                                 horizon="0q",
                                 source="finnhub_calendar",
-                                eps_mean=float(est),
+                                eps_mean=est,
                                 eps_high=None,
                                 eps_low=None,
                                 analyst_count=None,

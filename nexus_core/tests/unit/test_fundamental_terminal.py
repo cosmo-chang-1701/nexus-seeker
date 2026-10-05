@@ -235,3 +235,52 @@ async def test_earnings_surprise_section_render() -> None:
         assert "+22.5" in body
         assert "0Q: `$1.45`" in body
         assert "+1Q: `$1.60`" in body
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_render_with_guidance_details() -> None:
+    """測試 EarningsSurpriseSection 解析有效 data_json 時展示指引方向與利潤率。"""
+    sec = EarningsSurpriseSection()
+    from market_analysis.fundamental_pipeline.models import (
+        GuidanceExtraction,
+        MarginGuidance,
+        ToneMetric,
+    )
+
+    guidance_obj = GuidanceExtraction(
+        symbol="AAPL",
+        fiscal_period="2026-Q3",
+        revenue_guidance_midpoint_usd=90000000000.0,
+        eps_guidance_midpoint_usd=1.65,
+        margin_guidance=[
+            MarginGuidance(metric_name="Gross Margin", direction="EXPANDING")
+        ],
+        backlog_tone=ToneMetric(score=1, quote_snippet=""),
+        pricing_power_tone=ToneMetric(score=1, quote_snippet=""),
+        supply_chain_tone=ToneMetric(score=0, quote_snippet=""),
+        defensive_posture_tone=ToneMetric(score=0, quote_snippet=""),
+        reasoning_traditional_chinese="指引上修",
+    )
+    dto = GuidanceExtractionDTO(
+        symbol="AAPL",
+        fiscal_period="2026-Q3",
+        source_accession="ACC-AAPL-202",
+        model_version="gpt-4o",
+        confidence_score=0.95,
+        tone_delta_score=25.0,
+        data_json=guidance_obj.model_dump_json(),
+    )
+    with (
+        patch(
+            "cogs.fundamental_terminal.get_latest_earnings_surprise",
+            return_value=None,
+        ),
+        patch(
+            "cogs.fundamental_terminal.get_latest_guidance_extraction",
+            return_value=dto,
+        ),
+        patch("cogs.fundamental_terminal.get_eps_estimate_snapshots", return_value=[]),
+    ):
+        _, body = await sec.render("AAPL")
+        assert "指引方向: **RAISED**" in body
+        assert "利潤率擴張" in body

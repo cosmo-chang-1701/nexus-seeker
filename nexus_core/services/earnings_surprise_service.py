@@ -129,7 +129,16 @@ class EarningsSurpriseService:
                     prior_record = await asyncio.to_thread(
                         get_latest_guidance_extraction, sym_upper
                     )
-                    prior_tone = prior_record.tone_delta_score if prior_record else None
+                    prior_tone: float | None = None
+                    if prior_record and prior_record.data_json:
+                        try:
+                            prior_g = GuidanceExtraction.model_validate_json(
+                                prior_record.data_json
+                            )
+                            prior_tone = calculate_management_tone_score(prior_g)
+                        except Exception:
+                            prior_tone = None
+
                     tone_delta = calculate_tone_delta(tone_score, prior_tone)
 
                     extraction_dto = GuidanceExtractionDTO(
@@ -196,10 +205,12 @@ class EarningsSurpriseService:
         )
 
         now_et = datetime.now(timezone.utc).astimezone(_ET_ZONE)
+        fallback_qtr = (now_et.month - 1) // 3 + 1
+        default_period = f"{now_et.year}-Q{fallback_qtr}"
         fiscal_period = (
             consensus.fiscal_period
             if consensus and consensus.fiscal_period
-            else (target_period if target_period else now_et.strftime("%Y-Q%m"))
+            else (target_period if target_period else default_period)
         )
 
         session_str: FilingSession | Literal["UNKNOWN"] = (
@@ -299,11 +310,20 @@ class EarningsSurpriseService:
         if not consensus:
             return None
 
+        whisper_val: float | None = None
+        try:
+            whisper_val = await self._whisper_provider.get_whisper(
+                sym_upper, fiscal_period
+            )
+        except Exception as e:
+            logger.debug(f"[EarningsSurpriseService] Whisper 讀取異常: {e}")
+
         result = evaluate_earnings_surprise(
             actual_eps=consensus.actual_eps,
             consensus_eps=consensus.consensus_eps,
             actual_revenue=consensus.actual_revenue,
             consensus_revenue=consensus.consensus_revenue,
+            whisper_eps=whisper_val,
         )
 
         session_str: FilingSession | Literal["UNKNOWN"] = (
@@ -323,6 +343,7 @@ class EarningsSurpriseService:
             actual_revenue=consensus.actual_revenue,
             consensus_revenue=consensus.consensus_revenue,
             revenue_surprise_pct=result.revenue_surprise_pct,
+            whisper_eps=whisper_val,
             composite_score=result.composite_score,
             session=session_str,
             eps_basis="VENDOR_ADJUSTED",

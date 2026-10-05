@@ -157,6 +157,14 @@ def compare_guidance(
             verdict = "RAISED"
         elif (r_down or e_down) and not (r_up or e_up):
             verdict = "LOWERED"
+        elif (r_up or e_up) and (r_down or e_down):
+            # 數值方向分歧 (例如營收調升但利潤/EPS調降): 依態度與利潤率仲裁
+            if current_tone <= -15.0 or "承壓" in margin_trend:
+                verdict = "LOWERED"
+            elif current_tone >= 15.0 and "擴張" in margin_trend:
+                verdict = "RAISED"
+            else:
+                verdict = "MAINTAINED"
         else:
             verdict = "MAINTAINED"
     else:

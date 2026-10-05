@@ -159,3 +159,23 @@ def test_evaluate_earnings_surprise_full() -> None:
     assert pytest.approx(result.whisper_surprise_pct, 0.001) == 0.0476
     assert result.composite_score is not None
     assert result.small_base is False
+
+
+def test_calculate_eps_surprise_zero_denom_protection() -> None:
+    """測試極端參數 floor_eps=0.0 與 consensus=0.0 時不發生除零錯誤。"""
+    surprise, small_base = calculate_eps_surprise(0.05, 0.0, floor_eps=0.0)
+    assert surprise is not None
+    assert small_base is False
+
+
+def test_calculate_composite_surprise_score_whisper_surrogate() -> None:
+    """測試無分析師共識時 Whisper 作為 EPS 代理指標獲取完整 EPS 權重。"""
+    # 只有 Whisper (+25% -> 0.25 / 0.50 * 60 = 30) 與 Revenue (+5% -> 0.05 / 0.10 * 40 = 20) -> 50.0
+    score = calculate_composite_surprise_score(
+        eps_surprise=None,
+        rev_surprise=0.05,
+        whisper_surprise=0.25,
+        whisper_weight=0.0,  # 即使預設 weight=0，無 eps 時亦作為代理指標
+    )
+    assert score is not None
+    assert pytest.approx(score, 0.001) == 50.0

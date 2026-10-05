@@ -166,3 +166,78 @@ async def test_finnhub_consensus_provider_estimate_snapshots() -> None:
         assert snapshots[1].eps_mean == 1.60
         assert snapshots[2].eps_mean == 5.80
         assert snapshots[3].eps_mean == 6.80
+
+
+@pytest.mark.asyncio
+async def test_finnhub_consensus_provider_leap_year_and_malformed_data() -> None:
+    """測試在閏日 (2/29) 執行與 API 回傳畸形字串時系統不崩潰。"""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    provider = FinnhubConsensusProvider()
+    leap_date = datetime(2024, 2, 29, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    mock_entries = [
+        {
+            "date": "2024-02-28",
+            "year": 2024,
+            "quarter": 1,
+            "epsActual": "N/A",  # 畸形字串
+            "epsEstimate": "0.50",
+            "revenueActual": None,
+            "revenueEstimate": "5000000.0",
+            "hour": "bmo",
+        }
+    ]
+
+    with (
+        patch("services.fundamental_providers.datetime") as mock_dt,
+        patch(
+            "services.market_data_service.fundamentals.get_earnings_calendar",
+            new=AsyncMock(return_value=mock_entries),
+        ),
+    ):
+        mock_dt.now.return_value = leap_date
+        consensus = await provider.get_consensus("TSLA")
+        assert consensus is not None
+        assert consensus.actual_eps is None  # "N/A" 安全轉為 None
+        assert consensus.consensus_eps == 0.50
+        assert consensus.consensus_revenue == 5000000.0
+        assert consensus.session == "BMO"
+
+
+@pytest.mark.asyncio
+async def test_finnhub_consensus_provider_company_earnings_skips_empty() -> None:
+    """測試 company_earnings 遇到前項皆為 None 時正確跳過並提取有效項。"""
+    provider = FinnhubConsensusProvider()
+    mock_client = MagicMock()
+    mock_client.company_earnings.return_value = [
+        {"period": "2026-09-30", "actual": None, "estimate": None},  # 空項應跳過
+        {
+            "period": "2026-06-30",
+            "year": 2026,
+            "quarter": 2,
+            "actual": 0.85,
+            "estimate": 0.80,
+        },
+    ]
+
+    with (
+        patch(
+            "services.market_data_service.fundamentals.get_earnings_calendar",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "services.market_data_service._core._get_client",
+            return_value=mock_client,
+        ),
+        patch(
+            "services.market_data_service._core._execute_api_call",
+            new=AsyncMock(return_value=mock_client.company_earnings.return_value),
+        ),
+    ):
+        consensus = await provider.get_consensus("GOOGL")
+        assert consensus is not None
+        assert consensus.fiscal_period == "2026-Q2"
+        assert consensus.actual_eps == 0.85
+        assert consensus.consensus_eps == 0.80

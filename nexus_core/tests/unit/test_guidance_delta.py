@@ -126,3 +126,53 @@ def test_compare_guidance_fallback_to_tone() -> None:
     )
     summary = compare_guidance(curr_tone_high, None)
     assert summary.verdict == "RAISED"
+
+
+def test_compare_guidance_conflicting_signals() -> None:
+    """測試營收調升但 EPS 調降之分歧訊號仲裁。"""
+    prior = _make_sample_guidance(revenue=20000000000.0, eps=1.00)
+
+    # 營收 +5%, EPS -10%, 但態度極度謹慎且利潤率承壓 -> LOWERED
+    curr_mixed_pessimistic = _make_sample_guidance(
+        revenue=21000000000.0,
+        eps=0.90,
+        backlog=-1,
+        pricing=-1,
+        supply=-1,
+        defensive=-1,
+        margins=[MarginGuidance(metric_name="Gross Margin", direction="COMPRESSING")],
+    )
+    summary_lowered = compare_guidance(curr_mixed_pessimistic, prior)
+    assert summary_lowered.verdict == "LOWERED"
+
+    # 營收 +5%, EPS -10%, 但態度強烈擴張且利潤率擴張 -> RAISED
+    curr_mixed_optimistic = _make_sample_guidance(
+        revenue=21000000000.0,
+        eps=0.90,
+        backlog=2,
+        pricing=2,
+        supply=1,
+        defensive=1,
+        margins=[MarginGuidance(metric_name="Gross Margin", direction="EXPANDING")],
+    )
+    summary_raised = compare_guidance(curr_mixed_optimistic, prior)
+    assert summary_raised.verdict == "RAISED"
+
+
+def test_guidance_extraction_null_margin_coercion() -> None:
+    """測試當 LLM 回傳 margin_guidance: null 時模型自動轉為空陣列。"""
+    json_text = """{
+        "symbol": "TSLA",
+        "fiscal_period": "2026-Q3",
+        "revenue_guidance_midpoint_usd": 25000000000.0,
+        "eps_guidance_midpoint_usd": 0.85,
+        "margin_guidance": null,
+        "backlog_tone": {"score": 1, "quote_snippet": "需求穩定"},
+        "pricing_power_tone": {"score": 1, "quote_snippet": "價格良好"},
+        "supply_chain_tone": {"score": 0, "quote_snippet": "交付正常"},
+        "defensive_posture_tone": {"score": 0, "quote_snippet": "無"},
+        "reasoning_traditional_chinese": "管理層指引維持健康。"
+    }"""
+    g = GuidanceExtraction.model_validate_json(json_text)
+    assert g.margin_guidance == []
+    assert g.symbol == "TSLA"

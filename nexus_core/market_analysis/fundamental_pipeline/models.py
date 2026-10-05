@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 LiquidityRegime = Literal["EASY", "NEUTRAL", "TIGHT", "UNKNOWN"]
 
@@ -248,6 +248,15 @@ class GuidanceExtraction(BaseModel):
         default=None, description="EPS 指引中點金額 (美元)，無指引填 None"
     )
     margin_guidance: list[MarginGuidance] = Field(default_factory=list)
+
+    @field_validator("margin_guidance", mode="before")
+    @classmethod
+    def coerce_margin_guidance(cls, v: Any) -> Any:
+        if v is None:
+            empty_list: list[Any] = []
+            return empty_list
+        return v
+
     backlog_tone: ToneMetric
     pricing_power_tone: ToneMetric
     supply_chain_tone: ToneMetric

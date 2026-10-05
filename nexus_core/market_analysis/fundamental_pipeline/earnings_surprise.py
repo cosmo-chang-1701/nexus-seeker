@@ -49,6 +49,8 @@ def calculate_eps_surprise(
     abs_consensus = abs(consensus)
     small_base = abs_consensus < floor_eps
     denom = max(abs_consensus, floor_eps)
+    if denom <= 0:
+        denom = 0.05
 
     raw_surprise = (actual - consensus) / denom
     clamped_surprise = max(-clip_limit, min(clip_limit, raw_surprise))
@@ -113,7 +115,7 @@ def calculate_composite_surprise_score(
     # 決定 EPS 總項與 Whisper 分配
     has_eps = eps_surprise is not None
     has_rev = rev_surprise is not None
-    has_whisper = whisper_surprise is not None and whisper_weight > 0
+    has_whisper = whisper_surprise is not None and (whisper_weight > 0 or not has_eps)
 
     if not has_eps and not has_rev and not has_whisper:
         return None
@@ -130,8 +132,11 @@ def calculate_composite_surprise_score(
         components.append((eps_surprise, effective_eps_weight, EPS_SURPRISE_CLIP))
 
     if has_whisper and whisper_surprise is not None:
+        effective_whisper_weight = (
+            weight_eps * whisper_weight if has_eps else weight_eps
+        )
         components.append(
-            (whisper_surprise, weight_eps * whisper_weight, EPS_SURPRISE_CLIP)
+            (whisper_surprise, effective_whisper_weight, EPS_SURPRISE_CLIP)
         )
 
     if has_rev and rev_surprise is not None:

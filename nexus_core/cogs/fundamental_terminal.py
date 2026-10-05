@@ -28,8 +28,14 @@ from discord.ext import commands
 from market_analysis.fundamental_pipeline.governance_gate import (
     evaluate_governance_status,
 )
+from market_analysis.fundamental_pipeline.guidance_delta import (
+    compare_guidance,
+)
 from market_analysis.fundamental_pipeline.insider_signal import (
     evaluate_insider_signal,
+)
+from market_analysis.fundamental_pipeline.models import (
+    GuidanceExtraction,
 )
 
 logger = logging.getLogger(__name__)
@@ -204,9 +210,18 @@ class EarningsSurpriseSection:
         if guidance is not None:
             tone_val = guidance.tone_delta_score
             tone_icon = "🟢" if tone_val > 10 else ("🔴" if tone_val < -10 else "⚪")
+            extra_guidance = ""
+            if guidance.data_json:
+                try:
+                    curr_g = GuidanceExtraction.model_validate_json(guidance.data_json)
+                    g_summary = compare_guidance(curr_g)
+                    extra_guidance = f" ｜ 指引方向: **{g_summary.verdict}** ({g_summary.margin_trend})"
+                except Exception:
+                    extra_guidance = ""
+
             lines.append(
-                f"• 管理層前瞻態度: {tone_icon} 語意分數 **{tone_val:+.1f}** "
-                f"(指引模型: `{guidance.model_version}`)"
+                f"• 管理層前瞻態度: {tone_icon} 語意分數 **{tone_val:+.1f}**"
+                f"{extra_guidance} (指引模型: `{guidance.model_version}`)"
             )
         else:
             lines.append("• 管理層前瞻指引: 暫無結構化指引 (待 8-K Exhibit 99.1 擷取)")
