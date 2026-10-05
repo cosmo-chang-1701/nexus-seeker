@@ -53,6 +53,7 @@ flowchart TB
         V02["預期波幅 (EM) 與多 DTE 最大痛點重力<br/>(02_expected_move_and_max_pain.md)"]
         V03["Skew 偏斜與 Volume PCR 瀑布流背離<br/>(03_skew_pcr_divergence_confluence.md)"]
         V04["IVR 波動率位階與做市商賣方禁售閘門<br/>(04_ivr_regime_and_seller_lockout.md)"]
+        V05["財務預期差綜合評分與管理層指引語意解析<br/>(05_earnings_surprise_and_guidance_delta.md)"]
     end
 
     subgraph Microstructure_Layer["2. 做市商微觀結構與訂單流 (microstructure/)"]
@@ -162,6 +163,7 @@ flowchart TB
 | 13 | [`02_expected_move_and_max_pain.md`](valuation_pricing/02_expected_move_and_max_pain.md) | 預期波幅 (EM) 與多 DTE 最大痛點重力過濾體系 | ATM Straddle 0.85 經驗因子, $\max(7.0, \text{DTE})$ 分母約束, 痛點最小化損失函數 | `market_analysis/sentiment/iv_metrics.py` |
 | 14 | [`03_skew_pcr_divergence_confluence.md`](valuation_pricing/03_skew_pcr_divergence_confluence.md) | Skew 偏斜與 Volume PCR 瀑布流背離及三重結構性風險合流閘門 | Skew 252 交易日百分位數, Volume PCR $\ge 1.2$ 破位順向殺盤, 三重結構風險合流 | `market_analysis/insights_engine.py` |
 | 15 | [`04_ivr_regime_and_seller_lockout.md`](valuation_pricing/04_ivr_regime_and_seller_lockout.md) | IVR 波動率位階、做市商負 Gamma 賣方禁售與期權策略匹配閘門 | 252 日 IVR 四階矩陣, 期限結構倒掛 $\text{Term Ratio} > 1.05$, 做市商負 Gamma 賣方一票否決 | `market_analysis/ivr_strategy_gate.py` |
+| 15b | [`05_earnings_surprise_and_guidance_delta.md`](valuation_pricing/05_earnings_surprise_and_guidance_delta.md) | 財務預期差綜合評分、管理層指引語意解析與共識快照 | 雙維預期差 (EPS 60%, REV 40%), FLOOR_EPS 0.05 物理奇點防護, 四維管理層語意態度 | `market_analysis/fundamental_pipeline/earnings_surprise.py` |
 
 ---
 

@@ -2,24 +2,28 @@
 
 from __future__ import annotations
 
-import discord
-import pytest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import discord
+import pytest
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders.fundamental_embeds import (
     build_fa_terminal_embed,
     build_governance_flag_embed,
 )
 from cogs.fundamental_terminal import (
+    EarningsSurpriseSection,
     FaSectionRegistry,
     FundamentalTerminalCog,
     GovernanceGateSection,
     MacroLiquiditySection,
 )
 from market_analysis.fundamental_pipeline.models import (
+    EarningsSurpriseDTO,
+    EPSEstimateSnapshotRecord,
     GovernanceFlagRecord,
+    GuidanceExtractionDTO,
     LiquidityReading,
 )
 
@@ -123,6 +127,7 @@ async def test_macro_liquidity_section_render() -> None:
         "cogs.fundamental_terminal.get_latest_liquidity_regime", return_value=reading
     ):
         header, body = await sec.render("SPY")
+        assert "宏觀流動性體制" in header
         assert "EASY" in body
         assert "-0.52" in body
         assert "+2.5%" in body
@@ -139,6 +144,7 @@ async def test_governance_gate_section_render() -> None:
         patch("cogs.fundamental_terminal.get_insider_transactions", return_value=[]),
     ):
         header, body = await sec.render("TSLA")
+        assert "治理與重大事件監控" in header
         assert "治理狀態: 🟢 正常無重大異常" in body
         assert "內部人行為 (30D): ⚪ **NEUTRAL**" in body
 
@@ -162,3 +168,70 @@ async def test_fundamental_terminal_cog_command() -> None:
     _, kwargs = interaction.followup.send.call_args
     assert kwargs.get("ephemeral") is True
     assert isinstance(kwargs.get("embed"), NexusEmbed)
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_render() -> None:
+    """測試 EarningsSurpriseSection 渲染預期差、指引與快照。"""
+    sec = EarningsSurpriseSection()
+
+    surprise = EarningsSurpriseDTO(
+        symbol="AAPL",
+        fiscal_period="2026-Q3",
+        actual_eps=1.40,
+        consensus_eps=1.35,
+        eps_surprise_pct=0.037,
+        actual_revenue=85000000000.0,
+        consensus_revenue=84000000000.0,
+        revenue_surprise_pct=0.0119,
+        composite_score=15.2,
+    )
+    guidance = GuidanceExtractionDTO(
+        symbol="AAPL",
+        fiscal_period="2026-Q3",
+        source_accession="ACC-AAPL-202",
+        model_version="gpt-4o",
+        confidence_score=0.95,
+        tone_delta_score=22.5,
+        data_json="{}",
+    )
+    snapshot = [
+        EPSEstimateSnapshotRecord(
+            symbol="AAPL",
+            snapshot_date="2026-10-05",
+            horizon="0q",
+            source="finnhub",
+            eps_mean=1.45,
+        ),
+        EPSEstimateSnapshotRecord(
+            symbol="AAPL",
+            snapshot_date="2026-10-05",
+            horizon="+1q",
+            source="finnhub",
+            eps_mean=1.60,
+        ),
+    ]
+
+    with (
+        patch(
+            "cogs.fundamental_terminal.get_latest_earnings_surprise",
+            return_value=surprise,
+        ),
+        patch(
+            "cogs.fundamental_terminal.get_latest_guidance_extraction",
+            return_value=guidance,
+        ),
+        patch(
+            "cogs.fundamental_terminal.get_eps_estimate_snapshots",
+            return_value=snapshot,
+        ),
+    ):
+        header, body = await sec.render("AAPL")
+        assert "📊 業績預期差與 PEAD 修正" in header
+        assert "2026-Q3" in body
+        assert "+15.2" in body
+        assert "+3.7%" in body
+        assert "+1.2%" in body
+        assert "+22.5" in body
+        assert "0Q: `$1.45`" in body
+        assert "+1Q: `$1.60`" in body

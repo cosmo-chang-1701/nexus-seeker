@@ -12,11 +12,17 @@ from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
 from market_analysis.fundamental_pipeline.models import (
+    EarningsSurpriseDTO,
+    EarningsSurpriseStatus,
+    EpsBasis,
+    EPSEstimateSnapshotRecord,
+    EstimateHorizon,
     FilingCursorRecord,
     FilingEventRecord,
     FilingSession,
     GovernanceFlagRecord,
     GovernanceSeverity,
+    GuidanceExtractionDTO,
     InsiderTxRecord,
     LiquidityReading,
     MacroSurpriseReading,
@@ -558,5 +564,345 @@ def get_active_governance_flags(
             )
             for r in rows
         ]
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR3 財務預期差、分析師共識快照與管理層指引持久層實作
+# ============================================================================
+
+_UPSERT_EARNINGS_SURPRISE_SQL = """
+INSERT INTO earnings_surprise (
+    symbol,
+    fiscal_period,
+    actual_eps,
+    consensus_eps,
+    eps_surprise_pct,
+    actual_revenue,
+    consensus_revenue,
+    revenue_surprise_pct,
+    whisper_eps,
+    composite_score,
+    session,
+    eps_basis,
+    status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
+    actual_eps = excluded.actual_eps,
+    consensus_eps = excluded.consensus_eps,
+    eps_surprise_pct = excluded.eps_surprise_pct,
+    actual_revenue = excluded.actual_revenue,
+    consensus_revenue = excluded.consensus_revenue,
+    revenue_surprise_pct = excluded.revenue_surprise_pct,
+    whisper_eps = excluded.whisper_eps,
+    composite_score = excluded.composite_score,
+    session = excluded.session,
+    eps_basis = excluded.eps_basis,
+    status = excluded.status
+"""
+
+_UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL = """
+INSERT INTO eps_estimate_snapshot (
+    symbol,
+    snapshot_date,
+    horizon,
+    source,
+    eps_mean,
+    eps_high,
+    eps_low,
+    analyst_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, snapshot_date, horizon, source) DO UPDATE SET
+    eps_mean = excluded.eps_mean,
+    eps_high = excluded.eps_high,
+    eps_low = excluded.eps_low,
+    analyst_count = excluded.analyst_count
+"""
+
+_UPSERT_GUIDANCE_EXTRACTION_SQL = """
+INSERT INTO guidance_extraction (
+    symbol,
+    fiscal_period,
+    source_accession,
+    model_version,
+    confidence_score,
+    tone_delta_score,
+    data_json
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
+    source_accession = excluded.source_accession,
+    model_version = excluded.model_version,
+    confidence_score = excluded.confidence_score,
+    tone_delta_score = excluded.tone_delta_score,
+    data_json = excluded.data_json
+"""
+
+
+async def save_earnings_surprise(surprise: EarningsSurpriseDTO) -> None:
+    """寫入或更新單筆財務預期差記錄。"""
+    params = (
+        surprise.symbol.upper(),
+        surprise.fiscal_period,
+        surprise.actual_eps,
+        surprise.consensus_eps,
+        surprise.eps_surprise_pct,
+        surprise.actual_revenue,
+        surprise.consensus_revenue,
+        surprise.revenue_surprise_pct,
+        surprise.whisper_eps,
+        surprise.composite_score,
+        surprise.session,
+        surprise.eps_basis,
+        surprise.status,
+    )
+    await execute_write_async(_UPSERT_EARNINGS_SURPRISE_SQL, params)
+
+
+async def save_earnings_surprises(surprises: list[EarningsSurpriseDTO]) -> None:
+    """批次寫入或更新財務預期差記錄。"""
+    if not surprises:
+        return
+    rows = [
+        (
+            s.symbol.upper(),
+            s.fiscal_period,
+            s.actual_eps,
+            s.consensus_eps,
+            s.eps_surprise_pct,
+            s.actual_revenue,
+            s.consensus_revenue,
+            s.revenue_surprise_pct,
+            s.whisper_eps,
+            s.composite_score,
+            s.session,
+            s.eps_basis,
+            s.status,
+        )
+        for s in surprises
+    ]
+    await execute_write_many_async([(_UPSERT_EARNINGS_SURPRISE_SQL, rows, True)])
+
+
+def get_earnings_surprise(
+    symbol: str, fiscal_period: str
+) -> EarningsSurpriseDTO | None:
+    """讀取特定標的與季度之財務預期差記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, actual_eps, consensus_eps,
+                   eps_surprise_pct, actual_revenue, consensus_revenue,
+                   revenue_surprise_pct, whisper_eps, composite_score,
+                   session, eps_basis, status, created_at
+            FROM earnings_surprise
+            WHERE symbol = ? AND fiscal_period = ?
+            """,
+            (symbol.upper(), fiscal_period),
+        ).fetchone()
+        if not row:
+            return None
+        return EarningsSurpriseDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            actual_eps=row[2],
+            consensus_eps=row[3],
+            eps_surprise_pct=row[4],
+            actual_revenue=row[5],
+            consensus_revenue=row[6],
+            revenue_surprise_pct=row[7],
+            whisper_eps=row[8],
+            composite_score=row[9],
+            session=row[10],
+            eps_basis=cast(EpsBasis, row[11]),
+            status=cast(EarningsSurpriseStatus, row[12]),
+            created_at=row[13] if row[13] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
+    """讀取特定標的最新一筆財務預期差記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, actual_eps, consensus_eps,
+                   eps_surprise_pct, actual_revenue, consensus_revenue,
+                   revenue_surprise_pct, whisper_eps, composite_score,
+                   session, eps_basis, status, created_at
+            FROM earnings_surprise
+            WHERE symbol = ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return EarningsSurpriseDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            actual_eps=row[2],
+            consensus_eps=row[3],
+            eps_surprise_pct=row[4],
+            actual_revenue=row[5],
+            consensus_revenue=row[6],
+            revenue_surprise_pct=row[7],
+            whisper_eps=row[8],
+            composite_score=row[9],
+            session=row[10],
+            eps_basis=cast(EpsBasis, row[11]),
+            status=cast(EarningsSurpriseStatus, row[12]),
+            created_at=row[13] if row[13] else "",
+        )
+    finally:
+        conn.close()
+
+
+async def save_eps_estimate_snapshots(
+    snapshots: list[EPSEstimateSnapshotRecord],
+) -> None:
+    """批次寫入分析師每股盈餘預估快照。"""
+    if not snapshots:
+        return
+    rows = [
+        (
+            s.symbol.upper(),
+            s.snapshot_date,
+            s.horizon,
+            s.source,
+            s.eps_mean,
+            s.eps_high,
+            s.eps_low,
+            s.analyst_count,
+        )
+        for s in snapshots
+    ]
+    await execute_write_many_async([(_UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL, rows, True)])
+
+
+def get_eps_estimate_snapshots(
+    symbol: str, snapshot_date: str | None = None
+) -> list[EPSEstimateSnapshotRecord]:
+    """讀取特定標的之分析師預估快照（預設取最新日期）。"""
+    conn = get_read_connection()
+    try:
+        if snapshot_date is None:
+            max_row = conn.execute(
+                """
+                SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
+                WHERE symbol = ?
+                """,
+                (symbol.upper(),),
+            ).fetchone()
+            if not max_row or not max_row[0]:
+                return []
+            target_date = max_row[0]
+        else:
+            target_date = snapshot_date
+
+        rows = conn.execute(
+            """
+            SELECT symbol, snapshot_date, horizon, source,
+                   eps_mean, eps_high, eps_low, analyst_count, created_at
+            FROM eps_estimate_snapshot
+            WHERE symbol = ? AND snapshot_date = ?
+            ORDER BY CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
+            """,
+            (symbol.upper(), target_date),
+        ).fetchall()
+        return [
+            EPSEstimateSnapshotRecord(
+                symbol=r[0],
+                snapshot_date=r[1],
+                horizon=cast(EstimateHorizon, r[2]),
+                source=r[3],
+                eps_mean=float(r[4]),
+                eps_high=float(r[5]) if r[5] is not None else None,
+                eps_low=float(r[6]) if r[6] is not None else None,
+                analyst_count=int(r[7]) if r[7] is not None else None,
+                created_at=r[8] if r[8] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+async def save_guidance_extraction(extraction: GuidanceExtractionDTO) -> None:
+    """寫入或更新單筆管理層前瞻指引擷取記錄。"""
+    params = (
+        extraction.symbol.upper(),
+        extraction.fiscal_period,
+        extraction.source_accession,
+        extraction.model_version,
+        extraction.confidence_score,
+        extraction.tone_delta_score,
+        extraction.data_json,
+    )
+    await execute_write_async(_UPSERT_GUIDANCE_EXTRACTION_SQL, params)
+
+
+def get_guidance_extraction(
+    symbol: str, fiscal_period: str
+) -> GuidanceExtractionDTO | None:
+    """讀取特定標的與季度之管理層指引記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ? AND fiscal_period = ?
+            """,
+            (symbol.upper(), fiscal_period),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
+    """讀取特定標的最新一筆管理層指引記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
     finally:
         conn.close()
