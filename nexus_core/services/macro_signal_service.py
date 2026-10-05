@@ -40,6 +40,7 @@ from market_analysis.macro_signals import (
     IndicatorReading,
     MacroState,
     Observation,
+    SeriesKind,
     available_date_for,
     change_over,
     claims_surge,
@@ -99,7 +100,9 @@ async def _download_fred(series_id: str, start: date) -> str:
         return str(resp.text)
 
 
-async def fetch_fred_series(series_id: str, today: date) -> list[Observation]:
+async def fetch_fred_series(
+    series_id: str, today: date, kind: Optional[SeriesKind] = None
+) -> list[Observation]:
     """抓取 FRED 序列並附上各觀測的可用日（前視防護）。"""
     start = FRED_FULL_HISTORY_START.get(
         series_id, today - timedelta(days=FRED_LOOKBACK_DAYS)
@@ -107,9 +110,9 @@ async def fetch_fred_series(series_id: str, today: date) -> list[Observation]:
     text = await SingleFlightManager.run(
         f"fred_csv:{series_id}:{start.isoformat()}", _download_fred, series_id, start
     )
-    kind = FRED_SERIES[series_id]
+    eff_kind = kind if kind is not None else FRED_SERIES.get(series_id, "daily")
     return [
-        Observation(d, v, available_date_for(kind, d))
+        Observation(d, v, available_date_for(eff_kind, d))
         for d, v in parse_fred_csv(str(text))
     ]
 

@@ -54,6 +54,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **09:30–16:00 (every 30m, not clock-aligned)** | `monitor_order_telemetry_alignment_task` | Pending-order telemetry alignment (`telemetry_orders`) |
 | **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (shared radar cache has no writer; fetches via `Semaphore(3)`) |
 | **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC), `is_memory_safe()` gated |
+| **Every 5m (08:30/10:00/16:15)** | `fundamental_pipeline_clock` | Event clock patrol: 08:30/10:00 macro surprise & 16:15 Fed net liquidity regime (dry-run, no DM) |
 | **16:15** | `dynamic_after_market_report` | Close maintenance, daily sentiment snapshot, NAV history, CVaR tail risk check, and macro-signal dry-run log (record-only, no notifications) |
 | **Post-market / Fri 17:05** | Analyst Post-Market & VTR | Comprehensive post-market summary and weekly Virtual Trading Room Brinson attribution |
 | **24/7 (30m / 4h / Workers)** | WTI, Calendar & Workers | 24/7 WTI crude oil monitor, 4h macro/FedWatch checker, persistent DM queue, health & stream workers |
@@ -67,17 +68,17 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - **Microstructure** ([`docs/microstructure/`](docs/microstructure/)): Net GEX topology & walls (`01`), Physical wall constraint $K < \text{Spot}$ (`02`), Gamma flip (`03`), UOA paced ratio (`04`), Volume Profile & POC (`05`), Gamma squeeze & SPEAR (`06`).
 - **Valuation & Volatility** ([`docs/valuation_pricing/`](docs/valuation_pricing/)): TDP/DDP valuation (`01`), Expected move & Max Pain gravity (`02`), Skew 25-Delta & PCR divergence (`03`), IVR & seller lockout gate (`04`).
 - **Portfolio & Risk** ([`docs/risk_portfolio/`](docs/risk_portfolio/)): Beta-weighted Greeks (`01`), VIX battle ladder & Kelly (`02`), AROC gate (`03`), DITM convexity (`04`), Runway & liquidity (`05`), Brinson attribution (`06`), Downside risk (Sortino/MDD/CVaR) (`07`).
-- **Macro & Sentiment** ([`docs/macro_sentiment/`](docs/macro_sentiment/)): Macro escape top (`01`), SEC filing moat scanner (`02`), WTI crude monitor (`03`), Polymarket VWBP sentiment (`04`).
-- **Architecture & Platform** ([`docs/architecture/`](docs/architecture/) & [`docs/platform/`](docs/platform/)): Dual watchlist pipelines (`arch/01`), Pre-market cache-aside (`arch/02`), Dual service & proxy (`arch/03`), Engineering standards & DB single writer (`arch/04`), Calibration harness (`arch/05`), Notification center (`platform/03`), Scheduled jobs (`platform/08`).
+- **Macro & Sentiment** ([`docs/macro_sentiment/`](docs/macro_sentiment/)): Macro escape top (`01`), SEC filing moat scanner (`02`), WTI crude monitor (`03`), Polymarket VWBP sentiment (`04`), Liquidity regime & macro surprise (`05`).
+- **Architecture & Platform** ([`docs/architecture/`](docs/architecture/) & [`docs/platform/`](docs/platform/)): Dual watchlist pipelines (`arch/01`), Pre-market cache-aside (`arch/02`), Dual service & proxy (`arch/03`), Engineering standards & DB single writer (`arch/04`), Calibration harness (`arch/05`), Fundamental pipeline & event clock (`arch/06`), Notification center (`platform/03`), Scheduled jobs (`platform/08`).
 
 ---
 
 ## Codebase Architecture by Layer
 
-- `nexus_core/cogs/`: Discord presentation layer (`bot.py` bootstrap/DM queue, `trading/` schedulers & heartbeats, `analyst_agent.py`, `unified_terminal/`, `calendar.py`, `order_ui.py`, `settings_ui.py`, `hedging.py`).
-- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`intraday_pipeline/`, `dynamic_rollover/` slimmed scenarios (B&H-first advisory engine), `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`).
-- `nexus_core/services/`: Asynchronous service orchestrators and I/O pipelines (`downside_risk_service.py`, `notification_dispatcher.py`, `single_flight.py` request deduplication, `alpaca_stream_service.py`, `regime_outcome_labeler.py`, `llm_service.py`).
-- `nexus_core/database/`: SQLite WAL persistence layer (`connection.py` single-writer queue worker & `connect_db()`, `core.py` migration engine, `portfolio.py`, `orders.py`, `cache.py`, `notification_channels.py`).
+- `nexus_core/cogs/`: Discord presentation layer (`bot.py` bootstrap/DM queue, `trading/` schedulers, heartbeats & fundamental pipeline monitor, `analyst_agent.py`, `unified_terminal/`, `calendar.py`, `order_ui.py`, `settings_ui.py`, `hedging.py`).
+- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`fundamental_pipeline/`, `intraday_pipeline/`, `dynamic_rollover/` slimmed scenarios (B&H-first advisory engine), `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`).
+- `nexus_core/services/`: Asynchronous service orchestrators and I/O pipelines (`liquidity_service.py`, `macro_surprise_service.py`, `fundamental_universe.py`, `downside_risk_service.py`, `notification_dispatcher.py`, `single_flight.py` request deduplication, `alpaca_stream_service.py`, `regime_outcome_labeler.py`, `llm_service.py`).
+- `nexus_core/database/`: SQLite WAL persistence layer (`connection.py` single-writer queue worker & `connect_db()`, `core.py` migration engine, `fundamental_pipeline.py`, `portfolio.py`, `orders.py`, `cache.py`, `notification_channels.py`).
 - `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`microstructure.py`, `notif_report.py`, daily-bar strategy backtests `regime_momentum_backtest.py` / `static_allocation_backtest.py` / `macro_regime.py`; runs on dev machine only, never writes to live DB).
 - `nexus_edge_scraper/`: Standalone scraper and proxy microservice (Playwright scrapers, yfinance proxy endpoints, SEC section extraction).
 
