@@ -920,7 +920,7 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
     一律已透過 Discord defer 取得最長 15 分鐘的 followup 視窗。期權相關的
     Skew/PCR/UOA/Max Pain/IV/GEX 抓取必須明確帶上 force_live/force_refresh=True，
     保證略過 Edge Snapshot 與各自的記憶體/SQLite 快取層取得即時資料。"""
-    from datetime import date, timedelta
+    from datetime import date, datetime, timedelta
 
     cog = UnifiedTerminalCog(mock_bot)
     # 動態計算一個必定落在「30 天內到期日」篩選窗口內的到期日，避免寫死日期
@@ -999,8 +999,14 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
         mock_iv_metrics.iv_rank = 35.0
         mock_iv.return_value = mock_iv_metrics
 
-        await cog._fetch_single_symbol_data_raw("NVDA")
+        raw = await cog._fetch_single_symbol_data_raw("NVDA")
 
+        # 擠壓／動能以最後一根日線計算，不得吃 6 小時日線快取（盤中會凍結在
+        # 盤前預熱寫入的前一日收盤）；抓取時刻一併回傳供面板標示資料時間。
+        mock_hist.assert_any_await(
+            "NVDA", period="1y", interval="1d", force_refresh=True
+        )
+        assert isinstance(raw["df_hist_fetched_at"], datetime)
         mock_gex.assert_awaited_once_with("NVDA", force_live=True)
         mock_skew.assert_awaited_once_with("NVDA", force_live=True)
         mock_pcr.assert_awaited_once_with("NVDA", force_live=True)

@@ -48,8 +48,11 @@ class SymbolDeepDiveMixin:
         視窗，不再受 3 秒互動逾時限制。因此期權鏈/GEX/IV/Max Pain/Skew/PCR/UOA
         等量化數據一律以 force_live=True 或等效的 force_refresh=True 抓取，
         略過 Edge Snapshot（最舊可能 30 分鐘）與各自的記憶體/SQLite 快取層，
-        保證回傳即時資料。現價/SPY 歷史/總經/Reddit/Polymarket/基本面
-        論點等非期權數據維持既有快取策略不變。
+        保證回傳即時資料。標的本身的 1y 日線同樣以 force_refresh=True 抓取：
+        面板的「動能與擠壓狀態」以最後一根（盤中為今日成型中）日線計算，
+        走 6 小時 `_history_cache` 會讓盤中一直停在盤前預熱寫入的前一日收盤。
+        現價/SPY 歷史/總經/Reddit/Polymarket/基本面論點等其餘數據維持既有
+        快取策略不變。
         """
         from market_analysis.ddp_inspector import DDPInspector
         from market_time import ny_tz
@@ -72,9 +75,15 @@ class SymbolDeepDiveMixin:
         spy_task = asyncio.create_task(market_data_service.get_spy_history_df("1y"))
         macro_task = asyncio.create_task(market_data_service.get_macro_environment())
         quote_task = asyncio.create_task(market_data_service.get_quote(symbol))
-        df_hist_task = asyncio.create_task(
-            market_data_service.get_history_df(symbol, period="1y", interval="1d")
-        )
+
+        async def _get_daily_history() -> tuple[Any, datetime]:
+            # 抓取時間在日線回來當下記錄，而非等整個 gather（Reddit 等慢任務）結束
+            df = await market_data_service.get_history_df(
+                symbol, period="1y", interval="1d", force_refresh=True
+            )
+            return df, datetime.now(ny_tz)
+
+        df_hist_task = asyncio.create_task(_get_daily_history())
         gex_profile_task = asyncio.create_task(
             fetch_symbol_gex_metrics(symbol, force_live=True)
         )
@@ -180,7 +189,7 @@ class SymbolDeepDiveMixin:
             df_spy,
             macro_raw,
             quote,
-            df_hist_1d,
+            (df_hist_1d, df_hist_fetched_at),
             gex_profile_data,
             vp_data,
             atr_15m_data,
@@ -240,6 +249,7 @@ class SymbolDeepDiveMixin:
             "poly_markets": poly_markets,
             "ddp_report": ddp_report,
             "df_hist_1d": df_hist_1d,
+            "df_hist_fetched_at": df_hist_fetched_at,
             "month_max_pains": month_max_pains,
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
@@ -341,6 +351,19 @@ class SymbolDeepDiveMixin:
         from market_time import is_market_open, ny_tz
 
         now_ny = _dt.now(ny_tz)
+
+        # 擠壓欄位的資料時間：最後一根日線（tz-naive US/Eastern）與抓取時刻。
+        # 今日那一根在盤中仍在成型，呈現層須標明，避免誤讀為已收盤定案。
+        if psq_result and df_hist_1d is not None and not df_hist_1d.empty:
+            last_bar_ts = df_hist_1d.index[-1]
+            if hasattr(last_bar_ts, "date"):
+                psq_bar_date = last_bar_ts.date()
+                result["psq_bar_date"] = psq_bar_date
+                result["psq_bar_is_live"] = psq_bar_date == now_ny.date() and bool(
+                    is_market_open()
+                )
+            result["psq_fetched_at"] = data.get("df_hist_fetched_at")
+
         session_stats = data.get("session_stats")
         if isinstance(quote, dict) and session_stats is not None:
             quote, range_fixed = reconcile_daily_range(
