@@ -4,6 +4,13 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: '手動部署原因 / 備註 (Deploy reason / notes)'
+        required: false
+        type: string
+        default: 'Manual deploy via workflow_dispatch'
 
 env:
   # Opt into Node.js 24 for all actions to resolve deprecation warnings
@@ -29,7 +36,7 @@ jobs:
       packages: write
 
     outputs:
-      deploy_version: ${{ steps.vars.outputs.sha_short }}
+      deploy_version: ${{ steps.vars.outputs.deploy_version }}
       image_tag: ${{ steps.vars.outputs.image_tag }}
 
     steps:
@@ -40,7 +47,10 @@ jobs:
         id: vars
         run: |
           SHA_SHORT=$(git rev-parse --short HEAD)
+          # 版本化祕密使用動態識別碼 (SHA_SHORT + Run Number + Run Attempt)，確保 Re-run 時建立新 Secret
+          DEPLOY_VERSION="${SHA_SHORT}_${{ github.run_number }}_${{ github.run_attempt }}"
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
+          echo "deploy_version=${DEPLOY_VERSION}" >> $GITHUB_OUTPUT
           # 映像檔標籤包含 sha 後綴，這是版本化祕密同步的關鍵
           echo "image_tag=sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
           # 轉換映像檔名稱為小寫以符合 Docker 規範
@@ -81,8 +91,8 @@ jobs:
   deploy:
     name: 🚢 Deploy to Production (Swarm)
     needs: build-and-push
-    # 僅在推送 v* 標籤時觸發佈署
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 推送 v* 標籤或手動觸發 (workflow_dispatch) 時執行佈署
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
 
