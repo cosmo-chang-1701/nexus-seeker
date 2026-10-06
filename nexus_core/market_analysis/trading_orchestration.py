@@ -521,15 +521,36 @@ def get_safety_payout_threshold() -> float:
     """獲取安全提領/賠付紅線。"""
     from database import get_kv_cache
 
-    rrp_change = get_kv_cache("macro_rrp_change_30d") or 0.0
-    rrp_spike = get_kv_cache("macro_rrp_spike") or False
+    rrp_change_raw = get_kv_cache("macro_rrp_change_30d")
+    try:
+        rrp_change = float(rrp_change_raw) if rrp_change_raw is not None else 0.0
+    except (ValueError, TypeError):
+        rrp_change = 0.0
+
+    rrp_spike_raw = get_kv_cache("macro_rrp_spike")
+    rrp_spike = (
+        rrp_spike_raw is True
+        or rrp_spike_raw == 1
+        or str(rrp_spike_raw).strip().lower() in ("1", "true")
+    )
+    rrp_current = get_kv_cache("macro_rrp")
+
+    # 排除極低水位 (RRP < $20B) 下小基數除零引起的百分比失真虛警。
+    # 歷史高峰為 $2.5T，當前常態趨近 0 ($1.0B 左右)，微幅變動 $0.8B 即會造成 +400% 百分比跳升。
+    # 只有當 RRP 餘額具備實質規模 (>= $20B) 或顯著突波時，百分比劇變才代表系統級流動性衝擊。
+    has_material_rrp = True
+    if rrp_current is not None:
+        try:
+            has_material_rrp = float(rrp_current) >= 20.0
+        except (ValueError, TypeError):
+            has_material_rrp = True
 
     # 相容百分比 (e.g. 25.0) 與小數比例 (e.g. 0.25) 兩種格式
-    is_high_rrp_change = rrp_change > 20.0 or (
-        0.0 < rrp_change <= 1.0 and rrp_change > 0.20
+    is_high_rrp_change = has_material_rrp and (
+        rrp_change > 20.0 or (0.0 < rrp_change <= 1.0 and rrp_change > 0.20)
     )
     if is_high_rrp_change or rrp_spike:
-        # 發生流動性結構異常，拉高保留現金底線至最高戒備狀態
+        # 發生實質流動性結構異常，拉高保留現金底線至最高戒備狀態
         return 18000.0
 
     try:

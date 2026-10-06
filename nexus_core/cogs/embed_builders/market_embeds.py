@@ -1898,6 +1898,18 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         else:
             escape_win_status = "正常窗口"
 
+    escape_str = str(escape_win_status)
+    if "\u001b[" in escape_str:
+        escape_win_display = escape_str
+    elif "前移" in escape_str or "收縮" in escape_str:
+        escape_win_display = f"\u001b[1;31m{escape_str}\u001b[0m"
+    elif "後推" in escape_str or "寬鬆" in escape_str:
+        escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
+    elif "中性" in escape_str or "未知" in escape_str or "不足" in escape_str:
+        escape_win_display = f"\u001b[1;33m{escape_str}\u001b[0m"
+    else:
+        escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
+
     # 3. 建立 ANSI 面板內容 (精簡緊湊，無重複標題)
     spx_val_str = (
         f"\u001b[1;32m{float(spx):,.2f}\u001b[0m"
@@ -1931,7 +1943,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     risk_lines = [
         f" ├─ 零 Gamma 踩踏: {short_gamma_status}",
         f" ├─ 經濟衰退警告: {recession_status}",
-        f" ├─ 利率逃頂窗口: {escape_win_status}",
+        f" ├─ 利率逃頂窗口: {escape_win_display}",
         f" └─ 安全提領紅線: \u001b[1;31m${payout_threshold:,.0f}\u001b[0m",
     ]
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"

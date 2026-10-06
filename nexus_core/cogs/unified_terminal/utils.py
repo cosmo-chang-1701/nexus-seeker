@@ -226,16 +226,26 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
                 gex_data.get("gamma_flip") if isinstance(gex_data, dict) else None
             )
 
-            # 若 macro GEX 無法取得或為空，嘗試透過 SPY 即時個股期權計算
-            if not raw_flip or (
-                gex_data.get("spy_spot") == 510.0 and raw_flip == 515.0
+            # 檢查 raw_flip 是否為偏離現貨 >8% 的異常值
+            raw_flip_is_outlier = (
+                raw_flip is not None
+                and spy_spot is not None
+                and float(spy_spot) > 0
+                and (abs(float(raw_flip) - float(spy_spot)) / float(spy_spot) > 0.08)
+            )
+
+            # 若 macro GEX 無法取得或為空，或為靜態預設值/離群雜訊，嘗試透過 SPY 即時個股期權計算
+            if (
+                not raw_flip
+                or (gex_data.get("spy_spot") == 510.0 and raw_flip == 515.0)
+                or raw_flip_is_outlier
             ):
                 try:
                     spy_gex = await fetch_symbol_gex_metrics("SPY", force_live=False)
                     spot_calc = float(spy_gex.get("spot", 0.0) or 0.0)
                     if spot_calc > 0:
                         calc_flip = estimate_symbol_gamma_flip(
-                            spy_gex.get("gex_profile", {}), spot_calc
+                            spy_gex.get("gex_profile", {}), spot_calc, bracket_pct=0.08
                         )
                         if calc_flip > 0:
                             raw_flip = calc_flip
@@ -283,6 +293,30 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         spx_spy_ratio = float(spx) / float(spy_spot)
         if 9.8 <= spx_spy_ratio <= 10.3:
             gamma_flip_line = round(float(spy_gamma_flip) * spx_spy_ratio, 2)
+
+    # ── 大盤 Gamma Flip 合理性物理閘門 (Sanity Gate) ──────────────────
+    # 正常美股做市商 Gamma Flip 偏離現貨極少超過 ±3~5%；超過 ±8% 屬於遠端雜訊或異常合約干擾
+    _GEX_MAX_DEVIATION_PCT = 0.08
+
+    if spy_gamma_flip is not None and spy_spot is not None and float(spy_spot) > 0:
+        spy_dev = abs(float(spy_gamma_flip) - float(spy_spot)) / float(spy_spot)
+        if spy_dev > _GEX_MAX_DEVIATION_PCT:
+            logger.warning(
+                f"SPY Gamma Flip ({spy_gamma_flip}) 偏離現貨 ({spy_spot}) 達 {spy_dev:.1%} "
+                f"(>{_GEX_MAX_DEVIATION_PCT:.0%})，判定為異常雜訊，降級為無效"
+            )
+            spy_gamma_flip = None
+            gamma_flip_line = None
+
+    if gamma_flip_line is not None and spx is not None and float(spx) > 0:
+        spx_dev = abs(float(gamma_flip_line) - float(spx)) / float(spx)
+        if spx_dev > _GEX_MAX_DEVIATION_PCT:
+            logger.warning(
+                f"SPX Gamma Flip Line ({gamma_flip_line}) 偏離現貨 ({spx}) 達 {spx_dev:.1%} "
+                f"(>{_GEX_MAX_DEVIATION_PCT:.0%})，判定為異常雜訊，降級為無效"
+            )
+            gamma_flip_line = None
+            spy_gamma_flip = None
 
     # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
     # （若有呼叫的話）：該呼叫只在 macro_gamma_flip_line 快取未命中時才會執行，

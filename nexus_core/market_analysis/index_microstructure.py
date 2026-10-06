@@ -128,13 +128,21 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
                     data.get("data"), dict
                 ):
                     gex_data = data["data"]
+                    spy_spot_val = float(gex_data.get("spy_spot", 0.0) or 0.0)
+                    gamma_flip_val = float(gex_data.get("gamma_flip", 0.0) or 0.0)
+                    is_outlier = bool(
+                        spy_spot_val > 0.0
+                        and gamma_flip_val > 0.0
+                        and (abs(gamma_flip_val - spy_spot_val) / spy_spot_val > 0.08)
+                    )
                     is_fake_fallback = bool(
                         gex_data.get("is_fallback")
                         or (
                             gex_data.get("spy_spot") == 510.0
                             and gex_data.get("gamma_flip") == 515.0
                         )
-                        or float(gex_data.get("spy_spot", 0.0)) <= 0.0
+                        or spy_spot_val <= 0.0
+                        or is_outlier
                     )
                     if not is_fake_fallback:
                         await save_kv_cache(
@@ -154,9 +162,14 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
                         )
                         return gex_data  # type: ignore
                     else:
-                        logger.warning(
-                            "Tunnel Scraper 回傳靜態預設值 fallback，拒絕作為即時數據採用"
-                        )
+                        if is_outlier:
+                            logger.warning(
+                                f"Tunnel Scraper 回傳 Gamma Flip ({gamma_flip_val}) 偏離現貨 ({spy_spot_val}) 超過 8%，判定為異常合約雜訊，拒絕寫入快取"
+                            )
+                        else:
+                            logger.warning(
+                                "Tunnel Scraper 回傳靜態預設值 fallback，拒絕作為即時數據採用"
+                            )
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 GEX 數據: {e}")
     await save_kv_cache("macro_gex_is_fallback", 1)
@@ -918,7 +931,9 @@ async def _compute_spx_capped_from_above_signal_uncached() -> dict:
     }
 
 
-def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
+def estimate_symbol_gamma_flip(
+    gex_profile: dict, spot: float, bracket_pct: float = 0.30
+) -> float:
     """
     個股 Gamma Flip 輕量客戶端估算（逐履約價 Net GEX 符號變化零交叉點）。
 
@@ -939,9 +954,11 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     （例如全數為正、全數為負，或 profile 為空/格式異常）一律回傳 0.0，
     由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
 
-    Bracket 防禦：僅接受落在 spot ± 30%（`[spot*0.7, spot*1.3]`）區間內的
+    Bracket 防禦：僅接受落在 spot ± bracket_pct（預設 ±30%，即
+    `[spot*(1.0-bracket_pct), spot*(1.0+bracket_pct)]`）區間內的
     交叉履約價作為候選，避免深度價外雜訊合約產生偏離現價極遠的失真交叉判定
-    被誤用為 Gamma Flip。`spot <= 0` 時無法定義合理的 bracket，退回不限制
+    被誤用為 Gamma Flip。大盤 SPY 估算時可傳入 bracket_pct=0.08 收窄至 ±8%。
+    `spot <= 0` 時無法定義合理的 bracket，退回不限制
     bracket 的行為。bracket 內找不到交叉點一律回傳 0.0。
 
     最近交叉點選取：若 bracket 內存在多次負轉正零交叉，優先回傳其中距現價
@@ -965,8 +982,9 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     if not sorted_strikes:
         return 0.0
 
+    pct = abs(bracket_pct) if bracket_pct != 0 else 0.30
     if spot > 0:
-        bracket_low, bracket_high = spot * 0.7, spot * 1.3
+        bracket_low, bracket_high = spot * (1.0 - pct), spot * (1.0 + pct)
     else:
         bracket_low, bracket_high = float("-inf"), float("inf")
 
@@ -1299,7 +1317,22 @@ def evaluate_escape_window_regime(
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
-        short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
+
+        # 動態組合實際觸發因子
+        drivers: list[str] = []
+        if is_hawkish:
+            drivers.append("高利率")
+        if wti_known is not None and wti_known > 85.0:
+            drivers.append("高油價")
+        if cpi_known is not None and cpi_known > 0.3:
+            drivers.append("通膨升溫")
+        if vts_known is not None and vts_known >= 1.0:
+            drivers.append("波動倒掛")
+        if is_negative_gamma is True:
+            drivers.append("結構承壓")
+
+        reason = "+".join(drivers[:2]) if drivers else "宏觀承壓"
+        short_status_desc = f"⚠️ 前移 {shift_days} 天 ({reason})"
     elif is_dovish and easing_score >= 2 and tightening_score == 0:
         direction = "後推"
         shift_days = 5
