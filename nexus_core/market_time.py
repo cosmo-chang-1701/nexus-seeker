@@ -1,6 +1,6 @@
 from typing import Any
 import pandas_market_calendars as mcal
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import logging
 
@@ -76,6 +76,16 @@ def is_market_open() -> Any:
 
     # 5. 判斷當下時間是否落在開盤與收盤之間
     return market_open <= now_ny <= market_close
+
+
+def is_nyse_trading_day(day: date) -> bool:
+    """`day`（美東日期）是否為 NYSE 交易日（排除週末與國定休市日；半日市視為交易日）。
+
+    與 `is_market_open()` / 盤後 16:15 任務 (`cogs/trading/after_market.py`) 相同，
+    以 `nyse_calendar.schedule()` 是否為空判定。
+    """
+    schedule = nyse_calendar.schedule(start_date=day, end_date=day)
+    return not schedule.empty
 
 
 def get_trading_day_elapsed_fraction(min_fraction: float = 0.05) -> float:

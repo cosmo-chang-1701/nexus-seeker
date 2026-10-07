@@ -91,6 +91,7 @@ from .fundamental_pipeline import (
     save_macro_surprise,
     save_macro_surprises,
     get_macro_surprises_for_event,
+    get_recorded_macro_surprise_keys,
     get_latest_macro_surprises,
 )
 
@@ -172,5 +173,6 @@ __all__ = [
     "save_macro_surprise",
     "save_macro_surprises",
     "get_macro_surprises_for_event",
+    "get_recorded_macro_surprise_keys",
     "get_latest_macro_surprises",
 ]

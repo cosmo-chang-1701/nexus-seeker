@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import config
-from database.connection import get_read_connection
+from database.portfolio import get_all_portfolio
+from database.watchlist import get_all_watchlist
 from market_analysis.dynamic_rollover.constants import CORE_DEFENSE_ETF_SYMBOLS
 
 logger = logging.getLogger(__name__)
@@ -182,25 +184,49 @@ def filter_universe_symbols(
     return selected
 
 
-def _fetch_db_raw_symbols() -> tuple[list[str], list[str]]:
-    """從資料庫讀取持倉與自選清單。"""
-    conn = get_read_connection()
+def _is_nonzero_quantity(raw_qty: Any) -> bool:
+    """數量是否為非零（空單以負數表示，因此以 != 0 判斷而非 > 0）。"""
+    if raw_qty is None:
+        return False
     try:
-        # 持倉標的 (qty != 0)
-        cur = conn.cursor()
-        cur.execute(
-            "SELECT DISTINCT UPPER(symbol) FROM portfolio WHERE qty != 0 AND symbol IS NOT NULL"
-        )
-        holdings = [str(r[0]) for r in cur.fetchall() if r[0]]
+        return float(raw_qty) != 0.0
+    except (TypeError, ValueError):
+        return False
 
-        # 自選標的
-        cur.execute(
-            "SELECT DISTINCT UPPER(symbol) FROM watchlist WHERE symbol IS NOT NULL"
-        )
-        watchlist = [str(r[0]) for r in cur.fetchall() if r[0]]
-        return holdings, watchlist
-    finally:
-        conn.close()
+
+def _fetch_db_raw_symbols() -> tuple[list[str], list[str]]:
+    """從 `assets` 表讀取全站持倉與自選清單（同步，須於 to_thread 中呼叫）。
+
+    重用 `database.portfolio.get_all_portfolio()`（HOLDING + TRADE，數量存於
+    JSON metadata 的 `quantity`）與 `database.watchlist.get_all_watchlist()`
+    （WATCH），兩者皆以 try/finally 關閉唯讀連線。
+    - 持倉：數量 != 0（空單 qty < 0 同樣納入）。
+    - 自選：直接取 symbol。
+    """
+    holdings: list[str] = []
+    seen_holdings: set[str] = set()
+    for row in get_all_portfolio():
+        # 欄位順序：(user_id, asset_id, symbol, opt_type, strike, expiry,
+        #            entry_price, quantity, stock_cost, ...)
+        sym_raw = row[2]
+        if not sym_raw or not _is_nonzero_quantity(row[7]):
+            continue
+        sym = str(sym_raw).strip().upper()
+        if sym and sym not in seen_holdings:
+            seen_holdings.add(sym)
+            holdings.append(sym)
+
+    watchlist: list[str] = []
+    seen_watch: set[str] = set()
+    for _uid, sym_raw, _flag in get_all_watchlist():
+        if not sym_raw:
+            continue
+        sym = str(sym_raw).strip().upper()
+        if sym and sym not in seen_watch:
+            seen_watch.add(sym)
+            watchlist.append(sym)
+
+    return holdings, watchlist
 
 
 async def get_fundamental_universe(

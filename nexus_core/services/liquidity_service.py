@@ -130,15 +130,22 @@ async def run_liquidity_pipeline(today: date) -> LiquidityReading:
     series_data: dict[str, list[Observation]] = {}
 
     # 1. 抓取並存儲各序列觀測值
+    # 抓取與寫入分開防護：DB 寫入失敗不應丟棄已成功抓取的序列（本輪精算仍可使用）
     for sid, kind in LIQUIDITY_FRED_SERIES.items():
         try:
             obs = await fetch_fred_series(sid, today, kind=kind)
-            await store_observations(sid, obs, today)
-            # 僅保留 today 當天已可用的觀測
-            series_data[sid] = usable(obs, today)
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"[LiquidityService] 抓取/寫入 FRED 序列 {sid} 失敗: {e}")
+            logger.warning(f"[LiquidityService] 抓取 FRED 序列 {sid} 失敗: {e}")
             series_data[sid] = []
+            continue
+
+        # 僅保留 today 當天已可用的觀測
+        series_data[sid] = usable(obs, today)
+
+        try:
+            await store_observations(sid, obs, today)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[LiquidityService] 寫入 FRED 序列 {sid} 失敗: {e}")
 
     # 2. 提取最新宏觀數值
     latest_nfci = _latest_val(series_data.get("NFCI", []))

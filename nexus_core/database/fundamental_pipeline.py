@@ -177,22 +177,41 @@ async def save_macro_surprises(readings: list[MacroSurpriseReading]) -> None:
 
 
 def get_macro_surprises_for_event(
-    event_key: str, limit: int = 12
+    event_key: str, limit: int = 12, before: str | None = None
 ) -> list[MacroSurpriseReading]:
-    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。"""
+    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。
+
+    `before`：僅取 `release_time_utc < before` 的樣本（ISO-8601 UTC 字串，與
+    `release_time_utc` 同格式，字典序即時間序）。計算某次發布的 Z 分數時必須傳入
+    該發布時間，避免引用事件之後才公布的資料（前視偏差）。
+    """
     conn = get_read_connection()
     try:
-        rows = conn.execute(
-            """
-            SELECT event_key, release_time_utc, actual, forecast,
-                   raw_diff, z_score, growth_sign
-            FROM macro_release_surprise
-            WHERE event_key = ?
-            ORDER BY release_time_utc DESC
-            LIMIT ?
-            """,
-            (event_key, limit),
-        ).fetchall()
+        if before is None:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                  AND release_time_utc < ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, before, limit),
+            ).fetchall()
         readings = [
             MacroSurpriseReading(
                 event_key=r[0],
@@ -206,6 +225,26 @@ def get_macro_surprises_for_event(
             for r in reversed(rows)
         ]
         return readings
+    finally:
+        conn.close()
+
+
+def get_recorded_macro_surprise_keys(since: str) -> set[tuple[str, str]]:
+    """讀取 `release_time_utc >= since` 已入庫的 (event_key, release_time_utc) 集合。
+
+    供預期差服務略過已計算過的發布，避免以事後資料重算覆寫既有 Z 分數。
+    """
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT event_key, release_time_utc
+            FROM macro_release_surprise
+            WHERE release_time_utc >= ?
+            """,
+            (since,),
+        ).fetchall()
+        return {(str(r[0]), str(r[1])) for r in rows}
     finally:
         conn.close()
 

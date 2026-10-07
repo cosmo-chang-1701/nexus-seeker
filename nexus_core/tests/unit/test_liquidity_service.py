@@ -181,3 +181,47 @@ async def test_run_liquidity_pipeline_missing_history_is_unknown() -> None:
         assert reading.net_liquidity_chg_13w_pct is None
         # 關鍵指標缺失時，體制必須判定為 UNKNOWN (而非因 0.0 >= 0 誤判為 EASY)
         assert reading.regime == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_keeps_fetched_series_when_store_fails() -> None:
+    """DB 寫入失敗不得清空已抓取的序列：本輪精算仍應使用抓到的觀測值。"""
+    today = date(2026, 10, 5)
+    avail = today - timedelta(days=1)
+    data: dict[str, list[Observation]] = {
+        "NFCI": [Observation(today - timedelta(days=7), -0.58, avail)],
+        "ANFCI": [Observation(today - timedelta(days=7), -0.60, avail)],
+        "DGS10": [Observation(today - timedelta(days=1), 4.15, avail)],
+        "WALCL": [
+            Observation(today - timedelta(days=98), 6_800_000.0, avail),
+            Observation(today - timedelta(days=7), 7_000_000.0, avail),
+        ],
+        "WTREGEN": [
+            Observation(today - timedelta(days=98), 800_000.0, avail),
+            Observation(today - timedelta(days=7), 800_000.0, avail),
+        ],
+        "RRPONTSYD": [
+            Observation(today - timedelta(days=98), 200.0, avail),
+            Observation(today - timedelta(days=7), 200.0, avail),
+        ],
+    }
+
+    def mock_fetch(sid: str, t: date, kind: str | None = None) -> list[Observation]:
+        return data.get(sid, [])
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch
+    ), patch(
+        "services.liquidity_service.store_observations",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("db write failed"),
+    ) as mock_store, patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ):
+        reading = await run_liquidity_pipeline(today)
+
+    assert mock_store.await_count >= 1
+    assert reading.nfci == -0.58
+    assert reading.us10y == 4.15
+    assert reading.net_liquidity_bn == 6000.0
+    assert reading.regime == "EASY"
