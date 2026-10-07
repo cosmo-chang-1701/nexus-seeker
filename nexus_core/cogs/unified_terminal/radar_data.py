@@ -53,6 +53,18 @@ class _KvSnapshot:
         row = self._rows.get(key)
         return (row[0], row[1]) if row else (None, None)
 
+    def get_session_fresh(self, key: str) -> Any:
+        """同 get()，但套用「最近已收盤交易日」有效性（Vol POC 等價位型回退）。
+
+        與 `get_cached_volume_poc` 同一判斷，避免雷達繞過上限讀到過舊的價位。
+        """
+        import market_time
+
+        value, age = self.get_with_age(key)
+        if value is None or not market_time.is_cache_age_within_last_session(age):
+            return None
+        return value
+
 
 def _radar_kv_keys(sym: str, today_str: str) -> list[str]:
     """雷達路徑會用到的所有 kv_cache 鍵（皆可由 symbol 與日期決定）。"""
@@ -271,7 +283,9 @@ class RadarDataMixin:
         if not squeeze_cache:
             squeeze_cache = {}
 
-        vpoc_val = radar_cache.get("hvn_price") or kv.get(f"volume_poc_{sym.upper()}")
+        vpoc_val = radar_cache.get("hvn_price") or kv.get_session_fresh(
+            f"volume_poc_{sym.upper()}"
+        )
         volume_poc = float(vpoc_val) if vpoc_val is not None else 0.0
 
         iv_metrics = kv.get(f"iv_metrics_{sym.upper()}_{today_str}") or {}
@@ -547,7 +561,7 @@ class RadarDataMixin:
             "vp_data": {
                 "hvn": float(
                     radar_cache.get("hvn_price")
-                    or kv.get(f"volume_poc_{sym.upper()}")
+                    or kv.get_session_fresh(f"volume_poc_{sym.upper()}")
                     or 0.0
                 ),
                 "lvn": float(radar_cache.get("lvn_price") or 0.0),
@@ -849,11 +863,17 @@ class RadarDataMixin:
         )
 
         # 讀取 Volume-POC：取已計算之 vp_data.hvn 或 volume_poc_{sym} 快取
-        from database.cache import get_kv_cache
+        from database.cache import get_kv_cache_session_fresh
 
         up = sym.upper()
-        vpoc_cached = await asyncio.to_thread(get_kv_cache, f"volume_poc_{up}")
-        vpoc_val = (vp_data or {}).get("hvn") or vpoc_cached
+        vpoc_fresh = (vp_data or {}).get("hvn")
+        # 備援值套用與 get_cached_volume_poc 相同的交易日有效性，逾期視為缺值
+        vpoc_cached = (
+            None
+            if vpoc_fresh
+            else await asyncio.to_thread(get_kv_cache_session_fresh, f"volume_poc_{up}")
+        )
+        vpoc_val = vpoc_fresh or vpoc_cached
         volume_poc = float(vpoc_val) if vpoc_val is not None else 0.0
 
         # 計算 20 日均量與當前 K 棒成交量
@@ -953,8 +973,10 @@ class RadarDataMixin:
         )
         result["uoa_age_seconds"] = real_uoa_age
 
-        if volume_poc > 0:
-            await save_kv_cache(f"volume_poc_{sym.upper()}", volume_poc)
+        # 只在 POC 為本次新計算（vp_data.hvn）時寫入；備援值若存回會刷新自己的
+        # updated_at，使交易日有效性永遠不會到期。
+        if vpoc_fresh and float(vpoc_fresh) > 0:
+            await save_kv_cache(f"volume_poc_{sym.upper()}", float(vpoc_fresh))
 
         mom_val = None
         if isinstance(psq_res, dict):

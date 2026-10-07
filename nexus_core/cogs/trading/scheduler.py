@@ -20,10 +20,11 @@ import market_time
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
-# 即時 VIX 報價異常時，回退採用 SQLite `macro_vix` 的最大年齡：15 分鐘巡邏每輪都會
-# 寫入，30 分鐘 = 容許錯過一輪；VIX 盤中波動快，更舊的值會誤導尾部風險判斷，
-# 逾期則不採用、維持 is_vix_valid=False。
-_VIX_FALLBACK_MAX_AGE_SECONDS = 30 * 60
+# 即時 VIX 報價異常時，回退採用 SQLite `macro_vix` 的最大年齡：15 分鐘巡邏每輪
+# 「僅在取得即時報價時」才寫入，40 分鐘 = 兩個 15 分鐘週期＋餘裕（避免網路延遲
+# 使邊界剛好落在 30 分鐘）；VIX 盤中波動快，更舊的值會誤導尾部風險判斷，
+# 逾期則不採用、維持 is_vix_valid=False。回退值不會被存回刷新時間戳。
+_VIX_FALLBACK_MAX_AGE_SECONDS = 40 * 60
 
 scanner_times = [
     time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 15, 30, 45)
@@ -297,9 +298,14 @@ class SchedulerCog(commands.Cog):
 
             # 🛡️ 數據合理性檢驗 (Sanity Check) 與快取回退
             is_vix_valid = 5.0 <= vix_val <= 150.0
+            # 只有即時報價才會寫回 macro_vix；回退值若被存回會刷新自己的 updated_at，
+            # 使年齡上限永遠不會到期。
+            vix_is_live = is_vix_valid
             if not is_vix_valid:
-                cached_vix = database.get_kv_cache_fresh(
-                    "macro_vix", _VIX_FALLBACK_MAX_AGE_SECONDS
+                cached_vix = await asyncio.to_thread(
+                    database.get_kv_cache_fresh,
+                    "macro_vix",
+                    _VIX_FALLBACK_MAX_AGE_SECONDS,
                 )
                 if cached_vix:
                     try:
@@ -324,7 +330,7 @@ class SchedulerCog(commands.Cog):
             if is_spx_valid:
                 await database.save_kv_cache("macro_spx", spx_val)
             else:
-                cached_spx = database.get_kv_cache("macro_spx")
+                cached_spx = await asyncio.to_thread(database.get_kv_cache, "macro_spx")
                 if cached_spx:
                     try:
                         cached_spx_val = float(cached_spx)
@@ -343,7 +349,7 @@ class SchedulerCog(commands.Cog):
                     logger.warning(
                         f"🕒 [SPX 數據異常] 報價 {spx_val} 超出合理範圍 [3000.0, 15000.0]，跳過更新 macro_spx 快取"
                     )
-            if is_vix_valid:
+            if vix_is_live:
                 await database.save_kv_cache("macro_vix", vix_val)
             if tnx_val > 0.0:
                 await database.save_kv_cache("macro_us10y", tnx_val)

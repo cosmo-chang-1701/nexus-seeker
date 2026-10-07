@@ -21,11 +21,6 @@ ny_tz = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
-# kv `macro_fedwatch_probability` 供下游（宏觀逃頂評分、擠壓進場否決）回退讀取的最大年齡。
-# 寫入端為 4 小時週期的宏觀／FedWatch 檢查，12 小時 = 寫入週期 × 3，容許連續兩次
-# 刷新失敗仍可用；超過則視為未知（傳 prob=None，評分函式不計分、不放行 NORMAL）。
-FEDWATCH_PROB_MAX_AGE_SECONDS = 12 * 3600
-
 
 # ==========================================
 # Data Models
@@ -774,12 +769,18 @@ class CalendarService:
     def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
         """讀取最新 FedWatch 概率與是否為 Fallback 快取"""
         import sqlite3
-        from database.cache import get_kv_cache
+        from database.cache import get_fedwatch_probability_fresh, get_kv_cache
 
         fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
         is_fallback = fallback_val is None or int(fallback_val) == 1
 
-        cached_prob = get_kv_cache("macro_fedwatch_probability")
+        # 與宏觀逃頂評分／擠壓否決共用同一年齡上限（12h），避免 09:00 簡報與
+        # 進場閘門對同一份 FedWatch 資料的新鮮度判斷不一致。逾期視為不可用，
+        # 走下方 economic_calendar_events 備援並標記為 fallback。
+        cached_prob, prob_is_stale = get_fedwatch_probability_fresh()
+        if prob_is_stale:
+            logger.warning("FedWatch 快取已逾 12 小時，簡報改用日曆備援並標記為備援")
+            is_fallback = True
         if cached_prob is not None:
             try:
                 prob_val = float(cached_prob)
@@ -827,7 +828,7 @@ class CalendarService:
         import json
         from database.cache import get_kv_cache
 
-        prob, is_fallback = self.get_latest_fedwatch_probability()
+        prob, is_fallback = self.get_latest_fedwatch_probability()  # 內含 12h 年齡上限
         raw_details = get_kv_cache("macro_fedwatch_details")
         details: dict[str, Any] = {}
         if raw_details and not is_fallback:

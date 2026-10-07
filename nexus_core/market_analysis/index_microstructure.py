@@ -1463,6 +1463,7 @@ def evaluate_macro_top_escape_score(
     prob: float | None = None,
     is_negative_gamma: bool | None = None,
     satellite_euphoria_ratio: float | None = None,
+    prob_stale: bool = False,
 ) -> tuple[int, str, str, list[tuple[str, str]]]:
     """
     評估宏觀逃頂綜合評分：獨立於 evaluate_escape_window_regime() 的利率擇時矩陣，
@@ -1478,6 +1479,9 @@ def evaluate_macro_top_escape_score(
         satellite_euphoria_ratio: 使用者衛星持倉中，個別已符合 Scenario 3 亢奮出場
             條件 (現貨觸及 Call Wall 或 Skew 百分位 <= 20) 的比例 (0.0-1.0)。傳入
             None 代表此因子不參與評分 (例如脫離使用者持倉脈絡的呼叫路徑)。
+        prob_stale: FedWatch 快取「有值但已逾年齡上限」。僅在 prob 為 None 時影響
+            顯示：該因子文字改為「FedWatch 資料過期（逾 12 小時），不計分」，讓使用者
+            看見原因；計分與 tier 判定（fail-closed）完全不變。
 
     Returns:
         tuple[int, str, str, list[tuple[str, str]]]:
@@ -1524,7 +1528,11 @@ def evaluate_macro_top_escape_score(
     # Factor 3: FedWatch 鷹派傾向分數過高
     if safe_prob is None:
         unknown_factors += 1
-        f3_val = unknown_val
+        f3_val = (
+            "\u001b[1;33m⚪ FedWatch 資料過期（逾 12 小時），不計分\u001b[0m"
+            if prob_stale
+            else unknown_val
+        )
     elif safe_prob > 0.70:
         score += 1
         f3_val = f"\u001b[1;31m🚨 鷹派傾向偏高 ({safe_prob * 100:.1f}%)\u001b[0m"
