@@ -353,6 +353,17 @@ class AltDataService:
     # 4. SEC XBRL companyconcept 指標（capex / rpo / dio / revenue）
     # ========================================================================
 
+    @property
+    def sec_client(self) -> Any | None:
+        """目前已建立的 SEC 客戶端（不觸發建立）。"""
+        return self._sec_client
+
+    def attach_sec_client(self, client: Any) -> None:
+        """注入外部 SEC 客戶端以共用 8 req/s 限速器與 CIK 快取；已有客戶端時不覆蓋。"""
+        if self._sec_client is None:
+            self._sec_client = client
+            self._sec_unavailable_reason = None
+
     def _get_sec_client(self) -> Any | None:
         if self._sec_client is not None:
             return self._sec_client

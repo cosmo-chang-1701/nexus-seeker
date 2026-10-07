@@ -132,6 +132,24 @@ async def test_sec_unavailable_without_user_agent() -> None:
     assert "SEC_USER_AGENT" in reason
 
 
+@pytest.mark.asyncio
+async def test_attach_sec_client_shares_external_client() -> None:
+    """注入外部 SEC 客戶端後沿用之（共用限速器）；已有客戶端時不覆蓋。"""
+    svc = AltDataService()
+    with patch("config.SEC_USER_AGENT", ""):
+        res, _ = await svc.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q2", _AS_OF)
+    assert res is None and svc.sec_client is None
+
+    shared = _fake_sec()
+    svc.attach_sec_client(shared)
+    assert svc.sec_client is shared
+    res, _ = await svc.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q1", _AS_OF)
+    assert res is not None
+
+    svc.attach_sec_client(_fake_sec())
+    assert svc.sec_client is shared
+
+
 def test_no_finnhub_or_mock_only_keys_remain() -> None:
     """Finnhub /stock/metric 沒有 capex YoY / RPO / DIO 欄位：不得再讀取假欄位。"""
     src = (Path(__file__).parents[2] / "services" / "alt_data_service.py").read_text()

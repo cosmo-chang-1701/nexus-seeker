@@ -104,7 +104,8 @@ class SecFilingSyncRunner:
       在背景執行 `sync_universe_filings` 並立即返回，不阻塞時鐘輪詢。
     - 上一輪仍在執行時略過本輪（防重疊）。
     - 缺少合規 `SEC_USER_AGENT`（`SecConfigError`）時只記一次 error，之後靜默略過。
-    - 跨輪重用同一個 FilingEventService / SecEdgarClient（共用限速器與 CIK 快取）。
+    - 跨輪重用同一個 FilingEventService / SecEdgarClient（共用限速器與 CIK 快取），
+      並與 `alt_data_service`（18:00 產業鏈檢驗的 SEC XBRL 端）共用同一個實例。
     - 8-K Item 2.02 事件交由 `EarningsSurpriseService.process_filing_event`（共用同一個
       SecEdgarClient 與限速器）；只入庫、不推播，例外由 FilingEventService 隔離成 warning。
     """
@@ -122,8 +123,12 @@ class SecFilingSyncRunner:
     async def _get_service(self) -> FilingEventService | None:
         if self._service is not None:
             return self._service
+        # 與產業鏈檢驗（alt_data_service）共用同一個 SecEdgarClient：兩者可能在 18:00 同時
+        # 打 SEC，各自 8 req/s 會超過 SEC 10 req/s 上限。誰先建立，另一方就沿用。
         service = FilingEventService(
-            bot=self._bot, earnings_handler=self._handle_earnings_event
+            bot=self._bot,
+            client=alt_data_service.sec_client,
+            earnings_handler=self._handle_earnings_event,
         )
         try:
             client = await service.get_client()
@@ -135,6 +140,7 @@ class SecFilingSyncRunner:
                 )
                 self._config_error_logged = True
             return None
+        alt_data_service.attach_sec_client(client)
         # 財報預期差只入庫供 /fa 與估值使用，不傳 bot（docs/valuation_pricing/05 未規範推播）
         self._earnings_service = EarningsSurpriseService(sec_client=client)
         self._service = service

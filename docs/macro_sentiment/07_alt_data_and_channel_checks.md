@@ -170,7 +170,8 @@ flowchart TD
 - **領先落後尚未實作**：`lead_lag_quarters` 只是說明欄位；目前僅比較兩端在同一曆季的年增率（見 §2.1），因此「上游 Capex 領先 1–2 季」的傳導在本版判定中只會表現為同季幅度差異，解讀時須留意。
 - **資料來源與 Finnhub 欄位實測**：Finnhub `/stock/metric?metric=all` 沒有 capex 年增率、RPO 或 DIO 欄位（只有 `capexCagr5Y` 五年複合成長率與 `inventoryTurnoverTTM` 周轉率，語意不符），因此驅動端改由 SEC XBRL 計算；Finnhub 的 `revenueGrowthQuarterlyYoy` 沒有觀測期間，無法做期別對齊，亦不採用。
 - **選用 companyconcept 而非 companyfacts**：單一公司 companyfacts 解壓後約 5MB、JSON 解析峰值約 26MB；companyconcept 每個標籤僅數十 KB。服務只快取解析後的 `(start, end, val, filed)` 精簡事實，符合 1–2GB VPS 限制。所有請求經 `SecEdgarClient`（合規 User-Agent、8 req/s 限速）與 `SingleFlightManager` 合併。
-- **SEC_USER_AGENT 未設定**：`SecEdgarClient` 拒絕建立，所有 XBRL 成員判為不可得，鏈條以「資料不足」記錄原因，不拋出未捕捉例外。
+- **SEC_USER_AGENT 未設定**：`SecEdgarClient` 拒絕建立，所有 XBRL 成員判為不可得，鏈條以「資料不足」記錄原因，不拋出未捕捉例外。SEC 申報同步（`sec_filing_sync_hourly`）同樣依賴此祕密，未設定時只記一次 error 後每輪略過；兩者並存不衝突。
+- **SEC 客戶端共用**：`alt_data_service` 與 SEC 申報同步（`SecFilingSyncRunner`）共用同一個 `SecEdgarClient`（同一個 8 req/s 限速器與 CIK 快取），避免 18:00 兩者同時打 SEC 時合計超過 10 req/s；誰先建立客戶端，另一方就沿用（`AltDataService.attach_sec_client`）。
 - **非公開與外國申報實體**：`SPCX` 等非公開實體回傳「非公開實體，無 SEC 申報」並排除於覆蓋率分母；只申報 IFRS（20-F）的外國公司（如 TSM、ASML）無 us-gaap 標籤，記錄為不可得。
 - **無前視偏差保護 (Look-ahead Shield)**：SEC 事實以 `filed <= as_of` 過濾、同一期間取最新申報；FRED 以 `available_date <= as_of`；TSA 只取 `<= as_of` 日資料；台股月營收檢查 `出表日期 <= as_of`。台股 OpenAPI 只提供最新一個月，**不是 point-in-time 資料**，歷史期別通常因 `資料年月` 不符而排除。
 - **TSA 反爬蟲**：tsa.gov 位於 Akamai 之後，部分網路環境（例如開發機以 curl 實測）回應 HTTP 403；此時 TSA 判為不可得並記錄「TSA 頁面無法取得或格式不符」，`AIR_TRAVEL` 以資料不足記錄。頁面為兩欄表格（Date／Numbers），當年度頁由新到舊、歷年頁 `/travel/passenger-volumes/{year}` 由舊到新，依日期合併。
