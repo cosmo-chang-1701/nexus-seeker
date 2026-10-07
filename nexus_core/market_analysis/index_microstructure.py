@@ -55,6 +55,51 @@ _spx_capped_signal_cache_expiry: float = 0.0
 _GEX_SWR_REFRESH_BACKOFF_SECONDS: float = 60.0
 _gex_swr_last_attempt: BoundedCache = BoundedCache(max_size=300)
 
+# ── 大盤 SPY Gamma Flip 合理性閘門（單一來源）─────────────────────────────
+# 非對稱容許區間 [spot × (1 − BELOW), spot × (1 + ABOVE)]：
+# - Flip 高於現價 = 現價已跌入負 Gamma（short gamma 方向）。崩跌時 Flip 會遠
+#   高於現價（SPY 急跌 12% 時真實 Flip 約高於現價 10–14%），丟掉它等於讓
+#   short_gamma_critical 在最需要時失效。上限因此放寬到與 edge
+#   `find_gamma_flip()` 搜尋區間（spot ± 20%）一致——edge 不可能算出超過此
+#   範圍的合法 Flip，超過者必為資料錯誤。
+# - Flip 低於現價 = 正 Gamma 區（long gamma 方向）。誤丟只會讓判定降為未知
+#   （fail-closed），誤收遠端雜訊卻會把 regime 確定判成寬鬆，因此維持較嚴的 8%。
+# fetch_gex_metrics()、get_market_regime()、/market 面板、交易員終端 header、
+# /force_macro_update 共用此閘門；SPY 個股期權鏈備援估算的 bracket 亦同。
+MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT: float = 0.08
+MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT: float = 0.20
+
+
+def is_macro_gamma_flip_outlier(flip: Any, spot: Any) -> bool:
+    """大盤 SPY Gamma Flip 是否落在合理區間外（離群雜訊）。
+
+    `flip` 與 `spot` 皆為有效正數時才判定；任一缺值、非數值或 ≤ 0 時回傳
+    False（「缺值」與「離群」分開處理，由呼叫端各自決定是否視為未知）。
+    `flip` 與 `spot` 須為同一尺度（SPY 對 SPY，或 SPX 對 SPX）。
+    """
+    if isinstance(flip, bool) or isinstance(spot, bool):
+        return False
+    try:
+        flip_f = float(flip)
+        spot_f = float(spot)
+    except (TypeError, ValueError):
+        return False
+    if not (math.isfinite(flip_f) and math.isfinite(spot_f)):
+        return False
+    if flip_f <= 0.0 or spot_f <= 0.0:
+        return False
+    deviation = (flip_f - spot_f) / spot_f
+    if deviation >= 0.0:
+        return deviation > MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT
+    return -deviation > MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT
+
+
+# edge `/api/v1/scrape/macro/gex` 舊版（不帶 `is_fallback`）的靜態備援常數
+_LEGACY_EDGE_GEX_FALLBACK: Dict[str, float] = {
+    "spy_spot": 510.0,
+    "gamma_flip": 515.0,
+}
+
 
 def invalidate_market_regime_cache() -> None:
     """清除 get_market_regime() 的記憶體快取，供 /force_macro_update 等手動刷新
@@ -101,11 +146,18 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
             cached_obj = None
         if isinstance(cached_obj, dict) and isinstance(cached_obj.get("data"), dict):
             cached_data = cached_obj["data"]
-            # 排除陳舊硬編碼預設值
-            if not (
-                cached_data.get("spy_spot") == 510.0
-                and cached_data.get("gamma_flip") == 515.0
+            # 排除陳舊硬編碼預設值，以及修正前寫入的離群 Flip（與即時路徑同一閘門）
+            if _is_edge_fallback_payload(cached_data, _LEGACY_EDGE_GEX_FALLBACK):
+                pass
+            elif is_macro_gamma_flip_outlier(
+                cached_data.get("gamma_flip"), cached_data.get("spy_spot")
             ):
+                logger.warning(
+                    f"macro GEX 快取的 Gamma Flip ({cached_data.get('gamma_flip')}) "
+                    f"偏離快取現價 ({cached_data.get('spy_spot')}) 超出合理區間，"
+                    "不作為 last-known-good 採用"
+                )
+            else:
                 return {
                     **cached_data,
                     "_is_stale_cache": True,
@@ -128,31 +180,46 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
                     data.get("data"), dict
                 ):
                     gex_data = data["data"]
-                    is_fake_fallback = bool(
-                        gex_data.get("is_fallback")
-                        or (
-                            gex_data.get("spy_spot") == 510.0
-                            and gex_data.get("gamma_flip") == 515.0
-                        )
-                        or float(gex_data.get("spy_spot", 0.0)) <= 0.0
+                    try:
+                        spy_spot_val = float(gex_data.get("spy_spot") or 0.0)
+                        gamma_flip_val = float(gex_data.get("gamma_flip") or 0.0)
+                    except (TypeError, ValueError):
+                        spy_spot_val, gamma_flip_val = 0.0, 0.0
+                    is_outlier = is_macro_gamma_flip_outlier(
+                        gamma_flip_val, spy_spot_val
+                    )
+                    # gamma_flip 缺值或 ≤ 0（edge 搜尋區間內無交叉）同樣不可寫入：
+                    # 舊版會寫入預設值 515.0 或 0.0 並把 is_fallback 清為 0。
+                    is_fake_fallback = (
+                        _is_edge_fallback_payload(gex_data, _LEGACY_EDGE_GEX_FALLBACK)
+                        or spy_spot_val <= 0.0
+                        or gamma_flip_val <= 0.0
+                        or is_outlier
                     )
                     if not is_fake_fallback:
+                        await save_kv_cache("macro_spy_spot", spy_spot_val)
+                        await save_kv_cache("macro_spy_gamma_flip", gamma_flip_val)
                         await save_kv_cache(
-                            "macro_spy_spot", gex_data.get("spy_spot", 510.0)
-                        )
-                        await save_kv_cache(
-                            "macro_spy_gamma_flip",
-                            gex_data.get("gamma_flip", 515.0),
-                        )
-                        await save_kv_cache(
-                            "macro_gamma_flip_line",
-                            gex_data.get("gamma_flip", 515.0) * 10.0,
+                            "macro_gamma_flip_line", gamma_flip_val * 10.0
                         )
                         await save_kv_cache("macro_gex_is_fallback", 0)
                         await save_kv_cache(
                             cache_key, {"data": gex_data, "timestamp": time.time()}
                         )
                         return gex_data  # type: ignore
+                    elif is_outlier:
+                        logger.warning(
+                            f"Tunnel Scraper 回傳 Gamma Flip ({gamma_flip_val}) 偏離現貨 "
+                            f"({spy_spot_val}) 超出合理區間 (下 "
+                            f"{MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT:.0%}／上 "
+                            f"{MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT:.0%})，判定為異常"
+                            "合約雜訊，拒絕寫入快取"
+                        )
+                    elif gamma_flip_val <= 0.0 and spy_spot_val > 0.0:
+                        logger.warning(
+                            "Tunnel Scraper 回傳的 Gamma Flip 缺值或為 0（搜尋區間內"
+                            "無交叉），視為備援，不寫入快取"
+                        )
                     else:
                         logger.warning(
                             "Tunnel Scraper 回傳靜態預設值 fallback，拒絕作為即時數據採用"
@@ -276,6 +343,15 @@ async def _compute_market_regime_uncached() -> str:
                 spy_spot = float(g_spot)
         except (TypeError, ValueError):
             spy_spot = None
+
+    # 4b. 合理性閘門：Flip 相對現價離群（例如修正前寫入的快取雜訊）視為未知，
+    # 與 fetch_gex_metrics() 寫入端、/market 面板共用 is_macro_gamma_flip_outlier()。
+    if is_macro_gamma_flip_outlier(gamma_flip, spy_spot):
+        logger.warning(
+            f"大盤 Gamma Flip ({gamma_flip}) 偏離 SPY 現價 ({spy_spot}) 超出合理區間，"
+            "視為未知"
+        )
+        gamma_flip = None
 
     # 5. 跨資產流動性 (備援值視為未知)
     ted_spread: Optional[float] = None
@@ -918,7 +994,12 @@ async def _compute_spx_capped_from_above_signal_uncached() -> dict:
     }
 
 
-def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
+def estimate_symbol_gamma_flip(
+    gex_profile: dict,
+    spot: float,
+    bracket_pct: float = 0.30,
+    bracket_above_pct: Optional[float] = None,
+) -> float:
     """
     個股 Gamma Flip 輕量客戶端估算（逐履約價 Net GEX 符號變化零交叉點）。
 
@@ -939,9 +1020,12 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     （例如全數為正、全數為負，或 profile 為空/格式異常）一律回傳 0.0，
     由呼叫端 fail-safe 處理（視為無法確認，不應作為判斷依據）。
 
-    Bracket 防禦：僅接受落在 spot ± 30%（`[spot*0.7, spot*1.3]`）區間內的
-    交叉履約價作為候選，避免深度價外雜訊合約產生偏離現價極遠的失真交叉判定
-    被誤用為 Gamma Flip。`spot <= 0` 時無法定義合理的 bracket，退回不限制
+    Bracket 防禦：僅接受落在 `[spot*(1.0-bracket_pct), spot*(1.0+above)]`
+    區間內的交叉履約價作為候選（`above` 為 `bracket_above_pct`，未指定時等於
+    `bracket_pct`，即預設對稱 ±30%），避免深度價外雜訊合約產生偏離現價極遠的
+    失真交叉判定被誤用為 Gamma Flip。大盤 SPY 備援估算請改用
+    `estimate_macro_spy_gamma_flip()`（非對稱 bracket，與大盤合理性閘門一致）。
+    `spot <= 0` 時無法定義合理的 bracket，退回不限制
     bracket 的行為。bracket 內找不到交叉點一律回傳 0.0。
 
     最近交叉點選取：若 bracket 內存在多次負轉正零交叉，優先回傳其中距現價
@@ -965,8 +1049,14 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     if not sorted_strikes:
         return 0.0
 
+    pct_below = abs(bracket_pct) if bracket_pct != 0 else 0.30
+    pct_above = (
+        abs(bracket_above_pct)
+        if bracket_above_pct is not None and bracket_above_pct != 0
+        else pct_below
+    )
     if spot > 0:
-        bracket_low, bracket_high = spot * 0.7, spot * 1.3
+        bracket_low, bracket_high = spot * (1.0 - pct_below), spot * (1.0 + pct_above)
     else:
         bracket_low, bracket_high = float("-inf"), float("inf")
 
@@ -998,6 +1088,22 @@ def estimate_symbol_gamma_flip(gex_profile: dict, spot: float) -> float:
     if spot > 0:
         return min(candidates, key=lambda k: abs(k - spot))
     return candidates[0]
+
+
+def estimate_macro_spy_gamma_flip(gex_profile: dict, spot: float) -> float:
+    """大盤 SPY 個股期權鏈備援估算的 Gamma Flip（大盤 GEX 端點缺值或離群時用）。
+
+    與 `estimate_symbol_gamma_flip()` 同一套五步流程，bracket 改為與大盤合理性
+    閘門相同的非對稱區間：現價下方 `MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT`、上方
+    `MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT`。崩跌時（SHORT_GAMMA，Flip 須 ≥ 現價）
+    真實 Flip 可能高於現價 10% 以上，對稱 ±8% 會讓備援在最需要時失敗。
+    """
+    return estimate_symbol_gamma_flip(
+        gex_profile,
+        spot,
+        bracket_pct=MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT,
+        bracket_above_pct=MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT,
+    )
 
 
 def interpolate_gamma_flip_zero(gex_profile: dict, flip_strike: float) -> float:
@@ -1299,7 +1405,28 @@ def evaluate_escape_window_regime(
         direction = "前移"
         shift_days = 8 if tightening_score >= 3 else 5
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
-        short_status_desc = f"⚠️ 前移 {shift_days} 天 (高利率+結構承壓)"
+
+        # 歸因：每個計入緊縮分的因子各一個標籤，門檻與上方計分完全一致，因此
+        # 標籤數 == tightening_score（因子 2 的 CPI 與 WTI 合併為一個標籤）。
+        # 全數列出、不截斷：T ≥ 3 時截成兩個會把第三個實際觸發的因子藏起來。
+        cpi_hot = cpi_known is not None and cpi_known > 0.1
+        wti_hot = wti_known is not None and wti_known > 85.0
+        drivers: list[str] = []
+        if is_hawkish:
+            drivers.append("高利率")
+        if cpi_hot and wti_hot:
+            drivers.append("通膨油價雙升")
+        elif cpi_hot:
+            drivers.append("通膨升溫")
+        elif wti_hot:
+            drivers.append("高油價")
+        if vts_known is not None and vts_known >= 1.0:
+            drivers.append("波動倒掛")
+        if is_negative_gamma is True:
+            drivers.append("結構承壓")
+
+        reason = "+".join(drivers) if drivers else "宏觀承壓"
+        short_status_desc = f"⚠️ 前移 {shift_days} 天 ({reason})"
     elif is_dovish and easing_score >= 2 and tightening_score == 0:
         direction = "後推"
         shift_days = 5

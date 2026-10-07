@@ -8,7 +8,7 @@ Gamma Flip 臨界翻轉線（Gamma Neutral Level / Flip Line）是做市商整�
 
 ### 個股輕量估算與大盤端點分離架構
 在 Nexus Seeker 系統中：
-1. **大盤 SPY**：直接調用宏觀數據端點（`/api/v1/scrape/macro/gex`），取得與機構端比對的高精度全鏈 Gamma Flip。
+1. **大盤 SPY**：直接調用宏觀數據端點（`/api/v1/scrape/macro/gex`），取得與機構端比對的高精度全鏈 Gamma Flip；端點缺值、標記備援或離群時，改以 SPY 個股期權鏈經 `estimate_macro_spy_gamma_flip` 備援估算，兩者都須通過大盤合理性閘門（§2.2）。
 2. **個股標的**：因個股期權即時端點（`fetch_symbol_gex_metrics`）並未直接提供 Flip 欄位，系統設計了**輕量客戶端逐履約價符號變化估算演算法**（`estimate_symbol_gamma_flip`）。該演算法直接複用已抓取的 `gex_profile`，完全零額外網路請求，透過對相鄰履約價對掃描個別 Net GEX 值的符號變化（由負轉非負），並結合「$\pm 30\%$ Bracket 邊界」與「Net GEX Regime 方向一致性校驗」，徹底排除價外雜訊與偽交叉點。
 
 ---
@@ -34,10 +34,11 @@ $$
 以履約價 $K_{(i)}$ 作為由負轉正 Gamma 的臨界轉折履約價候選。
 
 #### 第三步：Bracket 雜訊防禦過濾
-深度價外（Deep OTM）期權常常因個別大單在遠端形成局部的微弱翻轉，若誤採為 Flip 會產生偏離現價數倍的失真數據。演算法引入現價 $\pm 30\%$ 的容差區間（Bracket）：
+深度價外（Deep OTM）期權常常因個別大單在遠端形成局部的微弱翻轉，若誤採為 Flip 會產生偏離現價數倍的失真數據。演算法引入現價下方 $b_{\downarrow}$、上方 $b_{\uparrow}$ 的容差區間（Bracket）：
 $$
-\mathcal{Z}_{\text{bracket}} = \{K \in \mathcal{Z} \mid 0.70 \times \text{Spot} \le K \le 1.30 \times \text{Spot}\}
+\mathcal{Z}_{\text{bracket}} = \{K \in \mathcal{Z} \mid (1 - b_{\downarrow}) \times \text{Spot} \le K \le (1 + b_{\uparrow}) \times \text{Spot}\}
 $$
+參數為 `estimate_symbol_gamma_flip(gex_profile, spot, bracket_pct, bracket_above_pct)`：$b_{\downarrow}$ = `bracket_pct`（預設 $0.30$），$b_{\uparrow}$ = `bracket_above_pct`（未指定時等於 $b_{\downarrow}$）。個股閘門一律使用預設對稱 $\pm 30\%$；大盤 SPY 備援估算 `estimate_macro_spy_gamma_flip()` 使用 $b_{\downarrow} = 8\%$、$b_{\uparrow} = 20\%$（與 §2.2 的大盤閘門相同）。
 *註：當 $\text{Spot} \le 0$ 時無法定義合理的 Bracket 範圍，退回不設邊界（保留所有候選點）。*
 
 #### 第四步：Net GEX Regime 方向一致性驗證
@@ -66,6 +67,28 @@ $$
 $$
 若 $\text{Spot} \le 0$ 且 $\mathcal{Z}_{\text{filtered}} \neq \emptyset$，則回傳第一筆候選 $\mathcal{Z}_{\text{filtered}}[0]$。
 
+### 2.2 大盤 SPY Gamma Flip 合理性閘門（非對稱）
+大盤 Flip 經過 edge 抓取、KV 快取、last-known-good 快取三層，任何一層的錯誤值都會直接決定 `SHORT_GAMMA_CRITICAL` 與逃頂窗口。定義偏離率 $d = (\text{Flip} - \text{Spot}) / \text{Spot}$（同一尺度：SPY 對 SPY、SPX 翻轉線對 SPX），`is_macro_gamma_flip_outlier(flip, spot)` 判定：
+$$
+\text{Outlier} = \begin{cases}
+d > \text{MACRO\_GEX\_FLIP\_MAX\_ABOVE\_SPOT\_PCT} = 0.20, & d \ge 0 \quad (\text{Flip 在現價上方：short gamma 方向}) \\
+-d > \text{MACRO\_GEX\_FLIP\_MAX\_BELOW\_SPOT\_PCT} = 0.08, & d < 0 \quad (\text{Flip 在現價下方：long gamma 方向})
+\end{cases}
+$$
+Flip 或 Spot 缺值、非數值、$\le 0$ 時回傳 `False`——「缺值」與「離群」分開處理，由呼叫端各自視為未知或觸發自癒。
+
+**為什麼非對稱**：
+- **上方 20%**：崩跌時做市商被壓進負 Gamma，真實 Flip 會遠高於現價（SPY 急跌 12% 時約高 10–14%）。對稱 $\pm 8\%$ 會在最需要的時候把真訊號當成雜訊丟掉，`short_gamma_critical` 因此失效。20% 與 edge `find_gamma_flip()` 的搜尋區間（$[0.8, 1.2] \times \text{Spot}$）一致：edge 不可能算出超過此範圍的合法 Flip，超過者必為資料錯誤（例如 SPY 774.8 時的 948.9，+22.5%）。
+- **下方 8%**：Flip 在現價下方代表正 Gamma（寬鬆）。誤丟只會讓判定降為未知（fail-closed，不開新倉），誤收遠端雜訊卻會把 regime 確定判成寬鬆，因此維持較嚴門檻。
+
+**套用點（單一判定函式）**：
+1. `fetch_gex_metrics()` 寫入端：edge 回傳離群、`gamma_flip` 缺值或 $\le 0$、帶 `is_fallback` 或舊版 510/515 常數時，一律不寫入 `macro_spy_gamma_flip`／`macro_gamma_flip_line`／`macro_gex_metrics_cache`，並標記 `macro_gex_is_fallback = 1`。
+2. `fetch_gex_metrics()` 的 last-known-good 讀取端：快取內的離群值不再回傳。
+3. `get_market_regime()`：以即時 SPY 報價重新判定，離群時 Flip 視為未知（三值邏輯，見 [`../macro_sentiment/01_macro_escape_top_matrix.md`](../macro_sentiment/01_macro_escape_top_matrix.md) §2.3）。
+4. `/market` 面板（`get_macro_overview_data`）：KV 讀到離群值即丟棄並走自癒（重抓大盤端點 → SPY 個股備援估算）；自癒結果與 SPX 尺度換算後的翻轉線再過一次閘門，仍離群才降為 `None`。
+5. 交易員終端 header：KV 的 Flip 相對 `macro_spy_spot` 離群時改顯示「快取數值離群，已濾除」。
+6. `/force_macro_update`（`services/macro_refresh_service.py`）：離群時改走 SPY 即時估算，失敗則如實回報。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -79,7 +102,7 @@ flowchart TD
     SortStrikes --> ScanSignFlip[掃描相鄰履約價對: g_prev < 0 <= g_curr]
     ScanSignFlip --> CheckFlip{找到負轉正交叉點?}
     CheckFlip -- 否 --> ReturnZero
-    CheckFlip -- 是 --> ApplyBracket["套用 Bracket 雜訊過濾:<br/>僅保留落在 0.7 * Spot 至 1.3 * Spot 之候選"]
+    CheckFlip -- 是 --> ApplyBracket["套用 Bracket 雜訊過濾:<br/>個股 0.7–1.3 × Spot；大盤備援 0.92–1.20 × Spot"]
 
     ApplyBracket --> CheckRegimeDir{全鏈總和 G_total 方向校驗}
     CheckRegimeDir -- "G_total > 0 (LONG_GAMMA)" --> FilterBelow[僅保留 Strike <= Spot 之候選]
@@ -101,8 +124,10 @@ flowchart TD
 
 | 常數名稱 | 數值 / 門檻 | 物理 / 代碼約束 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |
-| `bracket_low` | `0.7 * Spot` ($-30\%$) | 翻轉線有效候選範圍下界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
-| `bracket_high` | `1.3 * Spot` ($+30\%$) | 翻轉線有效候選範圍上界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
+| `bracket_low` | `(1 - bracket_pct) * Spot`，個股預設 `0.7 * Spot` ($-30\%$) | 翻轉線有效候選範圍下界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
+| `bracket_high` | `(1 + bracket_above_pct) * Spot`，個股預設 `1.3 * Spot` ($+30\%$) | 翻轉線有效候選範圍上界，排除深價外雜訊 | `nexus_core/market_analysis/index_microstructure.py` |
+| `MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT` | `0.20` | 大盤 Flip 高於現價（short gamma 方向）的容許上限；與 edge `find_gamma_flip()` 搜尋區間一致；亦為大盤備援 bracket 上界 | `nexus_core/market_analysis/index_microstructure.py` |
+| `MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT` | `0.08` | 大盤 Flip 低於現價（long gamma 方向）的容許上限；亦為大盤備援 bracket 下界 | `nexus_core/market_analysis/index_microstructure.py` |
 | `GAMMA_FLIP_MATERIALITY_CANDIDATES` | `(0.02, 0.05, 0.10)` | 重要性比的離線比較候選門檻（§5.6），閘門不使用 | `nexus_core/market_analysis/index_microstructure.py` |
 | `GAMMA_FLIP_MATERIALITY_DISPLAY` | `0.05` | 呈現層「雜訊交叉」標註與前向記錄分組門檻；**未經校準，不得用於閘門** | `nexus_core/market_analysis/index_microstructure.py` |
 | `Gamma Flip Fallback` | `VWAP + 0.5 ATR_15m` | 當 Flip 估算為 0.0 且全鏈正 Gamma 時的替代突破門檻 | `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` |
@@ -149,7 +174,11 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`：
-  - 核心估算函式：`estimate_symbol_gamma_flip()`
+  - 核心估算函式：`estimate_symbol_gamma_flip()`；大盤 SPY 備援：`estimate_macro_spy_gamma_flip()`
+  - 大盤合理性閘門（§2.2）：`is_macro_gamma_flip_outlier()`、`MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT`、`MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT`；套用於 `fetch_gex_metrics()`、`_compute_market_regime_uncached()`
+- `nexus_core/cogs/unified_terminal/utils.py`：`get_macro_overview_data()` 的 KV 讀取端閘門與自癒路徑
+- `nexus_core/services/macro_refresh_service.py`：`/force_macro_update` 的離群改走 SPY 即時估算
+- `nexus_core/cogs/embed_builders/market_embeds.py`：交易員終端 header 的離群 Flip 濾除
   - 重要性門檻（呈現與校準，§5.6）：`gamma_flip_materiality()`、`estimate_material_gamma_flip()`、`GammaFlipMateriality`
   - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
   - 內插零軸（呈現層）：`interpolate_gamma_flip_zero()`

@@ -159,7 +159,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     # 各 kv 快取的年齡（秒）：快取值本身不帶時效，edge 或排程停擺時舊值會被
     # 當成現況顯示（曾出現恐懼與貪婪 65 vs 實際 28、GEX Flip 停在 24 天前）。
     from database.cache import get_kv_cache_many
-    from market_analysis.index_microstructure import MACRO_GEX_STALE_MAX_AGE_SECONDS
+    from market_analysis.index_microstructure import (
+        MACRO_GEX_STALE_MAX_AGE_SECONDS,
+        is_macro_gamma_flip_outlier,
+    )
 
     kv_ages = {
         key: age
@@ -203,6 +206,19 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         core_cache_age is not None and core_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
     )
 
+    # KV 讀取端合理性閘門：修正前寫入的離群 Flip（例如 SPY 774.8 時的 948.9）
+    # 不可沿用，丟棄後走下方自癒路徑重抓（與 fetch_gex_metrics() 同一判定函式）。
+    kv_flip_is_outlier = is_macro_gamma_flip_outlier(
+        spy_gamma_flip, spy_spot
+    ) or is_macro_gamma_flip_outlier(gamma_flip_line, spx)
+    if kv_flip_is_outlier:
+        logger.warning(
+            f"KV 快取的 Gamma Flip (SPY {spy_gamma_flip} / SPX {gamma_flip_line}) "
+            f"偏離現貨 (SPY {spy_spot} / SPX {spx}) 超出合理區間，丟棄並改走自癒路徑"
+        )
+        spy_gamma_flip = None
+        gamma_flip_line = None
+
     # 大盤 GEX 快取超過時效：數值仍顯示，但不納入零 Gamma 與逃頂窗口判定
     # （與 get_market_regime() 的 MACRO_GEX_STALE_MAX_AGE_SECONDS 一致）。
     # 此處不重抓：GEX 走 edge Playwright 爬蟲，edge 失效時每次渲染都會白等。
@@ -213,39 +229,49 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         and gex_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
     )
 
-    if not gamma_flip_line or not spy_gamma_flip:
+    # 自癒：KV 缺值或離群（離群時上方已清為 None）
+    if kv_flip_is_outlier or not gamma_flip_line or not spy_gamma_flip:
         try:
             from market_analysis.index_microstructure import (
+                estimate_macro_spy_gamma_flip,
                 fetch_gex_metrics,
                 fetch_symbol_gex_metrics,
-                estimate_symbol_gamma_flip,
             )
 
             gex_data = await fetch_gex_metrics(allow_empty=True)
-            raw_flip = (
-                gex_data.get("gamma_flip") if isinstance(gex_data, dict) else None
-            )
+            if not isinstance(gex_data, dict):
+                gex_data = {}
+            raw_flip: Any = gex_data.get("gamma_flip")
+            try:
+                raw_flip_val = float(raw_flip) if raw_flip is not None else 0.0
+            except (TypeError, ValueError):
+                raw_flip_val = 0.0
+            ref_spot = spy_spot if spy_spot else gex_data.get("spy_spot")
 
-            # 若 macro GEX 無法取得或為空，嘗試透過 SPY 即時個股期權計算
-            if not raw_flip or (
-                gex_data.get("spy_spot") == 510.0 and raw_flip == 515.0
+            # 大盤 GEX 缺值、標記為備援，或相對現貨離群時，改以 SPY 個股期權鏈
+            # 即時估算（fetch_gex_metrics(allow_empty=True) 不會回傳靜態常數，
+            # 備援一律以 is_fallback 旗標辨識，不比對魔術數字）。
+            if (
+                raw_flip_val <= 0
+                or bool(gex_data.get("is_fallback"))
+                or is_macro_gamma_flip_outlier(raw_flip_val, ref_spot)
             ):
+                raw_flip_val = 0.0
                 try:
                     spy_gex = await fetch_symbol_gex_metrics("SPY", force_live=False)
                     spot_calc = float(spy_gex.get("spot", 0.0) or 0.0)
                     if spot_calc > 0:
-                        calc_flip = estimate_symbol_gamma_flip(
+                        calc_flip = estimate_macro_spy_gamma_flip(
                             spy_gex.get("gex_profile", {}), spot_calc
                         )
                         if calc_flip > 0:
-                            raw_flip = calc_flip
+                            raw_flip_val = calc_flip
                             if not spy_spot:
                                 spy_spot = spot_calc
                 except Exception:
                     pass
 
-            if raw_flip and float(raw_flip) > 0 and float(raw_flip) != 515.0:
-                raw_flip_val = float(raw_flip)
+            if raw_flip_val > 0:
                 if not spy_gamma_flip:
                     spy_gamma_flip = raw_flip_val
                 if not gamma_flip_line:
@@ -283,6 +309,25 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         spx_spy_ratio = float(spx) / float(spy_spot)
         if 9.8 <= spx_spy_ratio <= 10.3:
             gamma_flip_line = round(float(spy_gamma_flip) * spx_spy_ratio, 2)
+
+    # ── 大盤 Gamma Flip 合理性閘門（最終把關）──────────────────────────
+    # 自癒取得的值或 SPX 尺度換算後的翻轉線仍可能離群；與上方 KV 讀取端共用
+    # is_macro_gamma_flip_outlier()（非對稱區間，見 index_microstructure）。
+    if is_macro_gamma_flip_outlier(spy_gamma_flip, spy_spot):
+        logger.warning(
+            f"SPY Gamma Flip ({spy_gamma_flip}) 偏離現貨 ({spy_spot}) 超出合理區間，"
+            "判定為異常雜訊，降級為無效"
+        )
+        spy_gamma_flip = None
+        gamma_flip_line = None
+
+    if is_macro_gamma_flip_outlier(gamma_flip_line, spx):
+        logger.warning(
+            f"SPX Gamma Flip Line ({gamma_flip_line}) 偏離現貨 ({spx}) 超出合理區間，"
+            "判定為異常雜訊，降級為無效"
+        )
+        gamma_flip_line = None
+        spy_gamma_flip = None
 
     # 此處刻意不直接沿用上方 fetch_gex_metrics() 回傳值的 `_is_stale_cache`
     # （若有呼叫的話）：該呼叫只在 macro_gamma_flip_line 快取未命中時才會執行，
@@ -416,6 +461,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "gex_is_fallback": gex_is_fallback,
         "gex_is_expired": gex_is_expired,
         "gex_cache_age_seconds": gex_cache_age,
+        # 面板實際用於逃頂窗口與 backwardation 判定的 VTS（逾時效為 None）
+        "vts_ratio": vts_val,
         "core_is_expired": core_is_expired,
         "core_cache_age_seconds": core_cache_age,
     }

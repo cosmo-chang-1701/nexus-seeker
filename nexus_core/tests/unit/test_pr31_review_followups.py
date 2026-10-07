@@ -160,9 +160,11 @@ async def test_regime_with_edge_but_ted_and_flip_unknown_stays_unknown() -> None
 
 @pytest.mark.asyncio
 async def test_regime_ignores_expired_gex_cache() -> None:
-    # 10 天前的 Flip 560 vs SPY 670：若採用會確定判 NORMAL；過期應視為未知。
+    # 10 天前的 Flip 650 vs SPY 670：若採用會確定判 NORMAL；過期應視為未知。
+    # （Flip 須落在大盤合理性區間內——低於現價逾 8% 會被 is_macro_gamma_flip_outlier
+    # 判為離群而同樣視為未知，無法區分「過期」與「離群」兩條路徑。）
     expired = {
-        "gamma_flip": 560.0,
+        "gamma_flip": 650.0,
         "_is_stale_cache": True,
         "_cache_timestamp": time.time() - 10 * 86400,
     }
