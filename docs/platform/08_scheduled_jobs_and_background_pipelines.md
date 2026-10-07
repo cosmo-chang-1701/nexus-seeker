@@ -32,12 +32,15 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 | **09:30–16:00**<br/>*(每 30 分鐘，未對齊整點)* | `monitor_order_telemetry_alignment_task` | `cogs/trading/telemetry.py` | 盤中每 30 分鐘（`tasks.loop(minutes=30)`，Leader-Only） | 待成交掛單遙測對齊與撤退線：比對掛單價與最新市況、14 日內高影響總經事件，推播至 `telemetry_orders`。 |
 | **09:30–16:00**<br/>*(:05, :20, :35, :50)* | `monitor_real_portfolio_task` | `cogs/trading/portfolio_monitor.py` | 盤中每 15 分鐘（精確錯開 5 分） | 真實投組風控監控：評估投組 Greeks、下行回撤階梯（10%/15%/20%）與重新武裝狀態。持倉標的的 radar 資料先查 `bot._latest_radar_data_cache`，該快取已無寫入端，實際一律經 `_fetch_sym_radar_data_slow`（`Semaphore(3)`）自行抓取。 |
 | **09:30–16:00**<br/>*(每 30 分鐘)* | `IntradayScanPipeline` | `market_analysis/intraday_pipeline/pipeline.py` | 盤中每 30 分鐘（Leader-Only，85% RAM 守衛） | 「標的分析中心 2.0」深度自選心跳：評估 Gamma 擠壓、成交量分佈（Volume Profile / POC）與主力期權流；非 green 標的推播 `heartbeat_symbol_deep`（含期權合約規劃），並把心跳抓到的 UOA 寫入 `uoa_{SYM}` kv 快取與 `uoa_history`（`uoa_history` 唯一寫入端）。獨立 `asyncio.Task`，與 15 分鐘巡邏完全隔離。 |
-| **全天候每 5 分鐘**<br/>*(核心發布窗口)* | `fundamental_pipeline_clock` | `cogs/trading/fundamental_pipeline_monitor.py` | 每 5 分鐘輪詢（Leader-Only，85% RAM 守衛） | 基本面事件時鐘：巡邏 `ClockJobRegistry`，觸發平日 08:30 / 10:00 宏觀預期差標準化計算（執行前強制重抓當月總經日曆）與 NYSE 交易日 16:15 央行淨流動性體制精算，寫入 `liquidity_regime_log` 與 `macro_release_surprise`（乾跑無推播）。 |
+| **全天候每 5 分鐘**<br/>*(核心發布窗口)* | `fundamental_pipeline_clock` | `cogs/trading/fundamental_pipeline_monitor.py` | 每 5 分鐘輪詢（Leader-Only，85% RAM 守衛） | 基本面事件時鐘：巡邏 `ClockJobRegistry`，觸發平日 08:30 / 10:00 宏觀預期差標準化計算（執行前強制重抓當月總經日曆）與 NYSE 交易日 16:15 央行淨流動性體制精算，寫入 `liquidity_regime_log` 與 `macro_release_surprise`（乾跑無推播）；另觸發下列 SEC 申報同步。 |
+| **平日 07:00–20:00**<br/>*(每整點)* | `sec_filing_sync_hourly`（`ClockJob`） | `cogs/trading/fundamental_pipeline_monitor.py` → `services/filing_event_service.py` | 平日每整點、視窗 10 分鐘（Leader-Only，85% RAM 守衛；背景 `asyncio.Task`，上一輪未完成則略過；缺 `SEC_USER_AGENT` 只記一次 error 後略過） | SEC 申報直連同步 `FilingEventService.sync_universe_filings`：持倉＋自選標的池（≤ 80 檔）增量拉取申報，寫入 `sec_filing_cursor` / `sec_filing_event` / `insider_transaction` / `governance_flag`；結構化 13D 交由 `activist_gate` 評估（只記日誌）。推播受 `FUNDAMENTAL_PIPELINE_DRY_RUN` 控制（預設乾跑不推播）。 |
 | **24/7 每 30 分鐘** | `wti_oil_monitor` | `cogs/trading/wti_monitor.py` | 全天候（00:00–06:00 靜默） | 監控 WTI 原油期貨異動與板塊衝擊矩陣，於異動超過門檻時發送即時推播。 |
 | **每 4 小時** | `event_checker` | `cogs/calendar.py` | 全天候 | 檢查即將發布之宏觀經濟指標（CPI/PPI/FOMC）與財報日曆，定期更新 CME FedWatch 利率決策機率與 CPI YoY 偏差值（`update_cpi_deviation` 內部會 prefetch 月度日曆；日曆重寫保留既有 FedWatch 欄位，見 §5.4）。 |
 | **16:15** | `dynamic_after_market_report` | `cogs/trading/after_market.py` | 僅美股交易日（收盤後 15 分） | 1. 收盤日常維護；<br/>2. 寫入當日 `sentiment_daily_canonical` 快照；<br/>3. 重建日報酬序列並寫入 `portfolio_nav_daily`；<br/>4. 精算 VaR/CVaR 預算消耗與尾部體制轉換判定；<br/>5. 總經訊號乾跑記錄：抓取 FRED 與市場資料、計算 9 個候選指標與三態判定，寫入 `macro_signal_log`／`macro_regime_log`（**只記錄、不推播**，`ENABLE_MACRO_SIGNAL_LOG`）；<br/>6. 提領跑道快照：讀取 `portfolio_nav_daily` 與 CPI，計算壓力跑道並寫入 `withdrawal_runway_snapshot`（僅已設定提領者；須排在 NAV 與 FRED 觀測之後），寫入成功後經 `risk_withdrawal_runway` 推播壓力跑道警示（跌破 3／2／1 年）與提領提醒（前一個月 15 日起的前置提醒、提領月份首個交易日當日提醒，附賣出清單）。 |
 | **收盤後** | `post_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日 | Analyst Agent 盤後報告：產出全日市場總結、板塊強弱、異常期權金流匯總與隔夜策略展望。 |
 | **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading/scheduler.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
+
+> **兩條 SEC 管線的分工**：上表 08:00 的 `fundamental_filing_scan` 只掃持倉、每日一次、經 edge 取最新一份 10-K / 10-Q / 8-K 內文送 LLM 護城河判讀（`fundamental_scan_state` 游標）；`sec_filing_sync_hourly` 直連 SEC、涵蓋持倉＋自選、處理所有新申報的結構化欄位（Form 4、8-K item code、13D 封面），不呼叫 LLM（`sec_filing_cursor` 游標）。兩者各自維護游標、互不讀寫。`/fa` 對尚無游標的標的顯示「⚪ 尚無申報同步資料（待排程首次同步；僅涵蓋持倉與自選標的）」。頻率選擇與請求量估算見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) §3.1。
 
 ---
 
@@ -175,6 +178,7 @@ FedWatch 資料源說明依明細的 `source` 欄位產生（`cogs/embed_builder
 | WTI 原油全天候監控循環 | `nexus_core/cogs/trading/wti_monitor.py` | [`03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md) |
 | 15 分鐘價量突破警報循環 | `nexus_core/cogs/trading/price_volume_alert_monitor.py` | [`06_price_volume_alert_system.md`](06_price_volume_alert_system.md) |
 | 每日自動 SEC 財報掃描排程 | `nexus_core/cogs/trading/fundamental_filing_monitor.py` | [`02_sec_filing_moat_scanner.md`](../macro_sentiment/02_sec_filing_moat_scanner.md) |
+| SEC 申報直連同步與治理旗標（平日 07:00–20:00 ET 每整點，`sec_filing_sync_hourly`） | `nexus_core/services/filing_event_service.py` | [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) |
 | 前向報酬標註與反事實標註 | `nexus_core/services/regime_outcome_labeler.py` | [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) |
 | 盤前盤後分析師代理人循環 | `nexus_core/cogs/analyst_agent.py` | [`01_analyst_agent_reporting.md`](01_analyst_agent_reporting.md) |
 | 財經事件日曆與 FedWatch 循環 | `nexus_core/cogs/calendar.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
