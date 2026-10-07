@@ -39,6 +39,8 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 | **收盤後** | `post_market_loop` | `cogs/analyst_agent.py` | 僅美股交易日 | Analyst Agent 盤後報告：產出全日市場總結、板塊強弱、異常期權金流匯總與隔夜策略展望。 |
 | **週五 17:05** | `weekly_vtr_report_task` | `cogs/trading/scheduler.py` | 週五盤後 | 虛擬交易室（VTR）週度結算：總結每週模擬與實盤投資組合表現、對沖績效 Brinson 歸因與勝率統計。 |
 
+> **尚未接線（無排程）**：SEC 申報直連同步 `services/filing_event_service.py`（`FilingEventService.sync_universe_filings`，Form 4 內部人交易、8-K 4.02 / 5.02 治理旗標）與 13D 激進投資人閘門 `market_analysis/fundamental_pipeline/activist_gate.py` 目前**沒有任何排程或 `ClockJob` 註冊**，正式環境不會自動寫入 `sec_filing_cursor` / `sec_filing_event` / `insider_transaction` / `governance_flag`。`/fa` 對從未同步的標的會顯示「⚪ 尚無申報同步資料（SEC 申報同步管線尚未排程）」。上表 08:00 的 `fundamental_filing_scan` 是另一條既有管線（`fundamental_scan_state` 游標），與此無關。接線後的行為見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。
+
 ---
 
 ## 3. 交易時段併發控制與錯開快取架構
@@ -175,6 +177,7 @@ FedWatch 資料源說明依明細的 `source` 欄位產生（`cogs/embed_builder
 | WTI 原油全天候監控循環 | `nexus_core/cogs/trading/wti_monitor.py` | [`03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md) |
 | 15 分鐘價量突破警報循環 | `nexus_core/cogs/trading/price_volume_alert_monitor.py` | [`06_price_volume_alert_system.md`](06_price_volume_alert_system.md) |
 | 每日自動 SEC 財報掃描排程 | `nexus_core/cogs/trading/fundamental_filing_monitor.py` | [`02_sec_filing_moat_scanner.md`](../macro_sentiment/02_sec_filing_moat_scanner.md) |
+| SEC 申報直連同步與治理旗標（**尚未接線**，無排程） | `nexus_core/services/filing_event_service.py` | [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) |
 | 前向報酬標註與反事實標註 | `nexus_core/services/regime_outcome_labeler.py` | [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) |
 | 盤前盤後分析師代理人循環 | `nexus_core/cogs/analyst_agent.py` | [`01_analyst_agent_reporting.md`](01_analyst_agent_reporting.md) |
 | 財經事件日曆與 FedWatch 循環 | `nexus_core/cogs/calendar.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
