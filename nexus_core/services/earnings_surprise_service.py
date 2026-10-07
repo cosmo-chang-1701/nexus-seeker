@@ -194,7 +194,12 @@ class EarningsSurpriseService:
             event.session if event.session in ("BMO", "AMC") else "UNKNOWN"
         )
         surprise_dto = self._build_surprise_dto(
-            sym_upper, fiscal_period, consensus, whisper_val, session_str
+            sym_upper,
+            fiscal_period,
+            consensus,
+            whisper_val,
+            session_str,
+            announced_on=as_of.isoformat(),
         )
         saved = await self._persist_surprise(surprise_dto)
 
@@ -215,6 +220,7 @@ class EarningsSurpriseService:
         consensus: ConsensusData | None,
         whisper_val: float | None,
         session_str: FilingSession | Literal["UNKNOWN"],
+        announced_on: str | None = None,
     ) -> EarningsSurpriseDTO:
         actual_eps = consensus.actual_eps if consensus else None
         consensus_eps = consensus.consensus_eps if consensus else None
@@ -245,6 +251,7 @@ class EarningsSurpriseService:
             session=session_str,
             eps_basis="VENDOR_ADJUSTED",
             status=status_val,
+            announced_on=announced_on,
         )
 
     async def _persist_surprise(self, dto: EarningsSurpriseDTO) -> bool:

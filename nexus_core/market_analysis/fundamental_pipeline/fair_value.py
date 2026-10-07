@@ -47,6 +47,38 @@ DEFAULT_PERPETUAL_GROWTH: float = 0.025
 MIN_SPREAD_THRESHOLD: float = 0.010
 MIN_PEERS_COUNT: int = 3
 DEEP_VALUE_MOS_THRESHOLD: float = 0.25
+MODERATE_DISCOUNT_MOS: float = 0.10
+FAIR_VALUE_MOS_BAND: float = 0.10
+
+# 輸入缺值時套用的預設值（套用時必須寫入 flags 並於 /fa 呈現）
+DEFAULT_US10Y_PCT: float = 4.25  # 流動性體制尚無 10 年債殖利率時
+DEFAULT_GROWTH_EST: float = 0.05  # 前瞻與歷史成長率皆缺時的 g_est
+DEFAULT_BETA: float = 1.0
+
+# 估值旗標代碼（寫入 fair_value_log.flags_json；/fa 以 VALUATION_FLAG_LABELS_ZH 呈現）
+FLAG_US10Y_DEFAULT = "US10Y_DEFAULT"
+FLAG_NFCI_MISSING = "NFCI_MISSING"
+FLAG_BETA_DEFAULT = "BETA_DEFAULT"
+FLAG_G_EST_DEFAULT = "G_EST_DEFAULT"
+FLAG_G_EST_HISTORICAL = "G_EST_HISTORICAL"
+FLAG_FCF_UNAVAILABLE = "FCF_UNAVAILABLE"
+FLAG_FORWARD_EPS_TRAILING = "FORWARD_EPS_TRAILING"
+FLAG_PEER_PE_TRAILING = "PEER_PE_TRAILING"
+FLAG_SPOT_UNAVAILABLE = "SPOT_UNAVAILABLE"
+FLAG_GOVERNANCE_RISK = "GOVERNANCE_RISK"
+
+VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
+    FLAG_US10Y_DEFAULT: f"10 年債殖利率缺值，套用預設 {DEFAULT_US10Y_PCT:.2f}%",
+    FLAG_NFCI_MISSING: "NFCI 缺值，ERP 與同業倍數不做流動性調整",
+    FLAG_BETA_DEFAULT: f"Beta 缺值，套用預設 {DEFAULT_BETA:.1f}",
+    FLAG_G_EST_DEFAULT: f"成長率缺值，套用預設 {DEFAULT_GROWTH_EST:.0%}",
+    FLAG_G_EST_HISTORICAL: "無前瞻成長率，改用歷史 EPS／營收成長率",
+    FLAG_FCF_UNAVAILABLE: "無每股自由現金流（缺 P/FCF），DCF 不計",
+    FLAG_FORWARD_EPS_TRAILING: "無前瞻本益比，同業倍數改用近四季 EPS",
+    FLAG_PEER_PE_TRAILING: "部分同業缺前瞻本益比，改用近四季本益比",
+    FLAG_SPOT_UNAVAILABLE: "無現價，安全邊際不計",
+    FLAG_GOVERNANCE_RISK: "HIGH／CRITICAL 治理旗標生效中，深度價值判定壓制",
+}
 
 
 def calculate_equity_risk_premium(nfci: float | None) -> float:
@@ -74,7 +106,7 @@ def calculate_cost_of_equity(
     """
     dgs10 = us10y / 100.0 if us10y > 0.20 else us10y
     erp = calculate_equity_risk_premium(nfci)
-    eff_beta = max(0.5, min(2.0, beta if beta is not None else 1.0))
+    eff_beta = max(0.5, min(2.0, beta if beta is not None else DEFAULT_BETA))
     r = dgs10 + eff_beta * erp
     return r, erp
 
@@ -205,7 +237,7 @@ def integrate_fair_value(
     """
     flags: list[str] = []
     if not is_governance_clean:
-        flags.append("GOVERNANCE_RISK")
+        flags.append(FLAG_GOVERNANCE_RISK)
 
     final_fv: float | None = None
     method: str = "NONE"
@@ -238,6 +270,8 @@ def integrate_fair_value(
     mos: float | None = None
     if spot_price > 0:
         mos = round((final_fv - spot_price) / final_fv, 4)
+    else:
+        flags.append(FLAG_SPOT_UNAVAILABLE)
 
     is_deep_val = False
     if mos is not None:
@@ -247,9 +281,9 @@ def integrate_fair_value(
                 flags.append("DEEP_VALUE")
             else:
                 flags.append("DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE")
-        elif mos >= 0.10:
+        elif mos >= MODERATE_DISCOUNT_MOS:
             flags.append("MODERATE_DISCOUNT")
-        elif mos >= -0.10:
+        elif mos >= -FAIR_VALUE_MOS_BAND:
             flags.append("FAIRLY_VALUED")
         else:
             flags.append("OVERVALUED")

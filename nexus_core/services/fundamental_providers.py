@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import calendar
+import time
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -137,6 +138,9 @@ CALENDAR_ALIGN_WINDOW_DAYS: int = 5  # 財報日曆條目與 SEC 受理日之最
 REPORT_LAG_MAX_DAYS: int = (
     100  # 財季結束至財報發布之最長間隔（company_earnings 對齊用）
 )
+ESTIMATES_FORBIDDEN_COOLDOWN_SECONDS: int = (
+    24 * 3600
+)  # eps-estimate 403 後改走日曆備援的冷卻秒數
 SNAPSHOT_CALENDAR_LOOKAHEAD_DAYS: int = 400  # 日曆備援快照之前瞻查詢範圍
 
 
@@ -179,6 +183,9 @@ class FinnhubConsensusProvider:
     只回傳今日起之條目；`company_earnings` 可取最近 4 季 EPS 實際 / 預估（無營收）。
     year / quarter 欄位皆為「財年 / 財季」（AAPL 2025-12 季 = 2026-Q1）。
     """
+
+    # eps-estimate 回 403（免費方案無權限）後的冷卻截止時間（monotonic 秒，類別層級共用）
+    _estimates_forbidden_until: float = 0.0
 
     def __init__(self) -> None:
         pass
@@ -344,10 +351,18 @@ class FinnhubConsensusProvider:
         dated.sort(key=lambda c: c[0])
 
         rows: list[EPSEstimateSnapshotRecord] = []
-        for label, (_, item) in zip(labels, dated[:2]):
+        is_annual = labels[0] == "0y"
+        for label, (period_end, item) in zip(labels, dated[:2]):
             mean_val = _safe_float(item.get("epsAvg"))
             if mean_val is None:
                 continue
+            if is_annual:
+                fy = _safe_int(item.get("year"))
+                fiscal_period: str | None = (
+                    f"{fy}-FY" if fy is not None else period_end.isoformat()
+                )
+            else:
+                fiscal_period = _entry_fiscal_period(item) or period_end.isoformat()
             rows.append(
                 EPSEstimateSnapshotRecord(
                     symbol=sym_upper,
@@ -358,6 +373,7 @@ class FinnhubConsensusProvider:
                     eps_high=_safe_float(item.get("epsHigh")),
                     eps_low=_safe_float(item.get("epsLow")),
                     analyst_count=_safe_int(item.get("numberAnalysts")),
+                    fiscal_period=fiscal_period,
                 )
             )
         return rows
@@ -378,6 +394,11 @@ class FinnhubConsensusProvider:
         today = datetime.now(timezone.utc).astimezone(_ET_ZONE).date()
         snapshots: list[EPSEstimateSnapshotRecord] = []
 
+        if time.monotonic() < FinnhubConsensusProvider._estimates_forbidden_until:
+            # 免費方案 eps-estimate 回 403：冷卻期內不再打（每次 403 仍會消耗限流配額）
+            snapshots.extend(await self._calendar_quarter_snapshots(sym_upper, today))
+            return snapshots
+
         try:
             client = _get_client()
             q_data = await _execute_api_call(
@@ -396,9 +417,19 @@ class FinnhubConsensusProvider:
                 self._horizon_rows(sym_upper, today, a_list, ("0y", "+1y"))
             )
         except Exception as e:
-            logger.debug(
-                f"[FinnhubConsensusProvider] company_eps_estimates 失敗 ({sym_upper}): {e}"
-            )
+            msg = str(e).lower()
+            if "403" in msg or "access" in msg:
+                FinnhubConsensusProvider._estimates_forbidden_until = (
+                    time.monotonic() + ESTIMATES_FORBIDDEN_COOLDOWN_SECONDS
+                )
+                logger.info(
+                    "[FinnhubConsensusProvider] company_eps_estimates 無存取權限（免費方案 403），"
+                    f"{ESTIMATES_FORBIDDEN_COOLDOWN_SECONDS // 3600} 小時內改走財報日曆備援"
+                )
+            else:
+                logger.debug(
+                    f"[FinnhubConsensusProvider] company_eps_estimates 失敗 ({sym_upper}): {e}"
+                )
 
         if not any(s.horizon in ("0q", "+1q") for s in snapshots):
             snapshots.extend(await self._calendar_quarter_snapshots(sym_upper, today))
@@ -477,6 +508,7 @@ class FinnhubConsensusProvider:
                         eps_high=None,
                         eps_low=None,
                         analyst_count=None,
+                        fiscal_period=p_str,
                     )
                 )
         except Exception as e:

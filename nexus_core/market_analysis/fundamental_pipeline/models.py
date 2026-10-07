@@ -195,6 +195,8 @@ class EarningsSurpriseDTO:
     eps_basis: EpsBasis = "VENDOR_ADJUSTED"
     status: EarningsSurpriseStatus = "PROCESSED"
     created_at: str = ""
+    # 財報發布日（美東 YYYY-MM-DD，取自 8-K Item 2.02 的 SEC 受理日）；重試路徑不覆寫既有值
+    announced_on: str | None = None
 
 
 EarningsSurpriseRecord = EarningsSurpriseDTO
@@ -213,6 +215,9 @@ class EPSEstimateSnapshotRecord:
     eps_low: float | None = None
     analyst_count: int | None = None
     created_at: str = ""
+    # 財期（季度為 `YYYY-Qn`，年度為 `YYYY-FY`；無法辨識時為期末日 ISO 或 None），
+    # 修正動能以財期配對 t 與 t-30d 的快照，避免 horizon 標籤跨季換期
+    fiscal_period: str | None = None
 
 
 EPSEstimateSnapshotDTO = EPSEstimateSnapshotRecord
@@ -422,8 +427,8 @@ class RevisionScoreRecord:
 
     symbol: str
     trading_date: str
-    score_30d: float
-    breadth_ratio: float
+    score_30d: float | None  # 無任何可配對財期時為 None
+    breadth_ratio: float | None  # 無分析師層級調升 / 調降計數時為 None
     is_pead_aligned: bool
     detail_json: str
     created_at: str = ""
@@ -440,11 +445,13 @@ class FairValueRecord:
     trading_date: str
     dcf_value: float | None
     comps_value: float | None
-    fair_value: float
-    margin_of_safety: float
+    fair_value: float | None  # 兩模型皆無效 (method == NONE) 時為 None
+    margin_of_safety: float | None  # 無公允價值或無現價時為 None
     discount_rate: float
     equity_risk_premium: float
     flags_json: str
+    method: str = "NONE"  # BLENDED / DCF_ONLY / COMPS_ONLY / NONE
+    spot_price: float | None = None
     created_at: str = ""
 
 
@@ -525,8 +532,8 @@ class FairValueResult:
 class RevisionMomentumResult:
     """分析師修正動能綜合計算結果。"""
 
-    score_30d: float
-    breadth_ratio: float
+    score_30d: float | None
+    breadth_ratio: float | None
     is_pead_aligned: bool
     slopes: dict[str, float]
     up_count: int

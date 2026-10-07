@@ -15,6 +15,11 @@
    先寫成 PENDING，收盤後重算近 14 個日曆日（約 10 個交易日）內仍為 PENDING 的財季。
 8. PR4 產業鏈交叉驗證 (NYSE 交易日 18:00 ET)：對最近兩個已結束曆季執行 17 條鏈檢驗，
    只寫入 channel_check_log，不推播。
+9. PR5 每日分析師 EPS 共識快照刷新 (NYSE 交易日 19:00 ET)：`EstimateSnapshotRunner` 以背景任務
+   逐檔寫入當日快照（帶財期），供修正動能以財期配對 t-30d；上一輪未完成時略過。
+10. PR5 估值與次日候選名單 (NYSE 交易日 20:00 ET)：`ValuationJobRunner` 以背景任務執行，19:00 快照
+   刷新若仍在執行先等待其完成；只入庫、不推播（docs/valuation_pricing/06 未規範推播），
+   供 /fa 與盤前簡報讀取。兩者皆逐檔複檢 leader 與 `is_memory_safe()`，單一標的例外隔離。
 """
 
 from __future__ import annotations
@@ -42,6 +47,10 @@ from services.bounded_cache import BoundedCache
 from services.calendar_service import calendar_service
 from services.earnings_surprise_service import EarningsSurpriseService
 from services.filing_event_service import FilingEventService
+from services.fundamental_clock_service import (
+    EstimateSnapshotRunner,
+    ValuationJobRunner,
+)
 from services.liquidity_service import run_liquidity_pipeline
 from services.llm_service import is_memory_safe
 from services.macro_surprise_service import process_macro_surprises
@@ -366,18 +375,30 @@ async def _run_channel_check_job(now_et: datetime) -> None:
 def register_default_fundamental_jobs(
     sec_sync_runner: SecFilingSyncRunner | None = None,
     earnings_retry_runner: EarningsPendingRetryRunner | None = None,
+    snapshot_runner: EstimateSnapshotRunner | None = None,
+    valuation_runner: ValuationJobRunner | None = None,
 ) -> None:
     """註冊預設之基礎事件時鐘任務（PR1 總經 / 流動性、PR2 SEC 申報同步、PR3 財報 PENDING 重試、
-    PR4 產業鏈交叉驗證）。
+    PR4 產業鏈交叉驗證、PR5 共識快照刷新與估值候選名單）。
 
     `sec_sync_runner` 由 Cog 傳入（帶 bot 以便關閉乾跑後推播）；未提供時建立無 bot 的
-    執行器（只入庫、不推播）。`earnings_retry_runner` 由 Cog 傳入（帶 bot 以複檢 leader）。
+    執行器（只入庫、不推播）。`earnings_retry_runner` / `snapshot_runner` / `valuation_runner`
+    由 Cog 傳入（帶 bot 以複檢 leader）；未提供時建立無 bot 的執行器，且估值執行器會等待
+    同一次註冊建立的快照執行器。
     """
     runner = sec_sync_runner if sec_sync_runner is not None else SecFilingSyncRunner()
     retry_runner = (
         earnings_retry_runner
         if earnings_retry_runner is not None
         else EarningsPendingRetryRunner()
+    )
+    snap_runner = (
+        snapshot_runner if snapshot_runner is not None else EstimateSnapshotRunner()
+    )
+    val_runner = (
+        valuation_runner
+        if valuation_runner is not None
+        else ValuationJobRunner(snapshot_runner=snap_runner)
     )
     ClockJobRegistry.register(
         ClockJob(
@@ -452,9 +473,37 @@ def register_default_fundamental_jobs(
         )
     )
 
-    from services.fundamental_clock_service import register_valuation_clock_jobs
+    ClockJobRegistry.register(
+        ClockJob(
+            job_id="eps_estimate_snapshot_1900",
+            name="19:00 分析師 EPS 共識快照刷新",
+            schedule_desc="NYSE 交易日 19:00 ET（背景任務，不重疊）",
+            handler=snap_runner.trigger,
+            is_due_fn=nyse_trading_day_at(19, 0, window_minutes=30),
+            priority=70,
+            description=(
+                "逐檔寫入當日分析師 EPS 共識快照（eps_estimate_snapshot，帶財期），"
+                "供 20:00 修正動能以財期配對 t-30d（不推播）"
+            ),
+            cooldown_seconds=3600.0,
+        )
+    )
 
-    register_valuation_clock_jobs()
+    ClockJobRegistry.register(
+        ClockJob(
+            job_id="fundamental_watch_candidate_2000",
+            name="20:00 估值、修正動能與次日候選名單",
+            schedule_desc="NYSE 交易日 20:00 ET（背景任務，不重疊；等待 19:00 快照刷新完成）",
+            handler=val_runner.trigger,
+            is_due_fn=nyse_trading_day_at(20, 0, window_minutes=30),
+            priority=80,
+            description=(
+                "計算 DCF / Comps 安全邊際、修正動能與 PEAD，寫入 fair_value_log / "
+                "revision_score_log / fundamental_watch_candidate（不推播）"
+            ),
+            cooldown_seconds=3600.0,
+        )
+    )
 
 
 class FundamentalPipelineMonitorCog(commands.Cog):
@@ -465,14 +514,23 @@ class FundamentalPipelineMonitorCog(commands.Cog):
         self._dedup_cache = BoundedCache(max_size=300)
         self._sec_sync_runner = SecFilingSyncRunner(bot)
         self._earnings_retry_runner = EarningsPendingRetryRunner(bot)
+        self._snapshot_runner = EstimateSnapshotRunner(bot)
+        self._valuation_runner = ValuationJobRunner(
+            bot, snapshot_runner=self._snapshot_runner
+        )
         register_default_fundamental_jobs(
-            self._sec_sync_runner, self._earnings_retry_runner
+            self._sec_sync_runner,
+            self._earnings_retry_runner,
+            self._snapshot_runner,
+            self._valuation_runner,
         )
         self.fundamental_clock_task.start()
 
     async def cog_unload(self) -> None:
         self.fundamental_clock_task.cancel()
         self._sec_sync_runner.cancel()
+        self._snapshot_runner.cancel()
+        self._valuation_runner.cancel()
 
     @tasks.loop(minutes=5)
     async def fundamental_clock_task(self) -> None:

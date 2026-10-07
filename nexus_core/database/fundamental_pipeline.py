@@ -670,8 +670,9 @@ INSERT INTO earnings_surprise (
     composite_score,
     session,
     eps_basis,
-    status
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    status,
+    announced_on
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
     actual_eps = excluded.actual_eps,
     consensus_eps = excluded.consensus_eps,
@@ -683,7 +684,8 @@ ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
     composite_score = excluded.composite_score,
     session = excluded.session,
     eps_basis = excluded.eps_basis,
-    status = excluded.status
+    status = excluded.status,
+    announced_on = COALESCE(excluded.announced_on, earnings_surprise.announced_on)
 """
 
 _UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL = """
@@ -695,13 +697,15 @@ INSERT INTO eps_estimate_snapshot (
     eps_mean,
     eps_high,
     eps_low,
-    analyst_count
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    analyst_count,
+    fiscal_period
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, snapshot_date, horizon, source) DO UPDATE SET
     eps_mean = excluded.eps_mean,
     eps_high = excluded.eps_high,
     eps_low = excluded.eps_low,
-    analyst_count = excluded.analyst_count
+    analyst_count = excluded.analyst_count,
+    fiscal_period = COALESCE(excluded.fiscal_period, eps_estimate_snapshot.fiscal_period)
 """
 
 _UPSERT_GUIDANCE_EXTRACTION_SQL = """
@@ -739,6 +743,7 @@ async def save_earnings_surprise(surprise: EarningsSurpriseDTO) -> None:
         surprise.session,
         surprise.eps_basis,
         surprise.status,
+        surprise.announced_on,
     )
     await execute_write_async(_UPSERT_EARNINGS_SURPRISE_SQL, params)
 
@@ -762,6 +767,7 @@ async def save_earnings_surprises(surprises: list[EarningsSurpriseDTO]) -> None:
             s.session,
             s.eps_basis,
             s.status,
+            s.announced_on,
         )
         for s in surprises
     ]
@@ -779,7 +785,7 @@ def get_earnings_surprise(
             SELECT symbol, fiscal_period, actual_eps, consensus_eps,
                    eps_surprise_pct, actual_revenue, consensus_revenue,
                    revenue_surprise_pct, whisper_eps, composite_score,
-                   session, eps_basis, status, created_at
+                   session, eps_basis, status, created_at, announced_on
             FROM earnings_surprise
             WHERE symbol = ? AND fiscal_period = ?
             """,
@@ -802,6 +808,7 @@ def get_earnings_surprise(
             eps_basis=cast(EpsBasis, row[11]),
             status=cast(EarningsSurpriseStatus, row[12]),
             created_at=row[13] if row[13] else "",
+            announced_on=row[14] if row[14] else None,
         )
     finally:
         conn.close()
@@ -816,7 +823,7 @@ def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
             SELECT symbol, fiscal_period, actual_eps, consensus_eps,
                    eps_surprise_pct, actual_revenue, consensus_revenue,
                    revenue_surprise_pct, whisper_eps, composite_score,
-                   session, eps_basis, status, created_at
+                   session, eps_basis, status, created_at, announced_on
             FROM earnings_surprise
             WHERE symbol = ?
             ORDER BY fiscal_period DESC, created_at DESC
@@ -841,6 +848,54 @@ def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
             eps_basis=cast(EpsBasis, row[11]),
             status=cast(EarningsSurpriseStatus, row[12]),
             created_at=row[13] if row[13] else "",
+            announced_on=row[14] if row[14] else None,
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_processed_earnings_surprise(
+    symbol: str, as_of: str
+) -> EarningsSurpriseDTO | None:
+    """讀取 as_of（美東 YYYY-MM-DD，含）以前最近一筆 PROCESSED 財務預期差（供 PEAD 判定）。
+
+    只取 status = 'PROCESSED'（PENDING / FAILED 沒有綜合評分）；發布日晚於 as_of 者排除，
+    發布日未知（announced_on 為 NULL，例如非事件觸發的寫入）者仍回傳，由呼叫端標註日期不明。
+    """
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, actual_eps, consensus_eps,
+                   eps_surprise_pct, actual_revenue, consensus_revenue,
+                   revenue_surprise_pct, whisper_eps, composite_score,
+                   session, eps_basis, status, created_at, announced_on
+            FROM earnings_surprise
+            WHERE symbol = ? AND status = 'PROCESSED'
+              AND (announced_on IS NULL OR announced_on <= ?)
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(), as_of),
+        ).fetchone()
+        if not row:
+            return None
+        return EarningsSurpriseDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            actual_eps=row[2],
+            consensus_eps=row[3],
+            eps_surprise_pct=row[4],
+            actual_revenue=row[5],
+            consensus_revenue=row[6],
+            revenue_surprise_pct=row[7],
+            whisper_eps=row[8],
+            composite_score=row[9],
+            session=row[10],
+            eps_basis=cast(EpsBasis, row[11]),
+            status=cast(EarningsSurpriseStatus, row[12]),
+            created_at=row[13] if row[13] else "",
+            announced_on=row[14] if row[14] else None,
         )
     finally:
         conn.close()
@@ -887,26 +942,52 @@ async def save_eps_estimate_snapshots(
             s.eps_high,
             s.eps_low,
             s.analyst_count,
+            s.fiscal_period,
         )
         for s in snapshots
     ]
     await execute_write_many_async([(_UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL, rows, True)])
 
 
+def _row_to_snapshot(r: Any) -> EPSEstimateSnapshotRecord:
+    return EPSEstimateSnapshotRecord(
+        symbol=r[0],
+        snapshot_date=r[1],
+        horizon=cast(EstimateHorizon, r[2]),
+        source=r[3],
+        eps_mean=float(r[4]),
+        eps_high=float(r[5]) if r[5] is not None else None,
+        eps_low=float(r[6]) if r[6] is not None else None,
+        analyst_count=int(r[7]) if r[7] is not None else None,
+        created_at=r[8] if r[8] else "",
+        fiscal_period=r[9] if r[9] else None,
+    )
+
+
 def get_eps_estimate_snapshots(
-    symbol: str, snapshot_date: str | None = None
+    symbol: str, snapshot_date: str | None = None, as_of: str | None = None
 ) -> list[EPSEstimateSnapshotRecord]:
-    """讀取特定標的之分析師預估快照（預設取最新日期）。"""
+    """讀取特定標的之分析師預估快照。
+
+    - 指定 snapshot_date：只取該日。
+    - 未指定：取 as_of（含，YYYY-MM-DD）以前最新的快照日；as_of 為 None 時取全表最新。
+    """
     conn = get_read_connection()
     try:
         if snapshot_date is None:
-            max_row = conn.execute(
-                """
-                SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
-                WHERE symbol = ?
-                """,
-                (symbol.upper(),),
-            ).fetchone()
+            if as_of is None:
+                max_row = conn.execute(
+                    "SELECT MAX(snapshot_date) FROM eps_estimate_snapshot WHERE symbol = ?",
+                    (symbol.upper(),),
+                ).fetchone()
+            else:
+                max_row = conn.execute(
+                    """
+                    SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
+                    WHERE symbol = ? AND snapshot_date <= ?
+                    """,
+                    (symbol.upper(), as_of),
+                ).fetchone()
             if not max_row or not max_row[0]:
                 return []
             target_date = max_row[0]
@@ -916,73 +997,39 @@ def get_eps_estimate_snapshots(
         rows = conn.execute(
             """
             SELECT symbol, snapshot_date, horizon, source,
-                   eps_mean, eps_high, eps_low, analyst_count, created_at
+                   eps_mean, eps_high, eps_low, analyst_count, created_at, fiscal_period
             FROM eps_estimate_snapshot
             WHERE symbol = ? AND snapshot_date = ?
             ORDER BY CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
             """,
             (symbol.upper(), target_date),
         ).fetchall()
-        return [
-            EPSEstimateSnapshotRecord(
-                symbol=r[0],
-                snapshot_date=r[1],
-                horizon=cast(EstimateHorizon, r[2]),
-                source=r[3],
-                eps_mean=float(r[4]),
-                eps_high=float(r[5]) if r[5] is not None else None,
-                eps_low=float(r[6]) if r[6] is not None else None,
-                analyst_count=int(r[7]) if r[7] is not None else None,
-                created_at=r[8] if r[8] else "",
-            )
-            for r in rows
-        ]
+        return [_row_to_snapshot(r) for r in rows]
     finally:
         conn.close()
 
 
 def get_prior_eps_estimate_snapshots(
-    symbol: str, before_date: str
+    symbol: str, window_start: str, window_end: str
 ) -> list[EPSEstimateSnapshotRecord]:
-    """讀取特定標的在指定日期 (含) 之前最新一筆快照日期之預估快照。"""
+    """讀取 [window_start, window_end]（含兩端，YYYY-MM-DD）內所有快照，依快照日新到舊。
+
+    供修正動能取 t-30d 基準：呼叫端以財期配對並挑選最接近 t-30 的快照日，
+    窗口內沒有任何快照時回傳空清單（不退回窗口外的舊快照）。
+    """
     conn = get_read_connection()
     try:
-        max_row = conn.execute(
-            """
-            SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
-            WHERE symbol = ? AND snapshot_date <= ?
-            """,
-            (symbol.upper(), before_date),
-        ).fetchone()
-        if not max_row or not max_row[0]:
-            empty_list: list[EPSEstimateSnapshotRecord] = []
-            return empty_list
-        target_date = max_row[0]
-
         rows = conn.execute(
             """
             SELECT symbol, snapshot_date, horizon, source,
-                   eps_mean, eps_high, eps_low, analyst_count, created_at
+                   eps_mean, eps_high, eps_low, analyst_count, created_at, fiscal_period
             FROM eps_estimate_snapshot
-            WHERE symbol = ? AND snapshot_date = ?
-            ORDER BY CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
+            WHERE symbol = ? AND snapshot_date >= ? AND snapshot_date <= ?
+            ORDER BY snapshot_date DESC, CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
             """,
-            (symbol.upper(), target_date),
+            (symbol.upper(), window_start, window_end),
         ).fetchall()
-        return [
-            EPSEstimateSnapshotRecord(
-                symbol=r[0],
-                snapshot_date=r[1],
-                horizon=cast(EstimateHorizon, r[2]),
-                source=r[3],
-                eps_mean=float(r[4]),
-                eps_high=float(r[5]) if r[5] is not None else None,
-                eps_low=float(r[6]) if r[6] is not None else None,
-                analyst_count=int(r[7]) if r[7] is not None else None,
-                created_at=r[8] if r[8] else "",
-            )
-            for r in rows
-        ]
+        return [_row_to_snapshot(r) for r in rows]
     finally:
         conn.close()
 
@@ -1447,13 +1494,17 @@ INSERT INTO fair_value_log (
     margin_of_safety,
     discount_rate,
     equity_risk_premium,
-    flags_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    flags_json,
+    method,
+    spot_price
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, trading_date) DO UPDATE SET
     dcf_value = excluded.dcf_value,
     comps_value = excluded.comps_value,
     fair_value = excluded.fair_value,
     margin_of_safety = excluded.margin_of_safety,
+    method = excluded.method,
+    spot_price = excluded.spot_price,
     discount_rate = excluded.discount_rate,
     equity_risk_premium = excluded.equity_risk_premium,
     flags_json = excluded.flags_json
@@ -1525,8 +1576,8 @@ def get_revision_score(symbol: str, trading_date: str) -> RevisionScoreRecord | 
         return RevisionScoreRecord(
             symbol=row[0],
             trading_date=row[1],
-            score_30d=float(row[2]),
-            breadth_ratio=float(row[3]),
+            score_30d=float(row[2]) if row[2] is not None else None,
+            breadth_ratio=float(row[3]) if row[3] is not None else None,
             is_pead_aligned=bool(row[4]),
             detail_json=row[5],
             created_at=row[6] if row[6] else "",
@@ -1555,8 +1606,8 @@ def get_latest_revision_score(symbol: str) -> RevisionScoreRecord | None:
         return RevisionScoreRecord(
             symbol=row[0],
             trading_date=row[1],
-            score_30d=float(row[2]),
-            breadth_ratio=float(row[3]),
+            score_30d=float(row[2]) if row[2] is not None else None,
+            breadth_ratio=float(row[3]) if row[3] is not None else None,
             is_pead_aligned=bool(row[4]),
             detail_json=row[5],
             created_at=row[6] if row[6] else "",
@@ -1577,6 +1628,8 @@ async def save_fair_value(record: FairValueRecord) -> None:
         record.discount_rate,
         record.equity_risk_premium,
         record.flags_json,
+        record.method,
+        record.spot_price,
     )
     await execute_write_async(_UPSERT_FAIR_VALUE_SQL, params)
 
@@ -1596,6 +1649,8 @@ async def save_fair_values(records: Sequence[FairValueRecord]) -> None:
             r.discount_rate,
             r.equity_risk_premium,
             r.flags_json,
+            r.method,
+            r.spot_price,
         )
         for r in records
     ]
@@ -1610,7 +1665,7 @@ def get_fair_value(symbol: str, trading_date: str) -> FairValueRecord | None:
             """
             SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
                    margin_of_safety, discount_rate, equity_risk_premium,
-                   flags_json, created_at
+                   flags_json, created_at, method, spot_price
             FROM fair_value_log
             WHERE symbol = ? AND trading_date = ?
             """,
@@ -1623,11 +1678,13 @@ def get_fair_value(symbol: str, trading_date: str) -> FairValueRecord | None:
             trading_date=row[1],
             dcf_value=float(row[2]) if row[2] is not None else None,
             comps_value=float(row[3]) if row[3] is not None else None,
-            fair_value=float(row[4]),
-            margin_of_safety=float(row[5]),
+            fair_value=float(row[4]) if row[4] is not None else None,
+            margin_of_safety=float(row[5]) if row[5] is not None else None,
             discount_rate=float(row[6]),
             equity_risk_premium=float(row[7]),
             flags_json=row[8],
+            method=str(row[10]) if row[10] else "NONE",
+            spot_price=float(row[11]) if row[11] is not None else None,
             created_at=row[9] if row[9] else "",
         )
     finally:
@@ -1642,7 +1699,7 @@ def get_latest_fair_value(symbol: str) -> FairValueRecord | None:
             """
             SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
                    margin_of_safety, discount_rate, equity_risk_premium,
-                   flags_json, created_at
+                   flags_json, created_at, method, spot_price
             FROM fair_value_log
             WHERE symbol = ?
             ORDER BY trading_date DESC, created_at DESC
@@ -1657,11 +1714,13 @@ def get_latest_fair_value(symbol: str) -> FairValueRecord | None:
             trading_date=row[1],
             dcf_value=float(row[2]) if row[2] is not None else None,
             comps_value=float(row[3]) if row[3] is not None else None,
-            fair_value=float(row[4]),
-            margin_of_safety=float(row[5]),
+            fair_value=float(row[4]) if row[4] is not None else None,
+            margin_of_safety=float(row[5]) if row[5] is not None else None,
             discount_rate=float(row[6]),
             equity_risk_premium=float(row[7]),
             flags_json=row[8],
+            method=str(row[10]) if row[10] else "NONE",
+            spot_price=float(row[11]) if row[11] is not None else None,
             created_at=row[9] if row[9] else "",
         )
     finally:

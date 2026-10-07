@@ -19,6 +19,14 @@ _CLIENT = "services.market_data_service._core._get_client"
 _EXEC = "services.market_data_service._core._execute_api_call"
 
 
+@pytest.fixture(autouse=True)
+def _reset_estimates_forbidden() -> Any:
+    """eps-estimate 403 冷卻為類別層級狀態，每個測試前後重設，避免測試間互相污染。"""
+    FinnhubConsensusProvider._estimates_forbidden_until = 0.0
+    yield
+    FinnhubConsensusProvider._estimates_forbidden_until = 0.0
+
+
 def _et(year: int, month: int, day: int) -> datetime:
     return datetime(year, month, day, 12, 0, tzinfo=ZoneInfo("America/New_York"))
 
@@ -463,6 +471,29 @@ async def test_estimate_snapshots_calendar_fallback_maps_current_fiscal_quarter(
     by_h = {s.horizon: s.eps_mean for s in snapshots}
     assert by_h == {"0q": 2.9512, "+1q": 2.2866}
     assert all(s.source == "finnhub_calendar" for s in snapshots)
+    # 每列帶財期，供修正動能跨季以財期配對
+    assert {s.horizon: s.fiscal_period for s in snapshots} == {
+        "0q": "2027-Q1",
+        "+1q": "2027-Q2",
+    }
+
+    # 403 後進入冷卻：再次抓取不再打 eps-estimate（免費方案每次 403 仍消耗限流配額）
+    calls: list[Any] = []
+
+    async def exec_call_2(fn: Any, *args: Any, **kwargs: Any) -> Any:
+        calls.append(fn)
+        return await exec_call(fn, *args, **kwargs)
+
+    with (
+        patch("services.fundamental_providers.datetime") as mock_dt,
+        patch(_CLIENT, return_value=client),
+        patch(_EXEC, side_effect=exec_call_2),
+        patch(_CAL, new=AsyncMock(return_value=calendar_rows)),
+    ):
+        mock_dt.now.return_value = _et(2026, 10, 8)
+        again = await provider.get_estimate_snapshots("AAPL")
+    assert client.company_eps_estimates not in calls
+    assert {s.horizon for s in again} == {"0q", "+1q"}
 
 
 @pytest.mark.asyncio

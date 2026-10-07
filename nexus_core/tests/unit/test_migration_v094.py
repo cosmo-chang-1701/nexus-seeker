@@ -19,6 +19,8 @@ from database.fundamental_pipeline import (
     save_revision_scores,
     save_watch_candidates,
 )
+from database.core import get_migrations
+from database.migrations import v092_add_earnings_surprise as mig_v092
 from database.migrations import v094_add_valuation_and_watch as mig
 from market_analysis.fundamental_pipeline.models import (
     FairValueRecord,
@@ -39,10 +41,24 @@ def test_v094_migration_metadata() -> None:
     assert "CREATE TABLE IF NOT EXISTS fundamental_watch_candidate" in mig.sql
 
 
+def test_migrations_from_v090_are_contiguous() -> None:
+    """v090 起的遷移版本必須連續且唯一（runner 只執行 > MAX(version)，跳號會讓後續版本被誤判）。"""
+    versions = [m["version"] for m in get_migrations() if m["version"] >= 90]
+    assert versions == list(range(90, max(versions) + 1))
+    assert len(versions) == len(set(versions))
+    assert max(versions) == 94
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> dict[str, int]:
+    """回傳 {欄位名: notnull 旗標}。"""
+    return {r[1]: int(r[3]) for r in conn.execute(f"PRAGMA table_info({table})")}
+
+
 def test_v094_migration_ddl_execution() -> None:
-    """測試 DDL 可於乾淨的 SQLite 連線上正確執行。"""
+    """DDL 可於套用 v092 後的 SQLite 連線上正確執行（v094 會 ALTER v092 的兩張表）。"""
     conn = sqlite3.connect(":memory:")
     try:
+        conn.executescript(mig_v092.sql)
         conn.executescript(mig.sql)
         tables = [
             r[0]
@@ -65,6 +81,89 @@ def test_v094_migration_ddl_execution() -> None:
             )
     finally:
         conn.close()
+
+
+def test_v094_final_schema_nullable_and_new_columns() -> None:
+    """無效值存 NULL（不以 0.0 哨兵）；v092 兩張表以 ADD COLUMN 補財期與發布日。"""
+    conn = sqlite3.connect(":memory:")
+    try:
+        conn.executescript(mig_v092.sql)
+        conn.executescript(mig.sql)
+        fv_cols = _columns(conn, "fair_value_log")
+        assert fv_cols["fair_value"] == 0
+        assert fv_cols["margin_of_safety"] == 0
+        assert fv_cols["method"] == 1
+        assert "spot_price" in fv_cols
+        rev_cols = _columns(conn, "revision_score_log")
+        assert rev_cols["score_30d"] == 0
+        assert rev_cols["breadth_ratio"] == 0
+        assert "fiscal_period" in _columns(conn, "eps_estimate_snapshot")
+        assert "announced_on" in _columns(conn, "earnings_surprise")
+
+        conn.execute(
+            """
+            INSERT INTO fair_value_log (
+                symbol, trading_date, fair_value, margin_of_safety,
+                discount_rate, equity_risk_premium, flags_json
+            ) VALUES ('SPY', '2026-10-05', NULL, NULL, 0.08, 0.045, '[]')
+            """
+        )
+        row = conn.execute(
+            "SELECT fair_value, margin_of_safety, method FROM fair_value_log"
+        ).fetchone()
+        assert row == (None, None, "NONE")
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(
+                """
+                INSERT INTO fair_value_log (
+                    symbol, trading_date, discount_rate, equity_risk_premium,
+                    flags_json, method
+                ) VALUES ('X', '2026-10-05', 0.08, 0.045, '[]', 'BOGUS')
+                """
+            )
+    finally:
+        conn.close()
+
+
+@pytest.mark.asyncio
+async def test_null_fair_value_and_revision_roundtrip(db_conn: Any) -> None:
+    """method = NONE 的估值與無可配對財期的動能以 NULL 入庫並原樣讀回。"""
+    await save_fair_value(
+        FairValueRecord(
+            symbol="SPY",
+            trading_date="2026-10-05",
+            dcf_value=None,
+            comps_value=None,
+            fair_value=None,
+            margin_of_safety=None,
+            discount_rate=0.08,
+            equity_risk_premium=0.045,
+            flags_json='["FCF_UNAVAILABLE"]',
+            method="NONE",
+            spot_price=570.0,
+        )
+    )
+    fv = get_fair_value("SPY", "2026-10-05")
+    assert fv is not None
+    assert fv.fair_value is None
+    assert fv.margin_of_safety is None
+    assert fv.method == "NONE"
+    assert fv.spot_price == 570.0
+
+    await save_revision_score(
+        RevisionScoreRecord(
+            symbol="SPY",
+            trading_date="2026-10-05",
+            score_30d=None,
+            breadth_ratio=None,
+            is_pead_aligned=False,
+            detail_json="{}",
+        )
+    )
+    rev = get_revision_score("SPY", "2026-10-05")
+    assert rev is not None
+    assert rev.score_30d is None
+    assert rev.breadth_ratio is None
 
 
 @pytest.mark.asyncio

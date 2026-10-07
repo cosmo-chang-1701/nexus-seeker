@@ -1,17 +1,41 @@
 """分析師修正動能模型與 PEAD 捕捉單元測試。"""
 
+from datetime import date
+
 import pytest
 from market_analysis.fundamental_pipeline.models import (
     EPSEstimateSnapshotRecord,
 )
 from market_analysis.fundamental_pipeline.revision_momentum import (
+    FLAG_BREADTH_UNAVAILABLE,
+    FLAG_NO_CURRENT_SNAPSHOT,
+    FLAG_NO_MATCHED_PERIOD,
+    FLAG_NO_PRIOR_SNAPSHOT,
     FLOOR_EPS,
     calculate_breadth,
     calculate_horizon_slope,
     calculate_revision_score,
     evaluate_revision_momentum,
     is_pead_aligned,
+    prior_window,
 )
+
+
+def _snap(
+    snapshot_date: str,
+    horizon: str,
+    eps: float,
+    period: str | None,
+    source: str = "finnhub_calendar",
+) -> EPSEstimateSnapshotRecord:
+    return EPSEstimateSnapshotRecord(
+        symbol="NVDA",
+        snapshot_date=snapshot_date,
+        horizon=horizon,  # type: ignore[arg-type]
+        source=source,
+        eps_mean=eps,
+        fiscal_period=period,
+    )
 
 
 def test_calculate_horizon_slope_normal() -> None:
@@ -65,9 +89,13 @@ def test_calculate_revision_score() -> None:
     # 0.70 * 1.0 + 0.30 * 0.5 = 0.85 -> 85.0
     assert pytest.approx(score_partial, rel=1e-2) == 85.0
 
-    # 完全無可用斜率
-    score_empty = calculate_revision_score({}, breadth=0.0)
-    assert score_empty == 0.0
+    # 完全無可用斜率 → None（不以 0.0 哨兵充當「動能持平」）
+    assert calculate_revision_score({}, breadth=0.0) is None
+
+    # 無分析師層級廣度：斜率項權重 100%（0q/+1q 皆滿分上修 → +100）
+    assert calculate_revision_score(slopes_partial, breadth=None) == pytest.approx(
+        100.0
+    )
 
 
 def test_is_pead_aligned() -> None:
@@ -92,120 +120,114 @@ def test_is_pead_aligned() -> None:
     assert is_pead_aligned(30.0, 30.0, None) is False
 
 
-def test_evaluate_revision_momentum_end_to_end() -> None:
-    curr_snaps = [
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="0q",
-            source="finnhub",
-            eps_mean=0.90,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="+1q",
-            source="finnhub",
-            eps_mean=1.05,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="0y",
-            source="finnhub",
-            eps_mean=3.80,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="+1y",
-            source="finnhub",
-            eps_mean=4.60,
-        ),
-    ]
-
-    prior_snaps = [
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-09-05",
-            horizon="0q",
-            source="finnhub",
-            eps_mean=0.80,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-09-05",
-            horizon="+1q",
-            source="finnhub",
-            eps_mean=0.95,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-09-05",
-            horizon="0y",
-            source="finnhub",
-            eps_mean=3.50,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-09-05",
-            horizon="+1y",
-            source="finnhub",
-            eps_mean=4.20,
-        ),
-    ]
-
-    res = evaluate_revision_momentum(
-        current_snapshots=curr_snaps,
-        prior_snapshots=prior_snaps,
-        surprise_score=35.0,
-        days_since_surprise=20,
+def test_prior_window_is_t_minus_35_to_28_targeting_30() -> None:
+    start, end, target = prior_window(date(2026, 10, 5))
+    assert (start, end, target) == (
+        date(2026, 8, 31),
+        date(2026, 9, 7),
+        date(2026, 9, 5),
     )
 
-    assert res.score_30d > 0
-    assert res.breadth_ratio == 1.0
+
+def test_evaluate_revision_momentum_pairs_same_fiscal_period() -> None:
+    """同財期配對：只有 0q/+1q（免費方案）也能計算；無廣度時不以斜率方向重複計分。"""
+    curr = [
+        _snap("2026-10-05", "0q", 0.90, "2027-Q3"),
+        _snap("2026-10-05", "+1q", 1.05, "2027-Q4"),
+    ]
+    prior = [
+        _snap("2026-09-05", "0q", 0.80, "2027-Q3"),
+        _snap("2026-09-05", "+1q", 0.95, "2027-Q4"),
+    ]
+    res = evaluate_revision_momentum(
+        current_snapshots=curr,
+        prior_snapshots=prior,
+        surprise_score=35.0,
+        days_since_surprise=20,
+        prior_target_date=date(2026, 9, 5),
+    )
+    assert res.slopes["0q"] == pytest.approx(0.125)
+    assert res.slopes["+1q"] == pytest.approx(0.10 / 0.95)
+    # S = 0.4 * clip(0.125/0.2) + 0.6 * clip(0.1053/0.2) = 0.25 + 0.3158 → 56.58（無廣度，斜率 100%）
+    expected = 100 * (0.4 * 0.625 + 0.6 * (0.10 / 0.95) / 0.20)
+    assert res.score_30d == pytest.approx(expected, abs=0.01)
+    assert res.breadth_ratio is None
+    assert FLAG_BREADTH_UNAVAILABLE in res.details["flags"]
     assert res.is_pead_aligned is True
-    assert len(res.slopes) == 4
-    assert res.up_count == 4
-    assert res.down_count == 0
+    assert res.details["pairs"]["0q"]["fiscal_period"] == "2027-Q3"
+
+
+def test_evaluate_revision_momentum_across_quarter_rollover() -> None:
+    """跨季換期：t-30d 的 +1q（2027-Q4）在 t 變成 0q，必須以財期配對而非 horizon 標籤。"""
+    curr = [
+        _snap("2026-10-05", "0q", 1.10, "2027-Q4"),
+        _snap("2026-10-05", "+1q", 1.30, "2028-Q1"),
+    ]
+    prior = [
+        _snap("2026-09-05", "0q", 2.00, "2027-Q3"),  # 已結束的舊 0q，不得與新 0q 比較
+        _snap("2026-09-05", "+1q", 1.00, "2027-Q4"),
+    ]
+    res = evaluate_revision_momentum(curr, prior, prior_target_date=date(2026, 9, 5))
+    assert set(res.slopes) == {"0q"}
+    assert res.slopes["0q"] == pytest.approx(0.10)  # 1.00 → 1.10
+    assert res.details["pairs"]["0q"]["prior_horizon"] == "+1q"
+    assert res.details["unmatched_horizons"] == ["+1q"]  # 2028-Q1 無基準 → 不計
+    assert res.score_30d == pytest.approx(50.0)
+
+
+def test_evaluate_revision_momentum_picks_prior_closest_to_target() -> None:
+    """窗口內同財期多個快照日時取最接近 t-30 者。"""
+    curr = [_snap("2026-10-05", "0q", 1.20, "2027-Q3")]
+    prior = [
+        _snap("2026-09-07", "0q", 1.15, "2027-Q3"),  # t-28
+        _snap("2026-09-05", "0q", 1.00, "2027-Q3"),  # t-30（目標）
+        _snap("2026-08-31", "0q", 0.90, "2027-Q3"),  # t-35
+    ]
+    res = evaluate_revision_momentum(curr, prior, prior_target_date=date(2026, 9, 5))
+    assert res.details["pairs"]["0q"]["prior_date"] == "2026-09-05"
+    assert res.slopes["0q"] == pytest.approx(0.20)
+
+
+def test_evaluate_revision_momentum_without_period_or_prior_is_none() -> None:
+    """缺財期（v094 前舊快照）或窗口內無快照時不計分（None），並記錄原因旗標。"""
+    curr = [_snap("2026-10-05", "0q", 0.90, "2027-Q3")]
+    legacy_prior = [_snap("2026-09-05", "0q", 0.80, None)]
+    res = evaluate_revision_momentum(curr, legacy_prior)
+    assert res.score_30d is None
+    assert FLAG_NO_MATCHED_PERIOD in res.details["flags"]
+
+    res_empty = evaluate_revision_momentum(curr, [])
+    assert res_empty.score_30d is None
+    assert FLAG_NO_PRIOR_SNAPSHOT in res_empty.details["flags"]
+    assert res_empty.is_pead_aligned is False
+
+    res_no_curr = evaluate_revision_momentum([], legacy_prior)
+    assert FLAG_NO_CURRENT_SNAPSHOT in res_no_curr.details["flags"]
+
+
+def test_evaluate_revision_momentum_with_analyst_breadth() -> None:
+    """提供分析師層級調升 / 調降計數時才計入 30% 廣度項。"""
+    curr = [_snap("2026-10-05", "0q", 1.20, "2027-Q3")]
+    prior = [_snap("2026-09-05", "0q", 1.00, "2027-Q3")]
+    res = evaluate_revision_momentum(
+        curr, prior, analyst_up_count=3, analyst_down_count=1
+    )
+    assert res.breadth_ratio == pytest.approx(0.5)
+    assert res.score_30d == pytest.approx(100 * (0.70 * 1.0 + 0.30 * 0.5))
+    assert FLAG_BREADTH_UNAVAILABLE not in res.details["flags"]
 
 
 def test_evaluate_revision_momentum_deduplicates_horizons() -> None:
-    # 測試若同一天包含重複來源的相同 horizon (例如 2 筆 0q)，不應重複加總 up_count
-    curr_snaps = [
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="0q",
-            source="finnhub",
-            eps_mean=0.90,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-10-05",
-            horizon="0q",
-            source="bloomberg",
-            eps_mean=0.90,
-        ),
+    # 同一天同 horizon 有兩個來源時只取第一筆，不重複計數
+    curr = [
+        _snap("2026-10-05", "0q", 0.90, "2027-Q3", source="finnhub"),
+        _snap("2026-10-05", "0q", 0.90, "2027-Q3", source="bloomberg"),
     ]
-    prior_snaps = [
-        EPSEstimateSnapshotRecord(
-            symbol="NVDA",
-            snapshot_date="2026-09-05",
-            horizon="0q",
-            source="finnhub",
-            eps_mean=0.80,
-        ),
-    ]
-
-    res = evaluate_revision_momentum(
-        current_snapshots=curr_snaps,
-        prior_snapshots=prior_snaps,
-    )
-    # 僅 1 個 horizon (0q)，up_count 應為 1 而非 2
+    prior = [_snap("2026-09-05", "0q", 0.80, "2027-Q3", source="finnhub")]
+    res = evaluate_revision_momentum(current_snapshots=curr, prior_snapshots=prior)
     assert res.up_count == 1
     assert res.down_count == 0
-    assert res.breadth_ratio == 1.0
+    assert len(res.slopes) == 1
 
 
 def test_is_pead_aligned_nan_inf_protection() -> None:
