@@ -3,7 +3,14 @@
 涵蓋三大維度與先進科技五大支柱：
 1. 總體核心 (Macro & Traditional Core): 5 條
 2. 商業太空與國防前沿 (Space Economy & Defense): 5 條
-3. 先進科技生態矩陣 (Frontier & Advanced Technology): 7 條 (另提供量子運算前沿擴充)
+3. 先進科技生態矩陣 (Frontier & Advanced Technology): 7 條
+
+全系統（排程 `run_all_channel_checks`、`/fa` 標的反查 `get_links_for_symbol`、鍵值查詢）
+一律使用同一份 `SUPPLY_CHAIN_LINKS`（17 條），不再有額外擴充鏈。
+
+驅動端識別碼 `XBRL:<代號>:<指標>` 的指標由 SEC XBRL companyconcept 計算：
+`capex`（購置不動產廠房設備現金流出）、`rpo`（剩餘履約義務）、
+`dio`（存貨 / 銷貨成本 × 天數，自行計算，不使用周轉率）、`revenue`（營收）。
 """
 
 from __future__ import annotations
@@ -69,6 +76,7 @@ LINK_BRAND_RETAIL_INVENTORY = SupplyChainLink(
     followers=["PG", "KO", "PEP"],
     description="沃爾瑪/Costco 存貨周轉天數（DIO）上升意味渠道堵塞，反向壓制上游品牌廠出貨動能。",
     lead_lag_quarters="1-2Q",
+    polarity=-1,
 )
 
 LINK_AIR_TRAVEL = SupplyChainLink(
@@ -303,19 +311,6 @@ LINK_ADV_ROBOTICS_EMBODIED_NOWCAST = SupplyChainLink(
     lead_lag_quarters="0Q (NOWCAST)",
 )
 
-# 擴充前沿鏈條（量子運算）
-LINK_ADV_QUANTUM_COMPUTING = SupplyChainLink(
-    link_key="ADV_QUANTUM_COMPUTING",
-    title="量子運算與前沿計算架構",
-    link_type="NOWCAST",
-    experimental=True,
-    pillar="FRONTIER_TECH",
-    drivers=["XBRL:IBM:rpo"],
-    followers=["IONQ", "RGTI", "QBTS"],
-    description="國家安全實驗室（DOE/DOD）之先導量子運算專案撥款與合約（RPO），臨近驗證商業純量子系統之概念驗證（POC）營收。",
-    lead_lag_quarters="0-1Q (NOWCAST)",
-)
-
 LINK_ROBOTICS_EMBODIED_NOWCAST: SupplyChainLink = LINK_ADV_ROBOTICS_EMBODIED_NOWCAST
 
 # 核心 17 條產業鏈列表 (5 總體 + 5 太空 + 7 先進科技)
@@ -345,11 +340,9 @@ CORE_SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = [
 # 預設產業鏈列表（精準 17 條）
 SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = CORE_SUPPLY_CHAIN_LINKS
 
-# 全量產業鏈列表（包含擴充鏈條）
-ALL_SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = [
-    *CORE_SUPPLY_CHAIN_LINKS,
-    LINK_ADV_QUANTUM_COMPUTING,
-]
+# 相容別名：與 SUPPLY_CHAIN_LINKS 為同一份 17 條清單（原量子運算擴充鏈已移除，
+# 避免 /fa 反查顯示排程從不計算的鏈條）。
+ALL_SUPPLY_CHAIN_LINKS: list[SupplyChainLink] = SUPPLY_CHAIN_LINKS
 
 # 快速鍵值索引表
 _KEY_INDEX_MAP: dict[str, SupplyChainLink] = {

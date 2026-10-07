@@ -6,6 +6,8 @@
 3. 使用 BoundedCache 執行執行期去重防護。
 4. 預先註冊宏觀流動性 (NYSE 交易日 16:15 ET) 與總經預期差 (平日 08:30 / 10:00 ET)
    核心工作。預期差工作刻意不排除休市日：總經數據可能於休市日照常公布（如耶穌受難日的非農）。
+5. PR4 產業鏈交叉驗證 (NYSE 交易日 18:00 ET)：對最近兩個已結束曆季執行 17 條鏈檢驗，
+   只寫入 channel_check_log，不推播。
 """
 
 from __future__ import annotations
@@ -19,11 +21,13 @@ from zoneinfo import ZoneInfo
 import config
 import market_time
 from discord.ext import commands, tasks
+from market_analysis.fundamental_pipeline.alt_data_metrics import completed_periods
 from market_analysis.fundamental_pipeline.event_clock import (
     ClockJob,
     ClockJobRegistry,
     weekday_at,
 )
+from services.alt_data_service import alt_data_service
 from services.bounded_cache import BoundedCache
 from services.calendar_service import calendar_service
 from services.liquidity_service import run_liquidity_pipeline
@@ -108,6 +112,43 @@ async def _run_macro_surprise_job(now_et: datetime) -> None:
         logger.exception("[FundamentalPipeline] 執行總經預期差任務失敗")
 
 
+# 每次排程檢驗最近 N 個已結束曆季：較新一季多半仍在財報季（XBRL 尚未申報），
+# 前一季通常已完整，可完成方向命中驗證。
+CHANNEL_CHECK_PERIODS_PER_RUN = 2
+
+
+async def _run_channel_check_job(now_et: datetime) -> None:
+    """NYSE 交易日 18:00 ET 執行 17 條產業鏈交叉驗證並寫入 channel_check_log（不推播）。
+
+    監控迴圈已做 leader 與記憶體守衛；此工作耗時較長（SEC 限速下約數十秒），
+    每個期別開始前再檢查一次 `is_memory_safe()`。單條鏈的例外由
+    `run_all_channel_checks` 隔離，單一期別失敗也不影響另一期別。
+    """
+    as_of = now_et.date()
+    for period in completed_periods(as_of, CHANNEL_CHECK_PERIODS_PER_RUN):
+        if not is_memory_safe():
+            logger.warning(
+                f"[FundamentalPipeline] 記憶體使用率超標，略過產業鏈檢驗 {period}"
+            )
+            return
+        try:
+            results = await SingleFlightManager.run(
+                f"channel_check_job:{period}",
+                alt_data_service.run_all_channel_checks,
+                as_of_period=period,
+                as_of=as_of,
+                persist=True,
+            )
+            verdicts = [r.verdict for r in results]
+            logger.info(
+                f"[FundamentalPipeline] 產業鏈檢驗 {period} 完成：共 {len(verdicts)} 條，"
+                f"共振確認 {verdicts.count('CONFIRM')}、背離 {verdicts.count('DIVERGE')}、"
+                f"資料不足 {verdicts.count('INSUFFICIENT')}"
+            )
+        except Exception:
+            logger.exception(f"[FundamentalPipeline] 產業鏈檢驗 {period} 執行失敗")
+
+
 def register_default_fundamental_jobs() -> None:
     """註冊 PR1 預設之基礎事件時鐘任務。"""
     ClockJobRegistry.register(
@@ -143,6 +184,18 @@ def register_default_fundamental_jobs() -> None:
             is_due_fn=nyse_trading_day_at(16, 15, window_minutes=15),
             priority=30,
             description="抓取 FRED H.4.1/NFCI 計算淨流動性季增率與體制狀態",
+        )
+    )
+
+    ClockJobRegistry.register(
+        ClockJob(
+            job_id="channel_check_1800",
+            name="18:00 實體產業鏈交叉驗證",
+            schedule_desc="NYSE 交易日 18:00 ET（每日一次，最近兩個已結束曆季）",
+            handler=_run_channel_check_job,
+            is_due_fn=nyse_trading_day_at(18, 0, window_minutes=15),
+            priority=40,
+            description="SEC XBRL / TSA / FRED / TWSE·TPEx 17 條產業鏈檢驗，只寫入 channel_check_log",
         )
     )
 

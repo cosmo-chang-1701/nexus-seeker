@@ -7,6 +7,12 @@
 2. `NOWCAST` (高頻臨近預測):
    以實體客流、鐵路裝載或台廠供應鏈月營收高頻指標，檢驗方向性命中率 (nowcast_hit)
    與滾動相關係數 (correlation)。
+
+傳導極性：`SupplyChainLink.polarity == -1`（反向關係，例如零售 DIO 上升壓制品牌廠出貨）時，
+判定前先把驅動端增長率乘上極性；`driver_growth` 欄位仍保存原始量測值。
+
+時間對齊：兩端皆為同一曆季（`as_of_period`）的觀測值；`lead_lag_quarters` 僅為說明，
+尚未實作領先落後位移。
 """
 
 from __future__ import annotations
@@ -26,6 +32,22 @@ from market_analysis.fundamental_pipeline.models import (
 from market_analysis.fundamental_pipeline.supply_chain_map import (
     extract_symbols_from_link,
 )
+
+# 使用者可見之繁中對照（/fa 與日誌摘要一律使用中文，不顯示英文狀態碼）
+VERDICT_LABELS_ZH: dict[str, str] = {
+    "CONFIRM": "共振確認",
+    "DIVERGE": "背離",
+    "INSUFFICIENT": "資料不足",
+}
+LINK_TYPE_LABELS_ZH: dict[str, str] = {
+    "CAUSAL": "因果傳導",
+    "NOWCAST": "高頻臨近預測",
+}
+NOWCAST_DIRECTION_LABELS_ZH: dict[str, str] = {
+    "NOWCAST_UP": "預測向上",
+    "NOWCAST_DOWN": "預測向下",
+    "FLAT": "持平",
+}
 
 # 關鍵量化門檻常數
 DEFAULT_CAUSAL_DIVERGENCE_THRESHOLD_PP: float = 25.0
@@ -74,6 +96,10 @@ def compute_pearson_correlation(
     return max(-1.0, min(1.0, round(corr, 3)))
 
 
+def _with_note(text: str, note: str) -> str:
+    return f"{text}：{note}" if note else text
+
+
 def evaluate_causal_link(
     link: SupplyChainLink,
     as_of_period: str,
@@ -81,14 +107,16 @@ def evaluate_causal_link(
     follower_growth: float | None,
     divergence_threshold_pp: float = DEFAULT_CAUSAL_DIVERGENCE_THRESHOLD_PP,
     members_data: dict[str, Any] | None = None,
+    data_note: str = "",
 ) -> ChannelCheckResult:
-    """評估 CAUSAL 因果傳導鏈之共振與背離狀態。"""
+    """評估 CAUSAL 因果傳導鏈之共振與背離狀態（驅動端先乘上 polarity）。"""
     members = members_data if members_data is not None else {}
     members_dict = {
         "link_key": link.link_key,
         "title": link.title,
         "pillar": link.pillar,
         "lead_lag_quarters": link.lead_lag_quarters,
+        "polarity": link.polarity,
         "description": link.description,
         "drivers": link.drivers,
         "followers": link.followers,
@@ -111,11 +139,18 @@ def evaluate_causal_link(
             nowcast_hit=None,
             correlation=None,
             verdict="INSUFFICIENT",
-            summary_text="數據不充分 (驅動端或跟隨端增長率缺失)",
+            summary_text=_with_note("數據不充分 (驅動端或跟隨端增長率缺失)", data_note),
             members=members_dict,
         )
 
-    # 2. 計算傳導背離度點數 (follower - driver)
+    # 2. 套用傳導極性後計算背離度點數 (follower - polarity × driver)
+    raw_driver = driver_growth
+    driver_growth = round(raw_driver * link.polarity, 2)
+    polarity_note = (
+        f"｜ 反向關係：驅動原值 {raw_driver:+.1f}% 取負號比較 "
+        if link.polarity == -1
+        else ""
+    )
     divergence_pp = round(follower_growth - driver_growth, 2)
     abs_div = abs(divergence_pp)
 
@@ -158,13 +193,16 @@ def evaluate_causal_link(
                 f"跟隨增長 {follower_growth:+.1f}% ｜ 偏差 {divergence_pp:+.1f}pp)"
             )
 
+    if polarity_note:
+        summary_text = f"{summary_text} {polarity_note.strip()}"
+
     return ChannelCheckResult(
         link_key=link.link_key,
         title=link.title,
         link_type=link.link_type,
         experimental=link.experimental,
         as_of_period=as_of_period,
-        driver_growth=driver_growth,
+        driver_growth=raw_driver,
         follower_growth=follower_growth,
         divergence_pp=divergence_pp,
         nowcast_direction=None,
@@ -186,14 +224,16 @@ def evaluate_nowcast_link(
     direction_threshold_pct: float = DEFAULT_NOWCAST_DIRECTION_THRESHOLD_PCT,
     allow_nowcast_preview: bool = True,
     members_data: dict[str, Any] | None = None,
+    data_note: str = "",
 ) -> ChannelCheckResult:
-    """評估 NOWCAST 高頻臨近預測之方向性命中率與相關性檢驗。"""
+    """評估 NOWCAST 高頻臨近預測之方向性命中率與相關性檢驗（先行指標先乘上 polarity）。"""
     members = members_data if members_data is not None else {}
     members_dict = {
         "link_key": link.link_key,
         "title": link.title,
         "pillar": link.pillar,
         "lead_lag_quarters": link.lead_lag_quarters,
+        "polarity": link.polarity,
         "description": link.description,
         "drivers": link.drivers,
         "followers": link.followers,
@@ -216,9 +256,12 @@ def evaluate_nowcast_link(
             nowcast_hit=None,
             correlation=None,
             verdict="INSUFFICIENT",
-            summary_text="數據不充分 (高頻先行指標數據缺失)",
+            summary_text=_with_note("數據不充分 (高頻先行指標數據缺失)", data_note),
             members=members_dict,
         )
+
+    raw_driver = driver_growth
+    driver_growth = round(raw_driver * link.polarity, 2)
 
     # 2. 判定高頻指標方向性
     if driver_growth >= direction_threshold_pct:
@@ -272,7 +315,7 @@ def evaluate_nowcast_link(
                 summary_text = f"高頻先行指標偏空示警 (先行衰退 {driver_growth:+.1f}% ｜ 待跟隨端財報發布)"
         else:
             verdict = "INSUFFICIENT"
-            summary_text = "待跟隨端季度財報公布驗證"
+            summary_text = _with_note("待跟隨端季度財報公布驗證", data_note)
 
     return ChannelCheckResult(
         link_key=link.link_key,
@@ -280,7 +323,7 @@ def evaluate_nowcast_link(
         link_type=link.link_type,
         experimental=link.experimental,
         as_of_period=as_of_period,
-        driver_growth=driver_growth,
+        driver_growth=raw_driver,
         follower_growth=follower_growth,
         divergence_pp=divergence_pp,
         nowcast_direction=direction,
@@ -303,6 +346,7 @@ def evaluate_channel_check(
     direction_threshold_pct: float = DEFAULT_NOWCAST_DIRECTION_THRESHOLD_PCT,
     allow_nowcast_preview: bool = True,
     members_data: dict[str, Any] | None = None,
+    data_note: str = "",
 ) -> ChannelCheckResult:
     """產業鏈交叉驗證統一決策入口。"""
     if link.link_type == "CAUSAL":
@@ -313,6 +357,7 @@ def evaluate_channel_check(
             follower_growth=follower_growth,
             divergence_threshold_pp=divergence_threshold_pp,
             members_data=members_data,
+            data_note=data_note,
         )
     return evaluate_nowcast_link(
         link=link,
@@ -324,6 +369,7 @@ def evaluate_channel_check(
         direction_threshold_pct=direction_threshold_pct,
         allow_nowcast_preview=allow_nowcast_preview,
         members_data=members_data,
+        data_note=data_note,
     )
 
 
@@ -341,5 +387,9 @@ def result_to_log_record(result: ChannelCheckResult) -> ChannelCheckLogRecord:
         nowcast_hit=result.nowcast_hit,
         correlation=result.correlation,
         verdict=result.verdict,
-        members_json=json.dumps(result.members, ensure_ascii=False),
+        # summary_text 一併存入 members_json，/fa 才能顯示「資料不足」的原因
+        members_json=json.dumps(
+            {**result.members, "summary_text": result.summary_text},
+            ensure_ascii=False,
+        ),
     )

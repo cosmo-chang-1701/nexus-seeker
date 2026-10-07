@@ -1,0 +1,112 @@
+{
+ "cik": 936468,
+ "taxonomy": "us-gaap",
+ "tag": "RevenueRemainingPerformanceObligation",
+ "label": "Revenue, Remaining Performance Obligation, Amount",
+ "description": "Amount of transaction price allocated to performance obligation that has not been recognized as revenue.",
+ "entityName": "LOCKHEED MARTIN CORPORATION",
+ "units": {
+  "USD": [
+   {
+    "end": "2024-03-31",
+    "val": 159400000000,
+    "accn": "0000936468-24-000052",
+    "fy": 2024,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2024-04-23",
+    "frame": "CY2024Q1I"
+   },
+   {
+    "end": "2024-06-30",
+    "val": 158300000000,
+    "accn": "0000936468-24-000095",
+    "fy": 2024,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2024-07-23",
+    "frame": "CY2024Q2I"
+   },
+   {
+    "end": "2024-09-29",
+    "val": 165700000000,
+    "accn": "0000936468-24-000110",
+    "fy": 2024,
+    "fp": "Q3",
+    "form": "10-Q",
+    "filed": "2024-10-22",
+    "frame": "CY2024Q3I"
+   },
+   {
+    "end": "2024-12-31",
+    "val": 176000000000,
+    "accn": "0000936468-25-000009",
+    "fy": 2024,
+    "fp": "FY",
+    "form": "10-K",
+    "filed": "2025-01-28",
+    "frame": "CY2024Q4I"
+   },
+   {
+    "end": "2025-03-30",
+    "val": 173000000000,
+    "accn": "0000936468-25-000035",
+    "fy": 2025,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2025-04-22",
+    "frame": "CY2025Q1I"
+   },
+   {
+    "end": "2025-06-29",
+    "val": 166500000000,
+    "accn": "0001628280-25-035565",
+    "fy": 2025,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2025-07-22",
+    "frame": "CY2025Q2I"
+   },
+   {
+    "end": "2025-09-28",
+    "val": 179100000000,
+    "accn": "0001628280-25-045693",
+    "fy": 2025,
+    "fp": "Q3",
+    "form": "10-Q",
+    "filed": "2025-10-21",
+    "frame": "CY2025Q3I"
+   },
+   {
+    "end": "2025-12-31",
+    "val": 193600000000,
+    "accn": "0001628280-26-004195",
+    "fy": 2025,
+    "fp": "FY",
+    "form": "10-K",
+    "filed": "2026-01-29",
+    "frame": "CY2025Q4I"
+   },
+   {
+    "end": "2026-03-29",
+    "val": 186400000000,
+    "accn": "0001628280-26-026836",
+    "fy": 2026,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2026-04-23",
+    "frame": "CY2026Q1I"
+   },
+   {
+    "end": "2026-06-28",
+    "val": 230400000000,
+    "accn": "0001628280-26-049411",
+    "fy": 2026,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2026-07-23",
+    "frame": "CY2026Q2I"
+   }
+  ]
+ }
+}

@@ -2,351 +2,419 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from market_analysis.fundamental_pipeline.models import SupplyChainLink
 from market_analysis.fundamental_pipeline.supply_chain_map import (
+    LINK_AI_CAPEX,
+    LINK_BRAND_RETAIL_INVENTORY,
     LINK_SPACE_STARLINK_TW_NOWCAST,
+    SUPPLY_CHAIN_LINKS,
 )
 from market_analysis.macro_signals import Observation
-from services.alt_data_service import AltDataService
+from services.alt_data_service import AltDataService, SideMeasurement
+
+_FIX = Path(__file__).parent / "fixtures" / "alt_data"
+_AS_OF = date(2026, 10, 7)
+
+
+def _load(name: str) -> Any:
+    return json.loads((_FIX / name).read_text())
+
+
+class _FakeSec:
+    """以真實 companyconcept fixture 模擬 SecEdgarClient。"""
+
+    def __init__(self, concepts: dict[tuple[str, str], Any]) -> None:
+        self._concepts = concepts
+        self.calls: list[tuple[str, str]] = []
+
+    async def get_cik(self, symbol: str) -> str | None:
+        return {
+            "MSFT": "789019",
+            "AMZN": "1018724",
+            "WMT": "104169",
+            "LMT": "936468",
+        }.get(symbol)
+
+    async def fetch_company_concept(self, cik: str, tag: str) -> Any:
+        self.calls.append((cik, tag))
+        return self._concepts.get((cik, tag))
+
+
+def _fake_sec() -> _FakeSec:
+    return _FakeSec(
+        {
+            ("789019", "PaymentsToAcquirePropertyPlantAndEquipment"): _load(
+                "sec_concept_msft_PaymentsToAcquirePropertyPlantAndEquipment.json"
+            ),
+            ("1018724", "PaymentsToAcquirePropertyPlantAndEquipment"): _load(
+                "sec_concept_amzn_PaymentsToAcquirePropertyPlantAndEquipment.json"
+            ),
+            ("1018724", "PaymentsToAcquireProductiveAssets"): _load(
+                "sec_concept_amzn_PaymentsToAcquireProductiveAssets.json"
+            ),
+            ("104169", "InventoryNet"): _load("sec_concept_wmt_InventoryNet.json"),
+            ("104169", "CostOfRevenue"): _load("sec_concept_wmt_CostOfRevenue.json"),
+            ("936468", "RevenueRemainingPerformanceObligation"): _load(
+                "sec_concept_lmt_RevenueRemainingPerformanceObligation.json"
+            ),
+            ("789019", "RevenueFromContractWithCustomerExcludingAssessedTax"): _load(
+                "sec_concept_msft_RevenueFromContractWithCustomerExcludingAssessedTax.json"
+            ),
+        }
+    )
 
 
 @pytest.fixture
 def service() -> AltDataService:
-    return AltDataService(timeout_seconds=5.0)
+    return AltDataService(timeout_seconds=5.0, sec_client=_fake_sec())
+
+
+# ---------------------------------------------------------------------------
+# SEC XBRL 指標（capex / rpo / dio / revenue）
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_fetch_tsa_throughput_growth_success(service: AltDataService) -> None:
-    """測試 TSA 每日客流 HTML 解析與 28 日均值增長率精算。"""
-    sample_html = """
-    <html>
-      <table>
-        <tr><th>Date</th><th>2026</th><th>2025</th></tr>
-        <tr><td>10/05/2026</td><td>2,400,000</td><td>2,000,000</td></tr>
-        <tr><td>10/04/2026</td><td>2,300,000</td><td>2,100,000</td></tr>
-        <tr><td>10/03/2026</td><td>2,200,000</td><td>2,000,000</td></tr>
-        <tr><td>10/02/2026</td><td>2,500,000</td><td>2,200,000</td></tr>
-        <tr><td>10/01/2026</td><td>2,450,000</td><td>2,150,000</td></tr>
-        <tr><td>09/30/2026</td><td>2,350,000</td><td>2,050,000</td></tr>
-        <tr><td>09/29/2026</td><td>2,400,000</td><td>2,100,000</td></tr>
-      </table>
-    </html>
-    """
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = sample_html
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_get.return_value = mock_resp
-        growth = await service.fetch_tsa_throughput_growth()
-        assert growth is not None
-        assert growth > 0.0
-        # 驗證快取命中 (第二次呼叫不重複發起 GET 請求)
-        growth_cached = await service.fetch_tsa_throughput_growth()
-        assert growth_cached == growth
-        assert mock_get.call_count == 1
-
-
-@pytest.mark.asyncio
-async def test_fetch_tsa_throughput_network_error(service: AltDataService) -> None:
-    """測試 TSA 網絡異常時優雅降級回傳 None。"""
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_get.side_effect = Exception("Connection Timeout")
-        growth = await service.fetch_tsa_throughput_growth()
-        assert growth is None
-
-
-@pytest.mark.asyncio
-async def test_fetch_rail_freight_growth(service: AltDataService) -> None:
-    """測試 FRED 鐵路車皮裝載量年增率精算。"""
-    today = date(2026, 10, 5)
-    # 建立 14 個月的月度觀測數據
-    obs: list[Observation] = []
-    base_val = 100.0
-    for i in range(14):
-        obs_date = date(2025, 8, 1) + (date(2025, 9, 1) - date(2025, 8, 1)) * i
-        obs.append(
-            Observation(
-                obs_date=obs_date,
-                value=base_val + i * 2.0,
-                available_date=date(2025, 8, 1),
-            )
-        )
-
-    with patch(
-        "services.alt_data_service.fetch_fred_series", new_callable=AsyncMock
-    ) as mock_fetch:
-        mock_fetch.return_value = obs
-        growth = await service.fetch_rail_freight_growth(today)
-        assert growth is not None
-        assert growth > 0.0
-
-
-@pytest.mark.asyncio
-async def test_twse_and_tpex_revenue_parsing(service: AltDataService) -> None:
-    """測試台灣 TWSE 與 TPEx 月營收 OpenAPI 資料解析。"""
-    twse_sample = [
-        {
-            "出表日期": "115/03/10",
-            "資料年月": "115/02",
-            "公司代號": "2313",
-            "公司名稱": "華通",
-            "營業收入-去年同月增減(%)": "12.50",
-        },
-        {
-            "出表日期": "115/03/10",
-            "資料年月": "115/02",
-            "公司代號": "6285",
-            "公司名稱": "啟碁",
-            "營業收入-去年同月增減(%)": "8.30",
-        },
-    ]
-
-    tpex_sample = [
-        {
-            "出表日期": "115/03/10",
-            "資料年月": "115/02",
-            "公司代號": "3491",
-            "公司名稱": "昇達科",
-            "營業收入-去年同月增減(%)": "24.60",
-        }
-    ]
-
-    async def mock_get(url: str, *args: Any, **kwargs: Any) -> Any:
-        resp = MagicMock()
-        resp.status_code = 200
-        if "openapi.twse.com.tw" in url:
-            resp.json.return_value = twse_sample
-        else:
-            resp.json.return_value = tpex_sample
-        return resp
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as patched_get:
-        patched_get.side_effect = mock_get
-
-        # 測試台股叢集等權平均增長
-        # 2313 (+12.5%), 6285 (+8.3%), 3491 (+24.6%) -> avg = (12.5 + 8.3 + 24.6) / 3 = 15.13%
-        cluster_growth = await service.get_tw_supply_chain_growth(
-            ["TWSE:2313", "TWSE:6285", "TPEX:3491"]
-        )
-        assert cluster_growth is not None
-        assert cluster_growth == 15.13
-
-        # 不存在的代號回傳 None
-        unknown_growth = await service.get_tw_supply_chain_growth(["TWSE:99999"])
-        assert unknown_growth is None
-
-
-def test_get_xbrl_metric_growth_with_cached_data(
+async def test_xbrl_capex_falls_back_to_productive_assets_tag(
     service: AltDataService,
 ) -> None:
-    """測試從本地財務快取讀取資本支出或營收增長。"""
-    with patch("services.alt_data_service.get_cached_financials") as mock_financials:
-        mock_financials.return_value = {
-            "capex_growth_yoy": "28.5",
-            "revenue_growth": "0.15",
-        }
-
-        capex_growth = service.get_xbrl_metric_growth("MSFT", "capex")
-        assert capex_growth == 28.5
-
-        rev_growth = service.get_xbrl_metric_growth("MSFT", "revenue")
-        assert rev_growth == 15.0
-
-        # SpaceX (SPCX) 非公開實體直接優雅回傳 None
-        assert service.get_xbrl_metric_growth("SPCX", "capex") is None
+    res, tag = await service.get_xbrl_metric_yoy("AMZN", "capex", "2026-Q2", _AS_OF)
+    assert res is not None
+    assert tag == "PaymentsToAcquireProductiveAssets"
+    assert res.yoy_pct == pytest.approx(68.44, abs=0.01)
 
 
 @pytest.mark.asyncio
-async def test_run_channel_check_pipeline(service: AltDataService) -> None:
-    """測試端到端單一產業鏈交叉驗證執行。"""
-    with patch.object(
-        service, "get_driver_growth_for_link", new_callable=AsyncMock
-    ) as mock_driver, patch.object(
-        service, "get_follower_growth_for_link", new_callable=AsyncMock
-    ) as mock_follower:
-        mock_driver.return_value = 8.1
-        mock_follower.return_value = None
+async def test_xbrl_rpo_and_dio_are_real_sources(service: AltDataService) -> None:
+    rpo, rpo_tag = await service.get_xbrl_metric_yoy("LMT", "rpo", "2026-Q2", _AS_OF)
+    assert rpo is not None and rpo_tag == "RevenueRemainingPerformanceObligation"
+    dio, dio_tag = await service.get_xbrl_metric_yoy("WMT", "dio", "2026-Q2", _AS_OF)
+    assert dio is not None
+    assert dio_tag == "InventoryNet/CostOfRevenue"
+    assert dio.yoy_pct == pytest.approx(2.07, abs=0.01)
 
-        result = await service.run_channel_check(
+
+@pytest.mark.asyncio
+async def test_xbrl_reasons_for_unavailable(service: AltDataService) -> None:
+    res, reason = await service.get_xbrl_metric_yoy("SPCX", "capex", "2026-Q2", _AS_OF)
+    assert res is None and "非公開" in reason
+    res, reason = await service.get_xbrl_metric_yoy("ZZZZ", "capex", "2026-Q2", _AS_OF)
+    assert res is None and "CIK" in reason
+    # 當季 10-Q 尚未申報（2026-Q3 於 10/7 尚無資料）
+    res, reason = await service.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q3", _AS_OF)
+    assert res is None and "2026-Q3" in reason
+
+
+@pytest.mark.asyncio
+async def test_xbrl_concepts_are_cached(service: AltDataService) -> None:
+    sec = service._sec_client
+    assert isinstance(sec, _FakeSec)
+    await service.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q2", _AS_OF)
+    await service.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q1", _AS_OF)
+    assert (
+        sec.calls.count(("789019", "PaymentsToAcquirePropertyPlantAndEquipment")) == 1
+    )
+
+
+@pytest.mark.asyncio
+async def test_sec_unavailable_without_user_agent() -> None:
+    svc = AltDataService()
+    with patch("config.SEC_USER_AGENT", ""):
+        res, reason = await svc.get_xbrl_metric_yoy("MSFT", "capex", "2026-Q2", _AS_OF)
+    assert res is None
+    assert "SEC_USER_AGENT" in reason
+
+
+def test_no_finnhub_or_mock_only_keys_remain() -> None:
+    """Finnhub /stock/metric 沒有 capex YoY / RPO / DIO 欄位：不得再讀取假欄位。"""
+    src = (Path(__file__).parents[2] / "services" / "alt_data_service.py").read_text()
+    for fake in (
+        "capexGrowthTTMYoy",
+        "capexGrowthAnnual",
+        "rpoGrowthYoy",
+        "inventoryTurnoverTTMYoy",
+        "capex_growth_yoy",
+        "get_cached_financials",
+    ):
+        assert fake not in src
+
+
+# ---------------------------------------------------------------------------
+# 台股月營收（真實 OpenAPI 片段）
+# ---------------------------------------------------------------------------
+
+
+def _tw_mock_get() -> AsyncMock:
+    twse = _load("twse_t187ap05_L_snippet.json")
+    tpex = _load("tpex_t187ap05_O_snippet.json")
+
+    async def _get(url: str, *args: Any, **kwargs: Any) -> Any:
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = twse if "openapi.twse.com.tw" in url else tpex
+        return resp
+
+    return AsyncMock(side_effect=_get)
+
+
+@pytest.mark.asyncio
+async def test_tw_group_uses_data_month_for_period_alignment(
+    service: AltDataService,
+) -> None:
+    """資料年月 115/08 (2026-08) 屬於 2026-Q3：可用；目標 2026-Q2 時一律排除。"""
+    with patch("httpx.AsyncClient.get", new=_tw_mock_get()):
+        g_q3, info_q3 = await service.measure_tw_group(
+            ["TWSE:2313", "TWSE:6285", "TPEX:3491"], "2026-Q3", _AS_OF
+        )
+        g_q2, info_q2 = await service.measure_tw_group(
+            ["TWSE:2313", "TWSE:6285", "TPEX:3491"], "2026-Q2", _AS_OF
+        )
+    assert g_q3 is not None
+    assert info_q3["covered"] == 3
+    assert info_q3["members"]["3491"]["data_month"] == "2026-08"
+    assert g_q2 is None
+    assert "不屬於 2026-Q2" in info_q2["members"]["2313"]["status"]
+
+
+@pytest.mark.asyncio
+async def test_tw_group_rejects_snapshot_issued_after_as_of(
+    service: AltDataService,
+) -> None:
+    """出表日期 2026-09-17 晚於 as_of 2026-09-10 → 前視排除。"""
+    with patch("httpx.AsyncClient.get", new=_tw_mock_get()):
+        g, info = await service.measure_tw_group(
+            ["TWSE:2313"], "2026-Q3", date(2026, 9, 10)
+        )
+    assert g is None
+    assert "晚於" in info["members"]["2313"]["status"]
+
+
+# ---------------------------------------------------------------------------
+# TSA（真實兩欄頁面：當年度頁 + 歷年頁）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tsa_fetches_current_and_prior_year_pages(
+    service: AltDataService,
+) -> None:
+    pages = {
+        "https://www.tsa.gov/travel/passenger-volumes": (
+            _FIX / "tsa_passenger_volumes_current_2026.html"
+        ).read_text(),
+        "https://www.tsa.gov/travel/passenger-volumes/2025": (
+            _FIX / "tsa_passenger_volumes_2025.html"
+        ).read_text(),
+    }
+    requested: list[str] = []
+
+    async def _get(url: str, *args: Any, **kwargs: Any) -> Any:
+        requested.append(url)
+        resp = MagicMock()
+        resp.status_code = 200 if url in pages else 404
+        resp.text = pages.get(url, "")
+        return resp
+
+    with patch("httpx.AsyncClient.get", new=AsyncMock(side_effect=_get)):
+        res, note = await service.get_tsa_period_yoy("2026-Q3", _AS_OF)
+        # 第二次命中快取，不再發出請求
+        n_requests = len(requested)
+        await service.get_tsa_period_yoy("2026-Q3", _AS_OF)
+    assert res is not None, note
+    assert res.yoy_pct == pytest.approx(-2.77, abs=0.01)
+    assert set(requested) == set(pages)
+    assert len(requested) == n_requests
+
+
+@pytest.mark.asyncio
+async def test_tsa_blocked_returns_none_with_reason(service: AltDataService) -> None:
+    resp = MagicMock()
+    resp.status_code = 403
+    resp.text = "Access Denied"
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=resp)):
+        res, note = await service.get_tsa_period_yoy("2026-Q3", _AS_OF)
+    assert res is None
+    assert "TSA" in note
+
+
+# ---------------------------------------------------------------------------
+# FRED
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fred_period_yoy_no_mom_fallback(service: AltDataService) -> None:
+    obs = [
+        Observation(date(2026, 7, 1), 110.0, date(2026, 9, 1)),
+        Observation(date(2026, 8, 1), 112.0, date(2026, 9, 30)),
+    ]
+    with patch(
+        "services.alt_data_service.fetch_fred_series", new=AsyncMock(return_value=obs)
+    ):
+        res, note = await service.get_fred_period_yoy(
+            "RAILFRTCARLOADSD11", "2026-Q3", _AS_OF
+        )
+    assert res is None
+    assert "去年同月" in note
+
+
+@pytest.mark.asyncio
+async def test_fred_period_yoy_respects_available_date(service: AltDataService) -> None:
+    obs = [
+        Observation(date(2025, 7, 1), 100.0, date(2025, 9, 1)),
+        Observation(date(2025, 8, 1), 100.0, date(2025, 9, 30)),
+        Observation(date(2026, 7, 1), 110.0, date(2026, 9, 1)),
+        # 8 月數據 9/30 才公布：as_of 9/15 時不可用
+        Observation(date(2026, 8, 1), 200.0, date(2026, 9, 30)),
+    ]
+    with patch(
+        "services.alt_data_service.fetch_fred_series", new=AsyncMock(return_value=obs)
+    ):
+        res, _ = await service.get_fred_period_yoy(
+            "TOTALSA", "2026-Q3", date(2026, 9, 15)
+        )
+    assert res is not None
+    assert res.observations == 1
+    assert res.yoy_pct == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# 單側量測：美股與台股分群後等權合併
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_measure_side_combines_us_and_tw_groups(service: AltDataService) -> None:
+    """跟隨端同時有美股與台股時，兩群分別計算後等權合併，美股不再被整批丟棄。"""
+
+    async def _us(items: Any, period: str, as_of: date) -> tuple[float, dict[str, Any]]:
+        return 20.0, {"covered": 4}
+
+    async def _tw(ids: Any, period: str, as_of: date) -> tuple[float, dict[str, Any]]:
+        return 10.0, {"covered": 4}
+
+    with (
+        patch.object(service, "measure_us_group", new=AsyncMock(side_effect=_us)) as us,
+        patch.object(service, "measure_tw_group", new=AsyncMock(side_effect=_tw)) as tw,
+    ):
+        side = await service.measure_side(LINK_AI_CAPEX.followers, "2026-Q2", _AS_OF)
+    assert side.growth == 15.0
+    us_items = us.await_args_list[0].args[0]
+    assert ("NVDA", "revenue") in us_items and ("VRT", "revenue") in us_items
+    assert tw.await_args_list[0].args[0] == [
+        "TWSE:2382",
+        "TWSE:6669",
+        "TWSE:2345",
+        "TWSE:2317",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_us_group_coverage_threshold_excludes_non_public(
+    service: AltDataService,
+) -> None:
+    """AI_CAPEX 驅動端 MSFT/AMZN 有資料、GOOGL/META/ORCL 查無 → 2/5 低於半數門檻；SPCX 不計入分母。"""
+    items = [(d.split(":")[1], d.split(":")[2]) for d in LINK_AI_CAPEX.drivers]
+    growth, info = await service.measure_us_group(items, "2026-Q2", _AS_OF)
+    assert info["eligible"] == 5
+    assert info["covered"] == 2
+    assert growth is None
+    assert "低於門檻" in info["status"]
+    growth2, info2 = await service.measure_us_group(items[:3], "2026-Q2", _AS_OF)
+    assert growth2 == pytest.approx(round((109.63 + 68.44) / 2, 2), abs=0.02)
+
+
+# ---------------------------------------------------------------------------
+# 產業鏈端到端
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_channel_check_rejects_bad_period(service: AltDataService) -> None:
+    with pytest.raises(ValueError):
+        await service.run_channel_check(
             LINK_SPACE_STARLINK_TW_NOWCAST, as_of_period="2026-09"
         )
-        assert result.link_key == "SPACE_STARLINK_TW_NOWCAST"
-        assert result.nowcast_direction == "NOWCAST_UP"
-        assert result.verdict == "CONFIRM"
 
 
 @pytest.mark.asyncio
-async def test_run_all_channel_checks(service: AltDataService) -> None:
-    """測試全量 17 條產業鏈執行。"""
-    with patch.object(
-        service, "get_driver_growth_for_link", new_callable=AsyncMock
-    ) as mock_driver, patch.object(
-        service, "get_follower_growth_for_link", new_callable=AsyncMock
-    ) as mock_follower:
-        mock_driver.return_value = 10.0
-        mock_follower.return_value = 12.0
+async def test_run_channel_check_insufficient_carries_reason(
+    service: AltDataService,
+) -> None:
+    async def _side(
+        ids: Any, period: str, as_of: date, default_metric: str = "revenue"
+    ) -> SideMeasurement:
+        if ids is LINK_AI_CAPEX.drivers:
+            return SideMeasurement(growth=None, notes=["美股覆蓋 1/5 低於門檻"])
+        return SideMeasurement(growth=12.0)
 
+    with patch.object(service, "measure_side", new=AsyncMock(side_effect=_side)):
+        res = await service.run_channel_check(LINK_AI_CAPEX, "2026-Q3", as_of=_AS_OF)
+    assert res.verdict == "INSUFFICIENT"
+    assert "驅動端美股覆蓋 1/5 低於門檻" in res.summary_text
+    assert res.members["as_of"] == "2026-10-07"
+
+
+@pytest.mark.asyncio
+async def test_brand_retail_inventory_uses_inverse_polarity(
+    service: AltDataService,
+) -> None:
+    """零售 DIO 年增 +10%（渠道堵塞）、品牌廠營收 -8%：反向關係下判定共振確認。"""
+    assert LINK_BRAND_RETAIL_INVENTORY.polarity == -1
+
+    async def _side(
+        ids: Any, period: str, as_of: date, default_metric: str = "revenue"
+    ) -> SideMeasurement:
+        return SideMeasurement(
+            growth=10.0 if ids is LINK_BRAND_RETAIL_INVENTORY.drivers else -8.0
+        )
+
+    with patch.object(service, "measure_side", new=AsyncMock(side_effect=_side)):
+        res = await service.run_channel_check(
+            LINK_BRAND_RETAIL_INVENTORY, "2026-Q2", as_of=_AS_OF
+        )
+    assert res.verdict == "CONFIRM"
+    assert res.driver_growth == 10.0  # 保存原始量測值
+    assert res.divergence_pp == pytest.approx(2.0)
+    assert "反向" in res.summary_text
+
+
+@pytest.mark.asyncio
+async def test_run_all_isolates_single_link_failure(service: AltDataService) -> None:
+    """單條鏈例外不影響其餘 16 條，且只批次寫入一次。"""
+    calls: list[str] = []
+
+    async def _check(
+        link: SupplyChainLink,
+        as_of_period: str,
+        as_of: date | None = None,
+        persist: bool = False,
+    ) -> Any:
+        calls.append(link.link_key)
+        if link.link_key == "AI_CAPEX":
+            raise RuntimeError("boom")
+        from market_analysis.fundamental_pipeline.channel_check import (
+            evaluate_channel_check,
+        )
+
+        return evaluate_channel_check(link, as_of_period, 5.0, 4.0)
+
+    save = AsyncMock()
+    with (
+        patch.object(service, "run_channel_check", new=AsyncMock(side_effect=_check)),
+        patch("services.alt_data_service.save_channel_check_logs", new=save),
+    ):
         results = await service.run_all_channel_checks(
-            as_of_period="2026-Q2", persist=False
+            "2026-Q2", as_of=_AS_OF, persist=True
         )
-        assert len(results) == 17
-        for r in results:
-            assert r.verdict == "CONFIRM"
-
-
-@pytest.mark.asyncio
-async def test_fetch_tsa_throughput_growth_with_html_attributes(
-    service: AltDataService,
-) -> None:
-    """測試 TSA HTML 包含 class 或其他屬性時仍可精確解析。"""
-    sample_html_with_attrs = """
-    <html>
-      <table>
-        <tr class="views-row">
-          <td class="views-field views-field-date">10/05/2026</td>
-          <td class="views-field views-field-throughput" align="right">2,400,000</td>
-          <td class="views-field views-field-prior" align="right">2,000,000</td>
-        </tr>
-        <tr class="views-row">
-          <td class="views-field views-field-date">10/04/2026</td>
-          <td class="views-field views-field-throughput" align="right">2,300,000</td>
-          <td class="views-field views-field-prior" align="right">2,100,000</td>
-        </tr>
-        <tr class="views-row"><td class="views-field">10/03/2026</td><td>2,200,000</td><td>2,000,000</td></tr>
-        <tr class="views-row"><td class="views-field">10/02/2026</td><td>2,500,000</td><td>2,200,000</td></tr>
-        <tr class="views-row"><td class="views-field">10/01/2026</td><td>2,450,000</td><td>2,150,000</td></tr>
-        <tr class="views-row"><td class="views-field">09/30/2026</td><td>2,350,000</td><td>2,050,000</td></tr>
-        <tr class="views-row"><td class="views-field">09/29/2026</td><td>2,400,000</td><td>2,100,000</td></tr>
-      </table>
-    </html>
-    """
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = sample_html_with_attrs
-
-    # 清除快取以強制解析
-    service._tsa_cache = None
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-        mock_get.return_value = mock_resp
-        growth = await service.fetch_tsa_throughput_growth()
-        assert growth is not None
-        assert growth > 0.0
-
-
-@pytest.mark.asyncio
-async def test_twse_and_tpex_revenue_parsing_robustness(
-    service: AltDataService,
-) -> None:
-    """測試台灣 TWSE 與 TPEx 包含全形括號、替代代碼欄位與非數值字串時之健全性。"""
-    service._twse_cache = None
-    service._tpex_cache = None
-
-    twse_sample_robust = [
-        {
-            "出表日期": "115/03/10",
-            "SecuritiesCompanyCode": "2330",
-            "營業收入-去年同月增減（％）": " 35.80% ",
-        },
-        {
-            "出表日期": "115/03/10",
-            "公司代號": "2382",
-            "去年同月增減(%)": "--",  # 非數值應被安全過濾
-        },
-    ]
-
-    tpex_sample_robust = [
-        {
-            "CompanyCode": "3491",
-            "營業收入-去年同月增減(%)": "不適用",  # 非數值應被過濾
-        },
-        {
-            "公司代號": "6279",
-            "營業收入-去年同月增減（％）": "18.20",
-        },
-    ]
-
-    async def mock_get(url: str, *args: Any, **kwargs: Any) -> Any:
-        resp = MagicMock()
-        resp.status_code = 200
-        if "openapi.twse.com.tw" in url:
-            resp.json.return_value = twse_sample_robust
-        else:
-            resp.json.return_value = tpex_sample_robust
-        return resp
-
-    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as patched_get:
-        patched_get.side_effect = mock_get
-
-        cluster_growth = await service.get_tw_supply_chain_growth(
-            ["TWSE:2330", "TPEX:6279"]
-        )
-        assert cluster_growth is not None
-        assert cluster_growth == round((35.8 + 18.2) / 2, 2)
-
-
-@pytest.mark.asyncio
-async def test_fetch_rail_freight_growth_with_missing_months(
-    service: AltDataService,
-) -> None:
-    """測試 FRED 數列若有缺漏月份時，能以天數距離 (約 365 天) 準確對齊去年同期。"""
-    today = date(2026, 10, 5)
-    obs: list[Observation] = [
-        # 1 年前（2025-10-01）
-        Observation(
-            obs_date=date(2025, 10, 1),
-            value=100.0,
-            available_date=date(2025, 12, 1),
-        ),
-        # 中間有缺月份（例如僅 5 筆）
-        Observation(
-            obs_date=date(2026, 1, 1),
-            value=102.0,
-            available_date=date(2026, 3, 1),
-        ),
-        Observation(
-            obs_date=date(2026, 4, 1),
-            value=105.0,
-            available_date=date(2026, 6, 1),
-        ),
-        Observation(
-            obs_date=date(2026, 7, 1),
-            value=108.0,
-            available_date=date(2026, 9, 1),
-        ),
-        # 最新（2026-09-01，距離 2025-10-01 約 335 天）
-        Observation(
-            obs_date=date(2026, 9, 1),
-            value=112.0,
-            available_date=date(2026, 10, 1),
-        ),
-    ]
-
-    with patch(
-        "services.alt_data_service.fetch_fred_series", new_callable=AsyncMock
-    ) as mock_fetch:
-        mock_fetch.return_value = obs
-        growth = await service.fetch_rail_freight_growth(today)
-        assert growth is not None
-        # 112.0 vs 100.0 -> +12.0%
-        assert growth == 12.0
-
-
-def test_get_xbrl_metric_growth_finnhub_keys(service: AltDataService) -> None:
-    """測試 Finnhub 實際 metric 欄位鍵值 (如 capexGrowthTTMYoy) 正常讀取。"""
-    with patch("services.alt_data_service.get_cached_financials") as mock_financials:
-        mock_financials.return_value = {
-            "capexGrowthTTMYoy": 24.8,
-            "revenueGrowthTTMYoy": 18.5,
-        }
-
-        capex = service.get_xbrl_metric_growth("NVDA", "capex")
-        assert capex == 24.8
-
-        rev = service.get_xbrl_metric_growth("NVDA", "revenue")
-        assert rev == 18.5
+    assert len(calls) == len(SUPPLY_CHAIN_LINKS) == 17
+    assert len(results) == 16
+    save.assert_awaited_once()
+    assert len(save.await_args_list[0].args[0]) == 16

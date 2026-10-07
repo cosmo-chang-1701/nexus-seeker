@@ -238,3 +238,64 @@ def test_channel_check_members_dict_completeness() -> None:
     assert nowcast_res.members["pillar"] == "MACRO_CORE"
     assert "DAL" in nowcast_res.members["symbols"]
     assert "UAL" in nowcast_res.members["symbols"]
+
+
+def test_inverse_polarity_flips_driver_before_verdict() -> None:
+    """BRAND_RETAIL_INVENTORY 為反向關係：DIO +10% 與品牌營收 +8% 同號反而是背離。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        LINK_BRAND_RETAIL_INVENTORY,
+    )
+
+    same_sign = evaluate_causal_link(
+        LINK_BRAND_RETAIL_INVENTORY, "2026-Q2", driver_growth=10.0, follower_growth=8.0
+    )
+    assert same_sign.verdict == "DIVERGE"
+    assert same_sign.driver_growth == 10.0  # 欄位保存原始量測值
+    assert same_sign.divergence_pp == 18.0  # 8 - (-10)
+    assert same_sign.members["polarity"] == -1
+
+    opposite = evaluate_causal_link(
+        LINK_BRAND_RETAIL_INVENTORY, "2026-Q2", driver_growth=10.0, follower_growth=-8.0
+    )
+    assert opposite.verdict == "CONFIRM"
+    assert "反向" in opposite.summary_text
+
+    # 同向鏈條不受影響
+    normal = evaluate_causal_link(
+        LINK_AI_CAPEX, "2026-Q2", driver_growth=10.0, follower_growth=8.0
+    )
+    assert normal.verdict == "CONFIRM"
+    assert normal.members["polarity"] == 1
+
+
+def test_insufficient_summary_includes_data_note_and_is_persisted() -> None:
+    """資料不足的原因寫入 summary_text，並隨 members_json 存檔供 /fa 顯示。"""
+    res = evaluate_channel_check(
+        LINK_AI_CAPEX,
+        "2026-Q3",
+        driver_growth=None,
+        follower_growth=5.0,
+        data_note="驅動端美股覆蓋 1/5 低於門檻",
+    )
+    assert res.verdict == "INSUFFICIENT"
+    assert "驅動端美股覆蓋 1/5 低於門檻" in res.summary_text
+    record = result_to_log_record(res)
+    assert "低於門檻" in json.loads(record.members_json)["summary_text"]
+
+
+def test_chinese_label_maps_cover_all_enum_values() -> None:
+    from market_analysis.fundamental_pipeline.channel_check import (
+        LINK_TYPE_LABELS_ZH,
+        NOWCAST_DIRECTION_LABELS_ZH,
+        VERDICT_LABELS_ZH,
+    )
+
+    assert set(VERDICT_LABELS_ZH) == {"CONFIRM", "DIVERGE", "INSUFFICIENT"}
+    assert set(LINK_TYPE_LABELS_ZH) == {"CAUSAL", "NOWCAST"}
+    assert set(NOWCAST_DIRECTION_LABELS_ZH) == {"NOWCAST_UP", "NOWCAST_DOWN", "FLAT"}
+    for label in (
+        *VERDICT_LABELS_ZH.values(),
+        *LINK_TYPE_LABELS_ZH.values(),
+        *NOWCAST_DIRECTION_LABELS_ZH.values(),
+    ):
+        assert label.isascii() is False

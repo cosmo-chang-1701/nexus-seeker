@@ -365,6 +365,9 @@ class SupplyChainLink:
     followers: list[str]
     description: str
     lead_lag_quarters: str = "1-2Q"
+    # 傳導極性：+1 = 驅動端上升對跟隨端為利多（同向）；-1 = 反向關係
+    # （例如零售商 DIO 上升代表渠道堵塞，壓制上游品牌廠出貨）。判定前驅動端先乘上極性。
+    polarity: Literal[1, -1] = 1
 
 
 @dataclass(frozen=True)

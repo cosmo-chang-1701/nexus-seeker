@@ -10,7 +10,7 @@ Nexus Seeker 本質為選擇權風險控制與營運決策顧問系統（Zero-Ex
 
 事件時鐘遵循**開閉原則（Open-Closed Principle）**：主排程 Cog 以 5 分鐘固定步長巡邏全域時鐘註冊表，各業務模組（宏觀流動性、SEC 申報、財務預期差、產業鏈檢驗等）僅需向註冊器註冊其所屬的 `ClockJob`，無需修改主迴圈排程核心。
 
-> **目前已註冊的 `ClockJob`**：僅 `macro_surprise_0830`、`macro_surprise_1000` 與 `liquidity_regime_1615`（`cogs/trading/fundamental_pipeline_monitor.py`）。SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易與 8-K 治理旗標）與 13D 激進投資人閘門**尚未接線**——沒有註冊任何 `ClockJob`，也沒有其他排程呼叫；規格與接線後行為見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。財報預期差與管理層指引服務（`services/earnings_surprise_service.py`）同樣**尚未接線**，見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md)。
+> **目前已註冊的 `ClockJob`**：`macro_surprise_0830`、`macro_surprise_1000`、`liquidity_regime_1615` 與 `channel_check_1800`（`cogs/trading/fundamental_pipeline_monitor.py`）。`channel_check_1800` 於 NYSE 交易日 18:00 ET（`nyse_trading_day_at(18, 0, window_minutes=15)`，每日一次）以 `AltDataService.run_all_channel_checks(persist=True)` 檢驗最近兩個已結束曆季的 17 條產業鏈，每個期別前再檢查 `is_memory_safe()`，經 SingleFlight 合併，只寫入 `channel_check_log`、不推播；規格見 [`07_alt_data_and_channel_checks.md`](../macro_sentiment/07_alt_data_and_channel_checks.md)。SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易與 8-K 治理旗標）與 13D 激進投資人閘門**尚未接線**——沒有註冊任何 `ClockJob`，也沒有其他排程呼叫；規格與接線後行為見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。財報預期差與管理層指引服務（`services/earnings_surprise_service.py`）同樣**尚未接線**，見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md)。
 
 ### 1.2 適用市場環境與系統邊界
 - **低頻總經發布與非同步數據攝取**：涵蓋每週 H.4.1、芝加哥聯準會 NFCI、每週四初領失業金及每月 CPI、NFP、ISM PMI 發布。
@@ -38,6 +38,7 @@ $$C_{\text{dedup}} = \text{BoundedCache}(\text{max\_size} = 300)$$
 
 ### 2.1.1 觸發日曆
 - **宏觀預期差（08:30 / 10:00 ET）**：`weekday_at`，週一至週五觸發，刻意**不**排除 NYSE 休市日——總經數據可能在休市日照常公布（例如耶穌受難日的非農就業）。
+- **產業鏈交叉驗證（18:00 ET）**：同樣使用 `nyse_trading_day_at`；資料為月／季頻，每日一次已足夠，盤後執行避開盤中 API 負載。
 - **流動性體制（16:15 ET）**：`nyse_trading_day_at`，先以 `weekday_at` 判定時間視窗，再以 `market_time.is_nyse_trading_day()`（`pandas_market_calendars` NYSE 行事曆）排除國定休市日；行事曆查詢失敗時退回平日判定。
 
 ### 2.2 標的池優先級過濾模型

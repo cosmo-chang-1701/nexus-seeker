@@ -1058,12 +1058,43 @@ ON CONFLICT(link_key, as_of_period) DO UPDATE SET
     nowcast_hit = excluded.nowcast_hit,
     correlation = excluded.correlation,
     verdict = excluded.verdict,
-    members_json = excluded.members_json
+    members_json = excluded.members_json,
+    created_at = CURRENT_TIMESTAMP
+WHERE excluded.verdict != 'INSUFFICIENT'
+   OR channel_check_log.verdict = 'INSUFFICIENT'
 """
+
+# v093 的 CHECK(nowcast_direction IN (..., NULL)) 在 SQLite 中等同無約束（IN 清單含 NULL
+# 時，不合法值的比較結果為 NULL 而非 false）。v093 已在正式 DB 執行且不新增遷移，
+# 改於寫入端在 Python 層驗證列舉值與期別格式。
+_VALID_LINK_TYPES: frozenset[str] = frozenset({"CAUSAL", "NOWCAST"})
+_VALID_VERDICTS: frozenset[str] = frozenset({"CONFIRM", "DIVERGE", "INSUFFICIENT"})
+_VALID_NOWCAST_DIRECTIONS: frozenset[str] = frozenset(
+    {"NOWCAST_UP", "NOWCAST_DOWN", "FLAT"}
+)
+
+
+def _validate_channel_check_record(record: ChannelCheckLogRecord) -> None:
+    """寫入前驗證列舉值與期別格式；不合法時拋出 ValueError（整批不寫入）。"""
+    from market_analysis.fundamental_pipeline.alt_data_metrics import validate_period
+
+    validate_period(record.as_of_period)
+    if record.link_type not in _VALID_LINK_TYPES:
+        raise ValueError(f"channel_check_log.link_type 不合法: {record.link_type!r}")
+    if record.verdict not in _VALID_VERDICTS:
+        raise ValueError(f"channel_check_log.verdict 不合法: {record.verdict!r}")
+    if (
+        record.nowcast_direction is not None
+        and record.nowcast_direction not in _VALID_NOWCAST_DIRECTIONS
+    ):
+        raise ValueError(
+            f"channel_check_log.nowcast_direction 不合法: {record.nowcast_direction!r}"
+        )
 
 
 async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
-    """寫入或更新單筆產業鏈交叉驗證日誌。"""
+    """寫入或更新單筆產業鏈交叉驗證日誌（INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
+    _validate_channel_check_record(record)
     params = (
         record.link_key,
         record.as_of_period,
@@ -1082,9 +1113,11 @@ async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
 
 
 async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
-    """批次寫入產業鏈交叉驗證日誌（支援分批分塊防止 1GB VPS 記憶體暴增）。"""
+    """批次寫入產業鏈交叉驗證日誌（分塊寫入；INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
     if not records:
         return
+    for r in records:
+        _validate_channel_check_record(r)
     rows = [
         (
             r.link_key,
@@ -1262,41 +1295,27 @@ def get_channel_checks_by_symbol(
     related_links = get_links_for_symbol(clean_sym)
     link_keys = [link.link_key for link in related_links]
 
+    if not link_keys:
+        return []
+
     conn = get_read_connection()
     try:
-        quoted_pattern = f'%"{clean_sym}"%'
-        raw_pattern = f"%{clean_sym}%"
-
-        if link_keys:
-            placeholders = ",".join("?" for _ in link_keys)
-            query = f"""
-            SELECT link_key, as_of_period, link_type, experimental,
-                   driver_growth, follower_growth, divergence_pp,
-                   nowcast_direction, nowcast_hit, correlation,
-                   verdict, members_json, created_at
-            FROM channel_check_log
-            WHERE link_key IN ({placeholders})
-               OR members_json LIKE ?
-               OR members_json LIKE ?
-            ORDER BY as_of_period DESC, created_at DESC
-            LIMIT ?
-            """
-            params: list[Any] = [*link_keys, quoted_pattern, raw_pattern, limit]
-            # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-            rows = conn.execute(query, params).fetchall()
-        else:
-            query = """
-            SELECT link_key, as_of_period, link_type, experimental,
-                   driver_growth, follower_growth, divergence_pp,
-                   nowcast_direction, nowcast_hit, correlation,
-                   verdict, members_json, created_at
-            FROM channel_check_log
-            WHERE members_json LIKE ?
-               OR members_json LIKE ?
-            ORDER BY as_of_period DESC, created_at DESC
-            LIMIT ?
-            """
-            rows = conn.execute(query, (quoted_pattern, raw_pattern, limit)).fetchall()
+        # 只依靜態對照表的 link_key 精確比對；不再對 members_json 做 LIKE 模糊比對
+        # （短代碼如 "F"、"PL" 會配到所有列）。
+        placeholders = ",".join("?" for _ in link_keys)
+        query = f"""
+        SELECT link_key, as_of_period, link_type, experimental,
+               driver_growth, follower_growth, divergence_pp,
+               nowcast_direction, nowcast_hit, correlation,
+               verdict, members_json, created_at
+        FROM channel_check_log
+        WHERE link_key IN ({placeholders})
+        ORDER BY as_of_period DESC, created_at DESC
+        LIMIT ?
+        """
+        params: list[Any] = [*link_keys, limit]
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        rows = conn.execute(query, params).fetchall()
 
         return [
             ChannelCheckLogRecord(

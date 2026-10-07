@@ -225,3 +225,107 @@ async def test_save_channel_check_logs_chunking() -> None:
     assert get_channel_check("LINK_CHUNK_0", "2026-Q1") is not None
     assert get_channel_check("LINK_CHUNK_99", "2026-Q1") is not None
     assert get_channel_check("LINK_CHUNK_124", "2026-Q1") is not None
+
+
+def _rec(**overrides: object) -> ChannelCheckLogRecord:
+    base: dict[str, object] = dict(
+        link_key="AI_CAPEX",
+        as_of_period="2025-Q4",
+        link_type="CAUSAL",
+        experimental=False,
+        driver_growth=10.0,
+        follower_growth=12.0,
+        divergence_pp=2.0,
+        nowcast_direction=None,
+        nowcast_hit=None,
+        correlation=None,
+        verdict="CONFIRM",
+        members_json="{}",
+    )
+    base.update(overrides)
+    return ChannelCheckLogRecord(**base)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_insufficient_does_not_overwrite_existing_verdict() -> None:
+    """persist 時 INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果；反之可覆蓋。"""
+    await save_channel_check_logs([_rec(link_key="RAIL_FREIGHT", link_type="NOWCAST")])
+    await save_channel_check_logs(
+        [
+            _rec(
+                link_key="RAIL_FREIGHT",
+                link_type="NOWCAST",
+                verdict="INSUFFICIENT",
+                driver_growth=None,
+            )
+        ]
+    )
+    kept = get_channel_check("RAIL_FREIGHT", "2025-Q4")
+    assert kept is not None and kept.verdict == "CONFIRM"
+    assert kept.driver_growth == 10.0
+
+    # 新的實質判定可覆蓋舊的實質判定
+    await save_channel_check_log(
+        _rec(link_key="RAIL_FREIGHT", link_type="NOWCAST", verdict="DIVERGE")
+    )
+    updated = get_channel_check("RAIL_FREIGHT", "2025-Q4")
+    assert updated is not None and updated.verdict == "DIVERGE"
+
+    # 先寫 INSUFFICIENT，後續實質判定可覆蓋
+    await save_channel_check_log(
+        _rec(link_key="AIR_TRAVEL", link_type="NOWCAST", verdict="INSUFFICIENT")
+    )
+    await save_channel_check_log(
+        _rec(link_key="AIR_TRAVEL", link_type="NOWCAST", verdict="CONFIRM")
+    )
+    upgraded = get_channel_check("AIR_TRAVEL", "2025-Q4")
+    assert upgraded is not None and upgraded.verdict == "CONFIRM"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"nowcast_direction": "SIDEWAYS"},
+        {"verdict": "MAYBE"},
+        {"link_type": "OTHER"},
+        {"as_of_period": "2026-09"},
+        {"as_of_period": "2026Q3"},
+    ],
+)
+async def test_save_rejects_invalid_enum_or_period(
+    overrides: dict[str, object],
+) -> None:
+    """v093 的 CHECK(... IN (..., NULL)) 無效，改由寫入端拒絕不合法值與期別格式。"""
+    with pytest.raises(ValueError):
+        await save_channel_check_logs([_rec(link_key="LINK_INVALID", **overrides)])
+    with pytest.raises(ValueError):
+        await save_channel_check_log(_rec(link_key="LINK_INVALID", **overrides))
+    assert (
+        get_channel_check("LINK_INVALID", str(overrides.get("as_of_period", "2025-Q4")))
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_by_symbol_short_ticker_does_not_match_unrelated_rows() -> None:
+    """短代碼（F、PL）只命中靜態對照表涵蓋的鏈，不因 members_json 子字串誤配。"""
+    await save_channel_check_log(
+        _rec(
+            link_key="SPACE_EO_DATA",
+            link_type="NOWCAST",
+            as_of_period="2025-Q3",
+            members_json=json.dumps({"followers": ["PL", "BKSY"], "note": "FLAT"}),
+        )
+    )
+    await save_channel_check_log(
+        _rec(
+            link_key="ADV_AUTO_FLEET_DEMAND",
+            as_of_period="2025-Q3",
+            members_json=json.dumps({"followers": ["TSLA", "RIVN", "GM", "F"]}),
+        )
+    )
+    f_keys = {r.link_key for r in get_channel_checks_by_symbol("F")}
+    assert "ADV_AUTO_FLEET_DEMAND" in f_keys
+    assert "SPACE_EO_DATA" not in f_keys  # "FLAT" 含 F，舊 LIKE 會誤配
+    assert get_channel_checks_by_symbol("UNMAPPED_XYZ") == []

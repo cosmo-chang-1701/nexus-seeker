@@ -50,7 +50,7 @@ def test_experimental_flags() -> None:
     assert "SPACE_EO_DATA" in exp_keys
     assert "ADV_ENERGY_NUCLEAR_SMR" in exp_keys
     assert "ADV_ROBOTICS_EMBODIED_NOWCAST" in exp_keys
-    assert "ADV_QUANTUM_COMPUTING" in exp_keys
+    assert "ADV_QUANTUM_COMPUTING" not in exp_keys
 
     # 非實驗性鏈條驗證
     non_exp_keys = {
@@ -73,10 +73,8 @@ def test_get_supply_chain_link_lookup() -> None:
     link_lower = get_supply_chain_link("ai_capex")
     assert link_lower == link
 
-    # 擴充鏈條可查
-    quantum = get_supply_chain_link("ADV_QUANTUM_COMPUTING")
-    assert quantum is not None
-    assert quantum.experimental is True
+    # 原量子運算擴充鏈已移除：排程不計算的鏈條不得被查到
+    assert get_supply_chain_link("ADV_QUANTUM_COMPUTING") is None
 
     # 不存在的代碼
     assert get_supply_chain_link("NON_EXISTENT_LINK") is None
@@ -144,8 +142,8 @@ def test_get_links_by_pillar() -> None:
     assert len(space) == 5
 
     frontier = get_links_by_pillar("FRONTIER_TECH")
-    # 7 條核心 + 1 條量子運算擴充
-    assert len(frontier) == 8
+    # 7 條核心（量子運算擴充鏈已移除，與 run_all 的 17 條一致）
+    assert len(frontier) == 7
 
 
 def test_extract_symbols_from_link() -> None:
@@ -166,3 +164,26 @@ def test_extract_symbols_from_link() -> None:
     assert "UAL" in air_symbols
     assert "LUV" in air_symbols
     assert "TSA" not in air_symbols
+
+
+def test_symbol_lookup_and_run_all_use_same_17_links() -> None:
+    """/fa 反查涵蓋的鏈條必須是排程 run_all 會計算的 17 條之一（不再有量子擴充鏈）。"""
+    core_keys = {link.link_key for link in SUPPLY_CHAIN_LINKS}
+    assert {link.link_key for link in ALL_SUPPLY_CHAIN_LINKS} == core_keys
+    # IBM / IONQ 僅出現在已移除的量子鏈
+    assert get_links_for_symbol("IONQ") == []
+    for sym in ("TSLA", "MSFT", "2330", "SPCX", "WMT"):
+        for link in get_links_for_symbol(sym):
+            assert link.link_key in core_keys
+
+
+def test_brand_retail_inventory_is_inverse_polarity() -> None:
+    """零售 DIO 上升壓制品牌廠出貨：反向極性；其他鏈預設同向。"""
+    link = get_supply_chain_link("BRAND_RETAIL_INVENTORY")
+    assert link is not None
+    assert link.polarity == -1
+    assert all(
+        lk.polarity == 1
+        for lk in SUPPLY_CHAIN_LINKS
+        if lk.link_key != "BRAND_RETAIL_INVENTORY"
+    )

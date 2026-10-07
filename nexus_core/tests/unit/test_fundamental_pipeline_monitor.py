@@ -110,3 +110,149 @@ async def test_macro_surprise_job_still_processes_when_refresh_fails() -> None:
         await _run_macro_surprise_job(datetime(2026, 10, 7, 8, 31, tzinfo=ny_tz))
 
     mock_process.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# PR4 產業鏈交叉驗證排程 (channel_check_1800)
+# ---------------------------------------------------------------------------
+
+
+def test_channel_check_job_due_only_on_trading_day_1800_window() -> None:
+    """18:00 ET 視窗（15 分鐘）且為 NYSE 交易日才觸發；休市日與視窗外不觸發。"""
+    register_default_fundamental_jobs()
+
+    def _due(dt: datetime) -> list[str]:
+        return [j.job_id for j in ClockJobRegistry.due_jobs(dt)]
+
+    assert "channel_check_1800" in _due(datetime(2026, 10, 7, 18, 0, tzinfo=ny_tz))
+    assert "channel_check_1800" in _due(datetime(2026, 10, 7, 18, 14, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 7, 18, 15, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 7, 17, 55, tzinfo=ny_tz))
+    # 感恩節休市、週六
+    assert "channel_check_1800" not in _due(datetime(2026, 11, 26, 18, 5, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 10, 18, 5, tzinfo=ny_tz))
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_runs_two_completed_periods_with_persist() -> None:
+    """排程對最近兩個已結束曆季呼叫 run_all_channel_checks(persist=True)。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(return_value=[])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+
+    periods = [c.kwargs["as_of_period"] for c in mock_run.await_args_list]
+    assert periods == ["2026-Q3", "2026-Q2"]
+    for c in mock_run.await_args_list:
+        assert c.kwargs["persist"] is True
+        assert str(c.kwargs["as_of"]) == "2026-10-07"
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_skips_when_memory_unsafe() -> None:
+    """記憶體不足時工作本體不執行任何檢驗。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(return_value=[])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=False,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+    mock_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_one_period_failure_does_not_stop_other() -> None:
+    """單一期別例外不影響另一期別。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(side_effect=[RuntimeError("SEC down"), []])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+    assert mock_run.await_count == 2
+
+
+def _make_monitor_cog(is_leader: bool) -> object:
+    from unittest.mock import MagicMock
+
+    from cogs.trading.fundamental_pipeline_monitor import (
+        FundamentalPipelineMonitorCog,
+    )
+
+    bot = MagicMock()
+    bot._is_leader_instance = is_leader
+    with patch("discord.ext.tasks.Loop.start"):
+        return FundamentalPipelineMonitorCog(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("is_leader", "memory_ok"), [(False, True), (True, False)])
+async def test_clock_loop_does_not_run_channel_check_when_not_leader_or_memory_unsafe(
+    is_leader: bool, memory_ok: bool
+) -> None:
+    """非 leader 或記憶體不足時，監控迴圈不執行任何到期工作（含產業鏈檢驗）。"""
+    cog = _make_monitor_cog(is_leader)
+    mock_run = AsyncMock(return_value=[])
+    fixed_now = datetime(2026, 10, 7, 18, 2, tzinfo=ny_tz)
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=memory_ok,
+        ),
+        patch("cogs.trading.fundamental_pipeline_monitor.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value = fixed_now
+        await cog.fundamental_clock_task.coro(cog)  # type: ignore[attr-defined]
+    mock_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clock_loop_runs_channel_check_for_leader() -> None:
+    """leader 且記憶體安全時，18:00 視窗內會執行產業鏈檢驗（對照組）。"""
+    cog = _make_monitor_cog(True)
+    mock_run = AsyncMock(return_value=[])
+    fixed_now = datetime(2026, 10, 7, 18, 2, tzinfo=ny_tz)
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+        patch("cogs.trading.fundamental_pipeline_monitor.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value = fixed_now
+        await cog.fundamental_clock_task.coro(cog)  # type: ignore[attr-defined]
+    assert mock_run.await_count == 2
