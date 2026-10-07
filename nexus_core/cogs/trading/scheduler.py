@@ -20,6 +20,11 @@ import market_time
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
 
+# 即時 VIX 報價異常時，回退採用 SQLite `macro_vix` 的最大年齡：15 分鐘巡邏每輪都會
+# 寫入，30 分鐘 = 容許錯過一輪；VIX 盤中波動快，更舊的值會誤導尾部風險判斷，
+# 逾期則不採用、維持 is_vix_valid=False。
+_VIX_FALLBACK_MAX_AGE_SECONDS = 30 * 60
+
 scanner_times = [
     time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (0, 15, 30, 45)
 ]
@@ -293,7 +298,9 @@ class SchedulerCog(commands.Cog):
             # 🛡️ 數據合理性檢驗 (Sanity Check) 與快取回退
             is_vix_valid = 5.0 <= vix_val <= 150.0
             if not is_vix_valid:
-                cached_vix = database.get_kv_cache("macro_vix")
+                cached_vix = database.get_kv_cache_fresh(
+                    "macro_vix", _VIX_FALLBACK_MAX_AGE_SECONDS
+                )
                 if cached_vix:
                     try:
                         cached_vix_val = float(cached_vix)

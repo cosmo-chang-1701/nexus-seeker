@@ -206,9 +206,13 @@ async def evaluate_macro_top_escape_defense_impl(
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得 Fear & Greed 指數失敗: {e}")
 
-    from database.cache import get_kv_cache
+    from database.cache import get_kv_cache_fresh
+    from services.calendar_service import FEDWATCH_PROB_MAX_AGE_SECONDS
 
-    prob = get_kv_cache("macro_fedwatch_probability")
+    # 逾期（> 12h）回傳 None → 評分函式視為未知因子、不計分，不改任何門檻
+    prob = get_kv_cache_fresh(
+        "macro_fedwatch_probability", FEDWATCH_PROB_MAX_AGE_SECONDS
+    )
 
     satellite_euphoria_ratio = _compute_satellite_euphoria_ratio(portfolio_assets)
 

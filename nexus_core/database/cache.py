@@ -135,6 +135,20 @@ def get_kv_cache_with_age(key: str) -> tuple[Optional[Any], Optional[float]]:
     return None, None
 
 
+def get_kv_cache_fresh(key: str, max_age_seconds: float) -> Optional[Any]:
+    """讀取 kv_cache，僅在資料年齡 <= max_age_seconds 時回傳值，否則回傳 None。
+
+    與 get_kv_cache_with_age() 的關係：本函式是其薄封裝，把「讀值＋檢查年齡」
+    收斂成單一呼叫，供各 fallback 讀取點套用年齡上限。年齡未知 (None，例如
+    updated_at 解析失敗) 一律視為不可用，避免把來源不明的舊值誤當新鮮資料。
+    查無資料、逾期、年齡未知皆回傳 None，由呼叫端走既有的缺值路徑。
+    """
+    value, age_seconds = get_kv_cache_with_age(key)
+    if value is None or age_seconds is None or age_seconds > max_age_seconds:
+        return None
+    return value
+
+
 def get_kv_cache_many(
     keys: Sequence[str],
 ) -> dict[str, tuple[Any, Optional[float]]]:

@@ -21,6 +21,11 @@ ny_tz = ZoneInfo("America/New_York")
 
 logger = logging.getLogger(__name__)
 
+# kv `macro_fedwatch_probability` 供下游（宏觀逃頂評分、擠壓進場否決）回退讀取的最大年齡。
+# 寫入端為 4 小時週期的宏觀／FedWatch 檢查，12 小時 = 寫入週期 × 3，容許連續兩次
+# 刷新失敗仍可用；超過則視為未知（傳 prob=None，評分函式不計分、不放行 NORMAL）。
+FEDWATCH_PROB_MAX_AGE_SECONDS = 12 * 3600
+
 
 # ==========================================
 # Data Models

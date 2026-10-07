@@ -169,3 +169,19 @@ flowchart TD
   - `get_market_cache`, `save_market_cache`: SQLite 快取讀寫持久化介面
 - `nexus_core/database/migrations/v052_update_market_cache_composite_key.py`
   - 遷移腳本：建立 `(symbol, expiry)` 複合主鍵結構
+
+---
+
+## 7. 資料源限制與 TTL 矩陣
+
+本節彙整各資料源（Finnhub 免費方案、Yahoo Finance）的限制與對應的快取／讀取年齡約束。矩陣依各 PR 逐步補齊；目前僅記錄 SQLite `kv_cache` 的 fallback 讀取年齡上限。
+
+### 7.1 kv_cache fallback 讀取年齡上限
+
+fallback 路徑（即時資料缺失時回頭讀 SQLite 舊值）一律改用 `database/cache.py::get_kv_cache_fresh(key, max_age_seconds)`：它是 `get_kv_cache_with_age` 的薄封裝，**查無資料、年齡超過上限、年齡未知（`updated_at` 解析失敗）一律回傳 `None`**，由呼叫端走既有的缺值路徑，不改任何策略閘門門檻。
+
+| 位置 | 常數 | 上限 | 逾期行為（既有缺值路徑） |
+| :--- | :--- | :--- | :--- |
+| `get_cached_volume_poc` / `get_cached_gex_putwall`（`market_analysis/intraday_pipeline/metrics.py`） | `_FALLBACK_LEVEL_MAX_AGE_SECONDS` | 24 小時 | 回傳 `None`：POC 回退為現價、PutWall 視為 `None` |
+| `macro_vix` 回退（`cogs/trading/scheduler.py` 15 分鐘巡邏） | `_VIX_FALLBACK_MAX_AGE_SECONDS` | 30 分鐘 | 不採用，維持 `is_vix_valid=False` |
+| `macro_fedwatch_probability`（`market_analysis/squeeze_entry/vetoes.py`、`market_analysis/dynamic_rollover/macro_top_escape_defense.py`） | `FEDWATCH_PROB_MAX_AGE_SECONDS`（定義於 `services/calendar_service.py`） | 12 小時（寫入端 4 小時週期 × 3） | 傳入 `prob=None`；`evaluate_macro_top_escape_score` 將 `None` 視為未知因子、不計分，且已知分數為 NORMAL 時回傳 `UNKNOWN`（fail-closed），門檻不變 |

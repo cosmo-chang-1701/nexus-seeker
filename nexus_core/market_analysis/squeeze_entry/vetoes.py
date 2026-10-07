@@ -19,7 +19,8 @@ async def compute_macro_escape_tier() -> str:
     「無法確定為常態」回傳為 UNKNOWN；任何例外同樣回傳 UNKNOWN（fail-closed）。
     """
     try:
-        from database.cache import get_kv_cache
+        from database.cache import get_kv_cache_fresh
+        from services.calendar_service import FEDWATCH_PROB_MAX_AGE_SECONDS
         from market_analysis.index_microstructure import (
             evaluate_macro_top_escape_score,
             fetch_core_macro_metrics,
@@ -46,7 +47,9 @@ async def compute_macro_escape_tier() -> str:
             if fg_raw is not None and not core_metrics.get("_is_fallback")
             else None
         )
-        prob = get_kv_cache("macro_fedwatch_probability")
+        prob = get_kv_cache_fresh(
+            "macro_fedwatch_probability", FEDWATCH_PROB_MAX_AGE_SECONDS
+        )
         _, tier, _, _ = evaluate_macro_top_escape_score(
             vts_ratio=vts_ratio,
             fear_greed=fear_greed,

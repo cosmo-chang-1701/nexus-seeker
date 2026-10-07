@@ -26,6 +26,11 @@ logger = logging.getLogger(__name__)
 _WATCHLIST_METRICS_CACHE = BoundedCache(max_size=128)
 _WATCHLIST_METRICS_TTL = 20 * 60
 
+# Vol POC / GEX PutWall 的 SQLite 回退最大年齡：這兩個價位由 30 分鐘深度掃描
+# 與盤前預熱寫入，24 小時涵蓋「前一交易日收盤後～今日盤中」的正常空窗；
+# 超過一天（例如連假後）價位已不具參考性，寧可回到缺值路徑也不用舊價位。
+_FALLBACK_LEVEL_MAX_AGE_SECONDS = 24 * 3600
+
 
 def _quote_price(quote: Dict[str, Any] | None, fallback: float = 0.0) -> float:
     if not quote:
@@ -38,9 +43,11 @@ def _quote_price(quote: Dict[str, Any] | None, fallback: float = 0.0) -> float:
 
 
 def get_cached_volume_poc(symbol: str) -> float | None:
-    from database.cache import get_kv_cache
+    from database.cache import get_kv_cache_fresh
 
-    val = get_kv_cache(f"volume_poc_{symbol.upper()}")
+    val = get_kv_cache_fresh(
+        f"volume_poc_{symbol.upper()}", _FALLBACK_LEVEL_MAX_AGE_SECONDS
+    )
     return float(val) if val is not None else None
 
 
@@ -51,9 +58,11 @@ async def save_cached_volume_poc(symbol: str, poc: float) -> None:
 
 
 def get_cached_gex_putwall(symbol: str) -> float | None:
-    from database.cache import get_kv_cache
+    from database.cache import get_kv_cache_fresh
 
-    val = get_kv_cache(f"gex_putwall_{symbol.upper()}")
+    val = get_kv_cache_fresh(
+        f"gex_putwall_{symbol.upper()}", _FALLBACK_LEVEL_MAX_AGE_SECONDS
+    )
     return float(val) if val is not None else None
 
 
