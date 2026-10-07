@@ -195,6 +195,7 @@ flowchart TB
 | 25 | [`04_polymarket_vwbp_sentiment_radar.md`](macro_sentiment/04_polymarket_vwbp_sentiment_radar.md) | Polymarket VWBP 加權勝率與雙頁籤輿情共振雷達 | 13 組看跌語義反轉, 保底名義流動性加權 VWBP, 雙頁籤就地切換與四維共振雷達 | `cogs/unified_terminal/utils.py` |
 | 25b | [`05_liquidity_regime_and_macro_surprise.md`](macro_sentiment/05_liquidity_regime_and_macro_surprise.md) | 央行淨流動性體制與宏觀預期差標準化 | 淨流動性 WALCL-WTREGEN-RRPONTSYD, 13 週變更率, 流動性三態狀態機, 12 期滾動 Z-Score, NFCI 動態 ERP 擾動 | `market_analysis/fundamental_pipeline/liquidity_regime.py` |
 | 25c | [`06_sec_event_stream_and_governance_gate.md`](macro_sentiment/06_sec_event_stream_and_governance_gate.md) | SEC 申報直連、內部人交易與治理審查閘門（平日 07:00–20:00 ET 每整點同步，預設乾跑） | 限速 8 req/s, 1.5MB 截斷, defusedxml 解析, SGML 表頭權威受理時間, 4.02 CRITICAL / 5.02 預設 REVIEW 審查 30 天, 4/A 去重與 CIK 身分鍵, 10b5-1 聚類增持, 13D 5 個 SEC 營業日審查 | `market_analysis/fundamental_pipeline/sec_item_router.py` |
+| 25d | [`07_alt_data_and_channel_checks.md`](macro_sentiment/07_alt_data_and_channel_checks.md) | 實體替代數據攝取與 17 條產業鏈因果檢驗（NYSE 交易日 18:00 ET 排程寫入） | 17 條產業鏈對照矩陣, 曆季期別對齊與前視防護, SEC XBRL capex/RPO/DIO 單季年增率, 傳導極性, 美股/台股分群等權, CAUSAL 背離度點數, NOWCAST 方向命中率, TSA/FRED/TWSE/TPEx, 實驗性 🧪 標示 | `market_analysis/fundamental_pipeline/channel_check.py` |
 
 ---
 

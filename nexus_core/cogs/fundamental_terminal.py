@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ import discord
 from cogs.embed_builders.fundamental_embeds import build_fa_terminal_embed
 from database.fundamental_pipeline import (
     get_active_governance_flags,
+    get_channel_checks_by_symbol,
     get_eps_estimate_snapshots,
     get_insider_transactions,
     get_latest_earnings_surprise,
@@ -30,6 +32,11 @@ from discord.ext import commands
 from market_analysis.fundamental_pipeline.governance_gate import (
     evaluate_governance_status,
 )
+from market_analysis.fundamental_pipeline.channel_check import (
+    LINK_TYPE_LABELS_ZH,
+    NOWCAST_DIRECTION_LABELS_ZH,
+    VERDICT_LABELS_ZH as CHANNEL_VERDICT_LABELS_ZH,
+)
 from market_analysis.fundamental_pipeline.earnings_surprise import FLOOR_EPS
 from market_analysis.fundamental_pipeline.guidance_delta import (
     VERDICT_LABELS_ZH,
@@ -39,10 +46,15 @@ from market_analysis.fundamental_pipeline.insider_signal import (
     evaluate_insider_signal,
 )
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
     EarningsSurpriseDTO,
     EPSEstimateSnapshotRecord,
     GuidanceExtraction,
     GuidanceExtractionDTO,
+    SupplyChainLink,
+)
+from market_analysis.fundamental_pipeline.supply_chain_map import (
+    get_links_for_symbol,
 )
 
 logger = logging.getLogger(__name__)
@@ -342,11 +354,112 @@ class EarningsSurpriseSection:
         return f"• 分析師共識 EPS（{snap_date}）: {' ｜ '.join(snap_parts)}"
 
 
+_CHANNEL_SECTION_CHAR_BUDGET = 950  # Discord 欄位上限 1024 字元，保留結尾空行餘裕
+_CHANNEL_REASON_MAX_CHARS = 60
+_CHANNEL_NO_DATA = "尚無產業鏈檢驗資料（待每日 18:00 ET 排程寫入）"
+
+
+def _pick_channel_log(
+    logs: list[ChannelCheckLogRecord],
+) -> ChannelCheckLogRecord | None:
+    """同鏈多期時優先取最新的非「資料不足」結果；全為資料不足時取最新一期。"""
+    for log in logs:
+        if log.verdict != "INSUFFICIENT":
+            return log
+    return logs[0] if logs else None
+
+
+def _channel_reason(log: ChannelCheckLogRecord) -> str:
+    try:
+        members = json.loads(log.members_json) if log.members_json else {}
+    except (ValueError, TypeError):
+        return ""
+    text = str(members.get("summary_text", "")) if isinstance(members, dict) else ""
+    if "：" in text:
+        text = text.split("：", 1)[1]
+    if len(text) > _CHANNEL_REASON_MAX_CHARS:
+        text = text[: _CHANNEL_REASON_MAX_CHARS - 1] + "…"
+    return text
+
+
+def _format_channel_line(
+    link: SupplyChainLink, log: ChannelCheckLogRecord | None
+) -> str:
+    type_zh = LINK_TYPE_LABELS_ZH.get(link.link_type, "產業鏈")
+    tag = f"{type_zh}{'・🧪實驗性' if link.experimental else ''}"
+    if log is None:
+        return f"• {link.title}（{tag}）: ⚪ 尚無檢驗紀錄"
+    icon = {"CONFIRM": "🟢", "DIVERGE": "🔴"}.get(log.verdict, "⚪")
+    verdict_zh = CHANNEL_VERDICT_LABELS_ZH.get(log.verdict, "資料不足")
+    parts: list[str] = []
+    if log.driver_growth is not None:
+        inverse = "（反向）" if link.polarity == -1 else ""
+        parts.append(f"驅動{inverse} {log.driver_growth:+.1f}%")
+    if log.follower_growth is not None:
+        parts.append(f"跟隨 {log.follower_growth:+.1f}%")
+    if log.divergence_pp is not None:
+        parts.append(f"偏差 {log.divergence_pp:+.1f}pp")
+    if log.nowcast_direction is not None:
+        parts.append(NOWCAST_DIRECTION_LABELS_ZH.get(log.nowcast_direction, ""))
+    if log.verdict == "INSUFFICIENT":
+        reason = _channel_reason(log)
+        if reason:
+            parts.append(reason)
+    detail = " ｜ ".join(p for p in parts if p)
+    detail_str = f"（{detail}）" if detail else ""
+    return f"• {link.title}（{tag}）{log.as_of_period}: {icon} **{verdict_zh}**{detail_str}"
+
+
+class ChannelCheckSection:
+    """PR4: 實體產業鏈交叉驗證區塊。
+
+    資料由事件時鐘每日 18:00 ET（NYSE 交易日）排程寫入 channel_check_log；
+    排程尚未寫入時必須明示「尚無資料」，不得顯示成看似判定結果的「資料不足」。
+    """
+
+    @property
+    def section_id(self) -> str:
+        return "channel_checks"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "🔗 實體產業鏈交叉驗證"
+
+        links = get_links_for_symbol(sym_upper)
+        if not links:
+            return header, "• 產業鏈定位: 未涵蓋於當前 17 條核心產業鏈矩陣中"
+
+        # 讀取資料庫中與該標的相關之交叉驗證日誌（依期別新到舊）
+        logs = await asyncio.to_thread(get_channel_checks_by_symbol, sym_upper, 60)
+        if not logs:
+            titles = "、".join(link.title for link in links)
+            return header, f"• ⚪ {_CHANNEL_NO_DATA}\n• 涵蓋產業鏈: {titles}"
+
+        logs_by_key: dict[str, list[ChannelCheckLogRecord]] = {}
+        for log in logs:
+            logs_by_key.setdefault(log.link_key, []).append(log)
+
+        lines: list[str] = []
+        used = 0
+        for idx, link in enumerate(links):
+            line = _format_channel_line(
+                link, _pick_channel_log(logs_by_key.get(link.link_key, []))
+            )
+            if used + len(line) + 1 > _CHANNEL_SECTION_CHAR_BUDGET:
+                lines.append(f"• …其餘 {len(links) - idx} 條產業鏈略")
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        return header, "\n".join(lines)
+
+
 # 全域單例區塊註冊中心
 fa_section_registry = FaSectionRegistry()
 fa_section_registry.register(MacroLiquiditySection())
 fa_section_registry.register(GovernanceGateSection())
 fa_section_registry.register(EarningsSurpriseSection())
+fa_section_registry.register(ChannelCheckSection())
 
 
 # ============================================================================

@@ -28,6 +28,7 @@ from market_analysis.fundamental_pipeline.models import (
     EarningsSurpriseDTO,
     FilingEventRecord,
 )
+from services.alt_data_service import alt_data_service
 from services.bounded_cache import BoundedCache
 
 _MONITOR = "cogs.trading.fundamental_pipeline_monitor"
@@ -40,6 +41,40 @@ def clean_registry() -> Generator[None, None, None]:
     ClockJobRegistry.clear()
     yield
     ClockJobRegistry.clear()
+
+
+@pytest.fixture(autouse=True)
+def isolate_shared_sec_client() -> Generator[None, None, None]:
+    """SecFilingSyncRunner 會把 SEC 客戶端注入模組單例 alt_data_service，測試間需隔離。"""
+    with (
+        patch.object(alt_data_service, "_sec_client", None),
+        patch.object(alt_data_service, "_sec_unavailable_reason", None),
+    ):
+        yield
+
+
+def test_default_jobs_register_all_six_with_priorities() -> None:
+    """預設註冊 PR1 三個、PR2 SEC 同步、PR3 PENDING 重試與 PR4 產業鏈檢驗，依 priority 排序。"""
+    register_default_fundamental_jobs()
+    jobs = [(j.job_id, j.priority) for j in ClockJobRegistry.all_jobs()]
+    assert jobs == [
+        ("macro_surprise_0830", 10),
+        ("macro_surprise_1000", 20),
+        ("liquidity_regime_1615", 30),
+        ("sec_filing_sync_hourly", 40),
+        ("earnings_pending_retry_1730", 50),
+        ("channel_check_1800", 60),
+    ]
+
+
+def test_trading_day_1800_runs_sec_sync_before_channel_check() -> None:
+    """交易日 18:00 視窗內 SEC 同步與產業鏈檢驗同時到期，SEC 同步先執行（先建立共用客戶端）。"""
+    register_default_fundamental_jobs()
+    due = [
+        j.job_id
+        for j in ClockJobRegistry.due_jobs(datetime(2026, 10, 7, 18, 2, tzinfo=ny_tz))
+    ]
+    assert due == ["sec_filing_sync_hourly", "channel_check_1800"]
 
 
 def test_nyse_trading_day_at_skips_market_holidays() -> None:
@@ -127,6 +162,155 @@ async def test_macro_surprise_job_still_processes_when_refresh_fails() -> None:
         await _run_macro_surprise_job(datetime(2026, 10, 7, 8, 31, tzinfo=ny_tz))
 
     mock_process.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# PR4 產業鏈交叉驗證排程 (channel_check_1800)
+# ---------------------------------------------------------------------------
+
+
+def test_channel_check_job_due_only_on_trading_day_1800_window() -> None:
+    """18:00 ET 視窗（15 分鐘）且為 NYSE 交易日才觸發；休市日與視窗外不觸發。"""
+    register_default_fundamental_jobs()
+
+    def _due(dt: datetime) -> list[str]:
+        return [j.job_id for j in ClockJobRegistry.due_jobs(dt)]
+
+    assert "channel_check_1800" in _due(datetime(2026, 10, 7, 18, 0, tzinfo=ny_tz))
+    assert "channel_check_1800" in _due(datetime(2026, 10, 7, 18, 14, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 7, 18, 15, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 7, 17, 55, tzinfo=ny_tz))
+    # 感恩節休市、週六
+    assert "channel_check_1800" not in _due(datetime(2026, 11, 26, 18, 5, tzinfo=ny_tz))
+    assert "channel_check_1800" not in _due(datetime(2026, 10, 10, 18, 5, tzinfo=ny_tz))
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_runs_two_completed_periods_with_persist() -> None:
+    """排程對最近兩個已結束曆季呼叫 run_all_channel_checks(persist=True)。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(return_value=[])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+
+    periods = [c.kwargs["as_of_period"] for c in mock_run.await_args_list]
+    assert periods == ["2026-Q3", "2026-Q2"]
+    for c in mock_run.await_args_list:
+        assert c.kwargs["persist"] is True
+        assert str(c.kwargs["as_of"]) == "2026-10-07"
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_skips_when_memory_unsafe() -> None:
+    """記憶體不足時工作本體不執行任何檢驗。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(return_value=[])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=False,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+    mock_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_channel_check_job_one_period_failure_does_not_stop_other() -> None:
+    """單一期別例外不影響另一期別。"""
+    from cogs.trading.fundamental_pipeline_monitor import _run_channel_check_job
+
+    mock_run = AsyncMock(side_effect=[RuntimeError("SEC down"), []])
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+    ):
+        await _run_channel_check_job(datetime(2026, 10, 7, 18, 1, tzinfo=ny_tz))
+    assert mock_run.await_count == 2
+
+
+def _make_monitor_cog(is_leader: bool) -> object:
+    from unittest.mock import MagicMock
+
+    from cogs.trading.fundamental_pipeline_monitor import (
+        FundamentalPipelineMonitorCog,
+    )
+
+    bot = MagicMock()
+    bot._is_leader_instance = is_leader
+    with patch("discord.ext.tasks.Loop.start"):
+        return FundamentalPipelineMonitorCog(bot)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("is_leader", "memory_ok"), [(False, True), (True, False)])
+async def test_clock_loop_does_not_run_channel_check_when_not_leader_or_memory_unsafe(
+    is_leader: bool, memory_ok: bool
+) -> None:
+    """非 leader 或記憶體不足時，監控迴圈不執行任何到期工作（含產業鏈檢驗）。"""
+    cog = _make_monitor_cog(is_leader)
+    mock_run = AsyncMock(return_value=[])
+    fixed_now = datetime(2026, 10, 7, 18, 2, tzinfo=ny_tz)
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=memory_ok,
+        ),
+        patch("cogs.trading.fundamental_pipeline_monitor.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value = fixed_now
+        await cog.fundamental_clock_task.coro(cog)  # type: ignore[attr-defined]
+    mock_run.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_clock_loop_runs_channel_check_for_leader() -> None:
+    """leader 且記憶體安全時，18:00 視窗內會執行產業鏈檢驗（對照組）；同時到期的 SEC 同步亦觸發。"""
+    mock_trigger = AsyncMock(return_value=True)
+    with patch(f"{_MONITOR}.SecFilingSyncRunner.trigger", new=mock_trigger):
+        cog = _make_monitor_cog(True)
+    mock_run = AsyncMock(return_value=[])
+    fixed_now = datetime(2026, 10, 7, 18, 2, tzinfo=ny_tz)
+    with (
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.alt_data_service.run_all_channel_checks",
+            new=mock_run,
+        ),
+        patch(
+            "cogs.trading.fundamental_pipeline_monitor.is_memory_safe",
+            return_value=True,
+        ),
+        patch("cogs.trading.fundamental_pipeline_monitor.datetime") as mock_dt,
+    ):
+        mock_dt.now.return_value = fixed_now
+        await cog.fundamental_clock_task.coro(cog)  # type: ignore[attr-defined]
+    assert mock_run.await_count == 2
+    mock_trigger.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -423,6 +607,39 @@ async def test_sec_runner_injects_earnings_handler_sharing_sec_client() -> None:
     event = _earnings_event(is_backfill=True)
     await handler(event)
     earnings.process_filing_event.assert_awaited_once_with(event)
+
+
+@pytest.mark.asyncio
+async def test_sec_runner_shares_sec_client_with_alt_data_service() -> None:
+    """SEC 同步建立的客戶端注入 alt_data_service，18:00 產業鏈檢驗共用同一個限速器。"""
+    sec_client = MagicMock()
+    fake = _fake_service(AsyncMock(return_value={}))
+    fake.get_client = AsyncMock(return_value=sec_client)
+    runner = SecFilingSyncRunner(_leader_bot())
+    with (
+        patch(f"{_MONITOR}.FilingEventService", return_value=fake) as factory,
+        patch(f"{_MONITOR}.EarningsSurpriseService"),
+    ):
+        await runner._get_service()
+    assert factory.call_args.kwargs["client"] is None
+    assert alt_data_service.sec_client is sec_client
+
+
+@pytest.mark.asyncio
+async def test_sec_runner_reuses_client_already_built_by_alt_data_service() -> None:
+    """產業鏈檢驗先建立了 SEC 客戶端時，SEC 同步沿用之而非另建。"""
+    existing = MagicMock()
+    alt_data_service.attach_sec_client(existing)
+    fake = _fake_service(AsyncMock(return_value={}))
+    fake.get_client = AsyncMock(return_value=existing)
+    runner = SecFilingSyncRunner(_leader_bot())
+    with (
+        patch(f"{_MONITOR}.FilingEventService", return_value=fake) as factory,
+        patch(f"{_MONITOR}.EarningsSurpriseService"),
+    ):
+        await runner._get_service()
+    assert factory.call_args.kwargs["client"] is existing
+    assert alt_data_service.sec_client is existing
 
 
 def test_earnings_pending_retry_job_registered_on_trading_days_1730() -> None:

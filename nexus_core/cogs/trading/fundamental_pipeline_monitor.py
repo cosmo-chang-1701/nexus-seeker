@@ -13,6 +13,8 @@
    事件觸發財報預期差與指引擷取（只入庫、不推播；LLM 前由服務檢查記憶體與 API 設定）。
 7. 註冊財報預期差 PENDING 重試 (NYSE 交易日 17:30 ET)：BMO 財報在 Finnhub 尚無實際值時
    先寫成 PENDING，收盤後重算近 14 個日曆日（約 10 個交易日）內仍為 PENDING 的財季。
+8. PR4 產業鏈交叉驗證 (NYSE 交易日 18:00 ET)：對最近兩個已結束曆季執行 17 條鏈檢驗，
+   只寫入 channel_check_log，不推播。
 """
 
 from __future__ import annotations
@@ -28,12 +30,14 @@ import config
 import market_time
 from database.fundamental_pipeline import get_pending_earnings_surprise_keys
 from discord.ext import commands, tasks
+from market_analysis.fundamental_pipeline.alt_data_metrics import completed_periods
 from market_analysis.fundamental_pipeline.event_clock import (
     ClockJob,
     ClockJobRegistry,
     weekday_at,
 )
 from market_analysis.fundamental_pipeline.models import FilingEventRecord
+from services.alt_data_service import alt_data_service
 from services.bounded_cache import BoundedCache
 from services.calendar_service import calendar_service
 from services.earnings_surprise_service import EarningsSurpriseService
@@ -100,7 +104,8 @@ class SecFilingSyncRunner:
       在背景執行 `sync_universe_filings` 並立即返回，不阻塞時鐘輪詢。
     - 上一輪仍在執行時略過本輪（防重疊）。
     - 缺少合規 `SEC_USER_AGENT`（`SecConfigError`）時只記一次 error，之後靜默略過。
-    - 跨輪重用同一個 FilingEventService / SecEdgarClient（共用限速器與 CIK 快取）。
+    - 跨輪重用同一個 FilingEventService / SecEdgarClient（共用限速器與 CIK 快取），
+      並與 `alt_data_service`（18:00 產業鏈檢驗的 SEC XBRL 端）共用同一個實例。
     - 8-K Item 2.02 事件交由 `EarningsSurpriseService.process_filing_event`（共用同一個
       SecEdgarClient 與限速器）；只入庫、不推播，例外由 FilingEventService 隔離成 warning。
     """
@@ -118,8 +123,12 @@ class SecFilingSyncRunner:
     async def _get_service(self) -> FilingEventService | None:
         if self._service is not None:
             return self._service
+        # 與產業鏈檢驗（alt_data_service）共用同一個 SecEdgarClient：兩者可能在 18:00 同時
+        # 打 SEC，各自 8 req/s 會超過 SEC 10 req/s 上限。誰先建立，另一方就沿用。
         service = FilingEventService(
-            bot=self._bot, earnings_handler=self._handle_earnings_event
+            bot=self._bot,
+            client=alt_data_service.sec_client,
+            earnings_handler=self._handle_earnings_event,
         )
         try:
             client = await service.get_client()
@@ -131,6 +140,7 @@ class SecFilingSyncRunner:
                 )
                 self._config_error_logged = True
             return None
+        alt_data_service.attach_sec_client(client)
         # 財報預期差只入庫供 /fa 與估值使用，不傳 bot（docs/valuation_pricing/05 未規範推播）
         self._earnings_service = EarningsSurpriseService(sec_client=client)
         self._service = service
@@ -316,11 +326,49 @@ async def _run_macro_surprise_job(now_et: datetime) -> None:
         logger.exception("[FundamentalPipeline] 執行總經預期差任務失敗")
 
 
+# 每次排程檢驗最近 N 個已結束曆季：較新一季多半仍在財報季（XBRL 尚未申報），
+# 前一季通常已完整，可完成方向命中驗證。
+CHANNEL_CHECK_PERIODS_PER_RUN = 2
+
+
+async def _run_channel_check_job(now_et: datetime) -> None:
+    """NYSE 交易日 18:00 ET 執行 17 條產業鏈交叉驗證並寫入 channel_check_log（不推播）。
+
+    監控迴圈已做 leader 與記憶體守衛；此工作耗時較長（SEC 限速下約數十秒），
+    每個期別開始前再檢查一次 `is_memory_safe()`。單條鏈的例外由
+    `run_all_channel_checks` 隔離，單一期別失敗也不影響另一期別。
+    """
+    as_of = now_et.date()
+    for period in completed_periods(as_of, CHANNEL_CHECK_PERIODS_PER_RUN):
+        if not is_memory_safe():
+            logger.warning(
+                f"[FundamentalPipeline] 記憶體使用率超標，略過產業鏈檢驗 {period}"
+            )
+            return
+        try:
+            results = await SingleFlightManager.run(
+                f"channel_check_job:{period}",
+                alt_data_service.run_all_channel_checks,
+                as_of_period=period,
+                as_of=as_of,
+                persist=True,
+            )
+            verdicts = [r.verdict for r in results]
+            logger.info(
+                f"[FundamentalPipeline] 產業鏈檢驗 {period} 完成：共 {len(verdicts)} 條，"
+                f"共振確認 {verdicts.count('CONFIRM')}、背離 {verdicts.count('DIVERGE')}、"
+                f"資料不足 {verdicts.count('INSUFFICIENT')}"
+            )
+        except Exception:
+            logger.exception(f"[FundamentalPipeline] 產業鏈檢驗 {period} 執行失敗")
+
+
 def register_default_fundamental_jobs(
     sec_sync_runner: SecFilingSyncRunner | None = None,
     earnings_retry_runner: EarningsPendingRetryRunner | None = None,
 ) -> None:
-    """註冊預設之基礎事件時鐘任務（PR1 總經 / 流動性、PR2 SEC 申報同步、PR3 財報 PENDING 重試）。
+    """註冊預設之基礎事件時鐘任務（PR1 總經 / 流動性、PR2 SEC 申報同步、PR3 財報 PENDING 重試、
+    PR4 產業鏈交叉驗證）。
 
     `sec_sync_runner` 由 Cog 傳入（帶 bot 以便關閉乾跑後推播）；未提供時建立無 bot 的
     執行器（只入庫、不推播）。`earnings_retry_runner` 由 Cog 傳入（帶 bot 以複檢 leader）。
@@ -389,6 +437,18 @@ def register_default_fundamental_jobs(
             is_due_fn=nyse_trading_day_at(17, 30, window_minutes=15),
             priority=50,
             description="BMO 財報 Finnhub 實際值延遲更新時，收盤後重算預期差",
+        )
+    )
+
+    ClockJobRegistry.register(
+        ClockJob(
+            job_id="channel_check_1800",
+            name="18:00 實體產業鏈交叉驗證",
+            schedule_desc="NYSE 交易日 18:00 ET（每日一次，最近兩個已結束曆季）",
+            handler=_run_channel_check_job,
+            is_due_fn=nyse_trading_day_at(18, 0, window_minutes=15),
+            priority=60,
+            description="SEC XBRL / TSA / FRED / TWSE·TPEx 17 條產業鏈檢驗，只寫入 channel_check_log",
         )
     )
 

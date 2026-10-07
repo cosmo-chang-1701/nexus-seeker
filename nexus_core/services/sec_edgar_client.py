@@ -229,6 +229,31 @@ class SecEdgarClient:
                 data: dict[str, Any] = resp.json()
                 return data
 
+    async def fetch_company_concept(
+        self, cik: str, tag: str, taxonomy: str = "us-gaap"
+    ) -> dict[str, Any] | None:
+        """拉取單一 XBRL 概念的歷史事實 (companyconcept API)。
+
+        刻意不用 companyfacts：單一公司 companyfacts 解壓後約 5MB、json 解析峰值約 26MB，
+        companyconcept 每個標籤僅數十 KB，較符合 1–2GB VPS 記憶體限制。
+        HTTP 404（公司從未申報此標籤）回傳 None；其他錯誤拋出例外。
+        """
+        cik10 = str(cik).strip().zfill(10)
+        url = (
+            f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik10}/"
+            f"{taxonomy}/{tag}.json"
+        )
+        async with self._limiter:
+            async with httpx.AsyncClient(
+                headers=self._headers, timeout=self._timeout
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                data: dict[str, Any] = resp.json()
+                return data
+
     async def fetch_document_text(self, url: str, byte_cap: int = 1_500_000) -> str:
         """串流拉取原始文本，到達 byte_cap 上限時執行防爆截斷。"""
         async with self._limiter:

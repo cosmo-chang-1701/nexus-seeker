@@ -13,13 +13,16 @@ from cogs.embed_builders.fundamental_embeds import (
     build_governance_flag_embed,
 )
 from cogs.fundamental_terminal import (
+    ChannelCheckSection,
     EarningsSurpriseSection,
     FaSectionRegistry,
     FundamentalTerminalCog,
     GovernanceGateSection,
     MacroLiquiditySection,
 )
+from market_analysis.fundamental_pipeline.supply_chain_map import get_links_for_symbol
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
     EarningsSurpriseDTO,
     EPSEstimateSnapshotRecord,
     FilingCursorRecord,
@@ -452,3 +455,146 @@ async def test_earnings_surprise_section_small_base_and_pending() -> None:
     with _patch_pr3(pending, None, []):
         _, body = await sec.render("RKLB")
     assert "⏳ 待實際值公布（共識 EPS: `$0.10`）" in body
+
+
+def _cc_log(
+    link_key: str,
+    period: str,
+    verdict: str,
+    driver: float | None = None,
+    follower: float | None = None,
+    divergence: float | None = None,
+    direction: str | None = None,
+    members_json: str = "{}",
+    link_type: str = "NOWCAST",
+) -> ChannelCheckLogRecord:
+    return ChannelCheckLogRecord(
+        link_key=link_key,
+        as_of_period=period,
+        link_type=link_type,  # type: ignore[arg-type]
+        experimental=False,
+        driver_growth=driver,
+        follower_growth=follower,
+        divergence_pp=divergence,
+        nowcast_direction=direction,  # type: ignore[arg-type]
+        nowcast_hit=None,
+        correlation=None,
+        verdict=verdict,  # type: ignore[arg-type]
+        members_json=members_json,
+    )
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_no_data_is_explicit() -> None:
+    """排程尚未寫入任何紀錄時明示「尚無資料」，不得顯示看似判定結果的資料不足 / INSUFFICIENT。"""
+    sec = ChannelCheckSection()
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol", return_value=[]
+    ):
+        header, body = await sec.render("TSLA")
+    assert header == "🔗 實體產業鏈交叉驗證"
+    assert "尚無產業鏈檢驗資料（待每日 18:00 ET 排程寫入）" in body
+    assert "INSUFFICIENT" not in body and "資料不足" not in body
+    assert "自主移動載具台灣供應鏈預測" in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_render_with_data_in_chinese() -> None:
+    """渲染判定結果：中文鏈名、中文判定與類型，不顯示英文狀態碼或 link_key。"""
+    sec = ChannelCheckSection()
+    assert sec.section_id == "channel_checks"
+    record = _cc_log(
+        "ADV_AUTO_MOBILITY_TW_NOWCAST",
+        "2026-Q3",
+        "CONFIRM",
+        driver=8.1,
+        follower=6.5,
+        divergence=-1.6,
+        direction="NOWCAST_UP",
+    )
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol", return_value=[record]
+    ):
+        _, body = await sec.render("TSLA")
+    assert "自主移動載具台灣供應鏈預測（高頻臨近預測）2026-Q3: 🟢 **共振確認**" in body
+    assert "驅動 +8.1%" in body
+    assert "預測向上" in body
+    assert "尚無檢驗紀錄" in body  # TSLA 其他鏈尚無紀錄
+    for english in (
+        "CONFIRM",
+        "DIVERGE",
+        "INSUFFICIENT",
+        "NOWCAST",
+        "CAUSAL",
+        "ADV_AUTO",
+    ):
+        assert english not in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_prefers_latest_substantive_verdict() -> None:
+    """同鏈多期：較新一期資料不足時，顯示最新的實質判定；全為資料不足才顯示原因。"""
+    sec = ChannelCheckSection()
+    newer_insufficient = _cc_log(
+        "ADV_AUTO_MOBILITY_TW_NOWCAST",
+        "2026-Q3",
+        "INSUFFICIENT",
+        members_json='{"summary_text": "數據不充分：驅動端台股覆蓋 0/5 低於門檻"}',
+    )
+    older = _cc_log("ADV_AUTO_MOBILITY_TW_NOWCAST", "2026-Q2", "CONFIRM", driver=12.0)
+    fleet_insufficient = _cc_log(
+        "ADV_AUTO_FLEET_DEMAND",
+        "2026-Q3",
+        "INSUFFICIENT",
+        link_type="CAUSAL",
+        members_json='{"summary_text": "數據不充分 (驅動端或跟隨端增長率缺失)：跟隨端美股覆蓋 1/4 低於門檻"}',
+    )
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol",
+        return_value=[newer_insufficient, fleet_insufficient, older],
+    ):
+        _, body = await sec.render("TSLA")
+    assert "2026-Q2: 🟢 **共振確認**（驅動 +12.0%）" in body
+    assert "全美汽車總體景氣需求鏈（因果傳導）2026-Q3: ⚪ **資料不足**" in body
+    assert "跟隨端美股覆蓋 1/4 低於門檻" in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_inverse_polarity_label() -> None:
+    sec = ChannelCheckSection()
+    record = _cc_log(
+        "BRAND_RETAIL_INVENTORY",
+        "2026-Q2",
+        "CONFIRM",
+        driver=10.0,
+        follower=-8.0,
+        link_type="CAUSAL",
+    )
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol", return_value=[record]
+    ):
+        _, body = await sec.render("WMT")
+    assert "驅動（反向） +10.0%" in body
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_respects_discord_field_limit() -> None:
+    sec = ChannelCheckSection()
+    long_reason = '{"summary_text": "數據不充分：' + "很長的原因" * 40 + '"}'
+    logs = [
+        _cc_log(link.link_key, "2026-Q3", "INSUFFICIENT", members_json=long_reason)
+        for link in get_links_for_symbol("TSLA")
+    ]
+    with patch(
+        "cogs.fundamental_terminal.get_channel_checks_by_symbol", return_value=logs
+    ):
+        _, body = await sec.render("TSLA")
+    assert len(body) <= 1000
+
+
+@pytest.mark.asyncio
+async def test_channel_check_section_render_unmapped_symbol() -> None:
+    """測試未映射標的之提示訊息。"""
+    sec = ChannelCheckSection()
+    _header, body = await sec.render("UNMAPPED_SYMBOL_XYZ")
+    assert "未涵蓋於當前 17 條核心產業鏈矩陣中" in body

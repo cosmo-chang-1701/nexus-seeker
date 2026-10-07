@@ -1,0 +1,147 @@
+{
+ "cik": 1018724,
+ "taxonomy": "us-gaap",
+ "tag": "PaymentsToAcquirePropertyPlantAndEquipment",
+ "label": "Payments to Acquire Property, Plant, and Equipment",
+ "description": "The cash outflow associated with the acquisition of long-lived, physical assets that are used in the normal conduct of business to produce goods and services and not intended for resale; includes cash outflows to pay for construction of self-constructed assets.",
+ "entityName": "AMAZON COM INC",
+ "units": {
+  "USD": [
+   {
+    "start": "2015-04-01",
+    "end": "2016-03-31",
+    "val": 4897000000,
+    "accn": "0001018724-16-000227",
+    "fy": 2016,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2016-04-29"
+   },
+   {
+    "start": "2015-04-01",
+    "end": "2016-03-31",
+    "val": 4897000000,
+    "accn": "0001018724-17-000051",
+    "fy": 2017,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2017-04-28"
+   },
+   {
+    "start": "2016-01-01",
+    "end": "2016-03-31",
+    "val": 1179000000,
+    "accn": "0001018724-16-000227",
+    "fy": 2016,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2016-04-29"
+   },
+   {
+    "start": "2016-01-01",
+    "end": "2016-03-31",
+    "val": 1179000000,
+    "accn": "0001018724-17-000051",
+    "fy": 2017,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2017-04-28",
+    "frame": "CY2016Q1"
+   },
+   {
+    "start": "2015-07-01",
+    "end": "2016-06-30",
+    "val": 5395000000,
+    "accn": "0001018724-16-000286",
+    "fy": 2016,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2016-07-29"
+   },
+   {
+    "start": "2016-01-01",
+    "end": "2016-06-30",
+    "val": 2890000000,
+    "accn": "0001018724-16-000286",
+    "fy": 2016,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2016-07-29"
+   },
+   {
+    "start": "2016-04-01",
+    "end": "2016-06-30",
+    "val": 1711000000,
+    "accn": "0001018724-16-000286",
+    "fy": 2016,
+    "fp": "Q2",
+    "form": "10-Q",
+    "filed": "2016-07-29",
+    "frame": "CY2016Q2"
+   },
+   {
+    "start": "2015-10-01",
+    "end": "2016-09-30",
+    "val": 6040000000,
+    "accn": "0001018724-16-000324",
+    "fy": 2016,
+    "fp": "Q3",
+    "form": "10-Q",
+    "filed": "2016-10-28"
+   },
+   {
+    "start": "2016-01-01",
+    "end": "2016-09-30",
+    "val": 4731000000,
+    "accn": "0001018724-16-000324",
+    "fy": 2016,
+    "fp": "Q3",
+    "form": "10-Q",
+    "filed": "2016-10-28"
+   },
+   {
+    "start": "2016-07-01",
+    "end": "2016-09-30",
+    "val": 1841000000,
+    "accn": "0001018724-16-000324",
+    "fy": 2016,
+    "fp": "Q3",
+    "form": "10-Q",
+    "filed": "2016-10-28",
+    "frame": "CY2016Q3"
+   },
+   {
+    "start": "2016-01-01",
+    "end": "2016-12-31",
+    "val": 6737000000,
+    "accn": "0001018724-17-000011",
+    "fy": 2016,
+    "fp": "FY",
+    "form": "10-K",
+    "filed": "2017-02-10",
+    "frame": "CY2016"
+   },
+   {
+    "start": "2016-04-01",
+    "end": "2017-03-31",
+    "val": 7417000000,
+    "accn": "0001018724-17-000051",
+    "fy": 2017,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2017-04-28"
+   },
+   {
+    "start": "2017-01-01",
+    "end": "2017-03-31",
+    "val": 1861000000,
+    "accn": "0001018724-17-000051",
+    "fy": 2017,
+    "fp": "Q1",
+    "form": "10-Q",
+    "filed": "2017-04-28",
+    "frame": "CY2017Q1"
+   }
+  ]
+ }
+}
