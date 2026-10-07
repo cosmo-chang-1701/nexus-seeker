@@ -52,6 +52,18 @@ _PROFILE_CACHE_TTL = 86400  # 24 小時，公司 Profile 通常是靜態的
 
 _etf_cache: Any = BoundedCache(max_size=_SCALAR_CACHE_SIZE)
 _ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
+# 查詢失敗（例外）的負向快取：1 小時。避免 Finnhub 暫時異常／429 時，同一檔標的
+# 在每輪掃描都重打 symbol_lookup 白燒配額；又不至於把暫時性錯誤鎖太久。
+_ETF_NEGATIVE_CACHE_TTL = 3600
+# ETF 判斷的 SQLite 持久化年限：ETF 身分幾乎不會改變，30 天讓重啟／藍綠部署後免重查。
+_ETF_KV_MAX_AGE_SECONDS = 30 * 86400
+# 公司 Profile 的 SQLite 持久化年限：產業／市值等欄位變動緩慢，7 天足夠。
+_PROFILE_KV_MAX_AGE_SECONDS = 7 * 86400
+
+# 財報日曆同日記憶化：key=(SYMBOL, from_date, to_date)，value=(list, 到期時間戳)。
+# 200 檔 ≈ watchlist＋持倉規模上限；每筆僅數個小 dict，記憶體可忽略。
+_EARNINGS_CALENDAR_CACHE_SIZE = 200
+_earnings_calendar_cache: Any = BoundedCache(max_size=_EARNINGS_CALENDAR_CACHE_SIZE)
 
 # ---------------------------------------------------------------------------
 # 標的代號有效性快取 (24 小時有效快取 / 10 分鐘無效快取，大幅加速 /set_watch 與輸入驗證)
@@ -126,6 +138,11 @@ def clear_profile_cache() -> None:
 def clear_etf_cache() -> None:
     _etf_cache.clear()
     logger.info("Clarified ETF cache")
+
+
+def clear_earnings_calendar_cache() -> None:
+    _earnings_calendar_cache.clear()
+    logger.info("Clarified earnings calendar cache")
 
 
 def clear_history_cache() -> None:

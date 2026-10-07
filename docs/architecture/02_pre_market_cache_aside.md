@@ -185,3 +185,13 @@ fallback 路徑（即時資料缺失時回頭讀 SQLite 舊值）一律改用 `d
 | `get_cached_volume_poc` / `get_cached_gex_putwall`（`market_analysis/intraday_pipeline/metrics.py`） | `_FALLBACK_LEVEL_MAX_AGE_SECONDS` | 24 小時 | 回傳 `None`：POC 回退為現價、PutWall 視為 `None` |
 | `macro_vix` 回退（`cogs/trading/scheduler.py` 15 分鐘巡邏） | `_VIX_FALLBACK_MAX_AGE_SECONDS` | 30 分鐘 | 不採用，維持 `is_vix_valid=False` |
 | `macro_fedwatch_probability`（`market_analysis/squeeze_entry/vetoes.py`、`market_analysis/dynamic_rollover/macro_top_escape_defense.py`） | `FEDWATCH_PROB_MAX_AGE_SECONDS`（定義於 `services/calendar_service.py`） | 12 小時（寫入端 4 小時週期 × 3） | 傳入 `prob=None`；`evaluate_macro_top_escape_score` 將 `None` 視為未知因子、不計分，且已知分數為 NORMAL 時回傳 `UNKNOWN`（fail-closed），門檻不變 |
+
+### 7.2 Finnhub 免費方案：呼叫效率
+
+Finnhub 免費方案有 60 次/分的全域上限，且部分端點為付費（`etfs_profile`、`company_eps_estimates` 實測 403）。下列資料皆為靜態或日更，採「記憶體 → SQLite kv → API」分層，避免重啟／藍綠部署與同日重複查詢白燒配額。實測：`symbol_lookup('SPY')` 的 `type` 為 `"ETP"`，`AAPL` 為 `"Common Stock"`。
+
+| 資料 | 位置 | 快取策略 | 備註 |
+| :--- | :--- | :--- | :--- |
+| ETF 判斷 `is_etf` | `services/market_data_service/fundamentals.py` | 記憶體 24 小時 → kv `etf_flag_{SYM}`（30 天，僅持久化 True，避免新上市 ETF 誤判被鎖）→ `symbol_lookup`（`type == "ETP"`） | 改用免費端點，移除 403 的 `etfs_profile`；查詢例外時記憶體負向快取 1 小時並記 warning |
+| 財報日曆 `get_earnings_calendar` | 同上 | `(SYMBOL, from, to)` 同日記憶化（`BoundedCache` 200 筆），到期為當日 23:59:59 ET | 只快取未拋例外的結果（含空 list）；合併 17:30／19:00／20:00 ClockJob 與日曆服務的同日重複查詢 |
+| 公司 Profile `get_company_profile` | 同上 | 記憶體 24 小時 → kv `company_profile_{SYM}`（7 天）→ `company_profile2` | 重啟後第一輪 Intraday Pipeline 不再對整份 watchlist 重打 |

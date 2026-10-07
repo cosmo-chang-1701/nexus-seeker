@@ -15,8 +15,12 @@ from services.market_data_service._core import (
 )
 from services.market_data_service.caches import (
     BoundedCache,
+    _earnings_calendar_cache,
     _etf_cache,
     _ETF_CACHE_TTL,
+    _ETF_KV_MAX_AGE_SECONDS,
+    _ETF_NEGATIVE_CACHE_TTL,
+    _PROFILE_KV_MAX_AGE_SECONDS,
     _option_chain_cache,
     _profile_cache,
     _PROFILE_CACHE_TTL,
@@ -137,20 +141,43 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
         if now < expiry:
             return val  # type: ignore
 
+    # 記憶體 miss → SQLite 持久化（7 天）：重啟／藍綠部署後第一輪掃描免對整份
+    # watchlist 重打 company_profile2。讀取走 to_thread，避免阻塞 event loop。
+    # 延遲 import：避免 database 套件與 market_data_service 的循環匯入
+    from database.cache import get_kv_cache_fresh, save_kv_cache
+
+    kv_key = f"company_profile_{symbol}"
+    kv_val = await asyncio.to_thread(
+        get_kv_cache_fresh, kv_key, _PROFILE_KV_MAX_AGE_SECONDS
+    )
+    if isinstance(kv_val, dict) and kv_val:
+        _profile_cache[symbol] = (kv_val, now + _PROFILE_CACHE_TTL)
+        return cast(Dict[str, Any], kv_val)
+
     client = _get_client()
     try:
         data = await _execute_api_call(client.company_profile2, symbol=symbol)
         res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
         if res:
             _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
+            await save_kv_cache(kv_key, res)
         return res
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
 
 
+# Finnhub symbol_lookup 對 ETF 回傳的 type 值（實測 SPY → "ETP"；個股為 "Common Stock"）。
+# 免費方案的 etfs_profile 實測回 403，故改以 symbol_lookup 判斷。
+_ETF_LOOKUP_TYPES = frozenset({"ETP"})
+
+
 async def is_etf(symbol: str) -> bool:
-    """判斷標的是否為 ETF。"""
+    """判斷標的是否為 ETF。
+
+    查詢順序：記憶體 → SQLite kv（30 天，僅 True）→ Finnhub symbol_lookup（免費端點）。
+    查詢例外時寫入 1 小時負向快取（回傳 False），避免每輪重打並白燒配額。
+    """
     symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _etf_cache:
@@ -158,15 +185,40 @@ async def is_etf(symbol: str) -> bool:
         if now < expiry:
             return val  # type: ignore
 
+    # 延遲 import：避免 database 套件與 market_data_service 的循環匯入
+    from database.cache import get_kv_cache_fresh, save_kv_cache
+
+    kv_key = f"etf_flag_{symbol}"
+    kv_val = await asyncio.to_thread(
+        get_kv_cache_fresh, kv_key, _ETF_KV_MAX_AGE_SECONDS
+    )
+    if isinstance(kv_val, bool):
+        _etf_cache[symbol] = (kv_val, now + _ETF_CACHE_TTL)
+        return kv_val
+
     client = _get_client()
     try:
-        data = await _execute_api_call(client.etfs_profile, symbol=symbol)
-        res = False
-        if data and data.get("name"):
-            res = True
+        data = await _execute_api_call(client.symbol_lookup, symbol)
+        results = data.get("result", []) if data else []
+        # 允許 BRK-B / BRK.B 兩種寫法，與 quote.py 的比對方式一致
+        targets = {symbol, symbol.replace("-", "."), symbol.replace(".", "-")}
+        res = any(
+            (
+                str(r.get("symbol", "")).upper() in targets
+                or str(r.get("displaySymbol", "")).upper() in targets
+            )
+            and str(r.get("type", "")) in _ETF_LOOKUP_TYPES
+            for r in results
+        )
         _etf_cache[symbol] = (res, now + _ETF_CACHE_TTL)
+        # 只持久化 True：新上市 ETF 若被誤判為非 ETF，False 鎖 30 天會長期錯誤；
+        # False 僅留在記憶體 24 小時快取，重啟後自然重新查詢。
+        if res:
+            await save_kv_cache(kv_key, res)
         return res
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[{symbol}] Finnhub ETF 判斷失敗，1 小時內視為非 ETF: {e}")
+        _etf_cache[symbol] = (False, now + _ETF_NEGATIVE_CACHE_TTL)
         return False
 
 
@@ -178,7 +230,7 @@ async def get_earnings_calendar(
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """取得財報日曆。"""
+    """取得財報日曆（同日同參數記憶化，隔日 00:00 ET 失效）。"""
     client = _get_client()
     try:
         ny_tz = ZoneInfo("America/New_York")
@@ -188,11 +240,26 @@ async def get_earnings_calendar(
         if to_date is None:
             to_date = (now_ny + timedelta(days=90)).strftime("%Y-%m-%d")
 
+        # 免費方案個股查詢只回「今日起」條目，同日內結果不會變；
+        # 17:30／19:00／20:00 ClockJob 與日曆服務的重複查詢在此合併。
+        cache_key = (symbol.upper(), from_date, to_date)
+        cached = _earnings_calendar_cache.get(cache_key)
+        if cached is not None:
+            rows, expiry = cached
+            if now_ny.timestamp() < expiry:
+                return list(rows)
+
         data = await _execute_api_call(
             client.earnings_calendar, _from=from_date, to=to_date, symbol=symbol
         )
         earnings = data.get("earningsCalendar", []) if data else []
         earnings.sort(key=lambda x: x.get("date", ""))
+        # 只快取未拋例外的結果（含空 list）；到期 = 當日 23:59:59 ET
+        day_end = now_ny.replace(hour=23, minute=59, second=59, microsecond=0)
+        _earnings_calendar_cache[cache_key] = (
+            list(earnings),
+            day_end.timestamp(),
+        )
         return cast(List[Dict[str, Any]], earnings)
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
