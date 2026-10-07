@@ -214,3 +214,38 @@ async def test_get_prior_guidance_extraction_excludes_same_newer_and_unnormalize
     assert prior_excl.fiscal_period == "2026-Q1"
 
     assert get_prior_guidance_extraction("AMZN", "2026-Q1", "ACC-Q1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_pending_earnings_surprise_keys_only_recent_pending() -> None:
+    """PENDING 重試查詢：只回傳 created_at 在窗口內且狀態仍為 PENDING 之財季。"""
+    from datetime import datetime, timedelta, timezone
+
+    from database.fundamental_pipeline import get_pending_earnings_surprise_keys
+
+    await save_earnings_surprises(
+        [
+            EarningsSurpriseDTO(
+                symbol="ZZPEND",
+                fiscal_period="2026-Q3",
+                consensus_eps=1.0,
+                status="PENDING",
+            ),
+            EarningsSurpriseDTO(
+                symbol="ZZDONE",
+                fiscal_period="2026-Q3",
+                actual_eps=1.1,
+                consensus_eps=1.0,
+                composite_score=20.0,
+                status="PROCESSED",
+            ),
+        ]
+    )
+    now = datetime.now(timezone.utc)
+    keys = get_pending_earnings_surprise_keys(now - timedelta(days=1))
+    assert ("ZZPEND", "2026-Q3") in keys
+    assert all(sym != "ZZDONE" for sym, _ in keys)
+
+    assert ("ZZPEND", "2026-Q3") not in get_pending_earnings_surprise_keys(
+        now + timedelta(days=1)
+    )

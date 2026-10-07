@@ -841,6 +841,31 @@ def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
         conn.close()
 
 
+def get_pending_earnings_surprise_keys(since_utc: datetime) -> list[tuple[str, str]]:
+    """讀取 `created_at` 不早於 since_utc、狀態仍為 PENDING 之 (symbol, fiscal_period)。
+
+    `created_at` 為首次寫入時間（SQLite CURRENT_TIMESTAMP，UTC；upsert 不更新），
+    即該財季首次被財報事件寫成 PENDING 的時間，供 PENDING 重試排程界定回看窗口。
+    """
+    if since_utc.tzinfo is not None:
+        since_utc = since_utc.astimezone(timezone.utc)
+    since_str = since_utc.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, fiscal_period
+            FROM earnings_surprise
+            WHERE status = 'PENDING' AND created_at >= ?
+            ORDER BY symbol, fiscal_period
+            """,
+            (since_str,),
+        ).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+    finally:
+        conn.close()
+
+
 async def save_eps_estimate_snapshots(
     snapshots: list[EPSEstimateSnapshotRecord],
 ) -> None:

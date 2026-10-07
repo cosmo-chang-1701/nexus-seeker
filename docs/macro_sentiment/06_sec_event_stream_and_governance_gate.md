@@ -9,7 +9,7 @@
 
 Nexus Seeker 基本面分析管線 PR2 直接串接美國證券交易委員會（SEC EDGAR）官方系統，架構核心哲學如下。
 
-> **接線狀態（尚未接線）**：SEC 申報同步服務 `FilingEventService`（`sync_symbol_filings` / `sync_universe_filings`）目前**沒有任何 production 排程或呼叫端**，`sec_filing_cursor`、`sec_filing_event`、`insider_transaction`、`governance_flag` 四張表在正式環境不會自動產生資料；13D 激進投資人閘門 `activist_gate.evaluate_activist_filing` 同樣尚未接線（沒有下載 13D 內文的呼叫端）。`/fa` 的治理區塊在標的從未同步（無游標）時會明示「⚪ 尚無申報同步資料（SEC 申報同步管線尚未排程）」，不會把「沒有資料」顯示成正常或 NEUTRAL。以下各節描述的是模組行為與接線後的預期流程。
+> **接線狀態（已排程）**：`cogs/trading/fundamental_pipeline_monitor.py` 註冊 `ClockJob` `sec_filing_sync_hourly`，於**平日 07:00–20:00 ET 每整點**（視窗 10 分鐘）以背景 `asyncio.Task` 呼叫 `FilingEventService.sync_universe_filings`，寫入 `sec_filing_cursor`、`sec_filing_event`、`insider_transaction`、`governance_flag` 四張表；排程細節見 §3.1。推播仍受 `FUNDAMENTAL_PIPELINE_DRY_RUN`（預設 `true`）控制，預設只入庫、不推播。13D 激進投資人閘門 `activist_gate.evaluate_activist_filing` 由同步流程對結構化 Schedule 13D / 13D/A 呼叫，結果**只記日誌**（record-only，不入庫、不推播）。`/fa` 的治理區塊在標的尚無游標時會明示「⚪ 尚無申報同步資料（待排程首次同步；僅涵蓋持倉與自選標的）」，不會把「沒有資料」顯示成正常或 NEUTRAL。
 
 1. **零延遲直連與串流防護**：由核心容器直連 SEC API，繞過邊緣節點；硬性限制請求頻率（$\le 8\text{ req/s}$）與 1.5MB 串流截斷，保障 1GB–2GB VPS 的記憶體安全。
 2. **防禦性 XML 解析**：全面採用 `defusedxml.ElementTree` 解析 Form 4 與 8-K 文件，徹底杜絕 XML 外部實體注入（XXE）與實體膨脹（Billion Laughs）漏洞。
@@ -18,10 +18,10 @@ Nexus Seeker 基本面分析管線 PR2 直接串接美國證券交易委員會�
 5. **零交易執行不變量 (Zero-Execution Invariant)**：所有治理評級與內部人訊號均為純顧問性提示，絕無自動平倉、下單或對沖觸發。
 
 ### 1.2 適用市場環境
-- **財報重編與會計醜聞審查**：標的發布 8-K 4.02 時產生 CRITICAL 旗標並向持倉者推播顧問性警訊（需同步服務接線且關閉乾跑）。「凍結買入推薦」屬**規劃中、尚未實作**：目前沒有任何買入推薦流程讀取治理旗標。
+- **財報重編與會計醜聞審查**：標的發布 8-K 4.02 時產生 CRITICAL 旗標；關閉乾跑（`FUNDAMENTAL_PIPELINE_DRY_RUN=false`）後才向持倉者推播顧問性警訊，預設乾跑只入庫。「凍結買入推薦」屬**規劃中、尚未實作**：目前沒有任何買入推薦流程讀取治理旗標。
 - **高管異動**：8-K 5.02 預設產生 REVIEW 旗標供 `/fa` 人工複核；僅在取得內文且明確為 CEO / CFO 等離任時升為 HIGH 並推播。
 - **內部人集體逢低增持**：在市場恐慌或底部震盪期間，多位董事與 C-Suite 高管於公開市場自費增持，捕捉信心共振。
-- **激進投資人進駐與延遲申報（尚未接線）**：Schedule 13D 披露激進意圖（要求席次、推動分拆、併購），且檢查是否逾期申報（> 5 個 SEC 營業日）。模組已實作，但沒有 production 呼叫端。
+- **激進投資人進駐與延遲申報（record-only）**：Schedule 13D 披露激進意圖（要求席次、推動分拆、併購），且檢查是否逾期申報（> 5 個 SEC 營業日）。同步流程遇到結構化 `SCHEDULE 13D` / `SCHEDULE 13D/A`（EDGAR 自 2024-12-18 起強制的 `primary_doc.xml`）時下載並評估，結果只寫入日誌；13G 為被動持股、無 Item 4 意圖，不評估；舊版 HTML / 純文字 `SC 13D` 無結構化欄位，略過。
 
 ---
 
@@ -78,10 +78,12 @@ $$\text{Verdict} = \begin{cases}
 \text{NEUTRAL} & \text{其他一般狀況}
 \end{cases}$$
 
-### 2.3 激進投資人 13D 及時性度量（尚未接線）
+### 2.3 激進投資人 13D 及時性度量（record-only）
 依據 SEC Rule 13d-1(a) 條款，自突破 5% 持股事件日 $D_{\text{event}}$ 至申報受理日 $D_{\text{filing}}$。營業日依 Exchange Act Rule 14d-1(g)(3) 定義為週六、週日與**聯邦假日**以外的日子（與 NYSE 交易日不同：耶穌受難日 NYSE 休市但 SEC 上班；哥倫布日、退伍軍人節 SEC 休息但 NYSE 開市），以 `pandas` 的 `USFederalHolidayCalendar` 判定：
 $$\text{Business Days} = \sum_{d = D_{\text{event}} + 1}^{D_{\text{filing}}} \mathbb{I}(\text{Weekday}(d) \in \{\text{Mon, …, Fri}\}) \cdot \mathbb{I}(d \notin \mathcal{H}_{\text{federal}})$$
 $$\text{Delayed Flag} \iff \text{Business Days} > 5$$
+
+輸入欄位由 `activist_gate.parse_schedule_13d_xml` 自結構化 `primary_doc.xml` 取出（命名空間無關）：投資人名稱為第一位 `reportingPersonName`；持股比例取各申報人 `percentOfClass` 的**最大值**（共同申報人持股多為重疊計算，不可加總）；Item 4 為 `item4/transactionPurpose`（修正申報未修改 Item 4 時為空字串）；$D_{\text{event}}$ 為封面 `dateOfEvent`（MM/DD/YYYY），$D_{\text{filing}}$ 為 submissions 的 `filingDate`。修正申報（13D/A）沿用 5 日門檻，比 2024 新規的 2 營業日寬鬆，只會漏報不會誤報。
 
 ---
 
@@ -89,7 +91,7 @@ $$\text{Delayed Flag} \iff \text{Business Days} > 5$$
 
 ```mermaid
 flowchart TD
-    Z[尚未接線: 目前無排程呼叫 FilingEventService] -.-> A
+    Z[sec_filing_sync_hourly: 平日 07-20 ET 每整點背景執行 sync_universe_filings] --> A
     A[SEC EDGAR Submissions API 增量掃描] --> B[取得標的申報列表]
     B --> C{是否已有游標 sec_filing_cursor?}
     C -- 是 --> D[JSON 受理時間上界 > 游標 且 accession 不等於游標]
@@ -102,6 +104,7 @@ flowchart TD
     F -->|Form 4 / 4A| G[安全拉取 XML 並以 defusedxml 解析]
     G --> I[寫入 insider_transaction，主申報人 CIK 編碼於 owner_name 欄]
     I --> H[讀取時 4/A 取代原始明細，依 CIK 計算 30 天聚類信號]
+    F -->|SCHEDULE 13D / 13D/A 結構化 XML| AG[activist_gate 評估意圖與逾期，僅記日誌]
     F -->|8-K Item 4.02 / 5.02| J[識別重大治理風險]
     J --> K{Item 4.02 財報重編?}
     K -- 是 --> L[產生 CRITICAL 旗標，審查期 30 天]
@@ -119,6 +122,29 @@ flowchart TD
     FAIL --> R
     N --> R[游標推進至第一筆失敗之前最新的成功申報]
 ```
+
+### 3.1 排程與執行模型（`sec_filing_sync_hourly`）
+
+| 項目 | 規格 |
+|---|---|
+| 註冊位置 | `cogs/trading/fundamental_pipeline_monitor.py::register_default_fundamental_jobs`（`ClockJob` `sec_filing_sync_hourly`，priority 40） |
+| 觸發時間 | 平日（週一至週五）07:00–20:00 ET 每整點，視窗 10 分鐘（`weekday_hourly_between(7, 20)`）；時鐘每 5 分鐘輪詢，`cooldown_seconds=1800` 擋下同一整點的第二次命中 |
+| 日曆 | 採平日而非 NYSE 交易日：SEC 依聯邦營業日受理申報（耶穌受難日 NYSE 休市但 SEC 照常受理）；聯邦假日 EDGAR 休息，空跑一輪只花約 $N$ 次 submissions 請求 |
+| 守衛 | 時鐘迴圈先檢查 `ENABLE_FUNDAMENTAL_PIPELINE_LOG`、Leader 與 `is_memory_safe()`；`SecFilingSyncRunner.trigger` 啟動前再確認一次 Leader 與記憶體 |
+| 執行方式 | `trigger` 以背景 `asyncio.Task` 執行 `sync_universe_filings` 並立即返回，不阻塞同一時鐘上的 08:30 / 10:00 / 16:15 工作；上一輪未完成時略過本輪（防重疊） |
+| 缺少 `SEC_USER_AGENT` | 建立客戶端時捕捉 `SecConfigError`，**只記一次** error，之後每輪靜默略過（設定後重啟即生效） |
+| 客戶端重用 | 跨輪重用同一個 `FilingEventService` / `SecEdgarClient`（共用 8 req/s 限速器、CIK 快取與 24 小時映射表 TTL） |
+| 財報事件掛點 | `FilingEventService(earnings_handler=...)`：route 含 `EARNINGS` 的 8-K / 8-K/A Item 2.02（含回填）在事件入庫、游標推進後交給 `EarningsSurpriseService.process_filing_event`（共用同一個 `SecEdgarClient`）；只處理游標已涵蓋的事件，例外只記 warning、不計入 `failed`。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9 |
+
+**頻率選擇（每小時而非每 30 分鐘）**：一輪的請求量約為
+
+$$R \approx N + 2 \cdot F_{\text{new}} \quad (N \le 80 \text{ 檔標的的 submissions；每筆新申報一次 SGML 表頭，Form 4 / 13D 再一次 XML；8-K Item 2.02 另加申報目錄與 EX-99.1 共 2 次})$$
+
+穩態下 $F_{\text{new}}$ 每小時僅數筆，$R \approx 80\text{–}120$ 次，在 $\le 8\text{ req/s}$、`Semaphore(3)` 下約 15–30 秒。07:00、08:00、09:00 三輪涵蓋開盤前的 BMO 8-K；Form 4 法定申報期限為 2 個營業日，治理推播預設乾跑，每小時的延遲已足夠，改為 30 分鐘只會讓請求量加倍而無實質效益。20:00 之後受理的申報（EDGAR 對 Section 16 申報受理至 22:00）於次一平日 07:00 補抓。首次回填（每檔最多 90 天 Form 4 與 30 天 8-K）可能需要數千次請求、耗時數分鐘以上，因此採背景任務與防重疊，而不是讓時鐘迴圈等待。
+
+**推播模式**：依上方流程圖節點 O，只有「非回填、`FUNDAMENTAL_PIPELINE_DRY_RUN=false`、CRITICAL / HIGH、標的在持倉池」四者同時成立才經 `notification_dispatcher.notify` 推播 `defense_fundamental_thesis`；預設 `FUNDAMENTAL_PIPELINE_DRY_RUN=true`，排程接線後仍只入庫、不推播。
+
+**與 08:00 `fundamental_filing_scan` 的關係**：兩者都讀 SEC 申報但職責不重疊。08:00 任務（`cogs/trading/fundamental_filing_monitor.py`）只掃**持倉**、每日一次、經 edge `TUNNEL_URL` 取最新一份 10-K / 10-Q / 8-K 內文送 LLM 護城河判讀，游標為 `fundamental_scan_state`，判定「基本面假設破滅」才推播；本任務直連 SEC、涵蓋持倉＋自選標的池、處理**所有**新申報的結構化欄位（Form 4 明細、8-K item code、13D 封面），游標為 `sec_filing_cursor`；唯一的 LLM 呼叫是 8-K Item 2.02 觸發的 EX-99.1 指引擷取（每檔每季約一次）。兩者各自維護游標、互不讀寫對方的表。
 
 ---
 
@@ -153,7 +179,7 @@ flowchart TD
 - **併發錯誤可觀測**：`sync_universe_filings` 先建立客戶端，缺少 `SEC_USER_AGENT` 時在併發前即拋出 `SecConfigError`；個別標的的例外以 `logger.error` 逐檔記錄，不中斷其他標的。
 - **CIK 查詢合併**：`company_tickers.json` 的併發 miss 經 `SingleFlightManager` 合併為一次下載。
 - **主申報人 CIK 的保存方式**：v091 已部署至正式 DB 且不可修改，後續 migration 編號已被其他分支占用，因此不新增欄位，改在 `insider_transaction.owner_name` 欄以 `{cik}|{names}` 編碼保存，讀取時由 `database/fundamental_pipeline.py` 還原；修正申報與受理時間由 `LEFT JOIN sec_filing_event` 還原。
-- **`/fa` 資料狀態**：無游標（從未同步）時顯示「⚪ 尚無申報同步資料」，有游標且無生效旗標才顯示「🟢 已同步」；REVIEW 旗標顯示為 🟡 待人工複核。
+- **`/fa` 資料狀態**：無游標（尚未輪到首次同步、不在持倉＋自選標的池，或首次回填失敗）時顯示「⚪ 尚無申報同步資料（待排程首次同步；僅涵蓋持倉與自選標的）」，有游標且無生效旗標才顯示「🟢 已同步」；REVIEW 旗標顯示為 🟡 待人工複核。
 - **REVIEW 與下游排除**：下游若依 HIGH / CRITICAL 排除候選標的，5.02 降為 REVIEW 後不再觸發排除；REVIEW 只代表「有高管異動、待人工判讀」。
 
 ---
@@ -167,6 +193,7 @@ flowchart TD
 - `nexus_core/market_analysis/fundamental_pipeline/models.py`
 - `nexus_core/services/sec_edgar_client.py`
 - `nexus_core/services/filing_event_service.py`
+- `nexus_core/cogs/trading/fundamental_pipeline_monitor.py`
 - `nexus_core/cogs/fundamental_terminal.py`
 - `nexus_core/cogs/embed_builders/fundamental_embeds.py`
 - `nexus_core/database/fundamental_pipeline.py`

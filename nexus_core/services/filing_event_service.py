@@ -5,9 +5,13 @@
 2. 針對新追蹤標的執行最多 90 天 Form 4 內部人交易回填 (Backfill)。
 3. 分流解析 Form 4 XML 並儲存內部人交易 (insider_transaction)。
 4. 識別 8-K Item 4.02 / 5.02 並儲存治理審查旗標 (governance_flag)。
-5. 嚴格遵循零交易執行不變量與 DRY_RUN 預設規範，推播統一走 defense_fundamental_thesis 頻道。
+5. 結構化 Schedule 13D / 13D/A 下載後交由 activist_gate 評估（record-only，只記日誌）。
+6. 8-K Item 2.02（route `EARNINGS`）於游標推進後交由注入的 `earnings_handler`
+   （正式環境為 `EarningsSurpriseService.process_filing_event`）處理；盡力而為，失敗只記 warning。
+7. 嚴格遵循零交易執行不變量與 DRY_RUN 預設規範，推播統一走 defense_fundamental_thesis 頻道。
 
-尚未接線：本服務目前沒有任何 production 排程或呼叫端（`/fa` 只讀取既有資料表），
+接線狀態：由 `cogs/trading/fundamental_pipeline_monitor.py` 的 `sec_filing_sync_hourly`
+ClockJob（平日 07:00–20:00 ET 整點）以背景任務呼叫 `sync_universe_filings`，
 規格見 docs/macro_sentiment/06_sec_event_stream_and_governance_gate.md。
 
 受理時間：submissions JSON 的 acceptanceDateTime 不可信（部分公司比真實 UTC 多出美東
@@ -25,7 +29,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 import logging
-from typing import Any, Sequence
+from typing import Any, Awaitable, Callable, Sequence
 
 import config
 from database.fundamental_pipeline import (
@@ -34,6 +38,10 @@ from database.fundamental_pipeline import (
     save_insider_transactions,
     save_sec_filing_events,
     upsert_sec_filing_cursor,
+)
+from market_analysis.fundamental_pipeline.activist_gate import (
+    evaluate_activist_filing,
+    parse_schedule_13d_xml,
 )
 from market_analysis.fundamental_pipeline.form4_parser import parse_form4_xml
 from market_analysis.fundamental_pipeline.governance_gate import (
@@ -59,6 +67,11 @@ logger = logging.getLogger(__name__)
 
 _FORM4_FORMS = ("4", "4/A")
 _FORM_8K_FORMS = ("8-K", "8-K/A")
+_EARNINGS_ROUTE = "EARNINGS"
+
+# 財報事件處理器：收到已入庫之 8-K Item 2.02 事件（含回填事件，`is_backfill` 標示於事件上）。
+# 以 callable 注入，避免本模組 import EarningsSurpriseService（LLM / Finnhub 依賴）。
+EarningsEventHandler = Callable[[FilingEventRecord], Awaitable[object]]
 
 
 @dataclass(frozen=True)
@@ -107,9 +120,11 @@ class FilingEventService:
         self,
         client: SecEdgarClient | None = None,
         bot: Any | None = None,
+        earnings_handler: EarningsEventHandler | None = None,
     ) -> None:
         self._client = client
         self._bot = bot
+        self._earnings_handler = earnings_handler
 
     async def get_client(self) -> SecEdgarClient:
         """惰性獲取或初始化 SEC EDGAR 客戶端（缺少合規 User-Agent 時拋出 SecConfigError）。"""
@@ -129,6 +144,7 @@ class FilingEventService:
             "insider_txs": 0,
             "governance_flags": 0,
             "failed": 0,
+            "earnings_events": 0,
         }
 
         cursor = await asyncio.to_thread(get_sec_filing_cursor, sym_upper)
@@ -172,6 +188,7 @@ class FilingEventService:
         new_events: list[FilingEventRecord] = []
         new_txs: list[InsiderTxRecord] = []
         new_flags: list[GovernanceFlagRecord] = []
+        earnings_events: list[tuple[datetime, FilingEventRecord]] = []
         pending_notifications: list[_PendingNotification] = []
         # 成功處理之 (權威受理時間, accession)
         processed: list[tuple[datetime, str]] = []
@@ -268,6 +285,16 @@ class FilingEventService:
                     failure_floor = _earliest(failure_floor, accepted_et)
                     continue
 
+            if "ACTIVIST_13D" in routes and p_doc:
+                await self._evaluate_activist_13d(
+                    sym_upper,
+                    accession,
+                    cik_int,
+                    acc_no_dash,
+                    p_doc,
+                    filing_date=f_date or accepted_et.date().isoformat(),
+                )
+
             # 處理 8-K 治理審查
             filing_flags: list[GovernanceFlagRecord] = []
             if form in _FORM_8K_FORMS and parsed_items:
@@ -278,19 +305,20 @@ class FilingEventService:
                     accepted_at=accepted_et,
                 )
 
-            new_events.append(
-                FilingEventRecord(
-                    accession=accession,
-                    symbol=sym_upper,
-                    form=form,
-                    items=",".join(parsed_items) if parsed_items else None,
-                    accepted_at=accepted_iso,
-                    session=session,
-                    primary_doc_url=doc_url,
-                    routes_json=json.dumps(routes),
-                    is_backfill=is_backfill,
-                )
+            event_record = FilingEventRecord(
+                accession=accession,
+                symbol=sym_upper,
+                form=form,
+                items=",".join(parsed_items) if parsed_items else None,
+                accepted_at=accepted_iso,
+                session=session,
+                primary_doc_url=doc_url,
+                routes_json=json.dumps(routes),
+                is_backfill=is_backfill,
             )
+            new_events.append(event_record)
+            if form in _FORM_8K_FORMS and _EARNINGS_ROUTE in routes:
+                earnings_events.append((accepted_et, event_record))
             new_txs.extend(filing_txs)
             new_flags.extend(filing_flags)
             if not is_backfill:
@@ -334,7 +362,98 @@ class FilingEventService:
             failure_floor,
             newest_accession=accession_list[0],
         )
+
+        stats["earnings_events"] = await self._handle_earnings_events(
+            sym_upper, earnings_events, cursor, failure_floor
+        )
         return stats
+
+    async def _handle_earnings_events(
+        self,
+        symbol: str,
+        earnings_events: Sequence[tuple[datetime, FilingEventRecord]],
+        cursor: FilingCursorRecord | None,
+        failure_floor: datetime | None,
+    ) -> int:
+        """把本輪已入庫的 8-K Item 2.02 事件交給 earnings_handler；回傳成功處理筆數。
+
+        - 在事件入庫與游標推進之後執行：財報處理（含 LLM）較慢，不延後游標寫入。
+        - 只處理游標已涵蓋的事件（受理時間早於 failure_floor）；游標停在失敗之前時，
+          之後的事件下輪會重新處理，屆時再交給 handler，避免同一份財報重複呼叫 LLM。
+          首次回填有失敗時不寫游標、整批下輪重試，本輪不處理任何財報事件。
+        - 回填事件（is_backfill）照常處理以建立近期財報資料；handler 本身不推播。
+        - 盡力而為：單筆例外只記 warning，不計入 failed、不影響游標與其他事件。
+        """
+        if self._earnings_handler is None or not earnings_events:
+            return 0
+        if cursor is None and failure_floor is not None:
+            return 0
+        handled = 0
+        for accepted_et, event in earnings_events:
+            if failure_floor is not None and accepted_et >= failure_floor:
+                continue
+            try:
+                await self._earnings_handler(event)
+                handled += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.warning(
+                    f"[FilingEventService] {symbol} 財報事件處理失敗 ({event.accession})，"
+                    f"不影響申報同步與游標: {e!r}"
+                )
+        return handled
+
+    async def _evaluate_activist_13d(
+        self,
+        symbol: str,
+        accession: str,
+        cik_int: str,
+        acc_no_dash: str,
+        primary_doc: str,
+        filing_date: str,
+    ) -> None:
+        """下載結構化 Schedule 13D 並交由 activist_gate 評估（record-only，只記日誌）。
+
+        盡力而為：結果不入庫、不推播，因此下載或解析失敗只記 warning，不計入 failed、
+        不阻擋游標。舊版 HTML / 純文字 `SC 13D` 沒有結構化欄位，直接略過。
+        """
+        clean_doc = primary_doc.split("/")[-1]
+        if not clean_doc.lower().endswith(".xml"):
+            logger.debug(
+                f"[FilingEventService] {symbol} 13D ({accession}) 非結構化 XML，略過激進投資人評估。"
+            )
+            return
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_no_dash}/{clean_doc}"
+        try:
+            client = await self.get_client()
+            xml_text = await client.fetch_document_text(url)
+        except Exception as e:
+            logger.warning(
+                f"[FilingEventService] 下載 {symbol} 13D ({accession}) 失敗，略過激進投資人評估: {e}"
+            )
+            return
+
+        fields = parse_schedule_13d_xml(xml_text)
+        if fields is None:
+            logger.warning(
+                f"[FilingEventService] 無法解析 {symbol} 13D ({accession}) 結構化欄位，略過激進投資人評估。"
+            )
+            return
+
+        signal = evaluate_activist_filing(
+            symbol=symbol,
+            accession=accession,
+            investor_name=fields.investor_name,
+            ownership_pct=fields.ownership_pct,
+            item_4_text=fields.item_4_text,
+            event_date=fields.event_date,
+            filing_date=filing_date,
+        )
+        logger.info(
+            f"[FilingEventService] 13D 激進投資人評估 {symbol} ({accession}): "
+            f"意圖={signal.key_intents or '無'}，逾期={signal.is_delayed_filing}；{signal.summary_text}"
+        )
 
     async def _advance_cursor(
         self,
@@ -447,6 +566,7 @@ class FilingEventService:
             "insider_txs": 0,
             "governance_flags": 0,
             "failed": 0,
+            "earnings_events": 0,
         }
 
         semaphore = asyncio.Semaphore(3)
@@ -477,6 +597,6 @@ class FilingEventService:
             f"[FilingEventService] 宇宙申報同步完成: 處理 {len(universe)} 檔標的"
             f"（例外 {failed_symbols} 檔），新增事件 {total_stats['events']} 筆，"
             f"內部人交易 {total_stats['insider_txs']} 筆，治理旗標 {total_stats['governance_flags']} 筆，"
-            f"處理失敗申報 {total_stats['failed']} 筆。"
+            f"處理失敗申報 {total_stats['failed']} 筆，財報事件 {total_stats['earnings_events']} 筆。"
         )
         return total_stats
