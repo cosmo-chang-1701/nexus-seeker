@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 LiquidityRegime = Literal["EASY", "NEUTRAL", "TIGHT", "UNKNOWN"]
 
@@ -162,3 +164,246 @@ class GovernanceStatus:
     is_clean: bool
     max_severity: GovernanceSeverity | None
     active_flags: list[GovernanceFlagRecord]
+
+
+# ============================================================================
+# PR3 財務預期差、分析師共識快照與前瞻指引資料模型
+# ============================================================================
+
+EstimateHorizon = Literal["0q", "+1q", "0y", "+1y"]
+EpsBasis = Literal["VENDOR_ADJUSTED", "GAAP_EX99"]
+EarningsSurpriseStatus = Literal["PENDING", "PROCESSED", "FAILED"]
+GuidanceVerdict = Literal["RAISED", "LOWERED", "MAINTAINED", "UNKNOWN"]
+MarginDirection = Literal["EXPANDING", "COMPRESSING", "FLAT", "UNKNOWN"]
+
+
+@dataclass(frozen=True)
+class EarningsSurpriseDTO:
+    """財務預期差與綜合評分資料結構。"""
+
+    symbol: str
+    fiscal_period: str
+    actual_eps: float | None = None
+    consensus_eps: float | None = None
+    eps_surprise_pct: float | None = None
+    actual_revenue: float | None = None
+    consensus_revenue: float | None = None
+    revenue_surprise_pct: float | None = None
+    whisper_eps: float | None = None
+    composite_score: float | None = None
+    session: FilingSession | Literal["UNKNOWN"] = "UNKNOWN"
+    eps_basis: EpsBasis = "VENDOR_ADJUSTED"
+    status: EarningsSurpriseStatus = "PROCESSED"
+    created_at: str = ""
+
+
+EarningsSurpriseRecord = EarningsSurpriseDTO
+
+
+@dataclass(frozen=True)
+class EPSEstimateSnapshotRecord:
+    """分析師每股盈餘預估共識快照記錄。"""
+
+    symbol: str
+    snapshot_date: str
+    horizon: EstimateHorizon
+    source: str
+    eps_mean: float
+    eps_high: float | None = None
+    eps_low: float | None = None
+    analyst_count: int | None = None
+    created_at: str = ""
+
+
+EPSEstimateSnapshotDTO = EPSEstimateSnapshotRecord
+
+
+class MarginGuidance(BaseModel):
+    """毛利率 / 營業利益率指引結構。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    metric_name: str = Field(description="例如 Gross Margin 或 Operating Margin")
+    guidance_midpoint_pct: float | None = Field(
+        default=None, description="指引中點百分比數值，若無明確數值填 None"
+    )
+    direction: MarginDirection = Field(
+        default="UNKNOWN",
+        description="EXPANDING (擴張), COMPRESSING (壓縮), FLAT (持平), UNKNOWN (未知)",
+    )
+
+
+class ToneMetric(BaseModel):
+    """管理層態度語意評分項目。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    score: int = Field(
+        ge=-2,
+        le=2,
+        description="-2 代表極度惡化/防禦，0 代表中性，+2 代表極具定價自信/擴張",
+    )
+    quote_snippet: str = Field(
+        description=(
+            "支持評分的新聞稿英文原文逐字摘錄（限 200 字元以內，不可翻譯或改寫）；"
+            "原文無相關論述時 score 必須為 0 且本欄填空字串"
+        )
+    )
+
+
+class GuidanceExtraction(BaseModel):
+    """嚴格支援 OpenAI beta.chat.completions.parse 的結構化指引擷取定義。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    fiscal_period: str = Field(
+        description=(
+            "本次新聞稿所報告之財季，格式 YYYY-Qn（例如 2026-Q1）。僅供參考，"
+            "系統以 SEC 申報時間對齊 Finnhub 財報日曆推導之期別為準"
+        )
+    )
+    guidance_target_period: str | None = Field(
+        default=None,
+        description=(
+            "數值指引所針對之目標期別：季度填 YYYY-Qn，全年度填 FYYYYY（例如 FY2026）；"
+            "無數值指引填 None"
+        ),
+    )
+    revenue_guidance_midpoint_usd: float | None = Field(
+        default=None,
+        description=(
+            "營收指引中點，必須填完整美元數值（例如 94.5 billion 填 94500000000，"
+            "不可以百萬或十億為單位）；無數值指引填 None"
+        ),
+    )
+    eps_guidance_midpoint_usd: float | None = Field(
+        default=None,
+        description="每股盈餘指引中點，完整美元數值（例如 1.25）；無數值指引填 None",
+    )
+    margin_guidance: list[MarginGuidance] = Field(default_factory=list)
+
+    @field_validator("margin_guidance", mode="before")
+    @classmethod
+    def coerce_margin_guidance(cls, v: Any) -> Any:
+        if v is None:
+            empty_list: list[Any] = []
+            return empty_list
+        return v
+
+    backlog_tone: ToneMetric
+    pricing_power_tone: ToneMetric
+    supply_chain_tone: ToneMetric
+    defensive_posture_tone: ToneMetric
+    reasoning_traditional_chinese: str = Field(description="100% 繁體中文質化摘要論述")
+
+
+@dataclass(frozen=True)
+class GuidanceExtractionDTO:
+    """管理層指引擷取結果持久化資料結構。"""
+
+    symbol: str
+    fiscal_period: str
+    source_accession: str
+    model_version: str
+    # 依擷取欄位完整度計算（guidance_delta.calculate_extraction_confidence）
+    confidence_score: float
+    # 相較前期指引之態度邊際變化；schema 為 NOT NULL，無前期可比時寫入 0.0，
+    # 呈現層一律以前期記錄重算 delta，不得以本欄判斷有無前期
+    tone_delta_score: float
+    data_json: str
+    created_at: str = ""
+
+
+GuidanceExtractionRecord = GuidanceExtractionDTO
+
+
+@dataclass(frozen=True)
+class EarningsSurpriseResult:
+    """財務預期差綜合計算結果。"""
+
+    eps_surprise_pct: float | None
+    revenue_surprise_pct: float | None
+    whisper_surprise_pct: float | None
+    composite_score: float | None
+    small_base: bool
+
+
+@dataclass(frozen=True)
+class GuidanceDeltaSummary:
+    """前瞻指引邊際變動與態度摘要。"""
+
+    tone_score: float
+    tone_delta: float | None  # 無前期指引可比時為 None
+    revenue_guidance_delta_pct: float | None
+    eps_guidance_delta_pct: float | None
+    margin_trend: str
+    verdict: GuidanceVerdict
+    summary_text: str
+    comparison_note: str = ""  # 無法比較之原因（期別不同、單位不一致等），繁體中文
+
+
+# ============================================================================
+# PR4 實體替代數據與產業鏈因果檢驗資料模型
+# ============================================================================
+
+LinkType = Literal["CAUSAL", "NOWCAST"]
+ChannelCheckVerdict = Literal["CONFIRM", "DIVERGE", "INSUFFICIENT"]
+NowcastDirection = Literal["NOWCAST_UP", "NOWCAST_DOWN", "FLAT"]
+
+
+@dataclass(frozen=True)
+class SupplyChainLink:
+    """產業鏈因果與臨近預測對照結構。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    pillar: str
+    drivers: list[str]
+    followers: list[str]
+    description: str
+    lead_lag_quarters: str = "1-2Q"
+    # 傳導極性：+1 = 驅動端上升對跟隨端為利多（同向）；-1 = 反向關係
+    # （例如零售商 DIO 上升代表渠道堵塞，壓制上游品牌廠出貨）。判定前驅動端先乘上極性。
+    polarity: Literal[1, -1] = 1
+
+
+@dataclass(frozen=True)
+class ChannelCheckLogRecord:
+    """產業鏈交叉驗證日誌記錄 (對應 channel_check_log 資料表)。"""
+
+    link_key: str
+    as_of_period: str
+    link_type: LinkType
+    experimental: bool
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    members_json: str
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ChannelCheckResult:
+    """產業鏈交叉驗證即時評估結果。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    as_of_period: str
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    summary_text: str
+    members: dict[str, Any]

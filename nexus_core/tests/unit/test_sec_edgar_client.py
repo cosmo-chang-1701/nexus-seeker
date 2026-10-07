@@ -205,3 +205,62 @@ async def test_fetch_acceptance_datetime_reads_sgml_header() -> None:
         "https://www.sec.gov/Archives/edgar/data/320193/000114036126038674/"
         "0001140361-26-038674.hdr.sgml"
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_filing_documents_reads_index_headers() -> None:
+    """申報附件清單讀自 `{accession}-index-headers.html`（實際 AAPL 8-K 2.02 樣本）。"""
+    from pathlib import Path
+
+    client = SecEdgarClient(user_agent="NexusSeeker test@sample.com")
+    sample = (
+        Path(__file__).parent
+        / "fixtures"
+        / "sec"
+        / "0000320193-26-000005-index-headers.html"
+    ).read_text(encoding="utf-8")
+    filing_dir = SecEdgarClient.filing_directory_url(
+        "0000320193", "0000320193-26-000005"
+    )
+    assert (
+        filing_dir
+        == "https://www.sec.gov/Archives/edgar/data/320193/000032019326000005"
+    )
+    with patch.object(
+        client, "fetch_document_text", new=AsyncMock(return_value=sample)
+    ) as fetch:
+        docs = await client.fetch_filing_documents(
+            filing_dir + "/", "0000320193-26-000005"
+        )
+    fetch.assert_awaited_once()
+    assert fetch.await_args_list[-1].args[0] == (
+        f"{filing_dir}/0000320193-26-000005-index-headers.html"
+    )
+    assert ("EX-99.1", "a8-kex991q1202612272025.htm") in [
+        (d.doc_type, d.filename) for d in docs
+    ]
+
+
+@pytest.mark.asyncio
+async def test_fetch_company_concept_url_and_404() -> None:
+    """companyconcept：CIK 補零組出 URL；404（從未申報此標籤）回傳 None。"""
+    client = SecEdgarClient(user_agent="NexusSeeker test@sample.com")
+    ok = MagicMock()
+    ok.status_code = 200
+    ok.json.return_value = {"units": {"USD": []}}
+    ok.raise_for_status = MagicMock()
+    missing = MagicMock()
+    missing.status_code = 404
+    with patch(
+        "httpx.AsyncClient.get", new_callable=AsyncMock, side_effect=[ok, missing]
+    ) as mock_get:
+        data = await client.fetch_company_concept(
+            "789019", "PaymentsToAcquirePropertyPlantAndEquipment"
+        )
+        none = await client.fetch_company_concept("789019", "NoSuchTag")
+    assert data == {"units": {"USD": []}}
+    assert none is None
+    assert mock_get.await_args_list[0].args[0] == (
+        "https://data.sec.gov/api/xbrl/companyconcept/CIK0000789019/us-gaap/"
+        "PaymentsToAcquirePropertyPlantAndEquipment.json"
+    )

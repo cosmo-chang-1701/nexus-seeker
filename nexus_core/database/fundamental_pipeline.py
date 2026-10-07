@@ -10,17 +10,27 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
+    ChannelCheckVerdict,
+    EarningsSurpriseDTO,
+    EarningsSurpriseStatus,
+    EpsBasis,
+    EPSEstimateSnapshotRecord,
+    EstimateHorizon,
     FilingCursorRecord,
     FilingEventRecord,
     FilingSession,
     GovernanceFlagRecord,
     GovernanceSeverity,
+    GuidanceExtractionDTO,
     InsiderTxRecord,
+    LinkType,
     LiquidityReading,
     MacroSurpriseReading,
+    NowcastDirection,
 )
 
 from database.connection import (
@@ -630,6 +640,725 @@ def get_active_governance_flags(
                 detail_json=r[4],
                 expires_at=r[5],
                 created_at=r[6] if r[6] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR3 財務預期差、分析師共識快照與管理層指引持久層實作
+# ============================================================================
+
+_UPSERT_EARNINGS_SURPRISE_SQL = """
+INSERT INTO earnings_surprise (
+    symbol,
+    fiscal_period,
+    actual_eps,
+    consensus_eps,
+    eps_surprise_pct,
+    actual_revenue,
+    consensus_revenue,
+    revenue_surprise_pct,
+    whisper_eps,
+    composite_score,
+    session,
+    eps_basis,
+    status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
+    actual_eps = excluded.actual_eps,
+    consensus_eps = excluded.consensus_eps,
+    eps_surprise_pct = excluded.eps_surprise_pct,
+    actual_revenue = excluded.actual_revenue,
+    consensus_revenue = excluded.consensus_revenue,
+    revenue_surprise_pct = excluded.revenue_surprise_pct,
+    whisper_eps = excluded.whisper_eps,
+    composite_score = excluded.composite_score,
+    session = excluded.session,
+    eps_basis = excluded.eps_basis,
+    status = excluded.status
+"""
+
+_UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL = """
+INSERT INTO eps_estimate_snapshot (
+    symbol,
+    snapshot_date,
+    horizon,
+    source,
+    eps_mean,
+    eps_high,
+    eps_low,
+    analyst_count
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, snapshot_date, horizon, source) DO UPDATE SET
+    eps_mean = excluded.eps_mean,
+    eps_high = excluded.eps_high,
+    eps_low = excluded.eps_low,
+    analyst_count = excluded.analyst_count
+"""
+
+_UPSERT_GUIDANCE_EXTRACTION_SQL = """
+INSERT INTO guidance_extraction (
+    symbol,
+    fiscal_period,
+    source_accession,
+    model_version,
+    confidence_score,
+    tone_delta_score,
+    data_json
+) VALUES (?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(symbol, fiscal_period) DO UPDATE SET
+    source_accession = excluded.source_accession,
+    model_version = excluded.model_version,
+    confidence_score = excluded.confidence_score,
+    tone_delta_score = excluded.tone_delta_score,
+    data_json = excluded.data_json
+"""
+
+
+async def save_earnings_surprise(surprise: EarningsSurpriseDTO) -> None:
+    """寫入或更新單筆財務預期差記錄。"""
+    params = (
+        surprise.symbol.upper(),
+        surprise.fiscal_period,
+        surprise.actual_eps,
+        surprise.consensus_eps,
+        surprise.eps_surprise_pct,
+        surprise.actual_revenue,
+        surprise.consensus_revenue,
+        surprise.revenue_surprise_pct,
+        surprise.whisper_eps,
+        surprise.composite_score,
+        surprise.session,
+        surprise.eps_basis,
+        surprise.status,
+    )
+    await execute_write_async(_UPSERT_EARNINGS_SURPRISE_SQL, params)
+
+
+async def save_earnings_surprises(surprises: list[EarningsSurpriseDTO]) -> None:
+    """批次寫入或更新財務預期差記錄。"""
+    if not surprises:
+        return
+    rows = [
+        (
+            s.symbol.upper(),
+            s.fiscal_period,
+            s.actual_eps,
+            s.consensus_eps,
+            s.eps_surprise_pct,
+            s.actual_revenue,
+            s.consensus_revenue,
+            s.revenue_surprise_pct,
+            s.whisper_eps,
+            s.composite_score,
+            s.session,
+            s.eps_basis,
+            s.status,
+        )
+        for s in surprises
+    ]
+    await execute_write_many_async([(_UPSERT_EARNINGS_SURPRISE_SQL, rows, True)])
+
+
+def get_earnings_surprise(
+    symbol: str, fiscal_period: str
+) -> EarningsSurpriseDTO | None:
+    """讀取特定標的與季度之財務預期差記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, actual_eps, consensus_eps,
+                   eps_surprise_pct, actual_revenue, consensus_revenue,
+                   revenue_surprise_pct, whisper_eps, composite_score,
+                   session, eps_basis, status, created_at
+            FROM earnings_surprise
+            WHERE symbol = ? AND fiscal_period = ?
+            """,
+            (symbol.upper(), fiscal_period),
+        ).fetchone()
+        if not row:
+            return None
+        return EarningsSurpriseDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            actual_eps=row[2],
+            consensus_eps=row[3],
+            eps_surprise_pct=row[4],
+            actual_revenue=row[5],
+            consensus_revenue=row[6],
+            revenue_surprise_pct=row[7],
+            whisper_eps=row[8],
+            composite_score=row[9],
+            session=row[10],
+            eps_basis=cast(EpsBasis, row[11]),
+            status=cast(EarningsSurpriseStatus, row[12]),
+            created_at=row[13] if row[13] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
+    """讀取特定標的最新一筆財務預期差記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, actual_eps, consensus_eps,
+                   eps_surprise_pct, actual_revenue, consensus_revenue,
+                   revenue_surprise_pct, whisper_eps, composite_score,
+                   session, eps_basis, status, created_at
+            FROM earnings_surprise
+            WHERE symbol = ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return EarningsSurpriseDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            actual_eps=row[2],
+            consensus_eps=row[3],
+            eps_surprise_pct=row[4],
+            actual_revenue=row[5],
+            consensus_revenue=row[6],
+            revenue_surprise_pct=row[7],
+            whisper_eps=row[8],
+            composite_score=row[9],
+            session=row[10],
+            eps_basis=cast(EpsBasis, row[11]),
+            status=cast(EarningsSurpriseStatus, row[12]),
+            created_at=row[13] if row[13] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_pending_earnings_surprise_keys(since_utc: datetime) -> list[tuple[str, str]]:
+    """讀取 `created_at` 不早於 since_utc、狀態仍為 PENDING 之 (symbol, fiscal_period)。
+
+    `created_at` 為首次寫入時間（SQLite CURRENT_TIMESTAMP，UTC；upsert 不更新），
+    即該財季首次被財報事件寫成 PENDING 的時間，供 PENDING 重試排程界定回看窗口。
+    """
+    if since_utc.tzinfo is not None:
+        since_utc = since_utc.astimezone(timezone.utc)
+    since_str = since_utc.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, fiscal_period
+            FROM earnings_surprise
+            WHERE status = 'PENDING' AND created_at >= ?
+            ORDER BY symbol, fiscal_period
+            """,
+            (since_str,),
+        ).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+    finally:
+        conn.close()
+
+
+async def save_eps_estimate_snapshots(
+    snapshots: list[EPSEstimateSnapshotRecord],
+) -> None:
+    """批次寫入分析師每股盈餘預估快照。"""
+    if not snapshots:
+        return
+    rows = [
+        (
+            s.symbol.upper(),
+            s.snapshot_date,
+            s.horizon,
+            s.source,
+            s.eps_mean,
+            s.eps_high,
+            s.eps_low,
+            s.analyst_count,
+        )
+        for s in snapshots
+    ]
+    await execute_write_many_async([(_UPSERT_EPS_ESTIMATE_SNAPSHOT_SQL, rows, True)])
+
+
+def get_eps_estimate_snapshots(
+    symbol: str, snapshot_date: str | None = None
+) -> list[EPSEstimateSnapshotRecord]:
+    """讀取特定標的之分析師預估快照（預設取最新日期）。"""
+    conn = get_read_connection()
+    try:
+        if snapshot_date is None:
+            max_row = conn.execute(
+                """
+                SELECT MAX(snapshot_date) FROM eps_estimate_snapshot
+                WHERE symbol = ?
+                """,
+                (symbol.upper(),),
+            ).fetchone()
+            if not max_row or not max_row[0]:
+                return []
+            target_date = max_row[0]
+        else:
+            target_date = snapshot_date
+
+        rows = conn.execute(
+            """
+            SELECT symbol, snapshot_date, horizon, source,
+                   eps_mean, eps_high, eps_low, analyst_count, created_at
+            FROM eps_estimate_snapshot
+            WHERE symbol = ? AND snapshot_date = ?
+            ORDER BY CASE horizon WHEN '0q' THEN 1 WHEN '+1q' THEN 2 WHEN '0y' THEN 3 WHEN '+1y' THEN 4 ELSE 5 END ASC
+            """,
+            (symbol.upper(), target_date),
+        ).fetchall()
+        return [
+            EPSEstimateSnapshotRecord(
+                symbol=r[0],
+                snapshot_date=r[1],
+                horizon=cast(EstimateHorizon, r[2]),
+                source=r[3],
+                eps_mean=float(r[4]),
+                eps_high=float(r[5]) if r[5] is not None else None,
+                eps_low=float(r[6]) if r[6] is not None else None,
+                analyst_count=int(r[7]) if r[7] is not None else None,
+                created_at=r[8] if r[8] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+async def save_guidance_extraction(extraction: GuidanceExtractionDTO) -> None:
+    """寫入或更新單筆管理層前瞻指引擷取記錄。"""
+    params = (
+        extraction.symbol.upper(),
+        extraction.fiscal_period,
+        extraction.source_accession,
+        extraction.model_version,
+        extraction.confidence_score,
+        extraction.tone_delta_score,
+        extraction.data_json,
+    )
+    await execute_write_async(_UPSERT_GUIDANCE_EXTRACTION_SQL, params)
+
+
+def get_guidance_extraction(
+    symbol: str, fiscal_period: str
+) -> GuidanceExtractionDTO | None:
+    """讀取特定標的與季度之管理層指引記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ? AND fiscal_period = ?
+            """,
+            (symbol.upper(), fiscal_period),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_prior_guidance_extraction(
+    symbol: str,
+    before_period: str,
+    exclude_accession: str | None = None,
+) -> GuidanceExtractionDTO | None:
+    """讀取早於指定財季（`YYYY-Qn` 字串序）之最近一筆管理層指引記錄。
+
+    僅考慮已正規化為 `YYYY-Qn` 之期別，並排除同一申報（source_accession），
+    避免同季重送或更新季度被誤當成「前期」。
+    """
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ?
+              AND fiscal_period GLOB '[0-9][0-9][0-9][0-9]-Q[1-4]'
+              AND fiscal_period < ?
+              AND source_accession != ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(), before_period, exclude_accession or ""),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
+    """讀取特定標的最新一筆管理層指引記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(),),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR4 實體產業鏈交叉驗證持久化
+# ============================================================================
+
+_UPSERT_CHANNEL_CHECK_LOG_SQL = """
+INSERT INTO channel_check_log (
+    link_key,
+    as_of_period,
+    link_type,
+    experimental,
+    driver_growth,
+    follower_growth,
+    divergence_pp,
+    nowcast_direction,
+    nowcast_hit,
+    correlation,
+    verdict,
+    members_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(link_key, as_of_period) DO UPDATE SET
+    link_type = excluded.link_type,
+    experimental = excluded.experimental,
+    driver_growth = excluded.driver_growth,
+    follower_growth = excluded.follower_growth,
+    divergence_pp = excluded.divergence_pp,
+    nowcast_direction = excluded.nowcast_direction,
+    nowcast_hit = excluded.nowcast_hit,
+    correlation = excluded.correlation,
+    verdict = excluded.verdict,
+    members_json = excluded.members_json,
+    created_at = CURRENT_TIMESTAMP
+WHERE excluded.verdict != 'INSUFFICIENT'
+   OR channel_check_log.verdict = 'INSUFFICIENT'
+"""
+
+# v093 的 CHECK(nowcast_direction IN (..., NULL)) 在 SQLite 中等同無約束（IN 清單含 NULL
+# 時，不合法值的比較結果為 NULL 而非 false）。v093 已在正式 DB 執行且不新增遷移，
+# 改於寫入端在 Python 層驗證列舉值與期別格式。
+_VALID_LINK_TYPES: frozenset[str] = frozenset({"CAUSAL", "NOWCAST"})
+_VALID_VERDICTS: frozenset[str] = frozenset({"CONFIRM", "DIVERGE", "INSUFFICIENT"})
+_VALID_NOWCAST_DIRECTIONS: frozenset[str] = frozenset(
+    {"NOWCAST_UP", "NOWCAST_DOWN", "FLAT"}
+)
+
+
+def _validate_channel_check_record(record: ChannelCheckLogRecord) -> None:
+    """寫入前驗證列舉值與期別格式；不合法時拋出 ValueError（整批不寫入）。"""
+    from market_analysis.fundamental_pipeline.alt_data_metrics import validate_period
+
+    validate_period(record.as_of_period)
+    if record.link_type not in _VALID_LINK_TYPES:
+        raise ValueError(f"channel_check_log.link_type 不合法: {record.link_type!r}")
+    if record.verdict not in _VALID_VERDICTS:
+        raise ValueError(f"channel_check_log.verdict 不合法: {record.verdict!r}")
+    if (
+        record.nowcast_direction is not None
+        and record.nowcast_direction not in _VALID_NOWCAST_DIRECTIONS
+    ):
+        raise ValueError(
+            f"channel_check_log.nowcast_direction 不合法: {record.nowcast_direction!r}"
+        )
+
+
+async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
+    """寫入或更新單筆產業鏈交叉驗證日誌（INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
+    _validate_channel_check_record(record)
+    params = (
+        record.link_key,
+        record.as_of_period,
+        record.link_type,
+        1 if record.experimental else 0,
+        record.driver_growth,
+        record.follower_growth,
+        record.divergence_pp,
+        record.nowcast_direction,
+        (1 if record.nowcast_hit else 0) if record.nowcast_hit is not None else None,
+        record.correlation,
+        record.verdict,
+        record.members_json,
+    )
+    await execute_write_async(_UPSERT_CHANNEL_CHECK_LOG_SQL, params)
+
+
+async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
+    """批次寫入產業鏈交叉驗證日誌（分塊寫入；INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
+    if not records:
+        return
+    for r in records:
+        _validate_channel_check_record(r)
+    rows = [
+        (
+            r.link_key,
+            r.as_of_period,
+            r.link_type,
+            1 if r.experimental else 0,
+            r.driver_growth,
+            r.follower_growth,
+            r.divergence_pp,
+            r.nowcast_direction,
+            (1 if r.nowcast_hit else 0) if r.nowcast_hit is not None else None,
+            r.correlation,
+            r.verdict,
+            r.members_json,
+        )
+        for r in records
+    ]
+    # 分塊 100 筆寫入，符合低記憶體守衛
+    chunk_size = 100
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        await execute_write_many_async([(_UPSERT_CHANNEL_CHECK_LOG_SQL, chunk, True)])
+
+
+def get_channel_check(link_key: str, as_of_period: str) -> ChannelCheckLogRecord | None:
+    """讀取特定鏈條與週期之產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE link_key = ? AND as_of_period = ?
+            """,
+            (link_key, as_of_period),
+        ).fetchone()
+        if not row:
+            return None
+        return ChannelCheckLogRecord(
+            link_key=row[0],
+            as_of_period=row[1],
+            link_type=cast(LinkType, row[2]),
+            experimental=bool(row[3]),
+            driver_growth=float(row[4]) if row[4] is not None else None,
+            follower_growth=float(row[5]) if row[5] is not None else None,
+            divergence_pp=float(row[6]) if row[6] is not None else None,
+            nowcast_direction=cast(NowcastDirection, row[7])
+            if row[7] is not None
+            else None,
+            nowcast_hit=bool(row[8]) if row[8] is not None else None,
+            correlation=float(row[9]) if row[9] is not None else None,
+            verdict=cast(ChannelCheckVerdict, row[10]),
+            members_json=row[11],
+            created_at=row[12] if row[12] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_channel_checks_for_period(
+    as_of_period: str,
+) -> list[ChannelCheckLogRecord]:
+    """讀取某週期所有產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE as_of_period = ?
+            ORDER BY link_key ASC
+            """,
+            (as_of_period,),
+        ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_latest_channel_checks(
+    verdict: str | None = None, limit: int = 50
+) -> list[ChannelCheckLogRecord]:
+    """讀取最新發布的產業鏈交叉驗證日誌清單。"""
+    conn = get_read_connection()
+    try:
+        if verdict is not None:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                WHERE verdict = ?
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (verdict, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_channel_checks_by_symbol(
+    symbol: str, limit: int = 20
+) -> list[ChannelCheckLogRecord]:
+    """根據標的代碼（包含在上游驅動或下游跟隨端）查詢相關之最新交叉驗證日誌。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        get_links_for_symbol,
+    )
+
+    clean_sym = symbol.strip().upper()
+    if ":" in clean_sym:
+        clean_sym = clean_sym.split(":")[-1]
+
+    # 取得靜態映射中包含該標的之鏈條代碼
+    related_links = get_links_for_symbol(clean_sym)
+    link_keys = [link.link_key for link in related_links]
+
+    if not link_keys:
+        return []
+
+    conn = get_read_connection()
+    try:
+        # 只依靜態對照表的 link_key 精確比對；不再對 members_json 做 LIKE 模糊比對
+        # （短代碼如 "F"、"PL" 會配到所有列）。
+        placeholders = ",".join("?" for _ in link_keys)
+        query = f"""
+        SELECT link_key, as_of_period, link_type, experimental,
+               driver_growth, follower_growth, divergence_pp,
+               nowcast_direction, nowcast_hit, correlation,
+               verdict, members_json, created_at
+        FROM channel_check_log
+        WHERE link_key IN ({placeholders})
+        ORDER BY as_of_period DESC, created_at DESC
+        LIMIT ?
+        """
+        params: list[Any] = [*link_keys, limit]
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        rows = conn.execute(query, params).fetchall()
+
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
             )
             for r in rows
         ]

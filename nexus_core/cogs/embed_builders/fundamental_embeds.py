@@ -8,12 +8,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
-from typing import Sequence
+from collections.abc import Sequence
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-import discord
 
+import discord
 from cogs.embed_builders._core import NexusEmbed
 from market_analysis.fundamental_pipeline.models import GovernanceFlagRecord
 

@@ -10,24 +10,51 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Protocol
-import discord
-from discord import app_commands
-from discord.ext import commands
 
+import discord
 from cogs.embed_builders.fundamental_embeds import build_fa_terminal_embed
 from database.fundamental_pipeline import (
     get_active_governance_flags,
+    get_channel_checks_by_symbol,
+    get_eps_estimate_snapshots,
     get_insider_transactions,
+    get_latest_earnings_surprise,
+    get_latest_guidance_extraction,
     get_latest_liquidity_regime,
+    get_prior_guidance_extraction,
     get_sec_filing_cursor,
 )
+from discord import app_commands
+from discord.ext import commands
 from market_analysis.fundamental_pipeline.governance_gate import (
     evaluate_governance_status,
 )
+from market_analysis.fundamental_pipeline.channel_check import (
+    LINK_TYPE_LABELS_ZH,
+    NOWCAST_DIRECTION_LABELS_ZH,
+    VERDICT_LABELS_ZH as CHANNEL_VERDICT_LABELS_ZH,
+)
+from market_analysis.fundamental_pipeline.earnings_surprise import FLOOR_EPS
+from market_analysis.fundamental_pipeline.guidance_delta import (
+    VERDICT_LABELS_ZH,
+    compare_guidance,
+)
 from market_analysis.fundamental_pipeline.insider_signal import (
     evaluate_insider_signal,
+)
+from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
+    EarningsSurpriseDTO,
+    EPSEstimateSnapshotRecord,
+    GuidanceExtraction,
+    GuidanceExtractionDTO,
+    SupplyChainLink,
+)
+from market_analysis.fundamental_pipeline.supply_chain_map import (
+    get_links_for_symbol,
 )
 
 logger = logging.getLogger(__name__)
@@ -172,10 +199,267 @@ class GovernanceGateSection:
         return header, f"{gov_line}\n{insider_line}"
 
 
+_AWAIT_NEXT_EARNINGS_8K = "待下一份財報 8-K 觸發"
+_HORIZON_LABELS_ZH: dict[str, str] = {
+    "0q": "本季",
+    "+1q": "下季",
+    "0y": "本財年",
+    "+1y": "下財年",
+}
+
+
+def _parse_guidance(record: GuidanceExtractionDTO | None) -> GuidanceExtraction | None:
+    if record is None or not record.data_json:
+        return None
+    try:
+        return GuidanceExtraction.model_validate_json(record.data_json)
+    except Exception:
+        return None
+
+
+class EarningsSurpriseSection:
+    """PR3: 財務預期差與管理層前瞻指引區塊。
+
+    財報預期差由 SEC 申報同步發現 8-K Item 2.02 時事件觸發（僅涵蓋持倉與自選標的），
+    沒有資料時必須明示，不可用看似正常的佔位內容。
+    """
+
+    @property
+    def section_id(self) -> str:
+        return "earnings_surprise"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "📊 業績預期差與財報後漂移"
+
+        latest_surprise = await asyncio.to_thread(
+            get_latest_earnings_surprise, sym_upper
+        )
+        guidance = await asyncio.to_thread(get_latest_guidance_extraction, sym_upper)
+        snapshots = await asyncio.to_thread(get_eps_estimate_snapshots, sym_upper)
+
+        if latest_surprise is None and guidance is None and not snapshots:
+            return (
+                header,
+                f"• ⚪ 尚無財報預期差資料（{_AWAIT_NEXT_EARNINGS_8K}；僅涵蓋持倉與自選標的）",
+            )
+
+        lines: list[str] = [self._surprise_line(latest_surprise)]
+        lines.extend(await self._guidance_lines(sym_upper, guidance))
+        lines.append(self._snapshot_line(snapshots))
+        return header, "\n".join(lines)
+
+    @staticmethod
+    def _surprise_line(latest_surprise: EarningsSurpriseDTO | None) -> str:
+        if latest_surprise is None:
+            return f"• 業績預期差: ⚪ 尚無財報預期差資料（{_AWAIT_NEXT_EARNINGS_8K}）"
+
+        period = latest_surprise.fiscal_period
+        if latest_surprise.status != "PROCESSED":
+            cons = (
+                f"`${latest_surprise.consensus_eps:.2f}`"
+                if latest_surprise.consensus_eps is not None
+                else "--"
+            )
+            return f"• {period} 業績評分: ⏳ 待實際值公布（共識 EPS: {cons}）"
+
+        score_val = latest_surprise.composite_score
+        score_icon = (
+            "🟢"
+            if score_val is not None and score_val > 0
+            else ("🔴" if score_val is not None and score_val < 0 else "⚪")
+        )
+        score_str = f"{score_val:+.1f}" if score_val is not None else "--"
+        eps_str = (
+            f"{latest_surprise.eps_surprise_pct:+.1%}"
+            if latest_surprise.eps_surprise_pct is not None
+            else "--%"
+        )
+        rev_str = (
+            f"{latest_surprise.revenue_surprise_pct:+.1%}"
+            if latest_surprise.revenue_surprise_pct is not None
+            else "--%"
+        )
+        line = (
+            f"• {period} 業績評分: {score_icon} **{score_str}** "
+            f"(EPS 驚喜: `{eps_str}` ｜ 營收: `{rev_str}`)"
+        )
+        cons_eps = latest_surprise.consensus_eps
+        if cons_eps is not None and abs(cons_eps) < FLOOR_EPS:
+            line += (
+                f"\n  ⚠️ 小基數：共識 EPS `${cons_eps:.2f}` 絕對值低於 ${FLOOR_EPS:.2f}，"
+                "EPS 驚喜百分比以下限為分母，僅供參考"
+            )
+        return line
+
+    @staticmethod
+    async def _guidance_lines(
+        sym_upper: str, guidance: GuidanceExtractionDTO | None
+    ) -> list[str]:
+        if guidance is None:
+            return [
+                f"• 管理層前瞻指引: ⚪ 尚無指引擷取資料（{_AWAIT_NEXT_EARNINGS_8K}）"
+            ]
+
+        curr_g = _parse_guidance(guidance)
+        if curr_g is None:
+            return ["• 管理層前瞻指引: ⚠️ 指引資料解析失敗"]
+
+        prior_record = await asyncio.to_thread(
+            get_prior_guidance_extraction,
+            sym_upper,
+            guidance.fiscal_period,
+            guidance.source_accession,
+        )
+        prior_g = _parse_guidance(prior_record)
+        g_summary = compare_guidance(curr_g, prior_g)
+
+        tone_abs = g_summary.tone_score
+        tone_icon = "🟢" if tone_abs > 10 else ("🔴" if tone_abs < -10 else "⚪")
+        if g_summary.tone_delta is not None and prior_record is not None:
+            delta_str = (
+                f"較前期（{prior_record.fiscal_period}）`{g_summary.tone_delta:+.1f}`"
+            )
+        else:
+            delta_str = "無前期指引可比"
+
+        verdict_zh = VERDICT_LABELS_ZH.get(g_summary.verdict, "無法判定")
+        verdict_line = f"• 前瞻指引方向: **{verdict_zh}**（{g_summary.margin_trend}）"
+        if g_summary.verdict == "UNKNOWN" and g_summary.comparison_note:
+            verdict_line += f"\n  ↳ {g_summary.comparison_note}"
+
+        return [
+            (
+                f"• 管理層前瞻態度（{guidance.fiscal_period} 財報）: {tone_icon} "
+                f"語意分數 **{tone_abs:+.1f}** ｜ {delta_str} "
+                f"(指引模型: `{guidance.model_version}`)"
+            ),
+            verdict_line,
+        ]
+
+    @staticmethod
+    def _snapshot_line(snapshots: list[EPSEstimateSnapshotRecord]) -> str:
+        if not snapshots:
+            return f"• 分析師共識快照: ⚪ 尚無共識快照資料（{_AWAIT_NEXT_EARNINGS_8K}）"
+        snap_parts: list[str] = []
+        for horizon in ("0q", "+1q"):
+            snap = next((s for s in snapshots if s.horizon == horizon), None)
+            if snap is not None:
+                snap_parts.append(
+                    f"{_HORIZON_LABELS_ZH[horizon]}: `${snap.eps_mean:.2f}`"
+                )
+        if not snap_parts:
+            return "• 分析師共識快照: ⚪ 無季度共識預估"
+        snap_date = snapshots[0].snapshot_date
+        return f"• 分析師共識 EPS（{snap_date}）: {' ｜ '.join(snap_parts)}"
+
+
+_CHANNEL_SECTION_CHAR_BUDGET = 950  # Discord 欄位上限 1024 字元，保留結尾空行餘裕
+_CHANNEL_REASON_MAX_CHARS = 60
+_CHANNEL_NO_DATA = "尚無產業鏈檢驗資料（待每日 18:00 ET 排程寫入）"
+
+
+def _pick_channel_log(
+    logs: list[ChannelCheckLogRecord],
+) -> ChannelCheckLogRecord | None:
+    """同鏈多期時優先取最新的非「資料不足」結果；全為資料不足時取最新一期。"""
+    for log in logs:
+        if log.verdict != "INSUFFICIENT":
+            return log
+    return logs[0] if logs else None
+
+
+def _channel_reason(log: ChannelCheckLogRecord) -> str:
+    try:
+        members = json.loads(log.members_json) if log.members_json else {}
+    except (ValueError, TypeError):
+        return ""
+    text = str(members.get("summary_text", "")) if isinstance(members, dict) else ""
+    if "：" in text:
+        text = text.split("：", 1)[1]
+    if len(text) > _CHANNEL_REASON_MAX_CHARS:
+        text = text[: _CHANNEL_REASON_MAX_CHARS - 1] + "…"
+    return text
+
+
+def _format_channel_line(
+    link: SupplyChainLink, log: ChannelCheckLogRecord | None
+) -> str:
+    type_zh = LINK_TYPE_LABELS_ZH.get(link.link_type, "產業鏈")
+    tag = f"{type_zh}{'・🧪實驗性' if link.experimental else ''}"
+    if log is None:
+        return f"• {link.title}（{tag}）: ⚪ 尚無檢驗紀錄"
+    icon = {"CONFIRM": "🟢", "DIVERGE": "🔴"}.get(log.verdict, "⚪")
+    verdict_zh = CHANNEL_VERDICT_LABELS_ZH.get(log.verdict, "資料不足")
+    parts: list[str] = []
+    if log.driver_growth is not None:
+        inverse = "（反向）" if link.polarity == -1 else ""
+        parts.append(f"驅動{inverse} {log.driver_growth:+.1f}%")
+    if log.follower_growth is not None:
+        parts.append(f"跟隨 {log.follower_growth:+.1f}%")
+    if log.divergence_pp is not None:
+        parts.append(f"偏差 {log.divergence_pp:+.1f}pp")
+    if log.nowcast_direction is not None:
+        parts.append(NOWCAST_DIRECTION_LABELS_ZH.get(log.nowcast_direction, ""))
+    if log.verdict == "INSUFFICIENT":
+        reason = _channel_reason(log)
+        if reason:
+            parts.append(reason)
+    detail = " ｜ ".join(p for p in parts if p)
+    detail_str = f"（{detail}）" if detail else ""
+    return f"• {link.title}（{tag}）{log.as_of_period}: {icon} **{verdict_zh}**{detail_str}"
+
+
+class ChannelCheckSection:
+    """PR4: 實體產業鏈交叉驗證區塊。
+
+    資料由事件時鐘每日 18:00 ET（NYSE 交易日）排程寫入 channel_check_log；
+    排程尚未寫入時必須明示「尚無資料」，不得顯示成看似判定結果的「資料不足」。
+    """
+
+    @property
+    def section_id(self) -> str:
+        return "channel_checks"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "🔗 實體產業鏈交叉驗證"
+
+        links = get_links_for_symbol(sym_upper)
+        if not links:
+            return header, "• 產業鏈定位: 未涵蓋於當前 17 條核心產業鏈矩陣中"
+
+        # 讀取資料庫中與該標的相關之交叉驗證日誌（依期別新到舊）
+        logs = await asyncio.to_thread(get_channel_checks_by_symbol, sym_upper, 60)
+        if not logs:
+            titles = "、".join(link.title for link in links)
+            return header, f"• ⚪ {_CHANNEL_NO_DATA}\n• 涵蓋產業鏈: {titles}"
+
+        logs_by_key: dict[str, list[ChannelCheckLogRecord]] = {}
+        for log in logs:
+            logs_by_key.setdefault(log.link_key, []).append(log)
+
+        lines: list[str] = []
+        used = 0
+        for idx, link in enumerate(links):
+            line = _format_channel_line(
+                link, _pick_channel_log(logs_by_key.get(link.link_key, []))
+            )
+            if used + len(line) + 1 > _CHANNEL_SECTION_CHAR_BUDGET:
+                lines.append(f"• …其餘 {len(links) - idx} 條產業鏈略")
+                break
+            lines.append(line)
+            used += len(line) + 1
+
+        return header, "\n".join(lines)
+
+
 # 全域單例區塊註冊中心
 fa_section_registry = FaSectionRegistry()
 fa_section_registry.register(MacroLiquiditySection())
 fa_section_registry.register(GovernanceGateSection())
+fa_section_registry.register(EarningsSurpriseSection())
+fa_section_registry.register(ChannelCheckSection())
 
 
 # ============================================================================

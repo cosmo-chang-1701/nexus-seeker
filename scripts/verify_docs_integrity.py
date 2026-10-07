@@ -24,12 +24,12 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
-from pathlib import Path
 import re
 import sys
 import tempfile
 import time
 import urllib.parse
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants & Specification Registry
@@ -69,6 +69,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "02_expected_move_and_max_pain.md",
         "03_skew_pcr_divergence_confluence.md",
         "04_ivr_regime_and_seller_lockout.md",
+        "05_earnings_surprise_and_guidance_delta.md",
     ],
     "docs/risk_portfolio": [
         "01_beta_weighted_greeks.md",
@@ -86,6 +87,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "04_polymarket_vwbp_sentiment_radar.md",
         "05_liquidity_regime_and_macro_surprise.md",
         "06_sec_event_stream_and_governance_gate.md",
+        "07_alt_data_and_channel_checks.md",
     ],
     "docs/architecture": [
         "01_dual_watchlist_pipelines.md",
