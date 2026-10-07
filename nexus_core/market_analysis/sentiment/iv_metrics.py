@@ -396,7 +396,11 @@ async def fetch_and_calculate_iv_metrics(
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     cache_key = f"iv_metrics_{symbol}_{today_str}"
-    cached, kv_age = (None, None) if force_refresh else get_kv_cache_with_age(cache_key)
+    cached: Any = None
+    kv_age: float | None = None
+    if not force_refresh:
+        # 同步 SQLite 讀取移出 event loop
+        cached, kv_age = await asyncio.to_thread(get_kv_cache_with_age, cache_key)
     # 盤中：上游 edge 期權快照約 30 分鐘才換一次，kv 快取若更舊就不能再當「今日現值」
     if (
         cached is not None

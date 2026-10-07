@@ -13,6 +13,7 @@ import random
 import re
 import time
 import weakref
+from dataclasses import dataclass
 from contextlib import asynccontextmanager, contextmanager
 
 import finnhub
@@ -196,7 +197,11 @@ async def yahoo_slot() -> AsyncIterator[None]:
     """取得一個 Yahoo 請求名額（limiter + semaphore，依互動／背景挑池）。
 
     所有 Yahoo 流量（本地 yfinance、core→edge 即時 scrape）都應包在這裡，
-    共用同一份預算；`call_yf` 與 edge 路徑使用完全相同的池。"""
+    共用同一份預算；`call_yf` 與 edge 路徑使用完全相同的池。
+
+    **冷卻集中強制**：拿到名額後（而非排隊前）再檢查全域 429 冷卻，冷卻中拋
+    `YahooRateLimitedError`。排隊期間才開始的冷卻也會擋下尚未送出的請求，所有
+    經由本函式的呼叫點（`call_yf`、edge 路徑）因此都不需各自檢查。"""
     controls = _get_yfinance_controls()
     if _is_interactive_request.get():
         limiter, sem = controls["limiter_interactive"], controls["sem_interactive"]
@@ -204,6 +209,8 @@ async def yahoo_slot() -> AsyncIterator[None]:
         limiter, sem = controls["limiter_background"], controls["sem_background"]
     async with limiter:
         async with sem:
+            if is_yahoo_rate_limited():
+                raise YahooRateLimitedError("Yahoo 限流冷卻中")
             yield
 
 
@@ -214,6 +221,8 @@ async def yahoo_slot() -> AsyncIterator[None]:
 # （`mark_yahoo_*` 以 `global` 讀寫本模組命名空間）。
 _yahoo_rate_limit_until = 0.0
 _yahoo_backoff_seconds = 0.0
+# 最近一次記錄 429 的時間（epoch 秒）；`mark_yahoo_ok` 以此判斷成功回應是否「早於」該次 429
+_yahoo_last_rate_limited_at = 0.0
 
 # 無 Retry-After 時的指數退避：60→120→240→…上限 900 秒。60 秒是 Yahoo 限流通常
 # 解除的最短時間；900 秒（15 分鐘）對齊盤中巡邏週期，再長會讓盤中決策長時間無資料。
@@ -265,8 +274,9 @@ def mark_yahoo_rate_limited(retry_after: float | None = None) -> None:
 
     已在冷卻中（同一波多個在途請求各自 429）時**不升級退避倍數**，僅在
     Retry-After 指向更晚的時間時延長冷卻。"""
-    global _yahoo_rate_limit_until, _yahoo_backoff_seconds
+    global _yahoo_rate_limit_until, _yahoo_backoff_seconds, _yahoo_last_rate_limited_at
     now = time.time()
+    _yahoo_last_rate_limited_at = now
     if now < _yahoo_rate_limit_until:
         if retry_after is not None and retry_after > 0:
             new_until = now + min(retry_after, _YAHOO_BACKOFF_MAX_SECONDS)
@@ -289,9 +299,18 @@ def mark_yahoo_rate_limited(retry_after: float | None = None) -> None:
     logger.warning(f"🚨 Yahoo 觸發限流，全域冷卻 {delay:.0f} 秒")
 
 
-def mark_yahoo_ok() -> None:
-    """Yahoo 成功回應一次即重置指數退避（不縮短既有冷卻到期時間）。"""
+def mark_yahoo_ok(request_started_at: float) -> None:
+    """Yahoo 成功回應即重置指數退避（不縮短既有冷卻到期時間）。
+
+    `request_started_at` 為該請求「送出前」的 `time.time()`。以下情況**不重置**，
+    避免同一波 429 之前已送出、較晚才回來的成功請求把退避歸零：
+    - 目前仍在冷卻中；
+    - 請求送出時間不晚於最近一次 429 記錄時間。"""
     global _yahoo_backoff_seconds
+    if is_yahoo_rate_limited():
+        return
+    if request_started_at <= _yahoo_last_rate_limited_at:
+        return
     _yahoo_backoff_seconds = 0.0
 
 
@@ -306,17 +325,36 @@ class YahooEdgeBusyError(Exception):
     None，**不得**降級資料中心直連，但也不啟動冷卻。"""
 
 
-async def edge_get_yahoo(client: Any, url: str, endpoint: str) -> Any:
+@dataclass(frozen=True)
+class EdgeYahooResponse:
+    """`edge_get_yahoo` 的回傳：原始 response 與已解析的 JSON（非 200 或解析失敗為 None）。
+    呼叫端直接用 `data`，不要再對 `response` 呼叫 `.json()`。"""
+
+    response: Any
+    data: Any
+
+
+async def edge_get_yahoo(client: Any, url: str, endpoint: str) -> EdgeYahooResponse:
     """core→edge 的 Yahoo 即時 scrape 請求共用流程（K 線與期權共用）。
 
-    冷卻中直接拋 `YahooRateLimitedError`；送出時佔用 `yahoo_slot` 並以 `endpoint`
-    （edge_history／edge_options）計入配額觀測；HTTP 429 或 JSON status=rate_limited
-    記錄並啟動全域冷卻後拋 `YahooRateLimitedError`；HTTP 503 或 status=busy 拋
-    `YahooEdgeBusyError`；JSON status=success 重置退避。回傳原始 response。"""
+    冷卻中直接拋 `YahooRateLimitedError`（進場前快速路徑；`yahoo_slot` 拿到名額後
+    會再檢查一次）；送出時佔用 `yahoo_slot` 並以 `endpoint`（edge_history／
+    edge_options）計入配額觀測；HTTP 429 或 JSON status=rate_limited 記錄並啟動
+    全域冷卻後拋 `YahooRateLimitedError`；HTTP 503、status=busy 或 **請求逾時**
+    （httpx.TimeoutException，edge 已設定但回應不及）拋 `YahooEdgeBusyError`；
+    JSON status=success 重置退避。只有連線失敗（如 ConnectError，edge 不可達）
+    才原樣外拋，讓呼叫端維持直連降級。回傳 `EdgeYahooResponse`（JSON 僅解析一次）。"""
+    import httpx
+
     if is_yahoo_rate_limited():
         raise YahooRateLimitedError("Yahoo 限流冷卻中")
     async with yahoo_slot():
-        resp = await client.get(url)
+        started_at = time.time()
+        try:
+            resp = await client.get(url)
+        except httpx.TimeoutException as e:
+            # edge 已設定但逾時：多半是 edge 端排隊／Yahoo 慢，改走資料中心直連只會更糟
+            raise YahooEdgeBusyError("edge 請求逾時") from e
     # 只有拿到 edge 的 HTTP 回應才計入 Yahoo 呼叫；連線錯誤／逾時（請求未到 Yahoo）
     # 會在上面直接外拋而不計數，避免與之後的直連降級重複計算
     api_budget.record_call("yahoo", endpoint, interactive=_is_interactive_request.get())
@@ -327,19 +365,21 @@ async def edge_get_yahoo(client: Any, url: str, endpoint: str) -> Any:
         raise YahooRateLimitedError("edge 回報 Yahoo 429")
     if resp.status_code == 503:
         raise YahooEdgeBusyError("edge 忙碌（503）")
+    data: Any = None
     if resp.status_code == 200:
         try:
-            status = resp.json().get("status")
+            data = resp.json()
         except Exception:
-            status = None
+            data = None
+        status = data.get("status") if isinstance(data, dict) else None
         if status == "rate_limited":
             note_yahoo_rate_limited(endpoint)
             raise YahooRateLimitedError("edge 回報 Yahoo rate_limited")
         if status == "busy":
             raise YahooEdgeBusyError("edge 忙碌（status=busy）")
         if status == "success":
-            mark_yahoo_ok()
-    return resp
+            mark_yahoo_ok(started_at)
+    return EdgeYahooResponse(response=resp, data=data)
 
 
 async def call_yf(
@@ -353,6 +393,7 @@ async def call_yf(
     """
     endpoint: str = _endpoint or str(getattr(func, "__name__", "yf"))
     async with yahoo_slot():
+        started_at = time.time()
         api_budget.record_call(
             "yahoo",
             endpoint,
@@ -365,7 +406,7 @@ async def call_yf(
                 # 直連例外也走同一個限流判斷：計數並啟動全域冷卻（呼叫端不得重試）
                 note_yahoo_rate_limited(endpoint)
             raise
-        mark_yahoo_ok()
+        mark_yahoo_ok(started_at)
         return result
 
 

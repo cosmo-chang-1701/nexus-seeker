@@ -99,9 +99,9 @@ async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
 # 預設約 40 執行緒），若不設上限，core 端一輪 watchlist 併發會同時對 Yahoo 打出數十條請求，
 # 極易觸發 429。2 與 core 端背景 Semaphore(2) 對齊。
 _HISTORY_SEMAPHORE = threading.BoundedSemaphore(2)
-# 排隊上限：core 端 httpx 逾時 20 秒，edge 排隊超過 15 秒就先回 503 busy，
-# 避免 core 把逾時當一般錯誤而降級資料中心直連（更容易被封）。
-_HISTORY_QUEUE_TIMEOUT_SECONDS = 15
+# 排隊上限：core 端 httpx 逾時 20 秒，8 秒排隊＋抓取需落在該逾時內，edge 排隊超過
+# 8 秒就先回 503 busy；core 端即使仍逾時也視同 edge 忙碌（不降級資料中心直連）。
+_HISTORY_QUEUE_TIMEOUT_SECONDS = 8
 
 # 獨立的 429 token：前後不得緊鄰數字，避免誤判含 epoch 時間戳的訊息（如 "1791429600"）
 _HTTP_429_PATTERN = re.compile(r"(?<!\d)429(?!\d)")

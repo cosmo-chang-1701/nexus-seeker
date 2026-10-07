@@ -20,6 +20,7 @@ from services.market_data_service.caches import (
     _EMA_CACHE_TTL,
     _history_cache,
     _INTRADAY_BAR_SECONDS,
+    _LIVE_DAILY_PERIODS,
     _sma_cache,
     _SMA_CACHE_TTL,
     history_cache_expiry,
@@ -120,7 +121,7 @@ async def get_history_df(
 
     快取期限由 `caches.history_cache_expiry` 決定：盤中 intraday 到期於下一根 bar
     收盤時刻（收盤後 60 秒寬限內抓到的資料只快取到寬限結束）、短期日線 15 分鐘、收盤後 30 分內 5 分鐘、盤外到次一交易日
-    08:30 ET；僅盤中的指標用長週期日線維持 6 小時。
+    08:30 ET；盤中的指標用長週期日線最長 6 小時，但日線一律封頂於收盤後 60 秒。
 
     `force_refresh=True` 會略過快取讀取（但仍會將新結果寫入快取供其他呼叫端
     受益）。**背景路徑的 intraday（< 1d）`force_refresh` 會被忽略**：bar 對齊到期
@@ -128,7 +129,8 @@ async def get_history_df(
     （`/x`，已標記 interactive）與日線 `force_refresh` 行為不變。
     **`force_refresh` 仍會與飛行中的請求共乘**，理由見 `_history_single_flight_key`。
 
-    抓取失敗（回空）時，日線以上若有逾期 < 24 小時的快取則沿用並記 warning；
+    抓取失敗（回空）時，日線以上且 period 非 1d/2d/5d 的「長週期」若有逾期 < 24 小時的
+    快取則沿用並記 warning；短期現值日線回空；
     intraday 不做 stale 回退（跨 bar 的舊 K 棒比沒有資料更危險），維持回空。
     """
     from services.single_flight import SingleFlightManager
@@ -162,7 +164,13 @@ async def get_history_df(
     )
     if shared_df is None or shared_df.empty:
         # stale-on-error：日線以上沿用逾期 < 24 小時的快取（不改 (df, expiry) 形狀）
-        if interval in _STALE_OK_INTERVALS and cache_key in _history_cache:
+        # 短期「現值」日線（period 1d/2d/5d，如 VIX／原油／跳空）不回退過期快取：
+        # 其最後一根會隨成交更新，逾期資料比沒有資料更危險，失敗時回空由呼叫端 fail-safe。
+        if (
+            interval in _STALE_OK_INTERVALS
+            and period not in _LIVE_DAILY_PERIODS
+            and cache_key in _history_cache
+        ):
             stale_df, expiry = _history_cache[cache_key]
             overdue = now - expiry
             if overdue <= _STALE_MAX_OVERDUE_SECONDS:

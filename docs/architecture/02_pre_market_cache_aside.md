@@ -152,8 +152,8 @@ flowchart TD
 | 時段 | interval／period | 到期時間 |
 | :--- | :--- | :--- |
 | 盤中（含半日市，以 NYSE 行事曆 open／close 為準） | intraday（1m–90m） | 正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下落在某根 bar 收盤後 60 秒定案寬限內，只快取到寬限結束（下游以牆鐘判斷 bar 收盤，快取不可跨過收盤邊界） |
-| 盤中 | 日線以上且 period 屬 `1d`／`2d`／`5d`（被當現值用的短期日線，如 VIX 期限結構、原油、跳空） | 現在 ＋ 15 分鐘（對齊盤中巡邏） |
-| 盤中 | 其他指標用日線（period ≥ 1mo） | 現在 ＋ 6 小時（維持現狀） |
+| 盤中 | 日線以上且 period 屬 `1d`／`2d`／`5d`（被當現值用的短期日線，如 VIX 期限結構、原油、跳空） | `min(現在 ＋ 15 分鐘, 收盤 ＋ 60 秒)` |
+| 盤中 | 其他指標用日線（period ≥ 1mo） | `min(現在 ＋ 6 小時, 收盤 ＋ 60 秒)`（日線不跨過收盤；例：15:00 抓 1y/1d 於 16:01 到期） |
 | 盤中 | 未知 interval | 現在 ＋ 15 分鐘（保守） |
 | 收盤後 30 分內 | 全部 | 現在 ＋ 5 分鐘（最後一根 bar 仍可能被修正） |
 | 其餘盤外，開盤前 60 分以前 | 全部 | 當日 08:30 ET（除權息調整於開盤前生效，08:45 預熱需拿到新資料） |
@@ -162,9 +162,11 @@ flowchart TD
 
 背景路徑的 intraday（< 1d）`force_refresh=True` 在 `get_history_df` 開頭被忽略，改由上述 bar 對齊快取承接（同一輪多個模組共用同一份）；互動路徑（`/x`，已標記 interactive）與日線 `force_refresh` 行為不變。
 
-**stale-on-error**：抓取失敗（回空）時，僅日線以上（`1d`／`5d`／`1wk`／`1mo`／`3mo`）且快取逾期 ≤ 24 小時才回傳過期快取並記 warning；intraday 一律不做 stale 回退（跨 bar 的舊 K 棒比沒有資料更危險），維持回空由呼叫端 fail-safe。
+**stale-on-error**：抓取失敗（回空）時，僅日線以上（`1d`／`5d`／`1wk`／`1mo`／`3mo`）、period **不屬於** `1d`／`2d`／`5d`（短期現值日線失敗回空 DataFrame）且快取逾期 ≤ 24 小時才回傳過期快取並記 warning；intraday 一律不做 stale 回退（跨 bar 的舊 K 棒比沒有資料更危險），維持回空由呼叫端 fail-safe。
 
-**IV 快取**：記憶體 `_IV_CACHE_TTL` 由 900 秒改 1800 秒（edge 期權快照約 30 分鐘才換一次）；盤中 SQLite kv `iv_metrics_*` 年齡超過 `_EDGE_SNAPSHOT_MAX_AGE_SECONDS`（1800 秒）視為 miss 並重算，盤外日鍵整日有效。
+**IV 快取**：記憶體 `_IV_CACHE_TTL` 由 900 秒改 1800 秒（edge 期權快照約 30 分鐘才換一次）；盤中 SQLite kv `iv_metrics_*` 年齡超過 `_EDGE_SNAPSHOT_MAX_AGE_SECONDS`（1800 秒）視為 miss 並重算，盤外日鍵整日有效。kv 讀取經 `asyncio.to_thread`，不在 event loop 同步讀 SQLite。
+
+> **已知限制（IV 重算）**：重算時未扣除 edge 快照年齡，盤中 IV 最舊約 60 分鐘（期權報價本身亦延遲約 15 分）。
 
 | 常數名稱 | 數值 | 意涵 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |

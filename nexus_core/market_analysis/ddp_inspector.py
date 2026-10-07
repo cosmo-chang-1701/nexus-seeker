@@ -52,9 +52,15 @@ class DDPInspector:
             return t.info, t.quarterly_income_stmt
 
         self.last_fail_reason.pop(symbol, None)
-        info, q_inc = await market_data_service.call_yf(
-            _fetch_info_and_income, symbol, _endpoint="info_income"
-        )
+        try:
+            info, q_inc = await market_data_service.call_yf(
+                _fetch_info_and_income, symbol, _endpoint="info_income"
+            )
+        except market_data_service.YahooRateLimitedError:
+            # Yahoo 429 冷卻中：fail-safe 回 None，不可讓例外中斷 /x 的 gather 或排程
+            logger.info(f"[{symbol}] DDP 略過：Yahoo 限流冷卻中")
+            self._fail(symbol, "資料暫不可用（Yahoo 限流冷卻中）")
+            return None
 
         # 1. 產業過濾
         sector = info.get("sector")

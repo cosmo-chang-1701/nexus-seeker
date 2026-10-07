@@ -126,7 +126,8 @@ def history_cache_expiry(interval: str, period: str, now_ts: float) -> float:
 
     1. 盤中：intraday 到期＝正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下
        落在某根 bar 收盤後 60 秒定案寬限內，則只快取到該寬限結束；短期日線
-       （period 1d/2d/5d）15 分鐘；其餘指標用日線維持 6 小時。
+       （period 1d/2d/5d）15 分鐘；其餘指標用日線最長 6 小時；日線一律封頂於
+       收盤後 60 秒（`close + _BAR_SETTLE_GRACE_SECONDS`），不跨過收盤。
     2. 收盤後 30 分內：5 分鐘（全 interval）。
     3. 其餘盤外：到次一個「開盤前 60 分（08:30 ET）」刷新點；開盤前 60 分～開盤之間
        到開盤後 60 秒；一律至少 now+60 秒。
@@ -159,9 +160,13 @@ def history_cache_expiry(interval: str, period: str, now_ts: float) -> float:
                 )
                 return boundary.timestamp()
             if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
+                # 日線 TTL 一律封頂於「收盤＋定案寬限」：盤中抓到的最後一根日線 bar
+                # 是未定案快照，不可跨過收盤沿用到收盤後（否則 6 小時 TTL 會讓 15:00
+                # 抓的 1y 日線在 21:00 仍是盤中值）。
+                close_cap = close_dt.timestamp() + _BAR_SETTLE_GRACE_SECONDS
                 if period in _LIVE_DAILY_PERIODS:
-                    return now_ts + _LIVE_DAILY_TTL_SECONDS
-                return now_ts + _HISTORY_CACHE_TTL
+                    return min(now_ts + _LIVE_DAILY_TTL_SECONDS, close_cap)
+                return min(now_ts + _HISTORY_CACHE_TTL, close_cap)
             # 未知 interval：保守處理
             return now_ts + _LIVE_DAILY_TTL_SECONDS
         if (

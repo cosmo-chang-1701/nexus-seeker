@@ -40,6 +40,7 @@ from ._core import (  # noqa: F401,E402
     _to_yfinance_symbol,
     _yfinance_controls_by_loop,
     _yahoo_rate_limit_until,
+    EdgeYahooResponse,
     YahooEdgeBusyError,
     YahooRateLimitedError,
     edge_get_yahoo,

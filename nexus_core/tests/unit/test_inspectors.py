@@ -417,3 +417,38 @@ async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
         # market_data_service 的集中快取路徑，不再經過 call_yf。
         assert m_call_yf.await_count >= 1
         m_chain.assert_awaited_once_with("AAPL", "2099-12-31", prune_pct=None)
+
+
+@pytest.mark.asyncio
+async def test_ddp_inspector_yahoo_cooldown_returns_none_without_raising() -> None:
+    """Yahoo 429 冷卻中 call_yf 拋 YahooRateLimitedError：fail-safe 回 None（不中斷 /x gather）。"""
+    from services.market_data_service import YahooRateLimitedError
+
+    inspector = DDPInspector()
+    with patch(
+        "services.market_data_service.call_yf",
+        new_callable=AsyncMock,
+        side_effect=YahooRateLimitedError("cooldown"),
+    ):
+        assert await inspector.inspect_symbol("NVDA") is None
+    assert "限流" in inspector.last_fail_reason["NVDA"]
+
+
+@pytest.mark.asyncio
+async def test_volatility_inspector_yahoo_cooldown_returns_none() -> None:
+    from services.market_data_service import YahooRateLimitedError
+
+    df = pd.DataFrame({"Close": [100.0 + i * 0.1 for i in range(260)]})
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=df,
+        ),
+        patch(
+            "services.market_data_service.call_yf",
+            new_callable=AsyncMock,
+            side_effect=YahooRateLimitedError("cooldown"),
+        ),
+    ):
+        assert await VolatilityInspector().inspect_symbol("NVDA", None) is None

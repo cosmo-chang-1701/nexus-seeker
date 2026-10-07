@@ -136,7 +136,7 @@ def test_scrape_yf_history_queue_timeout_returns_503_busy() -> None:
         res = scrape_yf_history("AAPL")
     assert res.status_code == 503  # type: ignore[union-attr]
     assert b"busy" in res.body  # type: ignore[union-attr]
-    sem.acquire.assert_called_once_with(timeout=15)
+    sem.acquire.assert_called_once_with(timeout=8)
     sem.release.assert_not_called()
     fake_ticker.history.assert_not_called()
 

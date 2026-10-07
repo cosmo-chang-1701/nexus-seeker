@@ -61,9 +61,13 @@ class VolatilityInspector:
             return None
 
         # 3. 獲取當前 IV (Implied Volatility)
-        info = await market_data_service.call_yf(
-            lambda sym: yf.Ticker(sym).info, symbol, _endpoint="info"
-        )
+        try:
+            info = await market_data_service.call_yf(
+                lambda sym: yf.Ticker(sym).info, symbol, _endpoint="info"
+            )
+        except market_data_service.YahooRateLimitedError:
+            # Yahoo 429 冷卻中：fail-safe 略過此標的
+            return None
         iv_current = info.get("impliedVolatility")
         if not iv_current or iv_current <= 0:
             # Fallback: 嘗試從 ATM 期權鏈獲取 (透過集中快取路徑，享有 edge

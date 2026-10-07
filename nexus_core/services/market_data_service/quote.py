@@ -80,8 +80,8 @@ async def _fetch_history_via_edge(
         async with get_edge_client() as client:
             # 統一 Yahoo 預算／429 冷卻／退避重置：與期權路徑共用 edge_get_yahoo
             res = await edge_get_yahoo(client, req_url, "edge_history")
-            if res.status_code == 200:
-                data = res.json()
+            data = res.data
+            if res.response.status_code == 200 and isinstance(data, dict):
                 if data.get("status") == "success":
                     records = data.get("data", [])
                     if records:
@@ -130,6 +130,9 @@ async def _direct_yf_history(
             kwargs["interval"] = interval
 
         df = await call_yf(ticker.history, **kwargs)
+    except YahooRateLimitedError:
+        # yahoo_slot 拿到名額後才發現冷卻中：不重試、不改參數再打
+        return None
     except Exception as e:
         if is_yf_rate_limit_error(e):
             # 限流不要再用 repair=False 重打，直接啟動全域冷卻
@@ -148,6 +151,8 @@ async def _direct_yf_history(
             if interval is not None:
                 kwargs_fallback["interval"] = interval
             df = await call_yf(ticker.history, **kwargs_fallback)
+        except YahooRateLimitedError:
+            return None
         except Exception as e2:
             if is_yf_rate_limit_error(e2) and not is_yahoo_rate_limited():
                 note_yahoo_rate_limited("history")

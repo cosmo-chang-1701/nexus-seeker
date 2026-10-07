@@ -23,11 +23,32 @@ _NOW = _ts(2026, 10, 7, 10, 7)
         ("1m", "1d", _ts(2026, 10, 7, 10, 8)),
         ("1h", "5d", _ts(2026, 10, 7, 10, 30)),
         ("1d", "5d", _NOW + 900),
-        ("1d", "1y", _NOW + 21600),
+        # 6 小時 TTL 會跨過收盤（10:07+6h=16:07），封頂於收盤＋60 秒
+        ("1d", "1y", _ts(2026, 10, 7, 16, 1)),
     ],
 )
 def test_intraday_session_expiry(interval: str, period: str, expected: float) -> None:
-    assert history_cache_expiry(interval, period, _NOW) == pytest.approx(expected)
+    # abs 容差：預設 rel 容差對 epoch 秒約 1800 秒，會掩蓋 TTL 差異
+    assert history_cache_expiry(interval, period, _NOW) == pytest.approx(
+        expected, abs=1
+    )
+
+
+def test_long_daily_ttl_capped_at_close_plus_grace() -> None:
+    """15:00 抓 1y/1d：6 小時 TTL 封頂於 16:01；短期日線的 15 分鐘也不跨過收盤。"""
+    now = _ts(2026, 10, 7, 15, 0)
+    assert history_cache_expiry("1d", "1y", now) == pytest.approx(
+        _ts(2026, 10, 7, 16, 1), abs=1
+    )
+    assert history_cache_expiry("1d", "1mo", now) == pytest.approx(
+        _ts(2026, 10, 7, 16, 1), abs=1
+    )
+    near = _ts(2026, 10, 7, 15, 55)
+    assert history_cache_expiry("1d", "5d", near) == pytest.approx(
+        _ts(2026, 10, 7, 16, 1), abs=1
+    )
+    # 未接近收盤時，短期日線仍是 15 分鐘
+    assert history_cache_expiry("1d", "5d", now) == pytest.approx(now + 900, abs=1)
 
 
 def test_last_bar_never_exceeds_close() -> None:

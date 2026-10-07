@@ -10,6 +10,8 @@ import pandas as pd
 import yfinance as yf
 
 from services.market_data_service._core import (
+    EdgeYahooResponse,
+    YahooEdgeBusyError,
     YahooRateLimitedError,
     _sanitize_ticker,
     call_yf,
@@ -33,7 +35,7 @@ logger = logging.getLogger(__name__)
 OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 
-async def _edge_get_counted(client: Any, url: str) -> Any:
+async def _edge_get_counted(client: Any, url: str) -> EdgeYahooResponse:
     """Edge 即時 scrape 請求（會觸發 Yahoo 抓取）：與 K 線路徑共用 `edge_get_yahoo`
     （冷卻檢查、yahoo_slot、配額計數、429 冷卻、成功重置退避）。"""
     return await edge_get_yahoo(client, url, "edge_options")
@@ -47,8 +49,9 @@ async def _retry_once(
     不影響降級層級的順序或本身的 try/except 結構。"""
     try:
         return await coro_factory()
-    except YahooRateLimitedError:
-        # 限流冷卻中重試只會再打一次，直接外拋由呼叫端決定降級（不走直連）
+    except (YahooRateLimitedError, YahooEdgeBusyError):
+        # 限流冷卻中／edge 忙碌（含逾時）重試只會再打一次，直接外拋由呼叫端決定
+        # （兩者都不走資料中心直連）
         raise
     except Exception as e:
         if is_yf_rate_limit_error(e):
@@ -86,6 +89,7 @@ async def get_all_option_expiries(symbol: str) -> List[str]:
 async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
     """實際抓取期權到期日並寫入 `_option_expiries_cache`（Edge 優先、yfinance 降級）。"""
     res: List[str] = []
+    edge_blocked = False  # edge 忙碌／逾時：暫時性失敗，不得降級資料中心直連
     from config import TUNNEL_URL
     import urllib.parse
 
@@ -102,8 +106,8 @@ async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
                     lambda: _edge_get_counted(client, req_url),
                     label=f"[{symbol}] Edge 節點抓取期權到期日",
                 )
-                if resp.status_code == 200:
-                    data = resp.json()
+                data = resp.data
+                if resp.response.status_code == 200 and isinstance(data, dict):
                     if data.get("status") == "success" and data.get("data"):
                         res = data.get("data", [])
                         logger.info(f"[{symbol}] Edge 節點成功抓取期權到期日")
@@ -111,10 +115,16 @@ async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
             logger.warning(
                 f"[{symbol}] Yahoo 限流冷卻中，略過期權到期日抓取與資料中心直連"
             )
+            edge_blocked = True
+        except YahooEdgeBusyError:
+            logger.warning(
+                f"[{symbol}] Edge 節點忙碌／逾時，略過期權到期日資料中心直連"
+            )
+            edge_blocked = True
         except Exception as ex:
             logger.warning(f"[{symbol}] Edge 節點即時抓取期權到期日失敗: {ex}")
 
-    if not res and not is_yahoo_rate_limited():
+    if not res and not edge_blocked and not is_yahoo_rate_limited():
         if base_url:
             logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取期權到期日...")
         try:
@@ -175,6 +185,7 @@ async def _fetch_option_chain_raw(
             if TUNNEL_URL
             else ""
         )
+        edge_blocked = False  # edge 忙碌／逾時：暫時性失敗，不得降級資料中心直連
         if base_url:
             req_url = f"{base_url}/api/v1/scrape/yf/options/{urllib.parse.quote(symbol)}/chain?expiry={expiry}"
             try:
@@ -183,8 +194,8 @@ async def _fetch_option_chain_raw(
                         lambda: _edge_get_counted(client, req_url),
                         label=f"[{symbol}] Edge 節點抓取期權鏈",
                     )
-                    if resp.status_code == 200:
-                        data = resp.json()
+                    data = resp.data
+                    if resp.response.status_code == 200 and isinstance(data, dict):
                         if data.get("status") == "success" and data.get("data"):
                             calls_full = pd.DataFrame(data["data"].get("calls", []))
                             puts_full = pd.DataFrame(data["data"].get("puts", []))
@@ -194,14 +205,24 @@ async def _fetch_option_chain_raw(
                 logger.warning(
                     f"[{symbol}] Yahoo 限流冷卻中，略過期權鏈即時抓取與資料中心直連"
                 )
+                edge_blocked = True
+            except YahooEdgeBusyError:
+                logger.warning(
+                    f"[{symbol}] Edge 節點忙碌／逾時，略過期權鏈資料中心直連"
+                )
+                edge_blocked = True
             except Exception as ex:
                 logger.warning(f"[{symbol}] Edge 節點即時抓取期權鏈失敗: {ex}")
 
         if (
-            calls_full is None
-            or puts_full is None
-            or (calls_full.empty and puts_full.empty)
-        ) and not is_yahoo_rate_limited():
+            (
+                calls_full is None
+                or puts_full is None
+                or (calls_full.empty and puts_full.empty)
+            )
+            and not edge_blocked
+            and not is_yahoo_rate_limited()
+        ):
             if base_url:
                 logger.info(
                     f"[{symbol}] 降級改用本地 yfinance 直連抓取期權鏈 (expiry={expiry})..."
