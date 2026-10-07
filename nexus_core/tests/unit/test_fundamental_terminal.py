@@ -22,6 +22,7 @@ from cogs.fundamental_terminal import (
 from market_analysis.fundamental_pipeline.models import (
     EarningsSurpriseDTO,
     EPSEstimateSnapshotRecord,
+    FilingCursorRecord,
     GovernanceFlagRecord,
     GuidanceExtractionDTO,
     LiquidityReading,
@@ -134,19 +135,86 @@ async def test_macro_liquidity_section_render() -> None:
         assert "3.98%" in body
 
 
+_SYNCED_CURSOR = FilingCursorRecord(
+    symbol="TSLA",
+    cik="0001318605",
+    last_accepted_at="2026-10-05T16:30:00-04:00",
+    last_accession="0001318605-26-000001",
+    updated_at="2026-10-05 21:00:00",
+)
+
+
 @pytest.mark.asyncio
-async def test_governance_gate_section_render() -> None:
-    """測試 GovernanceGateSection 渲染治理狀態與內部人行為。"""
+async def test_governance_gate_section_never_synced_is_not_shown_as_clean() -> None:
+    """從未同步（無游標）時不得顯示「正常」或 NEUTRAL，必須明示尚無資料。"""
     sec = GovernanceGateSection()
 
     with (
+        patch("cogs.fundamental_terminal.get_sec_filing_cursor", return_value=None),
+        patch(
+            "cogs.fundamental_terminal.get_active_governance_flags", return_value=[]
+        ) as mock_flags,
+        patch(
+            "cogs.fundamental_terminal.get_insider_transactions", return_value=[]
+        ) as mock_txs,
+    ):
+        _, body = await sec.render("TSLA")
+
+    assert "尚無申報同步資料" in body
+    assert "管線尚未排程" in body
+    assert "🟢" not in body
+    assert "正常" not in body
+    assert "NEUTRAL" not in body
+    mock_flags.assert_not_called()
+    mock_txs.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_governance_gate_section_render() -> None:
+    """已同步且乾淨時才顯示 🟢，並與內部人行為一併渲染。"""
+    sec = GovernanceGateSection()
+
+    with (
+        patch(
+            "cogs.fundamental_terminal.get_sec_filing_cursor",
+            return_value=_SYNCED_CURSOR,
+        ),
         patch("cogs.fundamental_terminal.get_active_governance_flags", return_value=[]),
         patch("cogs.fundamental_terminal.get_insider_transactions", return_value=[]),
     ):
         header, body = await sec.render("TSLA")
         assert "治理與重大事件監控" in header
-        assert "治理狀態: 🟢 正常無重大異常" in body
+        assert "治理狀態: 🟢 已同步，最近未觸發 4.02 / 5.02 警訊" in body
+        assert "2026-10-05 21:00" in body
         assert "內部人行為 (30D): ⚪ **NEUTRAL**" in body
+
+
+@pytest.mark.asyncio
+async def test_governance_gate_section_review_flag_shows_pending_review() -> None:
+    """5.02 降級後的 REVIEW 旗標顯示為待人工複核（🟡），而非風控審查。"""
+    sec = GovernanceGateSection()
+    review_flag = GovernanceFlagRecord(
+        symbol="TSLA",
+        source_accession="ACC-1",
+        flag_kind="ITEM_5_02_OFFICER_CHANGE",
+        severity="REVIEW",
+        expires_at="2099-01-01 00:00:00",
+    )
+    with (
+        patch(
+            "cogs.fundamental_terminal.get_sec_filing_cursor",
+            return_value=_SYNCED_CURSOR,
+        ),
+        patch(
+            "cogs.fundamental_terminal.get_active_governance_flags",
+            return_value=[review_flag],
+        ),
+        patch("cogs.fundamental_terminal.get_insider_transactions", return_value=[]),
+    ):
+        _, body = await sec.render("TSLA")
+    assert "🟡" in body
+    assert "待人工複核" in body
+    assert "觸發風控審查" not in body
 
 
 @pytest.mark.asyncio

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import cast
 
@@ -190,22 +191,41 @@ async def save_macro_surprises(readings: list[MacroSurpriseReading]) -> None:
 
 
 def get_macro_surprises_for_event(
-    event_key: str, limit: int = 12
+    event_key: str, limit: int = 12, before: str | None = None
 ) -> list[MacroSurpriseReading]:
-    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。"""
+    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。
+
+    `before`：僅取 `release_time_utc < before` 的樣本（ISO-8601 UTC 字串，與
+    `release_time_utc` 同格式，字典序即時間序）。計算某次發布的 Z 分數時必須傳入
+    該發布時間，避免引用事件之後才公布的資料（前視偏差）。
+    """
     conn = get_read_connection()
     try:
-        rows = conn.execute(
-            """
-            SELECT event_key, release_time_utc, actual, forecast,
-                   raw_diff, z_score, growth_sign
-            FROM macro_release_surprise
-            WHERE event_key = ?
-            ORDER BY release_time_utc DESC
-            LIMIT ?
-            """,
-            (event_key, limit),
-        ).fetchall()
+        if before is None:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                  AND release_time_utc < ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, before, limit),
+            ).fetchall()
         readings = [
             MacroSurpriseReading(
                 event_key=r[0],
@@ -219,6 +239,26 @@ def get_macro_surprises_for_event(
             for r in reversed(rows)
         ]
         return readings
+    finally:
+        conn.close()
+
+
+def get_recorded_macro_surprise_keys(since: str) -> set[tuple[str, str]]:
+    """讀取 `release_time_utc >= since` 已入庫的 (event_key, release_time_utc) 集合。
+
+    供預期差服務略過已計算過的發布，避免以事後資料重算覆寫既有 Z 分數。
+    """
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT event_key, release_time_utc
+            FROM macro_release_surprise
+            WHERE release_time_utc >= ?
+            """,
+            (since,),
+        ).fetchall()
+        return {(str(r[0]), str(r[1])) for r in rows}
     finally:
         conn.close()
 
@@ -450,6 +490,28 @@ def get_recent_sec_events(symbol: str, limit: int = 20) -> list[FilingEventRecor
         conn.close()
 
 
+_OWNER_CIK_FIELD_RE = re.compile(r"^(\d{10})\|(.*)$", re.DOTALL)
+
+
+def _encode_owner_field(owner_name: str, owner_cik: str | None) -> str:
+    """把主申報人 CIK 編碼進 insider_transaction.owner_name 欄（`{cik}|{names}`）。
+
+    v091 已部署至正式 DB 且不可修改，後續 migration 編號已被其他分支占用，因此不新增
+    欄位，改以固定前綴保存 CIK；無 CIK 時原樣保存名稱。
+    """
+    if owner_cik:
+        return f"{owner_cik}|{owner_name}"
+    return owner_name
+
+
+def _decode_owner_field(raw: str) -> tuple[str, str | None]:
+    """還原 `_encode_owner_field` 的編碼，回傳 (名稱, CIK 或 None)。"""
+    match = _OWNER_CIK_FIELD_RE.match(raw or "")
+    if match is None:
+        return raw, None
+    return match.group(2), match.group(1)
+
+
 async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
     """批次寫入內部人交易明細。"""
     if not txs:
@@ -459,7 +521,7 @@ async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
             t.accession,
             t.line_no,
             t.symbol.upper(),
-            t.owner_name,
+            _encode_owner_field(t.owner_name, t.owner_cik),
             t.owner_role,
             1 if t.is_c_suite else 0,
             t.tx_date,
@@ -477,41 +539,54 @@ async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
 
 
 def get_insider_transactions(symbol: str, days: int = 90) -> list[InsiderTxRecord]:
-    """讀取某標的最近 N 天內的內部人交易記錄。"""
+    """讀取某標的最近 N 天內的內部人交易記錄。
+
+    LEFT JOIN sec_filing_event 以還原所屬申報的 form（判斷 Form 4/A）與受理時間，
+    供 `insider_signal.dedupe_amended_transactions` 以修正申報取代原始明細。
+    """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     conn = get_read_connection()
     try:
         rows = conn.execute(
             """
-            SELECT accession, line_no, symbol, owner_name, owner_role, is_c_suite,
-                   tx_date, tx_code, shares, price, acquired_disposed, shares_after,
-                   is_10b5_1, is_backfill, created_at
-            FROM insider_transaction
-            WHERE symbol = ? AND tx_date >= ?
-            ORDER BY tx_date DESC, line_no ASC
+            SELECT t.accession, t.line_no, t.symbol, t.owner_name, t.owner_role,
+                   t.is_c_suite, t.tx_date, t.tx_code, t.shares, t.price,
+                   t.acquired_disposed, t.shares_after, t.is_10b5_1, t.is_backfill,
+                   t.created_at, e.form, e.accepted_at
+            FROM insider_transaction AS t
+            LEFT JOIN sec_filing_event AS e ON e.accession = t.accession
+            WHERE t.symbol = ? AND t.tx_date >= ?
+            ORDER BY t.tx_date DESC, t.line_no ASC
             """,
             (symbol.upper(), cutoff),
         ).fetchall()
-        return [
-            InsiderTxRecord(
-                accession=r[0],
-                line_no=int(r[1]),
-                symbol=r[2],
-                owner_name=r[3],
-                owner_role=r[4] if r[4] else "OTHER",
-                is_c_suite=bool(r[5]),
-                tx_date=r[6],
-                tx_code=r[7],
-                shares=float(r[8]) if r[8] is not None else 0.0,
-                price=float(r[9]) if r[9] is not None else 0.0,
-                acquired_disposed=r[10] if r[10] else "D",
-                shares_after=float(r[11]) if r[11] is not None else 0.0,
-                is_10b5_1=bool(r[12]),
-                is_backfill=bool(r[13]),
-                created_at=r[14] if r[14] else "",
+        records: list[InsiderTxRecord] = []
+        for r in rows:
+            owner_name, owner_cik = _decode_owner_field(r[3])
+            form = str(r[15]).strip().upper() if r[15] else ""
+            records.append(
+                InsiderTxRecord(
+                    accession=r[0],
+                    line_no=int(r[1]),
+                    symbol=r[2],
+                    owner_name=owner_name,
+                    owner_cik=owner_cik,
+                    owner_role=r[4] if r[4] else "OTHER",
+                    is_c_suite=bool(r[5]),
+                    tx_date=r[6],
+                    tx_code=r[7],
+                    shares=float(r[8]) if r[8] is not None else 0.0,
+                    price=float(r[9]) if r[9] is not None else 0.0,
+                    acquired_disposed=r[10] if r[10] else "D",
+                    shares_after=float(r[11]) if r[11] is not None else 0.0,
+                    is_10b5_1=bool(r[12]),
+                    is_backfill=bool(r[13]),
+                    created_at=r[14] if r[14] else "",
+                    is_amendment=form.endswith("/A"),
+                    filing_accepted_at=r[16] if r[16] else "",
+                )
             )
-            for r in rows
-        ]
+        return records
     finally:
         conn.close()
 

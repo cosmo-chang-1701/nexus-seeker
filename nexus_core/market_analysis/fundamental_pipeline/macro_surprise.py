@@ -23,12 +23,20 @@ EPSILON_STD: float = 1e-9  # 標準差除零防禦下限
 
 @dataclass(frozen=True)
 class MacroEventDefinition:
-    """宏觀發布事件規格定義。"""
+    """宏觀發布事件規格定義。
+
+    - `names_zh`：`economic_calendar_events.event` 實際儲存的中文全名，即 Edge
+      Scraper (`nexus_edge_scraper/local_api/macro_calendar.py` TRANSLATIONS) 與
+      `market_analysis/macro_calendar_translator.py` 翻譯後的輸出，為主要比對依據。
+    - `aliases_en`：TradingView 原始英文名稱，僅作為未翻譯資料的備援。
+    兩者皆以「正規化後精確相等」比對（見 `match_macro_event`），不做子字串比對。
+    """
 
     event_key: str
     name_zh: str
     growth_sign: int  # 1: 增長導向 (越高代表景氣強勁), -1: 緊縮/通膨/壓力導向 (越高代表壓力或緊縮)
-    keywords: tuple[str, ...]
+    names_zh: tuple[str, ...]
+    aliases_en: tuple[str, ...] = ()
 
 
 # 宏觀發布事件標準註冊表
@@ -37,85 +45,123 @@ MACRO_EVENT_REGISTRY: tuple[MacroEventDefinition, ...] = (
         event_key="CPI_MOM",
         name_zh="消費者物價指數 (MoM)",
         growth_sign=-1,
-        keywords=("CPI MoM", "Consumer Price Index MoM", "CPI (MoM)"),
+        names_zh=("CPI 月增率",),
+        aliases_en=("CPI MoM", "Inflation Rate MoM", "Consumer Price Index MoM"),
     ),
     MacroEventDefinition(
         event_key="CORE_CPI_MOM",
         name_zh="核心消費者物價指數 (MoM)",
         growth_sign=-1,
-        keywords=("Core CPI MoM", "Core Consumer Price Index MoM", "Core CPI (MoM)"),
+        names_zh=("核心 CPI 月增率",),
+        aliases_en=("Core CPI MoM", "Core Inflation Rate MoM"),
     ),
     MacroEventDefinition(
         event_key="CPI_YOY",
         name_zh="消費者物價指數 (YoY)",
         growth_sign=-1,
-        keywords=("CPI YoY", "Consumer Price Index YoY", "CPI (YoY)"),
+        names_zh=("CPI 年增率",),
+        aliases_en=("CPI YoY", "Inflation Rate YoY", "Consumer Price Index YoY"),
     ),
     MacroEventDefinition(
         event_key="CORE_CPI_YOY",
         name_zh="核心消費者物價指數 (YoY)",
         growth_sign=-1,
-        keywords=("Core CPI YoY", "Core Consumer Price Index YoY", "Core CPI (YoY)"),
+        names_zh=("核心 CPI 年增率",),
+        aliases_en=("Core CPI YoY", "Core Inflation Rate YoY"),
     ),
     MacroEventDefinition(
         event_key="NFP",
         name_zh="非農就業人口變動",
         growth_sign=1,
-        keywords=("Non Farm Payrolls", "Nonfarm Payrolls", "NFP"),
+        names_zh=("非農就業人數",),
+        aliases_en=("Non Farm Payrolls", "Non-Farm Payrolls", "Nonfarm Payrolls"),
     ),
     MacroEventDefinition(
         event_key="UNEMPLOYMENT_RATE",
         name_zh="失業率",
         growth_sign=-1,
-        keywords=("Unemployment Rate",),
+        names_zh=("失業率",),
+        aliases_en=("Unemployment Rate",),
     ),
     MacroEventDefinition(
         event_key="RETAIL_SALES_MOM",
         name_zh="零售銷售月增率",
         growth_sign=1,
-        keywords=("Retail Sales MoM", "Retail Sales (MoM)"),
+        names_zh=("零售銷售月增率",),
+        aliases_en=("Retail Sales MoM",),
     ),
     MacroEventDefinition(
         event_key="GDP_QOQ",
         name_zh="實質 GDP 季增年率",
         growth_sign=1,
-        keywords=("GDP QoQ", "Gross Domestic Product QoQ", "GDP (QoQ)"),
+        # 僅收錄初值 (Adv) 與無後綴版本；修訂值 / 終值的共識預期與初值不同序列，
+        # 混入同一歷史樣本會扭曲 sigma_12，故刻意不納入。
+        names_zh=("GDP 成長率季增年率 (初值)", "GDP 成長率 (季增年率)"),
+        aliases_en=("GDP Growth Rate QoQ Adv", "GDP Growth Rate QoQ"),
     ),
     MacroEventDefinition(
         event_key="ISM_MANUFACTURING",
         name_zh="ISM 製造業採購經理人指數",
         growth_sign=1,
-        keywords=("ISM Manufacturing PMI", "ISM Manufacturing"),
+        names_zh=("ISM 製造業 PMI",),
+        aliases_en=("ISM Manufacturing PMI",),
     ),
     MacroEventDefinition(
         event_key="ISM_SERVICES",
         name_zh="ISM 非製造業採購經理人指數",
         growth_sign=1,
-        keywords=("ISM Non-Manufacturing PMI", "ISM Services PMI", "ISM Services"),
+        names_zh=("ISM 服務業 PMI", "ISM 非製造業 PMI"),
+        aliases_en=("ISM Services PMI", "ISM Non-Manufacturing PMI"),
     ),
     MacroEventDefinition(
         event_key="PPI_MOM",
         name_zh="生產者物價指數 (MoM)",
         growth_sign=-1,
-        keywords=("PPI MoM", "Producer Price Index MoM", "PPI (MoM)"),
+        names_zh=("PPI 月增率",),
+        aliases_en=("PPI MoM", "Producer Price Index MoM"),
     ),
     MacroEventDefinition(
         event_key="INITIAL_CLAIMS",
         name_zh="每週初領失業金人數",
         growth_sign=-1,
-        keywords=("Initial Jobless Claims", "Jobless Claims"),
+        names_zh=("初領失業救濟金人數",),
+        aliases_en=("Initial Jobless Claims",),
     ),
 )
 
 
-def match_macro_event(raw_event_name: str) -> MacroEventDefinition | None:
-    """將日曆中的事件名稱匹配至標準註冊表中的總經事件。"""
-    normalized = raw_event_name.strip().lower()
+def _normalize_event_name(raw: str) -> str:
+    """正規化事件名稱：去頭尾空白、連續空白收斂為單一空白、轉小寫。"""
+    return " ".join(raw.split()).lower()
+
+
+def _build_event_lookup() -> dict[str, MacroEventDefinition]:
+    lookup: dict[str, MacroEventDefinition] = {}
     for defn in MACRO_EVENT_REGISTRY:
-        for kw in defn.keywords:
-            if kw.lower() in normalized:
-                return defn
-    return None
+        for name in (*defn.names_zh, *defn.aliases_en):
+            key = _normalize_event_name(name)
+            existing = lookup.get(key)
+            if existing is not None and existing.event_key != defn.event_key:
+                raise ValueError(
+                    f"總經事件名稱 {name!r} 同時對應 {existing.event_key} 與 {defn.event_key}"
+                )
+            lookup[key] = defn
+    return lookup
+
+
+_EVENT_LOOKUP: dict[str, MacroEventDefinition] = _build_event_lookup()
+
+
+def match_macro_event(raw_event_name: str) -> MacroEventDefinition | None:
+    """將日曆事件名稱以「正規化後精確相等」對應至註冊表中的總經事件。
+
+    刻意不使用子字串比對：「核心 CPI 月增率」包含「CPI 月增率」、「初領失業金
+    4 週移動平均」與「初領失業救濟金人數」共享字首，子字串加先到先得會把它們
+    錯歸到同一 event_key，並在主鍵 (event_key, release_time_utc) 相撞時互相覆寫。
+    """
+    if not raw_event_name:
+        return None
+    return _EVENT_LOOKUP.get(_normalize_event_name(raw_event_name))
 
 
 def calculate_sample_std(diffs: Sequence[float]) -> float | None:

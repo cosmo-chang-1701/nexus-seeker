@@ -4,8 +4,9 @@
 1. 從 cached economic calendar (economic_calendar_events) 讀取已公布實際值與預測值的總經事件。
 2. 匹配官方註冊表定義 (MACRO_EVENT_REGISTRY)。
 3. 解析並標準化數值（處理百分比、K/M/B 量綱）。
-4. 結合過去 12 期歷史樣本計算 Standardized Surprise Z-Score (若樣本 >= 6)。
-5. 寫入 macro_release_surprise 資料表。
+4. 結合該次發布「之前」最多 12 期歷史樣本計算 Standardized Surprise Z-Score
+   (若樣本 >= 6)，嚴禁引用事件之後才公布的資料（前視偏差）。
+5. 寫入 macro_release_surprise 資料表；已入庫的發布不重算、不覆寫。
 """
 
 from __future__ import annotations
@@ -17,9 +18,11 @@ import math
 from database.connection import get_read_connection
 from database.fundamental_pipeline import (
     get_macro_surprises_for_event,
+    get_recorded_macro_surprise_keys,
     save_macro_surprise,
 )
 from market_analysis.fundamental_pipeline.macro_surprise import (
+    MAX_SURPRISE_LOOKBACK,
     calculate_standardized_surprise,
     match_macro_event,
 )
@@ -109,6 +112,12 @@ async def process_macro_surprises() -> list[MacroSurpriseReading]:
         return []
 
     processed_readings: list[MacroSurpriseReading] = []
+    # 已入庫的發布一律略過：Z 分數在首次計算時即以「當時可得」的歷史樣本定案，
+    # 事後重算會把事件之後才公布的資料混入 sigma_12，形成前視偏差。
+    earliest_time = min(item["event_time"] for item in events)
+    recorded_keys = await asyncio.to_thread(
+        get_recorded_macro_surprise_keys, earliest_time
+    )
 
     for item in events:
         event_name = item["event"]
@@ -116,20 +125,23 @@ async def process_macro_surprises() -> list[MacroSurpriseReading]:
         if defn is None:
             continue
 
+        release_time = item["event_time"]
+        if (defn.event_key, release_time) in recorded_keys:
+            continue
+
         actual = parse_calendar_metric_value(item["actual_value"])
         forecast = parse_calendar_metric_value(item["consensus_value"])
         if actual is None or forecast is None:
             continue
 
-        release_time = item["event_time"]
-        # 讀取該事件過往歷史預期差樣本（非同步委派避免阻塞 event loop）
+        # 僅取該次發布時間「之前」的最多 12 期歷史預期差（非同步委派避免阻塞 event loop）
         prior_surprises = await asyncio.to_thread(
-            get_macro_surprises_for_event, defn.event_key, 12
+            get_macro_surprises_for_event,
+            defn.event_key,
+            MAX_SURPRISE_LOOKBACK,
+            release_time,
         )
-        # 排除相同發布時間的舊記錄避免自我干擾
-        historical_diffs = [
-            s.raw_diff for s in prior_surprises if s.release_time_utc != release_time
-        ]
+        historical_diffs = [s.raw_diff for s in prior_surprises]
 
         raw_diff, z_score = calculate_standardized_surprise(
             actual=actual,
@@ -146,7 +158,9 @@ async def process_macro_surprises() -> list[MacroSurpriseReading]:
             z_score=round(z_score, 4) if z_score is not None else None,
             growth_sign=defn.growth_sign,
         )
+        # 依發布時間升冪逐筆寫入：同一輪中較晚的同類事件可讀到較早事件作為歷史樣本
         await save_macro_surprise(reading)
+        recorded_keys.add((defn.event_key, release_time))
         processed_readings.append(reading)
 
     logger.info(

@@ -1,0 +1,82 @@
+{
+  "_source": "2026-10-07 實測 data.sec.gov/submissions/CIK##########.json 與各申報 {accession}.hdr.sgml 之 <ACCEPTANCE-DATETIME>（美東牆上時間，與 EDGAR index 頁 Accepted 欄一致）。JSON acceptanceDateTime 與真實 UTC 的偏差因公司/重新產生批次而異：AAPL 全數與 AMZN 舊筆為真實 UTC + ET 偏移（夏令 +4h、冬令 +5h），MSFT 與 AMZN 最新筆為真實 UTC。",
+  "samples": [
+    {
+      "cik": "0000320193",
+      "ticker": "AAPL",
+      "accessionNumber": "0001140361-26-038674",
+      "form": "4",
+      "filingDate": "2026-10-05",
+      "acceptanceDateTime": "2026-10-06T02:42:45.000Z",
+      "items": "",
+      "primaryDocument": "xslF345X06/form4.xml",
+      "sgmlAcceptanceDateTimeET": "20261005184245"
+    },
+    {
+      "cik": "0000320193",
+      "ticker": "AAPL",
+      "accessionNumber": "0000320193-26-000020",
+      "form": "10-Q",
+      "filingDate": "2026-07-31",
+      "acceptanceDateTime": "2026-07-31T14:01:02.000Z",
+      "items": "",
+      "primaryDocument": "aapl-20260627.htm",
+      "sgmlAcceptanceDateTimeET": "20260731060102"
+    },
+    {
+      "cik": "0000320193",
+      "ticker": "AAPL",
+      "accessionNumber": "0000320193-26-000005",
+      "form": "8-K",
+      "filingDate": "2026-01-29",
+      "acceptanceDateTime": "2026-01-30T02:30:33.000Z",
+      "items": "2.02,9.01",
+      "primaryDocument": "aapl-20260129.htm",
+      "sgmlAcceptanceDateTimeET": "20260129163033"
+    },
+    {
+      "cik": "0000789019",
+      "ticker": "MSFT",
+      "accessionNumber": "0001193125-26-380280",
+      "form": "8-K",
+      "filingDate": "2026-09-02",
+      "acceptanceDateTime": "2026-09-02T20:30:24.000Z",
+      "items": "7.01,9.01",
+      "primaryDocument": "d291965d8k.htm",
+      "sgmlAcceptanceDateTimeET": "20260902163024"
+    },
+    {
+      "cik": "0000789019",
+      "ticker": "MSFT",
+      "accessionNumber": "0001193125-26-027207",
+      "form": "10-Q",
+      "filingDate": "2026-01-28",
+      "acceptanceDateTime": "2026-01-28T21:07:34.000Z",
+      "items": "",
+      "primaryDocument": "msft-20251231.htm",
+      "sgmlAcceptanceDateTimeET": "20260128160734"
+    },
+    {
+      "cik": "0001018724",
+      "ticker": "AMZN",
+      "accessionNumber": "0001595602-26-000009",
+      "form": "3/A",
+      "filingDate": "2026-10-06",
+      "acceptanceDateTime": "2026-10-06T21:27:29.000Z",
+      "items": "",
+      "primaryDocument": "xslF345X06/wk-form3a_1791322046.xml",
+      "sgmlAcceptanceDateTimeET": "20261006172729"
+    },
+    {
+      "cik": "0001018724",
+      "ticker": "AMZN",
+      "accessionNumber": "0001104659-26-110227",
+      "form": "8-A12B",
+      "filingDate": "2026-09-24",
+      "acceptanceDateTime": "2026-09-24T16:30:49.000Z",
+      "items": "",
+      "primaryDocument": "tm2625860d1_8a12b.htm",
+      "sgmlAcceptanceDateTimeET": "20260924083049"
+    }
+  ]
+}
