@@ -4,7 +4,7 @@ rate limiting、Edge Scraper HTTP 連線池、以及 `_execute_api_call` 生產�
 Finnhub client 與節流機制，維持單一權威來源。
 """
 
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 import asyncio
 import contextvars
 import functools
@@ -12,7 +12,7 @@ import logging
 import random
 import time
 import weakref
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 
 import finnhub
 from aiolimiter import AsyncLimiter
@@ -177,7 +177,11 @@ def _get_yfinance_controls() -> dict[str, Any]:
     controls = _yfinance_controls_by_loop.get(loop)
     if controls is None:
         controls = {
-            "limiter_background": AsyncLimiter(20, 60),
+            # 背景 30/60s：PR-0 之前 edge 路徑（K 線／期權即時 scrape）完全不經此桶，
+            # 統一預算後這些流量也要計入，總量才與先前可比；原 20 會在 15m 巡邏＋
+            # 30m 深度掃描同輪時被 edge 流量擠到排隊。若 PR-0 的每小時摘要顯示背景
+            # 平均 < 20 次/分，可改回 20。
+            "limiter_background": AsyncLimiter(30, 60),
             "limiter_interactive": AsyncLimiter(30, 60),
             "sem_background": asyncio.Semaphore(2),
             "sem_interactive": asyncio.Semaphore(5),
@@ -186,9 +190,12 @@ def _get_yfinance_controls() -> dict[str, Any]:
     return controls
 
 
-async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
-    """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。
-    依 `_is_interactive_request` context 挑選互動或背景限流池。"""
+@asynccontextmanager
+async def yahoo_slot() -> AsyncIterator[None]:
+    """取得一個 Yahoo 請求名額（limiter + semaphore，依互動／背景挑池）。
+
+    所有 Yahoo 流量（本地 yfinance、core→edge 即時 scrape）都應包在這裡，
+    共用同一份預算；`call_yf` 與 edge 路徑使用完全相同的池。"""
     controls = _get_yfinance_controls()
     if _is_interactive_request.get():
         limiter, sem = controls["limiter_interactive"], controls["sem_interactive"]
@@ -196,12 +203,75 @@ async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
         limiter, sem = controls["limiter_background"], controls["sem_background"]
     async with limiter:
         async with sem:
-            api_budget.record_call(
-                "yahoo",
-                getattr(func, "__name__", "yf"),
-                interactive=_is_interactive_request.get(),
-            )
-            return await asyncio.to_thread(func, *args, **kwargs)
+            yield
+
+
+# ---------------------------------------------------------------------------
+# Yahoo 全域 429 冷卻（比照下方 Finnhub `_rate_limit_until` 的全域變數寫法）
+# ---------------------------------------------------------------------------
+# 單元測試若需直接操作，請 patch `services.market_data_service._core._yahoo_rate_limit_until`
+# （`mark_yahoo_*` 以 `global` 讀寫本模組命名空間）。
+_yahoo_rate_limit_until = 0.0
+_yahoo_backoff_seconds = 0.0
+
+# 無 Retry-After 時的指數退避：60→120→240→…上限 900 秒。60 秒是 Yahoo 限流通常
+# 解除的最短時間；900 秒（15 分鐘）對齊盤中巡邏週期，再長會讓盤中決策長時間無資料。
+_YAHOO_BACKOFF_INITIAL_SECONDS = 60.0
+_YAHOO_BACKOFF_MAX_SECONDS = 900.0
+
+
+class YahooRateLimitedError(Exception):
+    """Yahoo 處於 429 冷卻（或 edge 回報限流）。呼叫端應回空／沿用快取，
+    **不得**改用資料中心 IP 直連（更容易被封）。"""
+
+
+def parse_retry_after(headers: Any) -> float | None:
+    """從回應標頭取 Retry-After 秒數；缺少或非數字（如 HTTP date）回 None。"""
+    try:
+        raw = headers.get("Retry-After") or headers.get("retry-after")
+        return float(raw) if raw else None
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def is_yahoo_rate_limited() -> bool:
+    """檢查 Yahoo 是否正處於全域 429 冷卻中（edge 與本地直連共用）。"""
+    return time.time() < _yahoo_rate_limit_until
+
+
+def mark_yahoo_rate_limited(retry_after: float | None = None) -> None:
+    """標記 Yahoo 進入冷卻。有 Retry-After 以其為準；否則 60→120→…上限 900 秒指數退避。"""
+    global _yahoo_rate_limit_until, _yahoo_backoff_seconds
+    if retry_after is not None and retry_after > 0:
+        delay = min(retry_after, _YAHOO_BACKOFF_MAX_SECONDS)
+    else:
+        delay = (
+            _YAHOO_BACKOFF_INITIAL_SECONDS
+            if _yahoo_backoff_seconds <= 0
+            else min(_yahoo_backoff_seconds * 2, _YAHOO_BACKOFF_MAX_SECONDS)
+        )
+        _yahoo_backoff_seconds = delay
+    # max() 保留最長冷卻，避免併發的較短 delay 覆蓋
+    _yahoo_rate_limit_until = max(_yahoo_rate_limit_until, time.time() + delay)
+    logger.warning(f"🚨 Yahoo 觸發限流，全域冷卻 {delay:.0f} 秒")
+
+
+def mark_yahoo_ok() -> None:
+    """Yahoo 成功回應一次即重置指數退避（不縮短既有冷卻到期時間）。"""
+    global _yahoo_backoff_seconds
+    _yahoo_backoff_seconds = 0.0
+
+
+async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
+    """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。
+    依 `_is_interactive_request` context 挑選互動或背景限流池。"""
+    async with yahoo_slot():
+        api_budget.record_call(
+            "yahoo",
+            getattr(func, "__name__", "yf"),
+            interactive=_is_interactive_request.get(),
+        )
+        return await asyncio.to_thread(func, *args, **kwargs)
 
 
 def _get_client() -> finnhub.Client:

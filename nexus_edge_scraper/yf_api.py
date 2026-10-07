@@ -1,7 +1,10 @@
 from typing import Any, Dict, List, Optional
 import asyncio
+import threading
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 router = APIRouter()
 
@@ -91,23 +94,46 @@ async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
     return await asyncio.to_thread(_fetch)
 
 
-@router.get("/api/v1/scrape/yf/history/{symbol}")
-async def scrape_yf_history(
+# history 端點同時最多 2 個 ticker.history 在跑：路由已改同步 def（FastAPI 丟 threadpool，
+# 預設約 40 執行緒），若不設上限，core 端一輪 watchlist 併發會同時對 Yahoo 打出數十條請求，
+# 極易觸發 429。2 與 core 端背景 Semaphore(2) 對齊。
+_HISTORY_SEMAPHORE = threading.BoundedSemaphore(2)
+
+
+def _is_rate_limit_error(exc: BaseException) -> bool:
+    """判斷例外是否為 Yahoo 限流（YFRateLimitError 或訊息含 Too Many Requests／429）。"""
+    if isinstance(exc, YFRateLimitError):
+        return True
+    msg = str(exc).lower()
+    return "too many requests" in msg or "429" in msg
+
+
+@router.get("/api/v1/scrape/yf/history/{symbol}", response_model=None)
+def scrape_yf_history(
     symbol: str, period: str = "1y", interval: str = "1d", auto_adjust: bool = True
-) -> Dict[str, Any]:
+) -> Dict[str, Any] | JSONResponse:
+    # 刻意用同步 def：ticker.history() 是阻塞 I/O，原本 async def 內直接呼叫會卡死整個
+    # edge event loop（含背景期權輪詢）；改 def 後 FastAPI 自動丟 threadpool。
     try:
         ticker = yf.Ticker(symbol)
-        try:
-            df = ticker.history(
-                period=period, interval=interval, auto_adjust=auto_adjust, repair=True
-            )
-        except Exception:
-            df = ticker.history(
-                period=period,
-                interval=interval,
-                auto_adjust=auto_adjust,
-                repair=False,
-            )
+        with _HISTORY_SEMAPHORE:
+            try:
+                df = ticker.history(
+                    period=period,
+                    interval=interval,
+                    auto_adjust=auto_adjust,
+                    repair=True,
+                )
+            except Exception as first_exc:
+                # 限流不應再以 repair=False 重打一次（只會加重 429）
+                if _is_rate_limit_error(first_exc):
+                    raise
+                df = ticker.history(
+                    period=period,
+                    interval=interval,
+                    auto_adjust=auto_adjust,
+                    repair=False,
+                )
         if df is None or df.empty:
             return {"status": "error", "data": "empty"}
 
@@ -122,6 +148,9 @@ async def scrape_yf_history(
         data = df.to_dict(orient="records")
         return {"status": "success", "data": data}
     except Exception as e:
+        if _is_rate_limit_error(e):
+            # 回 429 讓 core 端啟動統一冷卻，且不改用資料中心 IP 直連
+            return JSONResponse(status_code=429, content={"status": "rate_limited"})
         return {"status": "error", "message": str(e)}
 
 

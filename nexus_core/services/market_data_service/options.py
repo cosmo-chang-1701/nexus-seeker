@@ -11,10 +11,15 @@ import yfinance as yf
 
 from services.market_data_service import api_budget
 from services.market_data_service._core import (
+    YahooRateLimitedError,
     _is_interactive_request,
     _sanitize_ticker,
     call_yf,
     get_edge_client,
+    is_yahoo_rate_limited,
+    mark_yahoo_rate_limited,
+    parse_retry_after,
+    yahoo_slot,
 )
 from services.market_data_service.caches import (
     _EDGE_SNAPSHOT_MAX_AGE_SECONDS,
@@ -33,10 +38,19 @@ OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 async def _edge_get_counted(client: Any, url: str) -> Any:
     """Edge 即時 scrape 請求（會觸發 Yahoo 抓取），每次實際送出都計入 API 配額觀測。"""
-    api_budget.record_call(
-        "yahoo", "edge_options", interactive=_is_interactive_request.get()
-    )
-    return await client.get(url)
+    # 統一 Yahoo 預算：冷卻中不送請求；實際送出時佔用 yahoo_slot；回 429 則啟動全域冷卻
+    if is_yahoo_rate_limited():
+        raise YahooRateLimitedError("Yahoo 限流冷卻中")
+    async with yahoo_slot():
+        api_budget.record_call(
+            "yahoo", "edge_options", interactive=_is_interactive_request.get()
+        )
+        resp = await client.get(url)
+    if resp.status_code == 429:
+        api_budget.record_rate_limited("yahoo", "edge_options")
+        mark_yahoo_rate_limited(parse_retry_after(getattr(resp, "headers", None)))
+        raise YahooRateLimitedError("edge 回報 Yahoo 429")
+    return resp
 
 
 async def _retry_once(
@@ -47,6 +61,9 @@ async def _retry_once(
     不影響降級層級的順序或本身的 try/except 結構。"""
     try:
         return await coro_factory()
+    except YahooRateLimitedError:
+        # 限流冷卻中重試只會再打一次，直接外拋由呼叫端決定降級（不走直連）
+        raise
     except Exception as e:
         logger.warning(f"{label} 第一次嘗試失敗 ({e})，{delay}s 後重試一次...")
         await asyncio.sleep(delay)
@@ -101,10 +118,14 @@ async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
                     if data.get("status") == "success" and data.get("data"):
                         res = data.get("data", [])
                         logger.info(f"[{symbol}] Edge 節點成功抓取期權到期日")
+        except YahooRateLimitedError:
+            logger.warning(
+                f"[{symbol}] Yahoo 限流冷卻中，略過期權到期日抓取與資料中心直連"
+            )
         except Exception as ex:
             logger.warning(f"[{symbol}] Edge 節點即時抓取期權到期日失敗: {ex}")
 
-    if not res:
+    if not res and not is_yahoo_rate_limited():
         if base_url:
             logger.info(f"[{symbol}] 降級改用本地 yfinance 直連抓取期權到期日...")
         try:
@@ -180,6 +201,10 @@ async def _fetch_option_chain_raw(
                             puts_full = pd.DataFrame(data["data"].get("puts", []))
                             underlying_full = {}
                             logger.info(f"[{symbol}] Edge 節點成功抓取期權鏈")
+            except YahooRateLimitedError:
+                logger.warning(
+                    f"[{symbol}] Yahoo 限流冷卻中，略過期權鏈即時抓取與資料中心直連"
+                )
             except Exception as ex:
                 logger.warning(f"[{symbol}] Edge 節點即時抓取期權鏈失敗: {ex}")
 
@@ -187,7 +212,7 @@ async def _fetch_option_chain_raw(
             calls_full is None
             or puts_full is None
             or (calls_full.empty and puts_full.empty)
-        ):
+        ) and not is_yahoo_rate_limited():
             if base_url:
                 logger.info(
                     f"[{symbol}] 降級改用本地 yfinance 直連抓取期權鏈 (expiry={expiry})..."

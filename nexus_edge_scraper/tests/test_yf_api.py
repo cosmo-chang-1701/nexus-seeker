@@ -3,7 +3,8 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from yf_api import fetch_nearest_option_chain
+from yf_api import fetch_nearest_option_chain, scrape_yf_history
+from yfinance.exceptions import YFRateLimitError
 
 
 class _FakeChain:
@@ -68,3 +69,31 @@ async def test_fetch_nearest_option_chain_stringifies_last_trade_date() -> None:
     assert result is not None
     assert isinstance(result["calls"][0]["lastTradeDate"], str)
     assert isinstance(result["puts"][0]["lastTradeDate"], str)
+
+
+def test_scrape_yf_history_rate_limit_returns_429() -> None:
+    """Ticker.history 拋 YFRateLimitError → 回 HTTP 429 + status=rate_limited，
+    且不得再以 repair=False 重打一次（只會加重限流）。"""
+    fake_ticker = MagicMock()
+    fake_ticker.history.side_effect = YFRateLimitError()
+
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = scrape_yf_history("AAPL", period="1y", interval="1d")
+
+    assert res.status_code == 429  # type: ignore[union-attr]
+    assert b"rate_limited" in res.body  # type: ignore[union-attr]
+    assert fake_ticker.history.call_count == 1
+
+
+def test_scrape_yf_history_generic_error_returns_status_error() -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.history.side_effect = ValueError("boom")
+
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = scrape_yf_history("AAPL")
+
+    assert isinstance(res, dict)
+    assert res["status"] == "error"
+    assert "boom" in res["message"]
+    # 一般錯誤維持既有 repair=True → repair=False 兩次嘗試
+    assert fake_ticker.history.call_count == 2
