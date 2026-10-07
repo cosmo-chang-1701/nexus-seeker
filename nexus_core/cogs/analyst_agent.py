@@ -31,6 +31,7 @@ from market_analysis.analyst_runners import (
 # ``from cogs.analyst_agent import SECTORS``
 from market_analysis.analyst_runners.sector_runner import SECTORS  # noqa: F401
 from market_time import (
+    get_last_completed_trading_date,
     get_next_market_target_time,
     get_sleep_seconds,
 )
@@ -160,6 +161,16 @@ class AnalystAgent(commands.Cog):
         fundamental_candidates = await asyncio.to_thread(
             database.get_latest_watch_candidates, 10
         )
+        # 名單應為前一個已收盤交易日 20:00 產出；較舊者視為過期（盤前簡報不展示）
+        fundamental_expected_date: str | None = None
+        try:
+            fundamental_expected_date = await asyncio.to_thread(
+                get_last_completed_trading_date
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"[AnalystAgent] 無法推算前一交易日，候選名單不做過期判定: {e}"
+            )
 
         user_ids = database.get_all_user_ids()
         from cogs.embed_builder import build_pre_market_briefing_embed
@@ -193,6 +204,7 @@ class AnalystAgent(commands.Cog):
                 scanned_symbols=u_data["scanned_symbols"],
                 warning_days=warning_days,
                 fundamental_candidates=fundamental_candidates,
+                fundamental_expected_date=fundamental_expected_date,
             )
             await notify(self.bot, uid, "briefing_pre_market", embed=embed)
 

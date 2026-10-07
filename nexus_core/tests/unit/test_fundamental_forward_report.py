@@ -192,3 +192,75 @@ def test_load_fundamental_logs_snapshot(tmp_path: Path) -> None:
     report_text = run_fundamental_forward_report(snapshot_db=db_file, out_dir=tmp_path)
     assert "AAPL" in report_text
     assert (tmp_path / "calibration").exists()
+
+
+def test_report_excludes_null_and_method_none_rows() -> None:
+    """method = NONE 或 NULL 公允價值 / 動能不得以 0 計入分佈與平均。"""
+    logs: dict[str, list[dict[str, Any]]] = {
+        "fair_value_log": [
+            {
+                "symbol": "MSFT",
+                "trading_date": "2026-10-06",
+                "dcf_value": 600.0,
+                "comps_value": 560.0,
+                "fair_value": 580.0,
+                "margin_of_safety": 0.30,
+                "method": "BLENDED",
+            },
+            {
+                "symbol": "SPY",
+                "trading_date": "2026-10-06",
+                "dcf_value": None,
+                "comps_value": None,
+                "fair_value": None,
+                "margin_of_safety": None,
+                "method": "NONE",
+            },
+            {  # 舊版 0.0 哨兵（無 method 欄位）同樣排除
+                "symbol": "QQQ",
+                "trading_date": "2026-10-06",
+                "dcf_value": None,
+                "comps_value": None,
+                "fair_value": 0.0,
+                "margin_of_safety": 0.0,
+                "method": None,
+            },
+        ],
+        "revision_score_log": [
+            {
+                "symbol": "MSFT",
+                "trading_date": "2026-10-06",
+                "score_30d": 40.0,
+                "is_pead_aligned": False,
+            },
+            {
+                "symbol": "SPY",
+                "trading_date": "2026-10-06",
+                "score_30d": None,
+                "is_pead_aligned": False,
+            },
+        ],
+        "fundamental_watch_candidate": [],
+    }
+    report = generate_fundamental_forward_report(logs)
+    assert "有效估值筆數 : 1 筆（排除 method = NONE 或 NULL 共 2 筆）" in report
+    assert "平均安全邊際 (Mean MOS) : +30.00%" in report
+    assert "深度折價標的 (MOS >= 25%) : 1 筆 (100.0%)" in report
+    assert "有效動能筆數 : 1 筆（排除無可配對財期 1 筆）" in report
+    assert "平均修正動能分數 : +40.00" in report
+
+
+def test_load_reports_missing_tables_explicitly(tmp_path: Path) -> None:
+    """缺表不默默略過：記錄到 load_errors 並在報告開頭明示。"""
+    db_file = tmp_path / "empty.db"
+    sqlite3.connect(str(db_file)).close()
+    logs = load_fundamental_logs(snapshot_db=db_file)
+    missing = {e["table"] for e in logs["load_errors"] if e["kind"] == "MISSING_TABLE"}
+    assert missing == {
+        "fair_value_log",
+        "revision_score_log",
+        "fundamental_watch_candidate",
+    }
+    report = generate_fundamental_forward_report(logs)
+    assert "缺少資料表 fair_value_log" in report
+    assert "3 項資料讀取問題" in report

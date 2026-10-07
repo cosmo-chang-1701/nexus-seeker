@@ -17,8 +17,13 @@ def build_pre_market_briefing_embed(
     scanned_symbols: list[str] | None = None,
     warning_days: int = 2,
     fundamental_candidates: Sequence[Any] | None = None,
+    fundamental_expected_date: str | None = None,
 ) -> discord.Embed:
-    """建立盤前綜合宏觀與自選股報告 Embed (🌅 盤前綜合宏觀與自選股報告)"""
+    """建立盤前綜合宏觀與自選股報告 Embed (🌅 盤前綜合宏觀與自選股報告)
+
+    `fundamental_expected_date`：基本面候選名單應有的名單日（前一個已收盤交易日，YYYY-MM-DD）。
+    名單日早於它（20:00 排程漏跑或失敗）時不展示過期名單，只標註最新名單日。
+    """
     has_portfolio_earnings = any(
         item.get("is_portfolio", False) for item in (earnings_alerts or [])
     )
@@ -190,25 +195,43 @@ def build_pre_market_briefing_embed(
             inline=False,
         )
 
-    # 4. 基本面次日焦點候選名單
+    # 4. 基本面次日焦點候選名單（標註名單日；過期名單不展示）
     if fundamental_candidates:
+        list_date = str(getattr(fundamental_candidates[0], "trading_date", "") or "")
+        is_stale = bool(
+            fundamental_expected_date
+            and list_date
+            and list_date < fundamental_expected_date
+        )
         active_candidates = [
             c
             for c in fundamental_candidates
             if getattr(c, "status", "") in ("CANDIDATE", "WATCH")
         ]
-        if active_candidates:
+        field_name = f"📋 基本面次日焦點候選（名單日 {list_date or '未知'}）"
+        if is_stale:
+            embed.add_field(
+                name=field_name,
+                value=_safe_embed_field_value(
+                    f"⚠️ 最新名單日 {list_date} 早於前一交易日 {fundamental_expected_date}"
+                    "（20:00 估值排程未完成），過期名單不展示。",
+                    "無候選",
+                ),
+                inline=False,
+            )
+        elif active_candidates:
             cand_lines = ["```ansi"]
             for c in active_candidates[:5]:
                 sym = getattr(c, "symbol", "")
                 rk = getattr(c, "rank", 0)
                 st = getattr(c, "status", "WATCH")
                 st_color = "\u001b[1;32m" if st == "CANDIDATE" else "\u001b[0;33m"
-                tag = f"{st_color}[{st} #{rk}]\u001b[0m"
+                st_zh = "優先候選" if st == "CANDIDATE" else "觀察"
+                tag = f"{st_color}[{st_zh} #{rk}]\u001b[0m"
                 cand_lines.append(f" 🎯 {sym} {tag}")
             cand_lines.append("```")
             embed.add_field(
-                name="📋 基本面次日焦點候選 (Fundamental Watch)",
+                name=field_name,
                 value=_safe_embed_field_value("\n".join(cand_lines), "無候選"),
                 inline=False,
             )

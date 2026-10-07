@@ -12,17 +12,89 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from market_analysis.fundamental_pipeline.fair_value import (
+    DEEP_VALUE_MOS_THRESHOLD,
+    FAIR_VALUE_MOS_BAND,
+    MODERATE_DISCOUNT_MOS,
+)
+
 logger = logging.getLogger(__name__)
+
+# load_fundamental_logs 回傳 dict 中記錄讀取問題的鍵（缺表 / 查詢失敗）
+LOAD_ERRORS_KEY = "load_errors"
+
+_FAIR_VALUE_SQL = """
+SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
+       margin_of_safety, discount_rate, equity_risk_premium, flags_json,
+       method, spot_price
+FROM fair_value_log
+ORDER BY trading_date ASC, symbol ASC
+"""
+# v094 定稿前的快照沒有 method / spot_price 欄位
+_FAIR_VALUE_LEGACY_SQL = """
+SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
+       margin_of_safety, discount_rate, equity_risk_premium, flags_json,
+       NULL AS method, NULL AS spot_price
+FROM fair_value_log
+ORDER BY trading_date ASC, symbol ASC
+"""
+_REVISION_SQL = """
+SELECT symbol, trading_date, score_30d, breadth_ratio, is_pead_aligned, detail_json
+FROM revision_score_log
+ORDER BY trading_date ASC, symbol ASC
+"""
+_WATCH_SQL = """
+SELECT trading_date, symbol, rank, status, reasons_json, excluded_reason
+FROM fundamental_watch_candidate
+ORDER BY trading_date ASC, rank ASC
+"""
+
+
+def _query_table(
+    cur: sqlite3.Cursor,
+    table: str,
+    sql: str,
+    errors: list[dict[str, Any]],
+    legacy_sql: str | None = None,
+) -> list[tuple[Any, ...]]:
+    """執行查詢；缺表與其他錯誤都記錄到 errors 並記 log，不默默吞掉。"""
+    try:
+        return list(cur.execute(sql).fetchall())
+    except sqlite3.OperationalError as e:
+        msg = str(e)
+        if "no such table" in msg:
+            logger.warning(
+                f"[FundamentalForwardReport] 缺少資料表 {table}（v094 未套用？）"
+            )
+            errors.append({"table": table, "kind": "MISSING_TABLE", "error": msg})
+            return []
+        if legacy_sql is not None and "no such column" in msg:
+            logger.warning(
+                f"[FundamentalForwardReport] {table} 為舊版欄位結構，以相容查詢讀取: {msg}"
+            )
+            errors.append({"table": table, "kind": "LEGACY_SCHEMA", "error": msg})
+            return _query_table(cur, table, legacy_sql, errors)
+        logger.error(f"[FundamentalForwardReport] 讀取 {table} 失敗: {msg}")
+        errors.append({"table": table, "kind": "QUERY_ERROR", "error": msg})
+        return []
+    except sqlite3.Error as e:
+        logger.error(f"[FundamentalForwardReport] 讀取 {table} 失敗: {e}")
+        errors.append({"table": table, "kind": "QUERY_ERROR", "error": str(e)})
+        return []
 
 
 def load_fundamental_logs(
     snapshot_db: Path | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
-    """讀取基本面管線歷史資料表；支援外接唯讀快照或本地唯讀連線。"""
+    """讀取基本面管線歷史資料表；支援外接唯讀快照或本地唯讀連線。
+
+    缺表或查詢失敗時該表回傳空清單，並記錄到 `load_errors`（報告中明示），不默默略過。
+    """
     if snapshot_db is not None:
         from database.connection import connect_external_readonly
 
@@ -32,93 +104,77 @@ def load_fundamental_logs(
 
         conn = get_read_connection()
 
+    errors: list[dict[str, Any]] = []
     try:
         cur = conn.cursor()
 
-        # 1. 公允價值日誌
-        fv_rows: list[dict[str, Any]] = []
-        try:
-            cur.execute(
-                """
-                SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
-                       margin_of_safety, discount_rate, equity_risk_premium, flags_json
-                FROM fair_value_log
-                ORDER BY trading_date ASC, symbol ASC
-                """
+        fv_rows = [
+            {
+                "symbol": r[0],
+                "trading_date": r[1],
+                "dcf_value": r[2],
+                "comps_value": r[3],
+                "fair_value": r[4],
+                "margin_of_safety": r[5],
+                "discount_rate": r[6],
+                "equity_risk_premium": r[7],
+                "flags_json": r[8],
+                "method": r[9],
+                "spot_price": r[10],
+            }
+            for r in _query_table(
+                cur, "fair_value_log", _FAIR_VALUE_SQL, errors, _FAIR_VALUE_LEGACY_SQL
             )
-            for r in cur.fetchall():
-                fv_rows.append(
-                    {
-                        "symbol": r[0],
-                        "trading_date": r[1],
-                        "dcf_value": r[2],
-                        "comps_value": r[3],
-                        "fair_value": r[4],
-                        "margin_of_safety": r[5],
-                        "discount_rate": r[6],
-                        "equity_risk_premium": r[7],
-                        "flags_json": r[8],
-                    }
-                )
-        except Exception:
-            pass
-
-        # 2. 修正動能日誌
-        rev_rows: list[dict[str, Any]] = []
-        try:
-            cur.execute(
-                """
-                SELECT symbol, trading_date, score_30d, breadth_ratio,
-                       is_pead_aligned, detail_json
-                FROM revision_score_log
-                ORDER BY trading_date ASC, symbol ASC
-                """
+        ]
+        rev_rows = [
+            {
+                "symbol": r[0],
+                "trading_date": r[1],
+                "score_30d": r[2],
+                "breadth_ratio": r[3],
+                "is_pead_aligned": bool(r[4]),
+                "detail_json": r[5],
+            }
+            for r in _query_table(cur, "revision_score_log", _REVISION_SQL, errors)
+        ]
+        watch_rows = [
+            {
+                "trading_date": r[0],
+                "symbol": r[1],
+                "rank": r[2],
+                "status": r[3],
+                "reasons_json": r[4],
+                "excluded_reason": r[5],
+            }
+            for r in _query_table(
+                cur, "fundamental_watch_candidate", _WATCH_SQL, errors
             )
-            for r in cur.fetchall():
-                rev_rows.append(
-                    {
-                        "symbol": r[0],
-                        "trading_date": r[1],
-                        "score_30d": r[2],
-                        "breadth_ratio": r[3],
-                        "is_pead_aligned": bool(r[4]),
-                        "detail_json": r[5],
-                    }
-                )
-        except Exception:
-            pass
-
-        # 3. 基本面次日候選名單
-        watch_rows: list[dict[str, Any]] = []
-        try:
-            cur.execute(
-                """
-                SELECT trading_date, symbol, rank, status, reasons_json, excluded_reason
-                FROM fundamental_watch_candidate
-                ORDER BY trading_date ASC, rank ASC
-                """
-            )
-            for r in cur.fetchall():
-                watch_rows.append(
-                    {
-                        "trading_date": r[0],
-                        "symbol": r[1],
-                        "rank": r[2],
-                        "status": r[3],
-                        "reasons_json": r[4],
-                        "excluded_reason": r[5],
-                    }
-                )
-        except Exception:
-            pass
+        ]
 
         return {
             "fair_value_log": fv_rows,
             "revision_score_log": rev_rows,
             "fundamental_watch_candidate": watch_rows,
+            LOAD_ERRORS_KEY: errors,
         }
     finally:
         conn.close()
+
+
+def is_valid_fair_value_row(row: dict[str, Any]) -> bool:
+    """有效估值：method 不為 NONE、fair_value 與 margin_of_safety 非 NULL 且 fair_value > 0。
+
+    舊版快照（無 method 欄位）只依 NULL / 非正值判定，0.0 哨兵視為無效。
+    """
+    method = row.get("method")
+    fv = row.get("fair_value")
+    mos = row.get("margin_of_safety")
+    if method == "NONE" or fv is None or mos is None:
+        return False
+    try:
+        return float(fv) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -> str:
@@ -126,6 +182,7 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
     fv_logs = logs.get("fair_value_log", [])
     rev_logs = logs.get("revision_score_log", [])
     watch_logs = logs.get("fundamental_watch_candidate", [])
+    load_errors = logs.get(LOAD_ERRORS_KEY, [])
 
     lines: list[str] = [
         "=" * 78,
@@ -133,6 +190,21 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
         "=" * 78,
         "",
     ]
+
+    if load_errors:
+        lines.append("【⚠️ 資料讀取問題】")
+        for err in load_errors:
+            kind = err.get("kind")
+            table = err.get("table")
+            if kind == "MISSING_TABLE":
+                lines.append(f"• 缺少資料表 {table}（v094 尚未套用？），該節統計為空")
+            elif kind == "LEGACY_SCHEMA":
+                lines.append(
+                    f"• {table} 為舊版欄位結構，已以相容查詢讀取：{err.get('error')}"
+                )
+            else:
+                lines.append(f"• 讀取 {table} 失敗：{err.get('error')}")
+        lines.append("")
 
     # 1. 總覽指標
     dates = sorted(
@@ -160,15 +232,28 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
 
     # 2. 估值與安全邊際分佈
     lines.append("【2. 內在價值與安全邊際 (MOS) 統計】")
-    if fv_logs:
-        mos_values = [
-            r["margin_of_safety"] for r in fv_logs if r["margin_of_safety"] is not None
-        ]
-        avg_mos = sum(mos_values) / len(mos_values) if mos_values else 0.0
-        deep_val_count = sum(1 for m in mos_values if m >= 0.25)
-        moderate_count = sum(1 for m in mos_values if 0.10 <= m < 0.25)
-        fair_count = sum(1 for m in mos_values if -0.10 <= m < 0.10)
-        overval_count = sum(1 for m in mos_values if m < -0.10)
+    valid_fv = [r for r in fv_logs if is_valid_fair_value_row(r)]
+    if fv_logs and not valid_fv:
+        lines.append(
+            f"• 共 {len(fv_logs)} 筆估值皆無效（method = NONE 或公允價值 / 安全邊際為 NULL）"
+        )
+    elif fv_logs:
+        mos_values = [float(r["margin_of_safety"]) for r in valid_fv]
+        avg_mos = sum(mos_values) / len(mos_values)
+        lines.append(
+            f"• 有效估值筆數 : {len(valid_fv)} 筆（排除 method = NONE 或 NULL 共 "
+            f"{len(fv_logs) - len(valid_fv)} 筆）"
+        )
+        deep_val_count = sum(1 for m in mos_values if m >= DEEP_VALUE_MOS_THRESHOLD)
+        moderate_count = sum(
+            1
+            for m in mos_values
+            if MODERATE_DISCOUNT_MOS <= m < DEEP_VALUE_MOS_THRESHOLD
+        )
+        fair_count = sum(
+            1 for m in mos_values if -FAIR_VALUE_MOS_BAND <= m < MODERATE_DISCOUNT_MOS
+        )
+        overval_count = sum(1 for m in mos_values if m < -FAIR_VALUE_MOS_BAND)
 
         lines.append(f"• 平均安全邊際 (Mean MOS) : {avg_mos:+.2%}")
         lines.append(
@@ -198,9 +283,17 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
 
     # 3. 分析師修正動能與 PEAD
     lines.append("【3. 分析師修正動能與 PEAD 共振分析】")
-    if rev_logs:
-        scores = [r["score_30d"] for r in rev_logs]
-        avg_score = sum(scores) / len(scores) if scores else 0.0
+    scores = [float(r["score_30d"]) for r in rev_logs if r["score_30d"] is not None]
+    if rev_logs and not scores:
+        lines.append(
+            f"• 共 {len(rev_logs)} 筆修正動能皆無可配對財期（score_30d 為 NULL）"
+        )
+    elif rev_logs:
+        avg_score = sum(scores) / len(scores)
+        lines.append(
+            f"• 有效動能筆數 : {len(scores)} 筆（排除無可配對財期 "
+            f"{len(rev_logs) - len(scores)} 筆）"
+        )
         pos_rev_count = sum(1 for s in scores if s > 0)
         neg_rev_count = sum(1 for s in scores if s < 0)
         pead_aligned_count = sum(1 for r in rev_logs if r["is_pead_aligned"])
@@ -241,7 +334,12 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
     lines.append("")
 
     lines.append("=" * 78)
-    lines.append("報告總結：基本面離線前向指標擷取完備，完全符合唯讀離線校準架構規範。")
+    if load_errors:
+        lines.append(
+            f"報告總結：有 {len(load_errors)} 項資料讀取問題（見開頭），相關統計不完整；唯讀離線執行。"
+        )
+    else:
+        lines.append("報告總結：基本面離線前向指標擷取完備，唯讀離線執行。")
     lines.append("=" * 78)
 
     return "\n".join(lines)

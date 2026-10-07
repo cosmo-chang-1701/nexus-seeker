@@ -63,7 +63,6 @@ NotificationKey = Literal[
     # 🌐 全天候情報
     "alpha_polymarket",
     "alpha_wti_oil",
-    "intel_fundamental_events",
     # 📋 定時戰報與系統
     "briefing_pre_market",
     "briefing_post_market",
@@ -361,14 +360,6 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "INTEL",
         "ALWAYS",
         user_configured=True,
-    ),
-    NotificationChannel(
-        "intel_fundamental_events",
-        "intel_always",
-        "📰 基本面重大事件與 PEAD 異動 (SEC 申報、業績預期差與估值動能)",
-        "INTEL",
-        "ALWAYS",
-        default=True,
     ),
     # ------------------------------------------------------------- 📋 定時戰報與系統
     NotificationChannel(

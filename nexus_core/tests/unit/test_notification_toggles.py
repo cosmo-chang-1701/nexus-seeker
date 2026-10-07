@@ -31,7 +31,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 29
+    assert len(ALL_NOTIFICATION_KEYS) == 28
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = key != "system_lifecycle"
@@ -498,7 +498,6 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "alpha_price_volume_watch": True,
         "alpha_polymarket": False,
         "alpha_wti_oil": True,
-        "intel_fundamental_events": False,
         "briefing_pre_market": True,
         "briefing_post_market": True,
         "briefing_weekly_vtr": True,
