@@ -51,7 +51,10 @@ def test_migrations_from_v090_are_contiguous() -> None:
 
 def _columns(conn: sqlite3.Connection, table: str) -> dict[str, int]:
     """回傳 {欄位名: notnull 旗標}。"""
-    return {r[1]: int(r[3]) for r in conn.execute(f"PRAGMA table_info({table})")}
+    rows = conn.execute(
+        'SELECT name, "notnull" FROM pragma_table_info(?)', (table,)
+    ).fetchall()
+    return {r[0]: int(r[1]) for r in rows}
 
 
 def test_v094_migration_ddl_execution() -> None:
