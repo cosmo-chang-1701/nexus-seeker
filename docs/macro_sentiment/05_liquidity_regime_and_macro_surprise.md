@@ -54,6 +54,7 @@ $$z_t = \frac{A_t - F_t}{\sigma_{12}(A - F)}$$
 $$\sigma_{12} = \sqrt{\frac{1}{N - 1} \sum_{i=1}^{N} \left( (A_i - F_i) - \overline{(A - F)} \right)^2}$$
 - 最小樣本防禦：若歷史樣本數 $N < 6$，不計算 $z$ 值（標記為 `None`），僅保留原始差值 $\text{raw\_diff} = A_t - F_t$。
 - 極端值箝制：$z_t = \text{clip}(z_t, -4.0, +4.0)$。
+- 時點約束：$\sigma_{12}$ 只取發布時間嚴格早於本次發布（$\text{release\_time\_utc} < t$）的最近 12 期樣本；Z 分數於首次入庫時定案，之後不重算。
 
 ---
 
@@ -99,6 +100,11 @@ flowchart TD
 - **樣本不足防護**：若總經指標公布歷史少於 6 期，系統強制將 $z$ 分數置為 `None`，僅記錄原始差值，防止高波動性小樣本導致定價模型除法溢位。
 - **除以零與方差為零防護**：若歷史預期差完全相同（方差 $\le 10^{-9}$），強制將 $z$ 分數置為 `None`。
 - **量綱自動對齊**：日曆字串解析自動識別 `%`、`K`、`M`、`B`，確保實際值與共識預測值維持一致量綱尺度。
+- **事件名稱精確比對**：`economic_calendar_events.event` 存放的是 Edge Scraper 翻譯後的中文全名（如「CPI 月增率」「核心 CPI 月增率」「非農就業人數」「初領失業救濟金人數」「ISM 製造業 PMI」「零售銷售月增率」），註冊表 `MACRO_EVENT_REGISTRY` 以 `names_zh` 為主、`aliases_en`（TradingView 原文）為備援，於正規化空白與大小寫後**精確相等**比對，不做子字串比對，避免「核心 CPI 月增率」被歸入 `CPI_MOM`、「連續請領失業救濟金人數」被歸入 `INITIAL_CLAIMS` 而在主鍵 `(event_key, release_time_utc)` 上互相覆寫。GDP 僅收錄初值與無後綴版本，修訂值／終值不納入同一歷史樣本。
+- **預期差防前視偏差**：計算某次發布的 Z 分數時，歷史樣本查詢帶入 `before = release_time_utc`，只取事件之前的 12 期；`macro_release_surprise` 已存在的 `(event_key, release_time_utc)` 一律略過，不以事後才公布的資料重算覆寫。
+- **日曆實際值時效**：08:30 / 10:00 任務執行前強制重抓當月總經日曆（見 `docs/architecture/06_fundamental_pipeline_and_event_clock.md` §5）；Edge 不可用時沿用既有快取，當日實際值延至下一次成功刷新後補算。
+- **抓取與寫入隔離**：FRED 序列抓取成功但寫入 `macro_series_observation` 失敗時，僅記錄警告，本輪流動性精算仍使用已抓取的序列。
+- **序列發布節奏必須註冊**：`fetch_fred_series()` 未傳入 `kind` 且序列未註冊於 `FRED_SERIES` 時直接拋出 `ValueError`，不默默套用 daily 可用日。
 - **可用日延遲防前視偏差**：FRED 序列依其官方公布節奏（`weekly_nfci` 延遲 5 天，`weekly_h41` 延遲 2 天）設定可用日，回測與前向驗證嚴禁引用尚未發布之未來數據。
 
 ---

@@ -25,10 +25,18 @@ Nexus Seeker 本質為選擇權風險控制與營運決策顧問系統（Zero-Ex
 $$t_{\text{target}} \le t_{\text{curr}} < t_{\text{target}} + W$$
 其中預設 $W = 15 \text{ min}$。
 
-為防止在視窗 $W$ 內的連續 $\lceil W / \Delta t_{\text{tick}} \rceil$ 次輪詢中重複觸發同一任務，建立基於時間分桶（Time-Bucket Hash）的去重鍵：
-$$\text{BucketKey}(job\_id, t) = job\_id \parallel \text{Date}(t) \parallel \lfloor \text{Minute}(t) / 15 \rfloor$$
-去重快取容量約束為：
-$$C_{\text{dedup}} = \text{BoundedCache}(\text{max\_size} = 300, \text{ttl} = 3600\text{s})$$
+為防止在視窗 $W$ 內的連續 $\lceil W / \Delta t_{\text{tick}} \rceil$ 次輪詢中重複觸發同一任務，以 `job_id` 為鍵記錄最近一次觸發時間戳 $t_{\text{last}}(job\_id)$，並以每個 `ClockJob` 的冷卻秒數 $T_{\text{cool}}$（`cooldown_seconds`，預設 $1800\text{s}$）判定是否可再次執行：
+$$\text{Run}(job\_id, t) = \begin{cases}
+\text{True} & \text{若 } t_{\text{last}} \text{ 不存在} \lor (t - t_{\text{last}}) \ge T_{\text{cool}} \\
+\text{False} & \text{其他}
+\end{cases}$$
+由於 $T_{\text{cool}} = 1800\text{s} > W = 900\text{s}$，同一視窗內至多觸發一次；觸發前即寫入時間戳，執行失敗亦不於同視窗重試。時間戳存放於行程內記憶體：
+$$C_{\text{dedup}} = \text{BoundedCache}(\text{max\_size} = 300)$$
+（無 TTL，容量上限以 LRU 淘汰；Bot 重啟後冷卻狀態歸零。）
+
+### 2.1.1 觸發日曆
+- **宏觀預期差（08:30 / 10:00 ET）**：`weekday_at`，週一至週五觸發，刻意**不**排除 NYSE 休市日——總經數據可能在休市日照常公布（例如耶穌受難日的非農就業）。
+- **流動性體制（16:15 ET）**：`nyse_trading_day_at`，先以 `weekday_at` 判定時間視窗，再以 `market_time.is_nyse_trading_day()`（`pandas_market_calendars` NYSE 行事曆）排除國定休市日；行事曆查詢失敗時退回平日判定。
 
 ### 2.2 標的池優先級過濾模型
 設系統所有持倉標的集合為 $\mathcal{H}$，使用者自選清單標的集合為 $\mathcal{W}$，排除標的集合（指數與各類 ETF）為 $\mathcal{E}$。
@@ -51,9 +59,9 @@ flowchart TD
     F --> G{是否有到期工作?}
     G -- 否 --> H[結束本輪巡邏]
     G -- 是 --> I[遍歷到期 ClockJob]
-    I --> J{BucketKey 是否已在 BoundedCache?}
-    J -- 是 --> K[已於同視窗執行 跳過]
-    J -- 否 --> L[記錄 BoundedCache 標記]
+    I --> J{距上次觸發 < cooldown_seconds 1800s?}
+    J -- 是 --> K[冷卻中 跳過]
+    J -- 否 --> L[於 BoundedCache 記錄本次觸發時間戳]
     L --> M[執行 job.execute now_et]
     M --> N[寫入資料庫日誌 single-writer]
 ```
@@ -69,6 +77,7 @@ flowchart TD
 | `CLOCK_TICK_MINUTES` | `5` (int) | 時鐘巡邏背景循環間隔週期 |
 | `MEMORY_SAFE_THRESHOLD` | `85.0` (float) | VPS 記憶體使用率門檻百分比，超標則強制熔斷非核心工作 |
 | `MAX_DEDUP_CACHE_SIZE` | `300` (int) | 時鐘去重快取最大容量，防止記憶體洩漏 |
+| `ClockJob.cooldown_seconds` | `1800.0` (float) | 同一 `job_id` 兩次觸發的最小間隔秒數，須大於觸發視窗 $W$ 以確保同視窗僅執行一次 |
 
 ---
 
@@ -77,6 +86,8 @@ flowchart TD
 - **記憶體熔斷機制**：若 VPS 總體 RAM 使用率超過 85%，時鐘巡邏立即跳過本輪所有未執行工作，並於日誌輸出警告，優先保障 Discord Bot 連線與訂單處理核心。
 - **單一任務例外隔離**：單一 `ClockJob` 的執行異常（如網路超時、解析失敗）必須在內部捕捉並記錄日誌，絕不中斷同輪次中其他已到期的工作。
 - **標的池空值安全**：若資料庫內無任何持倉與自選標的，標的池自動回退為空串列，不引發例外。
+- **標的池資料來源**：持倉與自選皆讀自 `assets` 表（重用 `database.portfolio.get_all_portfolio()` 與 `database.watchlist.get_all_watchlist()`）；`HOLDING` / `TRADE` 以 JSON `metadata.quantity != 0` 篩選（空單為負數，同樣納入），`WATCH` 直接取代號。
+- **總經日曆強制刷新與延遲**：`economic_calendar_events` 的一般快取新鮮度為 24 小時，08:30 / 10:00 預期差任務執行前會以 `CalendarService.prefetch_monthly_macro_cache(force_fetch=True)` 強制重抓當月日曆（SingleFlight 合併同月份併發刷新）。未設定 `TUNNEL_URL` 或 Edge 無有效回應時沿用既有 SQLite 快取（SWR）並照常計算，此時當日實際值可能缺漏，待下一次成功刷新（同日 10:00 或次一平日 08:30）後補算。任務在視窗內首次輪詢（約發布後 0–5 分鐘）觸發一次，若 TradingView 尚未更新實際值，08:30 發布會由同日 10:00 任務補上，10:00 發布則延至次一平日 08:30。
 
 ---
 

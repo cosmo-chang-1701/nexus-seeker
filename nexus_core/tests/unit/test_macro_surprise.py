@@ -88,25 +88,89 @@ def test_calculate_standardized_surprise_zero_variance() -> None:
 
 
 def test_match_macro_event() -> None:
-    """測試總經事件名稱匹配與繁體中文屬性。"""
-    cpi = match_macro_event("US CPI MoM (May)")
+    """以 economic_calendar_events.event 實際儲存的中文全名匹配。"""
+    cpi = match_macro_event("CPI 月增率")
     assert cpi is not None
     assert cpi.event_key == "CPI_MOM"
     assert cpi.growth_sign == -1
     assert "物價" in cpi.name_zh
 
-    nfp = match_macro_event("Non Farm Payrolls")
+    core_cpi = match_macro_event("核心 CPI 月增率")
+    assert core_cpi is not None
+    assert core_cpi.event_key == "CORE_CPI_MOM"
+
+    nfp = match_macro_event("非農就業人數")
     assert nfp is not None
     assert nfp.event_key == "NFP"
     assert nfp.growth_sign == 1
 
-    ism = match_macro_event("ISM Manufacturing PMI")
+    claims = match_macro_event("初領失業救濟金人數")
+    assert claims is not None
+    assert claims.event_key == "INITIAL_CLAIMS"
+
+    ism = match_macro_event("ISM 製造業 PMI")
     assert ism is not None
     assert ism.event_key == "ISM_MANUFACTURING"
     assert ism.growth_sign == 1
 
+    retail = match_macro_event("零售銷售月增率")
+    assert retail is not None
+    assert retail.event_key == "RETAIL_SALES_MOM"
+
     unknown = match_macro_event("Some Random Local Survey")
     assert unknown is None
+    assert match_macro_event("") is None
+
+
+def test_match_macro_event_english_fallback_and_normalization() -> None:
+    """英文原名僅作備援；空白與大小寫正規化後精確相等。"""
+    nfp = match_macro_event("Non Farm Payrolls")
+    assert nfp is not None and nfp.event_key == "NFP"
+    cpi = match_macro_event("  inflation   rate MoM ")
+    assert cpi is not None and cpi.event_key == "CPI_MOM"
+    ism = match_macro_event("ism  製造業 pmi")
+    assert ism is not None and ism.event_key == "ISM_MANUFACTURING"
+
+
+def test_match_macro_event_no_substring_misclassification() -> None:
+    """子字串相近但語意不同的事件不得被錯歸（舊版子字串 + 先到先得的缺陷）。"""
+    # 核心 CPI 不得落入 CPI_MOM
+    core = match_macro_event("核心 CPI 月增率")
+    assert core is not None and core.event_key != "CPI_MOM"
+    core_en = match_macro_event("Core CPI MoM")
+    assert core_en is not None and core_en.event_key == "CORE_CPI_MOM"
+    # 續領 / 4 週均值不得落入 INITIAL_CLAIMS
+    assert match_macro_event("連續請領失業救濟金人數") is None
+    assert match_macro_event("初領失業金 4 週移動平均") is None
+    assert match_macro_event("Continuing Jobless Claims") is None
+    assert match_macro_event("Initial Jobless Claims 4-week Average") is None
+    # 核心零售、ISM 子項不得落入主指標
+    assert match_macro_event("核心零售銷售月增率 (除汽車)") is None
+    assert match_macro_event("ISM 製造業價格指數") is None
+    # 含額外前後綴的名稱不做模糊比對
+    assert match_macro_event("US CPI MoM (May)") is None
+
+
+def test_macro_event_registry_names_match_translator_output() -> None:
+    """註冊表中文名稱必須是翻譯器的實際輸出，避免與 Edge 翻譯表漂移後永遠匹配不到。"""
+    from market_analysis.fundamental_pipeline.macro_surprise import (
+        MACRO_EVENT_REGISTRY,
+    )
+    from market_analysis.macro_calendar_translator import (
+        MACRO_EVENT_TRANSLATIONS,
+        translate_macro_event,
+    )
+
+    translated_values = set(MACRO_EVENT_TRANSLATIONS.values())
+    for defn in MACRO_EVENT_REGISTRY:
+        for name in defn.names_zh:
+            assert name in translated_values, f"{defn.event_key}: {name}"
+        for alias in defn.aliases_en:
+            translated = translate_macro_event(alias)
+            matched = match_macro_event(translated)
+            assert (
+                matched is not None and matched.event_key == defn.event_key
+            ), f"{alias} -> {translated}"
 
 
 def test_macro_surprise_nan_and_inf_handling() -> None:
