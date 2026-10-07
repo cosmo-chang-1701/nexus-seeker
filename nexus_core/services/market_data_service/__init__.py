@@ -89,6 +89,7 @@ from .caches import (  # noqa: F401,E402
     clear_quote_cache,
     clear_sma_cache,
     clear_valid_symbol_cache,
+    history_cache_expiry,
     run_garbage_collection,
 )
 from .quote import (  # noqa: F401,E402

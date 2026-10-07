@@ -128,7 +128,8 @@ async def _confirm_left_entry_condition1_exhaustion_reversal(
 ) -> Tuple[bool, Optional[Any]]:
     """左側條件一：結構性空頭力竭與極值乖離確認。
 
-    15m K 線抓取刻意使用 force_refresh=True，且一律先經
+    15m K 線抓取傳 force_refresh=True（背景路徑由 get_history_df 的 bar 對齊快取
+    承接：到期 = 下一根 15m 收盤 + 60 秒，互動路徑才真的強刷），且一律先經
     `price_volume_alert.trim_to_confirmed_15m_bars()` 截斷至最近一根**已收盤**
     K 棒：AGENTS.md 與 price_volume_alert.py 的模組 docstring 都明確警告過
     opportunity_cost.py 現行右側條件一沿用的抓取方式不檢查 bar 完整性、不強制

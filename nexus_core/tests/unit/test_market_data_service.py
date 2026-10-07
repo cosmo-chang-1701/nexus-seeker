@@ -142,6 +142,11 @@ async def test_get_history_df_cache_expiry() -> None:
         patch("config.TUNNEL_URL", ""),
         patch("services.market_data_service.yf.Ticker", return_value=mock_ticker),
         patch("time.time", return_value=start_time),
+        # 到期時間改由 history_cache_expiry 依時段決定；此測試只驗證「超過期限即重抓」
+        patch(
+            "services.market_data_service.history.history_cache_expiry",
+            side_effect=lambda i, p, now: now + 21600,
+        ),
     ):
         df1 = await get_history_df("AAPL", period="1y", interval="1d")
         assert not df1.empty
@@ -1536,3 +1541,244 @@ async def test_get_quote_indices_never_consult_stream() -> None:
     finally:
         set_stream_service(original)
         mds.clear_quote_cache()
+
+
+# ---------------------------------------------------------------------------
+# PR-A：bar 對齊快取／背景 force_refresh／Yahoo 統一預算與 429 冷卻
+# ---------------------------------------------------------------------------
+def _ohlcv_df() -> Any:
+    import pandas as pd
+
+    df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [95.0],
+            "Close": [102.0],
+            "Volume": [1000],
+        },
+        index=pd.to_datetime(["2026-05-25"]),
+    )
+    df.index.name = "Date"
+    return df
+
+
+@pytest.fixture
+def _yahoo_clean() -> Any:
+    from services.market_data_service import _core, clear_history_cache
+
+    def _reset() -> None:
+        _core._yahoo_rate_limit_until = 0.0
+        _core._yahoo_backoff_seconds = 0.0
+        clear_history_cache()
+
+    _reset()
+    yield
+    _reset()
+
+
+@pytest.mark.asyncio
+async def test_background_intraday_force_refresh_uses_bar_aligned_cache(
+    _yahoo_clean: Any,
+) -> None:
+    from services.market_data_service import get_history_df
+
+    ticker = MagicMock()
+    ticker.ticker = "AAPL"
+    ticker.history = MagicMock(return_value=_ohlcv_df())
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch("services.market_data_service.yf.Ticker", return_value=ticker) as m_t,
+    ):
+        await get_history_df("AAPL", period="5d", interval="15m", force_refresh=True)
+        await get_history_df("AAPL", period="5d", interval="15m", force_refresh=True)
+        assert m_t.call_count == 1  # 第二次由快取承接
+
+
+@pytest.mark.asyncio
+async def test_interactive_intraday_force_refresh_refetches(_yahoo_clean: Any) -> None:
+    from services.market_data_service import get_history_df, mark_interactive_request
+
+    ticker = MagicMock()
+    ticker.ticker = "AAPL"
+    ticker.history = MagicMock(return_value=_ohlcv_df())
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch("services.market_data_service.yf.Ticker", return_value=ticker) as m_t,
+    ):
+        await get_history_df("AAPL", period="5d", interval="15m")
+        with mark_interactive_request():
+            await get_history_df(
+                "AAPL", period="5d", interval="15m", force_refresh=True
+            )
+        assert m_t.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_background_daily_force_refresh_still_refetches(
+    _yahoo_clean: Any,
+) -> None:
+    from services.market_data_service import get_history_df
+
+    ticker = MagicMock()
+    ticker.ticker = "AAPL"
+    ticker.history = MagicMock(return_value=_ohlcv_df())
+    with (
+        patch("config.TUNNEL_URL", ""),
+        patch("services.market_data_service.yf.Ticker", return_value=ticker) as m_t,
+    ):
+        await get_history_df("AAPL", period="1y", interval="1d")
+        await get_history_df("AAPL", period="1y", interval="1d", force_refresh=True)
+        assert m_t.call_count == 2
+
+
+def _edge_429_client() -> Any:
+    resp = MagicMock()
+    resp.status_code = 429
+    resp.headers = {}
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    cls = MagicMock()
+    cls.return_value.__aenter__.return_value = client
+    return cls, client
+
+
+@pytest.mark.asyncio
+async def test_edge_429_skips_direct_and_enters_cooldown(_yahoo_clean: Any) -> None:
+    from services.market_data_service import (
+        get_history_df,
+        is_yahoo_rate_limited,
+    )
+
+    cls, client = _edge_429_client()
+    ticker = MagicMock()
+    ticker.ticker = "AAPL"
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", cls),
+        patch("services.market_data_service.yf.Ticker", return_value=ticker),
+        patch(
+            "services.market_data_service.quote._direct_yf_history",
+            new_callable=AsyncMock,
+        ) as m_direct,
+    ):
+        df = await get_history_df("AAPL", period="1y", interval="1d")
+        assert df.empty
+        m_direct.assert_not_called()
+        assert is_yahoo_rate_limited() is True
+        assert client.get.await_count == 1
+
+        # 冷卻中再次呼叫：不發請求、仍不直連
+        await get_history_df("MSFT", period="1y", interval="1d")
+        assert client.get.await_count == 1
+        m_direct.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_edge_json_rate_limited_status_marks_cooldown(
+    _yahoo_clean: Any,
+) -> None:
+    from services.market_data_service import (
+        YahooRateLimitedError,
+        _fetch_history_via_edge,
+        is_yahoo_rate_limited,
+    )
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"status": "rate_limited"}
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    cls = MagicMock()
+    cls.return_value.__aenter__.return_value = client
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", cls),
+    ):
+        with pytest.raises(YahooRateLimitedError):
+            await _fetch_history_via_edge("AAPL", period="1y", interval="1d")
+    assert is_yahoo_rate_limited() is True
+
+
+def test_yahoo_backoff_exponential_and_reset(_yahoo_clean: Any) -> None:
+    from services.market_data_service import (
+        _core,
+        mark_yahoo_ok,
+        mark_yahoo_rate_limited,
+    )
+
+    with patch("time.time", return_value=1000.0):
+        mark_yahoo_rate_limited()
+        assert _core._yahoo_rate_limit_until == pytest.approx(1060.0)
+        mark_yahoo_rate_limited()
+        assert _core._yahoo_backoff_seconds == 120.0
+        for _ in range(10):
+            mark_yahoo_rate_limited()
+        assert _core._yahoo_backoff_seconds == 900.0
+        mark_yahoo_ok()
+        assert _core._yahoo_backoff_seconds == 0.0
+        mark_yahoo_rate_limited(retry_after=30)
+        assert _core._yahoo_rate_limit_until >= 1030.0
+
+
+@pytest.mark.asyncio
+async def test_stale_daily_cache_returned_on_fetch_failure(_yahoo_clean: Any) -> None:
+    from services.market_data_service import _history_cache, get_history_df
+
+    now = time.time()
+    _history_cache[("AAPL", "1y", "1d")] = (_ohlcv_df(), now - 3600)  # 逾期 1 小時
+    with patch(
+        "services.market_data_service.history._safe_yf_history",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        df = await get_history_df("AAPL", period="1y", interval="1d")
+    assert not df.empty
+    assert float(df["Close"].iloc[0]) == 102.0
+
+
+@pytest.mark.asyncio
+async def test_stale_daily_cache_not_used_beyond_24h_or_intraday(
+    _yahoo_clean: Any,
+) -> None:
+    from services.market_data_service import _history_cache, get_history_df
+
+    now = time.time()
+    _history_cache[("AAPL", "1y", "1d")] = (_ohlcv_df(), now - 90000)
+    _history_cache[("AAPL", "5d", "15m")] = (_ohlcv_df(), now - 3600)
+    with patch(
+        "services.market_data_service.history._safe_yf_history",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        assert (await get_history_df("AAPL", period="1y", interval="1d")).empty
+        assert (await get_history_df("AAPL", period="5d", interval="15m")).empty
+
+
+@pytest.mark.asyncio
+async def test_yahoo_slot_entered_on_edge_path(_yahoo_clean: Any) -> None:
+    from contextlib import asynccontextmanager
+
+    from services.market_data_service import _fetch_history_via_edge
+
+    entered: list[int] = []
+
+    @asynccontextmanager
+    async def _fake_slot() -> Any:
+        entered.append(1)
+        yield
+
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"status": "success", "data": []}
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=resp)
+    cls = MagicMock()
+    cls.return_value.__aenter__.return_value = client
+    with (
+        patch("config.TUNNEL_URL", "http://edge-node:8000"),
+        patch("httpx.AsyncClient", cls),
+        patch("services.market_data_service.quote.yahoo_slot", _fake_slot),
+    ):
+        await _fetch_history_via_edge("AAPL", period="1y", interval="1d")
+    assert entered == [1]

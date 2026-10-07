@@ -61,8 +61,8 @@ async def resolve_room_threshold_inputs(
     * ``atr_15m``：呼叫端傳入的 ``df_15m`` 就地計算 > radar 快取的
       ``atr_15m``（radar_data.py 走的是真實 ``fetch_atr_15m()``）> 由 radar 的
       日線 ``atr_14`` 依 √26 折算。**不**在此發動 ``fetch_atr_15m()``——該函式
-      預設 ``force_refresh=True``，在每輪次對每個候選標的都重抓一次成本過高，
-      且會與條件一手上的 K 棒取到不同快照。
+      預設 ``force_refresh=True``（背景路徑由 bar 對齊快取承接），此處仍不發動，
+      以免與條件一手上的 K 棒取到不同快照。
     * ``atr_1d``：radar 快取的 ``atr_14`` > ``fetch_atr_1d()``（走
       ``get_history_df`` 的既有日線快取，非 force_refresh）。
 

@@ -10,6 +10,7 @@ import numpy as np
 import yfinance as yf
 
 from services.market_data_service._core import (
+    _is_interactive_request,
     _to_yfinance_symbol,
     _sanitize_ticker,
     call_yf,
@@ -18,9 +19,10 @@ from services.market_data_service.caches import (
     _ema_cache,
     _EMA_CACHE_TTL,
     _history_cache,
-    _HISTORY_CACHE_TTL,
+    _INTRADAY_BAR_SECONDS,
     _sma_cache,
     _SMA_CACHE_TTL,
+    history_cache_expiry,
 )
 from services.market_data_service.quote import _safe_yf_history
 
@@ -84,7 +86,7 @@ async def _fetch_history_uncached(
             logger.warning(
                 f"[{symbol}] yfinance 歷史數據為空 (period={period}, interval={interval})"
             )
-            # 空結果**不寫入快取**：暫時性失敗 (限流/Edge 斷線) 若被快取 6 小時，
+            # 空結果**不寫入快取**：暫時性失敗 (限流/Edge 斷線) 若被快取，
             # 期間所有呼叫端 (含 VIX、盤後 NAV) 都會拿到「無資料」而退回備援值。
             return pd.DataFrame()
 
@@ -93,28 +95,55 @@ async def _fetch_history_uncached(
             df.index = df.index.tz_localize(None)
 
         result_df = df[["Open", "High", "Low", "Close", "Volume"]]
-        _history_cache[cache_key] = (result_df.copy(), now + _HISTORY_CACHE_TTL)
+        _history_cache[cache_key] = (
+            result_df.copy(),
+            history_cache_expiry(interval, period, now),
+        )
         return result_df
     except Exception as e:
         logger.error(f"[{symbol}] yfinance 抓取失敗: {e}")
         return pd.DataFrame()
 
 
+# stale-on-error 僅限日線以上；24 小時：日線最後一根最多落後一個交易日，
+# 超過就可能跨了除權息／拆股而不可信。
+_STALE_OK_INTERVALS: frozenset[str] = frozenset({"1d", "5d", "1wk", "1mo", "3mo"})
+_STALE_MAX_OVERDUE_SECONDS = 86400
+
+
 async def get_history_df(
     symbol: str, period: str = "1y", interval: str = "1d", force_refresh: bool = False
 ) -> pd.DataFrame:
     """
-    使用 yfinance 抓取歷史 K 線 (異步化，支援 6 小時快取、併發請求合併與 Copy 隔離)。
+    使用 yfinance 抓取歷史 K 線 (異步化，支援依 interval／交易時段決定期限的快取、
+    併發請求合併與 Copy 隔離)。
+
+    快取期限由 `caches.history_cache_expiry` 決定：盤中 intraday 對齊下一根 bar
+    收盤＋60 秒、短期日線 15 分鐘、收盤後 30 分內 5 分鐘、盤外到次一交易日
+    08:30 ET；僅盤中的指標用長週期日線維持 6 小時。
 
     `force_refresh=True` 會略過快取讀取（但仍會將新結果寫入快取供其他呼叫端
-    受益），供對資料新鮮度要求較高的短週期呼叫端使用（例如 15 分鐘價量警報）。
+    受益）。**背景路徑的 intraday（< 1d）`force_refresh` 會被忽略**：bar 對齊到期
+    已保證 bar 級新鮮度，同一輪多個模組各自強刷只會重複消耗 Yahoo 配額；互動
+    （`/x`，已標記 interactive）與日線 `force_refresh` 行為不變。
     **`force_refresh` 仍會與飛行中的請求共乘**，理由見 `_history_single_flight_key`。
+
+    抓取失敗（回空）時，日線以上若有逾期 < 24 小時的快取則沿用並記 warning；
+    intraday 不做 stale 回退（跨 bar 的舊 K 棒比沒有資料更危險），維持回空。
     """
     from services.single_flight import SingleFlightManager
 
     symbol = _to_yfinance_symbol(symbol)
     cache_key = (symbol, period, interval)
     now = time.time()
+
+    # A2：背景 intraday 的 force_refresh 交由 bar 對齊快取承接（單一改動點）
+    if (
+        force_refresh
+        and interval in _INTRADAY_BAR_SECONDS
+        and not _is_interactive_request.get()
+    ):
+        force_refresh = False
 
     if not force_refresh and cache_key in _history_cache:
         cached_df, expiry = _history_cache[cache_key]
@@ -131,8 +160,19 @@ async def get_history_df(
         interval,
         cache_key,
     )
+    if shared_df is None or shared_df.empty:
+        # stale-on-error：日線以上沿用逾期 < 24 小時的快取（不改 (df, expiry) 形狀）
+        if interval in _STALE_OK_INTERVALS and cache_key in _history_cache:
+            stale_df, expiry = _history_cache[cache_key]
+            overdue = now - expiry
+            if overdue <= _STALE_MAX_OVERDUE_SECONDS:
+                logger.warning(
+                    f"[{symbol}] 抓取失敗，沿用過期日線快取（逾期 {max(overdue, 0):.0f} 秒）"
+                )
+                return stale_df.copy()
+        return pd.DataFrame()
     # 共乘者全部共用同一個 DataFrame 物件，因此一律回傳副本以維持 Copy 隔離契約。
-    return shared_df.copy() if shared_df is not None else pd.DataFrame()
+    return shared_df.copy()
 
 
 async def get_spy_history_df(

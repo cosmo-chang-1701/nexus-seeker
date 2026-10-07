@@ -88,7 +88,7 @@ def split_daily_confirmed(
     """回傳 (已收盤日線, 是否有今日未確認 K 棒)。
 
     今日那一根一律視為未確認：盤中仍在成型；收盤後 `get_history_df` 的日線
-    快取（6 小時）也可能還停在盤中快照。代價是收盤後到隔日之間 D 判定落後一根，
+    快取（收盤後 30 分內僅 5 分鐘，之後到次日 08:30 ET）也可能還停在盤中快照。代價是收盤後到隔日之間 D 判定落後一根，
     這是刻意的保守取捨。
     """
     if df_daily.empty:
@@ -336,6 +336,8 @@ async def fetch_psq_matrix(
 
     df_daily, df_15m, df_5m = await asyncio.gather(
         get_history_df(symbol, period=_DAILY_PERIOD, interval="1d"),
+        # 15m／5m 的 force_refresh 在背景路徑由 bar 對齊快取承接（到期 = 下一根 bar
+        # 收盤 + 60 秒），同輪多模組共用同一份；互動路徑才真的強刷。
         get_history_df(
             symbol, period=_INTRADAY_15M_PERIOD, interval="15m", force_refresh=True
         ),

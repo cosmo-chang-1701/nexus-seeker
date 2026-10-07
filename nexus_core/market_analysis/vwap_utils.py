@@ -19,6 +19,9 @@ async def fetch_session_vwap(symbol: str, force_refresh: bool = True) -> float:
     就是單一交易時段內的累積成交量加權均價，period="1d" 讓 yfinance 自然
     只回傳當前/最近一個 session 的 15 分鐘K棒，不需要額外依交易日過濾。
 
+    force_refresh：背景路徑的 intraday force_refresh 由 get_history_df() 的 bar
+    對齊快取承接（到期 = 下一根 15m 收盤 + 60 秒），互動路徑才真的強刷。
+
     資料不足、零成交量或任何例外一律 fail-safe 回傳 0.0，交由呼叫端視為
     資料缺失（不應顯示為 $0.00）。
     """
@@ -60,7 +63,8 @@ class SessionStats(NamedTuple):
 async def fetch_session_stats(
     symbol: str, force_refresh: bool = True
 ) -> Optional[SessionStats]:
-    """與 `fetch_session_vwap()` 同一份資料，額外回傳區間極值與總量；失敗回傳 None。"""
+    """與 `fetch_session_vwap()` 同一份資料，額外回傳區間極值與總量；失敗回傳 None。
+    force_refresh 語意同 `fetch_session_vwap()`（背景 intraday 由 bar 對齊快取承接）。"""
     try:
         df_1d = await market_data_service.get_history_df(
             symbol, period="1d", interval="15m", force_refresh=force_refresh
