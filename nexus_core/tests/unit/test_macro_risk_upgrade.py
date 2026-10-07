@@ -893,40 +893,68 @@ async def test_is_covered_call_unlock_allowed_logic() -> Any:
 def test_safety_payout_threshold_logic() -> Any:
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
-    with patch("database.get_kv_cache") as mock_kv:
-        # Case 1a: Normal (小數格式 0.05)
-        mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 0.05,
-            "macro_rrp_spike": False,
-        }.get(key)
+    with (
+        patch("database.get_kv_cache") as mock_kv,
+        # 不受共用 DB 的總經日曆影響（4 天內有 FOMC/CPI/PCE 會回 16,500）
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+    ):
+        # Case 1: Normal (+5.0%)
+        mock_kv.side_effect = lambda key: {"macro_rrp_change_30d": 5.0}.get(key)
         assert get_safety_payout_threshold() == 13000.0
 
-        # Case 1b: Normal (百分比格式 5.0%)
-        mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 5.0,
-            "macro_rrp_spike": False,
-        }.get(key)
+        # Case 2: RRP increase > 20% (+25.0%)
+        mock_kv.side_effect = lambda key: {"macro_rrp_change_30d": 25.0}.get(key)
+        assert get_safety_payout_threshold() == 18000.0
+
+        # Case 3: 剛好 20.0% 不觸發（嚴格大於）
+        mock_kv.side_effect = lambda key: {"macro_rrp_change_30d": 20.0}.get(key)
         assert get_safety_payout_threshold() == 13000.0
 
-        # Case 2a: RRP increase > 20% (小數格式 0.25)
-        mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 0.25,
-            "macro_rrp_spike": False,
-        }.get(key)
-        assert get_safety_payout_threshold() == 18000.0
 
-        # Case 2b: RRP increase > 20% (百分比格式 25.0%)
-        mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 25.0,
-            "macro_rrp_spike": False,
-        }.get(key)
-        assert get_safety_payout_threshold() == 18000.0
+@pytest.mark.parametrize("small_pct", [0.25, 0.5, 0.99, 1.0])
+def test_safety_payout_threshold_reads_rrp_change_as_percent_only(
+    small_pct: float,
+) -> None:
+    """edge 的 rrp_change_30d 一律是百分比：+0.5% 不得被當成比例 0.5（+50%）
+    而誤觸 $18,000（已刪除「小數比例相容」分支）。"""
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
 
-        # Case 3: RRP Spike
-        mock_kv.side_effect = lambda key: {
-            "macro_rrp_change_30d": 5.0,
-            "macro_rrp_spike": True,
-        }.get(key)
+    with (
+        patch(
+            "database.get_kv_cache",
+            side_effect=lambda key: {
+                "macro_rrp": 300.0,
+                "macro_rrp_change_30d": small_pct,
+            }.get(key),
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+    ):
+        assert get_safety_payout_threshold() == 13000.0
+
+
+def test_safety_payout_threshold_event_week() -> None:
+    """4 天內有 FOMC／CPI／PCE 時回 $16,500；RRP 壓力優先於事件週。"""
+    from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+    events = [{"event": "FOMC Rate Decision"}]
+    with (
+        patch(
+            "database.get_kv_cache",
+            side_effect=lambda key: {"macro_rrp_change_30d": 5.0}.get(key),
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=events),
+    ):
+        assert get_safety_payout_threshold() == 16500.0
+    with (
+        patch(
+            "database.get_kv_cache",
+            side_effect=lambda key: {
+                "macro_rrp": 300.0,
+                "macro_rrp_change_30d": 25.0,
+            }.get(key),
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=events),
+    ):
         assert get_safety_payout_threshold() == 18000.0
 
 
@@ -2555,62 +2583,149 @@ def test_estimate_symbol_gamma_flip_bracket_pct() -> None:
     assert flip_narrow == 0.0
 
 
+_OUTLIER_OVERVIEW_KV: dict[str, Any] = {
+    "macro_spx": 7748.0,
+    "macro_spy_spot": 774.8,
+    # 修正前寫入的離群 Flip：高於現價 22.5%，超出 edge 搜尋區間（+20%）
+    "macro_spy_gamma_flip": 948.9,
+    "macro_gamma_flip_line": 9489.0,
+    "macro_gex_is_fallback": 0,
+    "macro_vix": 16.0,
+    "macro_vts_ratio": 0.85,
+    "macro_rrp": 1.0,
+    "macro_fed_balance": 6.7,
+    "macro_fear_greed": 50.0,
+}
+_FRESH_OVERVIEW_AGES: dict[str, float] = {
+    k: 600.0
+    for k in (
+        "macro_spy_gamma_flip",
+        "macro_vts_ratio",
+        "macro_rrp",
+        "macro_fed_balance",
+        "macro_fear_greed",
+        "macro_uer",
+        "macro_sahm_rule",
+    )
+}
+
+
 @pytest.mark.asyncio
 async def test_macro_gamma_flip_sanity_gate() -> None:
-    """測試 get_macro_overview_data 大盤 Gamma Flip 偏離超過 8% 時被物理閘門攔截為 None。"""
+    """KV 內的離群 Flip（948.9 vs SPY 774.8）不可沿用：走自癒路徑以 SPY 個股
+    期權鏈重估；自癒成功時採用新值，而不是單純變成 None。"""
+    from contextlib import ExitStack
+
     from cogs.unified_terminal.utils import get_macro_overview_data
 
-    # Case 1: SPY Flip = 948.9, SPY Spot = 774.8 (偏離 22.5% > 8%)
-    kv_data: dict[str, Any] = {
-        "macro_spy_spot": 774.8,
-        "macro_spy_gamma_flip": 948.9,
-        "macro_gamma_flip_line": 9489.0,
-        "macro_gex_is_fallback": 0,
-        "macro_vts_ratio": 0.85,
+    mock_spy_gex = {
+        "spot": 774.8,
+        # SHORT_GAMMA (total < 0)，負轉正交叉在 777.0
+        "gex_profile": {"770.0": -200.0, "777.0": 50.0},
     }
-    ages_data: dict[str, float] = {
-        "macro_spy_spot": 10.0,
-        "macro_spy_gamma_flip": 10.0,
-        "macro_gamma_flip_line": 10.0,
-        "macro_vts_ratio": 10.0,
-    }
-    with (
-        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
-        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
-        patch("database.get_kv_cache", side_effect=lambda k: kv_data.get(k)),
-        patch(
-            "database.cache.get_kv_cache_many",
-            side_effect=lambda keys: {
-                k: (kv_data.get(k), ages_data.get(k, 10.0)) for k in keys
-            },
-        ),
-        patch(
-            "market_analysis.index_microstructure.fetch_core_macro_metrics",
-            new_callable=AsyncMock,
-            return_value={},
-        ),
-        patch(
-            "services.market_data_service.get_quote",
-            new_callable=AsyncMock,
-            return_value={"price": 7748.0},
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in _overview_patches(_OUTLIER_OVERVIEW_KV, _FRESH_OVERVIEW_AGES, {}):
+            stack.enter_context(p)
+        mock_macro = stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+                new_callable=AsyncMock,
+                return_value=mock_spy_gex,
+            )
+        )
         overview = await get_macro_overview_data(123456)
-        # SPY Flip 和 SPX Flip 應被 Sanity Gate 剔除為 None
-        assert overview["spy_gamma_flip"] is None
-        assert overview["gamma_flip_line"] is None
+
+    mock_macro.assert_awaited_once()  # KV 離群 -> 觸發自癒
+    assert overview["spy_gamma_flip"] == 777.0
+    assert overview["gamma_flip_line"] == pytest.approx(7770.0)
+    assert overview["gex_is_expired"] is False
+
+
+@pytest.mark.asyncio
+async def test_macro_gamma_flip_sanity_gate_heal_fails_degrades_to_none() -> None:
+    """KV 離群且自癒（大盤端點與 SPY 個股估算）皆失敗時，Flip 視為未知 (None)。"""
+    from contextlib import ExitStack
+
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    with ExitStack() as stack:
+        for p in _overview_patches(_OUTLIER_OVERVIEW_KV, _FRESH_OVERVIEW_AGES, {}):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={"spot": 0.0, "gex_profile": {}},
+            )
+        )
+        overview = await get_macro_overview_data(123457)
+
+    assert overview["spy_gamma_flip"] is None
+    assert overview["gamma_flip_line"] is None
+    assert overview["short_gamma_critical"] is False
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_crash_keeps_far_above_flip() -> None:
+    """SPY 急跌 12%：真實 Flip 高於現價約 12%（short gamma 方向）不得被當成
+    雜訊丟棄，short_gamma_critical 必須成立。"""
+    from contextlib import ExitStack
+
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    kv = {
+        **_OUTLIER_OVERVIEW_KV,
+        "macro_spx": 6160.0,
+        "macro_spy_spot": 616.0,  # 自 700 急跌 12%
+        "macro_spy_gamma_flip": 690.0,  # 高於現價 12.0%
+        "macro_gamma_flip_line": 6900.0,
+        "macro_vix": 38.0,
+        "macro_vts_ratio": 1.12,
+    }
+    with ExitStack() as stack:
+        for p in _overview_patches(kv, _FRESH_OVERVIEW_AGES, {}):
+            stack.enter_context(p)
+        mock_macro = stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={},
+            )
+        )
+        overview = await get_macro_overview_data(123458)
+
+    mock_macro.assert_not_awaited()  # 合法值，不需自癒
+    assert overview["spy_gamma_flip"] == 690.0
+    assert overview["gamma_flip_line"] is not None
+    assert overview["short_gamma_critical"] is True
 
 
 def test_safety_payout_threshold_rrp_material_balance() -> None:
     """測試 RRP 極低水位 (<$20B) 下，小基數除零引起的巨幅百分比變動不誤觸 $18,000。"""
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
-    with patch("database.get_kv_cache") as mock_kv:
+    with (
+        patch("database.get_kv_cache") as mock_kv,
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+    ):
         # Case 1: RRP = 1.0B (極低水位), 30d 變動 = +402.0% -> 不觸發 $18,000，回歸基準 $13,000
         mock_kv.side_effect = lambda key: {
             "macro_rrp": 1.0,
             "macro_rrp_change_30d": 402.0,
-            "macro_rrp_spike": False,
         }.get(key)
         assert get_safety_payout_threshold() == 13000.0
 
@@ -2618,16 +2733,18 @@ def test_safety_payout_threshold_rrp_material_balance() -> None:
         mock_kv.side_effect = lambda key: {
             "macro_rrp": 50.0,
             "macro_rrp_change_30d": 25.0,
-            "macro_rrp_spike": False,
         }.get(key)
         assert get_safety_payout_threshold() == 18000.0
 
-        # Case 3: RRP = 1.0B, 但 rrp_spike = True (系統突波標記) -> 依然觸發最高戒備 $18,000
+        # Case 3: RRP 剛好 $20B 視為實質規模
         mock_kv.side_effect = lambda key: {
-            "macro_rrp": 1.0,
-            "macro_rrp_change_30d": 5.0,
-            "macro_rrp_spike": True,
+            "macro_rrp": 20.0,
+            "macro_rrp_change_30d": 25.0,
         }.get(key)
+        assert get_safety_payout_threshold() == 18000.0
+
+        # Case 4: RRP 餘額未知 -> 保守視為實質規模，不因缺值放寬紅線
+        mock_kv.side_effect = lambda key: {"macro_rrp_change_30d": 25.0}.get(key)
         assert get_safety_payout_threshold() == 18000.0
 
 
@@ -2672,82 +2789,127 @@ def test_market_embed_escape_window_ansi_coloring() -> None:
 
 @pytest.mark.asyncio
 async def test_macro_gamma_flip_outlier_raw_flip_triggers_symbol_fallback() -> None:
-    """測試當 macro GEX 回傳離群雜訊（Flip = 948.9，偏離現貨 >8%），get_macro_overview_data
+    """測試當 macro GEX 回傳離群雜訊（Flip = 948.9，高於現貨 22%），get_macro_overview_data
     能自動辨識 raw_flip 異常、觸發 SPY 個股期權鏈即時備援並成功自癒（回傳有效值 777.0）。"""
+    from contextlib import ExitStack
+
     from cogs.unified_terminal.utils import get_macro_overview_data
 
-    kv_data: dict[str, Any] = {
+    kv = {
+        **_OUTLIER_OVERVIEW_KV,
+        "macro_spx": 7750.0,
         "macro_spy_spot": 775.0,
         "macro_spy_gamma_flip": None,
         "macro_gamma_flip_line": None,
-        "macro_gex_is_fallback": 0,
-        "macro_vts_ratio": 0.85,
     }
-    ages_data: dict[str, float] = {
-        "macro_spy_spot": 10.0,
-        "macro_vts_ratio": 10.0,
-    }
-    # macro GEX 回傳偏離現貨 >8% 的雜訊
-    mock_outlier_macro_gex = {
-        "spy_spot": 775.0,
-        "gamma_flip": 948.9,
-    }
+    # macro GEX 回傳偏離現貨超出合理區間的雜訊
+    mock_outlier_macro_gex = {"spy_spot": 775.0, "gamma_flip": 948.9}
     # SPY 個股期權鏈回傳正常結構 (SHORT_GAMMA, total_gex < 0, 翻轉線在 777.0)
     mock_spy_gex = {
         "spot": 775.0,
-        "gex_profile": {
-            "770.0": -200.0,
-            "777.0": 50.0,
-        },
+        "gex_profile": {"770.0": -200.0, "777.0": 50.0},
     }
-    with (
-        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
-        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
-        patch("database.get_kv_cache", side_effect=lambda k: kv_data.get(k)),
-        patch(
-            "database.cache.get_kv_cache_many",
-            side_effect=lambda keys: {
-                k: (kv_data.get(k), ages_data.get(k, 10.0)) for k in keys
-            },
-        ),
-        patch(
-            "market_analysis.index_microstructure.fetch_core_macro_metrics",
-            new_callable=AsyncMock,
-            return_value={},
-        ),
-        patch(
-            "market_analysis.index_microstructure.fetch_gex_metrics",
-            new_callable=AsyncMock,
-            return_value=mock_outlier_macro_gex,
-        ),
-        patch(
-            "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
-            new_callable=AsyncMock,
-            return_value=mock_spy_gex,
-        ),
-        patch(
-            "services.market_data_service.get_quote",
-            new_callable=AsyncMock,
-            return_value={"price": 7750.0},
-        ),
-    ):
-        overview = await get_macro_overview_data(123456)
-        # 成功避開 948.9 雜訊，自癒回傳 SPY Flip 777.0
-        assert overview["spy_gamma_flip"] == 777.0
-        assert overview["gamma_flip_line"] is not None
-        assert 7700.0 <= overview["gamma_flip_line"] <= 7800.0
+    with ExitStack() as stack:
+        for p in _overview_patches(kv, {"macro_vts_ratio": 10.0}, {}):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value=mock_outlier_macro_gex,
+            )
+        )
+        mock_symbol = stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+                new_callable=AsyncMock,
+                return_value=mock_spy_gex,
+            )
+        )
+        overview = await get_macro_overview_data(123459)
+
+    mock_symbol.assert_awaited_once()
+    # 成功避開 948.9 雜訊，自癒回傳 SPY Flip 777.0
+    assert overview["spy_gamma_flip"] == 777.0
+    assert overview["gamma_flip_line"] is not None
+    assert 7700.0 <= overview["gamma_flip_line"] <= 7800.0
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_heal_ignores_fallback_flagged_payload() -> None:
+    """自癒時大盤 GEX 帶 is_fallback 旗標（不比對 510/515 魔術數字）即改走 SPY
+    個股估算；SPY 真的在 515 附近時，合法的 Flip 515 不會被誤丟。"""
+    from contextlib import ExitStack
+
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    kv = {
+        **_OUTLIER_OVERVIEW_KV,
+        "macro_spx": 5100.0,
+        "macro_spy_spot": 510.0,
+        "macro_spy_gamma_flip": None,
+        "macro_gamma_flip_line": None,
+    }
+    with ExitStack() as stack:
+        for p in _overview_patches(kv, {"macro_vts_ratio": 10.0}, {}):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={"spy_spot": 510.0, "gamma_flip": 515.0},
+            )
+        )
+        mock_symbol = stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+                new_callable=AsyncMock,
+            )
+        )
+        overview = await get_macro_overview_data(123460)
+
+    mock_symbol.assert_not_awaited()
+    assert overview["spy_gamma_flip"] == 515.0
+
+    with ExitStack() as stack:
+        for p in _overview_patches(kv, {"macro_vts_ratio": 10.0}, {}):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={
+                    "spy_spot": 510.0,
+                    "gamma_flip": 515.0,
+                    "is_fallback": True,
+                },
+            )
+        )
+        mock_symbol = stack.enter_context(
+            patch(
+                "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+                new_callable=AsyncMock,
+                return_value={"spot": 0.0, "gex_profile": {}},
+            )
+        )
+        overview = await get_macro_overview_data(123461)
+
+    mock_symbol.assert_awaited_once()
+    assert overview["spy_gamma_flip"] is None
 
 
 def test_safety_payout_threshold_rrp_string_type_safety() -> None:
     """測試 RRP 變動率為字串型態 (如 '402.0' 或 '0') 及 spike 為字串時不會拋出 TypeError。"""
     from market_analysis.trading_orchestration import get_safety_payout_threshold
 
-    with patch("database.get_kv_cache") as mock_kv:
+    with (
+        patch("database.get_kv_cache") as mock_kv,
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+    ):
         # 字串型態 402.0，RRP 餘額 1.0 (極低水位) -> 不誤觸 $18,000
         mock_kv.side_effect = lambda key: {
             "macro_rrp": "1.0",
             "macro_rrp_change_30d": "402.0",
-            "macro_rrp_spike": "false",
         }.get(key)
         assert get_safety_payout_threshold() == 13000.0
 
@@ -2755,35 +2917,78 @@ def test_safety_payout_threshold_rrp_string_type_safety() -> None:
         mock_kv.side_effect = lambda key: {
             "macro_rrp": "50.0",
             "macro_rrp_change_30d": "25.0",
-            "macro_rrp_spike": "false",
         }.get(key)
         assert get_safety_payout_threshold() == 18000.0
 
+        # 無法解析的字串視為 0%，不拋例外
+        mock_kv.side_effect = lambda key: {
+            "macro_rrp": "abc",
+            "macro_rrp_change_30d": "n/a",
+        }.get(key)
+        assert get_safety_payout_threshold() == 13000.0
 
-def test_market_embed_escape_window_ansi_unknown_yellow() -> None:
-    """測試 build_market_macro_overview_embed 對未知/資料不足窗口狀態渲染黃色 ANSI。"""
+
+@pytest.mark.parametrize(
+    ("kwargs", "ansi"),
+    [
+        # 中性平衡 -> evaluate_escape_window_regime 實際輸出「🟢 正常窗口 (...)」-> 綠色
+        (
+            {"prob": 0.55, "cpi_dev": 0.0, "wti": 75.0, "vts_ratio": 0.95},
+            "\u001b[1;32m",
+        ),
+        # 前移 -> 紅色
+        (
+            {
+                "prob": 0.90,
+                "cpi_dev": 0.4,
+                "wti": 75.0,
+                "vts_ratio": 0.85,
+                "is_negative_gamma": False,
+            },
+            "\u001b[1;31m",
+        ),
+        # 後推 -> 綠色
+        (
+            {
+                "prob": 0.30,
+                "cpi_dev": -0.1,
+                "wti": 70.0,
+                "vts_ratio": 0.85,
+                "is_negative_gamma": False,
+            },
+            "\u001b[1;32m",
+        ),
+    ],
+)
+def test_market_embed_escape_window_ansi_uses_real_regime_output(
+    kwargs: dict[str, Any], ansi: str
+) -> None:
+    """面板著色以 evaluate_escape_window_regime 的實際輸出為準（該函式不會產生
+    「未知／中性／資料不足」字樣，原黃色分支為死碼已刪除）。"""
     from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
 
-    macro_data_unknown: dict[str, Any] = {
-        "spx": 7800.0,
-        "vix": 16.0,
-        "us10y": 4.5,
-        "gamma_flip_line": 7750.0,
-        "escape_win_status": "⚪ 未知 (資料不足)",
-        "payout_threshold": 13000.0,
-    }
-    embed_unknown = build_market_macro_overview_embed(macro_data_unknown)
-    risk_field = next(
-        str(f.value)
-        for f in embed_unknown.fields
-        if f.name and "聯動風控引擎狀態" in f.name
+    *_, status = evaluate_escape_window_regime(**kwargs)
+    assert not any(word in status for word in ("未知", "中性", "不足"))
+    embed = build_market_macro_overview_embed(
+        {
+            "spx": 7800.0,
+            "vix": 16.0,
+            "us10y": 4.5,
+            "gamma_flip_line": 7750.0,
+            "escape_win_status": status,
+            "payout_threshold": 13000.0,
+        }
     )
-    assert "\u001b[1;33m⚪ 未知 (資料不足)\u001b[0m" in risk_field
+    risk_field = next(
+        str(f.value) for f in embed.fields if f.name and "聯動風控引擎狀態" in f.name
+    )
+    assert f"{ansi}{status}\u001b[0m" in risk_field
 
 
 @pytest.mark.asyncio
 async def test_fetch_gex_metrics_outlier_rejected_from_cache() -> None:
-    """測試 fetch_gex_metrics 收到爬蟲回傳偏離現貨 >8% 的異常 Flip 時拒絕寫入快取。"""
+    """測試 fetch_gex_metrics 收到爬蟲回傳超出合理區間（高於現價 >20%）的異常 Flip 時拒絕寫入快取。"""
     from unittest.mock import MagicMock
     from market_analysis.index_microstructure import fetch_gex_metrics
 
@@ -2793,7 +2998,7 @@ async def test_fetch_gex_metrics_outlier_rejected_from_cache() -> None:
         "status": "success",
         "data": {
             "spy_spot": 774.8,
-            "gamma_flip": 948.9,  # 偏離 22.5% > 8%
+            "gamma_flip": 948.9,  # 高於現價 22.5% > 20%
             "put_wall": 700.0,
         },
     }
@@ -2821,3 +3026,229 @@ async def test_fetch_gex_metrics_outlier_rejected_from_cache() -> None:
         assert "macro_spy_gamma_flip" not in saved_keys
         # 且 macro_gex_is_fallback 應被標記為 1
         assert saved_keys.get("macro_gex_is_fallback") == 1
+
+
+# ---------------------------------------------------------------------------
+# 大盤 Gamma Flip 非對稱合理性閘門（is_macro_gamma_flip_outlier）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("flip", "spot", "expected"),
+    [
+        (690.0, 616.0, False),  # 急跌 12%：Flip 高於現價 12%（short gamma）-> 合法
+        (739.0, 616.0, False),  # +19.97%（edge 搜尋上限內）-> 合法
+        (740.0, 616.0, True),  # 超過 +20% -> 離群
+        (948.9, 774.8, True),  # +22.5% -> 離群
+        (713.0, 775.0, False),  # -8.0% -> 合法
+        (705.0, 775.0, True),  # -9.0% -> 離群（long gamma 方向維持較嚴門檻）
+        (None, 775.0, False),  # 缺值不等於離群
+        (0.0, 775.0, False),
+        (780.0, None, False),
+        (780.0, 0.0, False),
+        ("abc", 775.0, False),
+        (True, 775.0, False),
+    ],
+)
+def test_is_macro_gamma_flip_outlier_asymmetric(
+    flip: Any, spot: Any, expected: bool
+) -> None:
+    from market_analysis.index_microstructure import is_macro_gamma_flip_outlier
+
+    assert is_macro_gamma_flip_outlier(flip, spot) is expected
+
+
+def test_macro_gamma_flip_bounds_match_edge_search_range() -> None:
+    """上方容許上限須與 edge find_gamma_flip() 的搜尋區間（spot × 1.2）一致。"""
+    from market_analysis.index_microstructure import (
+        MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT,
+        MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT,
+    )
+
+    assert MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT == 0.20
+    assert MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT == 0.08
+
+
+def test_estimate_macro_spy_gamma_flip_asymmetric_bracket() -> None:
+    """SPY 備援估算：SHORT_GAMMA 崩跌時 +12% 的交叉必須保留；+25% 與 -10% 剔除。"""
+    from market_analysis.index_microstructure import estimate_macro_spy_gamma_flip
+
+    spot = 616.0
+    crash_profile = {"600.0": -500.0, "680.0": -100.0, "690.0": 50.0}  # total < 0
+    assert estimate_macro_spy_gamma_flip(crash_profile, spot) == 690.0
+    # 舊的對稱 ±8% bracket 會把同一個合法交叉丟掉
+    assert estimate_symbol_gamma_flip(crash_profile, spot, bracket_pct=0.08) == 0.0
+
+    far_profile = {"600.0": -500.0, "760.0": -100.0, "770.0": 50.0}  # +25%
+    assert estimate_macro_spy_gamma_flip(far_profile, spot) == 0.0
+
+    # LONG_GAMMA：交叉在 -10%（554.4）-> 低於下方 8% 上限，剔除
+    long_profile = {"550.0": -10.0, "554.4": 30.0, "620.0": 500.0}
+    assert estimate_macro_spy_gamma_flip(long_profile, spot) == 0.0
+
+
+def _mock_edge_client(payload: dict[str, Any]) -> Any:
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"status": "success", "data": payload}
+    mock_client = MagicMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_accepts_crash_flip_far_above_spot() -> None:
+    """SPY 急跌 12% 時 edge 回傳的 Flip（高於現價 12%）是合法 short gamma 訊號，
+    必須寫入快取並清除 fallback 旗標，不得被當成雜訊丟棄。"""
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    saved: dict[str, Any] = {}
+
+    async def mock_save(key: str, val: Any) -> bool:
+        saved[key] = val
+        return True
+
+    payload = {"spy_spot": 616.0, "gamma_flip": 690.0, "put_wall": 600.0}
+    with (
+        patch("config.TUNNEL_URL", "https://mock-tunnel.test"),
+        patch("httpx.AsyncClient", return_value=_mock_edge_client(payload)),
+        patch("database.cache.save_kv_cache", side_effect=mock_save),
+        patch("database.cache.get_kv_cache", return_value=None),
+    ):
+        res = await fetch_gex_metrics(allow_empty=True)
+
+    assert res["gamma_flip"] == 690.0
+    assert saved["macro_spy_gamma_flip"] == 690.0
+    assert saved["macro_gamma_flip_line"] == 6900.0
+    assert saved["macro_gex_is_fallback"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flip_payload", [{}, {"gamma_flip": 0.0}, {"gamma_flip": None}]
+)
+async def test_fetch_gex_metrics_missing_or_zero_flip_is_fallback(
+    flip_payload: dict[str, Any],
+) -> None:
+    """edge 缺 gamma_flip 或 ≤ 0（搜尋區間內無交叉）時視為備援：不寫入預設值
+    515.0 或 0.0，且 macro_gex_is_fallback 標記為 1。"""
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    saved: dict[str, Any] = {}
+
+    async def mock_save(key: str, val: Any) -> bool:
+        saved[key] = val
+        return True
+
+    payload = {"spy_spot": 700.0, "put_wall": 680.0, **flip_payload}
+    with (
+        patch("config.TUNNEL_URL", "https://mock-tunnel.test"),
+        patch("httpx.AsyncClient", return_value=_mock_edge_client(payload)),
+        patch("database.cache.save_kv_cache", side_effect=mock_save),
+        patch("database.cache.get_kv_cache", return_value=None),
+    ):
+        res = await fetch_gex_metrics(allow_empty=True)
+
+    assert res == {}
+    assert "macro_spy_gamma_flip" not in saved
+    assert "macro_gamma_flip_line" not in saved
+    assert saved.get("macro_gex_is_fallback") == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_gex_metrics_last_known_good_rejects_cached_outlier() -> None:
+    """last-known-good 快取裡的離群 Flip（修正前寫入）不得再被回傳。"""
+    import httpx
+
+    from market_analysis.index_microstructure import fetch_gex_metrics
+
+    cached_outlier = {
+        "data": {"spy_spot": 774.8, "gamma_flip": 948.9, "put_wall": 700.0},
+        "timestamp": 1234567890.0,
+    }
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("timeout"))
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with (
+        patch("database.cache.get_kv_cache", return_value=cached_outlier),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient", return_value=mock_client),
+    ):
+        assert await fetch_gex_metrics(allow_empty=True) == {}
+
+
+@pytest.mark.asyncio
+async def test_get_market_regime_treats_outlier_flip_as_unknown() -> None:
+    """get_market_regime：Flip 相對即時 SPY 離群時視為未知，不可據以判成危機。"""
+    with (
+        patch("services.market_data_service.get_vix_spot_strict") as mock_vix,
+        patch("services.market_data_service.get_vix_term_structure") as mock_vts,
+        patch("services.market_data_service.get_quote") as mock_quote,
+        patch("market_analysis.index_microstructure.fetch_gex_metrics") as mock_gex,
+        patch(
+            "market_analysis.index_microstructure.fetch_liquidity_metrics",
+            new_callable=AsyncMock,
+            return_value={"ted_spread": 0.2},
+        ),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+    ):
+        mock_vix.return_value = 30.0
+        mock_vts.return_value = {"vts_ratio": 1.1, "is_valid": True}
+        mock_quote.return_value = {"c": 774.8}
+        mock_gex.return_value = {"spy_spot": 774.8, "gamma_flip": 948.9}
+        assert await get_market_regime() == "UNKNOWN"
+
+    invalidate_market_regime_cache()
+    with (
+        patch("services.market_data_service.get_vix_spot_strict") as mock_vix,
+        patch("services.market_data_service.get_vix_term_structure") as mock_vts,
+        patch("services.market_data_service.get_quote") as mock_quote,
+        patch("market_analysis.index_microstructure.fetch_gex_metrics") as mock_gex,
+        patch(
+            "market_analysis.index_microstructure.fetch_liquidity_metrics",
+            new_callable=AsyncMock,
+            return_value={"ted_spread": 0.2},
+        ),
+        patch("config.TUNNEL_URL", "http://mock-tunnel"),
+    ):
+        # 急跌 12%：Flip 高於現價 12% 為合法值，危機必須成立
+        mock_vix.return_value = 38.0
+        mock_vts.return_value = {"vts_ratio": 1.12, "is_valid": True}
+        mock_quote.return_value = {"c": 616.0}
+        mock_gex.return_value = {"spy_spot": 616.0, "gamma_flip": 690.0}
+        assert await get_market_regime() == "SHORT_GAMMA_CRITICAL"
+
+
+def test_escape_window_attribution_matches_scoring_thresholds() -> None:
+    """歸因門檻與計分一致：cpi_dev 0.2（> 0.1）會計分，也必須出現在歸因。"""
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    t_score, _, direction, _, _, status = evaluate_escape_window_regime(
+        prob=0.90, cpi_dev=0.2, wti=75.0, vts_ratio=0.85, is_negative_gamma=False
+    )
+    assert t_score == 2
+    assert direction == "前移"
+    assert "(高利率+通膨升溫)" in status
+
+
+def test_escape_window_attribution_lists_all_factors_when_t_ge_3() -> None:
+    """T ≥ 3 時列出全部觸發因子；CPI 與 WTI 同屬因子 2，合併為一個標籤。"""
+    from market_analysis.index_microstructure import evaluate_escape_window_regime
+
+    t_score, _, _, shift, _, status = evaluate_escape_window_regime(
+        prob=0.90, cpi_dev=0.4, wti=95.0, vts_ratio=1.1, is_negative_gamma=True
+    )
+    assert t_score == 4
+    assert shift == 8
+    assert "(高利率+通膨油價雙升+波動倒掛+結構承壓)" in status
+
+    t_score, _, _, _, _, status = evaluate_escape_window_regime(
+        prob=0.55, cpi_dev=0.0, wti=95.0, vts_ratio=1.1, is_negative_gamma=True
+    )
+    assert t_score == 3
+    assert "(高油價+波動倒掛+結構承壓)" in status

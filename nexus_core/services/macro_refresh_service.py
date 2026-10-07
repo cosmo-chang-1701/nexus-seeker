@@ -113,7 +113,7 @@ async def _fetch_spy_live_gex_fallback() -> dict[str, float] | None:
     """
     from database.cache import save_kv_cache_many
     from market_analysis.index_microstructure import (
-        estimate_symbol_gamma_flip,
+        estimate_macro_spy_gamma_flip,
         fetch_symbol_gex_metrics,
     )
 
@@ -135,7 +135,7 @@ async def _fetch_spy_live_gex_fallback() -> dict[str, float] | None:
     if spot <= 0:
         return None
     gex_profile = spy_gex.get("gex_profile") or {}
-    flip = estimate_symbol_gamma_flip(gex_profile, spot, bracket_pct=0.08)
+    flip = estimate_macro_spy_gamma_flip(gex_profile, spot)
     if flip <= 0:
         return None
 
@@ -166,6 +166,7 @@ async def _refresh_gex_and_liquidity(result: MacroRefreshResult) -> None:
             fetch_gex_metrics,
             fetch_liquidity_metrics,
             invalidate_market_regime_cache,
+            is_macro_gamma_flip_outlier,
         )
 
         results: list[Any] = list(
@@ -189,20 +190,17 @@ async def _refresh_gex_and_liquidity(result: MacroRefreshResult) -> None:
             logger.warning(f"強制刷新大盤 GEX 抓取失敗: {gex_res}")
 
         # last-known-good 快取超過 MACRO_GEX_STALE_MAX_AGE_SECONDS 已不可信
-        # （OI 結構已換手），或 GEX Flip 偏離現貨 >8%（異常合約雜訊），同樣改走 SPY
-        # 即時估算；估算也失敗時如實回報失敗，不可把數週前的 Flip 或雜訊當成「更新成功」。
+        # （OI 結構已換手），或 GEX Flip 相對現貨離群（is_macro_gamma_flip_outlier，
+        # 異常合約雜訊），同樣改走 SPY 即時估算；估算也失敗時如實回報失敗，不可把
+        # 數週前的 Flip 或雜訊當成「更新成功」。
         expired_age = _expired_stale_cache_age(gex_data)
         spot_check = _positive_float(gex_data.get("spy_spot"))
         flip_check = _positive_float(gex_data.get("gamma_flip"))
-        flip_is_outlier = (
-            spot_check > 0
-            and flip_check > 0
-            and (abs(flip_check - spot_check) / spot_check > 0.08)
-        )
+        flip_is_outlier = is_macro_gamma_flip_outlier(flip_check, spot_check)
         if spot_check <= 0 or expired_age is not None or flip_is_outlier:
             if flip_is_outlier:
                 logger.warning(
-                    f"大盤 GEX Flip ({flip_check}) 偏離現貨 ({spot_check}) 超過 8%，"
+                    f"大盤 GEX Flip ({flip_check}) 偏離現貨 ({spot_check}) 超出合理區間，"
                     "判定為異常合約雜訊，改走 SPY 即時個股期權估算"
                 )
             live_gex = await _fetch_spy_live_gex_fallback()

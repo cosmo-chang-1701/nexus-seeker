@@ -1,6 +1,16 @@
 #!/usr/bin/env python3
 """audit_macro_market_live.py — 即時執行 /force_macro_update 與 /market 並執行 7 大校驗電池。
 
+⚠️ 本腳本會**寫入**資料庫：/force_macro_update 與 refresh_macro_data 會覆寫
+kv_cache 的 macro_* 鍵與總經日曆。因此預設拒絕執行，必須擇一：
+- `--db <副本路徑>`：對資料庫副本執行（副本不可與 config 指向的正式 DB 相同）；
+- `--allow-live-writes`：明確同意對 config 指向的正式 DB 寫入。
+
+範例（在 nexus_core 目錄下）：
+    cp data/nexus_data.db /tmp/audit_copy.db
+    docker compose run --rm nexus-seeker python scripts/audit_macro_market_live.py \
+        --db /tmp/audit_copy.db
+
 本腳本於 Docker 容器環境內執行，完整走訪：
 1. Pre-run: 快照 SQLite kv_cache 與 economic_calendar_events 狀態。
 2. Phase 1A: 執行 Discord 管理員指令 /force_macro_update 路徑 (AdminCommandsCog)。
@@ -14,6 +24,7 @@
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -43,6 +54,8 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("audit_macro_market_live")
+
+_AUDIT_OVERVIEW_USER_ID = 0
 
 
 @dataclass
@@ -84,6 +97,33 @@ def _read_calendar_events_count() -> int:
         conn.close()
 
 
+def _resolve_target_db(db: str | None, allow_live_writes: bool) -> str:
+    """決定本次稽查要寫入的 DB 路徑；不符合安全條件時以 SystemExit 拒絕。
+
+    - 指定 `--db`：必須是已存在的檔案，且不可與 config 指向的正式 DB 相同
+      （除非同時給 `--allow-live-writes`）。
+    - 未指定 `--db`：必須給 `--allow-live-writes` 才會對正式 DB 執行寫入路徑。
+    """
+    live_db = os.path.realpath(str(config.DB_NAME))
+    if db is None:
+        if not allow_live_writes:
+            raise SystemExit(
+                "拒絕執行：本稽查會覆寫 kv_cache 的 macro_* 鍵與總經日曆。"
+                "請以 --db <副本路徑> 指定資料庫副本，或明確加上 --allow-live-writes "
+                f"同意寫入正式 DB（{live_db}）。"
+            )
+        return live_db
+    target = os.path.realpath(db)
+    if not os.path.isfile(target):
+        raise SystemExit(f"拒絕執行：--db 指定的檔案不存在：{target}")
+    if target == live_db and not allow_live_writes:
+        raise SystemExit(
+            f"拒絕執行：--db 指向 config 的正式 DB（{live_db}）。請改用副本，"
+            "或明確加上 --allow-live-writes。"
+        )
+    return target
+
+
 def _make_mock_interaction(admin_id: int) -> MagicMock:
     interaction = MagicMock(spec=discord.Interaction)
     interaction.user = MagicMock()
@@ -97,7 +137,7 @@ def _make_mock_interaction(admin_id: int) -> MagicMock:
     return interaction
 
 
-async def run_audit() -> dict[str, Any]:
+async def run_audit(target_db: str) -> dict[str, Any]:
     logger.info("=================================================================")
     logger.info("🌌 開始執行 Nexus Seeker 宏觀數據強制更新與市場面板深度審計")
     logger.info("=================================================================")
@@ -107,9 +147,20 @@ async def run_audit() -> dict[str, Any]:
         DatabaseWriteQueue.initialize(loop)
         logger.info("✅ DatabaseWriteQueue 已初始化")
 
+    try:
+        return await _run_audit_phases(target_db)
+    finally:
+        # 任何階段拋錯都必須停止寫入 worker，避免殘留執行緒與未刷出的寫入
+        if DatabaseWriteQueue.is_active():
+            await DatabaseWriteQueue.stop_worker()
+            logger.info("✅ DatabaseWriteQueue 已安全停止")
+
+
+async def _run_audit_phases(target_db: str) -> dict[str, Any]:
+    # 報告不記錄管理員 Discord ID（報告檔可能被分享）
     audit_summary: dict[str, Any] = {
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
-        "admin_user_id": config.DISCORD_ADMIN_USER_ID,
+        "target_db": target_db,
         "pre_snapshot": {},
         "post_snapshot": {},
         "discord_force_update": {},
@@ -123,8 +174,9 @@ async def run_audit() -> dict[str, Any]:
     # Phase 0: Pre-run DB 快照
     # -------------------------------------------------------------
     logger.info("\n--- Phase 0: 讀取 Pre-run DB 快照 ---")
-    pre_kv = _read_macro_kv_snapshot()
-    pre_cal_count = _read_calendar_events_count()
+    # 同步 SQLite 讀取不可在 event loop 執行緒上執行
+    pre_kv = await asyncio.to_thread(_read_macro_kv_snapshot)
+    pre_cal_count = await asyncio.to_thread(_read_calendar_events_count)
     audit_summary["pre_snapshot"] = {
         "kv_count": len(pre_kv),
         "keys": pre_kv,
@@ -193,8 +245,8 @@ async def run_audit() -> dict[str, Any]:
     # Post-update: 檢查 DB 異動
     # -------------------------------------------------------------
     logger.info("\n--- 檢查 DB 快照異動 ---")
-    post_kv = _read_macro_kv_snapshot()
-    post_cal_count = _read_calendar_events_count()
+    post_kv = await asyncio.to_thread(_read_macro_kv_snapshot)
+    post_cal_count = await asyncio.to_thread(_read_calendar_events_count)
 
     kv_mutations: dict[str, dict[str, Any]] = {}
     for k, post_info in post_kv.items():
@@ -231,9 +283,8 @@ async def run_audit() -> dict[str, Any]:
     # -------------------------------------------------------------
     logger.info("\n--- Phase 2: 執行 /market 資料管線 (get_macro_overview_data) ---")
     t0_market = time.monotonic()
-    macro_data: dict[str, Any] = await get_macro_overview_data(
-        config.DISCORD_ADMIN_USER_ID
-    )
+    # user_id 只用於記憶體快取鍵，以固定值取代管理員 ID
+    macro_data: dict[str, Any] = await get_macro_overview_data(_AUDIT_OVERVIEW_USER_ID)
     t_market_elapsed = time.monotonic() - t0_market
 
     audit_summary["macro_overview_data"] = macro_data
@@ -550,19 +601,36 @@ async def run_audit() -> dict[str, Any]:
             f" (sahm={sahm_rule}, us10y={us10y}, vix={vix})"
         )
 
-    # 驗證 short_gamma_critical 邏輯
-    # SPY vs SPY Flip
-    vts_val = cli_result.vts_ratio
+    # 驗證 short_gamma_critical 邏輯：VTS 與 Gamma 判定須與面板同源
+    # （面板讀 kv macro_vts_ratio 並套用時效閘門，不是 CLI 刷新的回傳值；
+    # 兩者時點不同會造成假 FAIL）。
+    vts_raw = macro_data.get("vts_ratio")
+    vts_val = float(vts_raw) if vts_raw is not None else None
+    vix_val_safe = float(vix) if vix is not None else 18.0
     is_backwardation = (
         (vts_val >= 1.0)
         if (vts_val is not None and vts_val > 0.0)
-        else (vix is not None and float(vix) > 25.0)
+        else (vix_val_safe > 25.0)
     )
-    is_neg_gamma = (
-        float(spy) < float(spy_gamma_flip)
-        if (spy is not None and spy_gamma_flip is not None and not gex_expired)
-        else None
-    )
+    is_neg_gamma: bool | None
+    if gex_expired:
+        is_neg_gamma = None
+    elif (
+        spy is not None
+        and spy_gamma_flip is not None
+        and float(spy) > 0.0
+        and float(spy_gamma_flip) > 0.0
+    ):
+        is_neg_gamma = float(spy) < float(spy_gamma_flip)
+    elif (
+        spx is not None
+        and gamma_flip_line is not None
+        and float(spx) > 0.0
+        and float(gamma_flip_line) > 0.0
+    ):
+        is_neg_gamma = float(spx) < float(gamma_flip_line)
+    else:
+        is_neg_gamma = None
     expected_short_gamma = (
         is_neg_gamma is True
         and (vix is not None and float(vix) > 20.0)
@@ -584,6 +652,8 @@ async def run_audit() -> dict[str, Any]:
         details={
             "short_gamma_critical": short_gamma_critical,
             "expected_short_gamma": expected_short_gamma,
+            "vts_ratio": vts_val,
+            "is_backwardation": is_backwardation,
             "recession_warning": recession_warning,
             "expected_recession": expected_recession,
             "escape_win_status": escape_win_status,
@@ -658,20 +728,44 @@ async def run_audit() -> dict[str, Any]:
             all_passed = False
 
     audit_summary["all_batteries_passed"] = all_passed
-
-    # 停止 worker
-    await DatabaseWriteQueue.stop_worker()
-    logger.info("✅ DatabaseWriteQueue 已安全停止")
-
     return audit_summary
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="即時執行 /force_macro_update 與 /market 並執行 7 大校驗電池（會寫入 DB）"
+    )
+    parser.add_argument(
+        "--db",
+        default=None,
+        help="資料庫副本路徑（建議）；不可與 config 指向的正式 DB 相同",
+    )
+    parser.add_argument(
+        "--allow-live-writes",
+        action="store_true",
+        help="明確同意對 config 指向的正式 DB 寫入 macro_* 快取與總經日曆",
+    )
+    parser.add_argument(
+        "--output",
+        default="data/audit_macro_market_live_report.json",
+        help="報告輸出路徑",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    result = asyncio.run(run_audit())
-    output_path = "data/audit_macro_market_live_report.json"
+    args = _parse_args()
+    target_db = _resolve_target_db(args.db, args.allow_live_writes)
+    # connect_db() 於每次呼叫時讀取 config.DB_NAME，在任何 DB 存取前改指向目標
+    config.DB_NAME = target_db
+    os.environ["NEXUS_DB_NAME"] = target_db
+    logger.info(f"稽查目標資料庫: {target_db}")
+
+    result = asyncio.run(run_audit(target_db))
+    output_path = args.output
     try:
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
         logger.info(f"\n完整審計結果已輸出至: {output_path}")
     except Exception as e:
         logger.warning(
@@ -679,7 +773,7 @@ if __name__ == "__main__":
         )
         output_path = "/tmp/audit_macro_market_live_report.json"
         with open(output_path, "w", encoding="utf-8") as f:
-            json.dump(result, f, ensure_ascii=False, indent=2)
+            json.dump(result, f, ensure_ascii=False, indent=2, default=str)
         logger.info(f"\n完整審計結果已輸出至: {output_path}")
     if not result.get("all_batteries_passed"):
         logger.error("❌ 部分校驗電池未通過！")

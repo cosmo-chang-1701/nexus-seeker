@@ -5820,3 +5820,27 @@ async def test_symbol_deep_dive_sets_psq_data_time(bar_is_today: bool) -> None:
     assert result["psq_bar_date"] == last_day
     assert result["psq_bar_is_live"] is bar_is_today
     assert result["psq_fetched_at"] == fetched_at
+
+
+def test_build_radar_scan_embed_filters_outlier_cached_gex_flip() -> None:
+    """交易員終端 header：KV 內相對 SPY 現價離群的 GEX Flip（修正前寫入）不顯示
+    數值，與 /market 面板同一合理性閘門；合法的崩跌 Flip（高於現價 12%）照常顯示。"""
+    scan_results = [
+        {
+            "symbol": "SPY",
+            "quote": {"c": 500.0, "dp": 0.5},
+            "iv_metrics": {"iv_rank": 20.0, "expected_move_weekly": 5.0},
+            "max_pain": {"max_pain": 500.0},
+        }
+    ]
+    outlier_kv = {"macro_spy_gamma_flip": "948.90", "macro_spy_spot": 774.8}
+    with patch("database.cache.get_kv_cache", side_effect=outlier_kv.get):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
+    assert "948.90" not in text
+    assert "快取數值離群，已濾除" in text
+
+    crash_kv = {"macro_spy_gamma_flip": "690.00", "macro_spy_spot": 616.0}
+    with patch("database.cache.get_kv_cache", side_effect=crash_kv.get):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
+    assert "690.00" in text
+    assert "已濾除" not in text

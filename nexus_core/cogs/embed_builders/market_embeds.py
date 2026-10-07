@@ -487,11 +487,16 @@ def build_radar_scan_embed(
             from database.cache import get_kv_cache, get_kv_cache_with_age
             from market_analysis.index_microstructure import (
                 MACRO_GEX_STALE_MAX_AGE_SECONDS,
+                is_macro_gamma_flip_outlier,
             )
 
             gex_flip = get_kv_cache("macro_spy_gamma_flip")
             _, gex_flip_age = get_kv_cache_with_age("macro_spy_gamma_flip")
             ted_spread = get_kv_cache("macro_ted_spread")
+            # 修正前寫入的離群 Flip 不顯示（與 /market 面板同一合理性閘門）
+            gex_flip_is_outlier = gex_flip is not None and is_macro_gamma_flip_outlier(
+                gex_flip, get_kv_cache("macro_spy_spot")
+            )
 
             if gex_flip is not None or ted_spread is not None:
                 gex_val = None
@@ -503,7 +508,12 @@ def build_radar_scan_embed(
                     except (ValueError, TypeError):
                         gex_val = None
 
-                if gex_val is not None and gex_val > 0:
+                if gex_flip_is_outlier:
+                    gex_str = (
+                        "SPY 零 Gamma 線 (GEX Flip): "
+                        "\u001b[1;33m快取數值離群，已濾除\u001b[0m"
+                    )
+                elif gex_val is not None and gex_val > 0:
                     gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_val:.2f}\u001b[0m"
                     if (
                         gex_flip_age is not None
@@ -1905,8 +1915,6 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         escape_win_display = f"\u001b[1;31m{escape_str}\u001b[0m"
     elif "後推" in escape_str or "寬鬆" in escape_str:
         escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
-    elif "中性" in escape_str or "未知" in escape_str or "不足" in escape_str:
-        escape_win_display = f"\u001b[1;33m{escape_str}\u001b[0m"
     else:
         escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
 

@@ -517,41 +517,43 @@ async def is_covered_call_unlock_allowed() -> bool:
     return False
 
 
+# 安全提領紅線（規格：docs/macro_sentiment/01_macro_escape_top_matrix.md §2.6）
+SAFETY_PAYOUT_BASE: float = 13000.0  # 常態
+SAFETY_PAYOUT_EVENT_WEEK: float = 16500.0  # 4 天內有 FOMC／CPI／PCE
+SAFETY_PAYOUT_LIQUIDITY_STRESS: float = 18000.0  # RRP 30 日變動率 > 20%
+# RRP 30 日變動率門檻（百分比，edge `rrp_change_30d` 一律為百分比）
+RRP_CHANGE_30D_STRESS_PCT: float = 20.0
+# RRP 餘額小基數門檻（十億美元）：低於此值時百分比變動失真，不觸發
+RRP_MATERIAL_BALANCE_BILLIONS: float = 20.0
+
+
 def get_safety_payout_threshold() -> float:
     """獲取安全提領/賠付紅線。"""
     from database import get_kv_cache
 
+    # edge `/api/v1/scrape/macro/core_metrics` 的 rrp_change_30d 一律是百分比
+    # （(rrp - past) / past × 100）。不再相容「小數比例」：+0.5% 會被誤讀成 +50%。
     rrp_change_raw = get_kv_cache("macro_rrp_change_30d")
     try:
         rrp_change = float(rrp_change_raw) if rrp_change_raw is not None else 0.0
     except (ValueError, TypeError):
         rrp_change = 0.0
-
-    rrp_spike_raw = get_kv_cache("macro_rrp_spike")
-    rrp_spike = (
-        rrp_spike_raw is True
-        or rrp_spike_raw == 1
-        or str(rrp_spike_raw).strip().lower() in ("1", "true")
-    )
     rrp_current = get_kv_cache("macro_rrp")
 
-    # 排除極低水位 (RRP < $20B) 下小基數除零引起的百分比失真虛警。
+    # 排除極低水位 (RRP < $20B) 下小基數引起的百分比失真虛警。
     # 歷史高峰為 $2.5T，當前常態趨近 0 ($1.0B 左右)，微幅變動 $0.8B 即會造成 +400% 百分比跳升。
-    # 只有當 RRP 餘額具備實質規模 (>= $20B) 或顯著突波時，百分比劇變才代表系統級流動性衝擊。
+    # 只有當 RRP 餘額具備實質規模 (>= $20B) 時，百分比劇變才代表系統級流動性衝擊。
+    # 餘額未知時保守視為具實質規模（不因缺值放寬紅線）。
     has_material_rrp = True
     if rrp_current is not None:
         try:
-            has_material_rrp = float(rrp_current) >= 20.0
+            has_material_rrp = float(rrp_current) >= RRP_MATERIAL_BALANCE_BILLIONS
         except (ValueError, TypeError):
             has_material_rrp = True
 
-    # 相容百分比 (e.g. 25.0) 與小數比例 (e.g. 0.25) 兩種格式
-    is_high_rrp_change = has_material_rrp and (
-        rrp_change > 20.0 or (0.0 < rrp_change <= 1.0 and rrp_change > 0.20)
-    )
-    if is_high_rrp_change or rrp_spike:
+    if has_material_rrp and rrp_change > RRP_CHANGE_30D_STRESS_PCT:
         # 發生實質流動性結構異常，拉高保留現金底線至最高戒備狀態
-        return 18000.0
+        return SAFETY_PAYOUT_LIQUIDITY_STRESS
 
     try:
         from database.calendar_cache import get_macro_events_between
@@ -563,10 +565,10 @@ def get_safety_payout_threshold() -> float:
         for ev in events:
             name = ev.get("event", "").upper()
             if "FOMC" in name or "CPI" in name or "PCE" in name:
-                return 16500.0
+                return SAFETY_PAYOUT_EVENT_WEEK
     except Exception as e:
         import logging
 
         logging.getLogger(__name__).warning(f"動態閾值查詢總經事件失敗: {e}")
 
-    return 13000.0
+    return SAFETY_PAYOUT_BASE
