@@ -88,6 +88,20 @@ def is_nyse_trading_day(day: date) -> bool:
     return not schedule.empty
 
 
+def count_nyse_sessions_after(start: date, end: date) -> int:
+    """`start`（不含）之後到 `end`（含）之間的 NYSE 交易日數；`end <= start` 時回傳 0。
+
+    例：週一公布財報、當週五收盤後計算 → 4（週二至週五）。供 PEAD 60 交易日窗口使用。
+    以 `nyse_calendar.schedule()` 一次取區間，半日市視為交易日。
+    """
+    if end <= start:
+        return 0
+    schedule = nyse_calendar.schedule(
+        start_date=start + timedelta(days=1), end_date=end
+    )
+    return int(len(schedule))
+
+
 def get_trading_day_elapsed_fraction(min_fraction: float = 0.05) -> float:
     """回傳「今日交易時段已經過的比例」(0.0-1.0)，供成交量類指標的盤中時段
     進度正規化使用（例如 UOA 的 Volume/OI 比值：OI 是前一交易日收盤的固定值，

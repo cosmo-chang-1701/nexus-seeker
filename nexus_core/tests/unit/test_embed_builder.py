@@ -5664,6 +5664,46 @@ def test_create_tactical_symbol_embed_marks_only_nearest_strike() -> None:
     assert "📍1100.00" in desc
 
 
+def test_pre_market_briefing_fundamental_candidates_show_list_date_or_hide_stale() -> (
+    None
+):
+    """基本面候選名單標註名單日；早於前一交易日的過期名單不展示。"""
+    from types import SimpleNamespace
+
+    macro_data = {"vix": 14.5, "dxy": 104.0, "tnx": 4.2, "us2y": 4.0}
+    cands = [
+        SimpleNamespace(
+            trading_date="2026-10-06", symbol="NVDA", rank=1, status="CANDIDATE"
+        ),
+        SimpleNamespace(
+            trading_date="2026-10-06", symbol="SPY", rank=2, status="WATCH"
+        ),
+        SimpleNamespace(
+            trading_date="2026-10-06", symbol="SMCI", rank=3, status="EXCLUDED"
+        ),
+    ]
+
+    fresh = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        fundamental_candidates=cands,
+        fundamental_expected_date="2026-10-06",
+    )
+    fresh_fields = {str(f.name): str(f.value or "") for f in fresh.fields}
+    name = "📋 基本面次日焦點候選（名單日 2026-10-06）"
+    assert name in fresh_fields
+    assert "NVDA" in fresh_fields[name]
+    assert "SMCI" not in fresh_fields[name]
+
+    stale = build_pre_market_briefing_embed(
+        macro_data=macro_data,
+        fundamental_candidates=cands,
+        fundamental_expected_date="2026-10-07",
+    )
+    stale_fields = {str(f.name): str(f.value or "") for f in stale.fields}
+    assert "過期名單不展示" in stale_fields[name]
+    assert "NVDA" not in stale_fields[name]
+
+
 # ---------------------------------------------------------------------------
 # /x 動能與擠壓狀態：資料時間（日線 K 棒日期＋抓取時刻）
 # ---------------------------------------------------------------------------

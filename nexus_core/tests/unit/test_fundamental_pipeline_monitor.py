@@ -30,6 +30,7 @@ from market_analysis.fundamental_pipeline.models import (
 )
 from services.alt_data_service import alt_data_service
 from services.bounded_cache import BoundedCache
+from services.fundamental_clock_service import EstimateSnapshotRunner
 
 _MONITOR = "cogs.trading.fundamental_pipeline_monitor"
 
@@ -53,8 +54,8 @@ def isolate_shared_sec_client() -> Generator[None, None, None]:
         yield
 
 
-def test_default_jobs_register_all_six_with_priorities() -> None:
-    """預設註冊 PR1 三個、PR2 SEC 同步、PR3 PENDING 重試與 PR4 產業鏈檢驗，依 priority 排序。"""
+def test_default_jobs_register_all_eight_with_priorities() -> None:
+    """預設註冊 PR1 三個、PR2 SEC 同步、PR3 PENDING 重試、PR4 產業鏈檢驗、PR5 共識快照與估值候選，依 priority 排序。"""
     register_default_fundamental_jobs()
     jobs = [(j.job_id, j.priority) for j in ClockJobRegistry.all_jobs()]
     assert jobs == [
@@ -64,7 +65,56 @@ def test_default_jobs_register_all_six_with_priorities() -> None:
         ("sec_filing_sync_hourly", 40),
         ("earnings_pending_retry_1730", 50),
         ("channel_check_1800", 60),
+        ("eps_estimate_snapshot_1900", 70),
+        ("fundamental_watch_candidate_2000", 80),
     ]
+
+
+def test_pr5_jobs_due_on_trading_days_1900_and_2000() -> None:
+    """共識快照 19:00、估值 20:00（各 30 分鐘視窗）；休市日與週末不到期。"""
+    register_default_fundamental_jobs()
+    for job_id, hour in (
+        ("eps_estimate_snapshot_1900", 19),
+        ("fundamental_watch_candidate_2000", 20),
+    ):
+        job = ClockJobRegistry.get(job_id)
+        assert job is not None
+        due_slots = [
+            (h, m)
+            for h in range(24)
+            for m in range(0, 60, 5)
+            if job.is_due(datetime(2026, 10, 7, h, m, tzinfo=ny_tz))
+        ]
+        assert due_slots == [(hour, m) for m in range(0, 30, 5)]
+        assert job.cooldown_seconds == 3600.0
+        # 2026-11-26 感恩節休市、2026-10-10 週六
+        assert job.is_due(datetime(2026, 11, 26, hour, 0, tzinfo=ny_tz)) is False
+        assert job.is_due(datetime(2026, 10, 10, hour, 0, tzinfo=ny_tz)) is False
+
+
+@pytest.mark.asyncio
+async def test_pr5_jobs_delegate_to_background_runners() -> None:
+    """兩個 PR5 工作的 handler 是執行器的 trigger；未傳入時估值執行器等待同一個快照執行器。"""
+    snap = MagicMock()
+    snap.trigger = AsyncMock(return_value=True)
+    val = MagicMock()
+    val.trigger = AsyncMock(return_value=True)
+    register_default_fundamental_jobs(snapshot_runner=snap, valuation_runner=val)
+    now = datetime(2026, 10, 7, 19, 0, tzinfo=ny_tz)
+    snap_job = ClockJobRegistry.get("eps_estimate_snapshot_1900")
+    val_job = ClockJobRegistry.get("fundamental_watch_candidate_2000")
+    assert snap_job is not None and val_job is not None
+    await snap_job.execute(now)
+    await val_job.execute(now)
+    snap.trigger.assert_awaited_once_with(now)
+    val.trigger.assert_awaited_once_with(now)
+
+    ClockJobRegistry.clear()
+    with patch(f"{_MONITOR}.ValuationJobRunner") as val_factory:
+        register_default_fundamental_jobs()
+    assert isinstance(
+        val_factory.call_args.kwargs["snapshot_runner"], EstimateSnapshotRunner
+    )
 
 
 def test_trading_day_1800_runs_sec_sync_before_channel_check() -> None:

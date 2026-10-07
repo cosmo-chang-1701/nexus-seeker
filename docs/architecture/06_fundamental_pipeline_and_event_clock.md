@@ -10,7 +10,7 @@ Nexus Seeker 本質為選擇權風險控制與營運決策顧問系統（Zero-Ex
 
 事件時鐘遵循**開閉原則（Open-Closed Principle）**：主排程 Cog 以 5 分鐘固定步長巡邏全域時鐘註冊表，各業務模組（宏觀流動性、SEC 申報、財務預期差、產業鏈檢驗等）僅需向註冊器註冊其所屬的 `ClockJob`，無需修改主迴圈排程核心。
 
-> **目前已註冊的 `ClockJob`**（`cogs/trading/fundamental_pipeline_monitor.py`）：`macro_surprise_0830`、`macro_surprise_1000`、`liquidity_regime_1615`、`sec_filing_sync_hourly`、`earnings_pending_retry_1730` 與 `channel_check_1800`。`sec_filing_sync_hourly` 於平日 07:00–20:00 ET 每整點以背景任務執行 SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易、8-K 治理旗標，並對結構化 13D 呼叫激進投資人閘門、只記日誌）；規格見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) §3.1。同步發現的 8-K Item 2.02 會在游標推進後交給注入的 `EarningsSurpriseService.process_filing_event`（財報預期差與管理層指引，只入庫不推播）；`earnings_pending_retry_1730` 於 NYSE 交易日 17:30 ET 重算仍為 `PENDING` 的財季。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9。`channel_check_1800` 於 NYSE 交易日 18:00 ET（`nyse_trading_day_at(18, 0, window_minutes=15)`，每日一次）以 `AltDataService.run_all_channel_checks(persist=True)` 檢驗最近兩個已結束曆季的 17 條產業鏈，每個期別前再檢查 `is_memory_safe()`，經 SingleFlight 合併，只寫入 `channel_check_log`、不推播；規格見 [`07_alt_data_and_channel_checks.md`](../macro_sentiment/07_alt_data_and_channel_checks.md)。SEC 申報同步與產業鏈檢驗的 SEC XBRL 驅動端都依賴 `SEC_USER_AGENT`：未設定時前者只記一次 error 後每輪略過，後者把 SEC 端指標判為資料不足（`INSUFFICIENT`），兩者互不影響。兩者共用同一個 `SecEdgarClient`（同一個 8 req/s 限速器），18:00 同時執行時合計仍不超過 SEC 10 req/s 上限。
+> **目前已註冊的 `ClockJob`**（`cogs/trading/fundamental_pipeline_monitor.py`）：`macro_surprise_0830`、`macro_surprise_1000`、`liquidity_regime_1615`、`sec_filing_sync_hourly`、`earnings_pending_retry_1730`、`channel_check_1800`、`eps_estimate_snapshot_1900` 與 `fundamental_watch_candidate_2000`（priority 依序 10–80）。`sec_filing_sync_hourly` 於平日 07:00–20:00 ET 每整點以背景任務執行 SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易、8-K 治理旗標，並對結構化 13D 呼叫激進投資人閘門、只記日誌）；規格見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) §3.1。同步發現的 8-K Item 2.02 會在游標推進後交給注入的 `EarningsSurpriseService.process_filing_event`（財報預期差與管理層指引，只入庫不推播）；`earnings_pending_retry_1730` 於 NYSE 交易日 17:30 ET 重算仍為 `PENDING` 的財季。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9。`channel_check_1800` 於 NYSE 交易日 18:00 ET（`nyse_trading_day_at(18, 0, window_minutes=15)`，每日一次）以 `AltDataService.run_all_channel_checks(persist=True)` 檢驗最近兩個已結束曆季的 17 條產業鏈，每個期別前再檢查 `is_memory_safe()`，經 SingleFlight 合併，只寫入 `channel_check_log`、不推播；規格見 [`07_alt_data_and_channel_checks.md`](../macro_sentiment/07_alt_data_and_channel_checks.md)。SEC 申報同步與產業鏈檢驗的 SEC XBRL 驅動端都依賴 `SEC_USER_AGENT`：未設定時前者只記一次 error 後每輪略過，後者把 SEC 端指標判為資料不足（`INSUFFICIENT`），兩者互不影響。兩者共用同一個 `SecEdgarClient`（同一個 8 req/s 限速器），18:00 同時執行時合計仍不超過 SEC 10 req/s 上限。`eps_estimate_snapshot_1900` 於 NYSE 交易日 19:00 ET 以背景任務逐檔寫入當日分析師 EPS 共識快照（帶財期），`fundamental_watch_candidate_2000` 於 NYSE 交易日 20:00 ET 以背景任務執行估值、修正動能與次日候選名單（快照刷新仍在執行時先等待其完成），兩者只入庫、不推播；規格見 [`06_revision_momentum_and_fair_value.md`](../valuation_pricing/06_revision_momentum_and_fair_value.md) §5.5。
 
 ### 1.2 適用市場環境與系統邊界
 - **低頻總經發布與非同步數據攝取**：涵蓋每週 H.4.1、芝加哥聯準會 NFCI、每週四初領失業金及每月 CPI、NFP、ISM PMI 發布。
@@ -42,6 +42,8 @@ $$C_{\text{dedup}} = \text{BoundedCache}(\text{max\_size} = 300)$$
 - **SEC 申報同步（平日 07:00–20:00 ET 每整點）**：`weekday_hourly_between(7, 20, window_minutes=10)`，週一至週五每個整點的前 10 分鐘到期；採平日而非 NYSE 交易日（SEC 依聯邦營業日受理申報）。$W = 10\text{ min} < T_{\text{cool}} = 1800\text{s} < 60\text{ min}$，每個整點恰觸發一次。處理器 `SecFilingSyncRunner.trigger` 只啟動背景 `asyncio.Task` 即返回（不阻塞同一輪的其他工作），上一輪未完成時略過；缺少 `SEC_USER_AGENT` 時只記一次 error。8-K Item 2.02 事件在同一個背景任務內、游標推進後交給 `EarningsSurpriseService.process_filing_event`（盡力而為，例外只記 warning）。
 - **財報預期差 PENDING 重試（17:30 ET）**：`nyse_trading_day_at(17, 30, window_minutes=15)`，NYSE 交易日觸發。處理器 `EarningsPendingRetryRunner.run` 複檢 leader 與 `is_memory_safe()` 後，對近 14 個日曆日內仍為 `PENDING` 的財季逐一呼叫 `evaluate_symbol_surprise`（只查 Finnhub、不呼叫 LLM，通常僅數檔，同步執行）；單一標的例外隔離。
 - **產業鏈交叉驗證（18:00 ET）**：`nyse_trading_day_at(18, 0, window_minutes=15)`，NYSE 交易日觸發；資料為月／季頻，每日一次已足夠，盤後執行避開盤中 API 負載。priority 60 排在同一輪的 SEC 申報同步（priority 40）之後。
+- **分析師 EPS 共識快照（19:00 ET）**：`nyse_trading_day_at(19, 0, window_minutes=30)`，NYSE 交易日觸發，`cooldown_seconds = 3600`。處理器 `EstimateSnapshotRunner.trigger`（`services/fundamental_clock_service.py`）複檢 leader、防重疊與 `is_memory_safe()` 後啟動背景 `asyncio.Task` 即返回；任務內逐檔呼叫 `ValuationService.refresh_estimate_snapshots`，每檔開始前複檢 leader 與記憶體，單一標的例外只計數。Finnhub 背景限流（50 次／60 秒）的等待只卡住這個背景任務，不阻塞時鐘輪詢。priority 70 排在同一輪的 SEC 申報同步（priority 40）之後。
+- **估值與次日候選名單（20:00 ET）**：`nyse_trading_day_at(20, 0, window_minutes=30)`，NYSE 交易日觸發，`cooldown_seconds = 3600`。處理器 `ValuationJobRunner.trigger` 同樣以背景任務執行；19:00 快照刷新若仍在執行，先等待其完成（上限 `SNAPSHOT_WAIT_TIMEOUT_SECONDS = 3600`，逾時則以既有最新快照估值），再逐檔估值，每檔前複檢 leader 與記憶體，超標即中止本輪且不寫不完整的候選名單。priority 80。
 
 ### 2.2 標的池優先級過濾模型
 設系統所有持倉標的集合為 $\mathcal{H}$，使用者自選清單標的集合為 $\mathcal{W}$，排除標的集合（指數與各類 ETF）為 $\mathcal{E}$。
@@ -73,6 +75,8 @@ flowchart TD
     BG -.->|8-K Item 2.02, 游標推進後| ES[EarningsSurpriseService.process_filing_event 只入庫]
     M -.->|earnings_pending_retry_1730| PR[重算近 14 日 PENDING 財季]
     M -.->|channel_check_1800| CC[最近兩個已結束曆季 17 條產業鏈檢驗 寫入 channel_check_log]
+    M -.->|eps_estimate_snapshot_1900| SN[背景任務 逐檔寫入當日 EPS 共識快照]
+    M -.->|fundamental_watch_candidate_2000| VW[背景任務 等待快照刷新後估值 寫入次日候選名單]
 ```
 
 ---
@@ -87,6 +91,7 @@ flowchart TD
 | `MEMORY_SAFE_THRESHOLD` | `85.0` (float) | VPS 記憶體使用率門檻百分比，超標則強制熔斷非核心工作 |
 | `MAX_DEDUP_CACHE_SIZE` | `300` (int) | 時鐘去重快取最大容量，防止記憶體洩漏 |
 | `ClockJob.cooldown_seconds` | `1800.0` (float) | 同一 `job_id` 兩次觸發的最小間隔秒數，須大於觸發視窗 $W$ 以確保同視窗僅執行一次 |
+| `SNAPSHOT_WAIT_TIMEOUT_SECONDS` | `3600.0` (float) | 20:00 估值等待 19:00 共識快照刷新完成的上限秒數；逾時改以既有最新快照估值 |
 
 ---
 

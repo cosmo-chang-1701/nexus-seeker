@@ -22,10 +22,13 @@ from database.fundamental_pipeline import (
     get_eps_estimate_snapshots,
     get_insider_transactions,
     get_latest_earnings_surprise,
+    get_latest_fair_value,
     get_latest_guidance_extraction,
     get_latest_liquidity_regime,
+    get_latest_revision_score,
     get_prior_guidance_extraction,
     get_sec_filing_cursor,
+    get_watch_candidates,
 )
 from discord import app_commands
 from discord.ext import commands
@@ -38,6 +41,12 @@ from market_analysis.fundamental_pipeline.channel_check import (
     VERDICT_LABELS_ZH as CHANNEL_VERDICT_LABELS_ZH,
 )
 from market_analysis.fundamental_pipeline.earnings_surprise import FLOOR_EPS
+from market_analysis.fundamental_pipeline.fair_value import (
+    DEEP_VALUE_MOS_THRESHOLD,
+    FAIR_VALUE_MOS_BAND,
+    MODERATE_DISCOUNT_MOS,
+    VALUATION_FLAG_LABELS_ZH,
+)
 from market_analysis.fundamental_pipeline.guidance_delta import (
     VERDICT_LABELS_ZH,
     compare_guidance,
@@ -51,7 +60,15 @@ from market_analysis.fundamental_pipeline.models import (
     EPSEstimateSnapshotRecord,
     GuidanceExtraction,
     GuidanceExtractionDTO,
+    RevisionScoreRecord,
     SupplyChainLink,
+)
+from market_analysis.fundamental_pipeline.revision_momentum import (
+    FLAG_BREADTH_UNAVAILABLE,
+    FLAG_NO_CURRENT_SNAPSHOT,
+    FLAG_NO_MATCHED_PERIOD,
+    FLAG_NO_PRIOR_SNAPSHOT,
+    FLAG_PEAD_DATE_UNKNOWN,
 )
 from market_analysis.fundamental_pipeline.supply_chain_map import (
     get_links_for_symbol,
@@ -340,13 +357,14 @@ class EarningsSurpriseSection:
     @staticmethod
     def _snapshot_line(snapshots: list[EPSEstimateSnapshotRecord]) -> str:
         if not snapshots:
-            return f"• 分析師共識快照: ⚪ 尚無共識快照資料（{_AWAIT_NEXT_EARNINGS_8K}）"
+            return "• 分析師共識快照: ⚪ 尚無共識快照資料（待 NYSE 交易日 19:00 ET 快照排程）"
         snap_parts: list[str] = []
         for horizon in ("0q", "+1q"):
             snap = next((s for s in snapshots if s.horizon == horizon), None)
             if snap is not None:
+                period = f" {snap.fiscal_period}" if snap.fiscal_period else ""
                 snap_parts.append(
-                    f"{_HORIZON_LABELS_ZH[horizon]}: `${snap.eps_mean:.2f}`"
+                    f"{_HORIZON_LABELS_ZH[horizon]}{period}: `${snap.eps_mean:.2f}`"
                 )
         if not snap_parts:
             return "• 分析師共識快照: ⚪ 無季度共識預估"
@@ -454,11 +472,208 @@ class ChannelCheckSection:
         return header, "\n".join(lines)
 
 
+_VALUATION_METHOD_ZH: dict[str, str] = {
+    "BLENDED": "DCF＋同業倍數各半",
+    "DCF_ONLY": "僅 DCF",
+    "COMPS_ONLY": "僅同業倍數",
+}
+
+_REVISION_FLAG_LABELS_ZH: dict[str, str] = {
+    FLAG_NO_CURRENT_SNAPSHOT: "尚無分析師 EPS 共識快照（待 19:00 快照排程）",
+    FLAG_NO_PRIOR_SNAPSHOT: "t-30 日（28–35 日前）尚無共識快照，動能待累積",
+    FLAG_NO_MATCHED_PERIOD: "t-30 日快照與當日快照無相同財期可比",
+    FLAG_BREADTH_UNAVAILABLE: "無分析師層級調升／調降資料，廣度項不計（斜率權重 100%）",
+    FLAG_PEAD_DATE_UNKNOWN: "財報發布日不明，未判定 PEAD",
+}
+
+
+def _parse_json_list(raw: str | None) -> list[str]:
+    try:
+        data = json.loads(raw) if raw else []
+    except (ValueError, TypeError):
+        return []
+    return [str(x) for x in data] if isinstance(data, list) else []
+
+
+def _valuation_flag_lines(flags: list[str]) -> list[str]:
+    labels = [
+        VALUATION_FLAG_LABELS_ZH[f] for f in flags if f in VALUATION_FLAG_LABELS_ZH
+    ]
+    return [f"  ⚠️ {label}" for label in labels]
+
+
+def _revision_lines(rev_record: RevisionScoreRecord | None) -> list[str]:
+    if rev_record is None:
+        return ["• 分析師修正動能: ⚪ 尚無資料（待 20:00 估值排程）"]
+    try:
+        detail = json.loads(rev_record.detail_json) if rev_record.detail_json else {}
+    except (ValueError, TypeError):
+        detail = {}
+    flags = detail.get("flags", []) if isinstance(detail, dict) else []
+    pead_str = "✅ 共振" if rev_record.is_pead_aligned else "⚪ 未共振"
+    if rev_record.score_30d is None:
+        line = f"• 分析師修正動能（{rev_record.trading_date}）: ⚪ 無可比財期 ｜ PEAD: {pead_str}"
+    else:
+        line = (
+            f"• 分析師修正動能（{rev_record.trading_date}）: **{rev_record.score_30d:+.1f}** "
+            f"｜ PEAD: {pead_str}"
+        )
+    out = [line]
+    for flag in flags if isinstance(flags, list) else []:
+        label = _REVISION_FLAG_LABELS_ZH.get(str(flag))
+        if label:
+            out.append(f"  ↳ {label}")
+    return out
+
+
+class ValuationEngineSection:
+    """PR5: 內在價值、安全邊際與分析師修正動能區塊。
+
+    fair_value / margin_of_safety 為 NULL 或 method == NONE 時明示無有效估值；
+    輸入預設值（10 年債 4.25%、成長率 5% 等）被套用時逐條標註。
+    """
+
+    @property
+    def section_id(self) -> str:
+        return "valuation_engine"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "💰 內在價值、安全邊際與修正動能"
+
+        fv_record, rev_record = await asyncio.gather(
+            asyncio.to_thread(get_latest_fair_value, sym_upper),
+            asyncio.to_thread(get_latest_revision_score, sym_upper),
+        )
+        lines: list[str] = []
+        if fv_record is None:
+            lines.append(
+                "• 公允價值: ⚪ 尚無估值資料（待 NYSE 交易日 20:00 ET 估值排程）"
+            )
+        else:
+            flags = _parse_json_list(fv_record.flags_json)
+            if (
+                fv_record.method == "NONE"
+                or fv_record.fair_value is None
+                or fv_record.fair_value <= 0
+            ):
+                lines.append(
+                    f"• 公允價值（{fv_record.trading_date}）: ⚪ 無有效估值"
+                    "（DCF 與同業倍數皆不成立，如 ETF 或資料不足）"
+                )
+            else:
+                dcf_str = (
+                    f"${fv_record.dcf_value:.2f}"
+                    if fv_record.dcf_value is not None
+                    else "不成立"
+                )
+                comps_str = (
+                    f"${fv_record.comps_value:.2f}"
+                    if fv_record.comps_value is not None
+                    else "不成立"
+                )
+                method_zh = _VALUATION_METHOD_ZH.get(fv_record.method, fv_record.method)
+                lines.append(
+                    f"• 公允價值中樞（{fv_record.trading_date}，{method_zh}）: "
+                    f"**${fv_record.fair_value:.2f}** (DCF: `{dcf_str}` ｜ 同業倍數: `{comps_str}`)"
+                )
+                mos = fv_record.margin_of_safety
+                if mos is None:
+                    lines.append("• 安全邊際 (MOS): ⚪ 無現價，未計算")
+                else:
+                    if mos >= DEEP_VALUE_MOS_THRESHOLD:
+                        val_tag = "🟢 深度折價"
+                        if "DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE" in flags:
+                            val_tag = "🟠 深度折價（治理旗標壓制）"
+                    elif mos >= MODERATE_DISCOUNT_MOS:
+                        val_tag = "🟢 中度折價"
+                    elif mos >= -FAIR_VALUE_MOS_BAND:
+                        val_tag = "⚪ 合理估值區間"
+                    else:
+                        val_tag = "🔴 明顯溢價"
+                    lines.append(f"• 安全邊際 (MOS): **{mos:+.2%}** ({val_tag})")
+            lines.append(
+                f"• 權益資本成本: `{fv_record.discount_rate:.2%}` "
+                f"(ERP: `{fv_record.equity_risk_premium:.2%}`)"
+            )
+            lines.extend(_valuation_flag_lines(flags))
+        lines.extend(_revision_lines(rev_record))
+        return header, "\n".join(lines)
+
+
+_STALE_NOTE = "（非最新交易日名單）"
+
+
+class WatchCandidateSection:
+    """PR5: 基本面次日候選名單區塊（讀最新一份名單並標示名單日期）。"""
+
+    @property
+    def section_id(self) -> str:
+        return "watch_candidate"
+
+    async def render(self, symbol: str) -> tuple[str, str]:
+        sym_upper = symbol.strip().upper()
+        header = "📋 次日基本面候選評級"
+
+        candidates = await asyncio.to_thread(get_watch_candidates)
+        if not candidates:
+            return (
+                header,
+                "• 次日排定狀態: ⚪ 尚無候選名單（待 NYSE 交易日 20:00 ET 估值排程）",
+            )
+        list_date = candidates[0].trading_date
+        cand = next((c for c in candidates if c.symbol == sym_upper), None)
+        if cand is None:
+            return (
+                header,
+                f"• 次日排定狀態（名單日 {list_date}）: ⚪ 未列入（不在持倉＋自選標的池或當日估值失敗）",
+            )
+
+        if cand.status == "EXCLUDED":
+            return (
+                header,
+                (
+                    f"• 次日排定狀態（名單日 {list_date}）: ⛔ **風控排除** (排名: #{cand.rank})\n"
+                    f"• 排除原因: {cand.excluded_reason or '未符合基本面池準入標準'}"
+                ),
+            )
+
+        status_zh = "🎯 優先候選" if cand.status == "CANDIDATE" else "👀 觀察"
+        lines = [
+            f"• 次日排定狀態（名單日 {list_date}）: **{status_zh}** (排名: #{cand.rank})"
+        ]
+        try:
+            r_dict = json.loads(cand.reasons_json) if cand.reasons_json else {}
+        except (ValueError, TypeError):
+            r_dict = {}
+        if isinstance(r_dict, dict):
+            c_score = r_dict.get("composite_score")
+            mos_val = r_dict.get("margin_of_safety")
+            pead_str = "✅ PEAD 共振" if r_dict.get("pead_aligned") else "⚪ 未共振"
+            score_str = f"{c_score:+.1f}" if isinstance(c_score, (int, float)) else "--"
+            mos_str = (
+                f"{mos_val:+.1%}" if isinstance(mos_val, (int, float)) else "無有效估值"
+            )
+            lines.append(
+                f"• 綜合評估分: **{score_str}** (安全邊際: `{mos_str}` ｜ {pead_str})"
+            )
+            for key in ("governance_note", "valuation_note"):
+                note = r_dict.get(key)
+                if note:
+                    lines.append(f"  ↳ {note}")
+        return header, "\n".join(lines)
+
+
 # 全域單例區塊註冊中心
 fa_section_registry = FaSectionRegistry()
 fa_section_registry.register(MacroLiquiditySection())
 fa_section_registry.register(GovernanceGateSection())
 fa_section_registry.register(EarningsSurpriseSection())
+fa_section_registry.register(ValuationEngineSection())
+fa_section_registry.register(WatchCandidateSection())
+# 產業鏈區塊最長（自帶 950 字元預算）且與單一標的決策關聯最弱，排最後。
+# 6 個區塊總長超過 NexusEmbed 5800 上限時，build_fa_terminal_embed 先依比例截短最長的欄位
+# 內文，不整欄丟棄（NexusEmbed.to_dict 的尾端丟欄只作為最後防線）。
 fa_section_registry.register(ChannelCheckSection())
 
 

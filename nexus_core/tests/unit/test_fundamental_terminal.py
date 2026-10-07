@@ -447,7 +447,7 @@ async def test_earnings_surprise_section_small_base_and_pending() -> None:
         _, body = await sec.render("RKLB")
     assert "小基數" in body
     assert "尚無指引擷取資料（待下一份財報 8-K 觸發）" in body
-    assert "尚無共識快照資料（待下一份財報 8-K 觸發）" in body
+    assert "尚無共識快照資料（待 NYSE 交易日 19:00 ET 快照排程）" in body
 
     pending = EarningsSurpriseDTO(
         symbol="RKLB", fiscal_period="2026-Q3", consensus_eps=0.10, status="PENDING"
@@ -598,3 +598,138 @@ async def test_channel_check_section_render_unmapped_symbol() -> None:
     sec = ChannelCheckSection()
     _header, body = await sec.render("UNMAPPED_SYMBOL_XYZ")
     assert "未涵蓋於當前 17 條核心產業鏈矩陣中" in body
+
+
+# ============================================================================
+# PR5：6 個區塊的總長預算、估值 / 動能 / 候選名單呈現
+# ============================================================================
+
+
+def test_fa_embed_trims_longest_fields_instead_of_dropping_sections() -> None:
+    """6 個區塊總長超過 5800 時截短最長欄位，所有區塊都保留、短欄位不動。"""
+    long_body = "\n".join(f"• 第 {i} 行產業鏈檢驗明細" + "資料" * 20 for i in range(40))
+    sections = [
+        ("🌊 宏觀流動性體制", "• 當前體制: **EASY**"),
+        ("🚨 治理", long_body),
+        ("📊 業績預期差", long_body),
+        ("💰 內在價值、安全邊際與修正動能", long_body),
+        ("📋 次日基本面候選評級", long_body),
+        ("🔗 產業鏈交叉驗證", long_body),
+    ]
+    embed = build_fa_terminal_embed("NVDA", "NVIDIA Corp", sections)
+    payload = embed.to_dict()
+    fields = payload["fields"]
+    assert len(fields) == 6  # 不整欄丟棄
+    total = (
+        len(payload.get("title") or "")
+        + len(payload.get("description") or "")
+        + len(payload["footer"]["text"])
+        + sum(len(f["name"]) + len(f["value"]) for f in fields)
+    )
+    assert total <= 5800
+    assert fields[0]["value"].startswith("• 當前體制: **EASY**")
+    assert fields[-1]["name"] == "🔗 產業鏈交叉驗證"
+
+
+def test_fa_registry_has_six_sections_with_channel_check_last() -> None:
+    from cogs.fundamental_terminal import fa_section_registry
+
+    ids = [s.section_id for s in fa_section_registry._sections]
+    assert len(ids) == 6
+    assert ids[-1] == ChannelCheckSection().section_id
+
+
+@pytest.mark.asyncio
+async def test_valuation_section_null_fair_value_and_default_flags() -> None:
+    """method = NONE / NULL 公允價值明示無有效估值；預設值旗標逐條標註；動能 None 不顯示 0。"""
+    from cogs.fundamental_terminal import ValuationEngineSection
+    from market_analysis.fundamental_pipeline.models import (
+        FairValueRecord,
+        RevisionScoreRecord,
+    )
+
+    fv = FairValueRecord(
+        symbol="SPY",
+        trading_date="2026-10-06",
+        dcf_value=None,
+        comps_value=None,
+        fair_value=None,
+        margin_of_safety=None,
+        discount_rate=0.0866,
+        equity_risk_premium=0.045,
+        flags_json='["US10Y_DEFAULT", "FCF_UNAVAILABLE"]',
+        method="NONE",
+    )
+    rev = RevisionScoreRecord(
+        symbol="SPY",
+        trading_date="2026-10-06",
+        score_30d=None,
+        breadth_ratio=None,
+        is_pead_aligned=False,
+        detail_json='{"flags": ["NO_PRIOR_SNAPSHOT", "BREADTH_UNAVAILABLE"]}',
+    )
+    with (
+        patch("cogs.fundamental_terminal.get_latest_fair_value", return_value=fv),
+        patch("cogs.fundamental_terminal.get_latest_revision_score", return_value=rev),
+    ):
+        _, body = await ValuationEngineSection().render("SPY")
+    assert "無有效估值" in body
+    assert "$0.00" not in body
+    assert "4.25%" in body  # 預設 10 年債殖利率被套用時必須呈現
+    assert "P/FCF" in body
+    assert "無可比財期" in body
+    assert "t-30 日" in body
+    assert "廣度項不計" in body
+
+
+@pytest.mark.asyncio
+async def test_valuation_section_blended_with_method_label() -> None:
+    from cogs.fundamental_terminal import ValuationEngineSection
+    from market_analysis.fundamental_pipeline.models import FairValueRecord
+
+    fv = FairValueRecord(
+        symbol="MSFT",
+        trading_date="2026-10-06",
+        dcf_value=600.0,
+        comps_value=560.0,
+        fair_value=580.0,
+        margin_of_safety=0.09,
+        discount_rate=0.0866,
+        equity_risk_premium=0.0425,
+        flags_json='["FAIRLY_VALUED"]',
+        method="BLENDED",
+        spot_price=527.98,
+    )
+    with (
+        patch("cogs.fundamental_terminal.get_latest_fair_value", return_value=fv),
+        patch("cogs.fundamental_terminal.get_latest_revision_score", return_value=None),
+    ):
+        _, body = await ValuationEngineSection().render("MSFT")
+    assert "$580.00" in body
+    assert "DCF＋同業倍數各半" in body
+    assert "+9.00%" in body
+    assert "待 20:00 估值排程" in body
+
+
+@pytest.mark.asyncio
+async def test_watch_candidate_section_shows_list_date() -> None:
+    from cogs.fundamental_terminal import WatchCandidateSection
+    from market_analysis.fundamental_pipeline.models import WatchCandidateRecord
+
+    cands = [
+        WatchCandidateRecord(
+            trading_date="2026-10-06",
+            symbol="INTC",
+            rank=2,
+            status="WATCH",
+            reasons_json=(
+                '{"composite_score": 30.0, "margin_of_safety": 0.4, '
+                '"pead_aligned": true, "governance_note": "HIGH 治理旗標生效中：不晉升 CANDIDATE"}'
+            ),
+        )
+    ]
+    with patch("cogs.fundamental_terminal.get_watch_candidates", return_value=cands):
+        _, body = await WatchCandidateSection().render("INTC")
+    assert "名單日 2026-10-06" in body
+    assert "觀察" in body
+    assert "HIGH 治理旗標" in body

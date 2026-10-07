@@ -8,34 +8,35 @@ Business logic for each report domain lives in the runner sub-modules under
 """
 
 from __future__ import annotations
-from typing import Any
 
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any
 
+import database
 import discord
 from discord.ext import commands, tasks
 
-import database
+# ── Runner sub-modules ────────────────────────────────────────────────────────
+from market_analysis.analyst_runners import (
+    earnings_runner,
+    macro_runner,
+    portfolio_runner,
+    sector_runner,
+    strategy_runner,
+)
+
+# Re-export SECTORS so existing tests and callers can still do
+# ``from cogs.analyst_agent import SECTORS``
+from market_analysis.analyst_runners.sector_runner import SECTORS  # noqa: F401
 from market_time import (
+    get_last_completed_trading_date,
     get_next_market_target_time,
     get_sleep_seconds,
 )
 from services.llm_service import generate_analyst_report, is_memory_safe
 from services.notification_dispatcher import notify, notify_many
-
-# ── Runner sub-modules ────────────────────────────────────────────────────────
-from market_analysis.analyst_runners import macro_runner
-from market_analysis.analyst_runners import earnings_runner
-from market_analysis.analyst_runners import sector_runner
-from market_analysis.analyst_runners import portfolio_runner
-from market_analysis.analyst_runners import strategy_runner
-
-# Re-export SECTORS so existing tests and callers can still do
-# ``from cogs.analyst_agent import SECTORS``
-from market_analysis.analyst_runners.sector_runner import SECTORS  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,21 @@ class AnalystAgent(commands.Cog):
             warning_days=warning_days
         )
 
+        # 3. 引用基本面次日候選名單 (唯讀查詢，至多 10 檔)
+        fundamental_candidates = await asyncio.to_thread(
+            database.get_latest_watch_candidates, 10
+        )
+        # 名單應為前一個已收盤交易日 20:00 產出；較舊者視為過期（盤前簡報不展示）
+        fundamental_expected_date: str | None = None
+        try:
+            fundamental_expected_date = await asyncio.to_thread(
+                get_last_completed_trading_date
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"[AnalystAgent] 無法推算前一交易日，候選名單不做過期判定: {e}"
+            )
+
         user_ids = database.get_all_user_ids()
         from cogs.embed_builder import build_pre_market_briefing_embed
 
@@ -187,6 +203,8 @@ class AnalystAgent(commands.Cog):
                 earnings_alerts=formatted_alerts,
                 scanned_symbols=u_data["scanned_symbols"],
                 warning_days=warning_days,
+                fundamental_candidates=fundamental_candidates,
+                fundamental_expected_date=fundamental_expected_date,
             )
             await notify(self.bot, uid, "briefing_pre_market", embed=embed)
 
@@ -371,7 +389,7 @@ class AnalystAgent(commands.Cog):
 
     async def run_fomc_escape_window_analysis(
         self, user_id: int
-    ) -> Optional[discord.Embed]:
+    ) -> discord.Embed | None:
         return await strategy_runner.run_fomc_escape_window_analysis(user_id)
 
     async def gather_sector_rotation_data(self) -> dict:
