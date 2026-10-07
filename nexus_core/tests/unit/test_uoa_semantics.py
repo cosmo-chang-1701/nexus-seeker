@@ -264,3 +264,50 @@ def test_pre_market_detection_does_not_anchor_moneyness() -> None:
     )
     assert after[0]["classified_spot"] == 1881.0
     assert after[0]["moneyness_basis_note"] in after[0]["intent"]
+
+
+def _leg(typ: str, action: str, vol: int, strike: float = 170.0) -> dict:
+    return {
+        "expiry": "2026-10-09",
+        "strike": strike,
+        "type": typ,
+        "action": action,
+        "volume": vol,
+        "symbol": "SPCX",
+        "intent": "x",
+    }
+
+
+def test_straddle_sto_pairs_and_marks_short_leg() -> None:
+    from market_analysis.uoa_telemetry import annotate_straddle_structures
+
+    entries = [
+        _leg("CALL", "🔴 賣出開倉 (STO - Bid)", 24000),
+        _leg("PUT", "🔴 賣出開倉 (STO - Bid)", 15000),
+    ]
+    annotate_straddle_structures(entries)
+    assert all(e["structure"] == "STRADDLE" for e in entries)
+    assert all(e["spread_role"] == "SHORT_LEG" for e in entries)
+    assert "賣出跨式" in entries[0]["intent"]
+
+
+def test_straddle_not_paired_when_volume_ratio_too_large() -> None:
+    from market_analysis.uoa_telemetry import annotate_straddle_structures
+
+    entries = [
+        _leg("CALL", "🔴 賣出開倉 (STO - Bid)", 30000),
+        _leg("PUT", "🔴 賣出開倉 (STO - Bid)", 10000),
+    ]
+    annotate_straddle_structures(entries)
+    assert not any(e.get("structure") for e in entries)
+
+
+def test_straddle_opposite_directions_not_paired() -> None:
+    from market_analysis.uoa_telemetry import annotate_straddle_structures
+
+    entries = [
+        _leg("CALL", "🟢 買入開倉 (BTO - Ask)", 1000),
+        _leg("PUT", "🔴 賣出開倉 (STO - Bid)", 1000),
+    ]
+    annotate_straddle_structures(entries)
+    assert not any(e.get("structure") for e in entries)

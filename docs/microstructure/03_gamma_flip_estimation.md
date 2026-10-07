@@ -171,6 +171,12 @@ flowchart TD
 
 ---
 
+### 5.x 局部體制揭露與後續觀察（2026-10-07）
+
+`analyze_local_gamma_regime()` 以相鄰履約價的逐檔 GEX 線性內插作為「現價處」體制，履約價柱是密度而非現價的 Gamma 曲線，現價跨一檔即可能翻號（SPCX 實測 $165 = −624M、$167.5 = +113M）。全鏈與局部號相反時，/x 現附註此限制。
+
+**後續觀察（僅進 calibration，不接閘門）**：以「掃描假設現價、重算總 GEX 曲線求零點」取代逐檔內插，再與前向價格路徑比較。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`：

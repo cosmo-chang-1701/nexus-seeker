@@ -89,6 +89,25 @@ def get_scenario_guidance(
     return "目前價差適中，依技術指標操作為主。"
 
 
+def _fmt_gex_notional(raw: float) -> str:
+    """GEX 原始值（OI×100×Γ×S²，每 100% 變動）→ 每 1% 變動避險名目，自動 $B/$M/$K。
+
+    docs/microstructure/01：原始值乘 0.01 才是每 1% 價格變動的做市商避險名目。
+    """
+    v = raw * 0.01
+    sign = "+" if v > 0 else ("-" if v < 0 else " ")
+    a = abs(v)
+    if a >= 1e9:
+        body = f"${a / 1e9:.2f}B"
+    elif a >= 1e6:
+        body = f"${a / 1e6:.1f}M"
+    elif a >= 1e3:
+        body = f"${a / 1e3:.0f}K"
+    else:
+        body = f"${a:.0f}"
+    return f"{sign}{body}"
+
+
 def _format_uoa_field(uoa_data: list) -> str:
     """將 uoa_data 列表轉換為動態對齊的標準 ASCII 表格。"""
     trades = []
@@ -97,11 +116,18 @@ def _format_uoa_field(uoa_data: list) -> str:
             action_str = str(item.get("action", ""))
             trade_type_str = str(item.get("trade_type", "SWEEP")).upper()
             if action_str.startswith("⚖️ MIDPOINT"):
-                flow_tag = "⚖️ CROSS"
+                flow_tag = "❔ 未定" if item.get("direction_note") else "⚖️ CROSS"
+            elif item.get("trade_type_inferred"):
+                flow_tag = "📊 日累積"
             elif trade_type_str == "BLOCK":
                 flow_tag = "📦 BLOCK"
             else:
                 flow_tag = "🔥 SWEEP"
+            _ratio_f = float(item.get("ratio", 0.0))
+            _paced = item.get("paced_ratio")
+            _ratio_str = str(item.get("ratio_str", f"{_ratio_f}x"))
+            if _paced is not None and abs(float(_paced) - _ratio_f) >= 0.05:
+                _ratio_str = f"{_ratio_f:.2f}x→{float(_paced):.2f}x"
             trade = UOATradeResult(
                 expiry=str(item.get("expiry", "")),
                 strike_price=float(item.get("strike", 0.0)),
@@ -111,8 +137,8 @@ def _format_uoa_field(uoa_data: list) -> str:
                 ask_price=float(item.get("ask_price", 0.0)),
                 volume=int(item.get("volume", 0)),
                 open_interest=int(item.get("oi", 0)),
-                ratio=float(item.get("ratio", 0.0)),
-                ratio_str=str(item.get("ratio_str", f"{item.get('ratio', 0.0)}x")),
+                ratio=_ratio_f,
+                ratio_str=_ratio_str,
                 action=f"{flow_tag} {action_str}",
                 intent=str(item.get("intent", "")),
                 symbol=item.get("symbol"),
@@ -1404,7 +1430,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                     gex_lines = [
                         "```ansi",
-                        " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [K]",
+                        " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [每 1% 避險名目]",
                     ]
                     for i, k in enumerate(reversed(display_strikes)):
                         v = _safe_gex(k)
@@ -1412,13 +1438,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         bar_str = "█" * bars + "░" * (10 - bars)
                         if v > 0:
                             color_prefix = "\u001b[1;32m"
-                            sign = "+"
                         elif v < 0:
                             color_prefix = "\u001b[1;31m"
-                            sign = "-"
                         else:
                             color_prefix = "\u001b[1;30m"
-                            sign = " "
 
                         # 只標最接近現價的那一檔：高價股的履約價間距相對小，1% 容差內常
                         # 落進兩檔以上，會同時出現多個 📍。1% 容差保留，現價遠離所有
@@ -1429,10 +1452,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             and abs(k - effective_c_val) < (effective_c_val * 0.01)
                             else "  "
                         )
-                        formatted_val = f"{sign}{abs(v)/1000:.0f}K"
+                        formatted_val = _fmt_gex_notional(v)
                         prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
                         gex_lines.append(
-                            f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>8}"
+                            f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>9}"
                         )
 
                     def _append_tree_block(
@@ -1493,7 +1516,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         put_wall_net = _safe_gex(put_wall_float)
                         if put_wall_net < 0:
                             put_items.append(
-                                f"⚠ 該履約價淨 GEX -{abs(put_wall_net)/1000:.0f}K 為負"
+                                f"⚠ 該履約價淨 GEX {_fmt_gex_notional(put_wall_net)} 為負"
                                 "（Put 端 Gamma 最大 ≠ 淨支撐，實為助跌區）"
                             )
                         # PutWall 落在淨 GEX 助跌區時，供下方結構停損並列「以淨
@@ -1689,6 +1712,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 for s in sto_strikes
                                 if isinstance(s, dict)
                                 and str(s.get("type", "")).upper() == "PUT"
+                                # 價內 STO Put 不是地板；跨式／價差腿非方向性
+                                and _to_float(s.get("strike"), 0.0) < effective_c_val
+                                and not s.get("structure_leg")
                             ]
                             if put_sto_candidates:
                                 best_sto = max(
@@ -1732,7 +1758,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                             f"⚠️ 機構大單 ${sto_strike:.2f}"
                                             f" (STO PUT {sto_volume:,}口{notional_suffix})"
                                             " 與 GEX PutWall 分歧"
-                                            " (機構掛單為單筆流量信號，非全鏈聚合曝險，僅供交叉參考)"
+                                            " (單日累積流量的啟發式方向，非全鏈聚合曝險，僅供交叉參考)"
                                         )
 
                         put_block_items = put_items
@@ -1849,7 +1875,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_arrow = (
                             "↑" if (call_wall_dist_pct >= 0 or is_call_zero) else "↓"
                         )
-                        depth_sign = "+" if call_wall_depth >= 0 else "-"
                         _space_line = (
                             f"距現價空間: {call_arrow}"
                             f"{abs(call_wall_dist_pct):.2f}%{space_flag}"
@@ -1860,7 +1885,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_items = [
                             f"CallWall: ${call_wall_float:.2f}{call_reanchor_note}",
                             _space_line,
-                            f"深度: {depth_sign}{abs(call_wall_depth)/1000:.0f}K",
+                            f"深度: {_fmt_gex_notional(call_wall_depth)}",
                         ]
                         call_block_items = call_items
                         if call_wall_dist_pct >= 0 or is_call_zero:
@@ -1943,13 +1968,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             regime_label = "🟢 LONG_GAMMA (自穩定壓制波動)"
                         else:
                             regime_label = "🔴 SHORT_GAMMA (助漲助跌)"
-                        net_gex_sign = (
-                            "+"
-                            if net_gex_float > 0
-                            else ("-" if net_gex_float < 0 else "")
-                        )
                         regime_items.append(
-                            f"Net GEX Regime (全鏈加總): {net_gex_sign}{abs(net_gex_float)/1000:.0f}K ({regime_label})"
+                            f"Net GEX Regime (全鏈加總): {_fmt_gex_notional(net_gex_float)} ({regime_label})"
                         )
                         # 釘住效應：全鏈 Long Gamma 時做市商逆勢避險（漲賣跌買），現價貼近
                         # 上方 CallWall 時突破難以延續——放量只代表量能，不代表能穿牆。
@@ -2035,7 +2055,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 "（與全鏈體制相反：現價已落入負 Gamma 區，單邊擴散風險）"
                                 if local_regime.is_short_gamma
                                 else "（與全鏈體制相反：現價附近仍有正 Gamma 緩衝）"
-                            )
+                            ) + "；局部值為相鄰履約價 GEX 內插，現價跨一檔即可能翻號"
                         else:
                             local_note = ""
                         regime_items.append(
@@ -2465,6 +2485,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             table_lines.append(
                 "⚠️ SWEEP/BLOCK/CROSS 為量體形狀 + Bid/Ask 執行價位置啟發式代理判定，"
                 "非真實 order-type 逐筆 tape 數據。"
+            )
+            table_lines.append(
+                "📊 日累積＝資料源無逐筆 tape，列示當日累積量；❔ 未定＝末筆成交無法判方向。"
             )
             table_lines.append(
                 "⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
