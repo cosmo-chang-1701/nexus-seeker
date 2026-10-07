@@ -21,6 +21,7 @@ from database.fundamental_pipeline import (
     get_active_governance_flags,
     get_insider_transactions,
     get_latest_liquidity_regime,
+    get_sec_filing_cursor,
 )
 from market_analysis.fundamental_pipeline.governance_gate import (
     evaluate_governance_status,
@@ -118,6 +119,17 @@ class GovernanceGateSection:
 
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
+        header = "🚨 治理與重大事件監控 (Governance Gate)"
+
+        # SEC 申報同步管線尚未排程：從未同步（無游標）時不得把「沒有資料」顯示成
+        # 「正常」或 NEUTRAL，必須與「已同步且乾淨」明確區分。
+        cursor = await asyncio.to_thread(get_sec_filing_cursor, sym_upper)
+        if cursor is None:
+            no_data = "⚪ 尚無申報同步資料（SEC 申報同步管線尚未排程）"
+            return (
+                header,
+                f"• 治理狀態: {no_data}\n• 內部人行為 (30D): {no_data}",
+            )
 
         # 讀取生效中之治理旗標
         flags = await asyncio.to_thread(get_active_governance_flags, sym_upper)
@@ -127,15 +139,23 @@ class GovernanceGateSection:
         txs = await asyncio.to_thread(get_insider_transactions, sym_upper, 30)
         insider_summary = evaluate_insider_signal(sym_upper, txs, window_days=30)
 
-        header = "🚨 治理與重大事件監控 (Governance Gate)"
-
+        synced_at = cursor.updated_at[:16] if cursor.updated_at else "--"
         if gov_status.is_clean:
-            gov_line = "• 治理狀態: 🟢 正常無重大異常 (最近未觸發 4.02 / 5.02 警訊)"
-        else:
-            sev_icon = "🔴" if gov_status.max_severity == "CRITICAL" else "🟠"
             gov_line = (
-                f"• 治理狀態: {sev_icon} **觸發風控審查** "
-                f"({gov_status.max_severity}，共 {len(gov_status.active_flags)} 項警訊生效中)"
+                "• 治理狀態: 🟢 已同步，最近未觸發 4.02 / 5.02 警訊"
+                f"（最後同步 {synced_at} UTC）"
+            )
+        else:
+            sev_icon = {"CRITICAL": "🔴", "HIGH": "🟠", "REVIEW": "🟡"}.get(
+                gov_status.max_severity or "", "⚪"
+            )
+            if gov_status.max_severity in ("CRITICAL", "HIGH"):
+                status_text = "**觸發風控審查**"
+            else:
+                status_text = "**待人工複核**（5.02 僅有 item code，未判定為離任）"
+            gov_line = (
+                f"• 治理狀態: {sev_icon} {status_text} "
+                f"({gov_status.max_severity}，共 {len(gov_status.active_flags)} 項旗標生效中)"
             )
 
         insider_icon = (

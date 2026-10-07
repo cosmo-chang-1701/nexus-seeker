@@ -92,6 +92,20 @@ class InsiderTxRecord:
     is_10b5_1: bool = False
     is_backfill: bool = False
     created_at: str = ""
+    # 主申報人 CIK（10 位補零）：聚合時的內部人身分鍵；無 CIK 時退回 owner_name。
+    # 持久化時編碼於 insider_transaction.owner_name 欄（`{cik}|{names}`），不改 schema。
+    owner_cik: str | None = None
+    # 是否來自修正申報（Form 4/A）；讀取時由 sec_filing_event.form 還原。
+    is_amendment: bool = False
+    # 所屬申報之受理時間（美東 ISO 8601），用於多份 4/A 取最新者；讀取時由事件表還原。
+    filing_accepted_at: str = ""
+
+    @property
+    def owner_key(self) -> str:
+        """內部人身分鍵：優先 CIK，否則為正規化後的申報人名稱。"""
+        if self.owner_cik:
+            return f"CIK:{self.owner_cik}"
+        return f"NAME:{self.owner_name.strip().upper()}"
 
 
 InsiderTransactionDTO = InsiderTxRecord

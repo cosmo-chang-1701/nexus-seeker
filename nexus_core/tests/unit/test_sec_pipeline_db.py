@@ -169,3 +169,62 @@ async def test_database_governance_flags_roundtrip() -> None:
     act = next(f for f in active if f.source_accession == "0001375365-26-000001")
     assert act.severity == "CRITICAL"
     assert act.flag_kind == "ITEM_4_02_RESTATEMENT"
+
+
+@pytest.mark.asyncio
+async def test_insider_owner_cik_and_amendment_roundtrip() -> None:
+    """主申報人 CIK 編碼於 owner_name 欄（不改 schema）且可還原；4/A 由事件表 form 還原。"""
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    await save_sec_filing_events(
+        [
+            FilingEventRecord(
+                accession="0009999999-26-000401",
+                symbol="ZZCK",
+                form="4/A",
+                items=None,
+                accepted_at="2026-10-05T18:42:45-04:00",
+                session="AMC",
+            )
+        ]
+    )
+    await save_insider_transactions(
+        [
+            InsiderTxRecord(
+                accession="0009999999-26-000401",
+                line_no=1,
+                symbol="ZZCK",
+                owner_name="Huang Family Trust, HUANG JENSEN",
+                owner_cik="0001197649",
+                tx_date=now_str,
+                tx_code="P",
+                shares=10.0,
+                price=1.0,
+                acquired_disposed="A",
+                is_amendment=True,
+            ),
+            InsiderTxRecord(
+                accession="0009999999-26-000402",
+                line_no=1,
+                symbol="ZZCK",
+                owner_name="NO CIK OWNER",
+                tx_date=now_str,
+                tx_code="P",
+                shares=5.0,
+                price=1.0,
+                acquired_disposed="A",
+            ),
+        ]
+    )
+
+    records = {r.accession: r for r in get_insider_transactions("ZZCK", days=30)}
+    amended = records["0009999999-26-000401"]
+    assert amended.owner_name == "Huang Family Trust, HUANG JENSEN"
+    assert amended.owner_cik == "0001197649"
+    assert amended.owner_key == "CIK:0001197649"
+    assert amended.is_amendment is True
+    assert amended.filing_accepted_at == "2026-10-05T18:42:45-04:00"
+
+    plain = records["0009999999-26-000402"]
+    assert plain.owner_name == "NO CIK OWNER"
+    assert plain.owner_cik is None
+    assert plain.is_amendment is False
