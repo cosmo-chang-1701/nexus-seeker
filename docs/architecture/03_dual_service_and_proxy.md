@@ -114,6 +114,8 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `_EDGE_SNAPSHOT_MAX_AGE_SECONDS` | `300.0` 秒 (5 分鐘) | Edge SQLite 快照新鮮度門檻（超過則視為失效） | `nexus_core/services/market_data_service/options.py:22` |
 | `_OPTION_EXPIRIES_CACHE_TTL` | `1800.0` 秒 (30 分鐘) | 期權到期日清單之記憶體快取存活時間 | `nexus_core/services/market_data_service/options.py:23` |
+| `yahoo_slot()`／`_yahoo_rate_limit_until` | 背景 30/60s、互動 30/60s；冷卻 60→900 秒 | Yahoo 統一預算與全域 429 冷卻 | `nexus_core/services/market_data_service/_core.py` |
+| `_HISTORY_SEMAPHORE` | `BoundedSemaphore(2)` | edge `/history` 同時 `ticker.history` 上限 | `nexus_edge_scraper/yf_api.py` |
 | `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 安全穿透端點網址 | `nexus_core/config.py` |
 | `MAX_RETRY_COUNT` | `1` 次 (`_retry_once`) | 外部請求失敗時的快速重試次數（避免阻塞過久） | `nexus_core/services/market_data_service/_utils.py` |
 | `PRIORITY_SYNC_INTERVAL` | 15 分鐘（隨盤中巡邏同步） | 持倉標的 Priority 清單同步頻率（`_sync_edge_watchlist`，未設 `TUNNEL_URL` 不同步） | `nexus_core/cogs/trading/scheduler.py:28` |
@@ -133,6 +135,12 @@ flowchart TD
 ### 5.2 403 / 429 封鎖狀態碼自適應識別
 - 當本地 `yfinance` 直連遭遇 Yahoo Finance 403 Forbidden 封鎖時，`_retry_once` 會在重試失敗後精確記錄異常類型。
 - 下一輪請求將自動提高對第 1 階與第 2 階邊緣節點的依賴，防止盲目重複發送無效請求導致 IP 封鎖期被延長。
+
+### 5.2.1 Yahoo 統一預算、全域 429 冷卻與「429 不走直連」
+- **統一預算**：所有 Yahoo 流量——本地 `yfinance`（`call_yf`）與 core→edge 即時 scrape（`/api/v1/scrape/yf/history`、`/options/*`；**不含** `/api/v1/cache/*` 本地快照讀取）——一律包在 `yahoo_slot()` 內，共用同一組 limiter／semaphore（背景 30/60s＋併發 2、互動 30/60s＋併發 5）。
+- **全域冷卻**：edge 回 HTTP 429 或 JSON `status == "rate_limited"`、或本地直連拋 `YFRateLimitError`／訊息含 `Too Many Requests`，即呼叫 `mark_yahoo_rate_limited()`：有 `Retry-After` 以其為準，否則 60→120→240→…上限 900 秒指數退避；成功一次（`mark_yahoo_ok()`）重置退避。冷卻中 `_fetch_history_via_edge`、期權即時 scrape、`_direct_yf_history` 一律不發請求。
+- **429 不走直連**：edge 回報限流時，`_safe_yf_history` 回傳 `None`（記 warning），**不**降級到 nexus_core 資料中心 IP 直連（更容易被封）；只有 edge「連線失敗／非 429 錯誤」才維持第 3 階直連降級。呼叫端依既有 fail-safe 處理空資料，日線另有 stale-on-error（見 `02` §4.1）。
+- **edge `/history`**：路由改同步 `def`（FastAPI 丟 threadpool，不再卡住 edge event loop 與背景期權輪詢），以 `threading.BoundedSemaphore(2)` 限制同時 `ticker.history` 數；捕捉 `YFRateLimitError` 回 HTTP 429，其餘錯誤維持 `{"status": "error"}` 200 回應。
 
 ### 5.3 異步連線池洩漏防護
 - 呼叫邊緣服務時，一律透過 `async with get_edge_client() as client:` 語法管理 `httpx.AsyncClient` 實例，確保在請求逾時或拋出例外時，底層 TCP Socket 連線能被及時釋放，防止 VPS 出現連線洩漏（Socket Leak）。

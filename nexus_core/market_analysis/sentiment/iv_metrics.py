@@ -13,6 +13,7 @@ from models.quant import IVMetrics
 from market_time import is_market_open, ny_tz
 
 
+from services.market_data_service.caches import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 from .cache import _iv_cache, _IV_CACHE_TTL
 
 
@@ -342,7 +343,8 @@ async def fetch_and_calculate_iv_metrics(
 ) -> IVMetrics:
     """
     獲取並計算隱含波動率 (IV) 相關指標，包括 IV Rank, IV Percentile, 週預期震盪區間。
-    具備 15 分鐘快取（900 秒）與資料庫持久化儲存。
+    具備 30 分鐘記憶體快取（對齊 edge 期權快照週期）與資料庫持久化儲存；
+    盤中 SQLite kv 快取年齡逾 30 分鐘視為 miss 並重算，盤外日鍵整日有效。
 
     force_refresh=True 時完全略過記憶體快取與 SQLite kv_cache 讀取，並要求所有
     下游期權鏈抓取略過 Edge Snapshot 分層，保證回傳即時資料。僅供已透過 Discord
@@ -389,12 +391,20 @@ async def fetch_and_calculate_iv_metrics(
                     return cached_val  # type: ignore
 
     # Check SQLite kv_cache next for same-day warm cache
-    from database.cache import get_kv_cache, save_kv_cache
+    from database.cache import get_kv_cache_with_age, save_kv_cache
     from datetime import datetime
 
     today_str = datetime.now().strftime("%Y-%m-%d")
     cache_key = f"iv_metrics_{symbol}_{today_str}"
-    cached = None if force_refresh else get_kv_cache(cache_key)
+    cached, kv_age = (None, None) if force_refresh else get_kv_cache_with_age(cache_key)
+    # 盤中：上游 edge 期權快照約 30 分鐘才換一次，kv 快取若更舊就不能再當「今日現值」
+    if (
+        cached is not None
+        and is_market_open()
+        and (kv_age is None or kv_age > _EDGE_SNAPSHOT_MAX_AGE_SECONDS)
+    ):
+        logger.info(f"[{symbol}] kv IV 快取已逾 30 分鐘，盤中重算")
+        cached = None
     if cached is not None:
         try:
             metrics = IVMetrics(**cached)

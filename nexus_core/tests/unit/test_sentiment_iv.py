@@ -46,8 +46,8 @@ def _patch_live_iv(live_iv: dict[str, Any]) -> Any:
 def clear_iv_cache() -> Any:
     _iv_cache.clear()
     with patch("database.cache.get_kv_cache", return_value=None), patch(
-        "database.cache.save_kv_cache", new_callable=AsyncMock
-    ):
+        "database.cache.get_kv_cache_with_age", return_value=(None, None)
+    ), patch("database.cache.save_kv_cache", new_callable=AsyncMock):
         yield
     _iv_cache.clear()
 
@@ -697,3 +697,65 @@ async def test_fetch_and_calculate_iv_metrics_premarket_cache_bypassed_when_mark
         # It should bypass cache and fetch the new live IV (0.45)
         assert metrics2.is_premarket is False
         assert metrics2.current_iv == pytest.approx(0.45)
+
+
+# ---------------------------------------------------------------------------
+# A4：盤中 kv IV 快取年齡 > 30 分鐘視為 miss
+# ---------------------------------------------------------------------------
+def _kv_iv_payload() -> dict:
+    from models.quant import IVMetrics
+
+    return IVMetrics(
+        symbol="KVAGE",
+        current_iv=0.3,
+        iv_rank=50.0,
+        iv_percentile=50.0,
+        reference_spot_price=100.0,
+    ).model_dump()
+
+
+@pytest.mark.parametrize(
+    "market_open,age,expect_hit",
+    [
+        (True, 1801.0, False),
+        (True, 1799.0, True),
+        (True, None, False),
+        (False, 4 * 3600.0, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_kv_iv_cache_age_gate(
+    market_open: bool, age: Any, expect_hit: bool
+) -> None:
+    from market_analysis.sentiment.iv_metrics import fetch_and_calculate_iv_metrics
+
+    m_expiries = AsyncMock(return_value=[])
+    with (
+        patch(
+            "database.cache.get_kv_cache_with_age",
+            return_value=(_kv_iv_payload(), age),
+        ),
+        patch(
+            "market_analysis.sentiment.iv_metrics.is_market_open",
+            return_value=market_open,
+        ),
+        patch(
+            "market_analysis.sentiment.iv_metrics.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 100.0},
+        ),
+        patch(
+            "market_analysis.sentiment.iv_metrics.market_data_service.get_all_option_expiries",
+            m_expiries,
+        ),
+    ):
+        try:
+            result = await fetch_and_calculate_iv_metrics("KVAGE")
+        except Exception:
+            result = None
+    if expect_hit:
+        assert result is not None and result.current_iv == pytest.approx(0.3)
+        m_expiries.assert_not_called()
+    else:
+        # 命中 kv 時不會走到重算（盤中重算會先查期權到期日）
+        m_expiries.assert_called()
