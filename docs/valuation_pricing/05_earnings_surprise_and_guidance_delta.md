@@ -1,6 +1,6 @@
 # 財務預期差綜合評分、管理層指引語意解析與共識快照規格書
 
-> **接線狀態（尚未接線）**：財報預期差協調服務 `EarningsSurpriseService`（`process_filing_event` / `evaluate_symbol_surprise` / `sync_symbol_estimates`）目前**沒有任何 production 排程或呼叫端**，`earnings_surprise`、`guidance_extraction`、`eps_estimate_snapshot` 三張表在正式環境不會自動產生資料。其上游 SEC 申報同步（`FilingEventService`）同樣尚未接線，見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。`/fa` 的業績預期差區塊在沒有資料時會明示「⚪ 尚無財報預期差資料（財報預期差管線尚未排程）」，各子項（預期差、指引、共識快照）缺資料時也分別標示「（管線尚未排程）」，不使用看似正常的佔位內容。以下各節描述的是模組行為與接線後的預期流程。
+> **接線狀態（已接線，只入庫不推播）**：`EarningsSurpriseService` 由兩條路徑觸發，規則見 §2.9。(1) **事件觸發**：SEC 申報同步 `sec_filing_sync_hourly`（平日 07:00–20:00 ET 每整點，見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)）發現標的池（持倉＋自選，≤ 80 檔）新的 8-K / 8-K/A Item 2.02 時呼叫 `process_filing_event`，首次同步的 30 天回填事件同樣處理。(2) **PENDING 重試**：`earnings_pending_retry_1730`（NYSE 交易日 17:30 ET）對近 14 個日曆日內仍為 `PENDING` 的財季呼叫 `evaluate_symbol_surprise`。結果寫入 `earnings_surprise`、`guidance_extraction`、`eps_estimate_snapshot`，供 `/fa` 與後續估值模組唯讀使用，**不推播**。`/fa` 沒有資料時顯示「⚪ 尚無財報預期差資料（待下一份財報 8-K 觸發；僅涵蓋持倉與自選標的）」，各子項（預期差、指引、共識快照）缺資料時分別標示「（待下一份財報 8-K 觸發）」。
 
 ---
 
@@ -124,13 +124,25 @@ $$\text{Verdict} = \begin{cases}
 
 已結束但尚未公布財報的財季不屬於任何 horizon（例如 10 月初時，9 月底結束、10 月底才公布的財季不是 `0q`）。Finnhub `company_eps_estimates` 在免費方案回 403 時，改以 `company_earnings` 最近已公布財季之期末日逐季推移 3 個月，找出第一個推算期末日 $\ge$ 今天之財季作為 `0q`，再以財年 / 財季比對財報日曆之 `epsEstimate`（來源標記 `finnhub_calendar`，僅有 `0q` / `+1q`）；無法錨定時不寫入。horizon 為滾動標籤：跨季時同一 horizon 會指向不同財季，比較不同日期之快照時須注意。
 
+### 2.9 觸發、重試與推播
+1. **事件觸發（`FilingEventService.earnings_handler`）**：`SecFilingSyncRunner` 建立 `FilingEventService` 時注入 `EarningsSurpriseService.process_filing_event`，兩者共用同一個 `SecEdgarClient`（同一個 8 req/s 限速器）。`FilingEventService` 只把 route 含 `EARNINGS`（Item 2.02）的 8-K / 8-K/A 事件交給 handler。
+   - **時機**：在事件入庫、游標推進**之後**才呼叫，財報處理（含 LLM）較慢，不延後游標寫入。
+   - **只處理游標已涵蓋的事件**：游標因前面某筆申報失敗而停住時，失敗之後的事件下輪會重新處理，屆時才交給 handler，同一份財報不會重複呼叫 LLM。首次回填有失敗時不寫游標，本輪也不處理任何財報事件。
+   - **回填事件**（`is_backfill`）照常處理，首次同步即可建立近 30 天的財報資料。
+   - **盡力而為**：handler 例外只記 warning，不計入 `failed`，不影響游標與同標的其他事件。
+2. **LLM 閘門**：沿用 §3 流程——推導出可靠財季後，`config.API_KEY` 已設定且 `is_memory_safe()` 時才呼叫 LLM，否則降級為純數字預期差。SEC 同步本身已是 leader-only 並在啟動時檢查記憶體。
+3. **PENDING 重試（`earnings_pending_retry_1730`）**：BMO 財報 8-K 在盤前同步時，Finnhub 常常還沒有實際 EPS，此時寫成 `PENDING`。NYSE 交易日 17:30 ET 由 `EarningsPendingRetryRunner` 讀取 `created_at`（首次寫入時間，upsert 不更新）在 `EARNINGS_PENDING_RETRY_LOOKBACK_DAYS` = 14 個日曆日（約 10 個交易日）內、`status = 'PENDING'` 的 `(symbol, fiscal_period)`，逐一呼叫 `evaluate_symbol_surprise(symbol, fiscal_period)` 重算。重算只呼叫 Finnhub，不呼叫 LLM。
+   - **時間選擇**：BMO 財報當天收盤後重算一次；盤後 AMC 財報的 actual 若 17:30 還沒進 Finnhub，下一個交易日 17:30 再補。此時段也錯開 16:15 的收盤維護與流動性精算。
+   - **閘門**：leader-only，並檢查 `is_memory_safe()`（時鐘迴圈檢查一次，執行器本身再複檢一次）。單一標的例外只記 warning，不影響其他標的。超過 14 天仍無實際值者不再重試，`/fa` 持續顯示「⏳ 待實際值公布」。
+4. **推播**：本規格不定義推播。預期差、指引與共識快照**只入庫**，供 `/fa` 與後續估值模組（PR5）唯讀使用；`EarningsSurpriseService` 不傳入 bot，事件觸發與重試路徑都沒有推播呼叫。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
 
 ```mermaid
 flowchart TD
-    A[SEC 8-K 申報事件監聽] --> B{包含 Item 2.02 財報發布?}
+    A[SEC 申報同步 sec_filing_sync_hourly 入庫並推進游標後] --> B{8-K 包含 Item 2.02 財報發布?}
     B -- 否 --> C[忽略或分流至其他 8-K 處理器]
     B -- 是 --> P[以 SEC 受理日對齊 Finnhub 財報條目推導財季 YYYY-Qn]
     P --> Q{推導出可靠財季?}
@@ -149,7 +161,10 @@ flowchart TD
     K --> L[計算綜合驚喜分數 Composite Surprise Score]
     L --> M[寫入 earnings_surprise 資料表（全空不寫、PENDING 不覆蓋 PROCESSED）]
     M --> N[更新分析師 EPS 預估快照 eps_estimate_snapshot]
-    N --> O[供 /fa 互動終端唯讀調閱呈現]
+    N --> O[供 /fa 互動終端唯讀調閱呈現（不推播）]
+    T[NYSE 交易日 17:30 ET PENDING 重試] --> U[讀取近 14 日仍為 PENDING 之財季]
+    U --> V[evaluate_symbol_surprise 重查 Finnhub（不呼叫 LLM）]
+    V --> M
 ```
 
 ---
@@ -174,6 +189,7 @@ flowchart TD
 | `LLM_GUIDANCE_MAX_TOKENS` | `2_400` (int) | 指引擷取 LLM 輸出 token 上限 |
 | `CALENDAR_ALIGN_WINDOW_DAYS` | `5` (int) | 財報日曆發布日與 SEC 受理日之最大對齊誤差（日） |
 | `REPORT_LAG_MAX_DAYS` | `100` (int) | 財季期末至財報發布之最長間隔（`company_earnings` 對齊用） |
+| `EARNINGS_PENDING_RETRY_LOOKBACK_DAYS` | `14` (int) | PENDING 重試回看窗口（日曆日，約 10 個交易日），以 `created_at` 首次寫入時間界定 |
 
 ---
 
@@ -202,5 +218,7 @@ flowchart TD
 - 財務預期差協調與指引服務：`nexus_core/services/earnings_surprise_service.py`
 - 資料庫遷移與資料表定義：`nexus_core/database/migrations/v092_add_earnings_surprise.py`
 - 資料庫持久層讀寫實作：`nexus_core/database/fundamental_pipeline.py`
+- 事件觸發掛點（earnings_handler）：`nexus_core/services/filing_event_service.py`
+- 排程接線（SecFilingSyncRunner 注入、EarningsPendingRetryRunner）：`nexus_core/cogs/trading/fundamental_pipeline_monitor.py`
 - 基本面互動診斷終端：`nexus_core/cogs/fundamental_terminal.py`
 - 全景診斷 Embed 構建器：`nexus_core/cogs/embed_builders/fundamental_embeds.py`

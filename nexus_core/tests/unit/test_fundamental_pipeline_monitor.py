@@ -14,6 +14,8 @@ from zoneinfo import ZoneInfo
 import config
 import pytest
 from cogs.trading.fundamental_pipeline_monitor import (
+    EARNINGS_PENDING_RETRY_LOOKBACK_DAYS,
+    EarningsPendingRetryRunner,
     FundamentalPipelineMonitorCog,
     SecFilingSyncRunner,
     _run_macro_surprise_job,
@@ -22,6 +24,10 @@ from cogs.trading.fundamental_pipeline_monitor import (
     weekday_hourly_between,
 )
 from market_analysis.fundamental_pipeline.event_clock import ClockJob, ClockJobRegistry
+from market_analysis.fundamental_pipeline.models import (
+    EarningsSurpriseDTO,
+    FilingEventRecord,
+)
 from services.bounded_cache import BoundedCache
 
 _MONITOR = "cogs.trading.fundamental_pipeline_monitor"
@@ -373,3 +379,142 @@ async def test_clock_task_triggers_sec_sync_without_blocking() -> None:
         gate.set()
         assert runner._task is not None
         await runner._task
+
+
+# ---------------------------------------------------------------------------
+# PR3 財報預期差：8-K 2.02 事件觸發與 PENDING 重試 (earnings_pending_retry_1730)
+# ---------------------------------------------------------------------------
+
+
+def _earnings_event(is_backfill: bool = False) -> FilingEventRecord:
+    return FilingEventRecord(
+        accession="ACC-EARN",
+        symbol="AAPL",
+        form="8-K",
+        items="2.02,9.01",
+        accepted_at="2026-10-07T16:05:00-04:00",
+        session="AMC",
+        primary_doc_url=None,
+        routes_json='["EARNINGS"]',
+        is_backfill=is_backfill,
+    )
+
+
+@pytest.mark.asyncio
+async def test_sec_runner_injects_earnings_handler_sharing_sec_client() -> None:
+    """SEC 同步服務注入財報處理器：8-K 2.02 事件轉交 process_filing_event，共用 SEC 客戶端。"""
+    sec_client = MagicMock()
+    fake = _fake_service(AsyncMock(return_value={}))
+    fake.get_client = AsyncMock(return_value=sec_client)
+    earnings = MagicMock()
+    earnings.process_filing_event = AsyncMock(return_value=None)
+    runner = SecFilingSyncRunner(_leader_bot())
+    with (
+        patch(f"{_MONITOR}.FilingEventService", return_value=fake) as factory,
+        patch(
+            f"{_MONITOR}.EarningsSurpriseService", return_value=earnings
+        ) as earnings_factory,
+    ):
+        service = await runner._get_service()
+    assert service is fake
+    earnings_factory.assert_called_once_with(sec_client=sec_client)
+
+    handler = factory.call_args.kwargs["earnings_handler"]
+    event = _earnings_event(is_backfill=True)
+    await handler(event)
+    earnings.process_filing_event.assert_awaited_once_with(event)
+
+
+def test_earnings_pending_retry_job_registered_on_trading_days_1730() -> None:
+    """PENDING 重試：NYSE 交易日 17:30 ET 到期；休市日、週末與其他時間不到期。"""
+    register_default_fundamental_jobs()
+    job = ClockJobRegistry.get("earnings_pending_retry_1730")
+    assert job is not None
+
+    due_slots = [
+        (h, m)
+        for h in range(24)
+        for m in range(0, 60, 5)
+        if job.is_due(datetime(2026, 10, 7, h, m, tzinfo=ny_tz))
+    ]
+    assert due_slots == [(17, 30), (17, 35), (17, 40)]
+    # 2026-11-26 感恩節休市、2026-10-10 週六
+    assert job.is_due(datetime(2026, 11, 26, 17, 30, tzinfo=ny_tz)) is False
+    assert job.is_due(datetime(2026, 10, 10, 17, 30, tzinfo=ny_tz)) is False
+
+
+_WED_1730 = datetime(2026, 10, 7, 17, 30, tzinfo=ny_tz)
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_skips_when_not_leader_or_memory_unsafe() -> None:
+    """非 leader 或記憶體超標時不讀 PENDING、不呼叫 Finnhub。"""
+    service = MagicMock()
+    service.evaluate_symbol_surprise = AsyncMock()
+    with patch(
+        f"{_MONITOR}.get_pending_earnings_surprise_keys",
+        return_value=[("AAPL", "2026-Q4")],
+    ) as query:
+        with patch(f"{_MONITOR}.is_memory_safe", return_value=True):
+            follower = EarningsPendingRetryRunner(
+                SimpleNamespace(_is_leader_instance=False), service=service
+            )
+            assert (await follower.run(_WED_1730))["pending"] == 0
+        with patch(f"{_MONITOR}.is_memory_safe", return_value=False):
+            leader = EarningsPendingRetryRunner(_leader_bot(), service=service)
+            assert (await leader.run(_WED_1730))["pending"] == 0
+    query.assert_not_called()
+    service.evaluate_symbol_surprise.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_reevaluates_pending_periods_and_isolates_errors() -> None:
+    """只重算回看窗口內的 PENDING 財季；單一標的例外不影響其他標的。"""
+
+    async def _evaluate(symbol: str, fiscal_period: str) -> EarningsSurpriseDTO | None:
+        if symbol == "BAD":
+            raise RuntimeError("finnhub 429")
+        if symbol == "AAPL":
+            return EarningsSurpriseDTO(
+                symbol=symbol,
+                fiscal_period=fiscal_period,
+                consensus_eps=1.0,
+                actual_eps=1.1,
+                status="PROCESSED",
+            )
+        return EarningsSurpriseDTO(
+            symbol=symbol,
+            fiscal_period=fiscal_period,
+            consensus_eps=1.0,
+            status="PENDING",
+        )
+
+    service = MagicMock()
+    service.evaluate_symbol_surprise = AsyncMock(side_effect=_evaluate)
+    keys = [("AAPL", "2026-Q4"), ("BAD", "2026-Q3"), ("MSFT", "2027-Q1")]
+    runner = EarningsPendingRetryRunner(_leader_bot(), service=service)
+    with (
+        patch(f"{_MONITOR}.get_pending_earnings_surprise_keys", return_value=keys) as q,
+        patch(f"{_MONITOR}.is_memory_safe", return_value=True),
+    ):
+        stats = await runner.run(_WED_1730)
+
+    since = q.call_args.args[0]
+    assert since.tzinfo is not None
+    assert (_WED_1730 - since).days == EARNINGS_PENDING_RETRY_LOOKBACK_DAYS
+    assert [c.args for c in service.evaluate_symbol_surprise.call_args_list] == keys
+    assert stats == {"pending": 3, "processed": 1, "still_pending": 1, "failed": 1}
+
+
+@pytest.mark.asyncio
+async def test_pending_retry_no_pending_does_not_build_service() -> None:
+    """沒有 PENDING 財季時不建立服務、不發任何外部請求。"""
+    runner = EarningsPendingRetryRunner(_leader_bot())
+    with (
+        patch(f"{_MONITOR}.get_pending_earnings_surprise_keys", return_value=[]),
+        patch(f"{_MONITOR}.is_memory_safe", return_value=True),
+        patch(f"{_MONITOR}.EarningsSurpriseService") as factory,
+    ):
+        stats = await runner.run(_WED_1730)
+    assert stats["pending"] == 0
+    factory.assert_not_called()

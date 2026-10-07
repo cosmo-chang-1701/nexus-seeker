@@ -10,7 +10,7 @@ Nexus Seeker 本質為選擇權風險控制與營運決策顧問系統（Zero-Ex
 
 事件時鐘遵循**開閉原則（Open-Closed Principle）**：主排程 Cog 以 5 分鐘固定步長巡邏全域時鐘註冊表，各業務模組（宏觀流動性、SEC 申報、財務預期差、產業鏈檢驗等）僅需向註冊器註冊其所屬的 `ClockJob`，無需修改主迴圈排程核心。
 
-> **目前已註冊的 `ClockJob`**（`cogs/trading/fundamental_pipeline_monitor.py`）：`macro_surprise_0830`、`macro_surprise_1000`、`liquidity_regime_1615` 與 `sec_filing_sync_hourly`。最後者於平日 07:00–20:00 ET 每整點以背景任務執行 SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易、8-K 治理旗標，並對結構化 13D 呼叫激進投資人閘門、只記日誌）；規格見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) §3.1。財報預期差與管理層指引服務（`services/earnings_surprise_service.py`）**尚未接線**，見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md)。
+> **目前已註冊的 `ClockJob`**（`cogs/trading/fundamental_pipeline_monitor.py`）：`macro_surprise_0830`、`macro_surprise_1000`、`liquidity_regime_1615`、`sec_filing_sync_hourly` 與 `earnings_pending_retry_1730`。`sec_filing_sync_hourly` 於平日 07:00–20:00 ET 每整點以背景任務執行 SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易、8-K 治理旗標，並對結構化 13D 呼叫激進投資人閘門、只記日誌）；規格見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md) §3.1。同步發現的 8-K Item 2.02 會在游標推進後交給注入的 `EarningsSurpriseService.process_filing_event`（財報預期差與管理層指引，只入庫不推播）；`earnings_pending_retry_1730` 於 NYSE 交易日 17:30 ET 重算仍為 `PENDING` 的財季。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9。
 
 ### 1.2 適用市場環境與系統邊界
 - **低頻總經發布與非同步數據攝取**：涵蓋每週 H.4.1、芝加哥聯準會 NFCI、每週四初領失業金及每月 CPI、NFP、ISM PMI 發布。
@@ -39,7 +39,8 @@ $$C_{\text{dedup}} = \text{BoundedCache}(\text{max\_size} = 300)$$
 ### 2.1.1 觸發日曆
 - **宏觀預期差（08:30 / 10:00 ET）**：`weekday_at`，週一至週五觸發，刻意**不**排除 NYSE 休市日——總經數據可能在休市日照常公布（例如耶穌受難日的非農就業）。
 - **流動性體制（16:15 ET）**：`nyse_trading_day_at`，先以 `weekday_at` 判定時間視窗，再以 `market_time.is_nyse_trading_day()`（`pandas_market_calendars` NYSE 行事曆）排除國定休市日；行事曆查詢失敗時退回平日判定。
-- **SEC 申報同步（平日 07:00–20:00 ET 每整點）**：`weekday_hourly_between(7, 20, window_minutes=10)`，週一至週五每個整點的前 10 分鐘到期；採平日而非 NYSE 交易日（SEC 依聯邦營業日受理申報）。$W = 10\text{ min} < T_{\text{cool}} = 1800\text{s} < 60\text{ min}$，每個整點恰觸發一次。處理器 `SecFilingSyncRunner.trigger` 只啟動背景 `asyncio.Task` 即返回（不阻塞同一輪的其他工作），上一輪未完成時略過；缺少 `SEC_USER_AGENT` 時只記一次 error。
+- **SEC 申報同步（平日 07:00–20:00 ET 每整點）**：`weekday_hourly_between(7, 20, window_minutes=10)`，週一至週五每個整點的前 10 分鐘到期；採平日而非 NYSE 交易日（SEC 依聯邦營業日受理申報）。$W = 10\text{ min} < T_{\text{cool}} = 1800\text{s} < 60\text{ min}$，每個整點恰觸發一次。處理器 `SecFilingSyncRunner.trigger` 只啟動背景 `asyncio.Task` 即返回（不阻塞同一輪的其他工作），上一輪未完成時略過；缺少 `SEC_USER_AGENT` 時只記一次 error。8-K Item 2.02 事件在同一個背景任務內、游標推進後交給 `EarningsSurpriseService.process_filing_event`（盡力而為，例外只記 warning）。
+- **財報預期差 PENDING 重試（17:30 ET）**：`nyse_trading_day_at(17, 30, window_minutes=15)`，NYSE 交易日觸發。處理器 `EarningsPendingRetryRunner.run` 複檢 leader 與 `is_memory_safe()` 後，對近 14 個日曆日內仍為 `PENDING` 的財季逐一呼叫 `evaluate_symbol_surprise`（只查 Finnhub、不呼叫 LLM，通常僅數檔，同步執行）；單一標的例外隔離。
 
 ### 2.2 標的池優先級過濾模型
 設系統所有持倉標的集合為 $\mathcal{H}$，使用者自選清單標的集合為 $\mathcal{W}$，排除標的集合（指數與各類 ETF）為 $\mathcal{E}$。
@@ -68,6 +69,8 @@ flowchart TD
     L --> M[執行 job.execute now_et]
     M --> N[寫入資料庫日誌 single-writer]
     M -.->|sec_filing_sync_hourly| BG[啟動背景 asyncio.Task 並立即返回; 上一輪未完成則略過]
+    BG -.->|8-K Item 2.02, 游標推進後| ES[EarningsSurpriseService.process_filing_event 只入庫]
+    M -.->|earnings_pending_retry_1730| PR[重算近 14 日 PENDING 財季]
 ```
 
 ---

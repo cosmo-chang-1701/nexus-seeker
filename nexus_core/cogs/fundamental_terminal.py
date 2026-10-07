@@ -187,7 +187,7 @@ class GovernanceGateSection:
         return header, f"{gov_line}\n{insider_line}"
 
 
-_PIPELINE_NOT_SCHEDULED = "管線尚未排程"
+_AWAIT_NEXT_EARNINGS_8K = "待下一份財報 8-K 觸發"
 _HORIZON_LABELS_ZH: dict[str, str] = {
     "0q": "本季",
     "+1q": "下季",
@@ -208,8 +208,8 @@ def _parse_guidance(record: GuidanceExtractionDTO | None) -> GuidanceExtraction 
 class EarningsSurpriseSection:
     """PR3: 財務預期差與管理層前瞻指引區塊。
 
-    財報預期差管線（EarningsSurpriseService）目前尚未排程；沒有資料時必須明示，
-    不可用看似正常的佔位內容。
+    財報預期差由 SEC 申報同步發現 8-K Item 2.02 時事件觸發（僅涵蓋持倉與自選標的），
+    沒有資料時必須明示，不可用看似正常的佔位內容。
     """
 
     @property
@@ -229,7 +229,7 @@ class EarningsSurpriseSection:
         if latest_surprise is None and guidance is None and not snapshots:
             return (
                 header,
-                f"• ⚪ 尚無財報預期差資料（財報預期差{_PIPELINE_NOT_SCHEDULED}）",
+                f"• ⚪ 尚無財報預期差資料（{_AWAIT_NEXT_EARNINGS_8K}；僅涵蓋持倉與自選標的）",
             )
 
         lines: list[str] = [self._surprise_line(latest_surprise)]
@@ -240,7 +240,7 @@ class EarningsSurpriseSection:
     @staticmethod
     def _surprise_line(latest_surprise: EarningsSurpriseDTO | None) -> str:
         if latest_surprise is None:
-            return f"• 業績預期差: ⚪ 尚無財報預期差資料（{_PIPELINE_NOT_SCHEDULED}）"
+            return f"• 業績預期差: ⚪ 尚無財報預期差資料（{_AWAIT_NEXT_EARNINGS_8K}）"
 
         period = latest_surprise.fiscal_period
         if latest_surprise.status != "PROCESSED":
@@ -286,7 +286,7 @@ class EarningsSurpriseSection:
     ) -> list[str]:
         if guidance is None:
             return [
-                f"• 管理層前瞻指引: ⚪ 尚無指引擷取資料（{_PIPELINE_NOT_SCHEDULED}）"
+                f"• 管理層前瞻指引: ⚪ 尚無指引擷取資料（{_AWAIT_NEXT_EARNINGS_8K}）"
             ]
 
         curr_g = _parse_guidance(guidance)
@@ -328,7 +328,7 @@ class EarningsSurpriseSection:
     @staticmethod
     def _snapshot_line(snapshots: list[EPSEstimateSnapshotRecord]) -> str:
         if not snapshots:
-            return f"• 分析師共識快照: ⚪ 尚無共識快照資料（{_PIPELINE_NOT_SCHEDULED}）"
+            return f"• 分析師共識快照: ⚪ 尚無共識快照資料（{_AWAIT_NEXT_EARNINGS_8K}）"
         snap_parts: list[str] = []
         for horizon in ("0q", "+1q"):
             snap = next((s for s in snapshots if s.horizon == horizon), None)

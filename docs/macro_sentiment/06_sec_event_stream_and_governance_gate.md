@@ -134,16 +134,17 @@ flowchart TD
 | 執行方式 | `trigger` 以背景 `asyncio.Task` 執行 `sync_universe_filings` 並立即返回，不阻塞同一時鐘上的 08:30 / 10:00 / 16:15 工作；上一輪未完成時略過本輪（防重疊） |
 | 缺少 `SEC_USER_AGENT` | 建立客戶端時捕捉 `SecConfigError`，**只記一次** error，之後每輪靜默略過（設定後重啟即生效） |
 | 客戶端重用 | 跨輪重用同一個 `FilingEventService` / `SecEdgarClient`（共用 8 req/s 限速器、CIK 快取與 24 小時映射表 TTL） |
+| 財報事件掛點 | `FilingEventService(earnings_handler=...)`：route 含 `EARNINGS` 的 8-K / 8-K/A Item 2.02（含回填）在事件入庫、游標推進後交給 `EarningsSurpriseService.process_filing_event`（共用同一個 `SecEdgarClient`）；只處理游標已涵蓋的事件，例外只記 warning、不計入 `failed`。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9 |
 
 **頻率選擇（每小時而非每 30 分鐘）**：一輪的請求量約為
 
-$$R \approx N + 2 \cdot F_{\text{new}} \quad (N \le 80 \text{ 檔標的的 submissions；每筆新申報一次 SGML 表頭，Form 4 / 13D 再一次 XML})$$
+$$R \approx N + 2 \cdot F_{\text{new}} \quad (N \le 80 \text{ 檔標的的 submissions；每筆新申報一次 SGML 表頭，Form 4 / 13D 再一次 XML；8-K Item 2.02 另加申報目錄與 EX-99.1 共 2 次})$$
 
 穩態下 $F_{\text{new}}$ 每小時僅數筆，$R \approx 80\text{–}120$ 次，在 $\le 8\text{ req/s}$、`Semaphore(3)` 下約 15–30 秒。07:00、08:00、09:00 三輪涵蓋開盤前的 BMO 8-K；Form 4 法定申報期限為 2 個營業日，治理推播預設乾跑，每小時的延遲已足夠，改為 30 分鐘只會讓請求量加倍而無實質效益。20:00 之後受理的申報（EDGAR 對 Section 16 申報受理至 22:00）於次一平日 07:00 補抓。首次回填（每檔最多 90 天 Form 4 與 30 天 8-K）可能需要數千次請求、耗時數分鐘以上，因此採背景任務與防重疊，而不是讓時鐘迴圈等待。
 
 **推播模式**：依上方流程圖節點 O，只有「非回填、`FUNDAMENTAL_PIPELINE_DRY_RUN=false`、CRITICAL / HIGH、標的在持倉池」四者同時成立才經 `notification_dispatcher.notify` 推播 `defense_fundamental_thesis`；預設 `FUNDAMENTAL_PIPELINE_DRY_RUN=true`，排程接線後仍只入庫、不推播。
 
-**與 08:00 `fundamental_filing_scan` 的關係**：兩者都讀 SEC 申報但職責不重疊。08:00 任務（`cogs/trading/fundamental_filing_monitor.py`）只掃**持倉**、每日一次、經 edge `TUNNEL_URL` 取最新一份 10-K / 10-Q / 8-K 內文送 LLM 護城河判讀，游標為 `fundamental_scan_state`，判定「基本面假設破滅」才推播；本任務直連 SEC、涵蓋持倉＋自選標的池、處理**所有**新申報的結構化欄位（Form 4 明細、8-K item code、13D 封面），不呼叫 LLM，游標為 `sec_filing_cursor`。兩者各自維護游標、互不讀寫對方的表。
+**與 08:00 `fundamental_filing_scan` 的關係**：兩者都讀 SEC 申報但職責不重疊。08:00 任務（`cogs/trading/fundamental_filing_monitor.py`）只掃**持倉**、每日一次、經 edge `TUNNEL_URL` 取最新一份 10-K / 10-Q / 8-K 內文送 LLM 護城河判讀，游標為 `fundamental_scan_state`，判定「基本面假設破滅」才推播；本任務直連 SEC、涵蓋持倉＋自選標的池、處理**所有**新申報的結構化欄位（Form 4 明細、8-K item code、13D 封面），游標為 `sec_filing_cursor`；唯一的 LLM 呼叫是 8-K Item 2.02 觸發的 EX-99.1 指引擷取（每檔每季約一次）。兩者各自維護游標、互不讀寫對方的表。
 
 ---
 

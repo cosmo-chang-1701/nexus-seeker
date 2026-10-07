@@ -336,12 +336,13 @@ def _patch_pr3(
 
 @pytest.mark.asyncio
 async def test_earnings_surprise_section_no_data_is_explicit() -> None:
-    """管線尚未排程、完全沒有資料時明示，不得出現看似正常的佔位內容。"""
+    """完全沒有資料時明示待財報 8-K 觸發，不得出現看似正常的佔位內容。"""
     sec = EarningsSurpriseSection()
     with _patch_pr3(None, None, []):
         header, body = await sec.render("AAPL")
     assert "尚無財報預期差資料" in body
-    assert "管線尚未排程" in body
+    assert "待下一份財報 8-K 觸發" in body
+    assert "尚未排程" not in body
     assert "待下輪" not in body and "追蹤中" not in body
     assert "PEAD" not in header and "Surprise" not in header
 
@@ -442,8 +443,8 @@ async def test_earnings_surprise_section_small_base_and_pending() -> None:
     with _patch_pr3(small, None, []):
         _, body = await sec.render("RKLB")
     assert "小基數" in body
-    assert "尚無指引擷取資料（管線尚未排程）" in body
-    assert "尚無共識快照資料（管線尚未排程）" in body
+    assert "尚無指引擷取資料（待下一份財報 8-K 觸發）" in body
+    assert "尚無共識快照資料（待下一份財報 8-K 觸發）" in body
 
     pending = EarningsSurpriseDTO(
         symbol="RKLB", fiscal_period="2026-Q3", consensus_eps=0.10, status="PENDING"

@@ -9,7 +9,10 @@
 4. 維護分析師 EPS 預估快照 (eps_estimate_snapshot)。
 5. 遵循 1GB–2GB VPS 記憶體守衛 (is_memory_safe) 與 Single-Writer 持久化架構。
 
-接線狀態：本服務目前**沒有 production 排程或呼叫端**（docs/valuation_pricing/05 §0）。
+接線狀態：`cogs/trading/fundamental_pipeline_monitor.py` 將 `process_filing_event` 注入
+SEC 申報同步（8-K Item 2.02 事件觸發，含回填），並以 `earnings_pending_retry_1730`
+（NYSE 交易日 17:30 ET）對 PENDING 財季呼叫 `evaluate_symbol_surprise`。只入庫、不推播
+（docs/valuation_pricing/05 §2.9）。
 """
 
 from __future__ import annotations
