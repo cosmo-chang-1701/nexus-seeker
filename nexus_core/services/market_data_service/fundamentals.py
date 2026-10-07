@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 from services.market_data_service._core import (
     _execute_api_call,
     _get_client,
+    is_finnhub_rate_limited,
     _sanitize_ticker,
 )
 from services.market_data_service.caches import (
@@ -20,6 +21,9 @@ from services.market_data_service.caches import (
     _ETF_CACHE_TTL,
     _ETF_KV_MAX_AGE_SECONDS,
     _ETF_NEGATIVE_CACHE_TTL,
+    _EARNINGS_CALENDAR_EMPTY_TTL,
+    _EARNINGS_CALENDAR_PENDING_ACTUAL_TTL,
+    _PROFILE_EMPTY_CACHE_TTL,
     _PROFILE_KV_MAX_AGE_SECONDS,
     _option_chain_cache,
     _profile_cache,
@@ -132,36 +136,66 @@ async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Company Profile & ETF
 # ---------------------------------------------------------------------------
+def _profile_single_flight_key(symbol: str) -> str:
+    """SingleFlight key 與 `_profile_cache` 的 cache key 同構（皆以 symbol 區分）。"""
+    return f"company_profile_{symbol}"
+
+
+async def _fetch_company_profile_uncached(symbol: str) -> Dict[str, Any]:
+    """實際抓取 company_profile2 並寫入記憶體／kv 快取（供 SingleFlight 共享）。"""
+    from database.cache import save_kv_cache
+
+    client = _get_client()
+    data = await _execute_api_call(client.company_profile2, symbol=symbol)
+    res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
+    now = time.time()
+    if res:
+        _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
+        await save_kv_cache(_profile_single_flight_key(symbol), res)
+    else:
+        # ETF 等標的回 {}：只在記憶體負向快取 24 小時，不寫 kv
+        _profile_cache[symbol] = ({}, now + _PROFILE_EMPTY_CACHE_TTL)
+    return res
+
+
 async def get_company_profile(symbol: str) -> Dict[str, Any]:
     """取得公司/ETF 基本資料。"""
+    from services.single_flight import SingleFlightManager
+
     symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _profile_cache:
         val, expiry = _profile_cache[symbol]
         if now < expiry:
-            return val  # type: ignore
+            return dict(val)
 
-    # 記憶體 miss → SQLite 持久化（7 天）：重啟／藍綠部署後第一輪掃描免對整份
+    # 記憶體 miss → SQLite 持久化（24 小時）：重啟／藍綠部署後第一輪掃描免對整份
     # watchlist 重打 company_profile2。讀取走 to_thread，避免阻塞 event loop。
     # 延遲 import：避免 database 套件與 market_data_service 的循環匯入
-    from database.cache import get_kv_cache_fresh, save_kv_cache
+    from database.cache import get_kv_cache_with_age
 
-    kv_key = f"company_profile_{symbol}"
-    kv_val = await asyncio.to_thread(
-        get_kv_cache_fresh, kv_key, _PROFILE_KV_MAX_AGE_SECONDS
-    )
-    if isinstance(kv_val, dict) and kv_val:
-        _profile_cache[symbol] = (kv_val, now + _PROFILE_CACHE_TTL)
-        return cast(Dict[str, Any], kv_val)
+    kv_key = _profile_single_flight_key(symbol)
+    kv_val, kv_age = await asyncio.to_thread(get_kv_cache_with_age, kv_key)
+    if (
+        isinstance(kv_val, dict)
+        and kv_val
+        and kv_age is not None
+        and 0 <= kv_age <= _PROFILE_KV_MAX_AGE_SECONDS
+    ):
+        # 記憶體到期 = now + (24h - kv 年齡)：總資料年齡不超過 24 小時
+        _profile_cache[symbol] = (
+            kv_val,
+            now + (_PROFILE_CACHE_TTL - kv_age),
+        )
+        return dict(kv_val)
 
-    client = _get_client()
     try:
-        data = await _execute_api_call(client.company_profile2, symbol=symbol)
-        res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
-        if res:
-            _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
-            await save_kv_cache(kv_key, res)
-        return res
+        res = await SingleFlightManager.run(
+            _profile_single_flight_key(symbol),
+            _fetch_company_profile_uncached,
+            symbol,
+        )
+        return dict(cast(Dict[str, Any], res))
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub company profile 失敗: {e}")
         return {}
@@ -176,7 +210,8 @@ async def is_etf(symbol: str) -> bool:
     """判斷標的是否為 ETF。
 
     查詢順序：記憶體 → SQLite kv（30 天，僅 True）→ Finnhub symbol_lookup（免費端點）。
-    查詢例外時寫入 1 小時負向快取（回傳 False），避免每輪重打並白燒配額。
+    查詢例外時寫入 1 小時負向快取（回傳 False），避免每輪重打並白燒配額；
+    限流類例外（429／冷卻中熔斷）不寫負向快取，直接回 False。
     """
     symbol = _sanitize_ticker(symbol)
     now = time.time()
@@ -217,6 +252,20 @@ async def is_etf(symbol: str) -> bool:
             await save_kv_cache(kv_key, res)
         return res
     except Exception as e:
+        err = str(e).lower()
+        if (
+            is_finnhub_rate_limited()
+            or "429" in err
+            or "rate limit" in err
+            or "limit reached" in err
+            or "too many requests" in err
+        ):
+            # 限流（含冷卻中的互動快速熔斷）是暫時性狀態，不是「這檔不是 ETF」：
+            # 不寫負向快取，冷卻結束後下一輪即可重新判斷。
+            logger.warning(
+                f"[{symbol}] Finnhub 限流，ETF 判斷暫回非 ETF（不快取）: {e}"
+            )
+            return False
         logger.warning(f"[{symbol}] Finnhub ETF 判斷失敗，1 小時內視為非 ETF: {e}")
         _etf_cache[symbol] = (False, now + _ETF_NEGATIVE_CACHE_TTL)
         return False
@@ -225,16 +274,64 @@ async def is_etf(symbol: str) -> bool:
 # ---------------------------------------------------------------------------
 # Earnings Calendar (財報日期)
 # ---------------------------------------------------------------------------
+def _earnings_single_flight_key(symbol: str, from_date: str, to_date: str) -> str:
+    """SingleFlight key 與 `_earnings_calendar_cache` 的 cache key 同構。"""
+    return f"earnings_cal_{symbol.upper()}_{from_date}_{to_date}"
+
+
+def _earnings_cache_expiry(rows: List[Dict[str, Any]], now_ny: datetime) -> float:
+    """依結果內容決定財報日曆的快取到期時間戳。
+
+    - 空結果：最多 1 小時（不鎖整天）。
+    - 有「今天或昨天（ET）」條目但 epsActual 尚未公布：僅 10 分鐘。
+    - 其餘：當日 23:59:59 ET。
+    """
+    day_end = now_ny.replace(hour=23, minute=59, second=59, microsecond=0).timestamp()
+    now_ts = now_ny.timestamp()
+    if not rows:
+        return min(day_end, now_ts + _EARNINGS_CALENDAR_EMPTY_TTL)
+    recent = {
+        now_ny.strftime("%Y-%m-%d"),
+        (now_ny - timedelta(days=1)).strftime("%Y-%m-%d"),
+    }
+    if any(r.get("date") in recent and r.get("epsActual") is None for r in rows):
+        return min(day_end, now_ts + _EARNINGS_CALENDAR_PENDING_ACTUAL_TTL)
+    return day_end
+
+
+async def _fetch_earnings_calendar_uncached(
+    symbol: str,
+    from_date: str,
+    to_date: str,
+    cache_key: tuple[str, str, str],
+) -> List[Dict[str, Any]]:
+    """實際抓取財報日曆並寫入快取（供 SingleFlight 共享；例外不快取）。"""
+    client = _get_client()
+    data = await _execute_api_call(
+        client.earnings_calendar, _from=from_date, to=to_date, symbol=symbol
+    )
+    earnings: List[Dict[str, Any]] = (
+        list(data.get("earningsCalendar") or []) if data else []
+    )
+    earnings.sort(key=lambda x: x.get("date", ""))
+    now_ny = datetime.now(ZoneInfo("America/New_York"))
+    _earnings_calendar_cache[cache_key] = (
+        [dict(e) for e in earnings],
+        _earnings_cache_expiry(earnings, now_ny),
+    )
+    return earnings
+
+
 async def get_earnings_calendar(
     symbol: str,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """取得財報日曆（同日同參數記憶化，隔日 00:00 ET 失效）。"""
-    client = _get_client()
+    from services.single_flight import SingleFlightManager
+
     try:
-        ny_tz = ZoneInfo("America/New_York")
-        now_ny = datetime.now(ny_tz)
+        now_ny = datetime.now(ZoneInfo("America/New_York"))
         if from_date is None:
             from_date = now_ny.strftime("%Y-%m-%d")
         if to_date is None:
@@ -247,20 +344,18 @@ async def get_earnings_calendar(
         if cached is not None:
             rows, expiry = cached
             if now_ny.timestamp() < expiry:
-                return list(rows)
+                return [dict(e) for e in rows]
 
-        data = await _execute_api_call(
-            client.earnings_calendar, _from=from_date, to=to_date, symbol=symbol
+        shared = await SingleFlightManager.run(
+            _earnings_single_flight_key(symbol, from_date, to_date),
+            _fetch_earnings_calendar_uncached,
+            symbol,
+            from_date,
+            to_date,
+            cache_key,
         )
-        earnings = data.get("earningsCalendar", []) if data else []
-        earnings.sort(key=lambda x: x.get("date", ""))
-        # 只快取未拋例外的結果（含空 list）；到期 = 當日 23:59:59 ET
-        day_end = now_ny.replace(hour=23, minute=59, second=59, microsecond=0)
-        _earnings_calendar_cache[cache_key] = (
-            list(earnings),
-            day_end.timestamp(),
-        )
-        return cast(List[Dict[str, Any]], earnings)
+        # 併發共乘者共用同一份 list，一律逐筆複製後回傳
+        return [dict(e) for e in cast(List[Dict[str, Any]], shared)]
     except Exception as e:
         logger.error(f"[{symbol}] Finnhub earnings calendar 失敗: {e}")
         return []

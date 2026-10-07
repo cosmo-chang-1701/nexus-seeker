@@ -57,12 +57,25 @@ _ETF_CACHE_TTL = 86400  # 24 小時，ETF 屬性通常是靜態的
 _ETF_NEGATIVE_CACHE_TTL = 3600
 # ETF 判斷的 SQLite 持久化年限：ETF 身分幾乎不會改變，30 天讓重啟／藍綠部署後免重查。
 _ETF_KV_MAX_AGE_SECONDS = 30 * 86400
-# 公司 Profile 的 SQLite 持久化年限：產業／市值等欄位變動緩慢，7 天足夠。
-_PROFILE_KV_MAX_AGE_SECONDS = 7 * 86400
+# 公司 Profile 的 SQLite 持久化年限：24 小時。Gate 1 流動性門檻會用 marketCapitalization，
+# 若 kv 放 7 天且命中後又刷新記憶體 24 小時，市值最舊可能約 8 天；故 kv 與記憶體
+# 同為 24 小時，kv 命中時記憶體到期 = now + (24h - kv 年齡)，總年齡不超過 24 小時。
+_PROFILE_KV_MAX_AGE_SECONDS = 86400
+# company_profile2 對 ETF 回 {}：空結果只在記憶體負向快取 24 小時（不寫 kv），
+# 避免每輪都讀 kv 並重打 API。
+_PROFILE_EMPTY_CACHE_TTL = 86400
 
 # 財報日曆同日記憶化：key=(SYMBOL, from_date, to_date)，value=(list, 到期時間戳)。
-# 200 檔 ≈ watchlist＋持倉規模上限；每筆僅數個小 dict，記憶體可忽略。
-_EARNINGS_CALENDAR_CACHE_SIZE = 200
+# key 含 (from, to) 窗口，每檔至少 3 種窗口（日曆服務 90 天、SEC sync／retry 的
+# consensus 窗口 ref_day-400..+30 等）；約 200 檔 watchlist＋持倉 × 3 = 600。
+# 每筆僅數個小 dict，記憶體可忽略。
+_EARNINGS_CALENDAR_CACHE_SIZE = 600
+# 空結果（含 Finnhub 暫時回空）最多快取 1 小時，不鎖整天；非空才快取到當日結束。
+_EARNINGS_CALENDAR_EMPTY_TTL = 3600
+# 結果中有「今天或昨天」的條目但 epsActual 尚未公布時，只快取 10 分鐘：
+# epsActual 會在發布日稍後才填入，否則 16:05 的 8-K → 17:00 SEC sync 若快取了
+# 無 epsActual 的資料，17:30 earnings_pending_retry 同 key 會命中舊資料而重試失效。
+_EARNINGS_CALENDAR_PENDING_ACTUAL_TTL = 600
 _earnings_calendar_cache: Any = BoundedCache(max_size=_EARNINGS_CALENDAR_CACHE_SIZE)
 
 # ---------------------------------------------------------------------------
