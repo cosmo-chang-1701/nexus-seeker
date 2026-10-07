@@ -136,11 +136,12 @@ class GovernanceGateSection:
         sym_upper = symbol.strip().upper()
         header = "🚨 治理與重大事件監控 (Governance Gate)"
 
-        # SEC 申報同步管線尚未排程：從未同步（無游標）時不得把「沒有資料」顯示成
-        # 「正常」或 NEUTRAL，必須與「已同步且乾淨」明確區分。
+        # SEC 申報同步由平日 07:00–20:00 ET 每整點排程執行，只涵蓋持倉與自選標的池。
+        # 從未同步（無游標：尚未輪到首次同步、不在標的池或同步失敗）時不得把「沒有資料」
+        # 顯示成「正常」或 NEUTRAL，必須與「已同步且乾淨」明確區分。
         cursor = await asyncio.to_thread(get_sec_filing_cursor, sym_upper)
         if cursor is None:
-            no_data = "⚪ 尚無申報同步資料（SEC 申報同步管線尚未排程）"
+            no_data = "⚪ 尚無申報同步資料（待排程首次同步；僅涵蓋持倉與自選標的）"
             return (
                 header,
                 f"• 治理狀態: {no_data}\n• 內部人行為 (30D): {no_data}",

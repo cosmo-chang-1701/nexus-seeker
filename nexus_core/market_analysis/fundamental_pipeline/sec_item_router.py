@@ -141,11 +141,25 @@ def route_filing(form: str, items: str | Sequence[str] | None = None) -> list[st
         routes.append("INSIDER_TRANSACTION")
         return routes
 
-    if form_norm in ("SC 13D", "SC 13D/A", "SCHEDULE 13D", "13D", "13D/A"):
+    if form_norm in (
+        "SC 13D",
+        "SC 13D/A",
+        "SCHEDULE 13D",
+        "SCHEDULE 13D/A",
+        "13D",
+        "13D/A",
+    ):
         routes.append("ACTIVIST_13D")
         return routes
 
-    if form_norm in ("SC 13G", "SC 13G/A", "SCHEDULE 13G", "13G", "13G/A"):
+    if form_norm in (
+        "SC 13G",
+        "SC 13G/A",
+        "SCHEDULE 13G",
+        "SCHEDULE 13G/A",
+        "13G",
+        "13G/A",
+    ):
         routes.append("PASSIVE_13G")
         return routes
 

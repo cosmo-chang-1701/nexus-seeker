@@ -8,15 +8,21 @@
 以外的日子。注意這與 NYSE 交易日不同（耶穌受難日 NYSE 休市但 SEC 上班；哥倫布日、
 退伍軍人節 SEC 休息但 NYSE 開市），因此使用聯邦假日曆而非 nyse_calendar。
 
-尚未接線：目前沒有任何 production 呼叫端下載 13D 內文並呼叫本模組。
+接線狀態：`services/filing_event_service.py` 在每小時 SEC 申報同步中，遇到結構化
+Schedule 13D / 13D/A（EDGAR 自 2024-12-18 起強制的 `primary_doc.xml`）時，以
+`parse_schedule_13d_xml` 取出封面與 Item 4，再呼叫 `evaluate_activist_filing`。
+結果目前只寫入日誌（record-only，不入庫、不推播）；13G 為被動持股、無 Item 4 意圖，
+不評估；舊版 HTML / 純文字 `SC 13D` 無結構化欄位，略過。
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 import re
 
+import defusedxml.ElementTree as ET
 from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from market_analysis.fundamental_pipeline.models import ActivistSignal
@@ -54,6 +60,75 @@ _ACTIVIST_INTENT_PATTERNS = {
         re.IGNORECASE,
     ),
 }
+
+
+@dataclass(frozen=True)
+class Schedule13DFields:
+    """結構化 Schedule 13D 申報中供激進投資人閘門使用的欄位。"""
+
+    investor_name: str
+    ownership_pct: float
+    item_4_text: str
+    event_date: str  # ISO 日期 (YYYY-MM-DD)；無法解析時為空字串
+
+
+def _local_name(tag: str) -> str:
+    return tag.split("}", 1)[1] if "}" in tag else tag
+
+
+def _iter_local(root: ET.Element, name: str) -> list[ET.Element]:
+    return [node for node in root.iter() if _local_name(node.tag) == name]
+
+
+def _first_text(root: ET.Element, name: str) -> str:
+    for node in _iter_local(root, name):
+        text = (node.text or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _normalize_event_date(raw: str) -> str:
+    """封面 `dateOfEvent` 為 MM/DD/YYYY，正規化為 ISO；亦接受已是 ISO 的值。"""
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(raw.strip(), fmt).date().isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
+def parse_schedule_13d_xml(xml_text: str) -> Schedule13DFields | None:
+    """解析 EDGAR 結構化 Schedule 13D `primary_doc.xml`（命名空間無關）。
+
+    - 投資人名稱：第一位申報人 `reportingPersonName`。
+    - 持股比例：各申報人 `percentOfClass` 取最大值（共同申報人持股多為重疊計算，不可加總）。
+    - Item 4：`item4/transactionPurpose`；修正申報未修改 Item 4 時為空字串。
+    - 事件日：封面 `dateOfEvent`。
+    非 XML 或缺少申報人名稱時回傳 None（例如舊版 HTML 申報）。
+    """
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return None
+
+    investor_name = _first_text(root, "reportingPersonName")
+    if not investor_name:
+        return None
+
+    pcts: list[float] = []
+    for node in _iter_local(root, "percentOfClass"):
+        try:
+            pcts.append(float((node.text or "").strip().rstrip("%")))
+        except ValueError:
+            continue
+
+    return Schedule13DFields(
+        investor_name=investor_name,
+        ownership_pct=max(pcts) if pcts else 0.0,
+        item_4_text=_first_text(root, "transactionPurpose"),
+        event_date=_normalize_event_date(_first_text(root, "dateOfEvent")),
+    )
 
 
 @lru_cache(maxsize=16)
