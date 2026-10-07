@@ -98,6 +98,7 @@ async def test_ddp_inspector_dispatches_yfinance_via_call_yf() -> None:
         m_ticker.return_value = mock_ticker_instance
 
         async def _run_sync(func: Any, *args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("_endpoint", None)  # 計數用參數，不傳給 func
             return func(*args, **kwargs)
 
         m_call_yf.side_effect = _run_sync
@@ -405,6 +406,7 @@ async def test_volatility_inspector_dispatches_yfinance_via_call_yf() -> None:
         m_atr.return_value = mock_atr_series
 
         async def _run_sync(func: Any, *args: Any, **kwargs: Any) -> Any:
+            kwargs.pop("_endpoint", None)  # 計數用參數，不傳給 func
             return func(*args, **kwargs)
 
         m_call_yf.side_effect = _run_sync

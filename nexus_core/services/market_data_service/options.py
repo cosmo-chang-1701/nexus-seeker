@@ -110,7 +110,7 @@ async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
         try:
             ticker = yf.Ticker(symbol)
             expiries = await _retry_once(
-                lambda: call_yf(lambda: ticker.options),
+                lambda: call_yf(lambda: ticker.options, _endpoint="options_expiries"),
                 label=f"[{symbol}] yfinance 抓取期權到期日",
             )
             res = list(expiries)

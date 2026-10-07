@@ -186,21 +186,25 @@ def _get_yfinance_controls() -> dict[str, Any]:
     return controls
 
 
-async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
+async def call_yf(
+    func: Any, *args: Any, _endpoint: str | None = None, **kwargs: Any
+) -> Any:
     """統一節流包裝：所有對 yfinance 的 blocking 呼叫都應經過這裡。
-    依 `_is_interactive_request` context 挑選互動或背景限流池。"""
+    依 `_is_interactive_request` context 挑選互動或背景限流池。
+
+    `_endpoint`（僅限關鍵字）只供 api_budget 計數命名，不會傳給 func；傳 lambda
+    時務必指定，否則端點會全部歸到「<lambda>」而失去分析價值。
+    """
     controls = _get_yfinance_controls()
-    if _is_interactive_request.get():
+    is_interactive = _is_interactive_request.get()
+    if is_interactive:
         limiter, sem = controls["limiter_interactive"], controls["sem_interactive"]
     else:
         limiter, sem = controls["limiter_background"], controls["sem_background"]
+    endpoint: str = _endpoint or str(getattr(func, "__name__", "yf"))
     async with limiter:
         async with sem:
-            api_budget.record_call(
-                "yahoo",
-                getattr(func, "__name__", "yf"),
-                interactive=_is_interactive_request.get(),
-            )
+            api_budget.record_call("yahoo", endpoint, interactive=is_interactive)
             return await asyncio.to_thread(func, *args, **kwargs)
 
 
@@ -229,6 +233,18 @@ def is_finnhub_rate_limited() -> bool:
 # ---------------------------------------------------------------------------
 # Core Async API Call (Thread-safe Wrapper)
 # ---------------------------------------------------------------------------
+async def _counted_finnhub_call(
+    endpoint: str,
+    is_interactive: bool,
+    func: Any,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+) -> Any:
+    """計數後在獨立線程執行 Finnhub 同步呼叫（互動／背景分支共用）。"""
+    api_budget.record_call("finnhub", endpoint, interactive=is_interactive)
+    return await asyncio.to_thread(func, *args, **kwargs)
+
+
 async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
     """執行 Finnhub API 呼叫的異步封裝（生產等級防禦）。
 
@@ -245,6 +261,7 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 
     global _rate_limit_until
 
+    endpoint: str = str(getattr(func, "__name__", "unknown"))
     controls = _get_finnhub_controls()
     is_interactive = _is_interactive_request.get()
     sem = controls["sem_interactive"] if is_interactive else controls["sem_background"]
@@ -287,12 +304,9 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                     async with controls["limiter_global"]:
                         try:
                             # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
-                            api_budget.record_call(
-                                "finnhub",
-                                getattr(func, "__name__", "unknown"),
-                                interactive=is_interactive,
+                            return await _counted_finnhub_call(
+                                endpoint, is_interactive, func, args, kwargs
                             )
-                            return await asyncio.to_thread(func, *args, **kwargs)
                         except Exception as e:
                             error_msg = str(e).lower()
                             is_rate_limit = (
@@ -301,9 +315,7 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                 or "too many requests" in error_msg
                             )
                             if is_rate_limit:
-                                api_budget.record_rate_limited(
-                                    "finnhub", getattr(func, "__name__", "unknown")
-                                )
+                                api_budget.record_rate_limited("finnhub", endpoint)
                             is_conn_error = (
                                 "connection aborted" in error_msg
                                 or "timeout" in error_msg
@@ -380,12 +392,9 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 
                             try:
                                 # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
-                                api_budget.record_call(
-                                    "finnhub",
-                                    getattr(func, "__name__", "unknown"),
-                                    interactive=is_interactive,
+                                return await _counted_finnhub_call(
+                                    endpoint, is_interactive, func, args, kwargs
                                 )
-                                return await asyncio.to_thread(func, *args, **kwargs)
                             except Exception as e:
                                 error_msg = str(e).lower()
                                 is_rate_limit = (
@@ -394,9 +403,7 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                     or "too many requests" in error_msg
                                 )
                                 if is_rate_limit:
-                                    api_budget.record_rate_limited(
-                                        "finnhub", getattr(func, "__name__", "unknown")
-                                    )
+                                    api_budget.record_rate_limited("finnhub", endpoint)
                                 is_conn_error = (
                                     "connection aborted" in error_msg
                                     or "timeout" in error_msg

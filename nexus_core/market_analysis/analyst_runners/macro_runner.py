@@ -3,11 +3,12 @@
 from __future__ import annotations
 from typing import Any
 
-import asyncio
 import logging
 import math
 
 import yfinance as yf
+
+from services import market_data_service
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,8 @@ async def fetch_macro_data() -> dict:
         return tickers.history(period="2d")
 
     try:
-        hist = await asyncio.to_thread(_fetch)
+        # 改走 call_yf：與其他 yfinance 呼叫共用節流並計入 API 配額摘要
+        hist = await market_data_service.call_yf(_fetch, _endpoint="tickers_history")
         if not hist.empty and len(hist) >= 2:
             vix = float(hist["Close"]["^VIX"].iloc[-1])
             dxy = float(hist["Close"]["DX-Y.NYB"].iloc[-1])
