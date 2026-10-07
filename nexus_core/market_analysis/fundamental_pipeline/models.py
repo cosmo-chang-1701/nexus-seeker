@@ -94,6 +94,20 @@ class InsiderTxRecord:
     is_10b5_1: bool = False
     is_backfill: bool = False
     created_at: str = ""
+    # 主申報人 CIK（10 位補零）：聚合時的內部人身分鍵；無 CIK 時退回 owner_name。
+    # 持久化時編碼於 insider_transaction.owner_name 欄（`{cik}|{names}`），不改 schema。
+    owner_cik: str | None = None
+    # 是否來自修正申報（Form 4/A）；讀取時由 sec_filing_event.form 還原。
+    is_amendment: bool = False
+    # 所屬申報之受理時間（美東 ISO 8601），用於多份 4/A 取最新者；讀取時由事件表還原。
+    filing_accepted_at: str = ""
+
+    @property
+    def owner_key(self) -> str:
+        """內部人身分鍵：優先 CIK，否則為正規化後的申報人名稱。"""
+        if self.owner_cik:
+            return f"CIK:{self.owner_cik}"
+        return f"NAME:{self.owner_name.strip().upper()}"
 
 
 InsiderTransactionDTO = InsiderTxRecord
@@ -230,7 +244,10 @@ class ToneMetric(BaseModel):
         description="-2 代表極度惡化/防禦，0 代表中性，+2 代表極具定價自信/擴張",
     )
     quote_snippet: str = Field(
-        description="支持評分的管理層原文直接引用摘錄（限 200 字以內）"
+        description=(
+            "支持評分的新聞稿英文原文逐字摘錄（限 200 字元以內，不可翻譯或改寫）；"
+            "原文無相關論述時 score 必須為 0 且本欄填空字串"
+        )
     )
 
 
@@ -240,12 +257,29 @@ class GuidanceExtraction(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    fiscal_period: str
+    fiscal_period: str = Field(
+        description=(
+            "本次新聞稿所報告之財季，格式 YYYY-Qn（例如 2026-Q1）。僅供參考，"
+            "系統以 SEC 申報時間對齊 Finnhub 財報日曆推導之期別為準"
+        )
+    )
+    guidance_target_period: str | None = Field(
+        default=None,
+        description=(
+            "數值指引所針對之目標期別：季度填 YYYY-Qn，全年度填 FYYYYY（例如 FY2026）；"
+            "無數值指引填 None"
+        ),
+    )
     revenue_guidance_midpoint_usd: float | None = Field(
-        default=None, description="營收指引中點金額 (美元)，無指引填 None"
+        default=None,
+        description=(
+            "營收指引中點，必須填完整美元數值（例如 94.5 billion 填 94500000000，"
+            "不可以百萬或十億為單位）；無數值指引填 None"
+        ),
     )
     eps_guidance_midpoint_usd: float | None = Field(
-        default=None, description="EPS 指引中點金額 (美元)，無指引填 None"
+        default=None,
+        description="每股盈餘指引中點，完整美元數值（例如 1.25）；無數值指引填 None",
     )
     margin_guidance: list[MarginGuidance] = Field(default_factory=list)
 
@@ -272,7 +306,10 @@ class GuidanceExtractionDTO:
     fiscal_period: str
     source_accession: str
     model_version: str
+    # 依擷取欄位完整度計算（guidance_delta.calculate_extraction_confidence）
     confidence_score: float
+    # 相較前期指引之態度邊際變化；schema 為 NOT NULL，無前期可比時寫入 0.0，
+    # 呈現層一律以前期記錄重算 delta，不得以本欄判斷有無前期
     tone_delta_score: float
     data_json: str
     created_at: str = ""
@@ -297,12 +334,13 @@ class GuidanceDeltaSummary:
     """前瞻指引邊際變動與態度摘要。"""
 
     tone_score: float
-    tone_delta: float
+    tone_delta: float | None  # 無前期指引可比時為 None
     revenue_guidance_delta_pct: float | None
     eps_guidance_delta_pct: float | None
     margin_trend: str
     verdict: GuidanceVerdict
     summary_text: str
+    comparison_note: str = ""  # 無法比較之原因（期別不同、單位不一致等），繁體中文
 
 
 # ============================================================================

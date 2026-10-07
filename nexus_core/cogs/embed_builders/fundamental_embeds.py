@@ -77,7 +77,7 @@ def build_governance_flag_embed(
     sev_icon = "🔴" if is_critical else "🟠"
     embed.add_field(
         name="🚨 審查等級與類型",
-        value=f"{sev_icon} **{flag.severity}** ｜ 代號: `{flag.flag_kind}`\n有效審查期至: `{flag.expires_at}`\n\u200b",
+        value=f"{sev_icon} **{flag.severity}** ｜ 代號: `{flag.flag_kind}`\n有效審查期至: `{flag.expires_at} UTC`\n\u200b",
         inline=False,
     )
 

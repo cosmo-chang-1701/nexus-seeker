@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from market_analysis.fundamental_pipeline.guidance_delta import (
+    calculate_extraction_confidence,
     calculate_management_tone_score,
     calculate_tone_delta,
     compare_guidance,
     evaluate_margin_trend,
+    is_magnitude_comparable,
 )
 from market_analysis.fundamental_pipeline.models import (
     GuidanceExtraction,
+    MarginDirection,
     MarginGuidance,
     ToneMetric,
 )
@@ -25,10 +28,12 @@ def _make_sample_guidance(
     supply: int = 0,
     defensive: int = 0,
     margins: list[MarginGuidance] | None = None,
+    target: str | None = "FY2026",
 ) -> GuidanceExtraction:
     return GuidanceExtraction(
         symbol=symbol,
         fiscal_period=fiscal_period,
+        guidance_target_period=target,
         revenue_guidance_midpoint_usd=revenue,
         eps_guidance_midpoint_usd=eps,
         margin_guidance=margins or [],
@@ -62,7 +67,8 @@ def test_calculate_tone_delta() -> None:
     """測試相較前期的態度邊際變化分數。"""
     assert calculate_tone_delta(50.0, 20.0) == 30.0
     assert calculate_tone_delta(-30.0, 0.0) == -30.0
-    assert calculate_tone_delta(40.0, None) == 40.0
+    # 無前期可比時為 None，不得以當期分數冒充邊際變化
+    assert calculate_tone_delta(40.0, None) is None
 
 
 def test_evaluate_margin_trend() -> None:
@@ -96,14 +102,14 @@ def test_compare_guidance_raised_and_lowered() -> None:
     assert summary_raised.revenue_guidance_delta_pct == 0.05
     assert summary_raised.eps_guidance_delta_pct is not None
     assert summary_raised.eps_guidance_delta_pct > 0.05
-    assert "RAISED" in summary_raised.summary_text
+    assert "調升" in summary_raised.summary_text
 
     # 營收與 EPS 明顯調降 (-5% 與 -10%)
     curr_lowered = _make_sample_guidance(revenue=19000000000.0, eps=0.72)
     summary_lowered = compare_guidance(curr_lowered, prior)
     assert summary_lowered.verdict == "LOWERED"
     assert summary_lowered.revenue_guidance_delta_pct == -0.05
-    assert "LOWERED" in summary_lowered.summary_text
+    assert "調降" in summary_lowered.summary_text
 
 
 def test_compare_guidance_maintained() -> None:
@@ -114,8 +120,8 @@ def test_compare_guidance_maintained() -> None:
     assert summary_flat.verdict == "MAINTAINED"
 
 
-def test_compare_guidance_fallback_to_tone() -> None:
-    """測試無數值指引時退回語意與利潤率判定。"""
+def test_compare_guidance_without_numbers_is_unknown() -> None:
+    """無數值指引時依 docs §2.5 一律 UNKNOWN，不以語意態度推論調升 / 調降。"""
     curr_tone_high = _make_sample_guidance(
         revenue=None,
         eps=None,
@@ -125,7 +131,94 @@ def test_compare_guidance_fallback_to_tone() -> None:
         defensive=1,
     )
     summary = compare_guidance(curr_tone_high, None)
-    assert summary.verdict == "RAISED"
+    assert summary.verdict == "UNKNOWN"
+    assert summary.tone_delta is None
+    assert summary.comparison_note == "無同期別前後數值指引"
+
+    curr_tone_low = _make_sample_guidance(
+        revenue=None,
+        eps=None,
+        backlog=-2,
+        pricing=-2,
+        supply=-2,
+        defensive=-2,
+        margins=[MarginGuidance(metric_name="Gross Margin", direction="COMPRESSING")],
+    )
+    assert compare_guidance(curr_tone_low, None).verdict == "UNKNOWN"
+
+
+def test_compare_guidance_numbers_without_prior_is_unknown() -> None:
+    """只有當期數值、沒有前期指引也沒有共識時無從比較，回傳 UNKNOWN。"""
+    curr = _make_sample_guidance(revenue=21000000000.0, eps=0.85)
+    summary = compare_guidance(curr, None)
+    assert summary.verdict == "UNKNOWN"
+    assert summary.revenue_guidance_delta_pct is None
+    assert summary.eps_guidance_delta_pct is None
+
+
+def test_compare_guidance_different_target_period_not_compared() -> None:
+    """前後指引目標期別不同（下季 vs 上一季的下季）時不做數值比較。"""
+    prior = _make_sample_guidance(revenue=20000000000.0, eps=0.80, target="2026-Q3")
+    curr = _make_sample_guidance(revenue=25000000000.0, eps=1.00, target="Q4 2026")
+    summary = compare_guidance(curr, prior)
+    assert summary.verdict == "UNKNOWN"
+    assert summary.revenue_guidance_delta_pct is None
+    assert "目標期別不同" in summary.comparison_note
+    # 態度邊際仍可計算（有前期）
+    assert summary.tone_delta == 0.0
+
+
+def test_compare_guidance_same_target_with_format_variants() -> None:
+    """目標期別格式不同但正規化後相同（FY2026 / fiscal year 2026）時可比較。"""
+    prior = _make_sample_guidance(revenue=20000000000.0, eps=0.80, target="FY2026")
+    curr = _make_sample_guidance(
+        revenue=21000000000.0, eps=0.85, target="fiscal year 2026"
+    )
+    assert compare_guidance(curr, prior).verdict == "RAISED"
+
+
+def test_compare_guidance_unit_mismatch_not_compared() -> None:
+    """一筆以完整美元、一筆以十億美元填寫（差距逾 100 倍）時判為無法比較。"""
+    prior = _make_sample_guidance(revenue=20.0, eps=None)  # 20 (billion)
+    curr = _make_sample_guidance(revenue=21000000000.0, eps=None)
+    summary = compare_guidance(curr, prior)
+    assert summary.verdict == "UNKNOWN"
+    assert summary.revenue_guidance_delta_pct is None
+    assert "單位不一致" in summary.comparison_note
+
+
+def test_is_magnitude_comparable() -> None:
+    assert is_magnitude_comparable(21e9, 20e9)
+    assert not is_magnitude_comparable(21e9, 21.0)
+    assert is_magnitude_comparable(0.85, 0.80, 0.05)
+    # EPS 接近零時以下限計算，避免 0.01 → 0.02 被誤判為單位不一致
+    assert is_magnitude_comparable(0.02, 0.01, 0.05)
+    assert not is_magnitude_comparable(85.0, 0.80, 0.05)
+
+
+def test_calculate_extraction_confidence() -> None:
+    """信心分數 = (可溯源態度維度數 + 營收 / EPS / 利潤率指引之有無) / 7。"""
+    full = _make_sample_guidance(
+        margins=[MarginGuidance(metric_name="Gross Margin", direction="FLAT")]
+    )
+    assert calculate_extraction_confidence(full, 4) == 1.0
+    bare = _make_sample_guidance(revenue=None, eps=None)
+    assert calculate_extraction_confidence(bare, 0) == 0.0
+    assert calculate_extraction_confidence(bare, 2) == round(2 / 7, 4)
+    # 超出範圍之溯源數被截斷
+    assert calculate_extraction_confidence(bare, 9) == round(4 / 7, 4)
+
+
+def test_margin_trend_labels_are_traditional_chinese() -> None:
+    """利潤率趨勢文字不得夾雜英文。"""
+    directions: tuple[MarginDirection, ...] = ("EXPANDING", "COMPRESSING", "FLAT")
+    for direction in directions:
+        g = _make_sample_guidance(
+            margins=[MarginGuidance(metric_name="Gross Margin", direction=direction)]
+        )
+        trend = evaluate_margin_trend(g)
+        assert trend.startswith("利潤率")
+        assert not any(ch.isascii() and ch.isalpha() for ch in trend)
 
 
 def test_compare_guidance_conflicting_signals() -> None:

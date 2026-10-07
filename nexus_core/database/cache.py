@@ -38,6 +38,7 @@ _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
     "downside_cvar_",
     "runway_warn_",
     "runway_remind_",
+    "governance_flag_",
 )
 # 新增任何「每日去重旗標」寫入點時，必須同步加入上方白名單，否則旗標會永久堆積；
 # 由 tests/unit/test_kv_cache_dedup_whitelist.py 以 AST 掃描強制。

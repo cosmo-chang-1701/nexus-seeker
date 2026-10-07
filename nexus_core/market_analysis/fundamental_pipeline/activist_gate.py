@@ -3,12 +3,21 @@
 依據 SEC Rule 13d-1(a) 與 Item 4 (Purpose of Transaction) 條款：
 1. 激進意圖關鍵字審查：董事會席次、戰略重整、出售拆分、代理人委託書爭奪。
 2. 5 營業日及時性檢查：跨越 5% 持股門檻後，逾期申報（> 5 營業日）標記延遲紅旗。
+
+營業日定義依 Exchange Act Rule 14d-1(g)(3)（Rule 13d-1 沿用）：週六、週日與聯邦假日
+以外的日子。注意這與 NYSE 交易日不同（耶穌受難日 NYSE 休市但 SEC 上班；哥倫布日、
+退伍軍人節 SEC 休息但 NYSE 開市），因此使用聯邦假日曆而非 nyse_calendar。
+
+尚未接線：目前沒有任何 production 呼叫端下載 13D 內文並呼叫本模組。
 """
 
 from __future__ import annotations
 
 from datetime import date, timedelta
+from functools import lru_cache
 import re
+
+from pandas.tseries.holiday import USFederalHolidayCalendar
 
 from market_analysis.fundamental_pipeline.models import ActivistSignal
 
@@ -47,15 +56,31 @@ _ACTIVIST_INTENT_PATTERNS = {
 }
 
 
+@lru_cache(maxsize=16)
+def _federal_holidays(year: int) -> frozenset[date]:
+    """指定年度的美國聯邦假日（含週末移至週五 / 週一的補假日）。"""
+    holidays = USFederalHolidayCalendar().holidays(
+        start=f"{year}-01-01", end=f"{year}-12-31"
+    )
+    return frozenset(ts.date() for ts in holidays)
+
+
+def is_sec_business_day(day: date) -> bool:
+    """`day` 是否為 SEC 營業日（排除週末與聯邦假日）。"""
+    # 0=Mon, ..., 4=Fri, 5=Sat, 6=Sun
+    if day.weekday() >= 5:
+        return False
+    return day not in _federal_holidays(day.year)
+
+
 def count_business_days(start_date: date, end_date: date) -> int:
-    """計算兩日期之間的營業日天數（排除週六與週日，不含 start_date 當日）。"""
+    """計算兩日期之間的 SEC 營業日天數（排除週末與聯邦假日，不含 start_date 當日）。"""
     if start_date >= end_date:
         return 0
     cur = start_date + timedelta(days=1)
     b_days = 0
     while cur <= end_date:
-        # 0=Mon, ..., 4=Fri, 5=Sat, 6=Sun
-        if cur.weekday() < 5:
+        if is_sec_business_day(cur):
             b_days += 1
         cur += timedelta(days=1)
     return b_days
