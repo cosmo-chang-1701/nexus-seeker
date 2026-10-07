@@ -980,6 +980,11 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
             "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
             new_callable=AsyncMock,
         ) as mock_unified_mp,
+        patch(
+            "cogs.unified_terminal.symbol_deep_dive._evaluate_squeeze_for_panel",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
     ):
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -1007,6 +1012,7 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
             "NVDA", period="1y", interval="1d", force_refresh=True
         )
         assert isinstance(raw["df_hist_fetched_at"], datetime)
+        assert "squeeze_eval" in raw and "ddp_reason" in raw
         mock_gex.assert_awaited_once_with("NVDA", force_live=True)
         mock_skew.assert_awaited_once_with("NVDA", force_live=True)
         mock_pcr.assert_awaited_once_with("NVDA", force_live=True)

@@ -33,6 +33,30 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# /x 的 Kelly 欄位以「賣出 16Δ Put」為參考單位（單口 Delta 再乘 β×S/SPY×100 換成 SPY 等值股數）
+_KELLY_REF_SHORT_PUT_DELTA = 0.16
+
+
+async def _evaluate_squeeze_for_panel(
+    symbol: str, quote_task: "asyncio.Task[Any]"
+) -> Optional[Any]:
+    """/x 用的多時間框架擠壓評估；沿用 entry_advisor._evaluate_squeeze_long 的否決／降級，
+    但刻意不呼叫 evaluation_recorder（互動指令不寫 DB）。失敗回傳 None。"""
+    try:
+        from market_analysis.squeeze_entry import evaluate_symbol
+        from market_analysis.squeeze_entry.vetoes import resolve_long_entry_vetoes
+
+        quote = await quote_task
+        spot = _safe_float((quote or {}).get("c"), 0.0)
+        if spot <= 0:
+            return None
+        vetoes, downgrade = await resolve_long_entry_vetoes(symbol)
+        return await evaluate_symbol(symbol, spot, vetoes, downgrade)
+    except Exception as e:
+        logger.warning(f"[{symbol}] /x 擠壓評估失敗: {e}")
+        return None
+
+
 class SymbolDeepDiveMixin:
     if TYPE_CHECKING:
         bot: Any
@@ -75,6 +99,9 @@ class SymbolDeepDiveMixin:
         spy_task = asyncio.create_task(market_data_service.get_spy_history_df("1y"))
         macro_task = asyncio.create_task(market_data_service.get_macro_environment())
         quote_task = asyncio.create_task(market_data_service.get_quote(symbol))
+        squeeze_task = asyncio.create_task(
+            _evaluate_squeeze_for_panel(symbol, quote_task)
+        )
 
         async def _get_daily_history() -> tuple[Any, datetime]:
             # 抓取時間在日線回來當下記錄，而非等整個 gather（Reddit 等慢任務）結束
@@ -205,6 +232,7 @@ class SymbolDeepDiveMixin:
             max_pain_data,
             iv_metrics,
             month_max_pains,
+            squeeze_eval,
         ) = await asyncio.gather(
             spy_task,
             macro_task,
@@ -225,6 +253,7 @@ class SymbolDeepDiveMixin:
             mp_task,
             iv_task,
             month_mp_task,
+            squeeze_task,
         )
 
         safe_reddit_text = (
@@ -248,6 +277,8 @@ class SymbolDeepDiveMixin:
             "reddit_posts": safe_reddit_posts,
             "poly_markets": poly_markets,
             "ddp_report": ddp_report,
+            "ddp_reason": ddp_inspector.last_fail_reason.get(symbol),
+            "squeeze_eval": squeeze_eval,
             "df_hist_1d": df_hist_1d,
             "df_hist_fetched_at": df_hist_fetched_at,
             "month_max_pains": month_max_pains,
@@ -329,7 +360,11 @@ class SymbolDeepDiveMixin:
             else {"symbol": symbol, "stock_cost": stock_cost, "price": 0.0}
         )
 
-        psq_result = analyze_psq(df_hist_1d, vix_spot=vix_now)
+        from market_analysis.squeeze_entry.timeframes import GREEN_DOT_LOOKBACK
+
+        psq_result = analyze_psq(
+            df_hist_1d, vix_spot=vix_now, green_dot_lookback=GREEN_DOT_LOOKBACK["D"]
+        )
         if psq_result:
             result["psq_result"] = psq_result
             is_df_valid = df_hist_1d is not None and not df_hist_1d.empty
@@ -407,9 +442,39 @@ class SymbolDeepDiveMixin:
         raw_em_context = await SentimentEngine.get_expected_move(
             symbol, quote=quote, iv_metrics=iv_metrics
         )
-        result["expected_move_context"] = (
+        em_context: dict[str, Any] = (
             raw_em_context if isinstance(raw_em_context, dict) else {}
         )
+        # 盤中跨式以即時現價定價，分布中心是現價而非前收；盤前／盤後維持前收為中心。
+        if isinstance(iv_metrics, dict):
+            _iv_src = iv_metrics.get("iv_source")
+            _ref_spot = _safe_float(iv_metrics.get("reference_spot_price"), 0.0)
+        else:
+            _iv_src = getattr(iv_metrics, "iv_source", None)
+            _ref_spot = _safe_float(
+                getattr(iv_metrics, "reference_spot_price", None), 0.0
+            )
+        if (
+            em_context
+            and _iv_src == "LIVE_IV"
+            and _ref_spot > 0
+            and _safe_float(em_context.get("expected_move_weekly"), 0.0) > 0
+            and is_market_open()
+        ):
+            from market_analysis.sentiment.iv_metrics import IVContext
+
+            em_context = IVContext.build_expected_move(
+                symbol,
+                expected_move_weekly=_safe_float(
+                    em_context.get("expected_move_weekly")
+                ),
+                reference_price=_ref_spot,
+                current_price=_safe_float(em_context.get("current_price"), 0.0),
+            )
+            em_context["reference_label"] = "現價"
+        elif em_context:
+            em_context["reference_label"] = "前收"
+        result["expected_move_context"] = em_context
 
         safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
         result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
@@ -419,6 +484,8 @@ class SymbolDeepDiveMixin:
 
         safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
         result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
+        result["ddp_reason"] = data.get("ddp_reason")
+        result["squeeze_eval"] = data.get("squeeze_eval")
         result["vix"] = vix_now
         result["spy_price"] = spy_price
 
@@ -649,9 +716,32 @@ class SymbolDeepDiveMixin:
                     f"{gravity['distance_pct']:+.1f}%"
                 )
 
+            # 單口 β 加權 Delta（SPY 等值股數），與 strategy/analyze.py 同定義：
+            # Δ × β × (股價/SPY) × 100。舊版寫死 0.16 少乘了後三項。
+            from market_analysis.risk_engine import calculate_beta_strict
+
+            beta = (
+                calculate_beta_strict(df_hist_1d, df_spy)
+                if df_hist_1d is not None and df_spy is not None
+                else None
+            )
+            if beta is None:
+                degraded_reasons.append("Beta 資料不足（以 1.0 計）")
+            beta_eff = beta if beta is not None else 1.0
+            px = _safe_float(safe_quote.get("c"), 0.0) or _safe_float(
+                result.get("price"), 0.0
+            )
+            unit_wd = (
+                _KELLY_REF_SHORT_PUT_DELTA * beta_eff * (px / spy_price) * 100.0
+                if spy_price and px > 0
+                else 0.0
+            )
+            result["kelly_beta"] = beta
+            result["kelly_unit_weighted_delta"] = unit_wd
+
             opt_result = optimize_position_risk(
                 current_delta=0.0,
-                unit_weighted_delta=0.16,
+                unit_weighted_delta=unit_wd,
                 user_capital=user_capital,
                 spy_price=spy_price if spy_price is not None else 0.0,
                 stock_iv=stock_iv,

@@ -46,8 +46,10 @@ from market_analysis.dynamic_rollover.structural_signals import (
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
     _add_ansi_field_safely,
+    format_psq_matrix_lines,
     format_runway_lines,
     gamma_flip_noise_note,
+    macro_iv_status_text,
     _chunk_ansi_table,
     _truncate_with_boundary,
 )
@@ -883,8 +885,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 status_basis = rvol_tod_val if rvol_tod_val is not None else rvol_val
                 if status_basis >= RVOL_EXPANSION_THRESHOLD:
                     status_str = f"🟢 放量 >= {RVOL_EXPANSION_THRESHOLD}x"
+                elif bar_body_dir < 0:
+                    status_str = (
+                        f"🟡 縮量回檔 < {RVOL_EXPANSION_THRESHOLD}x（賣壓未放大）"
+                    )
+                elif bar_body_dir > 0:
+                    status_str = f"❌ 缺乏放量代償 < {RVOL_EXPANSION_THRESHOLD}x（上漲未獲量能確認）"
                 else:
-                    status_str = f"❌ 缺乏放量代償 < {RVOL_EXPANSION_THRESHOLD}x"
+                    status_str = f"⚪ 量能平淡 < {RVOL_EXPANSION_THRESHOLD}x"
                 tod_str = ""
                 if rvol_tod_val is not None:
                     tod_str = (
@@ -1048,7 +1056,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
 
     skew_val_str = f"{skew_val:.2f}%" if skew_val is not None else "--%"
-    skew_per_str = f"{skew_percentile:.1f}%" if skew_percentile is not None else "--%"
+    if skew_percentile is not None:
+        skew_per_str = f"{skew_percentile:.1f}%"
+    elif data.get("skew_sample_size") is not None:
+        from market_analysis.sentiment.history_storage import _MIN_PERCENTILE_SAMPLES
+
+        skew_per_str = (
+            f"--%（樣本 {data.get('skew_sample_size')}/{_MIN_PERCENTILE_SAMPLES}）"
+        )
+    else:
+        skew_per_str = "--%"
 
     edge_lines = [
         "```ansi",
@@ -1176,7 +1193,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else:
                 status_tw = f"⚠️ 臨近財報{earnings_tag}（近月 IV 含事件溢價）"
         elif macro_loading:
-            status_tw = "⚠️ 臨近總經大事件/快取波動率已校正"
+            status_tw = macro_iv_status_text(
+                iv_source, bool(_iv_attr("event_loading_applied", False))
+            )
 
         iv_status_str = f"狀態: {status_tw}"
 
@@ -1192,7 +1211,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " IV Rank / IV Percentile",
                 " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
                 " Expected Move (預期區間)",
-                " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
+                " └─ 7 日 1σ: \u001b[1;30m--\u001b[0m (開盤後更新)",
                 "```",
             ]
         else:
@@ -1239,6 +1258,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 f"{iv_percentile_num:.1f}%" if iv_percentile_num is not None else "--%"
             )
 
+            _hist_cnt = int(_to_float(_iv_attr("iv_history_count", 0), 0.0))
+            _hist_req = int(_to_float(_iv_attr("iv_history_required", 60), 60.0))
+            if iv_rank_num is None and _hist_cnt > 0:
+                iv_status_str = f"樣本累積中 {_hist_cnt}/{_hist_req} 日，10/01 母體重置；{status_tw}"
             iv_lines = [
                 "```ansi",
                 vol_title,
@@ -1246,6 +1269,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " IV Rank / IV Percentile",
                 f" └─ IV Rank: {iv_rank_str} | IV Percentile: {iv_per_str} ({iv_status_str})",
             ]
+            _hv20 = _to_float_or_none(_iv_attr("hv_20"))
+            if iv_rank_num is None and _hv20 and current_iv_num:
+                iv_lines.append(
+                    f" └─ IV/HV20: {current_iv_num * 100:.1f}% / {_hv20 * 100:.1f}% = "
+                    f"{current_iv_num / _hv20:.2f}x（IVR 累積期參考，>1 偏貴）"
+                )
 
             iv_term_status = (
                 getattr(iv_data, "iv_term_structure_status", None) if iv_data else None
@@ -1291,8 +1320,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 em_weekly_rounded = round(safe_em_weekly, 2)
                 em_low_calc = round(em_ref_rounded - em_weekly_rounded, 2)
                 em_high_calc = round(em_ref_rounded + em_weekly_rounded, 2)
+                _ref_label = str(em_context.get("reference_label") or "前收")
                 expected_move_weekly_str = (
-                    f"前收 ${em_ref_rounded:.2f} ±${em_weekly_rounded:.2f} "
+                    f"{_ref_label} ${em_ref_rounded:.2f} ±${em_weekly_rounded:.2f} "
                     f"(${em_low_calc:.2f} ~ ${em_high_calc:.2f})"
                 )
             else:
@@ -1310,15 +1340,24 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 iv_lines.append(
                     " ⚠️ 原始 IV 與跨式定價相差 >4 倍（資料源尺度錯誤），已改用跨式反推值"
                 )
+            _st_exp = _iv_attr("straddle_expiry")
+            _st_dte = _iv_attr("straddle_dte")
+            em_title = (
+                f"7 日 1σ（{str(_st_exp)[5:]} 跨式 ×√(7/{_st_dte})）"
+                if _st_exp and _st_dte
+                else "7 日 1σ"
+            )
             if earnings_loading or macro_loading:
                 iv_lines.extend(
                     [
-                        f" ├─ 本週預期: {expected_move_weekly_str} ({em_note})",
+                        f" ├─ {em_title}: {expected_move_weekly_str} ({em_note})",
                         " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
                     ]
                 )
             else:
-                iv_lines.append(f" └─ 本週預期: {expected_move_weekly_str} ({em_note})")
+                iv_lines.append(
+                    f" └─ {em_title}: {expected_move_weekly_str} ({em_note})"
+                )
 
             catalysts = data.get("catalysts")
             if catalysts:
@@ -1326,8 +1365,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 # 事件清單含發布後冷卻期 (tte_hours < 0)；已公布的不得印成「僅剩 -0.1 天」，
                 # 合併為一行置於未到事件之後，且不佔 3 筆上限。
                 released_names: List[str] = []
-                upcoming_count = 0
-                upcoming_omitted = False
+                # (tier, tte 排序鍵, 時間戳, 事件名, 日期, 距今天數)
+                upcoming: List[tuple[int, float, str, str, str, float]] = []
+                _key_events = ("FOMC", "CPI", "PCE", "非農", "利率決議", "GDP")
                 for cat in catalysts:
                     if hasattr(cat, "date"):
                         date_str = cat.date
@@ -1335,7 +1375,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         if days < 0:
                             released_names.append(f"財報 ({date_str[5:]})")
                             continue
-                        line = f" └─ \u001b[1;33m⚠️ 距離財報 ({date_str[5:]}) 僅剩 {days:.1f} 天，嚴禁雙賣策略\u001b[0m"
+                        upcoming.append((0, days, "", "財報", date_str, days))
                     elif hasattr(cat, "time"):
                         date_str = cat.time[:10]
                         tte_hours = _to_float_or_none(getattr(cat, "tte_hours", None))
@@ -1349,14 +1389,59 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             released_names.append(event_name)
                             continue
                         days = round((tte_hours or 0.0) / 24.0, 1)
-                        line = f" └─ \u001b[1;33m⚠️ 距離 {event_name} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
+                        is_key = any(k in str(cat.event).upper() for k in _key_events)
+                        upcoming.append(
+                            (
+                                1 if is_key else 2,
+                                tte_hours or 0.0,
+                                str(cat.time),
+                                event_name,
+                                date_str,
+                                days,
+                            )
+                        )
+                # 同一時間戳的 CPI 家族（核心／月增／年增）合併成一行
+                merged: List[tuple[int, float, str, str, str, float]] = []
+                cpi_groups: dict[str, int] = {}
+                for ev_item in upcoming:
+                    if ev_item[0] == 1 and "CPI" in ev_item[3].upper():
+                        idx = cpi_groups.get(ev_item[2])
+                        if idx is not None:
+                            t, o, ts, nm, d, dy = merged[idx]
+                            cnt = int(nm.split(" 等 ")[1].rstrip(" 項")) + 1
+                            merged[idx] = (t, o, ts, f"CPI 等 {cnt} 項", d, dy)
+                            continue
+                        cpi_groups[ev_item[2]] = len(merged)
+                        merged.append(
+                            (
+                                ev_item[0],
+                                ev_item[1],
+                                ev_item[2],
+                                "CPI 等 1 項",
+                                ev_item[4],
+                                ev_item[5],
+                            )
+                        )
                     else:
-                        continue
-                    if upcoming_count >= 3:
-                        upcoming_omitted = True
-                        continue
-                    iv_lines.append(line)
-                    upcoming_count += 1
+                        merged.append(ev_item)
+                merged = [
+                    (t, o, ts, "CPI" if nm == "CPI 等 1 項" else nm, d, dy)
+                    for t, o, ts, nm, d, dy in merged
+                ]
+                # 依重要性取前 3 筆，再依時間順序顯示
+                chosen = sorted(
+                    sorted(merged, key=lambda x: (x[0], x[1]))[:3], key=lambda x: x[1]
+                )
+                upcoming_omitted = len(merged) > 3
+                for tier, _o, _ts, name, date_str, days in chosen:
+                    if name == "財報":
+                        iv_lines.append(
+                            f" └─ \u001b[1;33m⚠️ 距離財報 ({date_str[5:]}) 僅剩 {days:.1f} 天，嚴禁雙賣策略\u001b[0m"
+                        )
+                    else:
+                        iv_lines.append(
+                            f" └─ \u001b[1;33m⚠️ 距離 {name} ({date_str[5:]}) 僅剩 {days:.1f} 天，留意波動擴大\u001b[0m"
+                        )
                 if upcoming_omitted:
                     iv_lines.append(" └─ \u001b[1;30m...及其他事件 (已省略)\u001b[0m")
                 if released_names:
@@ -1944,9 +2029,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"{_rr_min:.2f}:1 {_flag_min}"
                                 )
                             put_block_items.append(
-                                f"進場盈虧比 (至 CallWall ${call_wall_float:.2f}): "
+                                f"短線盈虧比 (期權視角，至 CallWall ${call_wall_float:.2f}): "
                                 + "｜".join(rr_parts)
                                 + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
+                            )
+                            put_block_items.append(
+                                "B&H 建倉以擠壓等級為準（strategies/10 不設目標價），見下方 🎯 欄位"
                             )
                         _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
                     if call_block_items is not None:
@@ -2130,11 +2218,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         sqz_lines = [
             "```ansi",
-            " 動能與擠壓狀態 (Momentum & Squeeze)",
+            " 動能與擠壓狀態 (Momentum & Squeeze · 日線即時)",
             f" ├─ 擠壓強度: {sqz_level_label}",
             f" ├─ 方向狀態: {sqz_ansi_color}{directional_status}\u001b[0m",
             f" └─ 動能數值 (SQZ MOM): {sqz_ansi_color}{mom_str}\u001b[0m",
         ]
+
+        _gd_ago = (
+            getattr(psq_raw, "green_dot_bars_ago", None)
+            if hasattr(psq_raw, "is_squeezing")
+            else psq_raw.get("green_dot_bars_ago")
+        )
+        if _gd_ago is not None:
+            sqz_lines.insert(3, f" ├─ Green Dot: {_gd_ago} 根前（日線擠壓解除點）")
 
         if sqz_vix_label != "NORMAL":
             if sqz_vix_label == "OVEREXTENDED_RISK":
@@ -2185,6 +2281,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         if sqz_vix_note:
             sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
+
+        _sq_eval = data.get("squeeze_eval")
+        _matrix_lines = format_psq_matrix_lines(getattr(_sq_eval, "matrix", None))
+        if _matrix_lines:
+            # 空行讓 _add_ansi_field_safely 超過欄位上限時以整段換欄
+            sqz_lines.append("")
+            sqz_lines.extend(_matrix_lines)
+            sqz_lines.append("")
 
         freshness_line = _format_psq_freshness(
             data.get("psq_bar_date"),
@@ -2242,7 +2346,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ddp_status = "符合 (符合 DDP 盈餘/估值雙擊)"
         ddp_color = "\u001b[1;32m"
     else:
-        ddp_status = "不符合"
+        _ddp_reason = data.get("ddp_reason")
+        ddp_status = f"不符合（{_ddp_reason}）" if _ddp_reason else "不符合"
         ddp_color = "\u001b[1;30m"
 
     ivr_val = data.get("iv_rank")
@@ -2459,12 +2564,55 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if getattr(kelly_sizing, "warnings", None)
             else "安全/符合風控"
         )
-        target_lines.extend(
-            [
-                " 安全建倉額度 (Kelly Risk Sizing)",
-                f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m (佔總資金 {exposure}%)",
-                f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m",
-            ]
+        _k_beta = data.get("kelly_beta")
+        _k_unit = _to_float_or_none(data.get("kelly_unit_weighted_delta"))
+        _beta_str = f"{_k_beta:.2f}" if _k_beta is not None else "—"
+        kelly_lines = [
+            " 安全建倉額度 (Kelly · 賣出 16Δ Put 參考)",
+            f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m (β 加權 Delta 佔總資金 {exposure}%)",
+        ]
+        if _k_unit:
+            kelly_lines.append(f" ├─ 每口: β={_beta_str} → ≈{_k_unit:.1f} 股 SPY 等值")
+        if contracts == 0 and not any(
+            k in warnings for k in ("禁用", "fail-closed", "暫停")
+        ):
+            kelly_lines.append(" ├─ 0 口原因: 單口 β 加權 Delta 已超過可用風險額度")
+        kelly_lines.append(f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m")
+        target_lines.extend(kelly_lines)
+
+    _sq_ev = data.get("squeeze_eval")
+    _sq_res = getattr(_sq_ev, "result", None)
+    if _sq_res is not None:
+        from market_analysis.squeeze_entry import rules as _sq_rules
+
+        _status_map = {
+            _sq_rules.STATUS_ENTRY: "🟢 可進場",
+            _sq_rules.STATUS_WATCH: "🟡 觀察",
+            _sq_rules.STATUS_NONE: "⚪ 無訊號",
+            _sq_rules.STATUS_VETOED: "⛔ 否決",
+            _sq_rules.STATUS_NO_DATA: "— 資料不足",
+        }
+        _tier = getattr(_sq_res, "tier", None)
+        _size = getattr(_sq_res, "size_pct", None)
+        _tier_txt = f" T{_tier} → 建議部位 {_size}%" if _tier else ""
+        target_lines.append(" 現貨擠壓進場 (Squeeze Entry · strategies/10)")
+        target_lines.append(
+            f" ├─ 判定: {_status_map.get(str(_sq_res.status), str(_sq_res.status))}{_tier_txt}"
+        )
+        _sq_stop: Optional[float] = getattr(_sq_res, "stop", None)
+        _px_now = _to_float(data.get("price"), 0.0)
+        if _sq_stop:
+            _stop_pct = (
+                f" (↓{(_px_now - _sq_stop) / _px_now * 100:.2f}%)"
+                if _px_now > 0
+                else ""
+            )
+            target_lines.append(f" ├─ 參考停損: ${_sq_stop:.2f}{_stop_pct}")
+        target_lines.append(
+            f" ├─ 觸發: {'、'.join(getattr(_sq_res, 'triggers', []) or []) or '—'}"
+        )
+        target_lines.append(
+            f" └─ {getattr(_sq_res, 'resistance_warning', None) or _sq_res.reason}"
         )
 
     target_lines.append("```")

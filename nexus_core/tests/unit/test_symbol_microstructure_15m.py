@@ -86,7 +86,7 @@ def test_15m_microstructure_bearish_candle_and_low_rvol() -> None:
     )
     assert "15m 成交量: 800,000 股" in text
     assert "15m 均量 (SMA20): 1,000,000 股" in text
-    assert "即時量比 (RVOL_15m): 0.80x (狀態: ❌ 缺乏放量代償 < 1.5x)" in text
+    assert "即時量比 (RVOL_15m): 0.80x (狀態: 🟡 縮量回檔 < 1.5x（賣壓未放大）)" in text
 
 
 def test_15m_microstructure_flat_doji_candle() -> None:

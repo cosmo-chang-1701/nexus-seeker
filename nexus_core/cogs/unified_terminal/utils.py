@@ -6,6 +6,7 @@ import time
 from market_analysis.sentiment.skew_taxonomy import (
     POLYMARKET_BEARISH_PCT,
     POLYMARKET_BULLISH_PCT,
+    POLYMARKET_MIN_POOL_USD,
 )
 from services.llm_service import is_memory_safe
 from services.market_data_service import BoundedCache
@@ -625,8 +626,10 @@ async def calculate_polymarket_weighted_odds(
             bullish_prob = price_float
 
         vol = float(m.get("volumeNum") or m.get("volume") or 0.0)
-        # 基底名義流動性權重（防止 0 成交量合約被完全忽略）
-        w = max(vol, 1000.0)
+        if vol <= 0.0:
+            # 0 成交量合約沒有價格發現，不納入加權
+            continue
+        w = vol
 
         total_weighted_bullish += bullish_prob * w
         total_weight += w
@@ -636,9 +639,13 @@ async def calculate_polymarket_weighted_odds(
     if valid_contracts == 0 or total_weight <= 0.0:
         return "N/A"
 
+    vol_tag = _format_pool_volume(actual_total_vol)
+    if actual_total_vol < POLYMARKET_MIN_POOL_USD:
+        # 刻意不含「N% 巨鯨…」標籤，背離檢查的 regex 因此視為缺值
+        return f"⚪ 池量不足（{vol_tag}，{valid_contracts}檔），不判讀"
+
     agg_prob = total_weighted_bullish / total_weight
     pct = agg_prob * 100.0
-    vol_tag = _format_pool_volume(actual_total_vol)
 
     if pct >= POLYMARKET_BULLISH_PCT:
         tag = f"🟢 {pct:.1f}% 巨鯨看多"

@@ -114,3 +114,11 @@ class IVMetrics(BaseModel):
     # 14 天內財報日（ISO），以及它是否晚於期限結構的近月到期日（近月不含財報溢價）。
     earnings_date: str | None = None
     earnings_after_near_term: bool = False
+    # IVR 母體現有樣本數（含今日）與計算 IVR 所需的最低樣本數；供「樣本累積中 N/60」揭露。
+    iv_history_count: int = 0
+    iv_history_required: int = 60
+    # 20 日已實現波動率（年化）；僅供呈現（IV/HV20），嚴禁混入 IVR 母體。
+    hv_20: float | None = None
+    # 週預期 EM 所用跨式的到期日與 DTE（呈現標籤用）。
+    straddle_expiry: str | None = None
+    straddle_dte: int | None = None

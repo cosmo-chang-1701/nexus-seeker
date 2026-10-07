@@ -132,6 +132,28 @@ _STRADDLE_EM_TARGET_DTE = 7
 _STRADDLE_EM_MAX_DTE = 14
 
 
+def _select_straddle_expiry(
+    expiries: list[str], today_dt: Any
+) -> tuple[int, str] | None:
+    """週預期跨式的到期日選擇（單一定義，EM 計算與呈現標籤共用）。
+
+    在 [_STRADDLE_EM_MIN_DTE, _STRADDLE_EM_MAX_DTE] 內取 DTE 最接近 7 天的一檔，
+    回傳 (dte, expiry)；找不到合格到期日回傳 None。
+    """
+    candidates: list[tuple[int, str]] = []
+    for exp in expiries:
+        try:
+            exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        dte = (exp_dt - today_dt).days
+        if _STRADDLE_EM_MIN_DTE <= dte <= _STRADDLE_EM_MAX_DTE:
+            candidates.append((dte, exp))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda c: (abs(c[0] - _STRADDLE_EM_TARGET_DTE), c[0]))
+
+
 async def _calculate_straddle_implied_em(
     symbol: str, spot_price: float, force_live: bool = False
 ) -> float | None:
@@ -149,21 +171,10 @@ async def _calculate_straddle_implied_em(
         # 舊實作取「最近一檔」：週五盤中常選到 0-DTE，只剩幾小時的跨式被當成
         # 1 天再乘 √7 放大，權利金裡只剩日內 Gamma 與殘餘時間價值，週 EM 被系統性
         # 低估。找不到合格到期日時回傳 None，由呼叫端退回 IV 公式。
-        today_dt = datetime.now().date()
-        candidates: list[tuple[int, str]] = []
-        for exp in expiries:
-            try:
-                exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-            except ValueError:
-                continue
-            dte = (exp_dt - today_dt).days
-            if _STRADDLE_EM_MIN_DTE <= dte <= _STRADDLE_EM_MAX_DTE:
-                candidates.append((dte, exp))
-        if not candidates:
+        selected = _select_straddle_expiry(expiries, datetime.now().date())
+        if selected is None:
             return None
-        target_dte, target_expiry = min(
-            candidates, key=lambda c: (abs(c[0] - _STRADDLE_EM_TARGET_DTE), c[0])
-        )
+        target_dte, target_expiry = selected
 
         chain = await market_data_service.get_option_chain(
             symbol, target_expiry, force_live=force_live
@@ -699,6 +710,26 @@ async def fetch_and_calculate_iv_metrics(
                 f"using 15% floor. EM=${expected_move_weekly:.2f}"
             )
 
+        # 呈現用：EM 所用跨式的到期日／DTE（選法與 _calculate_straddle_implied_em 相同）
+        straddle_expiry: str | None = None
+        straddle_dte: int | None = None
+        if straddle_em and straddle_em > 0:
+            try:
+                sel = _select_straddle_expiry(
+                    await market_data_service.get_all_option_expiries(symbol) or [],
+                    datetime.now().date(),
+                )
+                if sel is not None:
+                    straddle_dte, straddle_expiry = sel
+            except Exception as e:
+                logger.debug(f"[{symbol}] 跨式到期日標示取得失敗: {e}")
+
+        hv_20_val: float | None = None
+        if not df_hist.empty and "HV_20" in df_hist.columns:
+            _hv = df_hist["HV_20"].dropna()
+            if not _hv.empty:
+                hv_20_val = float(_hv.iloc[-1])
+
         # 11. 判斷狀態
         iv_status: Literal["Low", "Normal", "High", "Extreme"] | None
         if iv_rank is None:
@@ -731,6 +762,11 @@ async def fetch_and_calculate_iv_metrics(
             iv_scale_corrected=iv_scale_corrected,
             earnings_date=earnings_date_str,
             earnings_after_near_term=earnings_after_near_term,
+            iv_history_count=len(pure_iv_values),
+            iv_history_required=min_history_records,
+            hv_20=hv_20_val,
+            straddle_expiry=straddle_expiry,
+            straddle_dte=straddle_dte,
         )
 
         # 12. 寫入快取

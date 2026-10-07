@@ -168,6 +168,10 @@ flowchart TD
 
 ---
 
+### 5.x 最低池量門檻（2026-10-07）
+
+總池量低於 `POLYMARKET_MIN_POOL_USD`（$100,000）時不判讀，回傳「⚪ 池量不足（$X，N檔），不判讀」，此字串不含「N% 巨鯨…」標籤，背離檢查視為缺值。0 成交量合約不納入加權（移除舊的 `max(vol, 1000)` 基底權重）。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/cogs/unified_terminal/utils.py`

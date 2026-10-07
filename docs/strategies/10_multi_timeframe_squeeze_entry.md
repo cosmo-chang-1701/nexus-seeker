@@ -182,6 +182,10 @@ flowchart TD
 - **錨點**：W、3D、65m 依 TradingView 文件的 Bar alignment 規則切分；Yahoo 與 TradingView 的資料源若有缺漏日，個別 K 棒仍可能不同。
 - **翻轉 `SQUEEZE_ENTRY_DRY_RUN`**：依 architecture/05 §5.8 G；由人工決定，不得因單一案例翻轉。
 
+### 5.x /x 面板顯示（2026-10-07）
+
+`/x` 的「動能與擠壓狀態」維持日線即時值（含今日成型中 K 棒），日線 Green Dot 回看窗改用 `GREEN_DOT_LOOKBACK["D"]`（3 根，先前誤用 1 根）。其下新增 W／3D／D／65m／15m／5m 矩陣（`evaluate_symbol()` 的 `PsqMatrix`，只用已收盤 K 棒；成型中等級與已收盤不同時才附註），Target Lock 欄位顯示判定、等級與部位 %（T1 1%／T2 1.5%／T3 2.5%）、參考停損與觸發條件。互動指令**不**呼叫 `evaluation_recorder`，不寫 DB。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/psq_engine.py`：`analyze_psq()`（Green Dot 回看窗、Turbo、擠壓區間低點）、`compute_psq_series()`（逐根序列，回測用）。

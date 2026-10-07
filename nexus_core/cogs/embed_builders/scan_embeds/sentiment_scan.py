@@ -197,7 +197,18 @@ def create_sentiment_scan_embed(
         if earnings_loading:
             status_tw = "⚠️ 臨近財報/快取波動率可能低估"
         elif macro_loading:
-            status_tw = "⚠️ 臨近總經大事件/快取波動率已校正"
+            from cogs.embed_builders._embed_helpers import macro_iv_status_text
+
+            status_tw = macro_iv_status_text(
+                iv_source,
+                bool(
+                    getattr(iv_data, "event_loading_applied", False)
+                    or (
+                        isinstance(iv_data, dict)
+                        and iv_data.get("event_loading_applied", False)
+                    )
+                ),
+            )
 
         iv_status_str = f"狀態: {status_tw}"
 
