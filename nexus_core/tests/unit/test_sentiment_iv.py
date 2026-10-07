@@ -759,3 +759,42 @@ async def test_kv_iv_cache_age_gate(
     else:
         # 命中 kv 時不會走到重算（盤中重算會先查期權到期日）
         m_expiries.assert_called()
+
+
+@pytest.mark.parametrize(
+    "market_open,age,expected_remaining",
+    [
+        (True, 1500.0, 300.0),  # 盤中：記憶體到期扣掉 kv 年齡
+        (True, 0.0, 1800.0),
+        (False, 4 * 3600.0, 1800.0),  # 盤外維持完整 TTL
+    ],
+)
+@pytest.mark.asyncio
+async def test_kv_hit_backfills_memory_cache_minus_age(
+    market_open: bool, age: float, expected_remaining: float
+) -> None:
+    from market_analysis.sentiment.cache import _IV_CACHE_TTL, _iv_cache
+    from market_analysis.sentiment.iv_metrics import fetch_and_calculate_iv_metrics
+
+    assert _IV_CACHE_TTL == 1800
+    _iv_cache.pop("KVAGE", None)
+    with (
+        patch(
+            "database.cache.get_kv_cache_with_age",
+            return_value=(_kv_iv_payload(), age),
+        ),
+        patch(
+            "market_analysis.sentiment.iv_metrics.is_market_open",
+            return_value=market_open,
+        ),
+        patch(
+            "market_analysis.sentiment.iv_metrics.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 100.0},
+        ),
+        patch("market_analysis.sentiment.iv_metrics.time.time", return_value=5000.0),
+    ):
+        await fetch_and_calculate_iv_metrics("KVAGE")
+    _metrics, expiry = _iv_cache["KVAGE"]
+    _iv_cache.pop("KVAGE", None)
+    assert expiry - 5000.0 == pytest.approx(expected_remaining)

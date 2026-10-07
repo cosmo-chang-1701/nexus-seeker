@@ -427,7 +427,12 @@ async def fetch_and_calculate_iv_metrics(
                         )
                         use_cache = False
             if use_cache:
-                _iv_cache[symbol] = (metrics, current_time + _IV_CACHE_TTL)
+                # 盤中：記憶體到期要扣掉 kv 年齡，否則 28 分鐘舊的 kv 資料會再被
+                # 記憶體多撐 30 分鐘；盤外日鍵整日有效，維持完整 TTL
+                mem_ttl: float = _IV_CACHE_TTL
+                if is_market_open() and kv_age is not None:
+                    mem_ttl = max(0, _IV_CACHE_TTL - kv_age)
+                _iv_cache[symbol] = (metrics, current_time + mem_ttl)
                 return metrics
         except Exception as e:
             logger.warning(f"[{symbol}] Failed to restore IVMetrics from kv_cache: {e}")

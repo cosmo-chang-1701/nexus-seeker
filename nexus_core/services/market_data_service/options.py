@@ -9,17 +9,14 @@ from collections import namedtuple
 import pandas as pd
 import yfinance as yf
 
-from services.market_data_service import api_budget
 from services.market_data_service._core import (
     YahooRateLimitedError,
-    _is_interactive_request,
     _sanitize_ticker,
     call_yf,
+    edge_get_yahoo,
     get_edge_client,
     is_yahoo_rate_limited,
-    mark_yahoo_rate_limited,
-    parse_retry_after,
-    yahoo_slot,
+    is_yf_rate_limit_error,
 )
 from services.market_data_service.caches import (
     _EDGE_SNAPSHOT_MAX_AGE_SECONDS,
@@ -37,20 +34,9 @@ OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
 
 
 async def _edge_get_counted(client: Any, url: str) -> Any:
-    """Edge 即時 scrape 請求（會觸發 Yahoo 抓取），每次實際送出都計入 API 配額觀測。"""
-    # 統一 Yahoo 預算：冷卻中不送請求；實際送出時佔用 yahoo_slot；回 429 則啟動全域冷卻
-    if is_yahoo_rate_limited():
-        raise YahooRateLimitedError("Yahoo 限流冷卻中")
-    async with yahoo_slot():
-        api_budget.record_call(
-            "yahoo", "edge_options", interactive=_is_interactive_request.get()
-        )
-        resp = await client.get(url)
-    if resp.status_code == 429:
-        api_budget.record_rate_limited("yahoo", "edge_options")
-        mark_yahoo_rate_limited(parse_retry_after(getattr(resp, "headers", None)))
-        raise YahooRateLimitedError("edge 回報 Yahoo 429")
-    return resp
+    """Edge 即時 scrape 請求（會觸發 Yahoo 抓取）：與 K 線路徑共用 `edge_get_yahoo`
+    （冷卻檢查、yahoo_slot、配額計數、429 冷卻、成功重置退避）。"""
+    return await edge_get_yahoo(client, url, "edge_options")
 
 
 async def _retry_once(
@@ -65,6 +51,9 @@ async def _retry_once(
         # 限流冷卻中重試只會再打一次，直接外拋由呼叫端決定降級（不走直連）
         raise
     except Exception as e:
+        if is_yf_rate_limit_error(e):
+            # 直連 yfinance 限流（call_yf 已啟動冷卻）：不重試，避免加重 429
+            raise
         logger.warning(f"{label} 第一次嘗試失敗 ({e})，{delay}s 後重試一次...")
         await asyncio.sleep(delay)
         return await coro_factory()

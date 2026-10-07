@@ -1,5 +1,6 @@
 from typing import Any, Dict, List, Optional
 import asyncio
+import re
 import threading
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
@@ -98,14 +99,23 @@ async def fetch_nearest_option_chain(symbol: str) -> Optional[Dict[str, Any]]:
 # 預設約 40 執行緒），若不設上限，core 端一輪 watchlist 併發會同時對 Yahoo 打出數十條請求，
 # 極易觸發 429。2 與 core 端背景 Semaphore(2) 對齊。
 _HISTORY_SEMAPHORE = threading.BoundedSemaphore(2)
+# 排隊上限：core 端 httpx 逾時 20 秒，edge 排隊超過 15 秒就先回 503 busy，
+# 避免 core 把逾時當一般錯誤而降級資料中心直連（更容易被封）。
+_HISTORY_QUEUE_TIMEOUT_SECONDS = 15
+
+# 獨立的 429 token：前後不得緊鄰數字，避免誤判含 epoch 時間戳的訊息（如 "1791429600"）
+_HTTP_429_PATTERN = re.compile(r"(?<!\d)429(?!\d)")
 
 
 def _is_rate_limit_error(exc: BaseException) -> bool:
-    """判斷例外是否為 Yahoo 限流（YFRateLimitError 或訊息含 Too Many Requests／429）。"""
+    """判斷例外是否為 Yahoo 限流：YFRateLimitError、訊息含 Too Many Requests
+    （不分大小寫）、或訊息含獨立的 429 token（前後非數字）。"""
     if isinstance(exc, YFRateLimitError):
         return True
-    msg = str(exc).lower()
-    return "too many requests" in msg or "429" in msg
+    msg = str(exc)
+    return (
+        "too many requests" in msg.lower() or _HTTP_429_PATTERN.search(msg) is not None
+    )
 
 
 @router.get("/api/v1/scrape/yf/history/{symbol}", response_model=None)
@@ -116,7 +126,9 @@ def scrape_yf_history(
     # edge event loop（含背景期權輪詢）；改 def 後 FastAPI 自動丟 threadpool。
     try:
         ticker = yf.Ticker(symbol)
-        with _HISTORY_SEMAPHORE:
+        if not _HISTORY_SEMAPHORE.acquire(timeout=_HISTORY_QUEUE_TIMEOUT_SECONDS):
+            return JSONResponse(status_code=503, content={"status": "busy"})
+        try:
             try:
                 df = ticker.history(
                     period=period,
@@ -134,6 +146,8 @@ def scrape_yf_history(
                     auto_adjust=auto_adjust,
                     repair=False,
                 )
+        finally:
+            _HISTORY_SEMAPHORE.release()
         if df is None or df.empty:
             return {"status": "error", "data": "empty"}
 
@@ -154,23 +168,27 @@ def scrape_yf_history(
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/api/v1/scrape/yf/options/{symbol}/expiries")
-async def scrape_yf_options_expiries(symbol: str) -> Dict[str, Any]:
+@router.get("/api/v1/scrape/yf/options/{symbol}/expiries", response_model=None)
+async def scrape_yf_options_expiries(symbol: str) -> Dict[str, Any] | JSONResponse:
     try:
         expiries = await fetch_option_expiries(symbol)
         return {"status": "success", "data": expiries}
     except Exception as e:
+        if _is_rate_limit_error(e):
+            return JSONResponse(status_code=429, content={"status": "rate_limited"})
         return {"status": "error", "message": str(e)}
 
 
-@router.get("/api/v1/scrape/yf/options/{symbol}/chain")
+@router.get("/api/v1/scrape/yf/options/{symbol}/chain", response_model=None)
 async def scrape_yf_options_chain(
     symbol: str, expiry: str = Query(...)
-) -> Dict[str, Any]:
+) -> Dict[str, Any] | JSONResponse:
     try:
         data = await fetch_option_chain_dict(symbol, expiry)
         if data is None:
             return {"status": "error", "message": "empty chain"}
         return {"status": "success", "data": data}
     except Exception as e:
+        if _is_rate_limit_error(e):
+            return JSONResponse(status_code=429, content={"status": "rate_limited"})
         return {"status": "error", "message": str(e)}

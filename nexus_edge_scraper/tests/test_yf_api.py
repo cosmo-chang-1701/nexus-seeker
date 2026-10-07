@@ -3,7 +3,14 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from yf_api import fetch_nearest_option_chain, scrape_yf_history
+import yf_api
+from yf_api import (
+    _is_rate_limit_error,
+    fetch_nearest_option_chain,
+    scrape_yf_history,
+    scrape_yf_options_chain,
+    scrape_yf_options_expiries,
+)
 from yfinance.exceptions import YFRateLimitError
 
 
@@ -97,3 +104,69 @@ def test_scrape_yf_history_generic_error_returns_status_error() -> None:
     assert "boom" in res["message"]
     # 一般錯誤維持既有 repair=True → repair=False 兩次嘗試
     assert fake_ticker.history.call_count == 2
+
+
+def test_is_rate_limit_error_ignores_epoch_timestamp() -> None:
+    """含 epoch 時間戳（如 1791429600）的訊息不得被誤判為 429。"""
+    assert _is_rate_limit_error(ValueError("period1=1791429600 invalid")) is False
+    assert _is_rate_limit_error(ValueError("HTTP 429")) is True
+    assert _is_rate_limit_error(ValueError("Error 429: slow down")) is True
+    assert _is_rate_limit_error(ValueError("TOO MANY REQUESTS")) is True
+    assert _is_rate_limit_error(YFRateLimitError()) is True
+
+
+def test_scrape_yf_history_timestamp_error_is_not_rate_limited() -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.history.side_effect = ValueError("bad range 1791429600")
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = scrape_yf_history("AAPL")
+    assert isinstance(res, dict)
+    assert res["status"] == "error"
+
+
+def test_scrape_yf_history_queue_timeout_returns_503_busy() -> None:
+    """排隊逾時回 503 status=busy，且不呼叫 Yahoo、不洩漏 semaphore。"""
+    fake_ticker = MagicMock()
+    sem = MagicMock()
+    sem.acquire.return_value = False
+    with (
+        patch("yf_api.yf.Ticker", return_value=fake_ticker),
+        patch.object(yf_api, "_HISTORY_SEMAPHORE", sem),
+    ):
+        res = scrape_yf_history("AAPL")
+    assert res.status_code == 503  # type: ignore[union-attr]
+    assert b"busy" in res.body  # type: ignore[union-attr]
+    sem.acquire.assert_called_once_with(timeout=15)
+    sem.release.assert_not_called()
+    fake_ticker.history.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_options_expiries_rate_limit_returns_429() -> None:
+    fake_ticker = MagicMock()
+    type(fake_ticker).options = property(
+        lambda self: (_ for _ in ()).throw(YFRateLimitError())
+    )
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = await scrape_yf_options_expiries("AAPL")
+    assert res.status_code == 429  # type: ignore[union-attr]
+    assert b"rate_limited" in res.body  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_options_chain_rate_limit_returns_429() -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.option_chain.side_effect = YFRateLimitError()
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = await scrape_yf_options_chain("AAPL", expiry="2026-10-16")
+    assert res.status_code == 429  # type: ignore[union-attr]
+
+
+@pytest.mark.asyncio
+async def test_options_chain_generic_error_stays_status_error() -> None:
+    fake_ticker = MagicMock()
+    fake_ticker.option_chain.side_effect = ValueError("boom")
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = await scrape_yf_options_chain("AAPL", expiry="2026-10-16")
+    assert isinstance(res, dict)
+    assert res["status"] == "error"

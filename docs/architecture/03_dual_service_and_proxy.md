@@ -138,9 +138,9 @@ flowchart TD
 
 ### 5.2.1 Yahoo 統一預算、全域 429 冷卻與「429 不走直連」
 - **統一預算**：所有 Yahoo 流量——本地 `yfinance`（`call_yf`）與 core→edge 即時 scrape（`/api/v1/scrape/yf/history`、`/options/*`；**不含** `/api/v1/cache/*` 本地快照讀取）——一律包在 `yahoo_slot()` 內，共用同一組 limiter／semaphore（背景 30/60s＋併發 2、互動 30/60s＋併發 5）。
-- **全域冷卻**：edge 回 HTTP 429 或 JSON `status == "rate_limited"`、或本地直連拋 `YFRateLimitError`／訊息含 `Too Many Requests`，即呼叫 `mark_yahoo_rate_limited()`：有 `Retry-After` 以其為準，否則 60→120→240→…上限 900 秒指數退避；成功一次（`mark_yahoo_ok()`）重置退避。冷卻中 `_fetch_history_via_edge`、期權即時 scrape、`_direct_yf_history` 一律不發請求。
+- **全域冷卻**：edge 回 HTTP 429 或 JSON `status == "rate_limited"`、或本地直連（`call_yf`，含期權）拋 `YFRateLimitError`／訊息含 `Too Many Requests`（不分大小寫）／獨立的 `429` token（regex `(?<!\d)429(?!\d)`，避免誤判 epoch 時間戳），即呼叫 `note_yahoo_rate_limited()`（計入配額摘要的 429 欄並 `mark_yahoo_rate_limited()`；期權重試 `_retry_once` 不對限流重試）：有 `Retry-After` 以其為準，否則 60→120→240→…上限 900 秒指數退避；已在冷卻中時不再升級退避倍數（僅 `Retry-After` 更晚才延長）；成功一次（直連 `call_yf`、edge K 線與期權成功，皆經共用 `edge_get_yahoo()`／`call_yf`）呼叫 `mark_yahoo_ok()` 重置退避。edge 請求只有拿到 HTTP 回應才計入 Yahoo 呼叫數，連線錯誤／逾時不計。冷卻中 `_fetch_history_via_edge`、期權即時 scrape、`_direct_yf_history` 一律不發請求。
 - **429 不走直連**：edge 回報限流時，`_safe_yf_history` 回傳 `None`（記 warning），**不**降級到 nexus_core 資料中心 IP 直連（更容易被封）；只有 edge「連線失敗／非 429 錯誤」才維持第 3 階直連降級。呼叫端依既有 fail-safe 處理空資料，日線另有 stale-on-error（見 `02` §4.1）。
-- **edge `/history`**：路由改同步 `def`（FastAPI 丟 threadpool，不再卡住 edge event loop 與背景期權輪詢），以 `threading.BoundedSemaphore(2)` 限制同時 `ticker.history` 數；捕捉 `YFRateLimitError` 回 HTTP 429，其餘錯誤維持 `{"status": "error"}` 200 回應。
+- **edge `/history`**：路由改同步 `def`（FastAPI 丟 threadpool，不再卡住 edge event loop 與背景期權輪詢），以 `threading.BoundedSemaphore(2)` 限制同時 `ticker.history` 數；捕捉 `YFRateLimitError` 回 HTTP 429，排隊超過 15 秒（`acquire(timeout=15)`）回 HTTP 503 `{"status":"busy"}`，core 視為暫時失敗（回 `None`、不設冷卻、**不**走直連）；其餘錯誤維持 `{"status": "error"}` 200 回應。edge `/options/*/expiries` 與 `/chain` 限流時同樣回 HTTP 429。
 
 ### 5.3 異步連線池洩漏防護
 - 呼叫邊緣服務時，一律透過 `async with get_edge_client() as client:` 語法管理 `httpx.AsyncClient` 實例，確保在請求逾時或拋出例外時，底層 TCP Socket 連線能被及時釋放，防止 VPS 出現連線洩漏（Socket Leak）。

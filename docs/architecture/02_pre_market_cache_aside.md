@@ -151,7 +151,7 @@ flowchart TD
 
 | 時段 | interval／period | 到期時間 |
 | :--- | :--- | :--- |
-| 盤中（含半日市，以 NYSE 行事曆 open／close 為準） | intraday（1m–90m） | 下一根 bar 收盤（不超過收盤）＋ 60 秒定案寬限 |
+| 盤中（含半日市，以 NYSE 行事曆 open／close 為準） | intraday（1m–90m） | 正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下落在某根 bar 收盤後 60 秒定案寬限內，只快取到寬限結束（下游以牆鐘判斷 bar 收盤，快取不可跨過收盤邊界） |
 | 盤中 | 日線以上且 period 屬 `1d`／`2d`／`5d`（被當現值用的短期日線，如 VIX 期限結構、原油、跳空） | 現在 ＋ 15 分鐘（對齊盤中巡邏） |
 | 盤中 | 其他指標用日線（period ≥ 1mo） | 現在 ＋ 6 小時（維持現狀） |
 | 盤中 | 未知 interval | 現在 ＋ 15 分鐘（保守） |
@@ -169,7 +169,7 @@ flowchart TD
 | 常數名稱 | 數值 | 意涵 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |
 | `_LIVE_DAILY_TTL_SECONDS` | `900` 秒 | 盤中短期日線到期 | `nexus_core/services/market_data_service/caches.py` |
-| `_BAR_SETTLE_GRACE_SECONDS` | `60` 秒 | bar 收盤後等 Yahoo 定案 | `nexus_core/services/market_data_service/caches.py` |
+| `_BAR_SETTLE_GRACE_SECONDS` | `60` 秒 | bar 收盤後等 Yahoo 定案（寬限內抓取的資料只快取到寬限結束） | `nexus_core/services/market_data_service/caches.py` |
 | `_POST_CLOSE_SETTLE_SECONDS`／`_POST_CLOSE_SHORT_TTL_SECONDS` | `1800`／`300` 秒 | 收盤後 30 分內短 TTL | `nexus_core/services/market_data_service/caches.py` |
 | `_PRE_OPEN_REFRESH_OFFSET_MINUTES` | `60` 分 | 次交易日開盤前 60 分（08:30 ET）刷新 | `nexus_core/services/market_data_service/caches.py` |
 | `_IV_CACHE_TTL` | `1800` 秒 | IV 記憶體快取，對齊 edge 快照週期 | `nexus_core/market_analysis/sentiment/cache.py` |

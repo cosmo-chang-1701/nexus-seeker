@@ -19,9 +19,9 @@ _NOW = _ts(2026, 10, 7, 10, 7)
 @pytest.mark.parametrize(
     "interval,period,expected",
     [
-        ("15m", "5d", _ts(2026, 10, 7, 10, 15) + 60),
-        ("1m", "1d", _ts(2026, 10, 7, 10, 8) + 60),
-        ("1h", "5d", _ts(2026, 10, 7, 10, 30) + 60),
+        ("15m", "5d", _ts(2026, 10, 7, 10, 15)),
+        ("1m", "1d", _ts(2026, 10, 7, 10, 8)),
+        ("1h", "5d", _ts(2026, 10, 7, 10, 30)),
         ("1d", "5d", _NOW + 900),
         ("1d", "1y", _NOW + 21600),
     ],
@@ -33,12 +33,39 @@ def test_intraday_session_expiry(interval: str, period: str, expected: float) ->
 def test_last_bar_never_exceeds_close() -> None:
     now = _ts(2026, 10, 7, 15, 55)
     assert history_cache_expiry("15m", "5d", now) == pytest.approx(
-        _ts(2026, 10, 7, 16, 0) + 60
+        _ts(2026, 10, 7, 16, 0)
     )
     # 60m bar 的邊界 15:30 之後下一根是 16:30，需被收盤截斷
     now2 = _ts(2026, 10, 7, 15, 45)
     assert history_cache_expiry("1h", "5d", now2) == pytest.approx(
-        _ts(2026, 10, 7, 16, 0) + 60
+        _ts(2026, 10, 7, 16, 0)
+    )
+
+
+def test_expiry_is_exactly_bar_close_not_after() -> None:
+    """到期須正好在 bar 收盤時刻：之後命中的舊快取最後一根是部分 K 棒。"""
+    now = _ts(2026, 10, 7, 10, 7)
+    assert history_cache_expiry("15m", "5d", now) == _ts(2026, 10, 7, 10, 15)
+
+
+def test_fetch_inside_settle_grace_caches_only_until_grace_end() -> None:
+    """抓取落在 bar 收盤後 60 秒寬限內：只快取到寬限結束（Yahoo 尚未定案）。"""
+    now = _ts(2026, 10, 7, 10, 15) + 20
+    assert history_cache_expiry("15m", "5d", now) == pytest.approx(
+        _ts(2026, 10, 7, 10, 15) + 60
+    )
+    # 寬限剛結束：回到「下一根 bar 收盤」
+    after = _ts(2026, 10, 7, 10, 15) + 60
+    assert history_cache_expiry("15m", "5d", after) == pytest.approx(
+        _ts(2026, 10, 7, 10, 30)
+    )
+
+
+def test_open_boundary_has_no_grace() -> None:
+    """開盤時刻不是 bar 收盤，不套寬限；9:30:20 仍到期於 9:45。"""
+    now = _ts(2026, 10, 7, 9, 30) + 20
+    assert history_cache_expiry("15m", "5d", now) == pytest.approx(
+        _ts(2026, 10, 7, 9, 45)
     )
 
 

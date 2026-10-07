@@ -77,7 +77,6 @@ async def _fetch_history_uncached(
     沿用原有的 fail-safe 語意——任何例外都記 log 並回空 DataFrame，不外拋（所有
     呼叫端都是盤中熱路徑）。
     """
-    now = time.time()
     try:
         ticker = yf.Ticker(symbol)
         df = await _safe_yf_history(ticker, period=period, interval=interval)
@@ -97,7 +96,8 @@ async def _fetch_history_uncached(
         result_df = df[["Open", "High", "Low", "Close", "Volume"]]
         _history_cache[cache_key] = (
             result_df.copy(),
-            history_cache_expiry(interval, period, now),
+            # 以抓取完成後的時間計算到期：抓取耗時可能讓 bar 邊界在途中被跨過
+            history_cache_expiry(interval, period, time.time()),
         )
         return result_df
     except Exception as e:
@@ -118,8 +118,8 @@ async def get_history_df(
     使用 yfinance 抓取歷史 K 線 (異步化，支援依 interval／交易時段決定期限的快取、
     併發請求合併與 Copy 隔離)。
 
-    快取期限由 `caches.history_cache_expiry` 決定：盤中 intraday 對齊下一根 bar
-    收盤＋60 秒、短期日線 15 分鐘、收盤後 30 分內 5 分鐘、盤外到次一交易日
+    快取期限由 `caches.history_cache_expiry` 決定：盤中 intraday 到期於下一根 bar
+    收盤時刻（收盤後 60 秒寬限內抓到的資料只快取到寬限結束）、短期日線 15 分鐘、收盤後 30 分內 5 分鐘、盤外到次一交易日
     08:30 ET；僅盤中的指標用長週期日線維持 6 小時。
 
     `force_refresh=True` 會略過快取讀取（但仍會將新結果寫入快取供其他呼叫端

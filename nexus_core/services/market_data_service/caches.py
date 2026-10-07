@@ -90,7 +90,9 @@ _INTRADAY_BAR_SECONDS: dict[str, int] = {
 # 盤中最後一根日線 bar 會隨成交更新，不能再讀 6 小時前的資料。
 _LIVE_DAILY_PERIODS: frozenset[str] = frozenset({"1d", "2d", "5d"})
 _LIVE_DAILY_TTL_SECONDS = 900  # 對齊 15 分鐘盤中巡邏
-_BAR_SETTLE_GRACE_SECONDS = 60  # Yahoo 於 bar 收盤後需要時間定案，多等 60 秒再重抓
+_BAR_SETTLE_GRACE_SECONDS = (
+    60  # Yahoo 於 bar 收盤後需要時間定案；寬限內抓到的資料只快取到寬限結束
+)
 _POST_CLOSE_SETTLE_SECONDS = 1800  # 收盤後 30 分內日線／最後一根 bar 仍可能被修正
 _POST_CLOSE_SHORT_TTL_SECONDS = 300
 # 除權息調整於開盤前生效；08:45 盤前預熱需拿到新資料，故次交易日開盤前 60 分（08:30 ET）刷新
@@ -122,7 +124,8 @@ def _next_trading_day_on_or_after(day: date) -> date:
 def history_cache_expiry(interval: str, period: str, now_ts: float) -> float:
     """歷史 K 線快取到期時間（epoch 秒）。純函式：時間由 now_ts 注入，不讀系統時鐘。
 
-    1. 盤中：intraday 對齊下一根 bar 收盤（不超過收盤）＋60 秒定案寬限；短期日線
+    1. 盤中：intraday 到期＝正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下
+       落在某根 bar 收盤後 60 秒定案寬限內，則只快取到該寬限結束；短期日線
        （period 1d/2d/5d）15 分鐘；其餘指標用日線維持 6 小時。
     2. 收盤後 30 分內：5 分鐘（全 interval）。
     3. 其餘盤外：到次一個「開盤前 60 分（08:30 ET）」刷新點；開盤前 60 分～開盤之間
@@ -139,9 +142,22 @@ def history_cache_expiry(interval: str, period: str, now_ts: float) -> float:
             bar = _INTRADAY_BAR_SECONDS.get(interval)
             if bar is not None:
                 elapsed = (now_et - open_dt).total_seconds()
-                k = math.floor(elapsed / bar) + 1
-                boundary = min(open_dt + timedelta(seconds=k * bar), close_dt)
-                return boundary.timestamp() + _BAR_SETTLE_GRACE_SECONDS
+                n_done = math.floor(elapsed / bar)
+                prev_boundary = open_dt + timedelta(seconds=n_done * bar)
+                # 抓取當下落在某根 bar 收盤後的寬限期內（Yahoo 尚未定案）：
+                # 只快取到寬限結束，之後重抓才拿得到定案資料。
+                if (
+                    n_done >= 1
+                    and (now_et - prev_boundary).total_seconds()
+                    < _BAR_SETTLE_GRACE_SECONDS
+                ):
+                    return prev_boundary.timestamp() + _BAR_SETTLE_GRACE_SECONDS
+                # 其餘：正好在下一根 bar 收盤時刻到期。下游 trim_to_confirmed_15m_bars
+                # 以牆鐘判斷收盤，快取不可跨過收盤邊界，否則會把部分 K 棒當已收盤。
+                boundary = min(
+                    open_dt + timedelta(seconds=(n_done + 1) * bar), close_dt
+                )
+                return boundary.timestamp()
             if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
                 if period in _LIVE_DAILY_PERIODS:
                     return now_ts + _LIVE_DAILY_TTL_SECONDS
