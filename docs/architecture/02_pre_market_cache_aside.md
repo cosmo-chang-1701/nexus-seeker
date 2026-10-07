@@ -178,10 +178,16 @@ flowchart TD
 
 ### 7.1 kv_cache fallback 讀取年齡上限
 
-fallback 路徑（即時資料缺失時回頭讀 SQLite 舊值）一律改用 `database/cache.py::get_kv_cache_fresh(key, max_age_seconds)`：它是 `get_kv_cache_with_age` 的薄封裝，**查無資料、年齡超過上限、年齡未知（`updated_at` 解析失敗）一律回傳 `None`**，由呼叫端走既有的缺值路徑，不改任何策略閘門門檻。
+fallback 路徑（即時資料缺失時回頭讀 SQLite 舊值）一律套用年齡約束，**查無資料、逾期、年齡未知（`updated_at` 解析失敗）一律視為缺值**，由呼叫端走既有的缺值路徑，不改任何策略閘門門檻。讀取函式皆位於 `database/cache.py`：
 
-| 位置 | 常數 | 上限 | 逾期行為（既有缺值路徑） |
-| :--- | :--- | :--- | :--- |
-| `get_cached_volume_poc` / `get_cached_gex_putwall`（`market_analysis/intraday_pipeline/metrics.py`） | `_FALLBACK_LEVEL_MAX_AGE_SECONDS` | 24 小時 | 回傳 `None`：POC 回退為現價、PutWall 視為 `None` |
-| `macro_vix` 回退（`cogs/trading/scheduler.py` 15 分鐘巡邏） | `_VIX_FALLBACK_MAX_AGE_SECONDS` | 30 分鐘 | 不採用，維持 `is_vix_valid=False` |
-| `macro_fedwatch_probability`（`market_analysis/squeeze_entry/vetoes.py`、`market_analysis/dynamic_rollover/macro_top_escape_defense.py`） | `FEDWATCH_PROB_MAX_AGE_SECONDS`（定義於 `services/calendar_service.py`） | 12 小時（寫入端 4 小時週期 × 3） | 傳入 `prob=None`；`evaluate_macro_top_escape_score` 將 `None` 視為未知因子、不計分，且已知分數為 NORMAL 時回傳 `UNKNOWN`（fail-closed），門檻不變 |
+- `get_kv_cache_fresh(key, max_age_seconds)`：固定秒數上限（`get_kv_cache_with_age` 的薄封裝）。
+- `get_kv_cache_session_fresh(key)`：以**交易日**為準的有效性（價位型資料用）。
+- `get_fedwatch_probability_fresh()`：回傳 `(prob, is_stale)`，常數 `FEDWATCH_PROB_MAX_AGE_SECONDS`（12 小時）亦定義於 `database/cache.py`，避免 `market_analysis` 反向 import `services`。
+
+所有 async 呼叫端皆以 `await asyncio.to_thread(...)` 讀取，不在 event loop 內同步操作 SQLite。
+
+| 位置 | 約束 | 逾期行為（既有缺值路徑） |
+| :--- | :--- | :--- |
+| `get_cached_volume_poc` / `get_cached_gex_putwall`（`market_analysis/intraday_pipeline/metrics.py`）與 `/x` 雷達（`cogs/unified_terminal/radar_data.py` 的 `volume_poc_*` 讀取） | 寫入時間（ET 日期）須在 `market_time.get_last_completed_trading_date()` 當天或之後（`market_time.is_cache_age_within_last_session`）：週一可用週五寫入的價位，週五不可用週三的。寫入者僅有盤中 30 分鐘 `IntradayScanPipeline` 與 `/x` 雷達（無盤前預熱寫入） | POC 回退為現價、PutWall 視為 `None`；雷達 POC 視為 0。雷達只在 POC 為本次新計算（`vp_data.hvn`）時寫入，**不存回備援值**，避免刷新自己的年齡 |
+| `macro_vix` 回退（`cogs/trading/scheduler.py` 15 分鐘巡邏） | `_VIX_FALLBACK_MAX_AGE_SECONDS` = 40 分鐘（兩個 15 分鐘週期＋餘裕）。僅即時報價才寫入 `macro_vix`，回退值不存回 | 不採用，維持 `is_vix_valid=False` |
+| `macro_fedwatch_probability`（`vetoes.py`、`macro_top_escape_defense.py`、`services/calendar_service.py` 的 `get_latest_fedwatch_probability` / `get_latest_fedwatch_info`） | `FEDWATCH_PROB_MAX_AGE_SECONDS` = 12 小時（寫入端 4 小時週期 × 3），三處共用同一上限，09:00 簡報與擠壓否決的 tier 一致 | 閘門端傳入 `prob=None, prob_stale=True`：`evaluate_macro_top_escape_score` 該因子顯示「FedWatch 資料過期（逾 12 小時），不計分」並記 `logger.warning`，已知分數為 NORMAL 時回傳 `UNKNOWN`（fail-closed），門檻不變；簡報端改走日曆備援並標記為 fallback |

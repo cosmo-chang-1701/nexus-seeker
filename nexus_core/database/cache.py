@@ -149,6 +149,45 @@ def get_kv_cache_fresh(key: str, max_age_seconds: float) -> Optional[Any]:
     return value
 
 
+def get_kv_cache_session_fresh(key: str, as_of: Optional[datetime] = None) -> Any:
+    """讀取 kv_cache，僅在「寫入於最近一個已收盤交易日當天或之後」時回傳值。
+
+    以交易日而非固定小時數判斷（見 `market_time.is_cache_age_within_last_session`），
+    供 Vol POC／GEX PutWall 這類價位回退使用，避免週末／連假讓備援全數失效。
+    查無資料、逾期、年齡未知皆回傳 None。
+    """
+    import market_time
+
+    value, age_seconds = get_kv_cache_with_age(key)
+    if value is None or not market_time.is_cache_age_within_last_session(
+        age_seconds, as_of
+    ):
+        return None
+    return value
+
+
+# FedWatch 鷹派傾向分數（kv `macro_fedwatch_probability`）供下游讀取的最大年齡。
+# 寫入端為 4 小時週期的宏觀／FedWatch 檢查，12 小時 = 寫入週期 × 3，容許連續兩次
+# 刷新失敗仍可用；超過則視為過期（prob=None，評分函式不計分、不放行 NORMAL）。
+# 定義於 database 層，避免 market_analysis 為取常數反向依賴 services。
+FEDWATCH_PROB_MAX_AGE_SECONDS: float = 12 * 3600.0
+
+
+def get_fedwatch_probability_fresh() -> tuple[Optional[Any], bool]:
+    """讀取 FedWatch 分數，回傳 `(prob, is_stale)`。
+
+    - 有值且年齡 <= FEDWATCH_PROB_MAX_AGE_SECONDS：`(prob, False)`。
+    - 有值但逾期或年齡未知：`(None, True)`，呼叫端據此標示「資料過期」。
+    - 查無資料：`(None, False)`（單純無資料，不是過期）。
+    """
+    value, age_seconds = get_kv_cache_with_age("macro_fedwatch_probability")
+    if value is None:
+        return None, False
+    if age_seconds is None or age_seconds > FEDWATCH_PROB_MAX_AGE_SECONDS:
+        return None, True
+    return value, False
+
+
 def get_kv_cache_many(
     keys: Sequence[str],
 ) -> dict[str, tuple[Any, Optional[float]]]:
@@ -242,6 +281,9 @@ __all__ = [
     "save_kv_cache_many",
     "get_kv_cache",
     "get_kv_cache_with_age",
+    "get_kv_cache_session_fresh",
+    "get_fedwatch_probability_fresh",
+    "FEDWATCH_PROB_MAX_AGE_SECONDS",
     "get_kv_cache_many",
     "purge_stale_kv_cache_dedup_keys",
 ]

@@ -229,6 +229,32 @@ def get_last_completed_trading_date(as_of: datetime | None = None) -> str:
     return fallback.strftime("%Y-%m-%d")
 
 
+def is_cache_age_within_last_session(
+    age_seconds: float | None, as_of: datetime | None = None
+) -> bool:
+    """快取資料是否寫於「最近一個已收盤交易日當天或之後」（以交易日為準的新鮮度）。
+
+    用於 Vol POC／GEX PutWall 這類「價位」型回退：固定小時數上限（如 24h）會被
+    週末、連假吃掉（週五寫入、週一讀取已逾 48h），但價位的參考性其實只隨「交易
+    日數」衰減。規則：由 `age_seconds` 反推寫入時間的美東日期，須 >=
+    `get_last_completed_trading_date(as_of)`。例如週一盤中讀取，上一個已收盤交易日
+    為週五，週五寫入有效；週五盤中讀取，上一個已收盤交易日為週四，週三寫入無效。
+
+    `age_seconds` 為 None（updated_at 無法解析）一律回傳 False。`as_of` 若為
+    naive datetime，視為美東時間；預設為現在。
+    """
+    if age_seconds is None:
+        return False
+    if as_of is None:
+        now_ny = datetime.now(ny_tz)
+    elif as_of.tzinfo is None:
+        now_ny = as_of.replace(tzinfo=ny_tz)
+    else:
+        now_ny = as_of.astimezone(ny_tz)
+    written_date = (now_ny - timedelta(seconds=age_seconds)).strftime("%Y-%m-%d")
+    return written_date >= get_last_completed_trading_date(now_ny)
+
+
 def get_session_bounds_utc(
     start_date: Any, end_date: Any
 ) -> dict[str, tuple[str, str]]:

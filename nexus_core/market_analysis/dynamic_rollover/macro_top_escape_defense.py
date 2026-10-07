@@ -1,3 +1,4 @@
+import asyncio
 import math
 from typing import Any, Dict, List, Optional
 
@@ -206,13 +207,13 @@ async def evaluate_macro_top_escape_defense_impl(
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得 Fear & Greed 指數失敗: {e}")
 
-    from database.cache import get_kv_cache_fresh
-    from services.calendar_service import FEDWATCH_PROB_MAX_AGE_SECONDS
+    from database.cache import get_fedwatch_probability_fresh
 
-    # 逾期（> 12h）回傳 None → 評分函式視為未知因子、不計分，不改任何門檻
-    prob = get_kv_cache_fresh(
-        "macro_fedwatch_probability", FEDWATCH_PROB_MAX_AGE_SECONDS
-    )
+    # 逾期（> 12h）回傳 prob=None 且 prob_stale=True → 評分函式視為未知因子、
+    # 不計分並明確標示「資料過期」，不改任何門檻。同步 SQLite 讀取移出 event loop。
+    prob, prob_stale = await asyncio.to_thread(get_fedwatch_probability_fresh)
+    if prob_stale:
+        logger.warning("宏觀逃頂前瞻防禦: FedWatch 資料過期（逾 12 小時），不計分")
 
     satellite_euphoria_ratio = _compute_satellite_euphoria_ratio(portfolio_assets)
 
@@ -222,6 +223,7 @@ async def evaluate_macro_top_escape_defense_impl(
         prob=prob,
         is_negative_gamma=is_negative_gamma,
         satellite_euphoria_ratio=satellite_euphoria_ratio,
+        prob_stale=prob_stale,
     )
     if tier not in _MACRO_TOP_ESCAPE_PUT_TIERS:
         return []

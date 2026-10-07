@@ -1300,7 +1300,9 @@ def test_calendar_service_fedwatch_lookup() -> None:
     from services.calendar_service import calendar_service
 
     # Case 1: kv_cache 命中
-    with patch("database.cache.get_kv_cache") as mock_kv:
+    with patch("database.cache.get_kv_cache") as mock_kv, patch(
+        "database.cache.get_fedwatch_probability_fresh", return_value=(0.65, False)
+    ):
         mock_kv.side_effect = lambda k: (
             0.65
             if k == "macro_fedwatch_probability"
@@ -1323,6 +1325,9 @@ def test_calendar_service_fedwatch_lookup() -> None:
     # Case 2: kv_cache miss, fallback to SQLite
     with (
         patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "database.cache.get_fedwatch_probability_fresh", return_value=(None, False)
+        ),
         patch("sqlite3.connect") as mock_conn,
     ):
         mock_cursor = MagicMock()
@@ -1333,7 +1338,9 @@ def test_calendar_service_fedwatch_lookup() -> None:
         assert is_fallback is True
 
     # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 自動觸發防禦並轉為 fallback
-    with patch("database.cache.get_kv_cache") as mock_kv:
+    with patch("database.cache.get_kv_cache") as mock_kv, patch(
+        "database.cache.get_fedwatch_probability_fresh", return_value=(1.0, False)
+    ):
         mock_kv.side_effect = lambda k: (
             1.0
             if k == "macro_fedwatch_probability"
