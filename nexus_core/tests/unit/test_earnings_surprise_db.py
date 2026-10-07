@@ -175,3 +175,77 @@ async def test_database_guidance_extraction_roundtrip() -> None:
     latest = get_latest_guidance_extraction("META")
     assert latest is not None
     assert latest.fiscal_period == "2026-Q3"
+
+
+@pytest.mark.asyncio
+async def test_get_prior_guidance_extraction_excludes_same_newer_and_unnormalized() -> (
+    None
+):
+    """前期指引只取「早於當期財季」且非同一申報之記錄，並忽略未正規化之期別字串。"""
+    from database.fundamental_pipeline import get_prior_guidance_extraction
+
+    def _g(period: str, accession: str) -> GuidanceExtractionDTO:
+        return GuidanceExtractionDTO(
+            symbol="AMZN",
+            fiscal_period=period,
+            source_accession=accession,
+            model_version="gpt-4o",
+            confidence_score=0.5,
+            tone_delta_score=0.0,
+            data_json="{}",
+        )
+
+    for dto in (
+        _g("2026-Q1", "ACC-Q1"),
+        _g("2026-Q2", "ACC-Q2"),
+        _g("2026-Q3", "ACC-Q3"),
+        _g("2026-Q4", "ACC-Q4"),  # 較新季度不得被當成前期
+        _g("Q3 2026", "ACC-LEGACY"),  # 未正規化字串（字串序會排在最後）
+    ):
+        await save_guidance_extraction(dto)
+
+    prior = get_prior_guidance_extraction("AMZN", "2026-Q3", "ACC-Q3")
+    assert prior is not None
+    assert prior.fiscal_period == "2026-Q2"
+
+    # 同一申報重送（例如修正後以相同 accession 寫入較早期別）也被排除
+    prior_excl = get_prior_guidance_extraction("AMZN", "2026-Q3", "ACC-Q2")
+    assert prior_excl is not None
+    assert prior_excl.fiscal_period == "2026-Q1"
+
+    assert get_prior_guidance_extraction("AMZN", "2026-Q1", "ACC-Q1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_pending_earnings_surprise_keys_only_recent_pending() -> None:
+    """PENDING 重試查詢：只回傳 created_at 在窗口內且狀態仍為 PENDING 之財季。"""
+    from datetime import datetime, timedelta, timezone
+
+    from database.fundamental_pipeline import get_pending_earnings_surprise_keys
+
+    await save_earnings_surprises(
+        [
+            EarningsSurpriseDTO(
+                symbol="ZZPEND",
+                fiscal_period="2026-Q3",
+                consensus_eps=1.0,
+                status="PENDING",
+            ),
+            EarningsSurpriseDTO(
+                symbol="ZZDONE",
+                fiscal_period="2026-Q3",
+                actual_eps=1.1,
+                consensus_eps=1.0,
+                composite_score=20.0,
+                status="PROCESSED",
+            ),
+        ]
+    )
+    now = datetime.now(timezone.utc)
+    keys = get_pending_earnings_surprise_keys(now - timedelta(days=1))
+    assert ("ZZPEND", "2026-Q3") in keys
+    assert all(sym != "ZZDONE" for sym, _ in keys)
+
+    assert ("ZZPEND", "2026-Q3") not in get_pending_earnings_surprise_keys(
+        now + timedelta(days=1)
+    )

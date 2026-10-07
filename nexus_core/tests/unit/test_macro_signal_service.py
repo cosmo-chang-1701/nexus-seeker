@@ -46,6 +46,20 @@ async def test_fetch_attaches_available_dates(db_conn: Any) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_unregistered_series_requires_explicit_kind() -> None:
+    """未註冊於 FRED_SERIES 的序列不得默默套用 daily 可用日：未給 kind 即拋錯且不下載。"""
+    mock_download = AsyncMock(return_value="observation_date,WALCL\n2026-09-16,1\n")
+    with patch.object(svc, "_download_fred", new=mock_download):
+        with pytest.raises(ValueError, match="WALCL"):
+            await svc.fetch_fred_series("WALCL", date(2026, 9, 26))
+        mock_download.assert_not_awaited()
+
+        obs = await svc.fetch_fred_series("WALCL", date(2026, 9, 26), kind="weekly_h41")
+    assert len(obs) == 1
+    assert obs[0].available_date > obs[0].obs_date
+
+
+@pytest.mark.asyncio
 async def test_revised_values_keep_first_seen(db_conn: Any) -> None:
     """FRED 事後修正時，保留當時首次看到的值（前向資料不受修正偏差影響）。"""
     d = date(2026, 9, 19)

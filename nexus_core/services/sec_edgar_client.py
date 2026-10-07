@@ -6,17 +6,32 @@
 3. 杜絕 XXE：全面透過 defusedxml.ElementTree 解析 XML 檔案。
 4. 認證檢查：強制驗證 SEC_USER_AGENT 格式（包含 @ 聯絡信箱），缺少時拋出 SecConfigError。
 5. CIK 查詢快取：支援 10 位數自動補零 (zfill(10)) 與官方 company_tickers.json 快取。
+   映射表以 TTL（24 小時）快取並經 SingleFlightManager 合併併發下載；映射表新鮮期間
+   查無代碼即直接回傳 None（隱含負向快取），下載失敗後 10 分鐘內不重試。
+6. 權威受理時間：submissions JSON 的 acceptanceDateTime 不可信（見
+   sec_item_router.parse_sec_acceptance_datetime），改讀 `{accession}.hdr.sgml` 表頭。
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 import logging
+import time
 from typing import Any
 from aiolimiter import AsyncLimiter
 import defusedxml.ElementTree as ET
 import httpx
 
 import config
+from market_analysis.fundamental_pipeline.press_release import (
+    INDEX_HEADERS_BYTE_CAP,
+    FilingDocumentEntry,
+    parse_index_headers_documents,
+)
+from market_analysis.fundamental_pipeline.sec_item_router import (
+    parse_sec_header_acceptance,
+)
+from services.single_flight import SingleFlightManager
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +63,12 @@ _COMMON_CIK_SEEDS: dict[str, str] = {
 }
 
 
+_COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
+_TICKER_MAP_TTL_SECONDS = 24 * 3600.0  # company_tickers.json 映射表快取有效期
+_TICKER_MAP_FAILURE_BACKOFF_SECONDS = 600.0  # 下載失敗後的重試冷卻
+_SGML_HEADER_BYTE_CAP = 65_536  # .hdr.sgml 僅約 1KB，受理時間位於首數行
+
+
 class SecConfigError(RuntimeError):
     """SEC 缺少正式認證聯絡資訊時的防禦性異常。"""
 
@@ -75,50 +96,124 @@ class SecEdgarClient:
         self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._timeout = timeout_seconds
         self._cik_cache: dict[str, str] = dict(_COMMON_CIK_SEEDS)
+        # 映射表最近一次成功載入 / 失敗的 monotonic 時間戳
+        self._ticker_map_loaded_at: float | None = None
+        self._ticker_map_failed_at: float | None = None
 
-    async def get_cik(self, symbol: str) -> str | None:
-        """根據股票代碼查詢 10 位數補零之 CIK，支援雙重股權代碼標準化映射。"""
+    @staticmethod
+    def _symbol_variants(symbol: str) -> list[str]:
+        """雙重股權標的（如 BRK.B <-> BRK-B）雙向標準化候選清單。"""
         sym_clean = symbol.strip().upper()
-        # 雙重股權標的（如 BRK.B <-> BRK-B）雙向標準化候選清單
         variants = [sym_clean]
         if "." in sym_clean:
             variants.append(sym_clean.replace(".", "-"))
         if "-" in sym_clean:
             variants.append(sym_clean.replace("-", "."))
+        return variants
 
+    def _lookup_cached(self, variants: list[str]) -> str | None:
         for v in variants:
             if v in self._cik_cache:
                 return self._cik_cache[v]
+        return None
 
-        # 若未命中快取，向 SEC 官方取得 company_tickers.json
+    async def _download_ticker_map(self) -> dict[str, str]:
+        """下載 company_tickers.json 並轉成 {ticker: cik10}（含 . / - 雙向別名）。"""
+        async with self._limiter:
+            async with httpx.AsyncClient(
+                headers=self._headers, timeout=self._timeout
+            ) as client:
+                resp = await client.get(_COMPANY_TICKERS_URL)
+                resp.raise_for_status()
+                data = resp.json()
+
+        mapping: dict[str, str] = {}
+        for entry in data.values():
+            ticker = str(entry.get("ticker", "")).strip().upper()
+            raw_cik = entry.get("cik_str")
+            if ticker and raw_cik is not None:
+                cik10 = str(raw_cik).zfill(10)
+                mapping[ticker] = cik10
+                if "-" in ticker:
+                    mapping[ticker.replace("-", ".")] = cik10
+                elif "." in ticker:
+                    mapping[ticker.replace(".", "-")] = cik10
+        return mapping
+
+    def _ticker_map_is_fresh(self, now: float) -> bool:
+        return (
+            self._ticker_map_loaded_at is not None
+            and now - self._ticker_map_loaded_at < _TICKER_MAP_TTL_SECONDS
+        )
+
+    def _in_failure_backoff(self, now: float) -> bool:
+        return (
+            self._ticker_map_failed_at is not None
+            and now - self._ticker_map_failed_at < _TICKER_MAP_FAILURE_BACKOFF_SECONDS
+        )
+
+    async def get_cik(self, symbol: str) -> str | None:
+        """根據股票代碼查詢 10 位數補零之 CIK，支援雙重股權代碼標準化映射。
+
+        快取策略：
+        - 命中記憶體快取（種子或映射表）直接回傳。
+        - 映射表在 TTL 內仍新鮮卻查無代碼 → 直接回傳 None，不重新下載（負向快取）。
+        - 下載失敗後冷卻期內不重試，直接回傳 None。
+        - 併發 miss 經 SingleFlightManager 合併為單一下載。
+        """
+        variants = self._symbol_variants(symbol)
+        cached = self._lookup_cached(variants)
+        if cached is not None:
+            return cached
+
+        now = time.monotonic()
+        if self._ticker_map_is_fresh(now) or self._in_failure_backoff(now):
+            return None
+
         try:
-            url = "https://www.sec.gov/files/company_tickers.json"
-            async with self._limiter:
-                async with httpx.AsyncClient(
-                    headers=self._headers, timeout=self._timeout
-                ) as client:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    data = resp.json()
-
-                    for entry in data.values():
-                        ticker = str(entry.get("ticker", "")).strip().upper()
-                        raw_cik = entry.get("cik_str")
-                        if ticker and raw_cik is not None:
-                            cik10 = str(raw_cik).zfill(10)
-                            self._cik_cache[ticker] = cik10
-                            if "-" in ticker:
-                                self._cik_cache[ticker.replace("-", ".")] = cik10
-                            elif "." in ticker:
-                                self._cik_cache[ticker.replace(".", "-")] = cik10
-
-            for v in variants:
-                if v in self._cik_cache:
-                    return self._cik_cache[v]
-            return None
+            mapping: dict[str, str] = await SingleFlightManager.run(
+                "sec_company_tickers_json", self._download_ticker_map
+            )
         except Exception as e:
-            logger.warning(f"查詢 SEC 官方 Ticker-CIK 映射表失敗 ({sym_clean}): {e}")
+            self._ticker_map_failed_at = time.monotonic()
+            logger.warning(f"查詢 SEC 官方 Ticker-CIK 映射表失敗 ({variants[0]}): {e}")
             return None
+
+        self._cik_cache.update(mapping)
+        self._ticker_map_loaded_at = time.monotonic()
+        self._ticker_map_failed_at = None
+        return self._lookup_cached(variants)
+
+    async def fetch_acceptance_datetime(self, cik: str, accession: str) -> datetime:
+        """讀取申報 SGML 表頭 `{accession}.hdr.sgml` 的權威受理時間（帶時區之美東時間）。
+
+        失敗（HTTP 錯誤、標籤缺漏）一律拋出例外，由呼叫端視為該筆處理失敗。
+        """
+        cik_int = str(int(cik))
+        acc_no_dash = accession.replace("-", "")
+        url = (
+            f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_no_dash}/"
+            f"{accession}.hdr.sgml"
+        )
+        header_text = await self.fetch_document_text(
+            url, byte_cap=_SGML_HEADER_BYTE_CAP
+        )
+        return parse_sec_header_acceptance(header_text)
+
+    @staticmethod
+    def filing_directory_url(cik: str, accession: str) -> str:
+        """組出申報目錄 URL（`/Archives/edgar/data/{cik}/{accession 去橫線}`，不含結尾斜線）。"""
+        cik_int = str(int(cik))
+        acc_no_dash = accession.replace("-", "")
+        return f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_no_dash}"
+
+    async def fetch_filing_documents(
+        self, filing_dir_url: str, accession: str
+    ) -> list[FilingDocumentEntry]:
+        """讀取 `{accession}-index-headers.html`，列出申報內各文件之 TYPE 與檔名（如 EX-99.1）。"""
+        url = f"{filing_dir_url.rstrip('/')}/{accession}-index-headers.html"
+        text = await self.fetch_document_text(url, byte_cap=INDEX_HEADERS_BYTE_CAP)
+        return parse_index_headers_documents(text)
 
     async def fetch_company_submissions(self, cik: str) -> dict[str, Any]:
         """拉取指定 CIK 之最近申報事件清單 (Submissions API)。"""
@@ -130,6 +225,31 @@ class SecEdgarClient:
                 headers=self._headers, timeout=self._timeout
             ) as client:
                 resp = await client.get(url)
+                resp.raise_for_status()
+                data: dict[str, Any] = resp.json()
+                return data
+
+    async def fetch_company_concept(
+        self, cik: str, tag: str, taxonomy: str = "us-gaap"
+    ) -> dict[str, Any] | None:
+        """拉取單一 XBRL 概念的歷史事實 (companyconcept API)。
+
+        刻意不用 companyfacts：單一公司 companyfacts 解壓後約 5MB、json 解析峰值約 26MB，
+        companyconcept 每個標籤僅數十 KB，較符合 1–2GB VPS 記憶體限制。
+        HTTP 404（公司從未申報此標籤）回傳 None；其他錯誤拋出例外。
+        """
+        cik10 = str(cik).strip().zfill(10)
+        url = (
+            f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik10}/"
+            f"{taxonomy}/{tag}.json"
+        )
+        async with self._limiter:
+            async with httpx.AsyncClient(
+                headers=self._headers, timeout=self._timeout
+            ) as client:
+                resp = await client.get(url)
+                if resp.status_code == 404:
+                    return None
                 resp.raise_for_status()
                 data: dict[str, Any] = resp.json()
                 return data

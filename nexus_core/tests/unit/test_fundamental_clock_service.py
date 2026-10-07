@@ -120,7 +120,7 @@ def test_register_valuation_clock_jobs() -> None:
     job = ClockJobRegistry.get("fundamental_watch_candidate_2000")
     assert job is not None
     assert job.job_id == "fundamental_watch_candidate_2000"
-    assert job.priority == 50
+    assert job.priority == 70
 
 
 @pytest.mark.asyncio

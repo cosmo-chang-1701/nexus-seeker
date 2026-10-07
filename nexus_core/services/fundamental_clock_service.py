@@ -199,7 +199,7 @@ def register_valuation_clock_jobs() -> None:
             schedule_desc="平日 20:00 ET (盤後 18:00–22:00 估值掃描窗口)",
             handler=_run_watch_candidates_job,
             is_due_fn=weekday_at(20, 0, window_minutes=30),
-            priority=50,
+            priority=70,
             description="計算全景 DCF/Comps 安全邊際與分析師修正動能，產出次日基本面觀察排名",
         )
     )

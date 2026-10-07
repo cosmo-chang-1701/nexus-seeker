@@ -21,7 +21,8 @@ _C_SUITE_TITLE_PATTERNS = [
     r"\bCOO\b",
     r"\bCTO\b",
     r"\bCIO\b",
-    r"\bPRESIDENT\b",
+    # 排除 Vice President / Senior Vice President / Executive Vice-President 等副總層級
+    r"(?<!VICE )(?<!VICE-)\bPRESIDENT\b",
     r"CHIEF EXECUTIVE OFFICER",
     r"CHIEF FINANCIAL OFFICER",
     r"CHIEF OPERATING OFFICER",
@@ -30,6 +31,32 @@ _C_SUITE_TITLE_PATTERNS = [
     r"GENERAL COUNSEL",
 ]
 _C_SUITE_REGEX = re.compile("|".join(_C_SUITE_TITLE_PATTERNS), re.IGNORECASE)
+
+# 10b5-1 腳註關鍵字（不分大小寫與常見變體）
+_10B5_KEYWORD_RE = re.compile(r"10b-?5[-–]?1|10b5", re.IGNORECASE)
+# 同一子句（不跨越句點、分號、逗號）內位於關鍵字之前的否定語，例如
+# "not made pursuant to a Rule 10b5-1 plan"、"no 10b5-1 trading plan"。
+_10B5_NEGATION_RE = re.compile(
+    r"\b(?:not|no|neither|nor|never|without)\b[^.;,]{0,80}?$|n't\b[^.;,]{0,80}?$",
+    re.IGNORECASE,
+)
+
+
+class Form4ParseError(ValueError):
+    """Form 4 XML 無法解析（格式錯誤或截斷）。"""
+
+
+def footnote_asserts_10b5_1(text: str) -> bool:
+    """腳註是否「肯定地」指出交易依 10b5-1 計畫執行。
+
+    只要有任一處提及 10b5-1 且同一子句中位於其前方沒有否定語，即視為肯定；
+    "not ... pursuant to a Rule 10b5-1 plan" 這類否定敘述不計入。
+    """
+    for match in _10B5_KEYWORD_RE.finditer(text):
+        prefix = text[: match.start()]
+        if not _10B5_NEGATION_RE.search(prefix):
+            return True
+    return False
 
 
 def _strip_namespaces(el: ET.Element) -> ET.Element:
@@ -44,7 +71,8 @@ def _is_c_suite_role(officer_title: str | None, is_officer: bool) -> bool:
     """判斷該高管是否屬於 C-Suite 核心決策層。"""
     if not officer_title:
         return False
-    return bool(_C_SUITE_REGEX.search(officer_title))
+    normalized = re.sub(r"\s+", " ", officer_title.strip())
+    return bool(_C_SUITE_REGEX.search(normalized))
 
 
 def _extract_text(element: ET.Element | None, xpath: str, default: str = "") -> str:
@@ -75,16 +103,21 @@ def parse_form4_xml(
     accession: str,
     symbol: str,
     is_backfill: bool = False,
+    raise_on_error: bool = False,
 ) -> list[InsiderTxRecord]:
     """解析 Form 4 XML 並產出結構化內部人交易明細記錄。
 
     支援傳入原始 XML 字串、位元組或已解析之 ElementTree 根結點。
+    `raise_on_error=True` 時，XML 無法解析會拋出 `Form4ParseError`（供同步服務
+    把該筆視為失敗、游標停在失敗之前）；預設維持回傳空清單。
     """
     if isinstance(xml_content, (str, bytes)):
         try:
             root = ET.fromstring(xml_content)
         except Exception as e:
             logger.error(f"解析 Form 4 XML 失敗 ({accession}, {symbol}): {e}")
+            if raise_on_error:
+                raise Form4ParseError(str(e)) from e
             return []
     else:
         root = xml_content
@@ -93,10 +126,14 @@ def parse_form4_xml(
     _strip_namespaces(root)
 
     # 1. 提取申報人 (Reporting Owner) 與職務（支援多位共同申報人，如家族信託與高管本人）
+    # 共同申報時以「主申報人」CIK 作為身分鍵：優先取具董事 / 高管身分者（個人內部人），
+    # 否則取文件中第一位；聚合時用 CIK 判斷是否為同一內部人，避免名稱串接字串失真。
     reporting_owners = root.findall(".//reportingOwner")
     owner_names: list[str] = []
     all_roles: list[str] = []
     is_c_suite = False
+    first_cik: str | None = None
+    insider_cik: str | None = None
 
     if not reporting_owners:
         owner_name = "REPORTING_OWNER"
@@ -106,6 +143,8 @@ def parse_form4_xml(
             r_name = _extract_text(ro, ".//reportingOwnerId/rptOwnerName", "")
             if r_name:
                 owner_names.append(r_name)
+            r_cik_raw = _extract_text(ro, ".//reportingOwnerId/rptOwnerCik", "")
+            r_cik = r_cik_raw.zfill(10) if r_cik_raw.isdigit() else None
             is_off = _extract_text(
                 ro, ".//reportingOwnerRelationship/isOfficer", "0"
             ).lower() in ("1", "true")
@@ -116,6 +155,11 @@ def parse_form4_xml(
                 ro, ".//reportingOwnerRelationship/isTenPercentOwner", "0"
             ).lower() in ("1", "true")
             title = _extract_text(ro, ".//reportingOwnerRelationship/officerTitle", "")
+            if r_cik is not None:
+                if first_cik is None:
+                    first_cik = r_cik
+                if insider_cik is None and (is_off or is_dir):
+                    insider_cik = r_cik
 
             if _is_c_suite_role(title, is_off):
                 is_c_suite = True
@@ -134,6 +178,11 @@ def parse_form4_xml(
 
         owner_name = ", ".join(owner_names) if owner_names else "REPORTING_OWNER"
         owner_role = " | ".join(all_roles) if all_roles else "OTHER"
+    owner_cik = insider_cik or first_cik
+
+    # 修正申報（Form 4/A）：documentType 為 "4/A"
+    doc_type = _extract_text(root, "documentType", "").upper()
+    is_amendment = doc_type.endswith("/A")
 
     # 2. 全域 10b5-1 標記檢查 (<aff10b5One>)
     has_global_10b5 = False
@@ -142,15 +191,14 @@ def parse_form4_xml(
             has_global_10b5 = True
             break
 
-    # 收集腳註中提及 10b5-1 的 footnoteId (不分大小寫與常見變體)
+    # 收集腳註中「肯定地」提及 10b5-1 的 footnoteId（排除 "not ... 10b5-1" 否定敘述）
     footnote_10b5_ids: set[str] = set()
     for fn in root.findall(".//footnotes/footnote"):
         fn_id = fn.attrib.get("id", "").strip()
-        if fn.text:
-            text_lower = fn.text.lower()
-            if any(k in text_lower for k in ("10b5-1", "10b5", "10b-5-1", "10b5–1")):
-                if fn_id:
-                    footnote_10b5_ids.add(fn_id)
+        fn_text = "".join(fn.itertext())
+        if fn_text and footnote_asserts_10b5_1(fn_text):
+            if fn_id:
+                footnote_10b5_ids.add(fn_id)
 
     # 3. 遍歷非衍生品交易 (nonDerivativeTransaction)
     tx_nodes = root.findall(".//nonDerivativeTransaction")
@@ -190,6 +238,7 @@ def parse_form4_xml(
             line_no=idx,
             symbol=symbol.upper(),
             owner_name=owner_name,
+            owner_cik=owner_cik,
             owner_role=owner_role,
             is_c_suite=is_c_suite,
             tx_date=tx_date,
@@ -200,6 +249,7 @@ def parse_form4_xml(
             shares_after=shares_after,
             is_10b5_1=is_tx_10b5,
             is_backfill=is_backfill,
+            is_amendment=is_amendment,
         )
         results.append(record)
 

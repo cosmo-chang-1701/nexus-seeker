@@ -8,11 +8,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from datetime import date, datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 from market_analysis.fundamental_pipeline.models import (
+    ChannelCheckLogRecord,
+    ChannelCheckVerdict,
     EarningsSurpriseDTO,
     EarningsSurpriseStatus,
     EpsBasis,
@@ -26,8 +29,10 @@ from market_analysis.fundamental_pipeline.models import (
     GovernanceSeverity,
     GuidanceExtractionDTO,
     InsiderTxRecord,
+    LinkType,
     LiquidityReading,
     MacroSurpriseReading,
+    NowcastDirection,
     RevisionScoreRecord,
     WatchCandidateRecord,
     WatchCandidateStatus,
@@ -195,22 +200,41 @@ async def save_macro_surprises(readings: list[MacroSurpriseReading]) -> None:
 
 
 def get_macro_surprises_for_event(
-    event_key: str, limit: int = 12
+    event_key: str, limit: int = 12, before: str | None = None
 ) -> list[MacroSurpriseReading]:
-    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。"""
+    """讀取某事件最近 N 期的歷史預期差（依發布時間升冪排序，最早在前最新在後）。
+
+    `before`：僅取 `release_time_utc < before` 的樣本（ISO-8601 UTC 字串，與
+    `release_time_utc` 同格式，字典序即時間序）。計算某次發布的 Z 分數時必須傳入
+    該發布時間，避免引用事件之後才公布的資料（前視偏差）。
+    """
     conn = get_read_connection()
     try:
-        rows = conn.execute(
-            """
-            SELECT event_key, release_time_utc, actual, forecast,
-                   raw_diff, z_score, growth_sign
-            FROM macro_release_surprise
-            WHERE event_key = ?
-            ORDER BY release_time_utc DESC
-            LIMIT ?
-            """,
-            (event_key, limit),
-        ).fetchall()
+        if before is None:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT event_key, release_time_utc, actual, forecast,
+                       raw_diff, z_score, growth_sign
+                FROM macro_release_surprise
+                WHERE event_key = ?
+                  AND release_time_utc < ?
+                ORDER BY release_time_utc DESC
+                LIMIT ?
+                """,
+                (event_key, before, limit),
+            ).fetchall()
         readings = [
             MacroSurpriseReading(
                 event_key=r[0],
@@ -224,6 +248,26 @@ def get_macro_surprises_for_event(
             for r in reversed(rows)
         ]
         return readings
+    finally:
+        conn.close()
+
+
+def get_recorded_macro_surprise_keys(since: str) -> set[tuple[str, str]]:
+    """讀取 `release_time_utc >= since` 已入庫的 (event_key, release_time_utc) 集合。
+
+    供預期差服務略過已計算過的發布，避免以事後資料重算覆寫既有 Z 分數。
+    """
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT event_key, release_time_utc
+            FROM macro_release_surprise
+            WHERE release_time_utc >= ?
+            """,
+            (since,),
+        ).fetchall()
+        return {(str(r[0]), str(r[1])) for r in rows}
     finally:
         conn.close()
 
@@ -455,6 +499,28 @@ def get_recent_sec_events(symbol: str, limit: int = 20) -> list[FilingEventRecor
         conn.close()
 
 
+_OWNER_CIK_FIELD_RE = re.compile(r"^(\d{10})\|(.*)$", re.DOTALL)
+
+
+def _encode_owner_field(owner_name: str, owner_cik: str | None) -> str:
+    """把主申報人 CIK 編碼進 insider_transaction.owner_name 欄（`{cik}|{names}`）。
+
+    v091 已部署至正式 DB 且不可修改，後續 migration 編號已被其他分支占用，因此不新增
+    欄位，改以固定前綴保存 CIK；無 CIK 時原樣保存名稱。
+    """
+    if owner_cik:
+        return f"{owner_cik}|{owner_name}"
+    return owner_name
+
+
+def _decode_owner_field(raw: str) -> tuple[str, str | None]:
+    """還原 `_encode_owner_field` 的編碼，回傳 (名稱, CIK 或 None)。"""
+    match = _OWNER_CIK_FIELD_RE.match(raw or "")
+    if match is None:
+        return raw, None
+    return match.group(2), match.group(1)
+
+
 async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
     """批次寫入內部人交易明細。"""
     if not txs:
@@ -464,7 +530,7 @@ async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
             t.accession,
             t.line_no,
             t.symbol.upper(),
-            t.owner_name,
+            _encode_owner_field(t.owner_name, t.owner_cik),
             t.owner_role,
             1 if t.is_c_suite else 0,
             t.tx_date,
@@ -482,41 +548,54 @@ async def save_insider_transactions(txs: list[InsiderTxRecord]) -> None:
 
 
 def get_insider_transactions(symbol: str, days: int = 90) -> list[InsiderTxRecord]:
-    """讀取某標的最近 N 天內的內部人交易記錄。"""
+    """讀取某標的最近 N 天內的內部人交易記錄。
+
+    LEFT JOIN sec_filing_event 以還原所屬申報的 form（判斷 Form 4/A）與受理時間，
+    供 `insider_signal.dedupe_amended_transactions` 以修正申報取代原始明細。
+    """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
     conn = get_read_connection()
     try:
         rows = conn.execute(
             """
-            SELECT accession, line_no, symbol, owner_name, owner_role, is_c_suite,
-                   tx_date, tx_code, shares, price, acquired_disposed, shares_after,
-                   is_10b5_1, is_backfill, created_at
-            FROM insider_transaction
-            WHERE symbol = ? AND tx_date >= ?
-            ORDER BY tx_date DESC, line_no ASC
+            SELECT t.accession, t.line_no, t.symbol, t.owner_name, t.owner_role,
+                   t.is_c_suite, t.tx_date, t.tx_code, t.shares, t.price,
+                   t.acquired_disposed, t.shares_after, t.is_10b5_1, t.is_backfill,
+                   t.created_at, e.form, e.accepted_at
+            FROM insider_transaction AS t
+            LEFT JOIN sec_filing_event AS e ON e.accession = t.accession
+            WHERE t.symbol = ? AND t.tx_date >= ?
+            ORDER BY t.tx_date DESC, t.line_no ASC
             """,
             (symbol.upper(), cutoff),
         ).fetchall()
-        return [
-            InsiderTxRecord(
-                accession=r[0],
-                line_no=int(r[1]),
-                symbol=r[2],
-                owner_name=r[3],
-                owner_role=r[4] if r[4] else "OTHER",
-                is_c_suite=bool(r[5]),
-                tx_date=r[6],
-                tx_code=r[7],
-                shares=float(r[8]) if r[8] is not None else 0.0,
-                price=float(r[9]) if r[9] is not None else 0.0,
-                acquired_disposed=r[10] if r[10] else "D",
-                shares_after=float(r[11]) if r[11] is not None else 0.0,
-                is_10b5_1=bool(r[12]),
-                is_backfill=bool(r[13]),
-                created_at=r[14] if r[14] else "",
+        records: list[InsiderTxRecord] = []
+        for r in rows:
+            owner_name, owner_cik = _decode_owner_field(r[3])
+            form = str(r[15]).strip().upper() if r[15] else ""
+            records.append(
+                InsiderTxRecord(
+                    accession=r[0],
+                    line_no=int(r[1]),
+                    symbol=r[2],
+                    owner_name=owner_name,
+                    owner_cik=owner_cik,
+                    owner_role=r[4] if r[4] else "OTHER",
+                    is_c_suite=bool(r[5]),
+                    tx_date=r[6],
+                    tx_code=r[7],
+                    shares=float(r[8]) if r[8] is not None else 0.0,
+                    price=float(r[9]) if r[9] is not None else 0.0,
+                    acquired_disposed=r[10] if r[10] else "D",
+                    shares_after=float(r[11]) if r[11] is not None else 0.0,
+                    is_10b5_1=bool(r[12]),
+                    is_backfill=bool(r[13]),
+                    created_at=r[14] if r[14] else "",
+                    is_amendment=form.endswith("/A"),
+                    filing_accepted_at=r[16] if r[16] else "",
+                )
             )
-            for r in rows
-        ]
+        return records
     finally:
         conn.close()
 
@@ -767,6 +846,31 @@ def get_latest_earnings_surprise(symbol: str) -> EarningsSurpriseDTO | None:
         conn.close()
 
 
+def get_pending_earnings_surprise_keys(since_utc: datetime) -> list[tuple[str, str]]:
+    """讀取 `created_at` 不早於 since_utc、狀態仍為 PENDING 之 (symbol, fiscal_period)。
+
+    `created_at` 為首次寫入時間（SQLite CURRENT_TIMESTAMP，UTC；upsert 不更新），
+    即該財季首次被財報事件寫成 PENDING 的時間，供 PENDING 重試排程界定回看窗口。
+    """
+    if since_utc.tzinfo is not None:
+        since_utc = since_utc.astimezone(timezone.utc)
+    since_str = since_utc.strftime("%Y-%m-%d %H:%M:%S")
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT symbol, fiscal_period
+            FROM earnings_surprise
+            WHERE status = 'PENDING' AND created_at >= ?
+            ORDER BY symbol, fiscal_period
+            """,
+            (since_str,),
+        ).fetchall()
+        return [(str(r[0]), str(r[1])) for r in rows]
+    finally:
+        conn.close()
+
+
 async def save_eps_estimate_snapshots(
     snapshots: list[EPSEstimateSnapshotRecord],
 ) -> None:
@@ -928,6 +1032,48 @@ def get_guidance_extraction(
         conn.close()
 
 
+def get_prior_guidance_extraction(
+    symbol: str,
+    before_period: str,
+    exclude_accession: str | None = None,
+) -> GuidanceExtractionDTO | None:
+    """讀取早於指定財季（`YYYY-Qn` 字串序）之最近一筆管理層指引記錄。
+
+    僅考慮已正規化為 `YYYY-Qn` 之期別，並排除同一申報（source_accession），
+    避免同季重送或更新季度被誤當成「前期」。
+    """
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ?
+              AND fiscal_period GLOB '[0-9][0-9][0-9][0-9]-Q[1-4]'
+              AND fiscal_period < ?
+              AND source_accession != ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(), before_period, exclude_accession or ""),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
 def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
     """讀取特定標的最新一筆管理層指引記錄。"""
     conn = get_read_connection()
@@ -955,6 +1101,318 @@ def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
             data_json=row[6],
             created_at=row[7] if row[7] else "",
         )
+    finally:
+        conn.close()
+
+
+# ============================================================================
+# PR4 實體產業鏈交叉驗證持久化
+# ============================================================================
+
+_UPSERT_CHANNEL_CHECK_LOG_SQL = """
+INSERT INTO channel_check_log (
+    link_key,
+    as_of_period,
+    link_type,
+    experimental,
+    driver_growth,
+    follower_growth,
+    divergence_pp,
+    nowcast_direction,
+    nowcast_hit,
+    correlation,
+    verdict,
+    members_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(link_key, as_of_period) DO UPDATE SET
+    link_type = excluded.link_type,
+    experimental = excluded.experimental,
+    driver_growth = excluded.driver_growth,
+    follower_growth = excluded.follower_growth,
+    divergence_pp = excluded.divergence_pp,
+    nowcast_direction = excluded.nowcast_direction,
+    nowcast_hit = excluded.nowcast_hit,
+    correlation = excluded.correlation,
+    verdict = excluded.verdict,
+    members_json = excluded.members_json,
+    created_at = CURRENT_TIMESTAMP
+WHERE excluded.verdict != 'INSUFFICIENT'
+   OR channel_check_log.verdict = 'INSUFFICIENT'
+"""
+
+# v093 的 CHECK(nowcast_direction IN (..., NULL)) 在 SQLite 中等同無約束（IN 清單含 NULL
+# 時，不合法值的比較結果為 NULL 而非 false）。v093 已在正式 DB 執行且不新增遷移，
+# 改於寫入端在 Python 層驗證列舉值與期別格式。
+_VALID_LINK_TYPES: frozenset[str] = frozenset({"CAUSAL", "NOWCAST"})
+_VALID_VERDICTS: frozenset[str] = frozenset({"CONFIRM", "DIVERGE", "INSUFFICIENT"})
+_VALID_NOWCAST_DIRECTIONS: frozenset[str] = frozenset(
+    {"NOWCAST_UP", "NOWCAST_DOWN", "FLAT"}
+)
+
+
+def _validate_channel_check_record(record: ChannelCheckLogRecord) -> None:
+    """寫入前驗證列舉值與期別格式；不合法時拋出 ValueError（整批不寫入）。"""
+    from market_analysis.fundamental_pipeline.alt_data_metrics import validate_period
+
+    validate_period(record.as_of_period)
+    if record.link_type not in _VALID_LINK_TYPES:
+        raise ValueError(f"channel_check_log.link_type 不合法: {record.link_type!r}")
+    if record.verdict not in _VALID_VERDICTS:
+        raise ValueError(f"channel_check_log.verdict 不合法: {record.verdict!r}")
+    if (
+        record.nowcast_direction is not None
+        and record.nowcast_direction not in _VALID_NOWCAST_DIRECTIONS
+    ):
+        raise ValueError(
+            f"channel_check_log.nowcast_direction 不合法: {record.nowcast_direction!r}"
+        )
+
+
+async def save_channel_check_log(record: ChannelCheckLogRecord) -> None:
+    """寫入或更新單筆產業鏈交叉驗證日誌（INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
+    _validate_channel_check_record(record)
+    params = (
+        record.link_key,
+        record.as_of_period,
+        record.link_type,
+        1 if record.experimental else 0,
+        record.driver_growth,
+        record.follower_growth,
+        record.divergence_pp,
+        record.nowcast_direction,
+        (1 if record.nowcast_hit else 0) if record.nowcast_hit is not None else None,
+        record.correlation,
+        record.verdict,
+        record.members_json,
+    )
+    await execute_write_async(_UPSERT_CHANNEL_CHECK_LOG_SQL, params)
+
+
+async def save_channel_check_logs(records: list[ChannelCheckLogRecord]) -> None:
+    """批次寫入產業鏈交叉驗證日誌（分塊寫入；INSUFFICIENT 不覆蓋同期既有的非 INSUFFICIENT 結果）。"""
+    if not records:
+        return
+    for r in records:
+        _validate_channel_check_record(r)
+    rows = [
+        (
+            r.link_key,
+            r.as_of_period,
+            r.link_type,
+            1 if r.experimental else 0,
+            r.driver_growth,
+            r.follower_growth,
+            r.divergence_pp,
+            r.nowcast_direction,
+            (1 if r.nowcast_hit else 0) if r.nowcast_hit is not None else None,
+            r.correlation,
+            r.verdict,
+            r.members_json,
+        )
+        for r in records
+    ]
+    # 分塊 100 筆寫入，符合低記憶體守衛
+    chunk_size = 100
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        await execute_write_many_async([(_UPSERT_CHANNEL_CHECK_LOG_SQL, chunk, True)])
+
+
+def get_channel_check(link_key: str, as_of_period: str) -> ChannelCheckLogRecord | None:
+    """讀取特定鏈條與週期之產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE link_key = ? AND as_of_period = ?
+            """,
+            (link_key, as_of_period),
+        ).fetchone()
+        if not row:
+            return None
+        return ChannelCheckLogRecord(
+            link_key=row[0],
+            as_of_period=row[1],
+            link_type=cast(LinkType, row[2]),
+            experimental=bool(row[3]),
+            driver_growth=float(row[4]) if row[4] is not None else None,
+            follower_growth=float(row[5]) if row[5] is not None else None,
+            divergence_pp=float(row[6]) if row[6] is not None else None,
+            nowcast_direction=cast(NowcastDirection, row[7])
+            if row[7] is not None
+            else None,
+            nowcast_hit=bool(row[8]) if row[8] is not None else None,
+            correlation=float(row[9]) if row[9] is not None else None,
+            verdict=cast(ChannelCheckVerdict, row[10]),
+            members_json=row[11],
+            created_at=row[12] if row[12] else "",
+        )
+    finally:
+        conn.close()
+
+
+def get_channel_checks_for_period(
+    as_of_period: str,
+) -> list[ChannelCheckLogRecord]:
+    """讀取某週期所有產業鏈交叉驗證記錄。"""
+    conn = get_read_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT link_key, as_of_period, link_type, experimental,
+                   driver_growth, follower_growth, divergence_pp,
+                   nowcast_direction, nowcast_hit, correlation,
+                   verdict, members_json, created_at
+            FROM channel_check_log
+            WHERE as_of_period = ?
+            ORDER BY link_key ASC
+            """,
+            (as_of_period,),
+        ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_latest_channel_checks(
+    verdict: str | None = None, limit: int = 50
+) -> list[ChannelCheckLogRecord]:
+    """讀取最新發布的產業鏈交叉驗證日誌清單。"""
+    conn = get_read_connection()
+    try:
+        if verdict is not None:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                WHERE verdict = ?
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (verdict, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT link_key, as_of_period, link_type, experimental,
+                       driver_growth, follower_growth, divergence_pp,
+                       nowcast_direction, nowcast_hit, correlation,
+                       verdict, members_json, created_at
+                FROM channel_check_log
+                ORDER BY as_of_period DESC, created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def get_channel_checks_by_symbol(
+    symbol: str, limit: int = 20
+) -> list[ChannelCheckLogRecord]:
+    """根據標的代碼（包含在上游驅動或下游跟隨端）查詢相關之最新交叉驗證日誌。"""
+    from market_analysis.fundamental_pipeline.supply_chain_map import (
+        get_links_for_symbol,
+    )
+
+    clean_sym = symbol.strip().upper()
+    if ":" in clean_sym:
+        clean_sym = clean_sym.split(":")[-1]
+
+    # 取得靜態映射中包含該標的之鏈條代碼
+    related_links = get_links_for_symbol(clean_sym)
+    link_keys = [link.link_key for link in related_links]
+
+    if not link_keys:
+        return []
+
+    conn = get_read_connection()
+    try:
+        # 只依靜態對照表的 link_key 精確比對；不再對 members_json 做 LIKE 模糊比對
+        # （短代碼如 "F"、"PL" 會配到所有列）。
+        placeholders = ",".join("?" for _ in link_keys)
+        query = f"""
+        SELECT link_key, as_of_period, link_type, experimental,
+               driver_growth, follower_growth, divergence_pp,
+               nowcast_direction, nowcast_hit, correlation,
+               verdict, members_json, created_at
+        FROM channel_check_log
+        WHERE link_key IN ({placeholders})
+        ORDER BY as_of_period DESC, created_at DESC
+        LIMIT ?
+        """
+        params: list[Any] = [*link_keys, limit]
+        # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query, python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        rows = conn.execute(query, params).fetchall()
+
+        return [
+            ChannelCheckLogRecord(
+                link_key=r[0],
+                as_of_period=r[1],
+                link_type=cast(LinkType, r[2]),
+                experimental=bool(r[3]),
+                driver_growth=float(r[4]) if r[4] is not None else None,
+                follower_growth=float(r[5]) if r[5] is not None else None,
+                divergence_pp=float(r[6]) if r[6] is not None else None,
+                nowcast_direction=cast(NowcastDirection, r[7])
+                if r[7] is not None
+                else None,
+                nowcast_hit=bool(r[8]) if r[8] is not None else None,
+                correlation=float(r[9]) if r[9] is not None else None,
+                verdict=cast(ChannelCheckVerdict, r[10]),
+                members_json=r[11],
+                created_at=r[12] if r[12] else "",
+            )
+            for r in rows
+        ]
     finally:
         conn.close()
 

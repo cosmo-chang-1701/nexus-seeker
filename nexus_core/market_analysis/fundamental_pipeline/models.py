@@ -94,6 +94,20 @@ class InsiderTxRecord:
     is_10b5_1: bool = False
     is_backfill: bool = False
     created_at: str = ""
+    # 主申報人 CIK（10 位補零）：聚合時的內部人身分鍵；無 CIK 時退回 owner_name。
+    # 持久化時編碼於 insider_transaction.owner_name 欄（`{cik}|{names}`），不改 schema。
+    owner_cik: str | None = None
+    # 是否來自修正申報（Form 4/A）；讀取時由 sec_filing_event.form 還原。
+    is_amendment: bool = False
+    # 所屬申報之受理時間（美東 ISO 8601），用於多份 4/A 取最新者；讀取時由事件表還原。
+    filing_accepted_at: str = ""
+
+    @property
+    def owner_key(self) -> str:
+        """內部人身分鍵：優先 CIK，否則為正規化後的申報人名稱。"""
+        if self.owner_cik:
+            return f"CIK:{self.owner_cik}"
+        return f"NAME:{self.owner_name.strip().upper()}"
 
 
 InsiderTransactionDTO = InsiderTxRecord
@@ -230,7 +244,10 @@ class ToneMetric(BaseModel):
         description="-2 代表極度惡化/防禦，0 代表中性，+2 代表極具定價自信/擴張",
     )
     quote_snippet: str = Field(
-        description="支持評分的管理層原文直接引用摘錄（限 200 字以內）"
+        description=(
+            "支持評分的新聞稿英文原文逐字摘錄（限 200 字元以內，不可翻譯或改寫）；"
+            "原文無相關論述時 score 必須為 0 且本欄填空字串"
+        )
     )
 
 
@@ -240,12 +257,29 @@ class GuidanceExtraction(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     symbol: str
-    fiscal_period: str
+    fiscal_period: str = Field(
+        description=(
+            "本次新聞稿所報告之財季，格式 YYYY-Qn（例如 2026-Q1）。僅供參考，"
+            "系統以 SEC 申報時間對齊 Finnhub 財報日曆推導之期別為準"
+        )
+    )
+    guidance_target_period: str | None = Field(
+        default=None,
+        description=(
+            "數值指引所針對之目標期別：季度填 YYYY-Qn，全年度填 FYYYYY（例如 FY2026）；"
+            "無數值指引填 None"
+        ),
+    )
     revenue_guidance_midpoint_usd: float | None = Field(
-        default=None, description="營收指引中點金額 (美元)，無指引填 None"
+        default=None,
+        description=(
+            "營收指引中點，必須填完整美元數值（例如 94.5 billion 填 94500000000，"
+            "不可以百萬或十億為單位）；無數值指引填 None"
+        ),
     )
     eps_guidance_midpoint_usd: float | None = Field(
-        default=None, description="EPS 指引中點金額 (美元)，無指引填 None"
+        default=None,
+        description="每股盈餘指引中點，完整美元數值（例如 1.25）；無數值指引填 None",
     )
     margin_guidance: list[MarginGuidance] = Field(default_factory=list)
 
@@ -272,7 +306,10 @@ class GuidanceExtractionDTO:
     fiscal_period: str
     source_accession: str
     model_version: str
+    # 依擷取欄位完整度計算（guidance_delta.calculate_extraction_confidence）
     confidence_score: float
+    # 相較前期指引之態度邊際變化；schema 為 NOT NULL，無前期可比時寫入 0.0，
+    # 呈現層一律以前期記錄重算 delta，不得以本欄判斷有無前期
     tone_delta_score: float
     data_json: str
     created_at: str = ""
@@ -297,12 +334,79 @@ class GuidanceDeltaSummary:
     """前瞻指引邊際變動與態度摘要。"""
 
     tone_score: float
-    tone_delta: float
+    tone_delta: float | None  # 無前期指引可比時為 None
     revenue_guidance_delta_pct: float | None
     eps_guidance_delta_pct: float | None
     margin_trend: str
     verdict: GuidanceVerdict
     summary_text: str
+    comparison_note: str = ""  # 無法比較之原因（期別不同、單位不一致等），繁體中文
+
+
+# ============================================================================
+# PR4 實體替代數據與產業鏈因果檢驗資料模型
+# ============================================================================
+
+LinkType = Literal["CAUSAL", "NOWCAST"]
+ChannelCheckVerdict = Literal["CONFIRM", "DIVERGE", "INSUFFICIENT"]
+NowcastDirection = Literal["NOWCAST_UP", "NOWCAST_DOWN", "FLAT"]
+
+
+@dataclass(frozen=True)
+class SupplyChainLink:
+    """產業鏈因果與臨近預測對照結構。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    pillar: str
+    drivers: list[str]
+    followers: list[str]
+    description: str
+    lead_lag_quarters: str = "1-2Q"
+    # 傳導極性：+1 = 驅動端上升對跟隨端為利多（同向）；-1 = 反向關係
+    # （例如零售商 DIO 上升代表渠道堵塞，壓制上游品牌廠出貨）。判定前驅動端先乘上極性。
+    polarity: Literal[1, -1] = 1
+
+
+@dataclass(frozen=True)
+class ChannelCheckLogRecord:
+    """產業鏈交叉驗證日誌記錄 (對應 channel_check_log 資料表)。"""
+
+    link_key: str
+    as_of_period: str
+    link_type: LinkType
+    experimental: bool
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    members_json: str
+    created_at: str = ""
+
+
+@dataclass(frozen=True)
+class ChannelCheckResult:
+    """產業鏈交叉驗證即時評估結果。"""
+
+    link_key: str
+    title: str
+    link_type: LinkType
+    experimental: bool
+    as_of_period: str
+    driver_growth: float | None
+    follower_growth: float | None
+    divergence_pp: float | None
+    nowcast_direction: NowcastDirection | None
+    nowcast_hit: bool | None
+    correlation: float | None
+    verdict: ChannelCheckVerdict
+    summary_text: str
+    members: dict[str, Any]
 
 
 # ============================================================================

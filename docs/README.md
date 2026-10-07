@@ -164,7 +164,7 @@ flowchart TB
 | 13 | [`02_expected_move_and_max_pain.md`](valuation_pricing/02_expected_move_and_max_pain.md) | 預期波幅 (EM) 與多 DTE 最大痛點重力過濾體系 | ATM Straddle 0.85 經驗因子, $\max(7.0, \text{DTE})$ 分母約束, 痛點最小化損失函數 | `market_analysis/sentiment/iv_metrics.py` |
 | 14 | [`03_skew_pcr_divergence_confluence.md`](valuation_pricing/03_skew_pcr_divergence_confluence.md) | Skew 偏斜與 Volume PCR 瀑布流背離及三重結構性風險合流閘門 | Skew 252 交易日百分位數, Volume PCR $\ge 1.2$ 破位順向殺盤, 三重結構風險合流 | `market_analysis/insights_engine.py` |
 | 15 | [`04_ivr_regime_and_seller_lockout.md`](valuation_pricing/04_ivr_regime_and_seller_lockout.md) | IVR 波動率位階、做市商負 Gamma 賣方禁售與期權策略匹配閘門 | 252 日 IVR 四階矩陣, 期限結構倒掛 $\text{Term Ratio} > 1.05$, 做市商負 Gamma 賣方一票否決 | `market_analysis/ivr_strategy_gate.py` |
-| 15b | [`05_earnings_surprise_and_guidance_delta.md`](valuation_pricing/05_earnings_surprise_and_guidance_delta.md) | 財務預期差綜合評分、管理層指引語意解析與共識快照 | 雙維預期差 (EPS 60%, REV 40%), FLOOR_EPS 0.05 物理奇點防護, 四維管理層語意態度 | `market_analysis/fundamental_pipeline/earnings_surprise.py` |
+| 15b | [`05_earnings_surprise_and_guidance_delta.md`](valuation_pricing/05_earnings_surprise_and_guidance_delta.md) | 財務預期差綜合評分、管理層指引語意解析與共識快照（SEC 同步之 8-K Item 2.02 事件觸發，NYSE 交易日 17:30 ET PENDING 重試，只入庫不推播） | 雙維預期差 (EPS 60%, REV 40%), FLOOR_EPS 0.05 物理奇點防護, 四維管理層語意態度 | `market_analysis/fundamental_pipeline/earnings_surprise.py` |
 | 15c | [`06_revision_momentum_and_fair_value.md`](valuation_pricing/06_revision_momentum_and_fair_value.md) | 分析師修正動能、兩段式現金流折現與同業倍數估值 | 2-Stage FCF DCF, 分母安全利差 $r - g_T \ge 0.010$, NFCI 流動性懲罰 Comps, MOS $\ge 25\%$ 深度價值, PEAD 共振 | `market_analysis/fundamental_pipeline/fair_value.py` |
 
 ---
@@ -196,7 +196,8 @@ flowchart TB
 | 24 | [`03_wti_crude_oil_monitor.md`](macro_sentiment/03_wti_crude_oil_monitor.md) | WTI 原油期貨 24/7 監控與板塊衝擊矩陣 | 24/7 半小時 48 時點對齊, 00:00–06:00 ET 靜默保護, 階梯油價風險權重 $w_{\text{oil}}$ | `cogs/trading/wti_monitor.py` |
 | 25 | [`04_polymarket_vwbp_sentiment_radar.md`](macro_sentiment/04_polymarket_vwbp_sentiment_radar.md) | Polymarket VWBP 加權勝率與雙頁籤輿情共振雷達 | 13 組看跌語義反轉, 保底名義流動性加權 VWBP, 雙頁籤就地切換與四維共振雷達 | `cogs/unified_terminal/utils.py` |
 | 25b | [`05_liquidity_regime_and_macro_surprise.md`](macro_sentiment/05_liquidity_regime_and_macro_surprise.md) | 央行淨流動性體制與宏觀預期差標準化 | 淨流動性 WALCL-WTREGEN-RRPONTSYD, 13 週變更率, 流動性三態狀態機, 12 期滾動 Z-Score, NFCI 動態 ERP 擾動 | `market_analysis/fundamental_pipeline/liquidity_regime.py` |
-| 25c | [`06_sec_event_stream_and_governance_gate.md`](macro_sentiment/06_sec_event_stream_and_governance_gate.md) | SEC 申報直連、內部人交易與治理審查閘門 | 限速 8 req/s, 1.5MB 截斷, defusedxml 解析, 4.02/5.02 治理審查 30 天, 10b5-1 聚類增持, 13D 5 營業日審查 | `market_analysis/fundamental_pipeline/sec_item_router.py` |
+| 25c | [`06_sec_event_stream_and_governance_gate.md`](macro_sentiment/06_sec_event_stream_and_governance_gate.md) | SEC 申報直連、內部人交易與治理審查閘門（平日 07:00–20:00 ET 每整點同步，預設乾跑） | 限速 8 req/s, 1.5MB 截斷, defusedxml 解析, SGML 表頭權威受理時間, 4.02 CRITICAL / 5.02 預設 REVIEW 審查 30 天, 4/A 去重與 CIK 身分鍵, 10b5-1 聚類增持, 13D 5 個 SEC 營業日審查 | `market_analysis/fundamental_pipeline/sec_item_router.py` |
+| 25d | [`07_alt_data_and_channel_checks.md`](macro_sentiment/07_alt_data_and_channel_checks.md) | 實體替代數據攝取與 17 條產業鏈因果檢驗（NYSE 交易日 18:00 ET 排程寫入） | 17 條產業鏈對照矩陣, 曆季期別對齊與前視防護, SEC XBRL capex/RPO/DIO 單季年增率, 傳導極性, 美股/台股分群等權, CAUSAL 背離度點數, NOWCAST 方向命中率, TSA/FRED/TWSE/TPEx, 實驗性 🧪 標示 | `market_analysis/fundamental_pipeline/channel_check.py` |
 
 ---
 

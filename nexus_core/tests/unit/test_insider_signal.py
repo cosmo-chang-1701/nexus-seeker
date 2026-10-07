@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from market_analysis.fundamental_pipeline.insider_signal import (
+    dedupe_amended_transactions,
     evaluate_insider_signal,
 )
 from market_analysis.fundamental_pipeline.models import InsiderTxRecord
@@ -284,3 +285,109 @@ def test_evaluate_insider_signal_conflict_heavy_sale_trumps_minor_buy() -> None:
     assert "非計畫性拋售" in summary.summary_text
     assert summary.cluster_buy_count == 2
     assert summary.cluster_sale_count == 3
+
+
+def _buy(
+    accession: str,
+    owner_name: str,
+    owner_cik: str | None,
+    tx_date: str = "2026-10-01",
+    shares: float = 1000.0,
+    is_amendment: bool = False,
+    filing_accepted_at: str = "",
+    line_no: int = 1,
+) -> InsiderTxRecord:
+    return InsiderTxRecord(
+        accession=accession,
+        line_no=line_no,
+        symbol="NVDA",
+        owner_name=owner_name,
+        owner_cik=owner_cik,
+        tx_date=tx_date,
+        tx_code="P",
+        shares=shares,
+        price=100.0,
+        acquired_disposed="A",
+        is_amendment=is_amendment,
+        filing_accepted_at=filing_accepted_at,
+    )
+
+
+def test_cluster_identity_uses_cik_not_joint_name_string() -> None:
+    """同一內部人（同 CIK）分別單獨申報與共同申報，名稱字串不同仍只算 1 人。"""
+    txs = [
+        _buy("ACC-1", "HUANG JENSEN", "0001197649", tx_date="2026-10-01"),
+        _buy(
+            "ACC-2",
+            "Huang Family Trust, HUANG JENSEN",
+            "0001197649",
+            tx_date="2026-10-02",
+        ),
+    ]
+    summary = evaluate_insider_signal("NVDA", txs, as_of_date="2026-10-05")
+    assert summary.cluster_buy_count == 1
+    assert summary.verdict == "NEUTRAL"
+
+
+def test_form4a_replaces_original_same_owner_same_day() -> None:
+    """4/A 取代同一申報人、同交易日的原始明細，不得重複聚合。"""
+    original = _buy(
+        "ACC-ORIG",
+        "Director Alpha",
+        "0000000001",
+        shares=1000.0,
+        filing_accepted_at="2026-10-01T18:00:00-04:00",
+    )
+    amended = _buy(
+        "ACC-AMEND",
+        "Director Alpha",
+        "0000000001",
+        shares=1200.0,
+        is_amendment=True,
+        filing_accepted_at="2026-10-03T17:00:00-04:00",
+    )
+    other_day = _buy(
+        "ACC-OTHER",
+        "Director Alpha",
+        "0000000001",
+        tx_date="2026-10-02",
+        shares=500.0,
+    )
+    deduped = dedupe_amended_transactions([original, amended, other_day])
+    assert [t.accession for t in deduped] == ["ACC-AMEND", "ACC-OTHER"]
+
+    summary = evaluate_insider_signal(
+        "NVDA", [original, amended, other_day], as_of_date="2026-10-05"
+    )
+    assert summary.total_net_bought_shares == 1700.0
+    assert summary.cluster_buy_count == 1
+
+
+def test_latest_form4a_wins_among_multiple_amendments() -> None:
+    """同組多份 4/A 時，只保留受理時間最新的一份。"""
+    first_amend = _buy(
+        "ACC-A1",
+        "Director Alpha",
+        "0000000001",
+        shares=900.0,
+        is_amendment=True,
+        filing_accepted_at="2026-10-02T09:00:00-04:00",
+    )
+    second_amend = _buy(
+        "ACC-A2",
+        "Director Alpha",
+        "0000000001",
+        shares=950.0,
+        is_amendment=True,
+        filing_accepted_at="2026-10-04T09:00:00-04:00",
+    )
+    deduped = dedupe_amended_transactions([second_amend, first_amend])
+    assert [t.accession for t in deduped] == ["ACC-A2"]
+
+
+def test_form4a_does_not_touch_other_owners() -> None:
+    """修正申報只影響同一申報人；他人同日明細保留。"""
+    amended = _buy("ACC-AMEND", "Director Alpha", "0000000001", is_amendment=True)
+    other_owner = _buy("ACC-B", "Director Beta", "0000000002")
+    deduped = dedupe_amended_transactions([amended, other_owner])
+    assert {t.accession for t in deduped} == {"ACC-AMEND", "ACC-B"}

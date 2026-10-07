@@ -2,47 +2,76 @@
 
 from __future__ import annotations
 
-import pytest
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
+import pytest
+
+from market_analysis.fundamental_pipeline.activist_gate import (
+    evaluate_activist_filing,
+)
 from market_analysis.fundamental_pipeline.models import FilingCursorRecord
 from services.filing_event_service import FilingEventService
+from services.sec_edgar_client import SecConfigError
+
+_ET = ZoneInfo("America/New_York")
+
+_VALID_FORM4_XML = """<?xml version="1.0"?>
+<ownershipDocument>
+    <documentType>4</documentType>
+    <reportingOwner>
+        <reportingOwnerId><rptOwnerCik>0000000001</rptOwnerCik><rptOwnerName>DOE JOHN</rptOwnerName></reportingOwnerId>
+        <reportingOwnerRelationship><isDirector>1</isDirector></reportingOwnerRelationship>
+    </reportingOwner>
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <transactionCoding><transactionCode>P</transactionCode></transactionCoding>
+            <transactionDate><value>2026-10-01</value></transactionDate>
+            <transactionAmounts>
+                <transactionShares><value>100</value></transactionShares>
+                <transactionPricePerShare><value>10.00</value></transactionPricePerShare>
+                <transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>
+            </transactionAmounts>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+</ownershipDocument>
+"""
 
 
-@pytest.mark.asyncio
-async def test_filing_event_service_sync_symbol_filings() -> None:
-    """測試同步單一標的的 Form 4 與 8-K 申報並更新游標。"""
-    mock_client = MagicMock()
-    mock_client.get_cik = AsyncMock(return_value="0001318605")
+def _et(
+    year: int, month: int, day: int, hour: int, minute: int, second: int
+) -> datetime:
+    return datetime(year, month, day, hour, minute, second, tzinfo=_ET)
 
-    # 模擬 submissions API 回傳之資料結構
-    mock_submissions = {
-        "filings": {
-            "recent": {
-                "accessionNumber": ["0001318605-26-000001", "0001318605-26-000002"],
-                "form": ["4", "8-K"],
-                "filingDate": ["2026-10-02", "2026-10-01"],
-                "acceptanceDateTime": ["2026-10-02T16:30:00Z", "2026-10-01T17:00:00Z"],
-                "primaryDocument": ["edgar.xml", "doc8k.htm"],
-                "items": ["", "4.02"],
-            }
-        }
-    }
-    mock_client.fetch_company_submissions = AsyncMock(return_value=mock_submissions)
-    mock_client.fetch_document_text = AsyncMock(
-        return_value="<ownershipDocument></ownershipDocument>"
+
+def _make_client(
+    recent: dict[str, list[str]],
+    acceptance: dict[str, datetime],
+    cik: str = "0001318605",
+) -> MagicMock:
+    """建立模擬 SEC 客戶端：表頭受理時間依 accession 查表，缺漏者拋出例外。"""
+    client = MagicMock()
+    client.get_cik = AsyncMock(return_value=cik)
+    client.fetch_company_submissions = AsyncMock(
+        return_value={"filings": {"recent": recent}}
     )
+    client.fetch_document_text = AsyncMock(return_value=_VALID_FORM4_XML)
 
-    service = FilingEventService(client=mock_client)
+    async def _acceptance(_cik: str, accession: str) -> datetime:
+        if accession not in acceptance:
+            raise RuntimeError(f"header unavailable: {accession}")
+        return acceptance[accession]
 
-    # 模擬現存游標
-    cursor = FilingCursorRecord(
-        symbol="TSLA",
-        cik="0001318605",
-        last_accepted_at="2026-09-30T00:00:00Z",
-        last_accession="OLD-ACC",
-    )
+    client.fetch_acceptance_datetime = AsyncMock(side_effect=_acceptance)
+    return client
 
+
+@contextmanager
+def _patched_db(cursor: FilingCursorRecord | None) -> Iterator[dict[str, Any]]:
     with (
         patch(
             "services.filing_event_service.get_sec_filing_cursor", return_value=cursor
@@ -50,132 +79,716 @@ async def test_filing_event_service_sync_symbol_filings() -> None:
         patch(
             "services.filing_event_service.save_sec_filing_events",
             new_callable=AsyncMock,
-        ) as mock_save_events,
+        ) as save_events,
         patch(
             "services.filing_event_service.save_insider_transactions",
             new_callable=AsyncMock,
-        ) as mock_save_txs,
+        ) as save_txs,
         patch(
             "services.filing_event_service.save_governance_flags",
             new_callable=AsyncMock,
-        ) as mock_save_flags,
+        ) as save_flags,
         patch(
             "services.filing_event_service.upsert_sec_filing_cursor",
             new_callable=AsyncMock,
-        ) as mock_upsert_cursor,
+        ) as upsert_cursor,
     ):
+        yield {
+            "save_events": save_events,
+            "save_txs": save_txs,
+            "save_flags": save_flags,
+            "upsert_cursor": upsert_cursor,
+        }
+
+
+def _days_ago(days: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+
+
+def _cursor(last_accepted_at: str, last_accession: str = "ACC-0") -> FilingCursorRecord:
+    return FilingCursorRecord(
+        symbol="TSLA",
+        cik="0001318605",
+        last_accepted_at=last_accepted_at,
+        last_accession=last_accession,
+    )
+
+
+@pytest.mark.asyncio
+async def test_filing_event_service_sync_symbol_filings() -> None:
+    """增量同步 Form 4 與 8-K：事件與游標皆使用 SGML 表頭之權威美東時間。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["0001318605-26-000001", "0001318605-26-000002"],
+            "form": ["4", "8-K"],
+            "filingDate": ["2026-10-02", "2026-10-01"],
+            "acceptanceDateTime": ["2026-10-02T20:30:00Z", "2026-10-01T21:00:00Z"],
+            "primaryDocument": ["edgar.xml", "doc8k.htm"],
+            "items": ["", "4.02"],
+        },
+        {
+            "0001318605-26-000001": _et(2026, 10, 2, 16, 30, 0),
+            "0001318605-26-000002": _et(2026, 10, 1, 17, 0, 0),
+        },
+    )
+    service = FilingEventService(client=client)
+
+    with _patched_db(_cursor("2026-09-30T00:00:00-04:00", "OLD-ACC")) as db:
         stats = await service.sync_symbol_filings("TSLA")
 
-        assert stats["events"] == 2
-        mock_save_events.assert_awaited_once()
-        mock_save_txs.assert_not_awaited()
-        mock_save_flags.assert_awaited_once()
-        mock_upsert_cursor.assert_awaited_once()
-        # 驗證游標更新至最新受理時間
-        args, _ = mock_upsert_cursor.call_args
-        assert args[0].last_accepted_at == "2026-10-02T16:30:00Z"
+    assert stats["events"] == 2
+    assert stats["insider_txs"] == 1
+    assert stats["failed"] == 0
+    db["save_events"].assert_awaited_once()
+    by_acc = {e.accession: e for e in db["save_events"].call_args.args[0]}
+    assert by_acc["0001318605-26-000001"].accepted_at == "2026-10-02T16:30:00-04:00"
+    assert by_acc["0001318605-26-000001"].session == "AMC"
+    db["save_flags"].assert_awaited_once()
+    db["upsert_cursor"].assert_awaited_once()
+    new_cursor = db["upsert_cursor"].call_args.args[0]
+    assert new_cursor.last_accepted_at == "2026-10-02T16:30:00-04:00"
+    assert new_cursor.last_accession == "0001318605-26-000001"
+
+
+@pytest.mark.asyncio
+async def test_inflated_json_timestamp_uses_header_for_session() -> None:
+    """JSON 值比真實 UTC 多出美東偏移（AAPL 實測）時，時段以表頭為準。
+
+    真實樣本 AAPL 10-Q 0000320193-26-000020：JSON 2026-07-31T14:01:02Z（若當 UTC 為
+    10:01 ET → RTH），SGML 表頭 20260731060102 → 06:01 ET → BMO。
+    """
+    client = _make_client(
+        {
+            "accessionNumber": ["0000320193-26-000020"],
+            "form": ["10-Q"],
+            "filingDate": ["2026-07-31"],
+            "acceptanceDateTime": ["2026-07-31T14:01:02.000Z"],
+            "primaryDocument": ["aapl-20260627.htm"],
+            "items": [""],
+        },
+        {"0000320193-26-000020": _et(2026, 7, 31, 6, 1, 2)},
+        cik="0000320193",
+    )
+    service = FilingEventService(client=client)
+    with _patched_db(
+        _cursor("2026-07-30T16:30:28-04:00", "0000320193-26-000018")
+    ) as db:
+        await service.sync_symbol_filings("AAPL")
+
+    event = db["save_events"].call_args.args[0][0]
+    assert event.session == "BMO"
+    assert event.accepted_at == "2026-07-31T06:01:02-04:00"
+
+
+@pytest.mark.asyncio
+async def test_inflated_json_old_filing_is_not_reprocessed() -> None:
+    """JSON 值偏高使舊申報看似晚於游標時，以表頭時間判定為舊申報並略過。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-NEW", "ACC-OLD"],
+            "form": ["8-K", "8-K"],
+            "filingDate": ["2026-10-05", "2026-10-05"],
+            # ACC-OLD 真實 18:00 ET，JSON 偏高為次日 02:00Z（晚於游標 19:00 ET = 23:00Z）
+            "acceptanceDateTime": ["2026-10-06T00:30:00Z", "2026-10-06T02:00:00Z"],
+            "primaryDocument": ["new.htm", "old.htm"],
+            "items": ["4.02", "4.02"],
+        },
+        {
+            "ACC-NEW": _et(2026, 10, 5, 20, 30, 0),
+            "ACC-OLD": _et(2026, 10, 5, 18, 0, 0),
+        },
+    )
+    service = FilingEventService(client=client)
+    with _patched_db(_cursor("2026-10-05T19:00:00-04:00", "ACC-PREV")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["events"] == 1
+    assert [e.accession for e in db["save_events"].call_args.args[0]] == ["ACC-NEW"]
+
+
+@pytest.mark.asyncio
+async def test_form4_failure_holds_cursor_before_first_failure() -> None:
+    """Form 4 下載失敗時，游標停在第一筆失敗之前；較新的成功申報下次重處理。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-3", "ACC-2", "ACC-1"],
+            "form": ["4", "4", "4"],
+            "filingDate": ["2026-10-03", "2026-10-02", "2026-10-01"],
+            "acceptanceDateTime": [
+                "2026-10-03T22:00:00Z",
+                "2026-10-02T22:00:00Z",
+                "2026-10-01T22:00:00Z",
+            ],
+            "primaryDocument": ["a3.xml", "a2.xml", "a1.xml"],
+            "items": ["", "", ""],
+        },
+        {
+            "ACC-3": _et(2026, 10, 3, 18, 0, 0),
+            "ACC-2": _et(2026, 10, 2, 18, 0, 0),
+            "ACC-1": _et(2026, 10, 1, 18, 0, 0),
+        },
+    )
+
+    async def _fetch(url: str, byte_cap: int = 1_500_000) -> str:
+        if "/ACC2/" in url:
+            raise RuntimeError("HTTP 503")
+        return _VALID_FORM4_XML
+
+    client.fetch_document_text = AsyncMock(side_effect=_fetch)
+    service = FilingEventService(client=client)
+    with _patched_db(_cursor("2026-09-30T18:00:00-04:00")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    # 成功者照常入庫（重處理時為冪等 upsert）
+    saved = {e.accession for e in db["save_events"].call_args.args[0]}
+    assert saved == {"ACC-3", "ACC-1"}
+    # 游標只推進到 ACC-1（失敗的 ACC-2 之前），不得越過到 ACC-3
+    new_cursor = db["upsert_cursor"].call_args.args[0]
+    assert new_cursor.last_accession == "ACC-1"
+    assert new_cursor.last_accepted_at == "2026-10-01T18:00:00-04:00"
+
+
+@pytest.mark.asyncio
+async def test_parse_failure_with_no_older_success_keeps_cursor() -> None:
+    """唯一一筆新申報解析失敗時，游標維持原值（不寫入）。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-BAD"],
+            "form": ["4"],
+            "filingDate": ["2026-10-03"],
+            "acceptanceDateTime": ["2026-10-03T22:00:00Z"],
+            "primaryDocument": ["bad.xml"],
+            "items": [""],
+        },
+        {"ACC-BAD": _et(2026, 10, 3, 18, 0, 0)},
+    )
+    client.fetch_document_text = AsyncMock(return_value="<ownershipDocument><broken>")
+    service = FilingEventService(client=client)
+    with _patched_db(_cursor("2026-09-30T18:00:00-04:00")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    db["save_txs"].assert_not_awaited()
+    db["upsert_cursor"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_header_failure_holds_cursor_below_json_lower_bound() -> None:
+    """表頭讀取失敗時，以 JSON 上界減最大偏差作為失敗下界，游標不得越過。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-NEW", "ACC-NOHDR", "ACC-OLD"],
+            "form": ["8-K", "8-K", "8-K"],
+            "filingDate": ["2026-10-03", "2026-10-02", "2026-10-01"],
+            "acceptanceDateTime": [
+                "2026-10-03T21:00:00Z",
+                "2026-10-02T21:00:00Z",
+                "2026-10-01T21:00:00Z",
+            ],
+            "primaryDocument": ["n.htm", "x.htm", "o.htm"],
+            "items": ["", "", ""],
+        },
+        {
+            "ACC-NEW": _et(2026, 10, 3, 17, 0, 0),
+            "ACC-OLD": _et(2026, 10, 1, 17, 0, 0),
+        },
+    )
+    service = FilingEventService(client=client)
+    with _patched_db(_cursor("2026-09-30T17:00:00-04:00")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    assert db["upsert_cursor"].call_args.args[0].last_accession == "ACC-OLD"
 
 
 @pytest.mark.asyncio
 async def test_filing_event_service_first_run_retains_recent_8k_flags() -> None:
-    """測試首次執行 (cursor is None) 時，30 天內的 8-K 申報不會因非首筆而被遺漏。"""
-    mock_client = MagicMock()
-    mock_client.get_cik = AsyncMock(return_value="0001375365")
-
-    # 模擬 SMCI: 第一筆為近期 Form 4，第二筆為 2 天前之 8-K 4.02 重編
-    mock_submissions = {
-        "filings": {
-            "recent": {
-                "accessionNumber": ["0001375365-26-000001", "0001375365-26-000002"],
-                "form": ["4", "8-K"],
-                "filingDate": ["2026-10-04", "2026-10-02"],
-                "acceptanceDateTime": ["2026-10-04T16:30:00Z", "2026-10-02T17:00:00Z"],
-                "primaryDocument": ["xslF345X03/doc4.xml", "doc8k.htm"],
-                "items": ["", "4.02"],
-            }
-        }
-    }
-    mock_client.fetch_company_submissions = AsyncMock(return_value=mock_submissions)
-    mock_client.fetch_document_text = AsyncMock(
-        return_value="<ownershipDocument></ownershipDocument>"
+    """首次執行 (cursor is None) 時，30 天內的 8-K 申報不會因非首筆而被遺漏。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["0001375365-26-000001", "0001375365-26-000002"],
+            "form": ["4", "8-K"],
+            "filingDate": [_days_ago(1), _days_ago(3)],
+            "acceptanceDateTime": ["2026-10-04T20:30:00Z", "2026-10-02T21:00:00Z"],
+            "primaryDocument": ["xslF345X03/doc4.xml", "doc8k.htm"],
+            "items": ["", "4.02"],
+        },
+        {
+            "0001375365-26-000001": _et(2026, 10, 4, 16, 30, 0),
+            "0001375365-26-000002": _et(2026, 10, 2, 17, 0, 0),
+        },
+        cik="0001375365",
     )
+    service = FilingEventService(client=client)
 
-    service = FilingEventService(client=mock_client)
-
-    with (
-        patch("services.filing_event_service.get_sec_filing_cursor", return_value=None),
-        patch(
-            "services.filing_event_service.save_sec_filing_events",
-            new_callable=AsyncMock,
-        ) as mock_save_events,
-        patch(
-            "services.filing_event_service.save_insider_transactions",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "services.filing_event_service.save_governance_flags",
-            new_callable=AsyncMock,
-        ) as mock_save_flags,
-        patch(
-            "services.filing_event_service.upsert_sec_filing_cursor",
-            new_callable=AsyncMock,
-        ) as mock_upsert_cursor,
-    ):
+    with _patched_db(None) as db:
         stats = await service.sync_symbol_filings("SMCI")
 
-        # 兩筆事件皆應被處理並儲存
-        assert stats["events"] == 2
-        mock_save_events.assert_awaited_once()
-        mock_save_flags.assert_awaited_once()
-        mock_upsert_cursor.assert_awaited_once()
-        # 驗證抓取 Form 4 時已剔除 xslF345X03 目錄前綴
-        fetch_args, _ = mock_client.fetch_document_text.call_args
-        assert "xslF345X03" not in fetch_args[0]
-        assert fetch_args[0].endswith("/doc4.xml")
+    assert stats["events"] == 2
+    db["save_events"].assert_awaited_once()
+    assert all(e.is_backfill for e in db["save_events"].call_args.args[0])
+    db["save_flags"].assert_awaited_once()
+    db["upsert_cursor"].assert_awaited_once()
+    # 驗證抓取 Form 4 時已剔除 xslF345X03 目錄前綴
+    fetch_args, _ = client.fetch_document_text.call_args
+    assert "xslF345X03" not in fetch_args[0]
+    assert fetch_args[0].endswith("/doc4.xml")
+
+
+@pytest.mark.asyncio
+async def test_first_run_failure_does_not_create_cursor() -> None:
+    """首次回填有任何失敗時不建立游標，下次以回填模式（不推播）整批重試。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-A", "ACC-B"],
+            "form": ["4", "4"],
+            "filingDate": [_days_ago(1), _days_ago(2)],
+            "acceptanceDateTime": ["2026-10-05T22:00:00Z", "2026-10-04T22:00:00Z"],
+            "primaryDocument": ["a.xml", "b.xml"],
+            "items": ["", ""],
+        },
+        {"ACC-A": _et(2026, 10, 5, 18, 0, 0)},  # ACC-B 表頭讀取失敗
+    )
+    service = FilingEventService(client=client)
+    with _patched_db(None) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    db["upsert_cursor"].assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_filing_event_service_first_run_old_filings_initializes_cursor() -> None:
-    """測試首次執行時，即使所有申報超出 90 天，游標仍應正常初始化以防止反覆全量掃描。"""
-    mock_client = MagicMock()
-    mock_client.get_cik = AsyncMock(return_value="0001045810")
+    """首次執行時，即使所有申報超出 90 天，游標仍以最新一筆的表頭時間初始化。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["0001045810-25-000001"],
+            "form": ["4"],
+            "filingDate": ["2025-01-01"],
+            "acceptanceDateTime": ["2025-01-01T21:30:00Z"],
+            "primaryDocument": ["doc4.xml"],
+            "items": [""],
+        },
+        {"0001045810-25-000001": _et(2025, 1, 1, 16, 30, 0)},
+        cik="0001045810",
+    )
+    service = FilingEventService(client=client)
 
-    mock_submissions = {
-        "filings": {
-            "recent": {
-                "accessionNumber": ["0001045810-25-000001"],
-                "form": ["4"],
-                "filingDate": ["2025-01-01"],
-                "acceptanceDateTime": ["2025-01-01T16:30:00Z"],
-                "primaryDocument": ["doc4.xml"],
-                "items": [""],
-            }
-        }
-    }
-    mock_client.fetch_company_submissions = AsyncMock(return_value=mock_submissions)
-    service = FilingEventService(client=mock_client)
+    with _patched_db(None) as db:
+        stats = await service.sync_symbol_filings("NVDA")
+
+    assert stats["events"] == 0
+    db["upsert_cursor"].assert_awaited_once()
+    new_cursor = db["upsert_cursor"].call_args.args[0]
+    assert new_cursor.last_accepted_at == "2025-01-01T16:30:00-05:00"
+    assert new_cursor.last_accession == "0001045810-25-000001"
+
+
+@pytest.mark.asyncio
+async def test_backfill_flags_are_not_notified() -> None:
+    """首次回填的治理旗標只入庫、不推播。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-8K"],
+            "form": ["8-K"],
+            "filingDate": [_days_ago(2)],
+            "acceptanceDateTime": ["2026-10-03T21:00:00Z"],
+            "primaryDocument": ["d.htm"],
+            "items": ["4.02"],
+        },
+        {"ACC-8K": _et(2026, 10, 3, 17, 0, 0)},
+    )
+    service = FilingEventService(client=client, bot=MagicMock())
+    with (
+        _patched_db(None) as db,
+        patch("services.filing_event_service.config") as mock_config,
+        patch.object(
+            service, "_dispatch_governance_notifications", new_callable=AsyncMock
+        ) as mock_dispatch,
+    ):
+        mock_config.FUNDAMENTAL_PIPELINE_DRY_RUN = False
+        await service.sync_symbol_filings("TSLA")
+
+    db["save_flags"].assert_awaited_once()
+    mock_dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_incremental_critical_flag_notifies_with_dedup_key() -> None:
+    """增量模式 CRITICAL 旗標推播帶 dedup_key（使用者 + symbol + flag_kind + 事件日）。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-8K"],
+            "form": ["8-K"],
+            "filingDate": ["2026-10-05"],
+            "acceptanceDateTime": ["2026-10-05T21:00:00Z"],
+            "primaryDocument": ["d.htm"],
+            "items": ["4.02,5.02"],
+        },
+        {"ACC-8K": _et(2026, 10, 5, 17, 0, 0)},
+    )
+    service = FilingEventService(client=client, bot=MagicMock())
+    with (
+        _patched_db(_cursor("2026-10-01T17:00:00-04:00")),
+        patch("services.filing_event_service.config") as mock_config,
+        patch(
+            "database.portfolio.get_all_portfolio_symbol_pairs",
+            return_value=[(111, "TSLA"), (222, "AAPL")],
+        ),
+        patch(
+            "services.notification_dispatcher.notify", new_callable=AsyncMock
+        ) as mock_notify,
+    ):
+        mock_config.FUNDAMENTAL_PIPELINE_DRY_RUN = False
+        await service.sync_symbol_filings("TSLA")
+
+    # 只有 4.02 CRITICAL 推播；5.02 僅 item code → REVIEW 不推播；只推給持有 TSLA 者
+    mock_notify.assert_awaited_once()
+    args, kwargs = mock_notify.call_args
+    assert args[1] == 111
+    assert args[2] == "defense_fundamental_thesis"
+    assert (
+        kwargs["dedup_key"]
+        == "governance_flag_111_TSLA_ITEM_4_02_RESTATEMENT_2026-10-05"
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_universe_fails_fast_on_sec_config_error() -> None:
+    """缺少合規 User-Agent 時，在 gather 之前即拋出 SecConfigError。"""
+    service = FilingEventService()
+    with (
+        patch(
+            "services.filing_event_service.SecEdgarClient",
+            side_effect=SecConfigError("missing UA"),
+        ),
+        patch(
+            "services.filing_event_service.get_fundamental_universe",
+            new_callable=AsyncMock,
+        ) as mock_universe,
+    ):
+        with pytest.raises(SecConfigError):
+            await service.sync_universe_filings()
+    mock_universe.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_sync_universe_logs_per_symbol_exceptions(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """個別標的例外以 logger.error 記錄，不中斷其他標的統計。"""
+    service = FilingEventService(client=MagicMock())
+
+    async def _sync(sym: str, backfill_form4_days: int = 90) -> dict[str, int]:
+        if sym == "BAD":
+            raise RuntimeError("boom")
+        return {"events": 2, "insider_txs": 1, "governance_flags": 0, "failed": 0}
 
     with (
-        patch("services.filing_event_service.get_sec_filing_cursor", return_value=None),
         patch(
-            "services.filing_event_service.save_sec_filing_events",
+            "services.filing_event_service.get_fundamental_universe",
             new_callable=AsyncMock,
+            return_value=["GOOD", "BAD"],
         ),
-        patch(
-            "services.filing_event_service.save_insider_transactions",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "services.filing_event_service.save_governance_flags",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "services.filing_event_service.upsert_sec_filing_cursor",
-            new_callable=AsyncMock,
-        ) as mock_upsert_cursor,
+        patch.object(service, "sync_symbol_filings", side_effect=_sync),
+        caplog.at_level("ERROR", logger="services.filing_event_service"),
     ):
-        stats = await service.sync_symbol_filings("NVDA")
-        assert stats["events"] == 0
-        mock_upsert_cursor.assert_awaited_once()
-        args, _ = mock_upsert_cursor.call_args
-        assert args[0].last_accepted_at == "2025-01-01T16:30:00Z"
+        totals = await service.sync_universe_filings()
+
+    assert totals["events"] == 2
+    assert any(
+        "BAD" in r.getMessage() and "boom" in r.getMessage() for r in caplog.records
+    )
+
+
+_SCHEDULE_13D_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/schedule13D">
+  <formData>
+    <coverPageHeader><dateOfEvent>09/21/2026</dateOfEvent></coverPageHeader>
+    <reportingPersons>
+      <reportingPersonInfo>
+        <reportingPersonName>Activist Partners LP</reportingPersonName>
+        <percentOfClass>8.2</percentOfClass>
+      </reportingPersonInfo>
+    </reportingPersons>
+    <items1To7><item4><transactionPurpose>We will nominate directors and push for a sale of the company.</transactionPurpose></item4></items1To7>
+  </formData>
+</edgarSubmission>
+"""
+
+
+@pytest.mark.asyncio
+async def test_structured_13d_is_evaluated_by_activist_gate() -> None:
+    """增量同步遇到結構化 SCHEDULE 13D：下載 primary_doc.xml 並交由 activist_gate 評估。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["0001000000-26-000001", "0001000000-26-000002"],
+            "form": ["SCHEDULE 13D", "SC 13D"],
+            "filingDate": ["2026-10-05", "2026-10-05"],
+            "acceptanceDateTime": ["2026-10-05T20:00:00Z", "2026-10-05T19:00:00Z"],
+            "primaryDocument": [
+                "xslSCHEDULE_13D_X02/primary_doc.xml",
+                "legacy13d.htm",
+            ],
+            "items": ["", ""],
+        },
+        {
+            "0001000000-26-000001": _et(2026, 10, 5, 16, 0, 0),
+            "0001000000-26-000002": _et(2026, 10, 5, 15, 0, 0),
+        },
+    )
+    client.fetch_document_text = AsyncMock(return_value=_SCHEDULE_13D_XML)
+    service = FilingEventService(client=client)
+
+    with (
+        _patched_db(_cursor("2026-10-01T00:00:00-04:00", "OLD-ACC")) as db,
+        patch(
+            "services.filing_event_service.evaluate_activist_filing",
+            wraps=evaluate_activist_filing,
+        ) as mock_eval,
+    ):
+        stats = await service.sync_symbol_filings("TSLA")
+
+    # 舊版 HTML 13D 不下載、不評估；結構化 13D 只下載一次 primary_doc.xml（已移除 xsl 前綴）
+    client.fetch_document_text.assert_awaited_once()
+    url = client.fetch_document_text.call_args.args[0]
+    assert url.endswith("/000100000026000001/primary_doc.xml")
+    mock_eval.assert_called_once()
+    kwargs = mock_eval.call_args.kwargs
+    assert kwargs["investor_name"] == "Activist Partners LP"
+    assert kwargs["ownership_pct"] == 8.2
+    assert kwargs["event_date"] == "2026-09-21"
+    assert kwargs["filing_date"] == "2026-10-05"
+    assert stats["events"] == 2
+    assert stats["failed"] == 0
+    db["upsert_cursor"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_13d_download_failure_does_not_block_cursor() -> None:
+    """13D 評估為 record-only：下載失敗只記 warning，不計 failed、不阻擋游標。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["0001000000-26-000003"],
+            "form": ["SCHEDULE 13D/A"],
+            "filingDate": ["2026-10-05"],
+            "acceptanceDateTime": ["2026-10-05T20:00:00Z"],
+            "primaryDocument": ["xslSCHEDULE_13D_X02/primary_doc.xml"],
+            "items": [""],
+        },
+        {"0001000000-26-000003": _et(2026, 10, 5, 16, 0, 0)},
+    )
+    client.fetch_document_text = AsyncMock(side_effect=RuntimeError("503"))
+    service = FilingEventService(client=client)
+
+    with _patched_db(_cursor("2026-10-01T00:00:00-04:00", "OLD-ACC")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 0
+    assert stats["events"] == 1
+    new_cursor = db["upsert_cursor"].call_args.args[0]
+    assert new_cursor.last_accession == "0001000000-26-000003"
+
+
+# ---------------------------------------------------------------------------
+# 8-K Item 2.02 → 財報預期差事件觸發（earnings_handler）
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_earnings_handler_called_only_for_8k_item_202_after_cursor() -> None:
+    """只有 8-K Item 2.02 交給 earnings_handler，且在事件入庫與游標推進之後才呼叫。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-EARN", "ACC-502", "ACC-F4"],
+            "form": ["8-K", "8-K", "4"],
+            "filingDate": ["2026-10-05", "2026-10-04", "2026-10-03"],
+            "acceptanceDateTime": [
+                "2026-10-05T11:00:00Z",
+                "2026-10-04T21:00:00Z",
+                "2026-10-03T21:00:00Z",
+            ],
+            "primaryDocument": ["e.htm", "m.htm", "f4.xml"],
+            "items": ["2.02,9.01", "5.02", ""],
+        },
+        {
+            "ACC-EARN": _et(2026, 10, 5, 7, 0, 0),
+            "ACC-502": _et(2026, 10, 4, 17, 0, 0),
+            "ACC-F4": _et(2026, 10, 3, 17, 0, 0),
+        },
+    )
+    order: list[str] = []
+    handler = AsyncMock(side_effect=lambda _e: order.append("handler"))
+    service = FilingEventService(client=client, earnings_handler=handler)
+
+    with _patched_db(_cursor("2026-10-01T17:00:00-04:00")) as db:
+        db["upsert_cursor"].side_effect = lambda _c: order.append("cursor")
+        db["save_events"].side_effect = lambda _e: order.append("save_events")
+        stats = await service.sync_symbol_filings("TSLA")
+
+    handler.assert_awaited_once()
+    event = handler.call_args.args[0]
+    assert event.accession == "ACC-EARN"
+    assert event.items == "2.02,9.01"
+    assert event.is_backfill is False
+    assert stats["earnings_events"] == 1
+    assert order == ["save_events", "cursor", "handler"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_earnings_event_is_processed_but_not_notified() -> None:
+    """首次回填的 8-K 2.02 交給真實 EarningsSurpriseService 入庫，且不推播任何訊息。"""
+    from services.earnings_surprise_service import EarningsSurpriseService
+    from services.fundamental_providers import ConsensusData
+
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-EARN"],
+            "form": ["8-K"],
+            "filingDate": [_days_ago(3)],
+            "acceptanceDateTime": ["2026-10-03T20:05:00Z"],
+            "primaryDocument": ["e.htm"],
+            "items": ["2.02,9.01"],
+        },
+        {"ACC-EARN": _et(2026, 10, 3, 16, 5, 0)},
+    )
+    provider = MagicMock()
+    provider.get_consensus = AsyncMock(
+        return_value=ConsensusData(
+            symbol="TSLA", fiscal_period="2026-Q3", actual_eps=1.2, consensus_eps=1.0
+        )
+    )
+    provider.get_estimate_snapshots = AsyncMock(return_value=[])
+    earnings = EarningsSurpriseService(sec_client=client, consensus_provider=provider)
+    service = FilingEventService(
+        client=client,
+        bot=MagicMock(),
+        earnings_handler=earnings.process_filing_event,
+    )
+
+    with (
+        _patched_db(None) as db,
+        patch("services.filing_event_service.config") as mock_config,
+        patch("services.earnings_surprise_service.is_memory_safe", return_value=False),
+        patch(
+            "services.earnings_surprise_service.save_earnings_surprise",
+            new_callable=AsyncMock,
+        ) as save_surprise,
+        patch(
+            "services.notification_dispatcher.notify", new_callable=AsyncMock
+        ) as mock_notify,
+    ):
+        mock_config.FUNDAMENTAL_PIPELINE_DRY_RUN = False
+        stats = await service.sync_symbol_filings("TSLA")
+
+    saved_events = db["save_events"].call_args.args[0]
+    assert saved_events[0].is_backfill is True
+    provider.get_consensus.assert_awaited_once()
+    save_surprise.assert_awaited_once()
+    assert save_surprise.call_args.args[0].status == "PROCESSED"
+    assert stats["earnings_events"] == 1
+    mock_notify.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_earnings_handler_exception_does_not_affect_sync_or_cursor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """單筆財報處理例外只記 warning：不計入 failed、游標照常推進、其他財報事件照常處理。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-NEW", "ACC-OLD"],
+            "form": ["8-K", "8-K"],
+            "filingDate": ["2026-10-05", "2026-10-04"],
+            "acceptanceDateTime": ["2026-10-05T11:00:00Z", "2026-10-04T21:00:00Z"],
+            "primaryDocument": ["n.htm", "o.htm"],
+            "items": ["2.02", "2.02"],
+        },
+        {
+            "ACC-NEW": _et(2026, 10, 5, 7, 0, 0),
+            "ACC-OLD": _et(2026, 10, 4, 17, 0, 0),
+        },
+    )
+
+    async def _handler(event: Any) -> None:
+        if event.accession == "ACC-NEW":
+            raise RuntimeError("llm down")
+
+    handler = AsyncMock(side_effect=_handler)
+    service = FilingEventService(client=client, earnings_handler=handler)
+
+    with (
+        _patched_db(_cursor("2026-10-01T17:00:00-04:00")) as db,
+        caplog.at_level("WARNING", logger="services.filing_event_service"),
+    ):
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert handler.await_count == 2
+    assert stats["failed"] == 0
+    assert stats["events"] == 2
+    assert stats["earnings_events"] == 1
+    assert db["upsert_cursor"].call_args.args[0].last_accession == "ACC-NEW"
+    assert any(
+        "ACC-NEW" in r.getMessage() and "llm down" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_earnings_event_beyond_failure_floor_is_deferred() -> None:
+    """游標停在失敗之前時，失敗之後的財報事件下輪會重處理，本輪不呼叫 handler（避免重複 LLM）。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-EARN-NEW", "ACC-F4-BAD", "ACC-EARN-OLD"],
+            "form": ["8-K", "4", "8-K"],
+            "filingDate": ["2026-10-05", "2026-10-04", "2026-10-03"],
+            "acceptanceDateTime": [
+                "2026-10-05T11:00:00Z",
+                "2026-10-04T21:00:00Z",
+                "2026-10-03T21:00:00Z",
+            ],
+            "primaryDocument": ["n.htm", "bad.xml", "o.htm"],
+            "items": ["2.02", "", "2.02"],
+        },
+        {
+            "ACC-EARN-NEW": _et(2026, 10, 5, 7, 0, 0),
+            "ACC-F4-BAD": _et(2026, 10, 4, 17, 0, 0),
+            "ACC-EARN-OLD": _et(2026, 10, 3, 17, 0, 0),
+        },
+    )
+    client.fetch_document_text = AsyncMock(side_effect=RuntimeError("404"))
+    handler = AsyncMock()
+    service = FilingEventService(client=client, earnings_handler=handler)
+
+    with _patched_db(_cursor("2026-10-01T17:00:00-04:00")) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    assert db["upsert_cursor"].call_args.args[0].last_accession == "ACC-EARN-OLD"
+    handler.assert_awaited_once()
+    assert handler.call_args.args[0].accession == "ACC-EARN-OLD"
+
+
+@pytest.mark.asyncio
+async def test_first_run_failure_skips_earnings_handler() -> None:
+    """首次回填有失敗時不建立游標、下輪整批重試，本輪不處理任何財報事件。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-EARN", "ACC-F4"],
+            "form": ["8-K", "4"],
+            "filingDate": [_days_ago(1), _days_ago(2)],
+            "acceptanceDateTime": ["2026-10-05T11:00:00Z", "2026-10-04T22:00:00Z"],
+            "primaryDocument": ["e.htm", "f4.xml"],
+            "items": ["2.02", ""],
+        },
+        {"ACC-EARN": _et(2026, 10, 5, 7, 0, 0)},  # ACC-F4 表頭讀取失敗
+    )
+    handler = AsyncMock()
+    service = FilingEventService(client=client, earnings_handler=handler)
+    with _patched_db(None) as db:
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    db["upsert_cursor"].assert_not_awaited()
+    handler.assert_not_awaited()
