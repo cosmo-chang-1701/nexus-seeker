@@ -52,7 +52,9 @@ class DDPInspector:
             return t.info, t.quarterly_income_stmt
 
         self.last_fail_reason.pop(symbol, None)
-        info, q_inc = await market_data_service.call_yf(_fetch_info_and_income, symbol)
+        info, q_inc = await market_data_service.call_yf(
+            _fetch_info_and_income, symbol, _endpoint="info_income"
+        )
 
         # 1. 產業過濾
         sector = info.get("sector")
@@ -148,7 +150,9 @@ class DDPInspector:
             fwd_pe = info.get("forwardPE")
             if not fwd_pe:
                 q_cash = await market_data_service.call_yf(
-                    lambda sym: yf.Ticker(sym).quarterly_cashflow, symbol
+                    lambda sym: yf.Ticker(sym).quarterly_cashflow,
+                    symbol,
+                    _endpoint="quarterly_cashflow",
                 )
                 if not q_cash.empty and "Operating Cash Flow" in q_cash.index:
                     ocf = float(q_cash.loc["Operating Cash Flow"].iloc[0])

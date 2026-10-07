@@ -62,7 +62,7 @@ class VolatilityInspector:
 
         # 3. 獲取當前 IV (Implied Volatility)
         info = await market_data_service.call_yf(
-            lambda sym: yf.Ticker(sym).info, symbol
+            lambda sym: yf.Ticker(sym).info, symbol, _endpoint="info"
         )
         iv_current = info.get("impliedVolatility")
         if not iv_current or iv_current <= 0:

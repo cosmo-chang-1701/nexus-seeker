@@ -4,6 +4,8 @@ import numpy as np
 import logging
 from typing import Dict, Optional
 
+from services.market_data_service import _core, api_budget
+
 logger = logging.getLogger(__name__)
 
 
@@ -92,6 +94,13 @@ def calculate_volume_profile(
         ticker = yf.Ticker(symbol_yf)
 
         # 1h interval is only available for the last 730 days. period="1mo" covers recent 20-22 trading days.
+        # 本函式為同步（由 asyncio.to_thread 呼叫），無法 await call_yf；
+        # 僅補計數以納入 API 配額摘要，節流不在此處（見 call_yf）。
+        api_budget.record_call(
+            "yahoo",
+            "volume_profile_history",
+            interactive=_core._is_interactive_request.get(),
+        )
         df = ticker.history(period="1mo", interval=interval)
         return calculate_volume_profile_from_df(df, days, is_hourly=(interval == "1h"))
     except Exception as e:
