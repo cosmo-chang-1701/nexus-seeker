@@ -30,13 +30,16 @@ jobs:
   build-and-push:
     name: 🏗️ Build and Push Image
     needs: test
+    # 僅允許 v* 標籤或 main 分支建置並推送映像檔；從任意功能分支手動觸發時只跑測試，
+    # 避免未審查的分支映像檔進入 GHCR。
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
 
     outputs:
-      deploy_version: ${{ steps.vars.outputs.deploy_version }}
+      sha_short: ${{ steps.vars.outputs.sha_short }}
       image_tag: ${{ steps.vars.outputs.image_tag }}
 
     steps:
@@ -47,10 +50,9 @@ jobs:
         id: vars
         run: |
           SHA_SHORT=$(git rev-parse --short HEAD)
-          # 版本化祕密使用動態識別碼 (SHA_SHORT + Run Number + Run Attempt)，確保 Re-run 時建立新 Secret
-          DEPLOY_VERSION="${SHA_SHORT}_${{ github.run_number }}_${{ github.run_attempt }}"
+          # 版本化祕密識別碼 (DEPLOY_VERSION) 改在 deploy job 內以該 job 自己的
+          # run_attempt 組出，確保「只重跑 deploy」時也會建立新 Secret。
           echo "sha_short=${SHA_SHORT}" >> $GITHUB_OUTPUT
-          echo "deploy_version=${DEPLOY_VERSION}" >> $GITHUB_OUTPUT
           # 映像檔標籤包含 sha 後綴，這是版本化祕密同步的關鍵
           echo "image_tag=sha-${SHA_SHORT}" >> $GITHUB_OUTPUT
           # 轉換映像檔名稱為小寫以符合 Docker 規範
@@ -91,15 +93,24 @@ jobs:
   deploy:
     name: 🚢 Deploy to Production (Swarm)
     needs: build-and-push
-    # 推送 v* 標籤或手動觸發 (workflow_dispatch) 時執行佈署
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    # 推送 v* 標籤時執行佈署；手動觸發 (workflow_dispatch) 僅限 main 分支或 v* 標籤，
+    # 不可從任意功能分支部署到正式環境。
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
     runs-on: ubuntu-latest
     environment: production
+    # 正式環境部署序列化：同時只允許一個部署執行，排隊者不取消進行中的部署。
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
 
     steps:
       - name: 🌐 Deploy via SSH
         uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262 # v1.0.3
         env:
+          # 版本化祕密識別碼 (SHA_SHORT + Run Number + 本 job 的 Run Attempt)；
+          # 在 deploy job 內計算，單獨重跑 deploy 時 run_attempt 會遞增，確保建立新 Secret。
+          DEPLOY_VERSION: ${{ needs.build-and-push.outputs.sha_short }}_${{ github.run_number }}_${{ github.run_attempt }}
+          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
           DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
           DISCORD_ADMIN_USER_ID: ${{ secrets.DISCORD_ADMIN_USER_ID }}
           LLM_API_BASE: ${{ secrets.LLM_API_BASE }}
@@ -107,6 +118,9 @@ jobs:
           API_KEY: ${{ secrets.API_KEY }}
           TUNNEL_URL: ${{ secrets.TUNNEL_URL }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          # SEC EDGAR 合規 User-Agent（需含聯絡信箱）；基本面管線 SEC XBRL / 申報同步使用。
+          # 未設定時 SecEdgarClient 拒絕建立，產業鏈檢驗的 XBRL 指標會判為資料不足。
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
           ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
           # Alpaca 即時串流總開關：GitHub Variables (非 Secret)，未設定時為 false，
@@ -121,11 +135,9 @@ jobs:
           host: ${{ secrets.DIGITALOCEAN_HOST }}
           username: ${{ secrets.DIGITALOCEAN_USERNAME }}
           key: ${{ secrets.DIGITALOCEAN_SSH_KEY }}
-          envs: SERVICE_NAME,DEPLOY_VERSION,IMAGE_TAG,REGISTRY,IMAGE_NAME,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,ALPACA_API_KEY,ALPACA_API_SECRET,ENABLE_ALPACA_STREAM,ENABLE_OPTIONS_ROLLOVER_INGESTION,OPTIONS_ROLLOVER_DRY_RUN,GHCR_TOKEN
+          envs: SERVICE_NAME,DEPLOY_VERSION,IMAGE_TAG,REGISTRY,IMAGE_NAME,DISCORD_TOKEN,DISCORD_ADMIN_USER_ID,LLM_API_BASE,LLM_MODEL_NAME,API_KEY,TUNNEL_URL,FINNHUB_API_KEY,SEC_USER_AGENT,ALPACA_API_KEY,ALPACA_API_SECRET,ENABLE_ALPACA_STREAM,ENABLE_OPTIONS_ROLLOVER_INGESTION,OPTIONS_ROLLOVER_DRY_RUN,GHCR_TOKEN
           script: |
-            # 初始化環境變數
-            DEPLOY_VERSION="${{ needs.build-and-push.outputs.deploy_version }}"
-            IMAGE_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+            # 初始化環境變數 (DEPLOY_VERSION / IMAGE_TAG 由 job env 經 envs 傳入)
             IMAGE_LOWER=$(echo $REGISTRY/$IMAGE_NAME | tr '[:upper:]' '[:lower:]')
             FULL_IMAGE="$IMAGE_LOWER:$IMAGE_TAG"
 
@@ -156,6 +168,7 @@ jobs:
               ["API_KEY"]="$API_KEY"
               ["TUNNEL_URL"]="$TUNNEL_URL"
               ["FINNHUB_API_KEY"]="$FINNHUB_API_KEY"
+              ["SEC_USER_AGENT"]="$SEC_USER_AGENT"
               ["ALPACA_API_KEY"]="$ALPACA_API_KEY"
               ["ALPACA_API_SECRET"]="$ALPACA_API_SECRET"
             )
