@@ -9,7 +9,9 @@ from collections import namedtuple
 import pandas as pd
 import yfinance as yf
 
+from services.market_data_service import api_budget
 from services.market_data_service._core import (
+    _is_interactive_request,
     _sanitize_ticker,
     call_yf,
     get_edge_client,
@@ -27,6 +29,14 @@ logger = logging.getLogger(__name__)
 
 
 OptionChainData = namedtuple("OptionChainData", ["calls", "puts", "underlying"])
+
+
+async def _edge_get_counted(client: Any, url: str) -> Any:
+    """Edge 即時 scrape 請求（會觸發 Yahoo 抓取），每次實際送出都計入 API 配額觀測。"""
+    api_budget.record_call(
+        "yahoo", "edge_options", interactive=_is_interactive_request.get()
+    )
+    return await client.get(url)
 
 
 async def _retry_once(
@@ -83,7 +93,7 @@ async def _fetch_option_expiries_uncached(symbol: str, now: float) -> List[str]:
         try:
             async with get_edge_client() as client:
                 resp = await _retry_once(
-                    lambda: client.get(req_url),
+                    lambda: _edge_get_counted(client, req_url),
                     label=f"[{symbol}] Edge 節點抓取期權到期日",
                 )
                 if resp.status_code == 200:
@@ -160,7 +170,7 @@ async def _fetch_option_chain_raw(
             try:
                 async with get_edge_client() as client:
                     resp = await _retry_once(
-                        lambda: client.get(req_url),
+                        lambda: _edge_get_counted(client, req_url),
                         label=f"[{symbol}] Edge 節點抓取期權鏈",
                     )
                     if resp.status_code == 200:

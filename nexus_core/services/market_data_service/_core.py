@@ -18,6 +18,7 @@ import finnhub
 from aiolimiter import AsyncLimiter
 
 from config import FINNHUB_API_KEY
+from services.market_data_service import api_budget
 
 logger = logging.getLogger(__name__)
 
@@ -195,6 +196,11 @@ async def call_yf(func: Any, *args: Any, **kwargs: Any) -> Any:
         limiter, sem = controls["limiter_background"], controls["sem_background"]
     async with limiter:
         async with sem:
+            api_budget.record_call(
+                "yahoo",
+                getattr(func, "__name__", "yf"),
+                interactive=_is_interactive_request.get(),
+            )
             return await asyncio.to_thread(func, *args, **kwargs)
 
 
@@ -281,6 +287,11 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                     async with controls["limiter_global"]:
                         try:
                             # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
+                            api_budget.record_call(
+                                "finnhub",
+                                getattr(func, "__name__", "unknown"),
+                                interactive=is_interactive,
+                            )
                             return await asyncio.to_thread(func, *args, **kwargs)
                         except Exception as e:
                             error_msg = str(e).lower()
@@ -289,6 +300,10 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                 or "limit reached" in error_msg
                                 or "too many requests" in error_msg
                             )
+                            if is_rate_limit:
+                                api_budget.record_rate_limited(
+                                    "finnhub", getattr(func, "__name__", "unknown")
+                                )
                             is_conn_error = (
                                 "connection aborted" in error_msg
                                 or "timeout" in error_msg
@@ -365,6 +380,11 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
 
                             try:
                                 # Finnhub SDK 為同步阻塞 I/O，必須在獨立線程中執行
+                                api_budget.record_call(
+                                    "finnhub",
+                                    getattr(func, "__name__", "unknown"),
+                                    interactive=is_interactive,
+                                )
                                 return await asyncio.to_thread(func, *args, **kwargs)
                             except Exception as e:
                                 error_msg = str(e).lower()
@@ -373,6 +393,10 @@ async def _execute_api_call(func: Any, *args, **kwargs) -> Any:  # type: ignore
                                     or "limit reached" in error_msg
                                     or "too many requests" in error_msg
                                 )
+                                if is_rate_limit:
+                                    api_budget.record_rate_limited(
+                                        "finnhub", getattr(func, "__name__", "unknown")
+                                    )
                                 is_conn_error = (
                                     "connection aborted" in error_msg
                                     or "timeout" in error_msg
