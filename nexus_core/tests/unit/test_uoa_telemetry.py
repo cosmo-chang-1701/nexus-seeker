@@ -38,7 +38,7 @@ def test_classify_uoa_trade_sto_nvda() -> None:
     trade = UOATradeInput(
         strike_price=220.0,
         option_type="CALL",
-        trade_price=1.10,
+        trade_price=1.15,
         bid_price=1.15,
         ask_price=1.30,
         volume=15000,
@@ -86,7 +86,7 @@ def test_spacex_intent_and_ascii_table() -> None:
     trade3 = UOATradeInput(
         strike_price=1100.0,
         option_type="CALL",
-        trade_price=1.10,
+        trade_price=1.15,
         bid_price=1.15,
         ask_price=1.30,
         volume=15000,
@@ -326,3 +326,58 @@ def test_ratio_str_rounds_instead_of_truncating(
     )
     result = classify_uoa_trade(trade, reference_date="2026-10-02")
     assert result.ratio_str == expected
+
+
+@pytest.mark.parametrize(
+    "price,bid,ask,expected",
+    [
+        (9.5, 9.75, 10.15, "過時成交"),
+        (3.76, 3.65, 3.70, "過時成交"),
+        (1.91, 1.90, 1.91, "價差過窄"),
+        (12.50, 12.00, 12.45, ""),
+        (5.0, 0.0, 5.1, ""),
+    ],
+)
+def test_assess_direction_confidence(
+    price: float, bid: float, ask: float, expected: str
+) -> None:
+    from market_analysis.uoa_telemetry import assess_direction_confidence
+
+    assert assess_direction_confidence(price, bid, ask) == expected
+
+
+def test_classify_uoa_trade_stale_print_is_direction_unknown() -> None:
+    trade = UOATradeInput(
+        strike_price=160.0,
+        option_type="CALL",
+        trade_price=9.5,
+        bid_price=9.75,
+        ask_price=10.15,
+        volume=12659,
+        open_interest=32964,
+        expiry="2026-10-16",
+        symbol="SPCX",
+    )
+    result = classify_uoa_trade(
+        trade, reference_date="2026-10-07", current_price=168.19
+    )
+    assert result.action.startswith("⚖️ MIDPOINT")
+    assert result.direction_note == "過時成交"
+    assert "方向未定" in result.intent
+
+
+def test_classify_uoa_trade_ratio_below_one_marks_open_close_unknown() -> None:
+    trade = UOATradeInput(
+        strike_price=150.0,
+        option_type="PUT",
+        trade_price=1.0,
+        bid_price=1.0,
+        ask_price=1.5,
+        volume=500,
+        open_interest=2000,
+        expiry="2026-10-30",
+        symbol="SPCX",
+    )
+    result = classify_uoa_trade(trade, reference_date="2026-10-07", current_price=168.0)
+    assert "STO" in result.action
+    assert "開／平倉未定" in result.intent

@@ -291,3 +291,52 @@ def test_released_catalysts_are_not_shown_with_negative_days() -> None:
     assert "-0.1 天" not in desc
     assert "距離 ISM 服務業 PMI (10-05) 僅剩 2.9 天" in desc
     assert "✅ 已公布：非農就業人數、失業率（市場消化中）" in desc
+
+
+def test_fmt_gex_notional_units() -> None:
+    from cogs.embed_builders.portfolio_embeds import _fmt_gex_notional
+
+    assert _fmt_gex_notional(1.162e9) == "+$11.6M"
+    assert _fmt_gex_notional(-6.24e8) == "-$6.2M"
+    assert _fmt_gex_notional(2.638e11) == "+$2.64B"
+    assert _fmt_gex_notional(0.0) == " $0"
+
+
+def test_uoa_field_labels_unknown_direction_and_inferred_type() -> None:
+    from cogs.embed_builders.portfolio_embeds import _format_uoa_field
+
+    base = {
+        "expiry": "2026-10-09",
+        "strike": 165.0,
+        "type": "PUT",
+        "volume": 5000,
+        "oi": 4000,
+        "ratio": 1.25,
+        "ratio_str": "1.25x",
+        "paced_ratio": 3.0,
+        "intent": "x",
+        "symbol": "SPCX",
+    }
+    unknown = _format_uoa_field(
+        [
+            {
+                **base,
+                "action": "⚖️ MIDPOINT (Cross)",
+                "direction_note": "過時成交",
+            }
+        ]
+    )
+    assert "❔ 未定" in unknown
+    assert "1.25x→3.00x" in unknown
+    inferred = _format_uoa_field(
+        [
+            {
+                **base,
+                "action": "🔴 賣出開倉 (STO - Bid)",
+                "trade_type": "SWEEP",
+                "trade_type_inferred": True,
+            }
+        ]
+    )
+    assert "📊 日累積" in inferred
+    assert "🔥 SWEEP" not in inferred

@@ -41,6 +41,7 @@ class UOATradeResult:
     symbol: Optional[str] = None
     delta: float = 0.0
     dte: int = 0
+    direction_note: str = ""
 
 
 def _visual_len(s: str) -> int:
@@ -73,6 +74,14 @@ UOA_ATM_BAND_PCT = 0.025
 # 「深價內機構吸籌」要求的最低 |Delta|。
 UOA_DEEP_ITM_MIN_DELTA = 0.80
 
+# 方向判定防護（docs/microstructure/04）：資料源只有「末筆成交＋當下報價快照」，
+# 把全日累積量歸給末筆一筆的方向，對過時成交與窄價差無判別力。
+UOA_MIN_TICK = 0.01
+UOA_UNINFORMATIVE_SPREAD_TICKS = 2  # 價差 ≤ 2 tick：末筆在 Bid 或 Ask 只是擲硬幣
+UOA_STALE_PRINT_SPREAD_FRAC = (
+    0.25  # 末筆超出 NBBO 多於 max(1 tick, 0.25×價差) 視為過時成交
+)
+
 
 def check_uoa_moneyness(
     is_call: bool,
@@ -101,6 +110,19 @@ def check_uoa_moneyness(
     return "ITM_Whale_Accumulation"
 
 
+def assess_direction_confidence(trade_price: float, bid: float, ask: float) -> str:
+    """回傳空字串＝可判方向；否則回傳繁中原因（'過時成交'／'價差過窄'）。"""
+    if bid <= 0 or ask <= 0 or ask < bid:
+        return ""  # 無報價時維持既有行為
+    spread = ask - bid
+    tol = max(UOA_MIN_TICK, UOA_STALE_PRINT_SPREAD_FRAC * spread)
+    if trade_price < bid - tol - 1e-9 or trade_price > ask + tol + 1e-9:
+        return "過時成交"
+    if spread <= UOA_UNINFORMATIVE_SPREAD_TICKS * UOA_MIN_TICK + 1e-9:
+        return "價差過窄"
+    return ""
+
+
 def classify_uoa_trade(
     trade: UOATradeInput,
     reference_date: Optional[Union[datetime, date, str]] = None,
@@ -122,8 +144,15 @@ def classify_uoa_trade(
     # 2. 規則分類 (Midpoint/Spread Matrix)
     midpoint = (trade.bid_price + trade.ask_price) / 2.0
 
+    direction_note = assess_direction_confidence(
+        trade.trade_price, trade.bid_price, trade.ask_price
+    )
+
+    # 方向無判別力（過時成交／窄價差）：沿用 MIDPOINT 字串，下游一律視為非方向性
+    if direction_note:
+        action = "⚖️ MIDPOINT (Cross)"
     # 規則 A (🟢 買入開倉 / Ask Side)
-    if trade.trade_price >= trade.ask_price or (
+    elif trade.trade_price >= trade.ask_price or (
         trade.trade_price > midpoint and trade.trade_price < trade.ask_price
     ):
         action = "🟢 買入開倉 (BTO - Ask)"
@@ -287,11 +316,20 @@ def classify_uoa_trade(
                     f" (OI={oi_str}, 佔比={ratio_str})，強力構築下行支撐地板"
                 )
 
+    elif direction_note:
+        intent = (
+            f"❔ {ticker_tag}{strike_str} {opt_type_upper} 單日累積 {volume_str} 口"
+            f" (DTE={dte}, OI={oi_str})，方向未定（{direction_note}：末筆成交對當下報價無判別力）"
+        )
     else:  # ⚖️ MIDPOINT (Cross)
         intent = (
             f"⚖️ {ticker_tag}大宗 Crossing 在 {strike_str} 對倒 {volume_str} 口"
             f" {opt_type_upper} (OI={oi_str})，中性策略組合或機構調倉"
         )
+
+    # 量 < OI：當日累積量無法區分開倉與平倉
+    if ratio < 1.0 and action != "⚖️ MIDPOINT (Cross)":
+        intent += "｜量<OI，開／平倉未定"
 
     # 5. Whale_Hedge 分類：買入深價內 Put (Delta < -0.65) 屬巨鯨避險部位，
     # 嚴禁計入多頭動能分數 (見 intraday_pipeline.py::evaluate_advanced_filters)
@@ -319,6 +357,7 @@ def classify_uoa_trade(
         symbol=trade.symbol,
         delta=delta if delta is not None else 0.0,
         dte=dte,
+        direction_note=direction_note,
     )
 
 
@@ -533,3 +572,52 @@ def annotate_spread_structures(entries: list[dict]) -> None:
                 leg["spread_role"] = "LONG_LEG"
                 leg["spread_label"] = label
                 leg["intent"] = f"{leg.get('intent', '')}｜🔗 屬{label}的買入腿"
+
+
+# 跨式兩腿成交量比超過此倍數就不視為同一組跨式。
+STRADDLE_VOLUME_RATIO_MAX = 2.0
+
+
+def annotate_straddle_structures(entries: list[dict]) -> None:
+    """同到期日、同履約價的 CALL 與 PUT 同為 STO（或同為 BTO），且量比在 1:2 以內 → 跨式（就地修改）。
+
+    兩腿都標 structure="STRADDLE"，intent 改寫為波動率交易；STO 跨式兩腿同時加
+    spread_role="SHORT_LEG"，讓物理封頂與 PutWall 分歧不再把它當成方向性地板／天花板。
+    已有 spread_role 的腿（價差）不覆寫。
+    """
+    groups: dict[tuple[str, float], dict[str, dict]] = {}
+    for e in entries:
+        if not isinstance(e, dict) or e.get("spread_role"):
+            continue
+        key = (str(e.get("expiry", "")), float(e.get("strike", 0.0)))
+        groups.setdefault(key, {})[str(e.get("type", "")).upper()] = e
+
+    for (expiry, strike), legs in groups.items():
+        call, put = legs.get("CALL"), legs.get("PUT")
+        if call is None or put is None:
+            continue
+        a_call, a_put = str(call.get("action", "")), str(put.get("action", ""))
+        both_sto = "STO" in a_call and "STO" in a_put
+        both_bto = "BTO" in a_call and "BTO" in a_put
+        if not (both_sto or both_bto):
+            continue
+        vc, vp = _leg_volume(call), _leg_volume(put)
+        if max(vc, vp) / max(min(vc, vp), 1.0) > STRADDLE_VOLUME_RATIO_MAX:
+            continue
+        sym = call.get("symbol") or put.get("symbol") or ""
+        tag = f"[{sym}] " if sym else ""
+        if both_sto:
+            text = (
+                f"🎯 {tag}{expiry[5:]} ${strike:g} 賣出跨式（CALL {int(vc):,}／PUT {int(vp):,} 口），"
+                f"押注結算釘在 ${strike:g} 附近、做空波動率，非方向性地板／天花板"
+            )
+        else:
+            text = (
+                f"🎯 {tag}{expiry[5:]} ${strike:g} 買入跨式（CALL {int(vc):,}／PUT {int(vp):,} 口），"
+                "押注大幅波動，方向中性"
+            )
+        for leg in (call, put):
+            leg["structure"] = "STRADDLE"
+            leg["intent"] = text
+            if both_sto:
+                leg["spread_role"] = "SHORT_LEG"

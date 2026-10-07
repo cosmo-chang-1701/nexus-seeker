@@ -165,13 +165,22 @@ flowchart TD
    - **首次偵測現價錨點**：期權鏈的 volume 是全日累積量，同一筆大單會被反覆重新分類。`_uoa_spot_anchor`（`BoundedCache`，鍵含美東日期）記錄合約首次成為 UOA 時的現價，價內外一律以該錨點判定，避免股價大漲後把原本的價外投機「事後改寫」為價內吸籌；錨點與現價不同時意圖文案會註明判定基準。**只在正規交易時段（`market_time.is_market_open()`）寫入錨點**：盤前現價是前收、期權鏈 volume 仍是前一交易日的量，若此時建錨，當日盤中所有成交都會被以前收判定價內外；非交易時段沿用當日既有錨點、但不新建，行事曆查詢失敗時視為非交易時段。程序重啟即重置，屬可接受的降級。
 6. **無套利下界**：`sanitize_option_trade_price()` 剔除低於內含價值（容差 $\max(0.05, 0.5\%\times\text{內含})$）的 `lastPrice`——那是現價大幅移動之前的舊成交。先退回當下 bid/ask 中價（方向分類隨之歸為 MIDPOINT），中價也不合理則剔除該合約。
 
+7. **方向信心與日累積標示（2026-10-07 起）**：資料源只有「末筆成交價＋當下 Bid/Ask 快照」，且把全日累積量歸給末筆一筆的方向。實測相隔 8 分鐘重跑，同一合約會在 STO 與 BTO 間整列互換。`assess_direction_confidence()` 因此在規則 A/B 之前攔截：
+   - **過時成交**：末筆超出 NBBO 多於 $\max(\text{UOA\_MIN\_TICK},\ \text{UOA\_STALE\_PRINT\_SPREAD\_FRAC}\times\text{價差})$。
+   - **價差過窄**：價差 ≤ `UOA_UNINFORMATIVE_SPREAD_TICKS` × `UOA_MIN_TICK`，末筆落在 Bid 或 Ask 只是擲硬幣。
+   - 兩者一律歸為既有的 `⚖️ MIDPOINT (Cross)` 字串（下游以 `"STO"`/`"BTO"` 字串判斷的價差配對、物理封頂、`uoa_history` 因此自動排除），另以 `direction_note` 帶出原因，呈現為「❔ 未定」。
+   - 量 < OI 時 intent 附註「量<OI，開／平倉未定」；`action` 字串不變。
+   - `trade_type` 缺值時由量體形狀推斷 SWEEP／BLOCK，`trade_type_inferred=True` 時呈現層改標「📊 日累積」；`oi_change_net` 缺值以 `vol−oi` 代理時 `oi_change_is_proxy=True`，顯示「(—)」。**`trade_type` 與 `oi_change_net` 的值不變**（`skew_commentary` 以 `trade_type == "SWEEP"` 計算淨 UOA Delta，改值會動到閘門）。
+   - **跨式**：`annotate_straddle_structures()` 把同到期日、同履約價、CALL 與 PUT 同為 STO（或同為 BTO）且量比 ≤ `STRADDLE_VOLUME_RATIO_MAX`（2.0）的兩腿標 `structure="STRADDLE"`；STO 跨式兩腿同時標 `spread_role="SHORT_LEG"`，物理封頂清單對應項加 `structure_leg=True`，GEX 的「機構大單 vs PutWall 分歧」警示排除這些腿與價內 STO PUT。
+   - **生效日 2026-10-07**：此日起 30 分鐘管線的物理封頂 STO 清單會比先前少（過時成交與窄價差不再算 STO）。這是資料清洗，不是閘門門檻變更；calibration 比較前後樣本時須以此日分段。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 30 分鐘深度心跳 `IntradayScanPipeline` 寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）
 - `nexus_core/database/migrations/v077_add_uoa_history.py`：`uoa_history` 資料表與去重索引定義
 - `nexus_core/market_time.py`：回看窗基準點 `get_trading_days_ago_utc()`（NYSE 行事曆，只計入已開盤的交易日）
 
-- `nexus_core/market_analysis/uoa_telemetry.py`：`check_uoa_moneyness()`、`classify_uoa_trade()`、`annotate_spread_structures()`
+- `nexus_core/market_analysis/uoa_telemetry.py`：`check_uoa_moneyness()`、`assess_direction_confidence()`、`classify_uoa_trade()`、`annotate_spread_structures()`、`annotate_straddle_structures()`
 - `nexus_core/market_analysis/intraday_consistency.py`：`sanitize_option_trade_price()`
 - `nexus_core/market_analysis/sentiment/uoa_detector.py`：
   - 候選列向量篩選：`_select_uoa_candidate_rows()`（第 85–107 行）

@@ -492,13 +492,20 @@ def create_watchlist_signal_embed(
             action = item.get("action", "")
 
             trade_type = str(item.get("trade_type", "SWEEP")).upper()
-            oi_change = int(item.get("oi_change_net", 0))
-            trade_tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
+            oi_change = int(item.get("oi_change_net") or 0)
+            if item.get("trade_type_inferred"):
+                trade_tag = "📊 日累積"
+            else:
+                trade_tag = "🔥 SWEEP" if trade_type == "SWEEP" else "📦 BLOCK"
 
             action_display = f"{trade_tag} {action}"
 
             vol_val = int(item.get("volume", 0))
-            oi_str = f"{vol_val:,}({oi_change:+})"
+            oi_str = (
+                f"{vol_val:,}(—)"
+                if item.get("oi_change_is_proxy")
+                else f"{vol_val:,}({oi_change:+})"
+            )
 
             ratio_str = item.get("ratio_str", "0.00x")
             intent = item.get("intent", "")

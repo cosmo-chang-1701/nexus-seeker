@@ -3387,7 +3387,7 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime (全鏈加總): +20000K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
+    assert "Net GEX Regime (全鏈加總): +$200K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
     assert "Gamma Flip (轉正履約價): $100.00 (緩衝: +0.00%)" in desc
     # 閘門取離散履約價 $100；真零軸在 95 (−2M) 與 100 (+10M) 之間內插 ≈ 95.83
     assert "相鄰履約價內插零軸 ≈ $95.83（閘門以履約價格點為準）" in desc
@@ -3395,7 +3395,7 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     assert "曝險熱力圖 (現價±3檔，非全鏈)" in desc
     assert "CallWall: $108.00" in desc
     assert "距現價空間: ↑8.00%" in desc
-    assert "深度: +4000K" in desc
+    assert "深度: +$40K" in desc
     assert "距現價空間 (下行緩衝): ↓10.00%" in desc
 
 
@@ -3426,7 +3426,7 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime (全鏈加總): -5000K (🔴 SHORT_GAMMA (助漲助跌))" in desc
+    assert "Net GEX Regime (全鏈加總): -$50K (🔴 SHORT_GAMMA (助漲助跌))" in desc
     assert "距現價空間: ↑3.00% ❌ 不足 3.50%" in desc
     assert "數據缺失" in desc and "已退回 3.5% 絕對底線" in desc
 
@@ -3662,7 +3662,7 @@ def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() ->
         "⚠️ 機構大單 $145.00 (STO PUT 12,509口, 權利金 $3.04M) 與 GEX PutWall 分歧"
         in desc
     )
-    assert "機構掛單為單筆流量信號，非全鏈聚合曝險，僅供交叉參考" in desc
+    assert "單日累積流量的啟發式方向，非全鏈聚合曝險，僅供交叉參考" in desc
 
 
 def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold() -> (

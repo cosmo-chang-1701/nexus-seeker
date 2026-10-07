@@ -11,6 +11,7 @@ from services import market_data_service
 from market_analysis.uoa_telemetry import (
     UOATradeInput,
     annotate_spread_structures,
+    annotate_straddle_structures,
     classify_uoa_trade,
 )
 from services.bounded_cache import BoundedCache
@@ -285,6 +286,8 @@ def _process_uoa_candidate_rows(
 
         # 6. 分類與結果封裝
         trade_type = row.get("trade_type")
+        trade_type_inferred = not trade_type
+        oi_change_is_proxy = not pd.notna(row.get("oi_change_net"))
         if not trade_type:
             trade_type = "BLOCK" if (vol > 1500 and int(vol) % 100 == 0) else "SWEEP"
 
@@ -359,6 +362,10 @@ def _process_uoa_candidate_rows(
                 "moneyness_basis_note": basis_note,
                 "iv": round(iv_val, 4),
                 "trade_type": trade_type,
+                # 呈現層據此標「日累積」：資料源無逐筆 tape，trade_type 是量體推斷值
+                "trade_type_inferred": trade_type_inferred,
+                "oi_change_is_proxy": oi_change_is_proxy,
+                "direction_note": result.direction_note,
                 "oi_change_net": oi_change_net,
                 "delta": result.delta,
                 "dte": result.dte,
@@ -419,6 +426,7 @@ async def detect_uoa(
 
         # 價差配對必須在截斷前五大之前做，否則另一腿可能已被截掉
         annotate_spread_structures(uoa_list)
+        annotate_straddle_structures(uoa_list)
         # 依權利金金額（名目價值）降序排列，取前 5 大，更能反映真實機構資金規模
         return sorted(uoa_list, key=lambda x: x["notional_value"], reverse=True)[:5]
 
@@ -553,9 +561,27 @@ async def detect_uoa_with_physical_caps(
                     )
 
         annotate_spread_structures(uoa_list)
+        annotate_straddle_structures(uoa_list)
         top5_uoa_list = sorted(
             uoa_list, key=lambda x: x["notional_value"], reverse=True
         )[:5]
+        # 跨式／價差賣出腿不是方向性地板或天花板：標記供呈現層過濾
+        leg_keys = {
+            (
+                e.get("expiry"),
+                float(e.get("strike", 0.0)),
+                str(e.get("type", "")).upper(),
+            )
+            for e in uoa_list
+            if e.get("structure") == "STRADDLE" or e.get("spread_role") == "SHORT_LEG"
+        }
+        for cap in physical_cap_strikes:
+            if (
+                cap.get("expiry"),
+                float(cap.get("strike", 0.0)),
+                str(cap.get("type", "")).upper(),
+            ) in leg_keys:
+                cap["structure_leg"] = True
         return top5_uoa_list, physical_cap_strikes
 
     except Exception as e:
