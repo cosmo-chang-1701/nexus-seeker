@@ -115,6 +115,22 @@ SQUEEZE_ENTRY_DRY_RUN = (
 REGIME_III_B_DRY_RUN = (
     get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
 )
+
+# 基本面分析管線 (Fundamental Event Pipeline) 核心開關與前向乾跑標記
+ENABLE_FUNDAMENTAL_PIPELINE_LOG = (
+    get_env_or_secret("ENABLE_FUNDAMENTAL_PIPELINE_LOG", "true").lower() == "true"
+)
+FUNDAMENTAL_PIPELINE_DRY_RUN = (
+    get_env_or_secret("FUNDAMENTAL_PIPELINE_DRY_RUN", "true").lower() == "true"
+)
+SEC_USER_AGENT = get_env_or_secret("SEC_USER_AGENT", "")
+try:
+    FUNDAMENTAL_UNIVERSE_MAX_SYMBOLS = int(
+        get_env_or_secret("FUNDAMENTAL_UNIVERSE_MAX_SYMBOLS", 80)
+    )
+except (ValueError, TypeError):
+    FUNDAMENTAL_UNIVERSE_MAX_SYMBOLS = 80
+
 # 自選標的進場顧問 dry-run (預設開啟)：只寫 log 與前向紀錄、不推播 DM。
 # 觸發頻率未經觀察，依 docs/architecture/05 §5.8 的不對稱原則，
 # 「新增推播路徑」一律需要一週觀察期才能翻轉為 false。乾跑期間**不寫**去重旗標，

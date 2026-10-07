@@ -34,6 +34,7 @@ flowchart TB
         A01["雙自選標的心跳管線架構與排程隔離<br/>(01_dual_watchlist_pipelines.md)"]
         A04["量化系統工程規範與 Discord 防爆分頁<br/>(04_engineering_standards.md)"]
         A05["回測校準工具與前向蒐集管線<br/>(05_calibration_harness_and_forward_collection.md)"]
+        A06["基本面管線與事件時鐘架構<br/>(06_fundamental_pipeline_and_event_clock.md)"]
     end
 
     subgraph Macro_Sentiment_Layer["5. 總體經濟與輿情預測 (macro_sentiment/)"]
@@ -42,6 +43,7 @@ flowchart TB
         M02["SEC 財報護城河自動掃描與排除條款<br/>(02_sec_filing_moat_scanner.md)"]
         M03["WTI 原油期貨 24/7 監控與板塊衝擊<br/>(03_wti_crude_oil_monitor.md)"]
         M04["Polymarket VWBP 加權與雙頁籤輿情雷達<br/>(04_polymarket_vwbp_sentiment_radar.md)"]
+        M05["央行淨流動性與宏觀預期差<br/>(05_liquidity_regime_and_macro_surprise.md)"]
     end
 
     subgraph Valuation_Pricing_Layer["3. 定價模型與波動率策略 (valuation_pricing/)"]
@@ -188,6 +190,7 @@ flowchart TB
 | 23 | [`02_sec_filing_moat_scanner.md`](macro_sentiment/02_sec_filing_moat_scanner.md) | SEC 財報護城河自動掃描器與嚴格排除條款 | 每日 08:00 ET 持倉掃描, RAM > 85% 防護, 5 大主題關鍵字錨點, 14 天事件靜默期 | `cogs/trading/fundamental_filing_monitor.py` |
 | 24 | [`03_wti_crude_oil_monitor.md`](macro_sentiment/03_wti_crude_oil_monitor.md) | WTI 原油期貨 24/7 監控與板塊衝擊矩陣 | 24/7 半小時 48 時點對齊, 00:00–06:00 ET 靜默保護, 階梯油價風險權重 $w_{\text{oil}}$ | `cogs/trading/wti_monitor.py` |
 | 25 | [`04_polymarket_vwbp_sentiment_radar.md`](macro_sentiment/04_polymarket_vwbp_sentiment_radar.md) | Polymarket VWBP 加權勝率與雙頁籤輿情共振雷達 | 13 組看跌語義反轉, 保底名義流動性加權 VWBP, 雙頁籤就地切換與四維共振雷達 | `cogs/unified_terminal/utils.py` |
+| 25b | [`05_liquidity_regime_and_macro_surprise.md`](macro_sentiment/05_liquidity_regime_and_macro_surprise.md) | 央行淨流動性體制與宏觀預期差標準化 | 淨流動性 WALCL-WTREGEN-RRPONTSYD, 13 週變更率, 流動性三態狀態機, 12 期滾動 Z-Score, NFCI 動態 ERP 擾動 | `market_analysis/fundamental_pipeline/liquidity_regime.py` |
 
 ---
 
@@ -202,6 +205,7 @@ flowchart TB
 | 28 | [`03_dual_service_and_proxy.md`](architecture/03_dual_service_and_proxy.md) | 雙服務架構與三階式降級代理 | 第 1 階 Edge 快照 $\to$ 第 2 階 Playwright 實時 Scrape $\to$ 第 3 階 本地 yfinance 直連 | `services/market_data_service/options.py` |
 | 29 | [`04_engineering_standards.md`](architecture/04_engineering_standards.md) | 量化系統工程規範與 Discord 防爆分頁原則 | 10 標的分頁 (37.7% 安全裕度), `chunk_embeds` 雙約束背包, 單訊息就地換頁 | `cogs/embed_builders/market_embeds.py` |
 | 30 | [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md) | 回測校準工具與前向蒐集管線 | 次一根開盤進場無前視, 方向中性 $\pm k\,\text{ATR}_{1D}$ 屏障標註, 2025 全量多資產轉倉回測基準, Wilson + 交易日叢集 bootstrap, $n \ge 100$／收縮 $n_0 = 200$, 只產報告不改參數 | `calibration/pipeline.py` |
+| 30b | [`06_fundamental_pipeline_and_event_clock.md`](architecture/06_fundamental_pipeline_and_event_clock.md) | 基本面分析管線與事件時鐘架構 | 5 分鐘固定巡邏步長, 開閉原則全域時鐘註冊表, 15 分鐘時間桶去重, 80 檔持倉優先標的池 | `market_analysis/fundamental_pipeline/event_clock.py` |
 
 ---
 
@@ -306,7 +310,7 @@ graph LR
 
 ## 7. 平台工程與使用者體驗系統 (`docs/platform/`)
 
-本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方「35 篇」核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
+本節為**補充性文件**，涵蓋非量化模型、但同樣重要的平台功能與使用者體驗系統（Discord 互動介面、排程報告、通知偏好、委託單管理等）。這些文件**不計入**上方核心量化規格書 SSOT，格式較自由（不強制 LaTeX／Mermaid／具名常數表三件套），但同樣要求 100% 繁體中文與有效的內部連結。
 
 | 檔案 | 核心主題 |
 |:---|:---|

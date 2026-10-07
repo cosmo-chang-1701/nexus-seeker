@@ -84,6 +84,16 @@ from .rollover_audit import (
     log_rollover_instruction,
     get_rollover_audit_log,
 )
+from .fundamental_pipeline import (
+    save_liquidity_regime,
+    get_latest_liquidity_regime,
+    get_liquidity_regime_by_date,
+    save_macro_surprise,
+    save_macro_surprises,
+    get_macro_surprises_for_event,
+    get_recorded_macro_surprise_keys,
+    get_latest_macro_surprises,
+)
 
 __all__ = [
     "run_migrations",
@@ -157,4 +167,12 @@ __all__ = [
     "delete_watch",
     "log_rollover_instruction",
     "get_rollover_audit_log",
+    "save_liquidity_regime",
+    "get_latest_liquidity_regime",
+    "get_liquidity_regime_by_date",
+    "save_macro_surprise",
+    "save_macro_surprises",
+    "get_macro_surprises_for_event",
+    "get_recorded_macro_surprise_keys",
+    "get_latest_macro_surprises",
 ]

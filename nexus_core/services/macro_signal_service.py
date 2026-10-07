@@ -40,6 +40,7 @@ from market_analysis.macro_signals import (
     IndicatorReading,
     MacroState,
     Observation,
+    SeriesKind,
     available_date_for,
     change_over,
     claims_surge,
@@ -99,17 +100,30 @@ async def _download_fred(series_id: str, start: date) -> str:
         return str(resp.text)
 
 
-async def fetch_fred_series(series_id: str, today: date) -> list[Observation]:
-    """抓取 FRED 序列並附上各觀測的可用日（前視防護）。"""
+async def fetch_fred_series(
+    series_id: str, today: date, kind: Optional[SeriesKind] = None
+) -> list[Observation]:
+    """抓取 FRED 序列並附上各觀測的可用日（前視防護）。
+
+    `kind` 未指定時必須能在 `FRED_SERIES` 查到發布節奏；查不到即拋 `ValueError`
+    （在下載前），避免未註冊序列被默默套用 daily 可用日而產生前視偏差。
+    """
+    if kind is not None:
+        eff_kind: SeriesKind = kind
+    elif series_id in FRED_SERIES:
+        eff_kind = FRED_SERIES[series_id]
+    else:
+        raise ValueError(
+            f"FRED 序列 {series_id} 未在 FRED_SERIES 註冊發布節奏，請明確傳入 kind"
+        )
     start = FRED_FULL_HISTORY_START.get(
         series_id, today - timedelta(days=FRED_LOOKBACK_DAYS)
     )
     text = await SingleFlightManager.run(
         f"fred_csv:{series_id}:{start.isoformat()}", _download_fred, series_id, start
     )
-    kind = FRED_SERIES[series_id]
     return [
-        Observation(d, v, available_date_for(kind, d))
+        Observation(d, v, available_date_for(eff_kind, d))
         for d, v in parse_fred_csv(str(text))
     ]
 
