@@ -5702,3 +5702,185 @@ def test_pre_market_briefing_fundamental_candidates_show_list_date_or_hide_stale
     stale_fields = {str(f.name): str(f.value or "") for f in stale.fields}
     assert "過期名單不展示" in stale_fields[name]
     assert "NVDA" not in stale_fields[name]
+
+
+# ---------------------------------------------------------------------------
+# /x 動能與擠壓狀態：資料時間（日線 K 棒日期＋抓取時刻）
+# ---------------------------------------------------------------------------
+def test_format_psq_freshness_live_bar() -> None:
+    from datetime import date
+
+    from cogs.embed_builders.portfolio_embeds import _format_psq_freshness
+
+    line = _format_psq_freshness(date(2026, 10, 5), True, datetime(2026, 10, 5, 10, 42))
+    assert line == " 🕒 資料時間: 日線 2026-10-05（盤中成型中） │ 抓取於 10/05 10:42 ET"
+
+
+def test_format_psq_freshness_closed_bar() -> None:
+    from datetime import date
+
+    from cogs.embed_builders.portfolio_embeds import _format_psq_freshness
+
+    line = _format_psq_freshness(date(2026, 10, 2), False, datetime(2026, 10, 5, 8, 50))
+    assert line == " 🕒 資料時間: 日線 2026-10-02 收盤 │ 抓取於 10/05 08:50 ET"
+
+
+def test_format_psq_freshness_missing_fields() -> None:
+    from datetime import date
+
+    from cogs.embed_builders.portfolio_embeds import _format_psq_freshness
+
+    assert _format_psq_freshness(None, False, None) is None
+    assert _format_psq_freshness(date(2026, 10, 2), False, None) == (
+        " 🕒 資料時間: 日線 2026-10-02 收盤"
+    )
+    assert _format_psq_freshness(None, False, datetime(2026, 10, 5, 9, 31)) == (
+        " 🕒 資料時間: 抓取於 10/05 09:31 ET"
+    )
+
+
+def _squeeze_field_value(embed: discord.Embed) -> str:
+    for field in embed.fields:
+        if "動能與擠壓狀態" in (field.name or ""):
+            return str(field.value)
+    raise AssertionError("找不到動能與擠壓狀態欄位")
+
+
+def test_tactical_embed_squeeze_field_shows_data_time() -> None:
+    from datetime import date
+
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data: dict[str, Any] = {
+        "symbol": "NVDA",
+        "price": 105.0,
+        "quote": {"c": 105.0},
+        "psq_result": {"is_squeezing": True, "momentum": 1.25, "direction": "Long"},
+        "psq_bar_date": date(2026, 10, 5),
+        "psq_bar_is_live": True,
+        "psq_fetched_at": datetime(2026, 10, 5, 10, 42),
+    }
+    value = _squeeze_field_value(create_tactical_symbol_embed(data))
+    assert "資料時間: 日線 2026-10-05（盤中成型中）" in value
+    assert "抓取於 10/05 10:42 ET" in value
+
+
+def test_tactical_embed_squeeze_field_without_data_time() -> None:
+    from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
+
+    data: dict[str, Any] = {
+        "symbol": "NVDA",
+        "price": 105.0,
+        "quote": {"c": 105.0},
+        "psq_result": {"is_squeezing": False, "momentum": -0.4, "direction": "Short"},
+    }
+    value = _squeeze_field_value(create_tactical_symbol_embed(data))
+    assert "SQZ MOM" in value
+    assert "資料時間" not in value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bar_is_today", [True, False])
+async def test_symbol_deep_dive_sets_psq_data_time(bar_is_today: bool) -> None:
+    """`_process_symbol_hub_data` 須帶出擠壓計算所用最後一根日線的日期、是否為
+    盤中成型中的今日 K 棒，以及日線抓取時刻。"""
+    import numpy as np
+    import pandas as pd
+    from datetime import date, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+    from market_time import ny_tz
+
+    class TestDeepDive(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+
+    today = datetime.now(ny_tz).date()
+    last_day = today if bar_is_today else date(2026, 10, 2)
+    n = 60
+    idx = pd.DatetimeIndex([last_day - timedelta(days=n - 1 - i) for i in range(n)])
+    closes = 100.0 + np.sin(np.arange(n) / 4.0) * 3.0
+    df_hist = pd.DataFrame(
+        {
+            "Open": closes,
+            "High": closes + 1.0,
+            "Low": closes - 1.0,
+            "Close": closes,
+            "Volume": 1_000_000.0,
+        },
+        index=idx,
+    )
+    fetched_at = datetime(2026, 10, 5, 10, 42, tzinfo=ny_tz)
+
+    raw_data: dict[str, Any] = {
+        "df_spy": pd.DataFrame(),
+        "macro_raw": {"vix": 18.0},
+        "quote": {"c": 101.0, "dp": 0.5},
+        "skew_data": {},
+        "pcr_data": {},
+        "uoa_data": [],
+        "sto_physical_cap_strikes": [],
+        "max_pain_data": {},
+        "iv_metrics": {},
+        "reddit_text": "",
+        "poly_markets": [],
+        "ddp_report": {},
+        "df_hist_1d": df_hist,
+        "df_hist_fetched_at": fetched_at,
+        "month_max_pains": [],
+        "gex_profile_data": None,
+        "volume_profile": None,
+        "atr_15m": 0.0,
+        "session_vwap": 0.0,
+        "bar_15m": None,
+        "catalysts": [],
+    }
+
+    with patch(
+        "services.asset_manager.AssetManager.get_assets", return_value=[]
+    ), patch("market_math.analyze_symbol", new_callable=AsyncMock) as mock_math, patch(
+        "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly, patch(
+        "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+        new_callable=AsyncMock,
+    ) as mock_poly_sum, patch(
+        "database.get_full_user_context", return_value=MagicMock()
+    ), patch("market_time.is_market_open", return_value=True):
+        mock_math.return_value = {"symbol": "TEST", "price": 101.0}
+        mock_poly.return_value = []
+        mock_poly_sum.return_value = None
+
+        result = await TestDeepDive()._process_symbol_hub_data(
+            "TEST", 123456789, raw_data
+        )
+
+    assert result.get("psq_result") is not None
+    assert result["psq_bar_date"] == last_day
+    assert result["psq_bar_is_live"] is bar_is_today
+    assert result["psq_fetched_at"] == fetched_at
+
+
+def test_build_radar_scan_embed_filters_outlier_cached_gex_flip() -> None:
+    """交易員終端 header：KV 內相對 SPY 現價離群的 GEX Flip（修正前寫入）不顯示
+    數值，與 /market 面板同一合理性閘門；合法的崩跌 Flip（高於現價 12%）照常顯示。"""
+    scan_results = [
+        {
+            "symbol": "SPY",
+            "quote": {"c": 500.0, "dp": 0.5},
+            "iv_metrics": {"iv_rank": 20.0, "expected_move_weekly": 5.0},
+            "max_pain": {"max_pain": 500.0},
+        }
+    ]
+    outlier_kv = {"macro_spy_gamma_flip": "948.90", "macro_spy_spot": 774.8}
+    with patch("database.cache.get_kv_cache", side_effect=outlier_kv.get):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
+    assert "948.90" not in text
+    assert "快取數值離群，已濾除" in text
+
+    crash_kv = {"macro_spy_gamma_flip": "690.00", "macro_spy_spot": 616.0}
+    with patch("database.cache.get_kv_cache", side_effect=crash_kv.get):
+        text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
+    assert "690.00" in text
+    assert "已濾除" not in text

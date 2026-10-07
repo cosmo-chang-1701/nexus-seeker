@@ -80,6 +80,8 @@ $$prob = \begin{cases}
 
    `/market` 面板（`cogs/unified_terminal/utils.py`）的 $is\_negative\_gamma$ 以 SPY 現價對 SPY Gamma Flip 判定；Flip 快取逾 3 天時傳入 `None`（面板仍顯示 Flip 並標示「N 天前快取・不納入判定」）。VTS 快取逾 3 天同樣視為 `None`。
 
+   **離群 Flip 同樣傳 `None` 或自癒**：Flip 相對現價落在大盤合理性區間外（高於現價 $> 20\%$ 或低於現價 $> 8\%$，`is_macro_gamma_flip_outlier`，規格見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §2.2）時，面板先丟棄 KV 值並走自癒（重抓大盤端點，仍缺值或離群再以 SPY 個股期權鏈估算）；自癒成功即以新值判定，失敗才傳入 `None`。`get_market_regime()` 與 last-known-good 快取套用同一判定。上方容許 20% 是為了在崩跌（Flip 遠高於現價的真負 Gamma）時保留訊號。
+
 **未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗、`is_negative_gamma` 因 Gamma Flip 缺值或大盤 GEX 快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）而無法判定）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被算成寬鬆而延後逃頂窗口。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
 
 加總總緊縮分 $T = \sum_{i=1}^4 T_i$ 與總寬鬆分 $E = \sum_{i=1}^4 E_i$。窗口位移天數 $\Delta D_{shift}$ 與狀態分級遵循：
@@ -89,6 +91,19 @@ $$\Delta D_{shift} = \begin{cases}
 +5 \text{ 天 (後推)} & \text{若 } prob \le 0.40 \land E \ge 2 \land T = 0 \\
 0 \text{ 天 (維持)} & \text{其餘中性平衡情況}
 \end{cases}$$
+
+**前移歸因標籤**：前移時狀態文字為「⚠️ 前移 N 天 (標籤₁+標籤₂+…)」，每個計入 $T_i = 1$ 的因子各一個標籤，判定門檻與上方計分**完全相同**，因此標籤數恆等於 $T$，全數列出不截斷（$T \ge 3$ 時不會擠掉第三個因子）：
+
+| 因子 | 計分條件 | 標籤 |
+| :--- | :--- | :--- |
+| $T_1$ | $prob > 0.70$ | 高利率 |
+| $T_2$ | $cpi\_dev > 0.1$ 且 $wti > 85.0$ | 通膨油價雙升 |
+| $T_2$ | 僅 $cpi\_dev > 0.1$ | 通膨升溫 |
+| $T_2$ | 僅 $wti > 85.0$ | 高油價 |
+| $T_3$ | $VTS \ge 1.0$ | 波動倒掛 |
+| $T_4$ | $is\_negative\_gamma = \text{True}$ | 結構承壓 |
+
+CPI 與 WTI 同屬因子 2，只占一個標籤。面板著色：含「前移」為紅色，其餘（後推、正常窗口）為綠色；`evaluate_escape_window_regime` 不會產生「未知／資料不足」文字。
 
 ### 2.4 五因子複合逃頂評分階梯 (Macro Top-Escape Score)
 `evaluate_macro_top_escape_score` 計算逃頂綜合評分 $S_{esc} \in [0, 5]$，融合持倉端微觀過熱廣度：
@@ -118,6 +133,18 @@ $$
 $\Delta_{\beta\text{-weighted}}$ 直接複用 `user_ctx.total_weighted_delta`（[`01_beta_weighted_greeks.md`](../risk_portfolio/01_beta_weighted_greeks.md) 的單一權威來源，`hedging.py` 對沖建議引擎已採同一欄位）；標的固定為 $\_MACRO\_TOP\_ESCAPE\_HEDGE\_SYMBOL = \text{SPY}$（沿用 `hedging.py` 既有以 SPY 作為組合對沖代理的慣例——逃頂訊號是系統性的，指數 Put 的流動性與價差優於個股）；建議合約 Delta $\approx -0.275$（範圍 $-0.25 \sim -0.30$）、DTE $30\sim60$ 天。組合已淨平/淨空（$\Delta_{\beta\text{-weighted}} \le 0$）時無下檔方向性曝險可對沖，fail-safe 不建議一筆語意矛盾的「加碼防護」。
 
 ⚠️ **保護性 Put 指令必須標記 `trade_category = "HEDGE"`**：`hedging._sum_hedge_only_delta` 以此欄位區分「對沖」與「刻意建立的方向性部位」，標記錯誤會導致對沖績效引擎誤判、在多頭共振訊號出現時建議使用者平掉自己的保護。
+
+### 2.6 安全提領紅線（RRP 流動性退潮）
+`/market` 面板「安全提領紅線」由 `get_safety_payout_threshold()`（`market_analysis/trading_orchestration.py`）決定應保留的現金底線，依序判定：
+$$\text{Payout} = \begin{cases}
+\$18{,}000 & \text{若 } RRP \ge \$20\text{B} \land \Delta RRP_{30d} > 20\% \\
+\$16{,}500 & \text{若未來 4 天內有 FOMC／CPI／PCE 事件（總經日曆）} \\
+\$13{,}000 & \text{其餘常態}
+\end{cases}$$
+
+- **$\Delta RRP_{30d}$ 一律是百分比**：edge `core_metrics` 以 $(RRP_t - RRP_{t-30}) / RRP_{t-30} \times 100$ 計算後寫入 `macro_rrp_change_30d`。系統只認百分比，不相容小數比例——否則 $+0.5\%$ 會被讀成 $+50\%$ 而誤觸 \$18,000。無法解析的值視為 $0\%$。
+- **\$20B 小基數門檻**：RRP 餘額已從 2022 年的 \$2.5T 高峰降到約 \$1B，此時 \$0.8B 的微幅變動就能產生 $+400\%$ 的百分比跳升。餘額低於 \$20B 時百分比變動不具系統意義，不觸發 \$18,000；餘額未知時保守視為具實質規模（不因缺值放寬紅線）。
+- 不存在獨立的「RRP 突波」旗標：舊版讀取的 `macro_rrp_spike` 沒有任何寫入者，已刪除。
 
 ---
 
@@ -185,6 +212,12 @@ flowchart TD
 | `_MACRO_TOP_ESCAPE_PUT_DTE_MIN` / `_MAX` | `30` / `60` | WATCH 級建議合約 DTE 範圍 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_PROFIT_UNLOCK_TOLERANCE` | `0.005` (0.5%) | 衛星持倉現價逼近 Call Wall 的判斷容差 | `nexus_core/market_analysis/dynamic_rollover/constants.py:14` |
 | `_EUPHORIA_SKEW_PERCENTILE` | `20.0` | 衛星持倉 Skew 倒掛亢奮門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py:11` |
+| `SAFETY_PAYOUT_LIQUIDITY_STRESS` | `18000.0` | RRP 實質規模下 30 日變動率 $> 20\%$ 的最高戒備提領紅線（§2.6） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `SAFETY_PAYOUT_EVENT_WEEK` | `16500.0` | 4 天內有 FOMC／CPI／PCE 的事件週提領紅線 | `nexus_core/market_analysis/trading_orchestration.py` |
+| `SAFETY_PAYOUT_BASE` | `13000.0` | 常態提領紅線 | `nexus_core/market_analysis/trading_orchestration.py` |
+| `RRP_CHANGE_30D_STRESS_PCT` | `20.0` (%) | RRP 30 日變動率門檻（百分比，嚴格大於） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `RRP_MATERIAL_BALANCE_BILLIONS` | `20.0` ($B) | RRP 小基數門檻：餘額低於此值時百分比變動不觸發 | `nexus_core/market_analysis/trading_orchestration.py` |
+| `MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT` / `_BELOW_` | `0.20` / `0.08` | 因子 4 所用大盤 Flip 的非對稱合理性區間（§2.3） | `nexus_core/market_analysis/index_microstructure.py` |
 
 ---
 
@@ -228,6 +261,11 @@ flowchart TD
 - `nexus_core/market_analysis/index_microstructure.py`
   - `evaluate_escape_window_regime`: 四因子宏觀流動性矩陣與窗口位移計算
   - `evaluate_macro_top_escape_score`: 五因子複合逃頂評分階梯
+  - `is_macro_gamma_flip_outlier`: 因子 4 大盤 Gamma Flip 合理性閘門
+- `nexus_core/market_analysis/trading_orchestration.py`
+  - `get_safety_payout_threshold`: 安全提領紅線（§2.6）
+- `nexus_core/cogs/unified_terminal/utils.py`
+  - `get_macro_overview_data`: `/market` 面板四因子輸入組裝、離群 Flip 自癒
 - `nexus_edge_scraper/local_api/macro.py`
   - `scrape_fedwatch`: CME 30 天期聯邦基金期貨（ZQ）反推及階梯定價演算法
 - `nexus_core/services/calendar_service.py`
