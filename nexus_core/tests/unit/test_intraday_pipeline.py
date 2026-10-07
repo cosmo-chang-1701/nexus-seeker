@@ -1973,3 +1973,29 @@ def test_seconds_until_next_slot(hh: int, mm: int, ss: int, expected: float) -> 
 
     now = datetime(2026, 10, 7, hh, mm, ss, tzinfo=ny_tz)
     assert _seconds_until_next_slot(now) == expected
+
+
+@pytest.mark.parametrize(
+    "start,now,expected",
+    [
+        # 09:38 開始、09:39:30 結束：09:40 距開始僅 2 分鐘，須睡到 10:10
+        ((9, 38, 0), (9, 39, 30), 30 * 60.0 + 30.0),
+        # 09:10 開始、09:29 結束：最早 09:30，下一個時槽 09:40 合法
+        ((9, 10, 0), (9, 29, 0), 11 * 60.0),
+        # 10:10 開始、10:15 結束：10:40 距開始 30 分鐘，合法
+        ((10, 10, 0), (10, 15, 0), 25 * 60.0),
+        # 09:55 開始、09:56 結束：最早 10:15，下一個時槽 10:40
+        ((9, 55, 0), (9, 56, 0), 44 * 60.0),
+    ],
+)
+def test_seconds_until_next_slot_min_gap(
+    start: tuple[int, int, int], now: tuple[int, int, int], expected: float
+) -> None:
+    from datetime import datetime
+
+    from market_analysis.intraday_pipeline.pipeline import _seconds_until_next_slot
+    from market_time import ny_tz
+
+    last = datetime(2026, 10, 7, *start, tzinfo=ny_tz)
+    cur = datetime(2026, 10, 7, *now, tzinfo=ny_tz)
+    assert _seconds_until_next_slot(cur, last_scan_start=last) == expected

@@ -38,20 +38,34 @@ _PIPELINE_SLOT_MINUTES: tuple[int, ...] = (10, 40)
 _MIN_SLOT_SLEEP_SECONDS = 60.0
 
 
+# 相鄰兩輪掃描開始時間的最小間隔（20 分鐘，即 30 分鐘週期的 2/3）。
+# 為什麼：開盤後或重啟後第一輪不在 :10/:40 時槽上，若結束後直接取「下一個時槽」，
+# 可能 1 分鐘內又跑一輪，使非 green 標的收到兩則相同的深度心跳 DM。
+_MIN_SCAN_GAP_SECONDS = 20 * 60.0
+
+
 def _seconds_until_next_slot(
-    now_et: datetime, slot_minutes: tuple[int, ...] = _PIPELINE_SLOT_MINUTES
+    now_et: datetime,
+    slot_minutes: tuple[int, ...] = _PIPELINE_SLOT_MINUTES,
+    last_scan_start: Optional[datetime] = None,
+    min_gap_seconds: float = _MIN_SCAN_GAP_SECONDS,
 ) -> float:
     """回傳距離下一個 :10/:40 時間點的秒數（最少 60 秒）。
 
     now_et 必須為 ET 時間。恰在時間點上時視為已過，取下一個時間點。
+    若提供 last_scan_start（上一輪掃描開始時間，須為 aware datetime），
+    則時槽另須不早於 last_scan_start + min_gap_seconds，避免背靠背掃描。
     """
-    base = now_et.replace(minute=0, second=0, microsecond=0)
+    earliest = now_et
+    if last_scan_start is not None:
+        earliest = max(now_et, last_scan_start + timedelta(seconds=min_gap_seconds))
+    base = earliest.replace(minute=0, second=0, microsecond=0)
     candidates = [base + timedelta(minutes=m) for m in slot_minutes]
     candidates.append(base + timedelta(hours=1, minutes=min(slot_minutes)))
     for slot in candidates:
-        delta = (slot - now_et).total_seconds()
-        if delta > 0:
-            return max(delta, _MIN_SLOT_SLEEP_SECONDS)
+        # 對 now_et 嚴格大於（恰在時槽上視為已過）；對間隔下限則允許等於。
+        if slot > now_et and slot >= earliest:
+            return max((slot - now_et).total_seconds(), _MIN_SLOT_SLEEP_SECONDS)
     return _MIN_SLOT_SLEEP_SECONDS  # pragma: no cover
 
 
@@ -66,7 +80,8 @@ class IntradayScanPipeline:
         self.engine = engine
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
-        self.scan_interval_seconds = 30 * 60  # 30 minutes
+        # 上一輪掃描開始時間，供 _seconds_until_next_slot 計算最小間隔。
+        self._last_scan_started: Optional[datetime] = None
         self._cached_spy_spot: float = 500.0
         # 進場顧問 radar 補抓的併發上限 (比照 portfolio_monitor.py 的 Semaphore(3))。
         self._radar_fetch_sem = asyncio.Semaphore(3)
@@ -734,9 +749,14 @@ class IntradayScanPipeline:
                         "🤖 [Intraday Pipeline] 記憶體水位過高 (RAM+Swap > 85%)，"
                         "跳過本輪掃描。"
                     )
-                    await asyncio.sleep(_seconds_until_next_slot(datetime.now(ny_tz)))
+                    await asyncio.sleep(
+                        _seconds_until_next_slot(
+                            datetime.now(ny_tz), last_scan_start=self._last_scan_started
+                        )
+                    )
                     continue
 
+                self._last_scan_started = datetime.now(ny_tz)
                 logger.info(
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
@@ -888,7 +908,11 @@ class IntradayScanPipeline:
                 await flush_dispatch_records()
 
                 # 4. 睡眠至下一個 :10/:40 時間點
-                await asyncio.sleep(_seconds_until_next_slot(datetime.now(ny_tz)))
+                await asyncio.sleep(
+                    _seconds_until_next_slot(
+                        datetime.now(ny_tz), last_scan_start=self._last_scan_started
+                    )
+                )
 
             except asyncio.CancelledError:
                 break

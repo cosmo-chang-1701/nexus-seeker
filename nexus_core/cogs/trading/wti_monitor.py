@@ -2,9 +2,10 @@
 
 獨立於美股交易時段，每 30 分鐘執行一次 CL=F 報價抓取與閾值評估。
 支援絕對價格閾值 (上限/下限) 與百分比波動觸發。
-深夜靜默保護 (00:00–06:00 ET) 防止打擾；CL=F 週末休市時段不抓取。
+深夜靜默保護 (00:00–06:00 ET) 防止打擾；CL=F 週末與平日維護休市時段不抓取。
 """
 
+import asyncio
 import logging
 from datetime import time, datetime
 from typing import Any
@@ -33,13 +34,21 @@ _wti_scan_times: list[time] = [
 ]
 
 
-def _is_cl_weekend_closed(now_et: datetime) -> bool:
-    """CL=F 週末休市判斷（ET）：週五 >=17:00、週六全天、週日 <18:00 為 True。
+# 30 分鐘波動基準的最大年齡（秒）：45 分鐘 = 30 分鐘輪詢週期 + 15 分鐘寬限。
+# 為什麼：跨休市（週末、平日維護）後基準價停留在休市前，超過此年齡就不是
+# 「30 分鐘前」的價格，拿來算波動會把整段休市價差誤判成 30 分鐘暴漲暴跌。
+_PREV_PRICE_MAX_AGE_SECONDS: float = 45 * 60.0
 
-    為什麼：CME 原油期貨週五 17:00 ET 收盤、週日 18:00 ET 重開，休市期間
-    抓取只會回傳同一筆價格，白燒 Yahoo 預算。
+
+def _is_cl_weekend_closed(now_et: datetime) -> bool:
+    """CL=F 休市判斷（ET）：週末休市與平日維護休市皆為 True。
+
+    為什麼：CME 原油期貨週五 17:00 ET 收盤、週日 18:00 ET 重開，另每個週一至
+    週四 17:00–18:00 ET 為維護休市；休市期間抓取只會回傳同一筆價格，白燒 Yahoo 預算。
     """
     wd = now_et.weekday()  # 週一=0 ... 週日=6
+    if wd <= 3 and now_et.hour == 17:
+        return True
     if wd == 4:
         return now_et.hour >= 17
     if wd == 5:
@@ -74,9 +83,9 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
             )
             return
 
-        # CL=F 週末休市保護：休市期間不抓取
+        # CL=F 休市保護（週末＋平日 17:00–18:00 ET 維護）：休市期間不抓取
         if _is_cl_weekend_closed(now_et):
-            logger.debug("🛢️ [WTI Monitor] CL=F 週末休市中，跳過掃描")
+            logger.debug("🛢️ [WTI Monitor] CL=F 休市中，跳過掃描")
             return
 
         try:
@@ -105,9 +114,20 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
         logger.info(f"🛢️ [WTI Monitor] CL=F 現價: ${current_price:.2f}")
 
         # 2. 計算 30 分鐘波動百分比
-        prev_price_raw = database.get_kv_cache("macro_wti_prev_30m")
+        # 同步 SQLite 讀取不得在 event loop 執行，改走 to_thread。
+        prev_price_raw, prev_age = await asyncio.to_thread(
+            database.get_kv_cache_with_age, "macro_wti_prev_30m"
+        )
+        # 基準缺失、年齡未知或過舊（跨休市）視為無基準：本輪只更新基準，不評估波動。
+        has_baseline = (
+            prev_price_raw is not None
+            and prev_age is not None
+            and prev_age <= _PREV_PRICE_MAX_AGE_SECONDS
+        )
         prev_price = (
-            float(prev_price_raw) if prev_price_raw is not None else current_price
+            float(prev_price_raw)
+            if has_baseline and prev_price_raw is not None
+            else current_price
         )
         pct_change = (
             ((current_price - prev_price) / prev_price * 100.0)
@@ -139,7 +159,7 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
                 alerts_to_send.append((WtiAlertType.LOWER_BREACH, config.lower_price))
 
             # 百分比波動檢查 (30 分鐘)
-            if abs(pct_change) >= config.pct_change_threshold:
+            if has_baseline and abs(pct_change) >= config.pct_change_threshold:
                 alert_type = (
                     WtiAlertType.PCT_SURGE
                     if pct_change > 0
