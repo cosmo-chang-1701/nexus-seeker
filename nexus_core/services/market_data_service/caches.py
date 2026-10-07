@@ -61,9 +61,11 @@ _ETF_KV_MAX_AGE_SECONDS = 30 * 86400
 # 若 kv 放 7 天且命中後又刷新記憶體 24 小時，市值最舊可能約 8 天；故 kv 與記憶體
 # 同為 24 小時，kv 命中時記憶體到期 = now + (24h - kv 年齡)，總年齡不超過 24 小時。
 _PROFILE_KV_MAX_AGE_SECONDS = 86400
-# company_profile2 對 ETF 回 {}：空結果只在記憶體負向快取 24 小時（不寫 kv），
-# 避免每輪都讀 kv 並重打 API。
-_PROFILE_EMPTY_CACHE_TTL = 86400
+# company_profile2 回 {} 的記憶體負向快取（不寫 kv）。ETF 本來就沒有 profile，
+# 同 symbol 已知為 ETF 時鎖 24 小時；非 ETF 的空回應可能是 Finnhub 暫時異常或
+# 新上市標的尚未收錄，只鎖 1 小時，避免把暫時性空值固定一整天。
+_PROFILE_EMPTY_ETF_CACHE_TTL = 86400
+_PROFILE_EMPTY_CACHE_TTL = 3600
 
 # 財報日曆同日記憶化：key=(SYMBOL, from_date, to_date)，value=(list, 到期時間戳)。
 # key 含 (from, to) 窗口，每檔至少 3 種窗口（日曆服務 90 天、SEC sync／retry 的

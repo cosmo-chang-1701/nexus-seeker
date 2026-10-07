@@ -331,6 +331,42 @@ async def test_purge_stale_kv_cache_dedup_keys_only_removes_whitelisted_old_rows
 
 
 @pytest.mark.asyncio
+async def test_purge_stale_kv_cache_by_prefix_only_removes_old_matching_rows() -> None:
+    """只清除指定前綴且逾期的列；新列與其他前綴的舊列不動。"""
+    import sqlite3
+    import config
+    from database.cache import (
+        get_kv_cache,
+        purge_stale_kv_cache_by_prefix,
+        save_kv_cache,
+    )
+
+    old_profile, old_etf = "company_profile_OLDCO", "etf_flag_OLDETF"
+    new_profile, other_old = "company_profile_NEWCO", "macro_gex_metrics_cache"
+    for k in (old_profile, old_etf, new_profile, other_old):
+        assert await save_kv_cache(k, {"x": 1})
+    conn = sqlite3.connect(config.DB_NAME, uri=config.DB_NAME.startswith("file:"))
+    try:
+        conn.execute(
+            "UPDATE kv_cache SET updated_at = '2000-01-01 00:00:00' WHERE key IN (?, ?, ?)",
+            (old_profile, old_etf, other_old),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    purged = await purge_stale_kv_cache_by_prefix(
+        ("company_profile_", "etf_flag_"), older_than_days=30
+    )
+    assert purged == 2
+    assert get_kv_cache(old_profile) is None
+    assert get_kv_cache(old_etf) is None
+    assert get_kv_cache(new_profile) == {"x": 1}
+    assert get_kv_cache(other_old) == {"x": 1}
+    assert await purge_stale_kv_cache_by_prefix((), older_than_days=30) == 0
+
+
+@pytest.mark.asyncio
 async def test_get_kv_cache_many_batches_reads(db_conn: Any) -> None:
     """批次讀取須在單一連線內取回多個 key，並附帶資料年齡。
 

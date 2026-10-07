@@ -325,7 +325,9 @@ async def test_profile_empty_result_negative_cached_in_memory_only() -> None:
     api = AsyncMock(return_value={})
     with p_read as read, p_save as save, patch.object(
         f, "_execute_api_call", api
-    ), patch.object(f, "_get_client", MagicMock()):
+    ), patch.object(f, "_get_client", MagicMock()), patch(
+        "database.cache.get_kv_cache_fresh", MagicMock(return_value=None)
+    ):
         assert await f.get_company_profile("SPY") == {}
         assert await f.get_company_profile("SPY") == {}
     assert api.await_count == 1
@@ -351,3 +353,179 @@ async def test_profile_concurrent_single_api_call_and_copy() -> None:
         again = await f.get_company_profile("NVDA")
     assert api.await_count == 1
     assert again["name"] == "NVIDIA"
+
+
+# ---------------------------------------------------------------------------
+# 第二輪 review 修正
+# ---------------------------------------------------------------------------
+async def _gather_interactive_and_background(coro_factory: Any) -> list[Any]:
+    """同時發出一個互動與一個背景呼叫（互動以 mark_interactive_request 標記）。"""
+    import asyncio
+
+    from services.market_data_service._core import mark_interactive_request
+
+    async def _interactive() -> Any:
+        with mark_interactive_request():
+            return await coro_factory()
+
+    return list(await asyncio.gather(_interactive(), coro_factory()))
+
+
+def _slow_api(result: Any) -> AsyncMock:
+    import asyncio
+
+    async def slow(*_a: Any, **_k: Any) -> Any:
+        await asyncio.sleep(0.05)
+        return result
+
+    return AsyncMock(side_effect=slow)
+
+
+@pytest.mark.asyncio
+async def test_profile_interactive_and_background_do_not_share_flight() -> None:
+    p_read, p_save = _patch_profile_kv(None, None)
+    api = _slow_api({"name": "NVIDIA"})
+    with p_read, p_save, patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ):
+        await _gather_interactive_and_background(lambda: f.get_company_profile("NVDA"))
+    assert api.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_earnings_calendar_interactive_and_background_do_not_share_flight() -> (
+    None
+):
+    api = _slow_api({"earningsCalendar": [{"date": "2026-10-20"}]})
+    with patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ):
+        await _gather_interactive_and_background(
+            lambda: f.get_earnings_calendar("NVDA", "2026-10-08", "2026-12-01")
+        )
+    assert api.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_is_etf_concurrent_single_api_call() -> None:
+    import asyncio
+
+    p_read, p_save = _patch_kv(None)
+    api = _slow_api({"result": [{"symbol": "SPY", "type": "ETP"}]})
+    with p_read, p_save as save, patch.object(
+        f, "_execute_api_call", api
+    ), patch.object(f, "_get_client", MagicMock()):
+        res = await asyncio.gather(*[f.is_etf("SPY") for _ in range(5)])
+    assert res == [True] * 5
+    assert api.await_count == 1
+    save.assert_awaited_once_with("etf_flag_SPY", True)
+
+
+@pytest.mark.asyncio
+async def test_is_etf_interactive_and_background_do_not_share_flight() -> None:
+    p_read, p_save = _patch_kv(None)
+    api = _slow_api({"result": []})
+    with p_read, p_save, patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ):
+        await _gather_interactive_and_background(lambda: f.is_etf("SPY"))
+    assert api.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_profile_concurrent_reads_kv_only_once() -> None:
+    import asyncio
+
+    p_read, p_save = _patch_profile_kv({"name": "NVIDIA"}, 60.0)
+    with p_read as read, p_save, patch.object(f, "_get_client", MagicMock()):
+        await asyncio.gather(*[f.get_company_profile("NVDA") for _ in range(5)])
+    assert read.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_profile_empty_known_etf_memory_negative_cached_24h() -> None:
+    from services.market_data_service.caches import _etf_cache, _profile_cache
+
+    _etf_cache["SPY"] = (True, f.time.time() + 3600)
+    p_read, p_save = _patch_profile_kv(None, None)
+    api = AsyncMock(return_value={})
+    with p_read, p_save, patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ):
+        t0 = f.time.time()
+        await f.get_company_profile("SPY")
+    api.assert_awaited_once()  # 只打 company_profile2，不為判斷 ETF 額外打 API
+    assert 23.9 * 3600 < _profile_cache["SPY"][1] - t0 < 24.1 * 3600
+
+
+@pytest.mark.asyncio
+async def test_profile_empty_known_etf_via_kv_flag_24h() -> None:
+    from services.market_data_service.caches import _profile_cache
+
+    p_read, p_save = _patch_profile_kv(None, None)
+    api = AsyncMock(return_value={})
+    with p_read, p_save, patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ), patch("database.cache.get_kv_cache_fresh", MagicMock(return_value=True)):
+        t0 = f.time.time()
+        await f.get_company_profile("SPY")
+    assert 23.9 * 3600 < _profile_cache["SPY"][1] - t0 < 24.1 * 3600
+
+
+@pytest.mark.asyncio
+async def test_profile_empty_unknown_symbol_negative_cached_1h() -> None:
+    from services.market_data_service.caches import _profile_cache
+
+    p_read, p_save = _patch_profile_kv(None, None)
+    api = AsyncMock(return_value={})
+    with p_read, p_save, patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ), patch("database.cache.get_kv_cache_fresh", MagicMock(return_value=None)):
+        t0 = f.time.time()
+        await f.get_company_profile("NEWCO")
+    assert 0.9 * 3600 < _profile_cache["NEWCO"][1] - t0 < 1.1 * 3600
+
+
+def test_earnings_expiry_monday_reads_friday_after_close_pending() -> None:
+    """週一讀到週五盤後條目（epsActual 缺）→ 10 分鐘（舊邏輯只認今天／昨天）。"""
+    now_ny = datetime(2026, 10, 12, 9, 0, tzinfo=_NY)  # 週一
+    rows = [{"date": "2026-10-09", "epsActual": None}]  # 週五
+    expiry = f._earnings_cache_expiry(rows, now_ny)
+    assert expiry == pytest.approx(now_ny.timestamp() + 600)
+
+
+def test_earnings_expiry_old_and_future_entries_not_short() -> None:
+    now_ny = datetime(2026, 10, 12, 9, 0, tzinfo=_NY)
+    day_end = now_ny.replace(hour=23, minute=59, second=59).timestamp()
+    for d in ("2026-10-08", "2026-10-20"):  # 已過期很久／未來
+        assert f._earnings_cache_expiry(
+            [{"date": d, "epsActual": None}], now_ny
+        ) == pytest.approx(day_end)
+
+
+def test_is_finnhub_rate_limit_error_matches() -> None:
+    from services.market_data_service._core import is_finnhub_rate_limit_error
+
+    for msg in (
+        "HTTP 429 Too Many Requests",
+        "API limit reached. Please try again later.",
+        "too many requests",
+        "Finnhub rate limited, fast-circuit to fallback",
+    ):
+        assert is_finnhub_rate_limit_error(Exception(msg)) is True
+    assert is_finnhub_rate_limit_error(RuntimeError("boom")) is False
+    assert is_finnhub_rate_limit_error(Exception("connection timeout")) is False
+
+
+@pytest.mark.asyncio
+async def test_earnings_calendar_cache_hit_refreshes_lru_order() -> None:
+    from services.market_data_service.caches import _earnings_calendar_cache
+
+    api = AsyncMock(return_value={"earningsCalendar": [{"date": "2026-10-20"}]})
+    with patch.object(f, "_execute_api_call", api), patch.object(
+        f, "_get_client", MagicMock()
+    ):
+        await f.get_earnings_calendar("AAA", "2026-10-08", "2026-12-01")
+        await f.get_earnings_calendar("BBB", "2026-10-08", "2026-12-01")
+        await f.get_earnings_calendar("AAA", "2026-10-08", "2026-12-01")  # 命中
+    assert list(_earnings_calendar_cache)[-1][0] == "AAA"

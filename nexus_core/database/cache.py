@@ -273,6 +273,37 @@ async def purge_stale_kv_cache_dedup_keys(older_than_days: int = 3) -> int:
         return 0
 
 
+async def purge_stale_kv_cache_by_prefix(
+    prefixes: tuple[str, ...], older_than_days: int
+) -> int:
+    """清除指定前綴下、updated_at 早於 older_than_days 天前的 kv_cache 列。
+
+    與 `purge_stale_kv_cache_dedup_keys` 不同：這裡處理的是「具快取語意、但標的
+    下市／移出清單後永不再被讀寫」的殘留列（如 company_profile_／etf_flag_），
+    不是每日去重旗標，故前綴由呼叫端傳入，不屬於 `_KV_CACHE_DEDUP_KEY_PREFIXES`。
+    以 GLOB（大小寫敏感、可走主鍵索引）參數化比對；整批併為單一交易。
+    回傳實際清除的資料列總數；失敗回傳 0。
+    """
+    if not prefixes:
+        return 0
+    cutoff_str = (
+        datetime.now(timezone.utc) - timedelta(days=older_than_days)
+    ).strftime("%Y-%m-%d %H:%M:%S")
+    statements = [
+        (
+            "DELETE FROM kv_cache WHERE key GLOB ? AND updated_at < ?",
+            (f"{prefix}*", cutoff_str),
+        )
+        for prefix in prefixes
+    ]
+    try:
+        rowcounts = await execute_write_many_async(statements)
+        return sum(max(0, n) for n in rowcounts)
+    except Exception as e:
+        logger.error(f"purge_stale_kv_cache_by_prefix 失敗: {e}")
+        return 0
+
+
 __all__ = [
     "get_cached_financials",
     "save_financials_cache",
@@ -286,4 +317,5 @@ __all__ = [
     "FEDWATCH_PROB_MAX_AGE_SECONDS",
     "get_kv_cache_many",
     "purge_stale_kv_cache_dedup_keys",
+    "purge_stale_kv_cache_by_prefix",
 ]

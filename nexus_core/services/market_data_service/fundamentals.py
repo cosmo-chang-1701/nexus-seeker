@@ -11,6 +11,8 @@ from zoneinfo import ZoneInfo
 from services.market_data_service._core import (
     _execute_api_call,
     _get_client,
+    _is_interactive_request,
+    is_finnhub_rate_limit_error,
     is_finnhub_rate_limited,
     _sanitize_ticker,
 )
@@ -24,6 +26,7 @@ from services.market_data_service.caches import (
     _EARNINGS_CALENDAR_EMPTY_TTL,
     _EARNINGS_CALENDAR_PENDING_ACTUAL_TTL,
     _PROFILE_EMPTY_CACHE_TTL,
+    _PROFILE_EMPTY_ETF_CACHE_TTL,
     _PROFILE_KV_MAX_AGE_SECONDS,
     _option_chain_cache,
     _profile_cache,
@@ -136,45 +139,52 @@ async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 # Company Profile & ETF
 # ---------------------------------------------------------------------------
-def _profile_single_flight_key(symbol: str) -> str:
-    """SingleFlight key 與 `_profile_cache` 的 cache key 同構（皆以 symbol 區分）。"""
+def _flight_origin_suffix() -> str:
+    """SingleFlight key 的來源尾綴：互動 "_i"／背景 "_b"。
+
+    互動請求（/x）與背景排程走不同的限流池（互動遇 429 快速熔斷、背景會等待重試），
+    若共乘同一個 in-flight 呼叫，背景請求會繼承互動的熔斷例外，或互動請求被背景的
+    長等待拖住。比照 options.py 把 force_live 併入 key 的作法，讓兩者不共乘。
+    """
+    return "_i" if _is_interactive_request.get() else "_b"
+
+
+def _profile_kv_key(symbol: str) -> str:
+    """kv 持久化 key 與 `_profile_cache` 的 cache key 同構（皆以 symbol 區分）。"""
     return f"company_profile_{symbol}"
 
 
-async def _fetch_company_profile_uncached(symbol: str) -> Dict[str, Any]:
-    """實際抓取 company_profile2 並寫入記憶體／kv 快取（供 SingleFlight 共享）。"""
-    from database.cache import save_kv_cache
-
-    client = _get_client()
-    data = await _execute_api_call(client.company_profile2, symbol=symbol)
-    res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
-    now = time.time()
-    if res:
-        _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
-        await save_kv_cache(_profile_single_flight_key(symbol), res)
-    else:
-        # ETF 等標的回 {}：只在記憶體負向快取 24 小時，不寫 kv
-        _profile_cache[symbol] = ({}, now + _PROFILE_EMPTY_CACHE_TTL)
-    return res
+def _profile_single_flight_key(symbol: str) -> str:
+    """SingleFlight key：kv key 加上互動／背景尾綴。"""
+    return f"{_profile_kv_key(symbol)}{_flight_origin_suffix()}"
 
 
-async def get_company_profile(symbol: str) -> Dict[str, Any]:
-    """取得公司/ETF 基本資料。"""
-    from services.single_flight import SingleFlightManager
+async def _is_known_etf(symbol: str) -> bool:
+    """僅查本地狀態（記憶體 → kv），不打 API；已知為 ETF 才回 True。"""
+    if symbol in _etf_cache:
+        val, expiry = _etf_cache[symbol]
+        if time.time() < expiry:
+            return val is True
+    from database.cache import get_kv_cache_fresh
 
-    symbol = _sanitize_ticker(symbol)
-    now = time.time()
-    if symbol in _profile_cache:
-        val, expiry = _profile_cache[symbol]
-        if now < expiry:
-            return dict(val)
+    kv_val = await asyncio.to_thread(
+        get_kv_cache_fresh, f"etf_flag_{symbol}", _ETF_KV_MAX_AGE_SECONDS
+    )
+    return kv_val is True
 
-    # 記憶體 miss → SQLite 持久化（24 小時）：重啟／藍綠部署後第一輪掃描免對整份
-    # watchlist 重打 company_profile2。讀取走 to_thread，避免阻塞 event loop。
+
+async def _load_company_profile_uncached(symbol: str) -> Dict[str, Any]:
+    """kv 讀取＋company_profile2 抓取（供 SingleFlight 共享）。
+
+    kv 讀取也放在共享函式內，同 key 併發只讀一次 SQLite、最多打一次 API。
+    """
     # 延遲 import：避免 database 套件與 market_data_service 的循環匯入
-    from database.cache import get_kv_cache_with_age
+    from database.cache import get_kv_cache_with_age, save_kv_cache
 
-    kv_key = _profile_single_flight_key(symbol)
+    kv_key = _profile_kv_key(symbol)
+    now = time.time()
+    # SQLite 持久化（24 小時）：重啟／藍綠部署後第一輪掃描免對整份 watchlist
+    # 重打 company_profile2。讀取走 to_thread，避免阻塞 event loop。
     kv_val, kv_age = await asyncio.to_thread(get_kv_cache_with_age, kv_key)
     if (
         isinstance(kv_val, dict)
@@ -183,16 +193,41 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
         and 0 <= kv_age <= _PROFILE_KV_MAX_AGE_SECONDS
     ):
         # 記憶體到期 = now + (24h - kv 年齡)：總資料年齡不超過 24 小時
-        _profile_cache[symbol] = (
-            kv_val,
-            now + (_PROFILE_CACHE_TTL - kv_age),
-        )
+        _profile_cache[symbol] = (kv_val, now + (_PROFILE_CACHE_TTL - kv_age))
         return dict(kv_val)
+
+    client = _get_client()
+    data = await _execute_api_call(client.company_profile2, symbol=symbol)
+    res: Dict[str, Any] = cast(Dict[str, Any], data) if data else {}
+    now = time.time()
+    if res:
+        _profile_cache[symbol] = (res, now + _PROFILE_CACHE_TTL)
+        await save_kv_cache(kv_key, res)
+    else:
+        # 空回應只在記憶體負向快取（不寫 kv）：已知 ETF 鎖 24 小時，否則 1 小時
+        ttl = (
+            _PROFILE_EMPTY_ETF_CACHE_TTL
+            if await _is_known_etf(symbol)
+            else _PROFILE_EMPTY_CACHE_TTL
+        )
+        _profile_cache[symbol] = ({}, now + ttl)
+    return res
+
+
+async def get_company_profile(symbol: str) -> Dict[str, Any]:
+    """取得公司/ETF 基本資料。"""
+    from services.single_flight import SingleFlightManager
+
+    symbol = _sanitize_ticker(symbol)
+    if symbol in _profile_cache:
+        val, expiry = _profile_cache[symbol]
+        if time.time() < expiry:
+            return dict(val)
 
     try:
         res = await SingleFlightManager.run(
             _profile_single_flight_key(symbol),
-            _fetch_company_profile_uncached,
+            _load_company_profile_uncached,
             symbol,
         )
         return dict(cast(Dict[str, Any], res))
@@ -206,13 +241,41 @@ async def get_company_profile(symbol: str) -> Dict[str, Any]:
 _ETF_LOOKUP_TYPES = frozenset({"ETP"})
 
 
+async def _fetch_is_etf_uncached(symbol: str) -> bool:
+    """實際查 symbol_lookup 並寫入記憶體／kv 快取（供 SingleFlight 共享；例外不快取）。"""
+    from database.cache import save_kv_cache
+
+    client = _get_client()
+    data = await _execute_api_call(client.symbol_lookup, symbol)
+    results = data.get("result", []) if data else []
+    # 允許 BRK-B / BRK.B 兩種寫法，與 quote.py 的比對方式一致
+    targets = {symbol, symbol.replace("-", "."), symbol.replace(".", "-")}
+    res = any(
+        (
+            str(r.get("symbol", "")).upper() in targets
+            or str(r.get("displaySymbol", "")).upper() in targets
+        )
+        and str(r.get("type", "")) in _ETF_LOOKUP_TYPES
+        for r in results
+    )
+    _etf_cache[symbol] = (res, time.time() + _ETF_CACHE_TTL)
+    # 只持久化 True：新上市 ETF 若被誤判為非 ETF，False 鎖 30 天會長期錯誤；
+    # False 僅留在記憶體 24 小時快取，重啟後自然重新查詢。
+    if res:
+        await save_kv_cache(f"etf_flag_{symbol}", res)
+    return res
+
+
 async def is_etf(symbol: str) -> bool:
     """判斷標的是否為 ETF。
 
-    查詢順序：記憶體 → SQLite kv（30 天，僅 True）→ Finnhub symbol_lookup（免費端點）。
+    查詢順序：記憶體 → SQLite kv（30 天，僅 True）→ Finnhub symbol_lookup（免費端點，
+    經 SingleFlight；互動／背景不共乘）。
     查詢例外時寫入 1 小時負向快取（回傳 False），避免每輪重打並白燒配額；
     限流類例外（429／冷卻中熔斷）不寫負向快取，直接回 False。
     """
+    from services.single_flight import SingleFlightManager
+
     symbol = _sanitize_ticker(symbol)
     now = time.time()
     if symbol in _etf_cache:
@@ -221,7 +284,7 @@ async def is_etf(symbol: str) -> bool:
             return val  # type: ignore
 
     # 延遲 import：避免 database 套件與 market_data_service 的循環匯入
-    from database.cache import get_kv_cache_fresh, save_kv_cache
+    from database.cache import get_kv_cache_fresh
 
     kv_key = f"etf_flag_{symbol}"
     kv_val = await asyncio.to_thread(
@@ -231,35 +294,15 @@ async def is_etf(symbol: str) -> bool:
         _etf_cache[symbol] = (kv_val, now + _ETF_CACHE_TTL)
         return kv_val
 
-    client = _get_client()
     try:
-        data = await _execute_api_call(client.symbol_lookup, symbol)
-        results = data.get("result", []) if data else []
-        # 允許 BRK-B / BRK.B 兩種寫法，與 quote.py 的比對方式一致
-        targets = {symbol, symbol.replace("-", "."), symbol.replace(".", "-")}
-        res = any(
-            (
-                str(r.get("symbol", "")).upper() in targets
-                or str(r.get("displaySymbol", "")).upper() in targets
-            )
-            and str(r.get("type", "")) in _ETF_LOOKUP_TYPES
-            for r in results
+        res = await SingleFlightManager.run(
+            f"{kv_key}{_flight_origin_suffix()}",
+            _fetch_is_etf_uncached,
+            symbol,
         )
-        _etf_cache[symbol] = (res, now + _ETF_CACHE_TTL)
-        # 只持久化 True：新上市 ETF 若被誤判為非 ETF，False 鎖 30 天會長期錯誤；
-        # False 僅留在記憶體 24 小時快取，重啟後自然重新查詢。
-        if res:
-            await save_kv_cache(kv_key, res)
-        return res
+        return bool(res)
     except Exception as e:
-        err = str(e).lower()
-        if (
-            is_finnhub_rate_limited()
-            or "429" in err
-            or "rate limit" in err
-            or "limit reached" in err
-            or "too many requests" in err
-        ):
+        if is_finnhub_rate_limited() or is_finnhub_rate_limit_error(e):
             # 限流（含冷卻中的互動快速熔斷）是暫時性狀態，不是「這檔不是 ETF」：
             # 不寫負向快取，冷卻結束後下一輪即可重新判斷。
             logger.warning(
@@ -267,7 +310,7 @@ async def is_etf(symbol: str) -> bool:
             )
             return False
         logger.warning(f"[{symbol}] Finnhub ETF 判斷失敗，1 小時內視為非 ETF: {e}")
-        _etf_cache[symbol] = (False, now + _ETF_NEGATIVE_CACHE_TTL)
+        _etf_cache[symbol] = (False, time.time() + _ETF_NEGATIVE_CACHE_TTL)
         return False
 
 
@@ -275,26 +318,33 @@ async def is_etf(symbol: str) -> bool:
 # Earnings Calendar (財報日期)
 # ---------------------------------------------------------------------------
 def _earnings_single_flight_key(symbol: str, from_date: str, to_date: str) -> str:
-    """SingleFlight key 與 `_earnings_calendar_cache` 的 cache key 同構。"""
-    return f"earnings_cal_{symbol.upper()}_{from_date}_{to_date}"
+    """SingleFlight key：與 `_earnings_calendar_cache` 的 cache key 同構，加互動／背景尾綴。"""
+    # 尾綴區分互動／背景，理由同 `_flight_origin_suffix`
+    return (
+        f"earnings_cal_{symbol.upper()}_{from_date}_{to_date}{_flight_origin_suffix()}"
+    )
 
 
 def _earnings_cache_expiry(rows: List[Dict[str, Any]], now_ny: datetime) -> float:
     """依結果內容決定財報日曆的快取到期時間戳。
 
     - 空結果：最多 1 小時（不鎖整天）。
-    - 有「今天或昨天（ET）」條目但 epsActual 尚未公布：僅 10 分鐘。
+    - 有「上一個已完成交易日～今天（ET）」條目但 epsActual 尚未公布：僅 10 分鐘
+      （以交易日而非「昨天」判斷，週一／假日後讀到週五盤後條目也算近期待公布）。
     - 其餘：當日 23:59:59 ET。
     """
     day_end = now_ny.replace(hour=23, minute=59, second=59, microsecond=0).timestamp()
     now_ts = now_ny.timestamp()
     if not rows:
         return min(day_end, now_ts + _EARNINGS_CALENDAR_EMPTY_TTL)
-    recent = {
-        now_ny.strftime("%Y-%m-%d"),
-        (now_ny - timedelta(days=1)).strftime("%Y-%m-%d"),
-    }
-    if any(r.get("date") in recent and r.get("epsActual") is None for r in rows):
+    from market_time import get_last_completed_trading_date
+
+    today = now_ny.strftime("%Y-%m-%d")
+    window_start = min(get_last_completed_trading_date(now_ny), today)
+    if any(
+        window_start <= str(r.get("date") or "") <= today and r.get("epsActual") is None
+        for r in rows
+    ):
         return min(day_end, now_ts + _EARNINGS_CALENDAR_PENDING_ACTUAL_TTL)
     return day_end
 
@@ -340,9 +390,9 @@ async def get_earnings_calendar(
         # 免費方案個股查詢只回「今日起」條目，同日內結果不會變；
         # 17:30／19:00／20:00 ClockJob 與日曆服務的重複查詢在此合併。
         cache_key = (symbol.upper(), from_date, to_date)
-        cached = _earnings_calendar_cache.get(cache_key)
-        if cached is not None:
-            rows, expiry = cached
+        # 命中讀取走 __getitem__（move_to_end 維持 LRU），不用 .get()
+        if cache_key in _earnings_calendar_cache:
+            rows, expiry = _earnings_calendar_cache[cache_key]
             if now_ny.timestamp() < expiry:
                 return [dict(e) for e in rows]
 
