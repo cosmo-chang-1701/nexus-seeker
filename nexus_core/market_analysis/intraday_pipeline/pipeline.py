@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
@@ -29,6 +29,30 @@ from market_analysis.intraday_pipeline.evaluation import evaluate_watchlist_symb
 
 
 logger = logging.getLogger(__name__)
+
+# 深度心跳對齊時間點 (每小時 :10/:40 ET)。
+# 為什麼：避開 :00/:15/:30/:45 巡邏與 :02/:17/:32/:47 價量監測的尖峰，
+# 且 :10/:40 時 edge 期權快照（約 30 分鐘一換）與 15m/30m K 棒皆已定案。
+_PIPELINE_SLOT_MINUTES: tuple[int, ...] = (10, 40)
+# 最短睡眠秒數：避免剛跑完仍落在同一個時間點分鐘內而重複執行。
+_MIN_SLOT_SLEEP_SECONDS = 60.0
+
+
+def _seconds_until_next_slot(
+    now_et: datetime, slot_minutes: tuple[int, ...] = _PIPELINE_SLOT_MINUTES
+) -> float:
+    """回傳距離下一個 :10/:40 時間點的秒數（最少 60 秒）。
+
+    now_et 必須為 ET 時間。恰在時間點上時視為已過，取下一個時間點。
+    """
+    base = now_et.replace(minute=0, second=0, microsecond=0)
+    candidates = [base + timedelta(minutes=m) for m in slot_minutes]
+    candidates.append(base + timedelta(hours=1, minutes=min(slot_minutes)))
+    for slot in candidates:
+        delta = (slot - now_et).total_seconds()
+        if delta > 0:
+            return max(delta, _MIN_SLOT_SLEEP_SECONDS)
+    return _MIN_SLOT_SLEEP_SECONDS  # pragma: no cover
 
 
 class IntradayScanPipeline:
@@ -702,7 +726,7 @@ class IntradayScanPipeline:
 
                 # AGENTS.md §4：盤中背景迴圈一律受 85% RAM 閘門約束。本管線每輪
                 # 對每位使用者的每檔自選標的抓報價、期權鏈、GEX 並組裝 embed，
-                # 記憶體吃緊時整輪略過，下一輪 (30 分鐘後) 再試。
+                # 記憶體吃緊時整輪略過，下一輪 (下一個 :10/:40) 再試。
                 from services.llm_service import is_memory_safe
 
                 if not is_memory_safe():
@@ -710,7 +734,7 @@ class IntradayScanPipeline:
                         "🤖 [Intraday Pipeline] 記憶體水位過高 (RAM+Swap > 85%)，"
                         "跳過本輪掃描。"
                     )
-                    await asyncio.sleep(self.scan_interval_seconds)
+                    await asyncio.sleep(_seconds_until_next_slot(datetime.now(ny_tz)))
                     continue
 
                 logger.info(
@@ -863,8 +887,8 @@ class IntradayScanPipeline:
 
                 await flush_dispatch_records()
 
-                # 4. 睡眠 30 分鐘
-                await asyncio.sleep(self.scan_interval_seconds)
+                # 4. 睡眠至下一個 :10/:40 時間點
+                await asyncio.sleep(_seconds_until_next_slot(datetime.now(ny_tz)))
 
             except asyncio.CancelledError:
                 break

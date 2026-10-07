@@ -2,7 +2,7 @@
 
 獨立於美股交易時段，每 30 分鐘執行一次 CL=F 報價抓取與閾值評估。
 支援絕對價格閾值 (上限/下限) 與百分比波動觸發。
-深夜靜默保護 (00:00–06:00 ET) 防止打擾。
+深夜靜默保護 (00:00–06:00 ET) 防止打擾；CL=F 週末休市時段不抓取。
 """
 
 import logging
@@ -33,6 +33,22 @@ _wti_scan_times: list[time] = [
 ]
 
 
+def _is_cl_weekend_closed(now_et: datetime) -> bool:
+    """CL=F 週末休市判斷（ET）：週五 >=17:00、週六全天、週日 <18:00 為 True。
+
+    為什麼：CME 原油期貨週五 17:00 ET 收盤、週日 18:00 ET 重開，休市期間
+    抓取只會回傳同一筆價格，白燒 Yahoo 預算。
+    """
+    wd = now_et.weekday()  # 週一=0 ... 週日=6
+    if wd == 4:
+        return now_et.hour >= 17
+    if wd == 5:
+        return True
+    if wd == 6:
+        return now_et.hour < 18
+    return False
+
+
 class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
     """WTI 原油價格警報背景排程器。"""
 
@@ -56,6 +72,11 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
             logger.debug(
                 f"🛢️ [WTI Monitor] 處於靜默時段 ({now_et.hour:02d}:{now_et.minute:02d} ET)，跳過掃描"
             )
+            return
+
+        # CL=F 週末休市保護：休市期間不抓取
+        if _is_cl_weekend_closed(now_et):
+            logger.debug("🛢️ [WTI Monitor] CL=F 週末休市中，跳過掃描")
             return
 
         try:

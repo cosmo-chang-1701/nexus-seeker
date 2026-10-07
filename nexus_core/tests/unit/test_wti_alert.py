@@ -361,3 +361,25 @@ def test_legacy_alias_resolution() -> None:
     """Test alias resolution for WTI oil alerts."""
     assert _resolve_key("wti_oil_alert") == "alpha_wti_oil"
     assert _resolve_key("oil_alert") == "alpha_wti_oil"
+
+
+@pytest.mark.parametrize(
+    "day,hh,mm,expected",
+    [
+        (9, 16, 59, False),  # 週五 16:59
+        (9, 17, 0, True),  # 週五 17:00
+        (10, 12, 0, True),  # 週六
+        (11, 17, 59, True),  # 週日 17:59
+        (11, 18, 0, False),  # 週日 18:00
+        (8, 3, 0, False),  # 週四
+    ],
+)
+def test_is_cl_weekend_closed(day: int, hh: int, mm: int, expected: bool) -> None:
+    from datetime import datetime
+
+    from cogs.trading.wti_monitor import _is_cl_weekend_closed
+    from market_time import ny_tz
+
+    assert (
+        _is_cl_weekend_closed(datetime(2026, 10, day, hh, mm, tzinfo=ny_tz)) is expected
+    )
