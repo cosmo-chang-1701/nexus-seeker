@@ -56,7 +56,7 @@ def test_sweet_spot_downgraded_when_upside_room_insufficient() -> None:
     assert "✅ 停損距離合格" in desc
     assert "❌ 上檔空間 0.24% 不足 10.47%，非進場點" in desc
     # (1100 − 1097.39) / (1097.39 − 1045.16) = 0.05；淨 GEX 錨 (1070 → 1065.16) = 0.08
-    assert "進場盈虧比 (至 CallWall $1100.00): 0.05:1 ❌" in desc
+    assert "短線盈虧比 (期權視角，至 CallWall $1100.00): 0.05:1 ❌" in desc
     assert "淨 GEX 支撐錨 $1070.00 0.08:1 ❌" in desc
     assert "(門檻 2.2:1)" in desc
 

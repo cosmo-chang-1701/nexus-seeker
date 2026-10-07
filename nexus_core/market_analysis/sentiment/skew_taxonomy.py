@@ -47,6 +47,9 @@ SKEW_TRIPLE_CONFLUENCE_PERCENTILE = 98.0
 # module 以免 embed 層與 unified_terminal 互相匯入。
 POLYMARKET_BULLISH_PCT = 55.0
 POLYMARKET_BEARISH_PCT = 45.0
+# 低於此總池量的預測市場不判讀：數千美元的池子可被單筆小額下單扭曲
+# （docs/macro_sentiment/04）。
+POLYMARKET_MIN_POOL_USD = 100_000.0
 
 # 百分位缺失或越界時的中性值：落在所有尾端門檻之外，不觸發任何防禦動作。
 SKEW_NEUTRAL_PERCENTILE = 50.0

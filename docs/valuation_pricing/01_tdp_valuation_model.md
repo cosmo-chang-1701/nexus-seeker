@@ -160,6 +160,10 @@ if ma20 is None and max_pain is None and volume_poc is None:
 
 ---
 
+### 5.x DDP 未通過原因碼（2026-10-07）
+
+`DDPInspector.inspect_symbol()` 回傳型別不變；未通過時原因記入 `last_fail_reason[symbol]`：不適用（景氣循環產業、去年同期 EPS ≤ 0、P/E 無效）、資料不足（無季報、季報未滿 5 季之新上市、計算失敗）、未達門檻（EPS 年增、營收未加速、Forward P/E、估值未壓縮）。/x 顯示「不符合（原因）」。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **DDP 基本面檢驗引擎**:

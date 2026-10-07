@@ -301,6 +301,14 @@ if vix_spot is not None and vix_spot >= 35.0:
 
 ---
 
+### 5.x /x 面板 Kelly 欄位的單位（2026-10-07）
+
+`/x` 的「安全建倉額度」以**賣出 16Δ Put**為參考單位。單口 β 加權 Delta（SPY 等值股數）與 NRO 掃描同定義：
+
+$$\text{unit\_weighted\_delta} = 0.16 \times \beta \times \frac{S}{S_{SPY}} \times 100$$
+
+β 取 `calculate_beta_strict(日線, SPY)`，重疊資料不足 60 筆時以 1.0 計並列入降級原因「Beta 資料不足」。舊版寫死 0.16，少乘了後三項，在高 β、股價相對 SPY 偏低的標的上口數被高估、曝險 % 被低估。欄位另顯示 β 與單口 SPY 等值股數，0 口時說明原因。現貨建倉部位以擠壓等級（strategies/10）為準，兩者並列。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **VIX 戰情階梯與分位數配置**:

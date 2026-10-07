@@ -137,6 +137,10 @@ else:
 
 ---
 
+### 5.x IVR 累積期揭露與 IV/HV20（2026-10-07）
+
+migration v088（v1.14.1）清空 `historical_iv` 後，IVR 需累積 `min_history_records`（60）個交易日。`IVMetrics` 新增 `iv_history_count`／`iv_history_required`，/x 在 IVR 缺失時顯示「樣本累積中 N/60 日」。另提供 `hv_20`（20 日已實現波動率）與 IV/HV20 比值作過渡期參考，**僅供呈現，嚴禁混入 IVR 母體，也不接任何閘門**。臨近總經事件的狀態文字只有 `event_loading_applied` 為真才寫「1.4x 事件加載」，LIVE_IV 寫「即時 IV 已含事件定價」。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **IV Rank / Percentile 計算與期限結構分析**:

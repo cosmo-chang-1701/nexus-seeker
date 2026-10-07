@@ -23,6 +23,12 @@ class DDPInspector:
 
     def __init__(self, bot: Any = None):
         self.bot = bot
+        # 最近一次 inspect_symbol 未通過的原因（symbol → 繁中原因），供 /x 揭露；
+        # inspect_symbol 的回傳型別不變，避免動到 run_scan 與其他呼叫端。
+        self.last_fail_reason: Dict[str, str] = {}
+
+    def _fail(self, symbol: str, reason: str) -> None:
+        self.last_fail_reason[symbol] = reason
 
     async def run_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """執行 DDP 掃描並回傳符合條件的標的"""
@@ -45,17 +51,20 @@ class DDPInspector:
             t = yf.Ticker(sym)
             return t.info, t.quarterly_income_stmt
 
+        self.last_fail_reason.pop(symbol, None)
         info, q_inc = await market_data_service.call_yf(_fetch_info_and_income, symbol)
 
         # 1. 產業過濾
         sector = info.get("sector")
         if sector in ["Energy", "Basic Materials"]:
             logger.info(f"[{symbol}] DDP Fail: Sector {sector} is highly cyclical")
+            self._fail(symbol, "不適用（景氣循環產業）")
             return None
 
         # 2. 獲取財務報表
         if q_inc.empty:
             logger.info(f"[{symbol}] DDP Fail: quarterly_income_stmt is empty")
+            self._fail(symbol, "資料不足（無季報）")
             return None
 
         try:
@@ -68,13 +77,16 @@ class DDPInspector:
                 eps_series = q_inc.loc["Net Income"]
             else:
                 logger.info(f"[{symbol}] DDP Fail: No EPS/Net Income data")
+                self._fail(symbol, "資料不足（無 EPS 資料）")
                 return None
 
             if q_inc.shape[1] < 5:
+                self._fail(symbol, "資料不足（季報未滿 5 季，新上市）")
                 return None
 
             rev = q_inc.loc["Total Revenue"] if "Total Revenue" in q_inc.index else None
             if rev is None or len(rev) < 5:
+                self._fail(symbol, "資料不足（季報未滿 5 季，新上市）")
                 return None
 
             curr_eps_val = float(eps_series.iloc[0])
@@ -83,12 +95,14 @@ class DDPInspector:
             # EPS 基期防護與 ZeroDivisionError 防護
             if prev_y_eps_val <= 0:
                 logger.info(f"[{symbol}] DDP Fail: Base EPS <= 0 ({prev_y_eps_val})")
+                self._fail(symbol, "不適用（去年同期 EPS ≤ 0）")
                 return None
 
             eps_growth = (curr_eps_val - prev_y_eps_val) / prev_y_eps_val
 
             if eps_growth < 0.15:
                 logger.info(f"[{symbol}] DDP Fail: EPS growth {eps_growth:.2%} < 15%")
+                self._fail(symbol, f"未達門檻（EPS 年增 {eps_growth:.0%} < 15%）")
                 return None
 
             # Revenue Acceleration Check & ZeroDivision 防護
@@ -108,6 +122,7 @@ class DDPInspector:
 
             if not rev_accel:
                 logger.info(f"[{symbol}] DDP Fail: Revenue growth not accelerating")
+                self._fail(symbol, "未達門檻（營收未加速）")
                 return None
 
             # Operating Margin Bonus
@@ -123,8 +138,10 @@ class DDPInspector:
             # 3. P/E Analysis
             curr_pe = info.get("trailingPE")
             if curr_pe is not None and float(curr_pe) > 500.0:
+                self._fail(symbol, "不適用（P/E 無效）")
                 return None
             if not curr_pe or curr_pe <= 0:
+                self._fail(symbol, "不適用（P/E 無效）")
                 return None
 
             # Forward Alignment
@@ -139,11 +156,16 @@ class DDPInspector:
                         logger.info(
                             f"[{symbol}] DDP Fail: No Forward P/E and negative OCF"
                         )
+                        self._fail(
+                            symbol, "未達門檻（無 Forward P/E 且營業現金流非正）"
+                        )
                         return None
                 else:
+                    self._fail(symbol, "資料不足（無現金流資料）")
                     return None
             elif fwd_pe >= curr_pe:
                 logger.info(f"[{symbol}] DDP Fail: Forward P/E >= Trailing P/E")
+                self._fail(symbol, "未達門檻（Forward P/E ≥ Trailing P/E）")
                 return None
 
             # 估值壓縮 (P/E 算法修正)
@@ -156,6 +178,7 @@ class DDPInspector:
                 pe_25th = five_yr_pe * 0.8
                 if curr_pe > pe_25th:
                     logger.info(f"[{symbol}] DDP Fail: Current P/E > 80% of 5Y Avg")
+                    self._fail(symbol, "未達門檻（估值未壓縮）")
                     return None
             else:
                 # 降級方案：比對股價
@@ -163,12 +186,14 @@ class DDPInspector:
                     symbol, period="3y", interval="1wk"
                 )
                 if hist.empty:
+                    self._fail(symbol, "資料不足（無歷史股價）")
                     return None
                 price_25th = np.percentile(hist["Close"].dropna(), 25)
                 price_mean = hist["Close"].dropna().mean()
                 curr_price = info.get("currentPrice", hist["Close"].iloc[-1])
                 if curr_price > price_25th:
                     logger.info(f"[{symbol}] DDP Fail: Price not compressed")
+                    self._fail(symbol, "未達門檻（估值未壓縮）")
                     return None
                 # 用股價相對位置推算假的 PE 供 UI 顯示
                 pe_25th = curr_pe
@@ -217,6 +242,7 @@ class DDPInspector:
 
         except Exception as e:
             logger.info(f"[{symbol}] DDP 深度分析跳過: {e}")
+            self._fail(symbol, "資料不足（計算失敗）")
             return None
 
     async def record_signal(self, report: Dict[str, Any]) -> Any:

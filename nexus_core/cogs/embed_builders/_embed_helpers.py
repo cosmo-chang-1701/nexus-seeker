@@ -1162,3 +1162,73 @@ def fedwatch_source_note(source: Any) -> str:
             "起始利率取自期貨隱含均價而非實際 EFFR，與 CME 官網 FedWatch 可能有落差。"
         )
     return "⚠️ FedWatch 資料源: 即時來源無法取得，以下為備援估算值。"
+
+
+_PSQ_TF_ORDER = ("W", "3D", "D", "65m", "15m", "5m")
+_SQZ_SHORT = {
+    "High": "🔴高",
+    "Mid": "🟠中",
+    "Normal": "🟡一般",
+    "Release": "⚪解除",
+}
+_MOM_SHORT = {
+    "LightBlue": "▲淺藍",
+    "DarkBlue": "▽深藍",
+    "Red": "▼紅",
+    "Golden": "△金",
+    "Neutral": "·",
+}
+
+
+def format_psq_matrix_lines(matrix: Any) -> list[str]:
+    """多時間框架擠壓矩陣（皆為已收盤 K 棒），供 /x 擠壓欄位使用。
+
+    以 getattr 讀取 `TimeframeState`；缺框架顯示「資料不足」。matrix 為 None 或
+    空時回傳空清單（呼叫端據此略過整段）。
+    """
+    if not matrix:
+        return []
+    lines = [" 多時間框架 (已收盤 K 棒)"]
+    last = len(_PSQ_TF_ORDER) - 1
+    for i, tf in enumerate(_PSQ_TF_ORDER):
+        prefix = " └─" if i == last else " ├─"
+        st = matrix.get(tf) if hasattr(matrix, "get") else None
+        if st is None:
+            lines.append(f"{prefix} {tf:<3} │ —（資料不足）")
+            continue
+        sqz = _SQZ_SHORT.get(str(getattr(st, "squeeze_level", "")), "—")
+        color = str(getattr(st, "momentum_color", "Neutral"))
+        mom = _MOM_SHORT.get(color, color)
+        try:
+            mv = f"{float(getattr(st, 'momentum_value', 0.0)):+.2f}"
+        except (TypeError, ValueError):
+            mv = "--"
+        ago = getattr(st, "green_dot_bars_ago", None)
+        if getattr(st, "green_dot", False) and ago is not None:
+            flag = f"GD {ago} 根前"
+        elif getattr(st, "turbo", False):
+            flag = "Turbo"
+        else:
+            flag = "—"
+        ts = str(getattr(st, "bar_ts", "") or "")
+        # 日內框架只顯示時分，日／3D／週顯示月日（bar_ts 形如 "2026-10-07 11:00" 或 "2026-10-07"）
+        if tf in ("65m", "15m", "5m") and " " in ts:
+            ts_short = ts.split(" ")[-1][:5]
+        else:
+            ts_short = ts[5:10] if len(ts) >= 10 else ts
+        row = f"{prefix} {tf:<3} │ {sqz} │ {mom} {mv} │ {flag} │ {ts_short}"
+        prev = getattr(st, "preview_squeeze_level", None)
+        # 成型中那一根與已收盤等級相同時不重複顯示（省字數，避免 embed 超過 6000）
+        if prev and str(prev) != str(getattr(st, "squeeze_level", "")):
+            row += f"（成型中:{_SQZ_SHORT.get(str(prev), str(prev))}）"
+        lines.append(row)
+    return lines
+
+
+def macro_iv_status_text(iv_source: Optional[str], event_loading_applied: bool) -> str:
+    """臨近總經事件時的 IV 狀態文字；只有真的套用 1.4x 事件加載才宣稱「已校正」。"""
+    if event_loading_applied:
+        return "⚠️ 臨近總經大事件（快取／HV 代理已套用 1.4x 事件加載）"
+    if iv_source == "LIVE_IV":
+        return "⚠️ 臨近總經大事件（即時 IV 已含事件定價）"
+    return "⚠️ 臨近總經大事件（快取 IV，可能未反映事件）"
