@@ -952,6 +952,48 @@ def get_guidance_extraction(
         conn.close()
 
 
+def get_prior_guidance_extraction(
+    symbol: str,
+    before_period: str,
+    exclude_accession: str | None = None,
+) -> GuidanceExtractionDTO | None:
+    """讀取早於指定財季（`YYYY-Qn` 字串序）之最近一筆管理層指引記錄。
+
+    僅考慮已正規化為 `YYYY-Qn` 之期別，並排除同一申報（source_accession），
+    避免同季重送或更新季度被誤當成「前期」。
+    """
+    conn = get_read_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT symbol, fiscal_period, source_accession, model_version,
+                   confidence_score, tone_delta_score, data_json, created_at
+            FROM guidance_extraction
+            WHERE symbol = ?
+              AND fiscal_period GLOB '[0-9][0-9][0-9][0-9]-Q[1-4]'
+              AND fiscal_period < ?
+              AND source_accession != ?
+            ORDER BY fiscal_period DESC, created_at DESC
+            LIMIT 1
+            """,
+            (symbol.upper(), before_period, exclude_accession or ""),
+        ).fetchone()
+        if not row:
+            return None
+        return GuidanceExtractionDTO(
+            symbol=row[0],
+            fiscal_period=row[1],
+            source_accession=row[2],
+            model_version=row[3],
+            confidence_score=float(row[4]),
+            tone_delta_score=float(row[5]),
+            data_json=row[6],
+            created_at=row[7] if row[7] else "",
+        )
+    finally:
+        conn.close()
+
+
 def get_latest_guidance_extraction(symbol: str) -> GuidanceExtractionDTO | None:
     """讀取特定標的最新一筆管理層指引記錄。"""
     conn = get_read_connection()

@@ -10,7 +10,7 @@ Nexus Seeker 本質為選擇權風險控制與營運決策顧問系統（Zero-Ex
 
 事件時鐘遵循**開閉原則（Open-Closed Principle）**：主排程 Cog 以 5 分鐘固定步長巡邏全域時鐘註冊表，各業務模組（宏觀流動性、SEC 申報、財務預期差、產業鏈檢驗等）僅需向註冊器註冊其所屬的 `ClockJob`，無需修改主迴圈排程核心。
 
-> **目前已註冊的 `ClockJob`**：僅 `macro_surprise_0830`、`macro_surprise_1000` 與 `liquidity_regime_1615`（`cogs/trading/fundamental_pipeline_monitor.py`）。SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易與 8-K 治理旗標）與 13D 激進投資人閘門**尚未接線**——沒有註冊任何 `ClockJob`，也沒有其他排程呼叫；規格與接線後行為見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。
+> **目前已註冊的 `ClockJob`**：僅 `macro_surprise_0830`、`macro_surprise_1000` 與 `liquidity_regime_1615`（`cogs/trading/fundamental_pipeline_monitor.py`）。SEC 申報同步（`services/filing_event_service.py`，Form 4 內部人交易與 8-K 治理旗標）與 13D 激進投資人閘門**尚未接線**——沒有註冊任何 `ClockJob`，也沒有其他排程呼叫；規格與接線後行為見 [`06_sec_event_stream_and_governance_gate.md`](../macro_sentiment/06_sec_event_stream_and_governance_gate.md)。財報預期差與管理層指引服務（`services/earnings_surprise_service.py`）同樣**尚未接線**，見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md)。
 
 ### 1.2 適用市場環境與系統邊界
 - **低頻總經發布與非同步數據攝取**：涵蓋每週 H.4.1、芝加哥聯準會 NFCI、每週四初領失業金及每月 CPI、NFP、ISM PMI 發布。

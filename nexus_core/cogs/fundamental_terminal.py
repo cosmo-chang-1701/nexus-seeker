@@ -22,6 +22,7 @@ from database.fundamental_pipeline import (
     get_latest_earnings_surprise,
     get_latest_guidance_extraction,
     get_latest_liquidity_regime,
+    get_prior_guidance_extraction,
     get_sec_filing_cursor,
 )
 from discord import app_commands
@@ -29,14 +30,19 @@ from discord.ext import commands
 from market_analysis.fundamental_pipeline.governance_gate import (
     evaluate_governance_status,
 )
+from market_analysis.fundamental_pipeline.earnings_surprise import FLOOR_EPS
 from market_analysis.fundamental_pipeline.guidance_delta import (
+    VERDICT_LABELS_ZH,
     compare_guidance,
 )
 from market_analysis.fundamental_pipeline.insider_signal import (
     evaluate_insider_signal,
 )
 from market_analysis.fundamental_pipeline.models import (
+    EarningsSurpriseDTO,
+    EPSEstimateSnapshotRecord,
     GuidanceExtraction,
+    GuidanceExtractionDTO,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,8 +186,30 @@ class GovernanceGateSection:
         return header, f"{gov_line}\n{insider_line}"
 
 
+_PIPELINE_NOT_SCHEDULED = "管線尚未排程"
+_HORIZON_LABELS_ZH: dict[str, str] = {
+    "0q": "本季",
+    "+1q": "下季",
+    "0y": "本財年",
+    "+1y": "下財年",
+}
+
+
+def _parse_guidance(record: GuidanceExtractionDTO | None) -> GuidanceExtraction | None:
+    if record is None or not record.data_json:
+        return None
+    try:
+        return GuidanceExtraction.model_validate_json(record.data_json)
+    except Exception:
+        return None
+
+
 class EarningsSurpriseSection:
-    """PR3: 財務預期差與管理層前瞻指引區塊。"""
+    """PR3: 財務預期差與管理層前瞻指引區塊。
+
+    財報預期差管線（EarningsSurpriseService）目前尚未排程；沒有資料時必須明示，
+    不可用看似正常的佔位內容。
+    """
 
     @property
     def section_id(self) -> str:
@@ -189,79 +217,128 @@ class EarningsSurpriseSection:
 
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "📊 業績預期差與 PEAD 修正 (Surprise & PEAD)"
+        header = "📊 業績預期差與財報後漂移"
 
-        # 讀取最新財報預期差
         latest_surprise = await asyncio.to_thread(
             get_latest_earnings_surprise, sym_upper
         )
         guidance = await asyncio.to_thread(get_latest_guidance_extraction, sym_upper)
         snapshots = await asyncio.to_thread(get_eps_estimate_snapshots, sym_upper)
 
-        lines: list[str] = []
-
-        if latest_surprise is None:
-            lines.append(
-                "• 業績預期差: 暫無近期季度財報發布記錄 (待 8-K Item 2.02 或共識快照)"
-            )
-        else:
-            score_val = latest_surprise.composite_score
-            score_icon = (
-                "🟢"
-                if score_val is not None and score_val > 0
-                else ("🔴" if score_val is not None and score_val < 0 else "⚪")
-            )
-            score_str = f"{score_val:+.1f}" if score_val is not None else "--"
-            eps_str = (
-                f"{latest_surprise.eps_surprise_pct:+.1%}"
-                if latest_surprise.eps_surprise_pct is not None
-                else "--%"
-            )
-            rev_str = (
-                f"{latest_surprise.revenue_surprise_pct:+.1%}"
-                if latest_surprise.revenue_surprise_pct is not None
-                else "--%"
-            )
-            lines.append(
-                f"• {latest_surprise.fiscal_period} 業績評分: {score_icon} **{score_str}** "
-                f"(EPS 驚喜: `{eps_str}` ｜ 營收: `{rev_str}`)"
+        if latest_surprise is None and guidance is None and not snapshots:
+            return (
+                header,
+                f"• ⚪ 尚無財報預期差資料（財報預期差{_PIPELINE_NOT_SCHEDULED}）",
             )
 
-        if guidance is not None:
-            tone_val = guidance.tone_delta_score
-            tone_icon = "🟢" if tone_val > 10 else ("🔴" if tone_val < -10 else "⚪")
-            extra_guidance = ""
-            if guidance.data_json:
-                try:
-                    curr_g = GuidanceExtraction.model_validate_json(guidance.data_json)
-                    g_summary = compare_guidance(curr_g)
-                    extra_guidance = f" ｜ 指引方向: **{g_summary.verdict}** ({g_summary.margin_trend})"
-                except Exception:
-                    extra_guidance = ""
-
-            lines.append(
-                f"• 管理層前瞻態度: {tone_icon} 語意分數 **{tone_val:+.1f}**"
-                f"{extra_guidance} (指引模型: `{guidance.model_version}`)"
-            )
-        else:
-            lines.append("• 管理層前瞻指引: 暫無結構化指引 (待 8-K Exhibit 99.1 擷取)")
-
-        if snapshots:
-            q0 = next((s for s in snapshots if s.horizon == "0q"), None)
-            q1 = next((s for s in snapshots if s.horizon == "+1q"), None)
-            snap_parts: list[str] = []
-            if q0:
-                snap_parts.append(f"0Q: `${q0.eps_mean:.2f}`")
-            if q1:
-                snap_parts.append(f"+1Q: `${q1.eps_mean:.2f}`")
-            if snap_parts:
-                lines.append(f"• 分析師共識中樞: {' ｜ '.join(snap_parts)}")
-            else:
-                lines.append("• 分析師共識快照: 追蹤中")
-        else:
-            lines.append("• 分析師共識快照: 待下輪市場共識同步")
-
+        lines: list[str] = [self._surprise_line(latest_surprise)]
+        lines.extend(await self._guidance_lines(sym_upper, guidance))
+        lines.append(self._snapshot_line(snapshots))
         return header, "\n".join(lines)
+
+    @staticmethod
+    def _surprise_line(latest_surprise: EarningsSurpriseDTO | None) -> str:
+        if latest_surprise is None:
+            return f"• 業績預期差: ⚪ 尚無財報預期差資料（{_PIPELINE_NOT_SCHEDULED}）"
+
+        period = latest_surprise.fiscal_period
+        if latest_surprise.status != "PROCESSED":
+            cons = (
+                f"`${latest_surprise.consensus_eps:.2f}`"
+                if latest_surprise.consensus_eps is not None
+                else "--"
+            )
+            return f"• {period} 業績評分: ⏳ 待實際值公布（共識 EPS: {cons}）"
+
+        score_val = latest_surprise.composite_score
+        score_icon = (
+            "🟢"
+            if score_val is not None and score_val > 0
+            else ("🔴" if score_val is not None and score_val < 0 else "⚪")
+        )
+        score_str = f"{score_val:+.1f}" if score_val is not None else "--"
+        eps_str = (
+            f"{latest_surprise.eps_surprise_pct:+.1%}"
+            if latest_surprise.eps_surprise_pct is not None
+            else "--%"
+        )
+        rev_str = (
+            f"{latest_surprise.revenue_surprise_pct:+.1%}"
+            if latest_surprise.revenue_surprise_pct is not None
+            else "--%"
+        )
+        line = (
+            f"• {period} 業績評分: {score_icon} **{score_str}** "
+            f"(EPS 驚喜: `{eps_str}` ｜ 營收: `{rev_str}`)"
+        )
+        cons_eps = latest_surprise.consensus_eps
+        if cons_eps is not None and abs(cons_eps) < FLOOR_EPS:
+            line += (
+                f"\n  ⚠️ 小基數：共識 EPS `${cons_eps:.2f}` 絕對值低於 ${FLOOR_EPS:.2f}，"
+                "EPS 驚喜百分比以下限為分母，僅供參考"
+            )
+        return line
+
+    @staticmethod
+    async def _guidance_lines(
+        sym_upper: str, guidance: GuidanceExtractionDTO | None
+    ) -> list[str]:
+        if guidance is None:
+            return [
+                f"• 管理層前瞻指引: ⚪ 尚無指引擷取資料（{_PIPELINE_NOT_SCHEDULED}）"
+            ]
+
+        curr_g = _parse_guidance(guidance)
+        if curr_g is None:
+            return ["• 管理層前瞻指引: ⚠️ 指引資料解析失敗"]
+
+        prior_record = await asyncio.to_thread(
+            get_prior_guidance_extraction,
+            sym_upper,
+            guidance.fiscal_period,
+            guidance.source_accession,
+        )
+        prior_g = _parse_guidance(prior_record)
+        g_summary = compare_guidance(curr_g, prior_g)
+
+        tone_abs = g_summary.tone_score
+        tone_icon = "🟢" if tone_abs > 10 else ("🔴" if tone_abs < -10 else "⚪")
+        if g_summary.tone_delta is not None and prior_record is not None:
+            delta_str = (
+                f"較前期（{prior_record.fiscal_period}）`{g_summary.tone_delta:+.1f}`"
+            )
+        else:
+            delta_str = "無前期指引可比"
+
+        verdict_zh = VERDICT_LABELS_ZH.get(g_summary.verdict, "無法判定")
+        verdict_line = f"• 前瞻指引方向: **{verdict_zh}**（{g_summary.margin_trend}）"
+        if g_summary.verdict == "UNKNOWN" and g_summary.comparison_note:
+            verdict_line += f"\n  ↳ {g_summary.comparison_note}"
+
+        return [
+            (
+                f"• 管理層前瞻態度（{guidance.fiscal_period} 財報）: {tone_icon} "
+                f"語意分數 **{tone_abs:+.1f}** ｜ {delta_str} "
+                f"(指引模型: `{guidance.model_version}`)"
+            ),
+            verdict_line,
+        ]
+
+    @staticmethod
+    def _snapshot_line(snapshots: list[EPSEstimateSnapshotRecord]) -> str:
+        if not snapshots:
+            return f"• 分析師共識快照: ⚪ 尚無共識快照資料（{_PIPELINE_NOT_SCHEDULED}）"
+        snap_parts: list[str] = []
+        for horizon in ("0q", "+1q"):
+            snap = next((s for s in snapshots if s.horizon == horizon), None)
+            if snap is not None:
+                snap_parts.append(
+                    f"{_HORIZON_LABELS_ZH[horizon]}: `${snap.eps_mean:.2f}`"
+                )
+        if not snap_parts:
+            return "• 分析師共識快照: ⚪ 無季度共識預估"
+        snap_date = snapshots[0].snapshot_date
+        return f"• 分析師共識 EPS（{snap_date}）: {' ｜ '.join(snap_parts)}"
 
 
 # 全域單例區塊註冊中心

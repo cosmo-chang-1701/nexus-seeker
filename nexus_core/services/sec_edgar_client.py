@@ -23,6 +23,11 @@ import defusedxml.ElementTree as ET
 import httpx
 
 import config
+from market_analysis.fundamental_pipeline.press_release import (
+    INDEX_HEADERS_BYTE_CAP,
+    FilingDocumentEntry,
+    parse_index_headers_documents,
+)
 from market_analysis.fundamental_pipeline.sec_item_router import (
     parse_sec_header_acceptance,
 )
@@ -194,6 +199,21 @@ class SecEdgarClient:
             url, byte_cap=_SGML_HEADER_BYTE_CAP
         )
         return parse_sec_header_acceptance(header_text)
+
+    @staticmethod
+    def filing_directory_url(cik: str, accession: str) -> str:
+        """組出申報目錄 URL（`/Archives/edgar/data/{cik}/{accession 去橫線}`，不含結尾斜線）。"""
+        cik_int = str(int(cik))
+        acc_no_dash = accession.replace("-", "")
+        return f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_no_dash}"
+
+    async def fetch_filing_documents(
+        self, filing_dir_url: str, accession: str
+    ) -> list[FilingDocumentEntry]:
+        """讀取 `{accession}-index-headers.html`，列出申報內各文件之 TYPE 與檔名（如 EX-99.1）。"""
+        url = f"{filing_dir_url.rstrip('/')}/{accession}-index-headers.html"
+        text = await self.fetch_document_text(url, byte_cap=INDEX_HEADERS_BYTE_CAP)
+        return parse_index_headers_documents(text)
 
     async def fetch_company_submissions(self, cik: str) -> dict[str, Any]:
         """拉取指定 CIK 之最近申報事件清單 (Submissions API)。"""

@@ -24,8 +24,11 @@ from market_analysis.fundamental_pipeline.models import (
     EPSEstimateSnapshotRecord,
     FilingCursorRecord,
     GovernanceFlagRecord,
+    GuidanceExtraction,
     GuidanceExtractionDTO,
     LiquidityReading,
+    MarginGuidance,
+    ToneMetric,
 )
 
 
@@ -238,11 +241,114 @@ async def test_fundamental_terminal_cog_command() -> None:
     assert isinstance(kwargs.get("embed"), NexusEmbed)
 
 
+def _guidance_obj(
+    period: str,
+    *,
+    revenue: float | None = None,
+    eps: float | None = None,
+    target: str | None = None,
+    backlog: int = 0,
+    margins: list[MarginGuidance] | None = None,
+) -> GuidanceExtraction:
+    return GuidanceExtraction(
+        symbol="AAPL",
+        fiscal_period=period,
+        guidance_target_period=target,
+        revenue_guidance_midpoint_usd=revenue,
+        eps_guidance_midpoint_usd=eps,
+        margin_guidance=margins or [],
+        backlog_tone=ToneMetric(score=backlog, quote_snippet=""),
+        pricing_power_tone=ToneMetric(score=1, quote_snippet=""),
+        supply_chain_tone=ToneMetric(score=0, quote_snippet=""),
+        defensive_posture_tone=ToneMetric(score=0, quote_snippet=""),
+        reasoning_traditional_chinese="測試",
+    )
+
+
+def _guidance_dto(
+    obj: GuidanceExtraction, period: str, accession: str, tone_delta: float
+) -> GuidanceExtractionDTO:
+    return GuidanceExtractionDTO(
+        symbol="AAPL",
+        fiscal_period=period,
+        source_accession=accession,
+        model_version="gpt-4o",
+        confidence_score=0.57,
+        tone_delta_score=tone_delta,
+        data_json=obj.model_dump_json(),
+    )
+
+
+_SNAPSHOTS = [
+    EPSEstimateSnapshotRecord(
+        symbol="AAPL",
+        snapshot_date="2026-10-05",
+        horizon="0q",
+        source="finnhub",
+        eps_mean=1.45,
+    ),
+    EPSEstimateSnapshotRecord(
+        symbol="AAPL",
+        snapshot_date="2026-10-05",
+        horizon="+1q",
+        source="finnhub",
+        eps_mean=1.60,
+    ),
+]
+
+
+def _patch_pr3(
+    surprise: EarningsSurpriseDTO | None,
+    guidance: GuidanceExtractionDTO | None,
+    snapshots: list[EPSEstimateSnapshotRecord],
+    prior: GuidanceExtractionDTO | None = None,
+) -> Any:
+    from contextlib import ExitStack
+
+    stack = ExitStack()
+    stack.enter_context(
+        patch(
+            "cogs.fundamental_terminal.get_latest_earnings_surprise",
+            return_value=surprise,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "cogs.fundamental_terminal.get_latest_guidance_extraction",
+            return_value=guidance,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "cogs.fundamental_terminal.get_eps_estimate_snapshots",
+            return_value=snapshots,
+        )
+    )
+    stack.enter_context(
+        patch(
+            "cogs.fundamental_terminal.get_prior_guidance_extraction",
+            return_value=prior,
+        )
+    )
+    return stack
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_no_data_is_explicit() -> None:
+    """管線尚未排程、完全沒有資料時明示，不得出現看似正常的佔位內容。"""
+    sec = EarningsSurpriseSection()
+    with _patch_pr3(None, None, []):
+        header, body = await sec.render("AAPL")
+    assert "尚無財報預期差資料" in body
+    assert "管線尚未排程" in body
+    assert "待下輪" not in body and "追蹤中" not in body
+    assert "PEAD" not in header and "Surprise" not in header
+
+
 @pytest.mark.asyncio
 async def test_earnings_surprise_section_render() -> None:
-    """測試 EarningsSurpriseSection 渲染預期差、指引與快照。"""
+    """渲染預期差、絕對語意分數與 delta 分開呈現、中文 horizon 標籤。"""
     sec = EarningsSurpriseSection()
-
     surprise = EarningsSurpriseDTO(
         symbol="AAPL",
         fiscal_period="2026-Q3",
@@ -254,101 +360,93 @@ async def test_earnings_surprise_section_render() -> None:
         revenue_surprise_pct=0.0119,
         composite_score=15.2,
     )
-    guidance = GuidanceExtractionDTO(
-        symbol="AAPL",
-        fiscal_period="2026-Q3",
-        source_accession="ACC-AAPL-202",
-        model_version="gpt-4o",
-        confidence_score=0.95,
-        tone_delta_score=22.5,
-        data_json="{}",
-    )
-    snapshot = [
-        EPSEstimateSnapshotRecord(
-            symbol="AAPL",
-            snapshot_date="2026-10-05",
-            horizon="0q",
-            source="finnhub",
-            eps_mean=1.45,
-        ),
-        EPSEstimateSnapshotRecord(
-            symbol="AAPL",
-            snapshot_date="2026-10-05",
-            horizon="+1q",
-            source="finnhub",
-            eps_mean=1.60,
-        ),
-    ]
-
-    with (
-        patch(
-            "cogs.fundamental_terminal.get_latest_earnings_surprise",
-            return_value=surprise,
-        ),
-        patch(
-            "cogs.fundamental_terminal.get_latest_guidance_extraction",
-            return_value=guidance,
-        ),
-        patch(
-            "cogs.fundamental_terminal.get_eps_estimate_snapshots",
-            return_value=snapshot,
-        ),
+    curr = _guidance_obj("2026-Q3", backlog=2)  # tone (2+1)/4/2*100 = 37.5
+    prior = _guidance_obj("2026-Q2", backlog=0)  # tone 12.5
+    with _patch_pr3(
+        surprise,
+        _guidance_dto(curr, "2026-Q3", "ACC-Q3", 25.0),
+        _SNAPSHOTS,
+        prior=_guidance_dto(prior, "2026-Q2", "ACC-Q2", 0.0),
     ):
         header, body = await sec.render("AAPL")
-        assert "📊 業績預期差與 PEAD 修正" in header
-        assert "2026-Q3" in body
-        assert "+15.2" in body
-        assert "+3.7%" in body
-        assert "+1.2%" in body
-        assert "+22.5" in body
-        assert "0Q: `$1.45`" in body
-        assert "+1Q: `$1.60`" in body
+    assert header == "📊 業績預期差與財報後漂移"
+    assert "2026-Q3" in body
+    assert "+15.2" in body
+    assert "+3.7%" in body
+    assert "+1.2%" in body
+    # 絕對分數與邊際變化分開呈現
+    assert "語意分數 **+37.5**" in body
+    assert "較前期（2026-Q2）`+25.0`" in body
+    assert "本季: `$1.45`" in body
+    assert "下季: `$1.60`" in body
+    assert "0Q" not in body and "+1Q" not in body
+    assert "小基數" not in body
 
 
 @pytest.mark.asyncio
-async def test_earnings_surprise_section_render_with_guidance_details() -> None:
-    """測試 EarningsSurpriseSection 解析有效 data_json 時展示指引方向與利潤率。"""
+async def test_earnings_surprise_section_without_prior_shows_no_delta() -> None:
+    """沒有前期指引時不得把當期分數顯示成邊際變化。"""
     sec = EarningsSurpriseSection()
-    from market_analysis.fundamental_pipeline.models import (
-        GuidanceExtraction,
-        MarginGuidance,
-        ToneMetric,
-    )
-
-    guidance_obj = GuidanceExtraction(
-        symbol="AAPL",
-        fiscal_period="2026-Q3",
-        revenue_guidance_midpoint_usd=90000000000.0,
-        eps_guidance_midpoint_usd=1.65,
-        margin_guidance=[
-            MarginGuidance(metric_name="Gross Margin", direction="EXPANDING")
-        ],
-        backlog_tone=ToneMetric(score=1, quote_snippet=""),
-        pricing_power_tone=ToneMetric(score=1, quote_snippet=""),
-        supply_chain_tone=ToneMetric(score=0, quote_snippet=""),
-        defensive_posture_tone=ToneMetric(score=0, quote_snippet=""),
-        reasoning_traditional_chinese="指引上修",
-    )
-    dto = GuidanceExtractionDTO(
-        symbol="AAPL",
-        fiscal_period="2026-Q3",
-        source_accession="ACC-AAPL-202",
-        model_version="gpt-4o",
-        confidence_score=0.95,
-        tone_delta_score=25.0,
-        data_json=guidance_obj.model_dump_json(),
-    )
-    with (
-        patch(
-            "cogs.fundamental_terminal.get_latest_earnings_surprise",
-            return_value=None,
-        ),
-        patch(
-            "cogs.fundamental_terminal.get_latest_guidance_extraction",
-            return_value=dto,
-        ),
-        patch("cogs.fundamental_terminal.get_eps_estimate_snapshots", return_value=[]),
-    ):
+    curr = _guidance_obj("2026-Q3", backlog=2)
+    with _patch_pr3(None, _guidance_dto(curr, "2026-Q3", "ACC-Q3", 0.0), []):
         _, body = await sec.render("AAPL")
-        assert "指引方向: **RAISED**" in body
-        assert "利潤率擴張" in body
+    assert "語意分數 **+37.5**" in body
+    assert "無前期指引可比" in body
+    assert "較前期" not in body
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_guidance_verdict_uses_prior() -> None:
+    """/fa 讀取前一期指引一起比較：同目標期別數值上修 → 調升（繁中呈現）。"""
+    sec = EarningsSurpriseSection()
+    margins = [MarginGuidance(metric_name="Gross Margin", direction="EXPANDING")]
+    curr = _guidance_obj(
+        "2026-Q3", revenue=95e9, eps=7.2, target="FY2026", margins=margins
+    )
+    prior = _guidance_obj("2026-Q2", revenue=90e9, eps=6.8, target="FY2026")
+    prior_lookup = MagicMock(return_value=_guidance_dto(prior, "2026-Q2", "ACC-Q2", 0))
+    with _patch_pr3(None, _guidance_dto(curr, "2026-Q3", "ACC-Q3", 0.0), []):
+        with patch(
+            "cogs.fundamental_terminal.get_prior_guidance_extraction", new=prior_lookup
+        ):
+            _, body = await sec.render("AAPL")
+    prior_lookup.assert_called_once_with("AAPL", "2026-Q3", "ACC-Q3")
+    assert "前瞻指引方向: **調升**（利潤率擴張）" in body
+    assert "RAISED" not in body and "Expanding" not in body
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_guidance_without_numbers_is_unknown() -> None:
+    """沒有可比較的數值指引時顯示「無法判定」並說明原因，不以語意態度推論。"""
+    sec = EarningsSurpriseSection()
+    curr = _guidance_obj("2026-Q3", backlog=2)
+    with _patch_pr3(None, _guidance_dto(curr, "2026-Q3", "ACC-Q3", 0.0), []):
+        _, body = await sec.render("AAPL")
+    assert "前瞻指引方向: **無法判定**" in body
+    assert "無同期別前後數值指引" in body
+
+
+@pytest.mark.asyncio
+async def test_earnings_surprise_section_small_base_and_pending() -> None:
+    """共識 EPS 絕對值 < 0.05 時標註小基數；PENDING 顯示待實際值公布。"""
+    sec = EarningsSurpriseSection()
+    small = EarningsSurpriseDTO(
+        symbol="RKLB",
+        fiscal_period="2026-Q2",
+        actual_eps=0.05,
+        consensus_eps=-0.02,
+        eps_surprise_pct=0.5,
+        composite_score=100.0,
+    )
+    with _patch_pr3(small, None, []):
+        _, body = await sec.render("RKLB")
+    assert "小基數" in body
+    assert "尚無指引擷取資料（管線尚未排程）" in body
+    assert "尚無共識快照資料（管線尚未排程）" in body
+
+    pending = EarningsSurpriseDTO(
+        symbol="RKLB", fiscal_period="2026-Q3", consensus_eps=0.10, status="PENDING"
+    )
+    with _patch_pr3(pending, None, []):
+        _, body = await sec.render("RKLB")
+    assert "⏳ 待實際值公布（共識 EPS: `$0.10`）" in body
