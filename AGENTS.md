@@ -55,6 +55,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (shared radar cache has no writer; fetches via `Semaphore(3)`) |
 | **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC), `is_memory_safe()` gated |
 | **Every 5m (08:30/10:00/16:15)** | `fundamental_pipeline_clock` | Event clock patrol: 08:30/10:00 macro surprise & 16:15 Fed net liquidity regime (dry-run, no DM) |
+| **Weekdays 07:00–20:00 (hourly)** | `sec_filing_sync_hourly` (ClockJob) | SEC EDGAR direct sync for holdings+watchlist universe (Form 4, 8-K 4.02/5.02 governance flags, 13D activist gate log-only); background task, no overlap, dry-run by default |
 | **16:15** | `dynamic_after_market_report` | Close maintenance, daily sentiment snapshot, NAV history, CVaR tail risk check, and macro-signal dry-run log (record-only, no notifications) |
 | **Post-market / Fri 17:05** | Analyst Post-Market & VTR | Comprehensive post-market summary and weekly Virtual Trading Room Brinson attribution |
 | **24/7 (30m / 4h / Workers)** | WTI, Calendar & Workers | 24/7 WTI crude oil monitor, 4h macro/FedWatch checker, persistent DM queue, health & stream workers |

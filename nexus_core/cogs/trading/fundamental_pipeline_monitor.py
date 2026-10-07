@@ -6,10 +6,14 @@
 3. 使用 BoundedCache 執行執行期去重防護。
 4. 預先註冊宏觀流動性 (NYSE 交易日 16:15 ET) 與總經預期差 (平日 08:30 / 10:00 ET)
    核心工作。預期差工作刻意不排除休市日：總經數據可能於休市日照常公布（如耶穌受難日的非農）。
+5. 註冊 SEC 申報同步 (平日 07:00–20:00 ET 每整點)：以背景任務執行
+   `FilingEventService.sync_universe_filings`，避免單輪（尤其首次回填）阻塞其他時鐘工作；
+   上一輪未完成時略過本輪。SEC 依聯邦營業日運作（耶穌受難日照常受理），故採平日而非 NYSE 交易日。
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -26,9 +30,11 @@ from market_analysis.fundamental_pipeline.event_clock import (
 )
 from services.bounded_cache import BoundedCache
 from services.calendar_service import calendar_service
+from services.filing_event_service import FilingEventService
 from services.liquidity_service import run_liquidity_pipeline
 from services.llm_service import is_memory_safe
 from services.macro_surprise_service import process_macro_surprises
+from services.sec_edgar_client import SecConfigError
 from services.single_flight import SingleFlightManager
 
 logger = logging.getLogger(__name__)
@@ -58,6 +64,106 @@ def nyse_trading_day_at(
             return True
 
     return _checker
+
+
+def weekday_hourly_between(
+    start_hour: int, end_hour: int, window_minutes: int = 10
+) -> Callable[[datetime], bool]:
+    """平日（週一至週五）`start_hour`–`end_hour` 點（含兩端）每個整點視窗內觸發。
+
+    時鐘每 5 分鐘輪詢一次，視窗 10 分鐘確保每個整點至少命中一次；同一整點的
+    重複命中由 ClockJob.cooldown_seconds 擋下。
+    """
+
+    def _checker(dt: datetime) -> bool:
+        if dt.weekday() >= 5:
+            return False
+        return start_hour <= dt.hour <= end_hour and dt.minute < window_minutes
+
+    return _checker
+
+
+class SecFilingSyncRunner:
+    """SEC 申報同步的背景執行器（單一實例、不重疊、設定錯誤只記一次）。
+
+    - `trigger` 由 ClockJob 呼叫：再次確認 leader 與記憶體守衛後，以 `asyncio.Task`
+      在背景執行 `sync_universe_filings` 並立即返回，不阻塞時鐘輪詢。
+    - 上一輪仍在執行時略過本輪（防重疊）。
+    - 缺少合規 `SEC_USER_AGENT`（`SecConfigError`）時只記一次 error，之後靜默略過。
+    - 跨輪重用同一個 FilingEventService / SecEdgarClient（共用限速器與 CIK 快取）。
+    """
+
+    def __init__(self, bot: Any | None = None) -> None:
+        self._bot = bot
+        self._service: FilingEventService | None = None
+        self._task: asyncio.Task[None] | None = None
+        self._config_error_logged = False
+
+    def is_running(self) -> bool:
+        return self._task is not None and not self._task.done()
+
+    async def _get_service(self) -> FilingEventService | None:
+        if self._service is not None:
+            return self._service
+        service = FilingEventService(bot=self._bot)
+        try:
+            await service.get_client()
+        except SecConfigError as e:
+            if not self._config_error_logged:
+                logger.error(
+                    f"[FundamentalPipeline] SEC 申報同步停用：{e} 設定 SEC_USER_AGENT 後重啟即可啟用；"
+                    "在此之前每輪靜默略過，不再重複記錄。"
+                )
+                self._config_error_logged = True
+            return None
+        self._service = service
+        return service
+
+    async def trigger(self, now_et: datetime) -> bool:
+        """啟動一輪背景同步；有啟動回傳 True，略過回傳 False。"""
+        if self._bot is not None and not getattr(
+            self._bot, "_is_leader_instance", False
+        ):
+            return False
+        if self.is_running():
+            logger.info(
+                "[FundamentalPipeline] 上一輪 SEC 申報同步仍在執行，略過本輪 "
+                f"({now_et:%Y-%m-%d %H:%M} ET)"
+            )
+            return False
+        if not is_memory_safe():
+            logger.warning(
+                "[FundamentalPipeline] VPS 記憶體使用率超標，略過本輪 SEC 申報同步"
+            )
+            return False
+        service = await self._get_service()
+        if service is None:
+            return False
+        self._task = asyncio.create_task(
+            self._run(service, now_et), name="fundamental_sec_filing_sync"
+        )
+        return True
+
+    async def _run(self, service: FilingEventService, now_et: datetime) -> None:
+        started = asyncio.get_running_loop().time()
+        try:
+            stats = await service.sync_universe_filings()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                f"[FundamentalPipeline] SEC 申報同步失敗 ({now_et:%Y-%m-%d %H:%M} ET)"
+            )
+            return
+        elapsed = asyncio.get_running_loop().time() - started
+        logger.info(
+            f"[FundamentalPipeline] SEC 申報同步完成 ({now_et:%Y-%m-%d %H:%M} ET)，"
+            f"耗時 {elapsed:.1f}s：{stats}"
+        )
+
+    def cancel(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
 
 
 async def _refresh_macro_calendar(now_et: datetime) -> bool:
@@ -108,8 +214,15 @@ async def _run_macro_surprise_job(now_et: datetime) -> None:
         logger.exception("[FundamentalPipeline] 執行總經預期差任務失敗")
 
 
-def register_default_fundamental_jobs() -> None:
-    """註冊 PR1 預設之基礎事件時鐘任務。"""
+def register_default_fundamental_jobs(
+    sec_sync_runner: SecFilingSyncRunner | None = None,
+) -> None:
+    """註冊預設之基礎事件時鐘任務（PR1 總經 / 流動性、PR2 SEC 申報同步）。
+
+    `sec_sync_runner` 由 Cog 傳入（帶 bot 以便關閉乾跑後推播）；未提供時建立無 bot 的
+    執行器（只入庫、不推播）。
+    """
+    runner = sec_sync_runner if sec_sync_runner is not None else SecFilingSyncRunner()
     ClockJobRegistry.register(
         ClockJob(
             job_id="macro_surprise_0830",
@@ -146,6 +259,19 @@ def register_default_fundamental_jobs() -> None:
         )
     )
 
+    ClockJobRegistry.register(
+        ClockJob(
+            job_id="sec_filing_sync_hourly",
+            name="SEC 申報同步（Form 4 / 8-K 治理 / 13D）",
+            schedule_desc="平日 07:00–20:00 ET 每整點（背景任務，不重疊）",
+            handler=runner.trigger,
+            is_due_fn=weekday_hourly_between(7, 20, window_minutes=10),
+            priority=40,
+            description="增量同步基本面標的池之 SEC 申報、內部人交易與治理旗標",
+            cooldown_seconds=1800.0,
+        )
+    )
+
 
 class FundamentalPipelineMonitorCog(commands.Cog):
     """基本面分析管線事件時鐘監控 Cog。"""
@@ -153,11 +279,13 @@ class FundamentalPipelineMonitorCog(commands.Cog):
     def __init__(self, bot: Any) -> None:
         self.bot = bot
         self._dedup_cache = BoundedCache(max_size=300)
-        register_default_fundamental_jobs()
+        self._sec_sync_runner = SecFilingSyncRunner(bot)
+        register_default_fundamental_jobs(self._sec_sync_runner)
         self.fundamental_clock_task.start()
 
     async def cog_unload(self) -> None:
         self.fundamental_clock_task.cancel()
+        self._sec_sync_runner.cancel()
 
     @tasks.loop(minutes=5)
     async def fundamental_clock_task(self) -> None:

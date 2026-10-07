@@ -5,9 +5,11 @@
 2. 針對新追蹤標的執行最多 90 天 Form 4 內部人交易回填 (Backfill)。
 3. 分流解析 Form 4 XML 並儲存內部人交易 (insider_transaction)。
 4. 識別 8-K Item 4.02 / 5.02 並儲存治理審查旗標 (governance_flag)。
-5. 嚴格遵循零交易執行不變量與 DRY_RUN 預設規範，推播統一走 defense_fundamental_thesis 頻道。
+5. 結構化 Schedule 13D / 13D/A 下載後交由 activist_gate 評估（record-only，只記日誌）。
+6. 嚴格遵循零交易執行不變量與 DRY_RUN 預設規範，推播統一走 defense_fundamental_thesis 頻道。
 
-尚未接線：本服務目前沒有任何 production 排程或呼叫端（`/fa` 只讀取既有資料表），
+接線狀態：由 `cogs/trading/fundamental_pipeline_monitor.py` 的 `sec_filing_sync_hourly`
+ClockJob（平日 07:00–20:00 ET 整點）以背景任務呼叫 `sync_universe_filings`，
 規格見 docs/macro_sentiment/06_sec_event_stream_and_governance_gate.md。
 
 受理時間：submissions JSON 的 acceptanceDateTime 不可信（部分公司比真實 UTC 多出美東
@@ -34,6 +36,10 @@ from database.fundamental_pipeline import (
     save_insider_transactions,
     save_sec_filing_events,
     upsert_sec_filing_cursor,
+)
+from market_analysis.fundamental_pipeline.activist_gate import (
+    evaluate_activist_filing,
+    parse_schedule_13d_xml,
 )
 from market_analysis.fundamental_pipeline.form4_parser import parse_form4_xml
 from market_analysis.fundamental_pipeline.governance_gate import (
@@ -268,6 +274,16 @@ class FilingEventService:
                     failure_floor = _earliest(failure_floor, accepted_et)
                     continue
 
+            if "ACTIVIST_13D" in routes and p_doc:
+                await self._evaluate_activist_13d(
+                    sym_upper,
+                    accession,
+                    cik_int,
+                    acc_no_dash,
+                    p_doc,
+                    filing_date=f_date or accepted_et.date().isoformat(),
+                )
+
             # 處理 8-K 治理審查
             filing_flags: list[GovernanceFlagRecord] = []
             if form in _FORM_8K_FORMS and parsed_items:
@@ -335,6 +351,57 @@ class FilingEventService:
             newest_accession=accession_list[0],
         )
         return stats
+
+    async def _evaluate_activist_13d(
+        self,
+        symbol: str,
+        accession: str,
+        cik_int: str,
+        acc_no_dash: str,
+        primary_doc: str,
+        filing_date: str,
+    ) -> None:
+        """下載結構化 Schedule 13D 並交由 activist_gate 評估（record-only，只記日誌）。
+
+        盡力而為：結果不入庫、不推播，因此下載或解析失敗只記 warning，不計入 failed、
+        不阻擋游標。舊版 HTML / 純文字 `SC 13D` 沒有結構化欄位，直接略過。
+        """
+        clean_doc = primary_doc.split("/")[-1]
+        if not clean_doc.lower().endswith(".xml"):
+            logger.debug(
+                f"[FilingEventService] {symbol} 13D ({accession}) 非結構化 XML，略過激進投資人評估。"
+            )
+            return
+        url = f"https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_no_dash}/{clean_doc}"
+        try:
+            client = await self.get_client()
+            xml_text = await client.fetch_document_text(url)
+        except Exception as e:
+            logger.warning(
+                f"[FilingEventService] 下載 {symbol} 13D ({accession}) 失敗，略過激進投資人評估: {e}"
+            )
+            return
+
+        fields = parse_schedule_13d_xml(xml_text)
+        if fields is None:
+            logger.warning(
+                f"[FilingEventService] 無法解析 {symbol} 13D ({accession}) 結構化欄位，略過激進投資人評估。"
+            )
+            return
+
+        signal = evaluate_activist_filing(
+            symbol=symbol,
+            accession=accession,
+            investor_name=fields.investor_name,
+            ownership_pct=fields.ownership_pct,
+            item_4_text=fields.item_4_text,
+            event_date=fields.event_date,
+            filing_date=filing_date,
+        )
+        logger.info(
+            f"[FilingEventService] 13D 激進投資人評估 {symbol} ({accession}): "
+            f"意圖={signal.key_intents or '無'}，逾期={signal.is_delayed_filing}；{signal.summary_text}"
+        )
 
     async def _advance_cursor(
         self,

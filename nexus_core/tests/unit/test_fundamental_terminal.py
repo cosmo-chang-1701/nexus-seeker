@@ -156,7 +156,8 @@ async def test_governance_gate_section_never_synced_is_not_shown_as_clean() -> N
         _, body = await sec.render("TSLA")
 
     assert "尚無申報同步資料" in body
-    assert "管線尚未排程" in body
+    assert "待排程首次同步" in body
+    assert "尚未排程" not in body
     assert "🟢" not in body
     assert "正常" not in body
     assert "NEUTRAL" not in body

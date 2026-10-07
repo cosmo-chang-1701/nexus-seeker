@@ -155,6 +155,8 @@ def test_route_filing_schedules() -> None:
     assert route_filing("SC 13D") == ["ACTIVIST_13D"]
     assert route_filing("SC 13D/A") == ["ACTIVIST_13D"]
     assert route_filing("SC 13G") == ["PASSIVE_13G"]
+    assert route_filing("SCHEDULE 13D/A") == ["ACTIVIST_13D"]
+    assert route_filing("SCHEDULE 13G/A") == ["PASSIVE_13G"]
 
 
 def test_route_filing_8k_items() -> None:
