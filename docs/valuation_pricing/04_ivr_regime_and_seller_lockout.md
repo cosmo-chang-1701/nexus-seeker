@@ -141,6 +141,8 @@ else:
 
 migration v088（v1.14.1）清空 `historical_iv` 後，IVR 需累積 `min_history_records`（60）個交易日。`IVMetrics` 新增 `iv_history_count`／`iv_history_required`，/x 在 IVR 缺失時顯示「樣本累積中 N/60 日」。另提供 `hv_20`（20 日已實現波動率）與 IV/HV20 比值作過渡期參考，**僅供呈現，嚴禁混入 IVR 母體，也不接任何閘門**。臨近總經事件的狀態文字只有 `event_loading_applied` 為真才寫「1.4x 事件加載」，LIVE_IV 寫「即時 IV 已含事件定價」。
 
+**IV 標示 tenor 與代理值揭露（僅 /x，不改 `current_iv`／`historical_iv` 定義）**：`IVMetrics` 新增 `current_iv_expiry`／`current_iv_dte`（LIVE_IV 取樣的最近到期）與 `term_near_expiry`／`term_far_expiry`（期限結構比值所用到期日，皆有預設值，舊快取可還原）。LIVE_IV 標為「最近到期 MM-DD (DTE n) ±20% OI 加權」，DTE ≤ 2 附「含結算 Gamma 偏高」；期限結構標示「近 MM-DD／遠 MM-DD 比」。HV_PROXY／STORED_IV 套用 1.4x 時值行寫「原值 ×1.4 事件加載 = 結果」；**代理值下不算 IV/HV20**（其恆等於 1.4），改列「跨式 IV/HV20」供參考。「極端高波」只認市場隱含 IV：跨式 IV，或 DTE ≥ 5 的 LIVE_IV；HV 代理與快取值不構成理由，IVR 未知時文末註明「IVR 累積中，無歷史分位」。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **IV Rank / Percentile 計算與期限結構分析**:

@@ -228,7 +228,7 @@ def test_high_vol_note_respects_sto_lockout_and_names_real_trigger() -> None:
         {
             "symbol": "SNDK",
             "quote": {"c": SNDK_SPOT},
-            "iv_data": _iv(current_iv=1.04),
+            "iv_data": _iv(current_iv=1.04, straddle_implied_iv=1.04),
             "psq_result": _psq(),
             "kelly_sizing": OptimizationResult(
                 suggested_contracts=0,
@@ -237,7 +237,7 @@ def test_high_vol_note_respects_sto_lockout_and_names_real_trigger() -> None:
             ),
         }
     )
-    assert "極端高波環境 (IV 104%)" in text
+    assert "極端高波環境 (跨式 IV 104%)" in text
     assert "賣方策略目前受風控禁用" in text
     assert "建議縮小部位或使用期權賣方策略保護" not in text
     assert "IVR > 50%" not in text

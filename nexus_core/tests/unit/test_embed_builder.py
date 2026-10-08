@@ -3662,7 +3662,6 @@ def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() ->
         "⚠️ 機構大單 $145.00 (STO PUT 12,509口, 權利金 $3.04M) 與 GEX PutWall 分歧"
         in desc
     )
-    assert "單日累積流量的啟發式方向，非全鏈聚合曝險，僅供交叉參考" in desc
 
 
 def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold() -> (
@@ -3911,7 +3910,8 @@ def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
     assert "Implied Volatility (IV) 🟢即時" in desc
-    assert "當前 30 天平值期權隱含波動率（每次開啟強制刷新，非快取）" in desc
+    assert "最近到期" in desc
+    assert "30 天平值" not in desc
 
 
 def test_create_tactical_symbol_embed_stored_iv_has_no_realtime_marker() -> None:

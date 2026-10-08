@@ -451,6 +451,8 @@ async def fetch_and_calculate_iv_metrics(
             "UNAVAILABLE"
         )
         is_market_active = is_market_open()
+        current_iv_expiry: str | None = None
+        current_iv_dte: int | None = None
 
         # A. Live IV Calculation (Preferred)
         # IV 定義統一為「最近到期日、現價 ±20% 內合約之 (OI+量)/距離 加權 IV」
@@ -488,6 +490,14 @@ async def fetch_and_calculate_iv_metrics(
                                 sum(iv * w for iv, w in all_options) / total_weight
                             )
                             iv_source = "LIVE_IV"
+                            current_iv_expiry = expirations[0]
+                            try:
+                                current_iv_dte = (
+                                    datetime.strptime(expirations[0], "%Y-%m-%d").date()
+                                    - datetime.now(ny_tz).date()
+                                ).days
+                            except ValueError:
+                                current_iv_dte = None
             except Exception as opt_err:
                 logger.warning(
                     f"[{symbol}] VIX-style weighted IV calculation failed: {opt_err}"
@@ -743,6 +753,17 @@ async def fetch_and_calculate_iv_metrics(
             except Exception as e:
                 logger.debug(f"[{symbol}] 跨式到期日標示取得失敗: {e}")
 
+        term_near_expiry: str | None = None
+        term_far_expiry: str | None = None
+        if term_status is not None:
+            try:
+                term_near_expiry, term_far_expiry = _select_term_expiries(
+                    await market_data_service.get_all_option_expiries(symbol) or [],
+                    datetime.now().date(),
+                )
+            except Exception as e:
+                logger.debug(f"[{symbol}] 期限結構到期日標示取得失敗: {e}")
+
         hv_20_val: float | None = None
         if not df_hist.empty and "HV_20" in df_hist.columns:
             _hv = df_hist["HV_20"].dropna()
@@ -786,6 +807,10 @@ async def fetch_and_calculate_iv_metrics(
             hv_20=hv_20_val,
             straddle_expiry=straddle_expiry,
             straddle_dte=straddle_dte,
+            current_iv_expiry=current_iv_expiry,
+            current_iv_dte=current_iv_dte,
+            term_near_expiry=term_near_expiry,
+            term_far_expiry=term_far_expiry,
         )
 
         # 12. 寫入快取

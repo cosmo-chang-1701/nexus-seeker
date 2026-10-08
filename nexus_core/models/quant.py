@@ -122,3 +122,8 @@ class IVMetrics(BaseModel):
     # 週預期 EM 所用跨式的到期日與 DTE（呈現標籤用）。
     straddle_expiry: str | None = None
     straddle_dte: int | None = None
+    # LIVE_IV 所取樣的到期日與 DTE，以及期限結構比值所用的近月／遠月到期日（呈現標籤用）。
+    current_iv_expiry: str | None = None
+    current_iv_dte: int | None = None
+    term_near_expiry: str | None = None
+    term_far_expiry: str | None = None

@@ -76,11 +76,25 @@ _GEX_STO_DIVERGENCE_THRESHOLD_PCT = 2.0
 
 
 def get_scenario_guidance(
-    current_price: float, max_pain: float, threshold: float = 0.03
+    current_price: float,
+    max_pain: float,
+    threshold: float = 0.03,
+    *,
+    sigma_to_expiry: float | None = None,
+    pin_strike: float | None = None,
 ) -> str:
     """Generate Max Pain settlement guidance from the spot/Max Pain spread."""
     if max_pain <= 0.0:
         return "期權未平倉量數據不足，無法評估結算磁吸效應。"
+    if pin_strike is not None:
+        return (
+            f"Long Gamma 釘住 ${pin_strike:.2f} 為主；痛點 ${max_pain:.2f} 僅供參考。"
+        )
+    if sigma_to_expiry is not None and abs(current_price - max_pain) > sigma_to_expiry:
+        return (
+            f"痛點 ${max_pain:.2f} 超出結算前 1σ (±${sigma_to_expiry:.2f})，"
+            "收斂機率低。"
+        )
 
     spread_pct = (current_price - max_pain) / max_pain
 
@@ -631,9 +645,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             iv_source = "STORED_IV"
 
         if is_premarket:
+            import market_time as _mt_title
+
+            _now_title = datetime.now(_mt_title.ny_tz)
+            _session_word = (
+                "盤後"
+                if _mt_title.is_nyse_trading_day(_now_title.date())
+                and _now_title.hour >= 16
+                else "盤前"
+            )
             if current_iv_num is not None and current_iv_num > 0.0:
                 title_suffix = (
-                    " [盤前/HV代理]" if iv_source == "HV_PROXY" else " [盤前/前日收盤]"
+                    f" [{_session_word}/HV代理]"
+                    if iv_source == "HV_PROXY"
+                    else f" [{_session_word}/前日收盤]"
                 )
             else:
                 title_suffix = " [盤前數據未更新/降級模式]"
@@ -1028,7 +1053,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         elif structural_inputs_missing:
             divergence_data_missing = True
             divergence = "資料不足（Skew 分位／PCR 缺失）"
-            action = "數據不足，不做結構背離判定"
+            action = ""
 
     skew_color = (
         "\u001b[1;35m"
@@ -1106,10 +1131,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         [
             " 情緒背離偵測 (Divergence Check)",
             f" └─ 狀態: {divergence_color}{divergence}\u001b[0m",
-            f" └─ 建議: \u001b[1;32m{action}\u001b[0m",
-            "```",
         ]
     )
+    if action:
+        edge_lines.append(f" └─ 建議: \u001b[1;32m{action}\u001b[0m")
+    edge_lines.append("```")
 
     _add_ansi_field_safely(embed, "📐 情緒與邊緣偵測 (Edge Detection)", edge_lines)
 
@@ -1234,13 +1260,18 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else:
                 if iv_source == "LIVE_IV":
                     vol_title = "Implied Volatility (IV) 🟢即時"
-                    vol_note = (
-                        "當前 30 天平值期權隱含波動率（每次開啟強制刷新，非快取）"
-                    )
+                    _ie = _iv_attr("current_iv_expiry")
+                    _id = _iv_attr("current_iv_dte")
+                    if _ie and _id is not None:
+                        vol_note = f"最近到期 {str(_ie)[5:]} (DTE {_id}) ±20% OI 加權"
+                        if int(_id) <= 2:
+                            vol_note += "，含結算 Gamma 偏高"
+                    else:
+                        vol_note = "最近到期 ±20% OI 加權"
                 else:
                     vol_title = "Implied Volatility (IV)"
                     vol_note = (
-                        "當前 30 天平值期權隱含波動率"
+                        "最近到期 ±20% OI 加權"
                         if iv_source != "STORED_IV"
                         else "SQLite 快取 IV（非即時）"
                     )
@@ -1262,6 +1293,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _hist_req = int(_to_float(_iv_attr("iv_history_required", 60), 60.0))
             if iv_rank_num is None and _hist_cnt > 0:
                 iv_status_str = f"樣本累積中 {_hist_cnt}/{_hist_req} 日，10/01 母體重置；{status_tw}"
+            if _iv_attr("event_loading_applied", False) and current_iv_num:
+                iv_val_str = (
+                    f"{current_iv_num / 1.4 * 100:.1f}% ×1.4 事件加載 = {iv_val_str}"
+                )
             iv_lines = [
                 "```ansi",
                 vol_title,
@@ -1270,11 +1305,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 f" └─ IV Rank: {iv_rank_str} | IV Percentile: {iv_per_str} ({iv_status_str})",
             ]
             _hv20 = _to_float_or_none(_iv_attr("hv_20"))
-            if iv_rank_num is None and _hv20 and current_iv_num:
-                iv_lines.append(
-                    f" └─ IV/HV20: {current_iv_num * 100:.1f}% / {_hv20 * 100:.1f}% = "
-                    f"{current_iv_num / _hv20:.2f}x（IVR 累積期參考，>1 偏貴）"
-                )
+            _st_iv_hv = _to_float_or_none(_iv_attr("straddle_implied_iv"))
+            if iv_rank_num is None and _hv20:
+                if iv_source in ("HV_PROXY", "STORED_IV"):
+                    # 代理值本身由 HV 推得，IV/HV20 恆為常數，不輸出。
+                    if _st_iv_hv:
+                        iv_lines.append(
+                            f" └─ 跨式 IV/HV20: {_st_iv_hv * 100:.1f}% / "
+                            f"{_hv20 * 100:.1f}% = {_st_iv_hv / _hv20:.2f}x（參考）"
+                        )
+                elif current_iv_num:
+                    iv_lines.append(
+                        f" └─ IV/HV20: {current_iv_num * 100:.1f}% / {_hv20 * 100:.1f}% = "
+                        f"{current_iv_num / _hv20:.2f}x（IVR 累積期參考，>1 偏貴）"
+                    )
 
             iv_term_status = (
                 getattr(iv_data, "iv_term_structure_status", None) if iv_data else None
@@ -1300,7 +1344,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     else:
                         # 0.95~1.05 為刻意的死區：近遠月 IV 大致持平，方向不具意義
                         term_prefix = "⚖️ 持平 (Flat, 0.95~1.05)"
-                    iv_lines.append(f" └─ {term_prefix} (近遠月比: {ratio_val:.2f})")
+                    _tn = _iv_attr("term_near_expiry")
+                    _tf = _iv_attr("term_far_expiry")
+                    _term_lbl = (
+                        f"近 {str(_tn)[5:]}／遠 {str(_tf)[5:]} 比"
+                        if _tn and _tf
+                        else "近遠月比"
+                    )
+                    iv_lines.append(f" └─ {term_prefix} ({_term_lbl}: {ratio_val:.2f})")
                 except (ValueError, TypeError):
                     iv_lines.append(" └─ --")
             else:
@@ -1347,17 +1398,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 if _st_exp and _st_dte
                 else "7 日 1σ"
             )
-            if earnings_loading or macro_loading:
-                iv_lines.extend(
-                    [
-                        f" ├─ {em_title}: {expected_move_weekly_str} ({em_note})",
-                        " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
-                    ]
-                )
-            else:
-                iv_lines.append(
-                    f" └─ {em_title}: {expected_move_weekly_str} ({em_note})"
-                )
+            iv_lines.append(f" └─ {em_title}: {expected_move_weekly_str} ({em_note})")
 
             catalysts = data.get("catalysts")
             if catalysts:
@@ -1454,6 +1495,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             iv_lines.append("```")
 
         _add_ansi_field_safely(embed, "📊 隱含波動率與預期區間 (IV Context)", iv_lines)
+
+    # 釘住成立時的釘住履約價（GEX 區塊內賦值，供 Max Pain 指引取用）。
+    _pin_strike: Optional[float] = None
 
     # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
     gex_data = data.get("gex_profile_data")
@@ -1843,7 +1887,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                             f"⚠️ 機構大單 ${sto_strike:.2f}"
                                             f" (STO PUT {sto_volume:,}口{notional_suffix})"
                                             " 與 GEX PutWall 分歧"
-                                            " (單日累積流量的啟發式方向，非全鏈聚合曝險，僅供交叉參考)"
                                         )
 
                         put_block_items = put_items
@@ -2033,9 +2076,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 + "｜".join(rr_parts)
                                 + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
                             )
-                            put_block_items.append(
-                                "B&H 建倉以擠壓等級為準（strategies/10 不設目標價），見下方 🎯 欄位"
-                            )
                         _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
                     if call_block_items is not None:
                         _append_tree_block(gex_lines, "🚧 上檔壓力", call_block_items)
@@ -2077,6 +2117,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 else _PIN_FALLBACK_BAND_PCT
                             )
                             if upside_room_pct <= pin_band_pct:
+                                _pin_strike = call_wall_float
                                 regime_items.append(
                                     f"📌 釘住效應：Long Gamma 且距 CallWall "
                                     f"${call_wall_float:.2f} 僅 {upside_room_pct:.2f}%"
@@ -2243,7 +2284,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         # Dynamic timeframe volatility regime evaluation
         # IV Rank 缺失（樣本不足）時必須維持「未知」，不可補 0 當成低波。
-        sqz_iv_pct = _to_float_or_none(current_iv)
+        # 「極端高波」只認市場隱含 IV：跨式 IV；或 DTE>=5 的即時 IV。HV 代理／快取值不算。
+        def _sqz_iv_attr(name: str) -> Any:
+            if isinstance(iv_data, dict):
+                return iv_data.get(name)
+            return getattr(iv_data, name, None)
+
+        sqz_iv_pct = _to_float_or_none(_sqz_iv_attr("straddle_implied_iv"))
+        if sqz_iv_pct is None and _sqz_iv_attr("iv_source") == "LIVE_IV":
+            _live_dte = _sqz_iv_attr("current_iv_dte")
+            if _live_dte is not None and int(_live_dte) >= 5:
+                sqz_iv_pct = _to_float_or_none(current_iv)
         iv_val_num = sqz_iv_pct * 100 if sqz_iv_pct is not None else None
         iv_rank_known = _to_float_or_none(iv_rank)
 
@@ -2251,7 +2302,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         if iv_rank_known is not None and iv_rank_known > 50.0:
             high_vol_reasons.append(f"IVR {iv_rank_known:.0f}%")
         if iv_val_num is not None and iv_val_num > 80.0:
-            high_vol_reasons.append(f"IV {iv_val_num:.0f}%")
+            high_vol_reasons.append(f"跨式 IV {iv_val_num:.0f}%")
 
         if high_vol_reasons:
             # 賣方建議必須服從風控：VIX 戰情階梯禁用 STO 時不得在同一張卡片
@@ -2266,9 +2317,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 if sto_locked
                 else "建議縮小部位或使用期權賣方策略保護"
             )
+            _ivr_unknown = "（IVR 累積中，無歷史分位）" if iv_rank_known is None else ""
             sqz_vix_note = (
                 f"極端高波環境 ({' / '.join(high_vol_reasons)})，提防劇烈洗盤，"
-                f"{hedge_advice}。"
+                f"{hedge_advice}。{_ivr_unknown}"
             )
         elif (
             iv_rank_known is not None
@@ -2417,6 +2469,33 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         oi_pcr_str = "--"
         oi_pcr_color = "\u001b[1;30m"
 
+    _st_iv_top = (
+        iv_data.get("straddle_implied_iv")
+        if isinstance(iv_data, dict)
+        else getattr(iv_data, "straddle_implied_iv", None)
+    )
+    _st_iv_f = _to_float_or_none(_st_iv_top)
+
+    def _sigma_to_dte(dte_days: int) -> Optional[float]:
+        if _st_iv_f is None or _st_iv_f <= 0 or price <= 0 or dte_days < 1:
+            return None
+        return _st_iv_f * price * math.sqrt(dte_days / 365.0)
+
+    _sigma_guard: Optional[float] = None
+    _mp_nearest = data.get("month_max_pains") or []
+    try:
+        from market_time import ny_tz as _sg_tz
+
+        _mp_sorted0 = sorted(_mp_nearest, key=lambda x: x.get("expiry", ""))
+        if _mp_sorted0:
+            _d0 = (
+                datetime.strptime(_mp_sorted0[0]["expiry"], "%Y-%m-%d").date()
+                - datetime.now(_sg_tz).date()
+            ).days
+            _sigma_guard = _sigma_to_dte(_d0)
+    except Exception:
+        _sigma_guard = None
+
     if cb_triggered:
         scenario = "⚠️ 最大痛點偏離度過高 (>30%) 已啟動斷路器，暫停輸出結算操作指引，請以技術指標為準。"
         scen_color = "\u001b[1;31m"
@@ -2424,7 +2503,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = get_scenario_guidance(price, max_pain)
         scen_color = "\u001b[1;30m"
     else:
-        scenario = get_scenario_guidance(price, max_pain)
+        scenario = get_scenario_guidance(
+            price, max_pain, sigma_to_expiry=_sigma_guard, pin_strike=_pin_strike
+        )
         spread_pct = ((price - max_pain) / max_pain) if max_pain > 0 else 0.0
         if spread_pct > 0.03:
             scen_color = "\u001b[1;31m"
@@ -2510,8 +2591,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             color_item = "\u001b[1;31m" if abs(dist) > 5.0 else "\u001b[1;32m"
             prefix = " ├─ " if i < len(month_mps_sorted) - 1 else " └─ "
 
+            _sig_i = _sigma_to_dte(dte)
+            sig_str = f" ±${_sig_i:.1f}" if _sig_i is not None else ""
             mp_lines.append(
-                f"{prefix}{exp} (DTE {dte} / {label}): \u001b[1;33m{mp_price_str}\u001b[0m (當前價差: {color_item}{dist_val_str}\u001b[0m)"
+                f"{prefix}{exp} (DTE {dte} / {label}): \u001b[1;33m{mp_price_str}\u001b[0m (當前價差: {color_item}{dist_val_str}\u001b[0m){sig_str}"
             )
     else:
         mp_lines.append(
@@ -2520,7 +2603,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     target_lines = [
         "```ansi",
-        " 最大痛點結算 (Max Pain Settlement)",
+        " 最大痛點結算 (Max Pain Settlement，±結算前1σ)",
     ]
     target_lines.extend(mp_lines)
     target_lines.extend(
@@ -2631,14 +2714,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             table_lines = table_str.split("\n")
             table_lines.append("")
             table_lines.append(
-                "⚠️ SWEEP/BLOCK/CROSS 為量體形狀 + Bid/Ask 執行價位置啟發式代理判定，"
-                "非真實 order-type 逐筆 tape 數據。"
-            )
-            table_lines.append(
-                "📊 日累積＝資料源無逐筆 tape，列示當日累積量；❔ 未定＝末筆成交無法判方向。"
-            )
-            table_lines.append(
-                "⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
+                "⚠️ 方向／SWEEP 為 Bid-Ask 啟發式；OI 為前日；📊日累積 ❔未定"
             )
             _add_ansi_field_safely(embed, uoa_field_name, table_lines)
         except Exception:
