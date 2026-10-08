@@ -154,7 +154,7 @@ async def get_stock_splits(symbol: str) -> pd.Series:
     symbol = _sanitize_ticker(symbol)
     try:
         ticker = yf.Ticker(symbol)
-        splits = await call_yf(lambda: ticker.splits)
+        splits = await call_yf(lambda: ticker.splits, _endpoint="splits")
         if splits is None:
             return pd.Series(dtype=float)
         return splits

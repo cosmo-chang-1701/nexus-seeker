@@ -11,7 +11,9 @@ import pandas as pd
 import yfinance as yf
 
 from market_time import is_market_open, ny_tz
+from services.market_data_service import api_budget
 from services.market_data_service._core import (
+    _is_interactive_request,
     _sanitize_ticker,
     _to_yfinance_symbol,
     call_yf,
@@ -65,6 +67,9 @@ async def _fetch_history_via_edge(
             req_url += "&auto_adjust=false"
 
         async with get_edge_client() as client:
+            api_budget.record_call(
+                "yahoo", "edge_history", interactive=_is_interactive_request.get()
+            )
             res = await client.get(req_url)
             if res.status_code == 200:
                 data = res.json()
