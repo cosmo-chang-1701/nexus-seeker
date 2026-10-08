@@ -6,6 +6,7 @@
 * 降級：宏觀逃頂評分 tier != NORMAL（含算不出來的 UNKNOWN）。
 """
 
+import asyncio
 import logging
 from typing import List, Optional, Tuple
 
@@ -19,7 +20,11 @@ async def compute_macro_escape_tier() -> str:
     「無法確定為常態」回傳為 UNKNOWN；任何例外同樣回傳 UNKNOWN（fail-closed）。
     """
     try:
-        from database.cache import get_kv_cache
+        from database.cache import (
+            FEDWATCH_PROB_MAX_AGE_HOURS,
+            get_fedwatch_probability_fresh,
+            should_warn_fedwatch_stale,
+        )
         from market_analysis.index_microstructure import (
             evaluate_macro_top_escape_score,
             fetch_core_macro_metrics,
@@ -46,13 +51,22 @@ async def compute_macro_escape_tier() -> str:
             if fg_raw is not None and not core_metrics.get("_is_fallback")
             else None
         )
-        prob = get_kv_cache("macro_fedwatch_probability")
+        # 同步 SQLite 讀取不得佔用 event loop；逾期時 prob=None 且 prob_stale=True，
+        # 進場閘門維持 fail-closed（tier=UNKNOWN），門檻不變。（避險端的保護性 Put
+        # 才沿用最後已知值，見 macro_top_escape_defense.py。）
+        prob, prob_stale = await asyncio.to_thread(get_fedwatch_probability_fresh)
+        if should_warn_fedwatch_stale("vetoes", prob_stale):
+            logger.warning(
+                f"FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），"
+                "宏觀逃頂評分不計入該因子"
+            )
         _, tier, _, _ = evaluate_macro_top_escape_score(
             vts_ratio=vts_ratio,
             fear_greed=fear_greed,
             prob=prob,
             is_negative_gamma=is_negative_gamma,
             satellite_euphoria_ratio=None,
+            prob_stale=prob_stale,
         )
         return str(tier)
     except Exception as e:

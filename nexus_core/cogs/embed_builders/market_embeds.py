@@ -1868,6 +1868,11 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                     fedwatch_desc = f"\u001b[1;33m{meeting_prefix}均衡定價 ({fw_val * 100:.1f}%)\u001b[0m{fedwatch_suffix}"
         except (ValueError, TypeError):
             fedwatch_desc = "暫無數據"
+    elif macro_data.get("fedwatch_is_stale"):
+        # 過期不顯示舊數字（與進場閘門的 fail-closed 判斷一致）
+        from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+
+        fedwatch_desc = f"\u001b[1;33m⚪ 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），不顯示舊值\u001b[0m"
     else:
         fedwatch_desc = "暫無數據"
 

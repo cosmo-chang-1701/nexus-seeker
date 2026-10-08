@@ -1,4 +1,9 @@
-from .cache import get_kv_cache, get_kv_cache_with_age, save_kv_cache
+from .cache import (
+    get_kv_cache,
+    get_kv_cache_fresh,
+    get_kv_cache_with_age,
+    save_kv_cache,
+)
 from .core import init_db, run_migrations
 from .financials import get_cached_financials, purge_old_cache, save_financials_cache
 from .fundamental_pipeline import (
@@ -176,6 +181,7 @@ __all__ = [
     "get_hedge_history",
     "get_insider_transactions",
     "get_kv_cache",
+    "get_kv_cache_fresh",
     "get_kv_cache_with_age",
     "get_latest_channel_checks",
     "get_latest_earnings_surprise",

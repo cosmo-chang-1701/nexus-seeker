@@ -75,7 +75,7 @@ async def test_evaluate_macro_top_escape_defense_opt_in_gate_off_no_action(
     new_callable=AsyncMock,
     return_value={"fear_greed": 48.0},
 )
-@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("database.cache.get_fedwatch_probability_fresh", return_value=(0.50, False))
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_score_zero_no_action(
@@ -110,7 +110,7 @@ async def test_evaluate_macro_top_escape_defense_score_zero_no_action(
     new_callable=AsyncMock,
     return_value={"fear_greed": 48.0},
 )
-@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("database.cache.get_fedwatch_probability_fresh", return_value=(0.50, False))
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_watch_tier_buys_protective_put(
     mock_ctx: MagicMock,
@@ -156,7 +156,7 @@ async def test_evaluate_macro_top_escape_defense_watch_tier_buys_protective_put(
     new_callable=AsyncMock,
     return_value={"fear_greed": 48.0},
 )
-@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("database.cache.get_fedwatch_probability_fresh", return_value=(0.50, False))
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_watch_tier_flat_portfolio_no_hedge(
     mock_ctx: MagicMock,
@@ -191,7 +191,7 @@ async def test_evaluate_macro_top_escape_defense_watch_tier_flat_portfolio_no_he
     new_callable=AsyncMock,
     return_value={"fear_greed": 80.0},
 )
-@patch("database.cache.get_kv_cache", return_value=0.50)
+@patch("database.cache.get_fedwatch_probability_fresh", return_value=(0.50, False))
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_elevated_tier_buys_protective_put(
@@ -234,7 +234,10 @@ async def test_evaluate_macro_top_escape_defense_elevated_tier_buys_protective_p
     new_callable=AsyncMock,
     return_value=_CRITICAL_PATCHES["fear_greed"],
 )
-@patch("database.cache.get_kv_cache", return_value=_CRITICAL_PATCHES["prob"])
+@patch(
+    "database.cache.get_fedwatch_probability_fresh",
+    return_value=(_CRITICAL_PATCHES["prob"], False),
+)
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_critical_tier_buys_protective_put_not_trim(
@@ -280,7 +283,10 @@ async def test_evaluate_macro_top_escape_defense_critical_tier_buys_protective_p
     new_callable=AsyncMock,
     return_value=_CRITICAL_PATCHES["fear_greed"],
 )
-@patch("database.cache.get_kv_cache", return_value=_CRITICAL_PATCHES["prob"])
+@patch(
+    "database.cache.get_fedwatch_probability_fresh",
+    return_value=(_CRITICAL_PATCHES["prob"], False),
+)
 @patch("database.orders.get_user_active_orders", return_value=[])
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_macro_top_escape_defense_skips_already_flagged_symbols(

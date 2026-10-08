@@ -37,10 +37,14 @@ def _quote_price(quote: Dict[str, Any] | None, fallback: float = 0.0) -> float:
     return fallback
 
 
+# Vol POC / GEX PutWall 的 SQLite 回退有效性「以交易日為準」：寫入時間（ET 日期）
+# 須在 market_time 的最近一個已收盤交易日當天或之後（週一可用週五的價位，週五
+# 不可用週三的）。固定小時數上限會被週末／連假吃掉。這兩個價位的寫入者是盤中
+# 30 分鐘 IntradayScanPipeline（本模組）與 /x 雷達面板，沒有盤前預熱寫入。
 def get_cached_volume_poc(symbol: str) -> float | None:
-    from database.cache import get_kv_cache
+    from database.cache import get_kv_cache_session_fresh
 
-    val = get_kv_cache(f"volume_poc_{symbol.upper()}")
+    val = get_kv_cache_session_fresh(f"volume_poc_{symbol.upper()}")
     return float(val) if val is not None else None
 
 
@@ -51,9 +55,9 @@ async def save_cached_volume_poc(symbol: str, poc: float) -> None:
 
 
 def get_cached_gex_putwall(symbol: str) -> float | None:
-    from database.cache import get_kv_cache
+    from database.cache import get_kv_cache_session_fresh
 
-    val = get_kv_cache(f"gex_putwall_{symbol.upper()}")
+    val = get_kv_cache_session_fresh(f"gex_putwall_{symbol.upper()}")
     return float(val) if val is not None else None
 
 
@@ -287,7 +291,7 @@ async def build_enhanced_watchlist_metrics(
         except Exception as e:
             logger.warning(f"Error calculating Vol POC for {symbol}: {e}")
     if volume_poc <= 0.0:
-        cached_poc = get_cached_volume_poc(symbol)
+        cached_poc = await asyncio.to_thread(get_cached_volume_poc, symbol)
         volume_poc = cached_poc if cached_poc else current_price
 
     # 2. GEX PutWall and CallWall via SQLite cache fallback
@@ -307,7 +311,7 @@ async def build_enhanced_watchlist_metrics(
     except Exception as e:
         logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
     if gex_max_put_wall is None or gex_max_put_wall <= 0.0:
-        cached_wall = get_cached_gex_putwall(symbol)
+        cached_wall = await asyncio.to_thread(get_cached_gex_putwall, symbol)
         gex_max_put_wall = cached_wall if cached_wall else None
 
     # Restore essential indicators for pricing engine (AGENTS.md)

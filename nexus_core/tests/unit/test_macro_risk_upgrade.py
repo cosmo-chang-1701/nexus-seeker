@@ -1300,7 +1300,9 @@ def test_calendar_service_fedwatch_lookup() -> None:
     from services.calendar_service import calendar_service
 
     # Case 1: kv_cache 命中
-    with patch("database.cache.get_kv_cache") as mock_kv:
+    with patch("database.cache.get_kv_cache") as mock_kv, patch(
+        "database.cache.get_fedwatch_probability_fresh", return_value=(0.65, False)
+    ):
         mock_kv.side_effect = lambda k: (
             0.65
             if k == "macro_fedwatch_probability"
@@ -1310,11 +1312,11 @@ def test_calendar_service_fedwatch_lookup() -> None:
                 else (0 if k == "macro_fedwatch_is_fallback" else None)
             )
         )
-        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        prob, is_fallback, _stale = calendar_service.get_latest_fedwatch_probability()
         assert prob == 0.65
         assert is_fallback is False
 
-        p, is_fb, details = calendar_service.get_latest_fedwatch_info()
+        p, is_fb, details, _stale = calendar_service.get_latest_fedwatch_info()
         assert p == 0.65
         assert is_fb is False
         assert details.get("meeting_date") == "09/16"
@@ -1323,25 +1325,30 @@ def test_calendar_service_fedwatch_lookup() -> None:
     # Case 2: kv_cache miss, fallback to SQLite
     with (
         patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "database.cache.get_fedwatch_probability_fresh", return_value=(None, False)
+        ),
         patch("sqlite3.connect") as mock_conn,
     ):
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
         mock_conn.return_value.cursor.return_value = mock_cursor
-        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        prob, is_fallback, _stale = calendar_service.get_latest_fedwatch_probability()
         assert prob == 0.85
         assert is_fallback is True
 
     # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 自動觸發防禦並轉為 fallback
-    with patch("database.cache.get_kv_cache") as mock_kv:
+    with patch("database.cache.get_kv_cache") as mock_kv, patch(
+        "database.cache.get_fedwatch_probability_fresh", return_value=(1.0, False)
+    ):
         mock_kv.side_effect = lambda k: (
             1.0
             if k == "macro_fedwatch_probability"
             else (0 if k == "macro_fedwatch_is_fallback" else None)
         )
-        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
+        prob, is_fallback, _stale = calendar_service.get_latest_fedwatch_probability()
         assert is_fallback is True
-        p, is_fb, details = calendar_service.get_latest_fedwatch_info()
+        p, is_fb, details, _stale = calendar_service.get_latest_fedwatch_info()
         assert is_fb is True
         assert details.get("prob_hike") == 0.0
 

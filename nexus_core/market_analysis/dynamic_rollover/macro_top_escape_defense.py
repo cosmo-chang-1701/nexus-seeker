@@ -1,3 +1,4 @@
+import asyncio
 import math
 from typing import Any, Dict, List, Optional
 
@@ -206,9 +207,24 @@ async def evaluate_macro_top_escape_defense_impl(
     except Exception as e:
         logger.warning(f"宏觀逃頂前瞻防禦: 取得 Fear & Greed 指數失敗: {e}")
 
-    from database.cache import get_kv_cache
+    from database.cache import (
+        FEDWATCH_PROB_MAX_AGE_HOURS,
+        get_fedwatch_probability_last_known,
+        should_warn_fedwatch_stale,
+    )
 
-    prob = get_kv_cache("macro_fedwatch_probability")
+    # 避險端與進場閘門的過期政策刻意相反：進場閘門過期 → prob=None（fail-closed，
+    # 不放行新曝險）；避險過期 → 沿用最後一筆已知值計分（fail-safe for hedging），
+    # 因為保護性 Put 寧可多算一個風險因子，也不該因資料過期而少算而漏掉避險。
+    # prob_stale=True 且 prob 非 None 時，評分函式照常計分並在因子文字附註
+    # 「資料過期，沿用最後值」。查無任何資料時才是 prob=None（單純未知，不計分）。
+    # 同步 SQLite 讀取移出 event loop。
+    prob, prob_stale = await asyncio.to_thread(get_fedwatch_probability_last_known)
+    if should_warn_fedwatch_stale("defense", prob_stale):
+        logger.warning(
+            f"宏觀逃頂前瞻防禦: FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），"
+            "沿用最後已知值計分"
+        )
 
     satellite_euphoria_ratio = _compute_satellite_euphoria_ratio(portfolio_assets)
 
@@ -218,6 +234,7 @@ async def evaluate_macro_top_escape_defense_impl(
         prob=prob,
         is_negative_gamma=is_negative_gamma,
         satellite_euphoria_ratio=satellite_euphoria_ratio,
+        prob_stale=prob_stale,
     )
     if tier not in _MACRO_TOP_ESCAPE_PUT_TIERS:
         return []

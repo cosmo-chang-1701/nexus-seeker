@@ -1,4 +1,5 @@
 from typing import Any, cast
+import asyncio
 import inspect
 import logging
 import re
@@ -61,7 +62,6 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     from database import get_kv_cache, save_kv_cache
     from market_analysis.trading_orchestration import get_safety_payout_threshold
     from services.market_data_service import get_quote
-    import asyncio
 
     try:
         results = await asyncio.gather(
@@ -396,9 +396,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     payout_threshold = get_safety_payout_threshold()
 
-    fedwatch_prob, fedwatch_is_fallback, fedwatch_details = (
-        calendar_service.get_latest_fedwatch_info()
-    )
+    # 同步 SQLite 讀取移出 event loop；過期時 fedwatch_prob=None、fedwatch_is_stale=True
+    (
+        fedwatch_prob,
+        fedwatch_is_fallback,
+        fedwatch_details,
+        fedwatch_is_stale,
+    ) = await asyncio.to_thread(calendar_service.get_latest_fedwatch_info)
 
     # 取得 CPI 實際值 / 預期值與偏差
     cpi_actual = get_kv_cache("macro_cpi_actual")
@@ -449,6 +453,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "payout_threshold": payout_threshold,
         "fedwatch_probability": fedwatch_prob,
         "fedwatch_is_fallback": fedwatch_is_fallback,
+        "fedwatch_is_stale": fedwatch_is_stale,
         "fedwatch_details": fedwatch_details,
         "cpi_actual": cpi_actual,
         "cpi_expected": cpi_expected,

@@ -1463,6 +1463,7 @@ def evaluate_macro_top_escape_score(
     prob: float | None = None,
     is_negative_gamma: bool | None = None,
     satellite_euphoria_ratio: float | None = None,
+    prob_stale: bool = False,
 ) -> tuple[int, str, str, list[tuple[str, str]]]:
     """
     評估宏觀逃頂綜合評分：獨立於 evaluate_escape_window_regime() 的利率擇時矩陣，
@@ -1478,6 +1479,14 @@ def evaluate_macro_top_escape_score(
         satellite_euphoria_ratio: 使用者衛星持倉中，個別已符合 Scenario 3 亢奮出場
             條件 (現貨觸及 Call Wall 或 Skew 百分位 <= 20) 的比例 (0.0-1.0)。傳入
             None 代表此因子不參與評分 (例如脫離使用者持倉脈絡的呼叫路徑)。
+        prob_stale: FedWatch 快取「有值但已逾年齡上限」。兩種語意由 prob 是否為 None 區分：
+            * `prob is None`（進場閘門／簡報，fail-closed）：該因子不計分，文字為
+              「FedWatch 資料過期（逾 N 小時），不計分」，已知分數為 NORMAL 時 tier
+              為 UNKNOWN。
+            * `prob` 非 None（避險端沿用最後已知值，fail-safe for hedging）：照常計分，
+              文字附註「FedWatch 資料過期（逾 N 小時），沿用最後值」，tier 以含此因子
+              的分數判定。避險寧可多算一個風險因子，也不因資料過期而少算。
+            N 由 `FEDWATCH_PROB_MAX_AGE_SECONDS` 推導。
 
     Returns:
         tuple[int, str, str, list[tuple[str, str]]]:
@@ -1522,14 +1531,29 @@ def evaluate_macro_top_escape_score(
     factor_breakdown.append(("市場情緒 (Fear & Greed)", f2_val))
 
     # Factor 3: FedWatch 鷹派傾向分數過高
+    from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+
     if safe_prob is None:
         unknown_factors += 1
-        f3_val = unknown_val
-    elif safe_prob > 0.70:
-        score += 1
-        f3_val = f"\u001b[1;31m🚨 鷹派傾向偏高 ({safe_prob * 100:.1f}%)\u001b[0m"
+        f3_val = (
+            f"\u001b[1;33m⚪ FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），不計分\u001b[0m"
+            if prob_stale
+            else unknown_val
+        )
     else:
-        f3_val = f"\u001b[1;32m🟢 定價均衡 ({safe_prob * 100:.1f}%)\u001b[0m"
+        # prob_stale 且 prob 非 None＝避險端沿用最後已知值：照常計分並附註過期
+        stale_note = (
+            f"；FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），沿用最後值"
+            if prob_stale
+            else ""
+        )
+        if safe_prob > 0.70:
+            score += 1
+            f3_val = f"\u001b[1;31m🚨 鷹派傾向偏高 ({safe_prob * 100:.1f}%{stale_note})\u001b[0m"
+        else:
+            f3_val = (
+                f"\u001b[1;32m🟢 定價均衡 ({safe_prob * 100:.1f}%{stale_note})\u001b[0m"
+            )
     factor_breakdown.append(("FOMC 鷹派傾向分數 (FedWatch)", f3_val))
 
     # Factor 4: 大盤負 Gamma 狀態

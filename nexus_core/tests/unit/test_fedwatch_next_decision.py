@@ -127,11 +127,11 @@ def test_fallback_details_are_internally_consistent(
         patch.object(
             calendar_service,
             "get_latest_fedwatch_probability",
-            return_value=(prob, True),
+            return_value=(prob, True, False),
         ),
         patch("database.cache.get_kv_cache", return_value=None),
     ):
-        p, is_fallback, details = calendar_service.get_latest_fedwatch_info()
+        p, is_fallback, details, _stale = calendar_service.get_latest_fedwatch_info()
 
     assert p == prob
     assert is_fallback is True
