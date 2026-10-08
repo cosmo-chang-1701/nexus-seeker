@@ -312,8 +312,8 @@ async def test_wti_monitor_alert_dispatch(mock_bot: Any) -> None:
     ), patch(
         "database.wti_config.get_wti_config", new_callable=AsyncMock
     ) as mock_cfg, patch("database.get_kv_cache", return_value=None), patch(
-        "database.save_kv_cache", new_callable=AsyncMock
-    ) as mock_save, patch(
+        "database.get_kv_cache_with_age", return_value=(None, None)
+    ), patch("database.save_kv_cache", new_callable=AsyncMock) as mock_save, patch(
         "market_analysis.wti_analysis.analyze_wti", new_callable=AsyncMock
     ) as mock_analyze:
         # CL=F price triggers upper breach
@@ -361,3 +361,73 @@ def test_legacy_alias_resolution() -> None:
     """Test alias resolution for WTI oil alerts."""
     assert _resolve_key("wti_oil_alert") == "alpha_wti_oil"
     assert _resolve_key("oil_alert") == "alpha_wti_oil"
+
+
+@pytest.mark.parametrize(
+    "day,hh,mm,expected",
+    [
+        (9, 16, 59, False),  # 週五 16:59
+        (9, 17, 0, True),  # 週五 17:00
+        (10, 12, 0, True),  # 週六
+        (11, 17, 59, True),  # 週日 17:59
+        (11, 18, 0, False),  # 週日 18:00
+        (8, 3, 0, False),  # 週四
+        (8, 17, 0, True),  # 週四 17:00 維護休市
+        (8, 17, 30, True),  # 週四 17:30
+        (8, 17, 59, True),  # 週四 17:59
+        (8, 18, 0, False),  # 週四 18:00 重開
+        (5, 17, 30, True),  # 週一 17:30 維護休市
+        (5, 16, 59, False),  # 週一 16:59
+    ],
+)
+def test_is_cl_weekend_closed(day: int, hh: int, mm: int, expected: bool) -> None:
+    from datetime import datetime
+
+    from cogs.trading.wti_monitor import _is_cl_weekend_closed
+    from market_time import ny_tz
+
+    assert (
+        _is_cl_weekend_closed(datetime(2026, 10, day, hh, mm, tzinfo=ny_tz)) is expected
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "prev_age,expect_pct_alert",
+    [
+        (49.5 * 3600.0, False),  # 跨週末的舊基準：不評估 30 分鐘波動
+        (None, False),  # 年齡未知：視為無基準
+        (30 * 60.0, True),  # 新鮮基準：正常觸發
+    ],
+)
+async def test_wti_pct_alert_requires_fresh_baseline(
+    mock_bot: Any, prev_age: Any, expect_pct_alert: bool
+) -> None:
+    cog = WtiMonitorCog(mock_bot)
+    with patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch("database.get_all_user_ids", return_value=[1001]), patch(
+        "database.is_notification_enabled", return_value=True
+    ), patch(
+        "cogs.trading.wti_monitor.get_wti_config", new_callable=AsyncMock
+    ) as mock_cfg, patch("database.get_kv_cache", return_value=None), patch(
+        "database.get_kv_cache_with_age", return_value=(80.0, prev_age)
+    ), patch("database.save_kv_cache", new_callable=AsyncMock) as mock_save, patch(
+        "cogs.trading.wti_monitor.analyze_wti", new_callable=AsyncMock
+    ) as mock_analyze:
+        mock_quote.return_value = {"c": 90.0}  # 相對 80 為 +12.5%
+        mock_cfg.return_value = WtiAlertConfig(
+            upper_price=None, lower_price=None, pct_change_threshold=3.0
+        )
+        mock_analyze.return_value = WtiAnalysisResult(
+            alert_type=WtiAlertType.PCT_SURGE,
+            technicals=WtiTechnicals(price=90.0),
+            oil_risk_weight=0.5,
+            trigger_price=90.0,
+            threshold_value=3.0,
+        )
+        await cog._evaluate_wti_alerts()
+        assert mock_analyze.called is expect_pct_alert
+        # 無論是否評估，基準都要更新
+        mock_save.assert_any_call("macro_wti_prev_30m", 90.0)
+    await cog.cog_unload()
