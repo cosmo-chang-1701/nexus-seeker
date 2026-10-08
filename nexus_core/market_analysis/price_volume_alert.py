@@ -197,9 +197,10 @@ def _log_stream_shadow_diff(
 async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mBar]:
     """抓取並回傳某標的最近一根已收盤的 15 分鐘 K 棒資料（yfinance）。
 
-    強制繞過 `get_history_df` 的 6 小時快取 (`force_refresh=True`)，因為
-    15 分鐘週期的排程掃描若沿用該快取，會在 6 小時內重複拿到同一份
-    （甚至尚未收盤時的）過期資料。
+    傳入 `force_refresh=True` 以表達「需要 bar 級新鮮度」；背景路徑的 intraday
+    `force_refresh` 實際由 `get_history_df` 的 bar 對齊快取承接（到期 = 下一根
+    15m 收盤 + 60 秒，同輪多模組共用同一份），互動路徑才真的強刷。已收盤判斷
+    仍由 `trim_to_confirmed_15m_bars` 負責，不依賴快取。
     """
     try:
         df_15m = await market_data_service.get_history_df(

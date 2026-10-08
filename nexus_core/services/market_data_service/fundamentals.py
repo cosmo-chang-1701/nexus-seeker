@@ -111,7 +111,7 @@ async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
             import pandas as pd
 
             ticker = yf.Ticker(_to_yfinance_symbol(symbol))
-            divs = await call_yf(lambda: ticker.dividends)
+            divs = await call_yf(lambda: ticker.dividends, _endpoint="dividends")
             df = await get_history_df(symbol, "1y")
             price = (
                 float(df["Close"].iloc[-1]) if df is not None and not df.empty else 0.0

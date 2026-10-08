@@ -50,10 +50,10 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **08:45** | `pre_market_risk_monitor` | Pre-warm quant metrics, IV, Max Pain, Squeeze, and portfolio downside return series |
 | **09:00** | `pre_market_loop` | Analyst Agent pre-market outlook and macro briefings |
 | **09:30–16:00 (:00,:15,:30,:45)** | `dynamic_market_scanner` | 15m patrol: macro cache & VIX tail-risk alert, edge watchlist sync, NRO/DDP/IV option scan (no watchlist radar DM) |
-| **09:30–16:00 (every 15m, not clock-aligned)** | `price_volume_alert_monitor` | 15m price-volume breakout (`tasks.loop(minutes=15)`, `Semaphore(3)`) |
+| **09:30–16:00 (:02,:17,:32,:47)** | `price_volume_alert_monitor` | 15m price-volume breakout (`tasks.loop(time=...)`, `Semaphore(3)`) |
 | **09:30–16:00 (every 30m, not clock-aligned)** | `monitor_order_telemetry_alignment_task` | Pending-order telemetry alignment (`telemetry_orders`) |
 | **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (shared radar cache has no writer; fetches via `Semaphore(3)`) |
-| **09:30–16:00 (every 30m)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC), `is_memory_safe()` gated |
+| **09:30–16:00 (:10,:40)** | `IntradayScanPipeline` | 30m deep watchlist scan (Gamma squeeze & Volume Profile POC), `is_memory_safe()` gated |
 | **Every 5m (08:30/10:00/16:15)** | `fundamental_pipeline_clock` | Event clock patrol: 08:30/10:00 macro surprise & 16:15 Fed net liquidity regime (dry-run, no DM); also drives the five ClockJobs below |
 | **Weekdays 07:00–20:00 (hourly)** | `sec_filing_sync_hourly` (ClockJob) | SEC EDGAR direct sync for holdings+watchlist universe (Form 4, 8-K 4.02/5.02 governance flags, 13D activist gate log-only); new 8-K Item 2.02 (incl. backfill) triggers `EarningsSurpriseService` earnings surprise + guidance LLM extraction (record-only, no DM); background task, no overlap, dry-run by default |
 | **17:30 (NYSE trading days)** | `earnings_pending_retry_1730` (ClockJob) | Re-evaluate earnings surprises still `PENDING` within 14 calendar days (Finnhub only, no LLM, record-only) |

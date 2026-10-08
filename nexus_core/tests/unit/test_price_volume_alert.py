@@ -704,3 +704,13 @@ def test_stream_bar_conversion_is_tz_naive_eastern() -> None:
     assert bar.bar_time == datetime(2026, 9, 22, 10, 0)
     assert bar.bar_time.tzinfo is None
     assert (bar.volume, bar.avg_volume, bar.close) == (300.0, 100.0, 1.5)
+
+
+def test_pv_alert_schedule_times() -> None:
+    """價量監測觸發時間點固定為每小時 :02/:17/:32/:47 (ET)。"""
+    from cogs.trading.price_volume_alert_monitor import _pv_alert_times
+
+    assert len(_pv_alert_times) == 24 * 4
+    assert {t.minute for t in _pv_alert_times} == {2, 17, 32, 47}
+    assert {t.hour for t in _pv_alert_times} == set(range(24))
+    assert all(t.tzinfo is not None and t.second == 0 for t in _pv_alert_times)

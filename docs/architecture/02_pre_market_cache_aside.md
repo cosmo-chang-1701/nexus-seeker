@@ -137,6 +137,45 @@ flowchart TD
 | `PRE_WARM_CONCURRENCY` | `3` (Semaphore) | 盤前預熱併發抓取連線數上限 | `nexus_core/cogs/trading/pre_market.py:98` |
 | `COMPOSITE_KEY` | `(symbol, expiry)` | 快取表唯一複合主鍵定義 | `nexus_core/database/migrations/v052_update_market_cache_composite_key.py` |
 
+### 4.1 資料源限制與 TTL 矩陣
+
+資料源只有 **Finnhub 免費方案**與 **Yahoo Finance（yfinance，多數經 edge 代理）**；Alpaca 串流預設關閉，不得假設存在。
+
+| 資料源 | 限制 | 對應設計約束 |
+| :--- | :--- | :--- |
+| Finnhub 免費 | 60 次/分＋30 次/秒全域上限，超過回 429；`company_eps_estimates` 實測 403 | 靜態／日更資料持久化快取；403 端點負向快取 |
+| Yahoo | 無官方配額，依 IP 觸發 429／`YFRateLimitError`；1m 約 7 天、<1d 約 60 天、1h 約 730 天 | 全部 Yahoo 流量（本地 yfinance＋core→edge 即時 scrape）共用 `yahoo_slot()` 預算與全域 429 冷卻；429 時**不得**改用資料中心 IP 直連 |
+| Yahoo 資料節奏 | 盤中 K 棒在 bar 收盤後才定案；期權約延遲 15 分、OI 日更；除權息調整於開盤前生效 | TTL 對齊 K 棒邊界、edge 快照週期（30 分）與交易時段 |
+
+歷史 K 線記憶體快取（`_history_cache`）到期時間由純函式 `history_cache_expiry(interval, period, now_ts)` 決定，不再對所有 interval 固定 6 小時：
+
+| 時段 | interval／period | 到期時間 |
+| :--- | :--- | :--- |
+| 盤中（含半日市，以 NYSE 行事曆 open／close 為準） | intraday（1m–90m） | 正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下落在某根 bar 收盤後 60 秒定案寬限內，只快取到寬限結束（下游以牆鐘判斷 bar 收盤，快取不可跨過收盤邊界） |
+| 盤中 | 日線以上且 period 屬 `1d`／`2d`／`5d`（被當現值用的短期日線，如 VIX 期限結構、原油、跳空） | `min(現在 ＋ 15 分鐘, 收盤 ＋ 60 秒)` |
+| 盤中 | 其他指標用日線（period ≥ 1mo） | `min(現在 ＋ 6 小時, 收盤 ＋ 60 秒)`（日線不跨過收盤；例：15:00 抓 1y/1d 於 16:01 到期） |
+| 盤中 | 未知 interval | 現在 ＋ 15 分鐘（保守） |
+| 收盤後 30 分內 | 全部 | 現在 ＋ 5 分鐘（最後一根 bar 仍可能被修正） |
+| 其餘盤外，開盤前 60 分以前 | 全部 | 當日 08:30 ET（除權息調整於開盤前生效，08:45 預熱需拿到新資料） |
+| 開盤前 60 分～開盤 | 全部 | 開盤 ＋ 60 秒 |
+| 收盤 30 分後／週末／假日 | 全部 | 下一交易日 08:30 ET；一律不早於現在 ＋ 60 秒 |
+
+背景路徑的 intraday（< 1d）`force_refresh=True` 在 `get_history_df` 開頭被忽略，改由上述 bar 對齊快取承接（同一輪多個模組共用同一份）；互動路徑（`/x`，已標記 interactive）與日線 `force_refresh` 行為不變。
+
+**stale-on-error**：抓取失敗（回空）時，僅日線以上（`1d`／`5d`／`1wk`／`1mo`／`3mo`）、period **不屬於** `1d`／`2d`／`5d`（短期現值日線失敗回空 DataFrame）且快取逾期 ≤ 24 小時才回傳過期快取並記 warning；intraday 一律不做 stale 回退（跨 bar 的舊 K 棒比沒有資料更危險），維持回空由呼叫端 fail-safe。
+
+**IV 快取**：記憶體 `_IV_CACHE_TTL` 由 900 秒改 1800 秒（edge 期權快照約 30 分鐘才換一次）；盤中 SQLite kv `iv_metrics_*` 年齡超過 `_EDGE_SNAPSHOT_MAX_AGE_SECONDS`（1800 秒）視為 miss 並重算，盤外日鍵整日有效。kv 讀取經 `asyncio.to_thread`，不在 event loop 同步讀 SQLite。
+
+> **已知限制（IV 重算）**：重算時未扣除 edge 快照年齡，盤中 IV 最舊約 60 分鐘（期權報價本身亦延遲約 15 分）。
+
+| 常數名稱 | 數值 | 意涵 | 程式碼檔案路徑 |
+| :--- | :--- | :--- | :--- |
+| `_LIVE_DAILY_TTL_SECONDS` | `900` 秒 | 盤中短期日線到期 | `nexus_core/services/market_data_service/caches.py` |
+| `_BAR_SETTLE_GRACE_SECONDS` | `60` 秒 | bar 收盤後等 Yahoo 定案（寬限內抓取的資料只快取到寬限結束） | `nexus_core/services/market_data_service/caches.py` |
+| `_POST_CLOSE_SETTLE_SECONDS`／`_POST_CLOSE_SHORT_TTL_SECONDS` | `1800`／`300` 秒 | 收盤後 30 分內短 TTL | `nexus_core/services/market_data_service/caches.py` |
+| `_PRE_OPEN_REFRESH_OFFSET_MINUTES` | `60` 分 | 次交易日開盤前 60 分（08:30 ET）刷新 | `nexus_core/services/market_data_service/caches.py` |
+| `_IV_CACHE_TTL` | `1800` 秒 | IV 記憶體快取，對齊 edge 快照週期 | `nexus_core/market_analysis/sentiment/cache.py` |
+
 ---
 
 ## 5. 邊界條件、風控熔斷與例外處理
@@ -163,6 +202,10 @@ flowchart TD
 - `nexus_core/market_analysis/sentiment/max_pain.py`
   - `get_unified_max_pain`: Cache-Aside 檢核、偏離校驗與調度核心
   - `_MARKET_CACHE_MAX_AGE_SECONDS`: 6 小時絕對過期常數
+- `nexus_core/services/market_data_service/caches.py`
+  - `history_cache_expiry`: 歷史 K 線依 interval × 交易時段決定到期時間（純函式）
+- `nexus_core/services/market_data_service/history.py`
+  - `get_history_df`: bar 對齊快取、背景 intraday `force_refresh` 忽略、日線 stale-on-error
 - `nexus_core/services/single_flight.py`
   - `SingleFlightManager`: 併發去重與防範驚群效應管理器
 - `nexus_core/database/market_cache.py`

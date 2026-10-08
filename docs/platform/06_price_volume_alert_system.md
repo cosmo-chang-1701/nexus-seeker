@@ -2,7 +2,7 @@
 
 ## 1. 功能總覽
 
-不同於 WTI 監控（單一固定標的 `CL=F`，見 [`../macro_sentiment/03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md)），這是一套**每使用者、多標的**的自選警戒清單：每位使用者最多可註冊 15 組獨立的 `(symbol, target_price, direction, volume_multiplier)` 監控，排程器在盤中每 15 分鐘評估所有已註冊監控。
+不同於 WTI 監控（單一固定標的 `CL=F`，見 [`../macro_sentiment/03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md)），這是一套**每使用者、多標的**的自選警戒清單：每位使用者最多可註冊 15 組獨立的 `(symbol, target_price, direction, volume_multiplier)` 監控，排程器在盤中於每小時 :02／:17／:32／:47（ET）評估所有已註冊監控（15m K 棒 :00／:15／:30／:45 收盤後留約 2 分鐘讓 Yahoo 定案，並與 :00 巡邏、:05 持倉監控錯開）。
 
 ## 2. K 棒完整性防呆（`market_analysis/price_volume_alert.py::get_confirmed_15m_bar`）
 
@@ -65,5 +65,5 @@
 
 - `nexus_core/market_analysis/price_volume_alert.py`：`get_confirmed_15m_bar()`（資料來源分派）, `get_confirmed_15m_bar_from_stream()`, `trim_to_confirmed_15m_bars()`, `evaluate_watch_trigger()`
 - `nexus_core/database/price_volume_watch.py`：`price_volume_watches` 表 CRUD，`upsert_watch()`, `get_all_watches()`
-- `nexus_core/cogs/trading/price_volume_alert_monitor.py`：15 分鐘排程器，KV Cache 防重複發送
+- `nexus_core/cogs/trading/price_volume_alert_monitor.py`：排程器（`tasks.loop(time=_pv_alert_times)`，:02/:17/:32/:47 ET），KV Cache 防重複發送
 - `nexus_core/database/migrations/v063_add_price_volume_watches.py`：`price_volume_watches` 表註冊遷移

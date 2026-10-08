@@ -12,10 +12,16 @@ import yfinance as yf
 
 from market_time import is_market_open, ny_tz
 from services.market_data_service._core import (
+    YahooEdgeBusyError,
+    YahooRateLimitedError,
     _sanitize_ticker,
     _to_yfinance_symbol,
     call_yf,
+    edge_get_yahoo,
     get_edge_client,
+    is_yahoo_rate_limited,
+    is_yf_rate_limit_error,
+    note_yahoo_rate_limited,
 )
 from services.market_data_service.caches import (
     _FINNHUB_QUOTE_STALE_THRESHOLD_SECONDS,
@@ -47,7 +53,10 @@ async def _fetch_history_via_edge(
     interval: Optional[str] = None,
     auto_adjust: bool = True,
 ) -> Optional[pd.DataFrame]:
-    """優先透過 Edge 節點即時抓取 K 線。未設定 TUNNEL_URL 或抓取失敗/空值時回傳 None。"""
+    """優先透過 Edge 節點即時抓取 K 線。未設定 TUNNEL_URL 或抓取失敗/空值時回傳 None。
+
+    Yahoo 限流（冷卻中、HTTP 429 或 JSON status=rate_limited）一律拋
+    `YahooRateLimitedError`，由 `_safe_yf_history` 決定不走資料中心直連。"""
     from config import TUNNEL_URL
     import urllib.parse
 
@@ -57,6 +66,10 @@ async def _fetch_history_via_edge(
     if not base_url:
         return None
 
+    # 冷卻中不發請求（edge 與直連共用同一個全域冷卻）
+    if is_yahoo_rate_limited():
+        raise YahooRateLimitedError("Yahoo 限流冷卻中")
+
     try:
         req_url = f"{base_url}/api/v1/scrape/yf/history/{urllib.parse.quote(str(symbol))}?period={period}"
         if interval:
@@ -65,9 +78,10 @@ async def _fetch_history_via_edge(
             req_url += "&auto_adjust=false"
 
         async with get_edge_client() as client:
-            res = await client.get(req_url)
-            if res.status_code == 200:
-                data = res.json()
+            # 統一 Yahoo 預算／429 冷卻／退避重置：與期權路徑共用 edge_get_yahoo
+            res = await edge_get_yahoo(client, req_url, "edge_history")
+            data = res.data
+            if res.response.status_code == 200 and isinstance(data, dict):
                 if data.get("status") == "success":
                     records = data.get("data", [])
                     if records:
@@ -87,6 +101,8 @@ async def _fetch_history_via_edge(
                     else:
                         # Edge 節點已明確確認查無數據 (如標的下市)，回傳空 DataFrame 避免無謂本地重試
                         return pd.DataFrame()
+    except (YahooRateLimitedError, YahooEdgeBusyError):
+        raise
     except Exception as ex:
         logger.warning(f"[{symbol}] Edge 節點即時抓取 K 線失敗: {ex}")
 
@@ -101,6 +117,8 @@ async def _direct_yf_history(
     auto_adjust: bool = True,
 ) -> Optional[pd.DataFrame]:
     """nexus_core 直連 yfinance 抓取 K 線（降級方案），加入 repair 容錯。"""
+    if is_yahoo_rate_limited():
+        return None
     df = None
     try:
         kwargs: dict[str, Any] = {
@@ -112,7 +130,15 @@ async def _direct_yf_history(
             kwargs["interval"] = interval
 
         df = await call_yf(ticker.history, **kwargs)
+    except YahooRateLimitedError:
+        # yahoo_slot 拿到名額後才發現冷卻中：不重試、不改參數再打
+        return None
     except Exception as e:
+        if is_yf_rate_limit_error(e):
+            # 限流不要再用 repair=False 重打，直接啟動全域冷卻
+            if not is_yahoo_rate_limited():  # call_yf 已計數並設冷卻則略過
+                note_yahoo_rate_limited("history")
+            return None
         logger.warning(
             f"yfinance history (repair=True) 失敗: {e}，嘗試降級使用 repair=False 重試..."
         )
@@ -125,7 +151,11 @@ async def _direct_yf_history(
             if interval is not None:
                 kwargs_fallback["interval"] = interval
             df = await call_yf(ticker.history, **kwargs_fallback)
+        except YahooRateLimitedError:
+            return None
         except Exception as e2:
+            if is_yf_rate_limit_error(e2) and not is_yahoo_rate_limited():
+                note_yahoo_rate_limited("history")
             logger.warning(f"yfinance history 直接呼叫失敗: {e2}")
 
     if df is None or getattr(df, "empty", True):
@@ -146,9 +176,18 @@ async def _safe_yf_history(
 
     symbol = getattr(ticker, "ticker", "")
     if symbol:
-        df_edge = await _fetch_history_via_edge(
-            symbol, period=period, interval=interval, auto_adjust=auto_adjust
-        )
+        try:
+            df_edge = await _fetch_history_via_edge(
+                symbol, period=period, interval=interval, auto_adjust=auto_adjust
+            )
+        except YahooRateLimitedError:
+            # 限流時改用資料中心 IP 直連只會更容易被封，直接回 None 由呼叫端 fail-safe
+            logger.warning(f"[{symbol}] Yahoo 限流冷卻中，略過資料中心直連")
+            return None
+        except YahooEdgeBusyError:
+            # edge 排隊逾時屬暫時性失敗：不設冷卻，但同樣不改用資料中心直連
+            logger.warning(f"[{symbol}] Edge 節點忙碌（排隊逾時），略過資料中心直連")
+            return None
         if df_edge is not None:
             if not df_edge.empty:
                 return df_edge
