@@ -3627,7 +3627,7 @@ def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_ne
     assert "參考停損 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.15 (↓2.94%)" in desc
     # 閘門不變：引擎停損仍以 PutWall 1050 為錨，降為次行
     assert "引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
-    assert "緩衝判定與引擎閘門仍以 PutWall 為準" in desc
+    assert "閘門仍以 PutWall 為準" in desc
     assert desc.index("參考停損 (淨 GEX 支撐") < desc.index("引擎閘門停損")
 
 
@@ -5234,7 +5234,7 @@ def test_create_tactical_symbol_embed_no_atr1d_degrade_when_atr14_present() -> N
     desc = get_embed_text(embed)
 
     assert "CallWall: $160.00" in desc
-    assert "ATR₁D" not in desc
+    assert " ｜日線參考 $149.38 (↓3.00%)" in desc
     assert "數據缺失（ATR₁D）" not in desc
 
 

@@ -199,19 +199,21 @@ flowchart TD
 
 7. **降級揭露不得因判定有利而省略**：`is_degraded` 的揭露義務與判定結果無關。空間充足、緩衝落在甜蜜點等**有利**結論若建立在降級門檻上，同樣必須輸出 `degrade_reason`——否則使用者會誤以為那是完整數據下的判定。分析中心 GEX 欄位的兩側（PutWall 緩衝三態、CallWall 空間）皆已統一為「一律揭露」。
 
-11. **「進場甜蜜點」必須與上檔空間交叉判定（呈現層）**：公式 B 的 `SWEET_SPOT` 只代表「停損距離不在雜訊帶內、也不超過 8% 上限」，**不代表可進場**——它完全不看上方空間。2026-10-02 MU 實測：現價 $\$1097.39$、PutWall $\$1050$、CallWall $\$1100$，停損距離 $4.76\%$ 落在甜蜜點，但上檔只剩 $0.24\%$（公式 A 門檻 $10.47\%$），實際 R:R 僅 $0.05:1$，舊版仍單獨印出「✅ 進場甜蜜點」。分析中心因此改為：
+8. **「進場甜蜜點」必須與上檔空間交叉判定（呈現層）**：公式 B 的 `SWEET_SPOT` 只代表「停損距離不在雜訊帶內、也不超過 8% 上限」，**不代表可進場**——它完全不看上方空間。2026-10-02 MU 實測：現價 $\$1097.39$、PutWall $\$1050$、CallWall $\$1100$，停損距離 $4.76\%$ 落在甜蜜點，但上檔只剩 $0.24\%$（公式 A 門檻 $10.47\%$），實際 R:R 僅 $0.05:1$，舊版仍單獨印出「✅ 進場甜蜜點」。分析中心因此改為：
     - 下檔與上檔兩個區塊等 CallWall 空間算完才一起輸出；`SWEET_SPOT` 但上檔空間 $<$ 公式 A 門檻時，標籤降格為「✅ 停損距離合格｜❌ 上檔空間 X% 不足 Y%，非進場點」。
     - 下檔區塊末行新增「進場盈虧比 (至 CallWall)」：$\text{R:R} = (\text{CallWall} - \text{Spot}) / (\text{Spot} - \text{Stop})$，Stop 與停損距離同一條線，以 `_ROOM_RISK_MULTIPLIER`（$2.2$）為 ✅／❌ 門檻；PutWall 落在淨 GEX 助跌區時並列淨 GEX 支撐錨的 R:R（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）。下行緩衝判定為過窄（停損距離 $< 2.5\times\text{ATR}_{15m}$）時，原比值即使 $\ge 2.2$ 也不得印 ✅（改標「⚠ 停損過窄、比值虛高」），並另列以合格停損 $\text{Spot}\times(1-\text{min\_pct})$ 重算的 R:R。CallWall 空間不足旗標標出 `binding_term` 對應的生效項（$2.2\times$停損風險／$1.5\times\text{ATR}_{1D}$／$3.5\%$ 底線），避免與盈虧比 ✅ 看似矛盾。
     - Gamma 體制區塊在「全鏈 Long Gamma 且 $0 \le$ 上檔空間 $\le 1 \times \text{ATR}_{1D}/\text{Spot}$」（ATR₁D 不可得退回 $1\%$，`_PIN_FALLBACK_BAND_PCT`）時加註「📌 釘住效應」：做市商逆勢避險壓制突破延續。
     - 以上皆為呈現層；引擎閘門（`opportunity_cost.py` 條件三本來就交叉判定空間）不變。
 
-8. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
+9. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
-9. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
+10. **日線噪音帶參考停損（並列、待校準）**：`/x` 在結構停損行尾並列「｜日線參考 $x (↓y%)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（倍數為 `room_threshold._DAILY_NOISE_STOP_ATR_1D_MULT`，/x 與 calibration 共用）。ATR₁D 先取 `atr_1d`、再取 `atr_14`，並以 `is_valid_daily_atr()` 排除 $0.01$ 佔位值（與 §5 第 2 點同一判定）；PutWall 不低於現價、停損不低於現價、PutWall 異常降級分支、淨 GEX 助跌區分支（PutWall 已被宣告不可靠）皆不輸出。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
 
-10. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
+11. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
 
-12. **Kelly 呈現與賣方前提（2026-10-08 起）**：`/x` 的 Kelly 區塊標題為「賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)」，「每口」註明未指定到期日；它是賣出 16Δ Put 的額度，與現貨進場閘門（上檔空間、停損距離、盈虧比）不同源，閘門全紅時仍可能有口數。`optimize_position_risk` 與 IVR 未知減半的規則不變，只在呈現層補一行「賣方前提」：`IVR`（未知或異常值⚠、`is_selling_locked_by_ivr()` 鎖定 ❌，門檻不另寫死）、`引力`（沿用結算指引已算的 `find_settlement_gravity()` 結果，有值 ❌；斷路器觸發時 `—`）、`牆淨GEX`（PutWall 淨 GEX < 0 ❌）、`局部Γ`（局部體制為 SHORT_GAMMA ❌）、`事件`（沿用 IV 區塊的財報／總經事件加載判定 ⚠）；GEX 缺失的兩項顯示 `—`。無風控警示時省略「系統風控」整行。
+12. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
+
+13. **Kelly 呈現與賣方前提（2026-10-08 起）**：`/x` 的 Kelly 區塊標題為「賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)」，「每口」註明未指定到期日；它是賣出 16Δ Put 的額度，與現貨進場閘門（上檔空間、停損距離、盈虧比）不同源，閘門全紅時仍可能有口數。`optimize_position_risk` 與 IVR 未知減半的規則不變，只在呈現層補一行「賣方前提」：`IVR`（未知或異常值⚠、`is_selling_locked_by_ivr()` 鎖定 ❌，門檻不另寫死）、`引力`（沿用結算指引已算的 `find_settlement_gravity()` 結果，有值 ❌；斷路器觸發時 `—`）、`牆淨GEX`（PutWall 淨 GEX < 0 ❌）、`局部Γ`（局部體制為 SHORT_GAMMA ❌）、`事件`（沿用 IV 區塊的財報／總經事件加載判定 ⚠）；GEX 缺失的兩項顯示 `—`。無風控警示時省略「系統風控」整行。
 
 ---
 

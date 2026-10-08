@@ -480,6 +480,8 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 3. 次一交易日確認 16:15 ET 的 `📸 [Canonical 日級快照]` 與 08:45 ET 的補寫日誌都有出現。
 4. 部署新版 edge 後，第一個交易日收盤後確認 edge 日誌出現 `[em_snapshot] … 寫入 N 筆到期日跨式`。edge 離線的日子不會有 EM 與 GEX 歷史，只會少樣本，不影響其他日的標註。
 
+**停損墊片比較（`micro-report` 的「停損墊片比較」段落）**：母體為 `edge_PutWall` 且 `tested` 的事件（與「支撐定義比較」同一個 tested 定義；`atr_1d` 缺失而排除的件數另列於報表「atr_1d缺失排除」與備註，與「支撐定義比較」的 edge_PutWall tested 件數差即為此數），對 `0.5×ATR15m(現行)`、`0.25×ATR1D`、`0.5×ATR1D` 三種墊片（倍數取自 `room_threshold._ROOM_STOP_ATR_15M_MULTIPLIER`／`_DAILY_NOISE_STOP_ATR_1D_MULT`，標籤動態組成），以 $\text{stop} = \text{wall} - \text{buffer}$ 計算：觸發率（觀察期最低價 $\le$ stop）、掃損收回率（觸發且最後收盤 $\ge$ wall）、真破率（觸發且最後收盤 $<$ stop），CI 同樣依日期叢集 bootstrap。**條件率的分母是該墊片的觸發數**，另輸出「掃損無條件率」「真破無條件率」（分母皆為全部 tested 事件，三種墊片共用，才能互比）。統計鍵為中性的 `{n, hits, n_dates, rate, ci}`（支撐守住率沿用既有鍵）。snapshot 沒有 15m ATR，ATR₁₅ₘ 以 ATR₁D/$\sqrt{26}$ 折算（沿用 `room_threshold._BARS_PER_SESSION`）。樣本門檻沿用可標註日期 $\ge 20$、tested $\ge 30$，不足時輸出「樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ」；**每種墊片的觸發數也須 $\ge 30$**，未達者標「觸發樣本不足」，其條件率不可判讀（可先比較無條件率）。標註事件上的 `_path` 僅供計算，輸出報表前剔除。`/x` 目前只並列日線噪音帶參考停損，閘門不動。
+
 **判讀準則**：
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
 - Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。

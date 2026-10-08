@@ -121,3 +121,30 @@ def test_mrvl_after_hours_embed_within_budget() -> None:
     names = [f.name or "" for f in embed.fields]
     assert any("🐋 異常活動" in n for n in names)
     assert any("🧲 Gamma 曝險分布" in n for n in names)
+
+
+def test_mrvl_without_callwall_within_budget() -> None:
+    """沒有 CallWall（R:R 分支不輸出）的一般路徑：同樣不得有欄位被 pop、總字數 ≤ 5600。"""
+    from market_time import ny_tz
+    from datetime import datetime
+
+    now = datetime(2026, 10, 7, 21, 14, tzinfo=ny_tz)
+
+    class _FakeDT(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> "_FakeDT":
+            return now  # type: ignore[return-value]
+
+    data = _mrvl_data()
+    data["gex_profile_data"]["call_wall"] = 0.0
+    with patch("cogs.embed_builders.portfolio_embeds.datetime", _FakeDT):
+        embed = create_tactical_symbol_embed(data)
+
+    assert len(embed.to_dict()["fields"]) == len(
+        embed.fields
+    ), "欄位被 5800 字上限靜默 pop"
+    total = len(embed.title or "") + len(embed.description or "")
+    if embed.footer and embed.footer.text:
+        total += len(embed.footer.text)
+    total += sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
+    assert total <= 5600, f"總字數 {total} 超過 5600 緩衝線"
