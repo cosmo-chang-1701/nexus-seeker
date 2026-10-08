@@ -432,6 +432,24 @@ def is_finnhub_rate_limited() -> bool:
     return time.time() < _rate_limit_until
 
 
+def is_finnhub_rate_limit_error(exc: BaseException) -> bool:
+    """判斷例外是否為 Finnhub 限流類錯誤（HTTP 429 或互動請求的快速熔斷例外）。
+
+    字串條件與 `_execute_api_call` 內既有的 `is_rate_limit` 一致
+    （"429"／"limit reached"／"too many requests"），另含互動熔斷例外的訊息
+    （"Finnhub rate limited, fast-circuit to fallback"）。
+    注意：`_execute_api_call` 內部的判斷待後續統一改用本函式（本 PR 刻意不動其本體，
+    避免與大幅改寫該函式的分支衝突）。
+    """
+    msg = str(exc).lower()
+    return (
+        "429" in msg
+        or "limit reached" in msg
+        or "too many requests" in msg
+        or "fast-circuit" in msg
+    )
+
+
 # ---------------------------------------------------------------------------
 # Core Async API Call (Thread-safe Wrapper)
 # ---------------------------------------------------------------------------

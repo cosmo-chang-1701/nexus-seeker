@@ -21,7 +21,7 @@ Nexus Seeker 作為 24/7 全年無休運行的 Discord 美股期權量化風控�
 
 | 時間 (美東 ET) | 任務識別名稱 | 核心模組與入口 | 執行頻率與條件 | 核心職責與下游影響 |
 | :--- | :--- | :--- | :--- | :--- |
-| **03:00** | `kv_cache_dedup_purge` 等離峰維護 | `cogs/trading/scheduler.py` | 每日離峰（非交易日亦執行） | 1. 刪除 `kv_cache` 逾 3 日單日去重標記；<br/>2. 清理 `uoa_history` 逾 10 交易日異常大單；<br/>3. 歸檔過期持倉與委託；<br/>4. 清理 `sentiment_history`（60 日）與 `sentiment_daily_canonical`（260 日）；<br/>5. 執行 SQLite WAL Checkpoint 與 `PRAGMA optimize`。 |
+| **03:00** | `kv_cache_dedup_purge` 等離峰維護 | `cogs/trading/scheduler.py` | 每日離峰（非交易日亦執行） | 1. 刪除 `kv_cache` 逾 3 日單日去重標記，並清除逾 30 日未更新的 `company_profile_`／`etf_flag_` 持久化列；<br/>2. 清理 `uoa_history` 逾 10 交易日異常大單；<br/>3. 歸檔過期持倉與委託；<br/>4. 清理 `sentiment_history`（60 日）與 `sentiment_daily_canonical`（260 日）；<br/>5. 執行 SQLite WAL Checkpoint 與 `PRAGMA optimize`。 |
 | **03:30** | `regime_outcome_labeler` | `services/regime_outcome_labeler.py` | 每日盤前（Leader-Only，85% RAM 守衛） | 1. 為 `regime_evaluation_log` 滿 5 交易日的紀錄抓取歷史 K 線回填前向報酬標籤；<br/>2. 執行 `run_dispatch_outcome_labeling` 為滿 20/60 交易日的可行動通知計算「照做 vs 持有」反事實報酬。 |
 | **08:00** | `fundamental_filing_scan` | `cogs/trading/fundamental_filing_monitor.py` | 僅美股交易日 | 針對持倉標的掃描最新 SEC 10-K / 10-Q / 8-K 申報，以 `fundamental_scan_state` 游標去重，驅動動態轉倉情境 1。 |
 | **08:30** | `daily_reddit_update` | `cogs/trading/scheduler.py` | 每日開盤前 | 抓取 Reddit 財經子版輿情貼文，更新社群情緒指標與邊界熱度。 |

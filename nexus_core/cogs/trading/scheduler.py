@@ -158,6 +158,20 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             logger.error(f"kv_cache 每日去重旗標清理失敗: {e}")
 
+        # Finnhub 公司 Profile／ETF 旗標的持久化列：標的移出清單後不再被讀寫，
+        # 但 updated_at 只在寫入時更新，故以 30 天未更新視為殘留並清除。
+        try:
+            from database.cache import purge_stale_kv_cache_by_prefix
+
+            stale_rows = await purge_stale_kv_cache_by_prefix(
+                ("company_profile_", "etf_flag_"), older_than_days=30
+            )
+            logger.info(
+                f"🧹 [kv_cache 清理] 已清除 {stale_rows} 筆逾 30 天的 Profile／ETF 旗標。"
+            )
+        except Exception as e:
+            logger.error(f"kv_cache Profile／ETF 旗標清理失敗: {e}")
+
         # 過期合約歸檔：這是一個全表掃描的寫入交易，原本掛在
         # database.portfolio.get_user_portfolio() / get_all_portfolio() 的開頭，
         # 等於每次讀取持倉都取得一次寫入鎖（15 分鐘心跳每輪都會踩到）。
