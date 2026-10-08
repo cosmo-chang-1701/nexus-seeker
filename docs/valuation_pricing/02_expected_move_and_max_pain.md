@@ -189,7 +189,9 @@ $$F_{\text{split}} = \prod_{i:\ t_i \ge t_{\text{now}} - 30\text{d}} r_i$$
 
 ### 5.x 顯示標籤與中心（2026-10-07，僅 /x）
 
-欄位標示為「7 日 1σ（到期日 跨式 ×√(7/DTE)）」，到期日與 DTE 由 `_select_straddle_expiry()` 提供（與 EM 計算同一定義）。盤中且 IV 為 LIVE_IV 時，區間以 `reference_spot_price`（現價）為中心並標「現價」，因跨式以即時現價定價；盤前／盤後維持以前收為中心。雷達與 Max Pain 路徑不變。
+欄位標示為「7 日 1σ（到期日 跨式 ×√(7/DTE)）」，到期日與 DTE 由 `_select_straddle_expiry()` 提供（與 EM 計算同一定義）。只要 `reference_spot_price` 與週度 EM 皆有值（與 IV 來源無關），區間即以 `reference_spot_price`（跨式定價當下的現價）為中心：盤中標「現價」，盤後／盤前標「最新收盤」；因盤後 `quote.pc` 是**昨日**收盤，不得再用前收為中心。`reference_spot_price` 不可得時沿用前收並標「前收」。雷達與 Max Pain 路徑不變。
+
+**結算前 1σ 與依體制指引（僅 /x）**：有 `straddle_implied_iv` 且 DTE ≥ 1 時，痛點列尾附 `±$x`，σ_exp = straddle_iv × 現價 × √(DTE/365)。`get_scenario_guidance` 依序判定：(1) Long Gamma 釘住效應成立 → 以釘住履約價（CallWall）為主、痛點僅供參考；(2) 現價與痛點距離超過最近到期的結算前 1σ → 「收斂機率低」；(3) 其餘維持原三種文案。`find_settlement_gravity` 與 Kelly 降級原因不變。
 
 ## 6. 核心程式碼檔案路徑關聯
 

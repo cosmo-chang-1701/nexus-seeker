@@ -566,12 +566,14 @@ def annotate_spread_structures(entries: list[dict]) -> None:
                 else "屬價差結構邊界，非機構獨立承接地板"
             )
             short_leg["intent"] = (
-                f"{head}，🔗 屬{label}的賣出腿，{role_note}{basis_note}"
+                f"{head}，🔗 疑似{label}賣出腿（日累積配對），{role_note}{basis_note}"
             )
             for leg in matched:
                 leg["spread_role"] = "LONG_LEG"
                 leg["spread_label"] = label
-                leg["intent"] = f"{leg.get('intent', '')}｜🔗 屬{label}的買入腿"
+                leg["intent"] = (
+                    f"{leg.get('intent', '')}｜🔗 疑似{label}買入腿（日累積配對）"
+                )
 
 
 # 跨式兩腿成交量比超過此倍數就不視為同一組跨式。

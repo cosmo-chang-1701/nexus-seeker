@@ -6,7 +6,7 @@ import pandas as pd
 import sqlite3  # noqa: F401
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 from services import market_data_service
 from market_time import ny_tz
 
@@ -869,3 +869,27 @@ def find_settlement_gravity(
     if not candidates:
         return None
     return min(candidates, key=lambda c: c[0])[1]
+
+
+def next_unsettled_expiry(expiries: Iterable[str], now_ny: datetime) -> Optional[str]:
+    """完整到期日清單中最近一檔尚未結算者（Yahoo 預設期權頁所涵蓋的到期日）。
+
+    規則同 `find_settlement_gravity`：DTE < 0 跳過；到期當日
+    `_EXPIRY_SETTLE_HOUR_ET` 之後預設頁可能仍停在當日、也可能已換下一檔，
+    無法確定時回傳 None（不標註），**不**跳到下一檔。
+    """
+    today = now_ny.date()
+    parsed: list[date] = []
+    for raw in expiries:
+        try:
+            parsed.append(datetime.strptime(str(raw), "%Y-%m-%d").date())
+        except (TypeError, ValueError):
+            continue
+    for exp_dt in sorted(parsed):
+        dte = (exp_dt - today).days
+        if dte < 0:
+            continue
+        if dte == 0 and now_ny.hour >= _EXPIRY_SETTLE_HOUR_ET:
+            return None
+        return exp_dt.isoformat()
+    return None

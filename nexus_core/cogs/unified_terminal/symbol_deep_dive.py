@@ -256,6 +256,13 @@ class SymbolDeepDiveMixin:
             squeeze_task,
         )
 
+        # 完整期權到期日清單（任務已完成，僅取結果）：供 /x 推定 GEX 涵蓋的到期日，
+        # 不可用 month_max_pains——它會漏掉 Max Pain 計算失敗的到期日。
+        try:
+            option_expiries = [str(e) for e in (await expiries_task or [])]
+        except Exception:
+            option_expiries = []
+
         safe_reddit_text = (
             reddit_details[0] if isinstance(reddit_details, tuple) else reddit_details
         )
@@ -282,6 +289,7 @@ class SymbolDeepDiveMixin:
             "df_hist_1d": df_hist_1d,
             "df_hist_fetched_at": df_hist_fetched_at,
             "month_max_pains": month_max_pains,
+            "option_expiries": option_expiries,
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
             "atr_15m": atr_15m_data,
@@ -445,21 +453,17 @@ class SymbolDeepDiveMixin:
         em_context: dict[str, Any] = (
             raw_em_context if isinstance(raw_em_context, dict) else {}
         )
-        # 盤中跨式以即時現價定價，分布中心是現價而非前收；盤前／盤後維持前收為中心。
+        # 跨式以定價當下的現價（盤後為最新收盤）為中心，而非昨日前收。
         if isinstance(iv_metrics, dict):
-            _iv_src = iv_metrics.get("iv_source")
             _ref_spot = _safe_float(iv_metrics.get("reference_spot_price"), 0.0)
         else:
-            _iv_src = getattr(iv_metrics, "iv_source", None)
             _ref_spot = _safe_float(
                 getattr(iv_metrics, "reference_spot_price", None), 0.0
             )
         if (
             em_context
-            and _iv_src == "LIVE_IV"
             and _ref_spot > 0
             and _safe_float(em_context.get("expected_move_weekly"), 0.0) > 0
-            and is_market_open()
         ):
             from market_analysis.sentiment.iv_metrics import IVContext
 
@@ -471,14 +475,17 @@ class SymbolDeepDiveMixin:
                 reference_price=_ref_spot,
                 current_price=_safe_float(em_context.get("current_price"), 0.0),
             )
-            em_context["reference_label"] = "現價"
+            em_context["reference_label"] = "現價" if is_market_open() else "最新收盤"
         elif em_context:
             em_context["reference_label"] = "前收"
         result["expected_move_context"] = em_context
 
         safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
         result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
+        # 頭條 Max Pain 實際鎖定的到期日：結算前 1σ 必須用同一檔的 DTE
+        result["max_pain_expiry"] = safe_mp.get("expiry")
         result["month_max_pains"] = data.get("month_max_pains", [])
+        result["option_expiries"] = data.get("option_expiries", [])
         result["gex_profile_data"] = gex_profile_data
         result["catalysts"] = catalysts
 
@@ -613,9 +620,14 @@ class SymbolDeepDiveMixin:
             result["bar_15m_time"] = bar_time
             result["bar_15m_notes"] = assessment.notes
             tod_avg = _clean_float(_extract_val("tod_avg_volume"))
+            # /x 以同時段中位數為基準（抗單日離群）；沒有時退回平均。
+            tod_median = _clean_float(_extract_val("tod_median_volume"))
+            tod_base = tod_median if tod_median is not None else tod_avg
+            # 面板標籤必須如實標示實際採用的統計（中位數缺失而退回平均時不得標中位數）
+            result["tod_stat"] = "median" if tod_median is not None else "mean"
             rvol_tod = (
-                (v_15m / tod_avg)
-                if (v_15m is not None and tod_avg is not None and tod_avg > 0)
+                (v_15m / tod_base)
+                if (v_15m is not None and tod_base is not None and tod_base > 0)
                 else None
             )
             if assessment.is_stale or assessment.is_anomalous:

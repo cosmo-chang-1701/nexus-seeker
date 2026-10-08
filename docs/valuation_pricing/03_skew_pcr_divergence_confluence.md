@@ -46,6 +46,8 @@ $$Z_{\text{robust}} = \frac{x - \operatorname{median}(\mathcal{S}_N)}{\operatorn
 - $\text{Skew Percentile} > 85.0\%$：市場進入高戒備避險區間；
 - $\text{Skew Percentile} \ge 98.0\%$：市場進入全域極端尾部對沖狀態。
 
+> **/x 顯示慣例**：標籤為「Skew (P−C)」，即上式 $\sigma_{\text{IV}}(25\Delta\text{ Put}) - \sigma_{\text{IV}}(25\Delta\text{ Call})$；值為負代表 Call 較貴，尾端加註「Call溢價」，不代表避險需求高。百分位判讀仍以 midrank 為準。
+
 ### 2.2 Volume PCR 與破位順向殺盤定理
 設 $V_{\text{Put}}(K_i)$ 與 $V_{\text{Call}}(K_j)$ 分別為全鏈所有賣權與買權的盤中即時累積成交量：
 $$\text{Volume PCR} = \frac{\sum_{i} V_{\text{Put}}(K_i)}{\sum_{j} V_{\text{Call}}(K_j)}$$

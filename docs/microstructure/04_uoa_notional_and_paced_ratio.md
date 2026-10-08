@@ -174,6 +174,8 @@ flowchart TD
    - **跨式**：`annotate_straddle_structures()` 把同到期日、同履約價、CALL 與 PUT 同為 STO（或同為 BTO）且量比 ≤ `STRADDLE_VOLUME_RATIO_MAX`（2.0）的兩腿標 `structure="STRADDLE"`；STO 跨式兩腿同時標 `spread_role="SHORT_LEG"`，物理封頂清單對應項加 `structure_leg=True`，GEX 的「機構大單 vs PutWall 分歧」警示排除這些腿與價內 STO PUT。
    - **生效日 2026-10-07**：此日起 30 分鐘管線的物理封頂 STO 清單會比先前少（過時成交與窄價差不再算 STO）。這是資料清洗，不是閘門門檻變更；calibration 比較前後樣本時須以此日分段。
 
+8. **推測語氣與交叉引用對齊（2026-10-08 起）**：價差配對只依「同到期日、同類型、成交量 1:1」的日累積量推測，未必是同一筆下單，因此 intent 一律寫「疑似{標籤}賣出腿／買入腿（日累積配對）」；`spread_label`、`spread_role` 的**值不變**。`/x` 的「大單 ↔ PutWall 分歧」取自全鏈封頂掃描，與前 5 大 UOA 表母體不同：該筆 (到期日, 履約價, PUT) 不在表內時標〔全鏈掃描，表外〕，到期日與 GEX 涵蓋的到期日不同時標〔跨到期〕（見 [`01_gex_topology_and_walls.md`](01_gex_topology_and_walls.md) §2.1）。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/database/uoa_history.py`：可回看的 UOA 歷史存取層（`save_uoa_observations()` 由 30 分鐘深度心跳 `IntradayScanPipeline` 寫入／`get_recent_uoa()` 供條件四回看窗讀取／`purge_stale_uoa_history()` 由 03:00 ET 排程清理）

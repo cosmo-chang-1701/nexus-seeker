@@ -3387,7 +3387,7 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime (全鏈加總): +$200K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
+    assert "Net GEX Regime (最近到期): +$200K (🟢 LONG_GAMMA (自穩定壓制波動))" in desc
     assert "Gamma Flip (轉正履約價): $100.00 (緩衝: +0.00%)" in desc
     # 閘門取離散履約價 $100；真零軸在 95 (−2M) 與 100 (+10M) 之間內插 ≈ 95.83
     assert "相鄰履約價內插零軸 ≈ $95.83（閘門以履約價格點為準）" in desc
@@ -3426,7 +3426,7 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "Net GEX Regime (全鏈加總): -$50K (🔴 SHORT_GAMMA (助漲助跌))" in desc
+    assert "Net GEX Regime (最近到期): -$50K (🔴 SHORT_GAMMA (助漲助跌))" in desc
     assert "距現價空間: ↑3.00% ❌ 不足 3.50%" in desc
     assert "數據缺失" in desc and "已退回 3.5% 絕對底線" in desc
 
@@ -3659,10 +3659,9 @@ def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() ->
     desc = get_embed_text(embed)
 
     assert (
-        "⚠️ 機構大單 $145.00 (STO PUT 12,509口, 權利金 $3.04M) 與 GEX PutWall 分歧"
+        "⚠️ 大單 $145.00 STO PUT 12,509口, 權利金 $3.04M 與 PutWall 分歧〔全鏈掃描，表外〕"
         in desc
     )
-    assert "單日累積流量的啟發式方向，非全鏈聚合曝險，僅供交叉參考" in desc
 
 
 def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold() -> (
@@ -3686,7 +3685,7 @@ def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "與 GEX PutWall 分歧" not in desc
+    assert "與 PutWall 分歧" not in desc
 
 
 def test_create_tactical_symbol_embed_ignores_call_side_sto_for_putwall_divergence() -> (
@@ -3710,7 +3709,7 @@ def test_create_tactical_symbol_embed_ignores_call_side_sto_for_putwall_divergen
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "與 GEX PutWall 分歧" not in desc
+    assert "與 PutWall 分歧" not in desc
 
 
 def test_create_tactical_symbol_embed_sto_divergence_falls_back_to_volume_without_notional() -> (
@@ -3735,7 +3734,7 @@ def test_create_tactical_symbol_embed_sto_divergence_falls_back_to_volume_withou
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "⚠️ 機構大單 $96.00 (STO PUT 8,000口) 與 GEX PutWall 分歧" in desc
+    assert "⚠️ 大單 $96.00 STO PUT 8,000口 與 PutWall 分歧〔全鏈掃描，表外〕" in desc
 
 
 def test_create_tactical_symbol_embed_sto_divergence_prioritizes_notional_over_volume() -> (
@@ -3777,7 +3776,8 @@ def test_create_tactical_symbol_embed_sto_divergence_prioritizes_notional_over_v
     desc = get_embed_text(embed)
 
     assert (
-        "⚠️ 機構大單 $96.00 (STO PUT 1,605口, 權利金 $3.04M) 與 GEX PutWall 分歧" in desc
+        "⚠️ 大單 $96.00 STO PUT 1,605口, 權利金 $3.04M 與 PutWall 分歧〔全鏈掃描，表外〕"
+        in desc
     )
 
 
@@ -3911,7 +3911,8 @@ def test_create_tactical_symbol_embed_marks_live_iv_realtime() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
     assert "Implied Volatility (IV) 🟢即時" in desc
-    assert "當前 30 天平值期權隱含波動率（每次開啟強制刷新，非快取）" in desc
+    assert "最近到期" in desc
+    assert "30 天平值" not in desc
 
 
 def test_create_tactical_symbol_embed_stored_iv_has_no_realtime_marker() -> None:

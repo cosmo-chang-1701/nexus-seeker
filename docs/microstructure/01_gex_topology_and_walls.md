@@ -34,6 +34,8 @@ $$
 - $\text{Net GEX} > 0 \implies \text{LONG\_GAMMA}$（自穩定均值回歸環境）
 - $\text{Net GEX} \le 0 \implies \text{SHORT\_GAMMA}$（高波動順向放大環境）
 
+> **/x 的涵蓋範圍（2026-10-08 起）**：`/x` 的 GEX 來自 edge 爬取的 Yahoo 預設期權頁，沒有帶 `?date=`，因此實際是**單一最近到期**、全履約價加總，並非跨到期全鏈。呈現層以 `_resolve_gex_expiry()` 取得該到期日：實際值優先（edge 回傳新增的 `expiry`＝被計入 GEX 的合約最常見到期日，只增欄位、向下相容，edge 重新部署後才生效）、推定後備（完整期權到期日清單 `option_expiries` 中最近一檔未結算者，`max_pain.next_unsettled_expiry()`；到期當日 16:00 ET 後無法確定預設頁停在哪一檔，不標註，不跳下一檔）；`_is_stale_cache` 過期快取不標註。體制標題寫成「Net GEX Regime (MM-DD 到期)」，取不到時寫「Net GEX Regime (最近到期)」，不再稱全鏈加總。⚠買與〔跨到期〕共用同一個結果，為 None 時兩者都不輸出。UOA 與 PutWall 分歧警示若其到期日與此不同，會標註〔跨到期〕。熱力圖另對該到期日當日 BTO 的履約價標 `⚠買Nk`：今日主動買入尚未反映於前日 OI，做市商實際 Γ 可能低於顯示（流量與存量的符號衝突，屬模型限制，僅揭露）。
+
 ### 2.2 三階做市商牆體分類體系 (`classify_gex_wall`)
 令全鏈最大正 GEX 曝險值為 $M_{\text{pos}} = \max_{K} \{\text{GEX}(K) \mid \text{GEX}(K) > 0\}$。對任一履約價的曝險值 $\text{GEX}(K)$，做市商意圖映射函式定義如下：
 $$

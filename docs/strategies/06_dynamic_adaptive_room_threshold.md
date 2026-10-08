@@ -213,6 +213,8 @@ flowchart TD
 
 10. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
 
+12. **Kelly 呈現與賣方前提（2026-10-08 起）**：`/x` 的 Kelly 區塊標題為「賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)」，「每口」註明未指定到期日；它是賣出 16Δ Put 的額度，與現貨進場閘門（上檔空間、停損距離、盈虧比）不同源，閘門全紅時仍可能有口數。`optimize_position_risk` 與 IVR 未知減半的規則不變，只在呈現層補一行「賣方前提」：`IVR`（未知或異常值⚠、`is_selling_locked_by_ivr()` 鎖定 ❌，門檻不另寫死）、`引力`（沿用結算指引已算的 `find_settlement_gravity()` 結果，有值 ❌；斷路器觸發時 `—`）、`牆淨GEX`（PutWall 淨 GEX < 0 ❌）、`局部Γ`（局部體制為 SHORT_GAMMA ❌）、`事件`（沿用 IV 區塊的財報／總經事件加載判定 ⚠）；GEX 缺失的兩項顯示 `—`。無風控警示時省略「系統風控」整行。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

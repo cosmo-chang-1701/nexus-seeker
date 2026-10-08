@@ -451,6 +451,17 @@ async def fetch_and_calculate_iv_metrics(
             "UNAVAILABLE"
         )
         is_market_active = is_market_open()
+        current_iv_expiry: str | None = None
+        current_iv_dte: int | None = None
+        _expiries_memo: list[list[str]] = []
+
+        async def _option_expiries() -> list[str]:
+            # 同一次計算內只取一次到期日清單（跨式／期限結構／財報比對共用）
+            if not _expiries_memo:
+                _expiries_memo.append(
+                    await market_data_service.get_all_option_expiries(symbol) or []
+                )
+            return _expiries_memo[0]
 
         # A. Live IV Calculation (Preferred)
         # IV 定義統一為「最近到期日、現價 ±20% 內合約之 (OI+量)/距離 加權 IV」
@@ -459,7 +470,7 @@ async def fetch_and_calculate_iv_metrics(
         # 與本加權值混入同一條 historical_iv 序列，使 IV Rank 母體不一致。
         if is_market_active:
             try:
-                expirations = await market_data_service.get_all_option_expiries(symbol)
+                expirations = await _option_expiries()
                 if expirations:
                     chain = await market_data_service.get_option_chain(
                         symbol, expirations[0], force_live=force_refresh
@@ -488,6 +499,14 @@ async def fetch_and_calculate_iv_metrics(
                                 sum(iv * w for iv, w in all_options) / total_weight
                             )
                             iv_source = "LIVE_IV"
+                            current_iv_expiry = expirations[0]
+                            try:
+                                current_iv_dte = (
+                                    datetime.strptime(expirations[0], "%Y-%m-%d").date()
+                                    - datetime.now(ny_tz).date()
+                                ).days
+                            except ValueError:
+                                current_iv_dte = None
             except Exception as opt_err:
                 logger.warning(
                     f"[{symbol}] VIX-style weighted IV calculation failed: {opt_err}"
@@ -539,6 +558,18 @@ async def fetch_and_calculate_iv_metrics(
             )
             current_iv = straddle_iv
             iv_scale_corrected = True
+            # IV 值已改為跨式反推，tenor 標籤必須跟著換成跨式的到期日
+            try:
+                _sel_fix = _select_straddle_expiry(
+                    await _option_expiries(), datetime.now().date()
+                )
+                if _sel_fix is not None:
+                    current_iv_dte, current_iv_expiry = _sel_fix
+                else:
+                    current_iv_dte, current_iv_expiry = None, None
+            except Exception as e:
+                current_iv_dte, current_iv_expiry = None, None
+                logger.debug(f"[{symbol}] 尺度修正後跨式到期日取得失敗: {e}")
 
         # 3. 儲存至 database historical_iv：**只寫入盤中即時 IV (LIVE_IV)**。
         # LIVE_IV 只在 is_market_open() 時產生，因此必為交易日；STORED_IV (前值
@@ -599,7 +630,7 @@ async def fetch_and_calculate_iv_metrics(
         if earnings_date_str and term_status is not None:
             try:
                 near_expiry, _ = _select_term_expiries(
-                    await market_data_service.get_all_option_expiries(symbol) or [],
+                    await _option_expiries(),
                     datetime.now().date(),
                 )
                 earnings_after_near_term = bool(
@@ -735,13 +766,24 @@ async def fetch_and_calculate_iv_metrics(
         if straddle_em and straddle_em > 0:
             try:
                 sel = _select_straddle_expiry(
-                    await market_data_service.get_all_option_expiries(symbol) or [],
+                    await _option_expiries(),
                     datetime.now().date(),
                 )
                 if sel is not None:
                     straddle_dte, straddle_expiry = sel
             except Exception as e:
                 logger.debug(f"[{symbol}] 跨式到期日標示取得失敗: {e}")
+
+        term_near_expiry: str | None = None
+        term_far_expiry: str | None = None
+        if term_status is not None:
+            try:
+                term_near_expiry, term_far_expiry = _select_term_expiries(
+                    await _option_expiries(),
+                    datetime.now().date(),
+                )
+            except Exception as e:
+                logger.debug(f"[{symbol}] 期限結構到期日標示取得失敗: {e}")
 
         hv_20_val: float | None = None
         if not df_hist.empty and "HV_20" in df_hist.columns:
@@ -786,6 +828,10 @@ async def fetch_and_calculate_iv_metrics(
             hv_20=hv_20_val,
             straddle_expiry=straddle_expiry,
             straddle_dte=straddle_dte,
+            current_iv_expiry=current_iv_expiry,
+            current_iv_dte=current_iv_dte,
+            term_near_expiry=term_near_expiry,
+            term_far_expiry=term_far_expiry,
         )
 
         # 12. 寫入快取
