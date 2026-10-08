@@ -237,7 +237,8 @@ def test_noise_note_helper() -> None:
 
     noisy = GammaFlipMateriality(1075.0, 9_400_000.0, 4_160_000_000.0, 0.00226)
     note = gamma_flip_noise_note(noisy, 0.0)
-    assert "-9400K" in note
+    assert "-$94K" in note
+    assert "待校準：microstructure/03 §5.6" in note
     assert "0.2%" in note
     assert "排除後 Flip: 無" in note
     assert "$1070.00" in gamma_flip_noise_note(noisy, 1070.0)

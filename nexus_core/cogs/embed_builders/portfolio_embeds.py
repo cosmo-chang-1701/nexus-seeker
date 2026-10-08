@@ -34,6 +34,7 @@ from market_analysis.room_threshold import (
     evaluate_wall_buffer,
     resolve_atr_15m,
 )
+from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 from market_analysis.sentiment.max_pain import find_settlement_gravity
 from market_analysis.dynamic_rollover.constants import (
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
@@ -48,6 +49,7 @@ from cogs.embed_builders._embed_helpers import (
     _add_ansi_field_safely,
     format_psq_matrix_lines,
     format_runway_lines,
+    _fmt_gex_notional,
     gamma_flip_noise_note,
     macro_iv_status_text,
     _chunk_ansi_table,
@@ -78,6 +80,29 @@ _EXTREME_VOL_MIN_DTE = 5
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_gex_expiry(
+    gex_data: Any, data: Dict[str, Any], now_ny: datetime
+) -> str | None:
+    """/x GEX 區塊所涵蓋的到期日：實際值優先、推定後備。
+
+    1. 過期快取（`_is_stale_cache`）不標到期日。
+    2. edge 回傳的 `expiry`（被計入 GEX 的合約最常見到期日）。
+    3. 後備：完整期權到期日清單的最近一檔未結算者（Yahoo 預設頁）；
+       到期當日 16:00 ET 後無法確定，回傳 None。
+    """
+    if not isinstance(gex_data, dict) or gex_data.get("_is_stale_cache"):
+        return None
+    actual = gex_data.get("expiry")
+    if actual:
+        return str(actual)
+    expiries = data.get("option_expiries")
+    if not isinstance(expiries, list) or not expiries:
+        return None
+    from market_analysis.sentiment.max_pain import next_unsettled_expiry
+
+    return next_unsettled_expiry(expiries, now_ny)
 
 
 def _session_phase(now_ny: datetime) -> Literal["盤中", "盤前", "盤後", "休市"]:
@@ -124,25 +149,6 @@ def get_scenario_guidance(
     if spread_pct < -threshold:
         return "價格遠低於最大痛點，具備磁吸效應回升動能。"
     return "目前價差適中，依技術指標操作為主。"
-
-
-def _fmt_gex_notional(raw: float) -> str:
-    """GEX 原始值（OI×100×Γ×S²，每 100% 變動）→ 每 1% 變動避險名目，自動 $B/$M/$K。
-
-    docs/microstructure/01：原始值乘 0.01 才是每 1% 價格變動的做市商避險名目。
-    """
-    v = raw * 0.01
-    sign = "+" if v > 0 else ("-" if v < 0 else " ")
-    a = abs(v)
-    if a >= 1e9:
-        body = f"${a / 1e9:.2f}B"
-    elif a >= 1e6:
-        body = f"${a / 1e6:.1f}M"
-    elif a >= 1e3:
-        body = f"${a / 1e3:.0f}K"
-    else:
-        body = f"${a:.0f}"
-    return f"{sign}{body}"
 
 
 def _format_uoa_field(uoa_data: list) -> str:
@@ -641,6 +647,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     iv_source = None
     current_iv_val = None
     _phase: str = "盤前"
+    # IV 區塊判定的事件加載（財報／總經）；供 Kelly 賣方前提共用，False＝無事件或無 IV 區塊
+    _event_loading_outer = False
 
     def _iv_attr(name: str, default: Any = None) -> Any:
         if iv_data is None:
@@ -864,6 +872,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else None
         )
         tod_samples = int(_to_float(data.get("tod_sample_count"), 0.0))
+        _tod_stat_word = "平均" if data.get("tod_stat") == "mean" else "中位數"
         _bt = data.get("bar_15m_time")
         is_auction_bar = isinstance(_bt, datetime) and (
             (_bt.hour, _bt.minute) in ((9, 30), (15, 45))
@@ -947,7 +956,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 if rvol_tod_val is not None:
                     tod_str = (
                         f"｜同時段量比 {rvol_tod_val:.2f}x"
-                        f" (前 {tod_samples} 日同時段)"
+                        f" (前 {tod_samples} 日{_tod_stat_word}"
+                        + ("，樣本少" if tod_samples < 3 else "")
+                        + ")"
                     )
                 elif is_auction_bar:
                     tod_str = "｜⚠ 開盤／收盤競價時段，量比天然偏高"
@@ -1106,6 +1117,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
 
     skew_val_str = f"{skew_val:.2f}%" if skew_val is not None else "--%"
+    skew_note = " Call溢價" if skew_val is not None and skew_val < 0 else ""
     if skew_percentile is not None:
         skew_per_str = f"{skew_percentile:.1f}%"
     elif data.get("skew_sample_size") is not None:
@@ -1120,7 +1132,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     edge_lines = [
         "```ansi",
         " Option Skew (期權偏斜)",
-        f" └─ Skew 值: {skew_color}{skew_val_str}\u001b[0m (分位點: {skew_color}{skew_per_str}\u001b[0m)",
+        f" └─ Skew (P−C): {skew_color}{skew_val_str}{skew_note}\u001b[0m (分位點: {skew_color}{skew_per_str}\u001b[0m)",
     ]
     if skew_percentile is not None and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
         edge_lines.append(
@@ -1225,6 +1237,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             except Exception:
                 pass
 
+        _event_loading_outer = bool(earnings_loading or macro_loading)
+
         earnings_date_val = _iv_attr("earnings_date")
         earnings_tag = f" {str(earnings_date_val)[5:10]}" if earnings_date_val else ""
         if earnings_loading:
@@ -1240,7 +1254,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 status_tw = f"⚠️ 臨近財報{earnings_tag}（近月 IV 含事件溢價）"
         elif macro_loading:
             status_tw = macro_iv_status_text(
-                iv_source, bool(_iv_attr("event_loading_applied", False))
+                iv_source,
+                bool(_iv_attr("event_loading_applied", False)),
+                omit_loading_note=True,  # 值行已揭露 ×1.4，狀態不重複
             )
 
         iv_status_str = f"狀態: {status_tw}"
@@ -1534,6 +1550,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     # 釘住成立時的釘住履約價（GEX 區塊內賦值，供 Max Pain 指引取用）。
     _pin_strike: Optional[float] = None
+    # 供 Kelly「賣方前提」與日內轉折使用（GEX 區塊內賦值；None 表示未取得）。
+    _put_wall_net_outer: Optional[float] = None
+    _local_short_gamma_outer: Optional[bool] = None
+    _gamma_flip_outer: Optional[float] = None
+    _gex_price_outer: Optional[float] = None  # GEX 區塊採用的現價（與 Flip 同價）
 
     # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
     gex_data = data.get("gex_profile_data")
@@ -1544,6 +1565,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     ):
         try:
             gex_prof = gex_data["gex_profile"]
+            from market_time import ny_tz as _gex_tz
+
+            _gex_exp = _resolve_gex_expiry(gex_data, data, datetime.now(_gex_tz))
+            _gex_exp_label = f"{_gex_exp[5:]} 到期" if _gex_exp else "最近到期"
             strike_keys: list[float] = []
             for k in gex_prof.keys():
                 try:
@@ -1597,6 +1622,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         "```ansi",
                         " ┌─ 履約價(Strike) ─ 曝險熱力圖 (現價±3檔，非全鏈) ─ [每 1% 避險名目]",
                     ]
+                    _bto_by_strike: dict[float, int] = {}
+                    if _gex_exp:
+                        for _u in data.get("uoa") or []:
+                            if not isinstance(_u, dict):
+                                continue
+                            if str(
+                                _u.get("expiry", "")
+                            ) != _gex_exp or "BTO" not in str(_u.get("action", "")):
+                                continue
+                            _uk = _to_float(_u.get("strike"), 0.0)
+                            if _uk in display_strikes:
+                                _bto_by_strike[_uk] = _bto_by_strike.get(_uk, 0) + int(
+                                    _to_float(_u.get("volume"), 0.0)
+                                )
                     for i, k in enumerate(reversed(display_strikes)):
                         v = _safe_gex(k)
                         bars = int((abs(v) / max_abs_gex) * 10)
@@ -1619,9 +1658,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         )
                         formatted_val = _fmt_gex_notional(v)
                         prefix = " ├─" if i < len(display_strikes) - 1 else " └─"
+                        _bto_n = _bto_by_strike.get(k, 0)
+                        _bto_tag = f" ⚠買{_bto_n / 1000:.1f}k" if _bto_n > 0 else ""
                         gex_lines.append(
-                            f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>9}"
+                            f"{prefix} {spot_marker}{k:>7.2f} | {color_prefix}{bar_str}\u001b[0m | {formatted_val:>9}{_bto_tag}"
                         )
+                    if _bto_by_strike:
+                        gex_lines.append(" ⚠買＝今日買入未計入前日OI，實際Γ可能偏低")
 
                     def _append_tree_block(
                         lines: List[str], header: str, items: List[str]
@@ -1679,6 +1722,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         # 裡要跟著賣現貨避險（助跌），不是支撐——據實揭露，並另列現價下方
                         # 淨 GEX 最大的正支撐。僅影響呈現，引擎閘門仍以 edge PutWall 為準。
                         put_wall_net = _safe_gex(put_wall_float)
+                        _put_wall_net_outer = put_wall_net
                         if put_wall_net < 0:
                             put_items.append(
                                 f"⚠ 該履約價淨 GEX {_fmt_gex_notional(put_wall_net)} 為負"
@@ -1919,10 +1963,32 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                             if notional_str
                                             else ""
                                         )
+                                        _sto_exp = str(best_sto.get("expiry", ""))
+                                        _sto_dte = ""
+                                        try:
+                                            _sto_dte = f"(DTE{(datetime.strptime(_sto_exp, '%Y-%m-%d').date() - datetime.now(_gex_tz).date()).days})"
+                                        except ValueError:
+                                            pass
+                                        _in_table = any(
+                                            isinstance(_u, dict)
+                                            and str(_u.get("expiry", "")) == _sto_exp
+                                            and _to_float(_u.get("strike"), 0.0)
+                                            == sto_strike
+                                            and str(_u.get("type", "")).upper() == "PUT"
+                                            for _u in (data.get("uoa") or [])
+                                        )
+                                        _sto_tags = (
+                                            "" if _in_table else "〔全鏈掃描，表外〕"
+                                        ) + (
+                                            "〔跨到期〕"
+                                            if _gex_exp and _sto_exp != _gex_exp
+                                            else ""
+                                        )
                                         put_items.append(
-                                            f"⚠️ 機構大單 ${sto_strike:.2f}"
-                                            f" (STO PUT {sto_volume:,}口{notional_suffix})"
-                                            " 與 GEX PutWall 分歧"
+                                            f"⚠️ 大單 ${sto_strike:.2f}"
+                                            f"{' ' + _sto_exp[5:] + _sto_dte if _sto_exp else ''}"
+                                            f" STO PUT {sto_volume:,}口{notional_suffix}"
+                                            f" 與 PutWall 分歧{_sto_tags}"
                                         )
 
                         put_block_items = put_items
@@ -2133,7 +2199,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         else:
                             regime_label = "🔴 SHORT_GAMMA (助漲助跌)"
                         regime_items.append(
-                            f"Net GEX Regime (全鏈加總): {_fmt_gex_notional(net_gex_float)} ({regime_label})"
+                            f"Net GEX Regime ({_gex_exp_label}): {_fmt_gex_notional(net_gex_float)} ({regime_label})"
                         )
                         # 釘住效應：全鏈 Long Gamma 時做市商逆勢避險（漲賣跌買），現價貼近
                         # 上方 CallWall 時突破難以延續——放量只代表量能，不代表能穿牆。
@@ -2157,7 +2223,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 regime_items.append(
                                     f"📌 釘住效應：Long Gamma 且距 CallWall "
                                     f"${call_wall_float:.2f} 僅 {upside_room_pct:.2f}%"
-                                    f"（≤ 1×ATR₁D {pin_band_pct:.2f}%），做市商逆勢避險壓制突破延續"
+                                    f"（≤ 1×ATR₁D {pin_band_pct:.2f}%），壓制突破延續"
                                 )
 
                     gamma_flip_val = estimate_symbol_gamma_flip(
@@ -2186,6 +2252,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         flip_zero = interpolate_gamma_flip_zero(
                             gex_prof, gamma_flip_val
                         )
+                        if not noise_note:
+                            # 雜訊交叉不構成「跌破 Flip」；比較用現價與本區塊同源
+                            _gamma_flip_outer = gamma_flip_val
+                            _gex_price_outer = effective_c_val
                         if noise_note:
                             flip_item += f"\n │  {noise_note}"
                         elif flip_zero > 0 and not math.isclose(
@@ -2201,6 +2271,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                     local_regime = analyze_local_gamma_regime(gex_prof, effective_c_val)
                     if local_regime is not None:
+                        _local_short_gamma_outer = bool(local_regime.is_short_gamma)
                         total_long = (
                             net_gex_float is not None and net_gex_float > 50000.0
                         )
@@ -2288,18 +2359,48 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
         from cogs.embed_builders._embed_helpers import get_sqz_status_display
 
-        directional_status, sqz_ansi_color = get_sqz_status_display(
-            sqz_is_squeezing, sqz_momentum, sqz_signal_dir
+        _mom_color = (
+            getattr(psq_raw, "momentum_color", None)
+            if hasattr(psq_raw, "is_squeezing")
+            else psq_raw.get("momentum_color")
         )
-        mom_str = f"{sqz_momentum:+.2f}"
+        directional_status, sqz_ansi_color = get_sqz_status_display(
+            sqz_is_squeezing,
+            sqz_momentum,
+            sqz_signal_dir,
+            momentum_color=str(_mom_color) if _mom_color else None,
+        )
+
+        # 日內轉折：日線動能為正（與「方向狀態」同源的即時值 sqz_momentum），
+        # 但 65m／15m 動能轉負或價格跌破 Gamma Flip。
+        _turn_note = ""
+        _mtx = getattr(data.get("squeeze_eval"), "matrix", None)
+        if isinstance(_mtx, dict):
+            try:
+                if sqz_momentum > 0:
+                    if any(
+                        tf in _mtx and _mtx[tf].momentum_value < 0
+                        for tf in ("65m", "15m")
+                    ):
+                        _turn_note = "65m/15m 動能<0"
+                    elif (
+                        _gamma_flip_outer is not None
+                        and _gamma_flip_outer > 0
+                        and _gex_price_outer is not None
+                        and 0 < _gex_price_outer < _gamma_flip_outer
+                    ):
+                        _turn_note = "跌破 Gamma Flip"
+            except (AttributeError, TypeError):
+                _turn_note = ""
 
         sqz_lines = [
             "```ansi",
-            " 動能與擠壓狀態 (Momentum & Squeeze · 日線即時)",
+            " 日線即時",
             f" ├─ 擠壓強度: {sqz_level_label}",
-            f" ├─ 方向狀態: {sqz_ansi_color}{directional_status}\u001b[0m",
-            f" └─ 動能數值 (SQZ MOM): {sqz_ansi_color}{mom_str}\u001b[0m",
+            f" {'├─' if _turn_note else '└─'} 方向狀態: {sqz_ansi_color}{directional_status}\u001b[0m",
         ]
+        if _turn_note:
+            sqz_lines.append(f" └─ \u001b[1;33m⚠ 日內轉弱: {_turn_note}\u001b[0m")
 
         _gd_ago = (
             getattr(psq_raw, "green_dot_bars_ago", None)
@@ -2563,6 +2664,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
         )
 
+    gravity: Optional[Dict[str, Any]] = None
     if not cb_triggered:
         from market_time import ny_tz as _gravity_tz
 
@@ -2690,16 +2792,45 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _k_unit = _to_float_or_none(data.get("kelly_unit_weighted_delta"))
         _beta_str = f"{_k_beta:.2f}" if _k_beta is not None else "—"
         kelly_lines = [
-            " 安全建倉額度 (Kelly · 賣出 16Δ Put 參考)",
+            " 賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)",
             f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m (β 加權 Delta 佔總資金 {exposure}%)",
         ]
         if _k_unit:
-            kelly_lines.append(f" ├─ 每口: β={_beta_str} → ≈{_k_unit:.1f} 股 SPY 等值")
+            kelly_lines.append(
+                f" ├─ 每口(未指定到期): β={_beta_str} → ≈{_k_unit:.1f} 股 SPY 等值"
+            )
+        # IVR：與 ivr_strategy_gate 同一判定（含門檻與未知／異常值語意）
+        _pre_ivr = _to_float_or_none(ivr_val)
+        if _pre_ivr is None or _pre_ivr < 0.0:
+            _pre_ivr_mark = "⚠"
+        else:
+            _pre_ivr_mark = "❌" if is_selling_locked_by_ivr(_pre_ivr) else "✅"
+        # 引力：沿用上方結算指引已算好的 gravity；斷路器觸發時不評估
+        _pre_grav = "—" if cb_triggered else ("❌" if gravity is not None else "✅")
+        _pre_wall = (
+            "—"
+            if _put_wall_net_outer is None
+            else ("❌" if _put_wall_net_outer < 0 else "✅")
+        )
+        _pre_local = (
+            "—"
+            if _local_short_gamma_outer is None
+            else ("❌" if _local_short_gamma_outer else "✅")
+        )
+        _pre_event = "⚠" if _event_loading_outer else "✅"
+        kelly_lines.append(
+            f" ├─ 賣方前提: IVR{_pre_ivr_mark} 引力{_pre_grav} 牆淨GEX{_pre_wall}"
+            f" 局部Γ{_pre_local} 事件{_pre_event}"
+        )
         if contracts == 0 and not any(
             k in warnings for k in ("禁用", "fail-closed", "暫停")
         ):
             kelly_lines.append(" ├─ 0 口原因: 單口 β 加權 Delta 已超過可用風險額度")
-        kelly_lines.append(f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m")
+        if getattr(kelly_sizing, "warnings", None):
+            kelly_lines.append(f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m")
+        else:
+            # 無風控警示時不輸出「安全/符合風控」整行（省字數），改由末項收尾。
+            kelly_lines[-1] = kelly_lines[-1].replace(" ├─", " └─", 1)
         target_lines.extend(kelly_lines)
 
     _sq_ev = data.get("squeeze_eval")
