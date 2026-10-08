@@ -207,6 +207,8 @@ flowchart TD
 
 8. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
+9. **日線噪音帶參考停損（並列、待校準）**：`/x` 在停損行之後另列「日線參考 (−0.25×ATR₁D)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（`ATR₁D ≤ 0` 時不輸出）。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
+
 9. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
 
 10. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。

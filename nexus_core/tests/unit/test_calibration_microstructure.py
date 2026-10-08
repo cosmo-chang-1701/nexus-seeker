@@ -603,3 +603,63 @@ def test_micro_report_gamma_flip_materiality_stats() -> None:
     assert stats["n_raw_flip"] == 3
     row = stats["依門檻剔除"]["5%"]
     assert row == {"剔除": 2, "改選": 1, "消失": 1, "剔除率": round(2 / 3, 3)}
+
+
+def _stop_event(
+    day: str, lows: list[float], closes: list[float], wall: float = 100.0
+) -> dict[str, Any]:
+    return {
+        "symbol": "X",
+        "date": day,
+        "walls": {"edge_PutWall": {"strike": wall, "tested": True, "held": True}},
+        "_path": {"lows": lows, "closes": closes, "atr_1d": 26.0},
+    }
+
+
+def test_stop_buffer_outcomes_classifies_whipsaw_true_break_and_no_trigger() -> None:
+    from calibration.microstructure import stop_buffer_outcomes
+
+    # 0.25×ATR1D = 6.5 → stop 93.5；現行 0.5×26/√26 ≈ 2.55 → stop ≈ 97.45
+    events = [
+        _stop_event("d1", [96.0, 99.0], [99.0, 101.0]),  # 僅現行墊片觸發，且收回
+        _stop_event("d2", [90.0, 91.0], [92.0, 90.0]),  # 全部觸發且真破
+        _stop_event("d3", [99.0, 100.0], [100.0, 101.0]),  # 都未觸發
+    ]
+    out = stop_buffer_outcomes(events)
+    cur = out["定義比較"]["0.5×ATR15m(現行)"]
+    assert cur["n"] == 3
+    assert cur["觸發率"]["tested"] == 3 and cur["觸發率"]["held"] == 2
+    assert cur["掃損收回率"]["tested"] == 2 and cur["掃損收回率"]["held"] == 1
+    assert cur["真破率"]["held"] == 1
+    wide = out["定義比較"]["0.25×ATR1D"]
+    assert wide["觸發率"]["held"] == 1  # 只有 d2
+    assert wide["掃損收回率"]["held"] == 0
+    assert "ATR₁D/√26" in out["備註"]
+
+
+def test_stop_buffer_outcomes_insufficient_sample_keeps_current() -> None:
+    from calibration.microstructure import stop_buffer_outcomes
+
+    out = stop_buffer_outcomes([_stop_event("d1", [90.0], [90.0])])
+    assert "樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ" in out["判讀"]
+    # 未 tested 或缺路徑者不入母體
+    assert (
+        stop_buffer_outcomes([{"walls": {}, "date": "d"}])["定義比較"]["0.25×ATR1D"][
+            "n"
+        ]
+        == 0
+    )
+
+
+def test_label_symbol_keeps_path_for_stop_buffer() -> None:
+    from calibration.microstructure import _label_symbol, support_definitions
+
+    snap = _wall_snap("2026-09-21")
+    snap["_defs"] = support_definitions(snap)
+    idx = pd.bdate_range("2026-09-21", periods=6)
+    hist = pd.DataFrame(
+        {"Low": [1.0] * 6, "Close": [2.0] * 6},
+        index=idx,
+    )
+    (rec,) = _label_symbol([snap], hist, horizon_days=5)
+    assert rec["_path"]["lows"] == [1.0] * 5 and len(rec["_path"]["closes"]) == 5

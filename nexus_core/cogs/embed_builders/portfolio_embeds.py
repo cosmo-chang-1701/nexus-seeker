@@ -1785,10 +1785,22 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"\n │  引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): "
                                     f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
                                     f"{fallback_marker}"
-                                    "\n │  ⚠ PutWall 位於淨 GEX 助跌區；緩衝判定與引擎"
-                                    "閘門仍以 PutWall 為準（PutWall 定義待校準）"
+                                    "\n │  ⚠ PutWall 位於助跌區，閘門仍以 PutWall 為準"
                                 )
                             put_items.append(stop_item)
+                            # docs/strategies/06 §5：日線噪音帶參考停損，僅並列，
+                            # 閘門不動，待 calibration 停損墊片比較。
+                            if _pw_atr_1d > 0:
+                                _daily_stop = put_wall_float - 0.25 * _pw_atr_1d
+                                _daily_pct = (
+                                    (effective_c_val - _daily_stop)
+                                    / effective_c_val
+                                    * 100
+                                )
+                                put_items[-1] += (
+                                    "\n │  日線參考 (−0.25×ATR₁D): "
+                                    f"${_daily_stop:.2f} (↓{_daily_pct:.2f}%)，待校準"
+                                )
 
                         if effective_c_val > 0:
                             sto_strikes = data.get("sto_physical_cap_strikes") or []
@@ -2032,9 +2044,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 f"短線盈虧比 (期權視角，至 CallWall ${call_wall_float:.2f}): "
                                 + "｜".join(rr_parts)
                                 + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
-                            )
-                            put_block_items.append(
-                                "B&H 建倉以擠壓等級為準（strategies/10 不設目標價），見下方 🎯 欄位"
                             )
                         _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
                     if call_block_items is not None:

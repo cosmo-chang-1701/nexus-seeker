@@ -533,7 +533,13 @@ def _label_symbol(
                 "dist_pct": (spot - strike) / spot * 100 if spot > 0 else None,
                 **_wall_outcome(strike, atr, lows, closes),
             }
-        rec: dict[str, Any] = {"symbol": s["symbol"], "date": s["date"], "walls": walls}
+        rec: dict[str, Any] = {
+            "symbol": s["symbol"],
+            "date": s["date"],
+            "walls": walls,
+            # 供停損墊片比較使用；報表輸出前由 build_micro_report 剔除
+            "_path": {"lows": lows, "closes": closes, "atr_1d": atr},
+        }
         support = walls.get("淨GEX最大")
         if support is not None:
             rec.update(
@@ -614,6 +620,77 @@ def compare_support_definitions(labeled: list[dict[str, Any]]) -> dict[str, Any]
             else "CI 重疊或淨 GEX 定義未較佳，維持 edge PutWall，只保留呈現層揭露"
         )
     return {"n_labeled_dates": n_dates, "定義比較": table, "判讀": verdict}
+
+
+def _stop_buffer_definitions() -> dict[str, Any]:
+    from market_analysis.room_threshold import _BARS_PER_SESSION
+
+    return {
+        "0.5×ATR15m(現行)": lambda a1d: 0.5 * a1d / math.sqrt(_BARS_PER_SESSION),
+        "0.25×ATR1D": lambda a1d: 0.25 * a1d,
+        "0.5×ATR1D": lambda a1d: 0.5 * a1d,
+    }
+
+
+STOP_BUFFER_DEFINITIONS = _stop_buffer_definitions()
+
+
+def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
+    """PutWall 停損墊片比較（docs/strategies/06 §5；母體＝edge_PutWall tested 事件）。
+
+    - stopped：觀察期最低價 <= wall − buffer
+    - whipsaw：stopped 且觀察期最後收盤 >= wall（掃損後收回）
+    - true_break：stopped 且觀察期最後收盤 < stop（真破）
+    ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）。
+    """
+    events: list[tuple[str, dict[str, Any]]] = []
+    for x in labeled:
+        w = (x.get("walls") or {}).get("edge_PutWall")
+        path = x.get("_path")
+        if not w or not w.get("tested") or not path:
+            continue
+        atr = float(path.get("atr_1d") or 0.0)
+        if atr <= 0 or not path.get("lows") or not path.get("closes"):
+            continue
+        events.append((x["date"], {"wall": float(w["strike"]), **path}))
+
+    table: dict[str, Any] = {}
+    for name, buf_fn in STOP_BUFFER_DEFINITIONS.items():
+        stopped: list[tuple[str, bool]] = []
+        whipsaw: list[tuple[str, bool]] = []
+        broken: list[tuple[str, bool]] = []
+        for d, e in events:
+            stop = e["wall"] - buf_fn(e["atr_1d"])
+            hit = min(e["lows"]) <= stop
+            last = e["closes"][-1]
+            stopped.append((d, hit))
+            if hit:
+                whipsaw.append((d, last >= e["wall"]))
+                broken.append((d, last < stop))
+        table[name] = {
+            "n": len(events),
+            "觸發率": _hold_rate_stats(stopped),
+            "掃損收回率": _hold_rate_stats(whipsaw),
+            "真破率": _hold_rate_stats(broken),
+        }
+
+    n_dates = len({d for d, _ in events})
+    if n_dates < _MIN_LABELED_DATES or len(events) < _MIN_TESTED_PER_DEFINITION:
+        verdict = (
+            f"樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ"
+            f"（可標註日期 {n_dates}/{_MIN_LABELED_DATES}；"
+            f"tested 事件 {len(events)}/{_MIN_TESTED_PER_DEFINITION}）"
+        )
+    else:
+        verdict = (
+            "樣本已達門檻；比較掃損收回率與真破率的 CI 後，"
+            "再決定是否調整墊片（閘門不得先改）"
+        )
+    return {
+        "備註": "ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）",
+        "定義比較": table,
+        "判讀": verdict,
+    }
 
 
 def put_wall_net_gex_stats(
@@ -809,6 +886,7 @@ def build_micro_report(
         "支撐牆守住率_依深度四分位": hold_table
         or f"尚無走完 {horizon_days} 個交易日觀察期的快照",
         "支撐定義比較": compare_support_definitions(labeled),
+        "停損墊片比較": stop_buffer_outcomes(labeled),
         "PutWall處淨GEX": put_wall_net_gex_stats(snaps, labeled),
         "GammaFlip重要性": gamma_flip_materiality_stats(snaps),
         "n_labeled": len(labeled),
