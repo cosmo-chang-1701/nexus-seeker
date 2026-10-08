@@ -45,6 +45,8 @@ class Confirmed15mBar:
     # 前幾個交易日「同一時段」K 棒的均量（日內 U 型量能季節性基準）；樣本不足為 None。
     tod_avg_volume: Optional[float] = None
     tod_sample_count: int = 0
+    # 同時段中位數（抗離群；僅供 /x 呈現，排程推播仍用 tod_avg_volume）。
+    tod_median_volume: Optional[float] = None
 
 
 # 同時段均量至少需要的前日樣本數；5d 週期最多 4 個。
@@ -75,6 +77,28 @@ def compute_time_of_day_avg_volume(
         return (avg if avg > 0 else None), n
     except Exception as e:
         logger.warning(f"同時段均量計算失敗: {e}")
+        return None, 0
+
+
+def compute_time_of_day_median_volume(
+    df_confirmed: pd.DataFrame,
+) -> tuple[Optional[float], int]:
+    """同 `compute_time_of_day_avg_volume`，但以中位數取代平均（抗單日離群量）。"""
+    try:
+        last_ts = df_confirmed.index[-1]
+        slot = last_ts.time()
+        prior = df_confirmed.iloc[:-1]
+        mask = [
+            (ts.time() == slot and ts.date() < last_ts.date()) for ts in prior.index
+        ]
+        same_slot = prior.loc[mask, "Volume"].dropna()
+        n = int(len(same_slot))
+        if n < _TOD_MIN_SAMPLES:
+            return None, n
+        med = float(same_slot.median())
+        return (med if med > 0 else None), n
+    except Exception as e:
+        logger.warning(f"同時段中位數計算失敗: {e}")
         return None, 0
 
 
@@ -239,6 +263,7 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
     )
 
     tod_avg_volume, tod_samples = compute_time_of_day_avg_volume(df_confirmed)
+    tod_median_volume, _ = compute_time_of_day_median_volume(df_confirmed)
 
     return Confirmed15mBar(
         symbol=symbol,
@@ -251,6 +276,7 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
         low=low_val,
         tod_avg_volume=tod_avg_volume,
         tod_sample_count=tod_samples,
+        tod_median_volume=tod_median_volume,
     )
 
 

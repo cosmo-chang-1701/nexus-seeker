@@ -609,9 +609,12 @@ class SymbolDeepDiveMixin:
             result["bar_15m_time"] = bar_time
             result["bar_15m_notes"] = assessment.notes
             tod_avg = _clean_float(_extract_val("tod_avg_volume"))
+            # /x 以同時段中位數為基準（抗單日離群）；沒有時退回平均。
+            tod_median = _clean_float(_extract_val("tod_median_volume"))
+            tod_base = tod_median if tod_median is not None else tod_avg
             rvol_tod = (
-                (v_15m / tod_avg)
-                if (v_15m is not None and tod_avg is not None and tod_avg > 0)
+                (v_15m / tod_base)
+                if (v_15m is not None and tod_base is not None and tod_base > 0)
                 else None
             )
             if assessment.is_stale or assessment.is_anomalous:

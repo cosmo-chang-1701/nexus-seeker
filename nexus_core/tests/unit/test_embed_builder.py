@@ -3659,7 +3659,7 @@ def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() ->
     desc = get_embed_text(embed)
 
     assert (
-        "⚠️ 機構大單 $145.00 (STO PUT 12,509口, 權利金 $3.04M) 與 GEX PutWall 分歧"
+        "⚠️ 大單 $145.00 STO PUT 12,509口, 權利金 $3.04M 與 PutWall 分歧〔全鏈掃描，表外〕"
         in desc
     )
 
@@ -3685,7 +3685,7 @@ def test_create_tactical_symbol_embed_omits_sto_divergence_line_within_threshold
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "與 GEX PutWall 分歧" not in desc
+    assert "與 PutWall 分歧" not in desc
 
 
 def test_create_tactical_symbol_embed_ignores_call_side_sto_for_putwall_divergence() -> (
@@ -3709,7 +3709,7 @@ def test_create_tactical_symbol_embed_ignores_call_side_sto_for_putwall_divergen
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "與 GEX PutWall 分歧" not in desc
+    assert "與 PutWall 分歧" not in desc
 
 
 def test_create_tactical_symbol_embed_sto_divergence_falls_back_to_volume_without_notional() -> (
@@ -3734,7 +3734,7 @@ def test_create_tactical_symbol_embed_sto_divergence_falls_back_to_volume_withou
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "⚠️ 機構大單 $96.00 (STO PUT 8,000口) 與 GEX PutWall 分歧" in desc
+    assert "⚠️ 大單 $96.00 STO PUT 8,000口 與 PutWall 分歧〔全鏈掃描，表外〕" in desc
 
 
 def test_create_tactical_symbol_embed_sto_divergence_prioritizes_notional_over_volume() -> (
@@ -3776,7 +3776,8 @@ def test_create_tactical_symbol_embed_sto_divergence_prioritizes_notional_over_v
     desc = get_embed_text(embed)
 
     assert (
-        "⚠️ 機構大單 $96.00 (STO PUT 1,605口, 權利金 $3.04M) 與 GEX PutWall 分歧" in desc
+        "⚠️ 大單 $96.00 STO PUT 1,605口, 權利金 $3.04M 與 PutWall 分歧〔全鏈掃描，表外〕"
+        in desc
     )
 
 

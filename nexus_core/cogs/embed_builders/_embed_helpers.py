@@ -33,6 +33,7 @@ def get_sqz_status_display(
     momentum: float | None,
     signal_dir: str,
     short: bool = False,
+    momentum_color: str | None = None,
 ) -> tuple[str, str]:
     """Returns a unified (directional_status, ansi_color_code) for Squeeze momentum."""
     if is_squeezing is None:
@@ -51,6 +52,23 @@ def get_sqz_status_display(
     tw_dir = {"Long": "多頭", "Short": "空頭", "Neutral": "中性"}.get(
         signal_dir, "中性"
     )
+
+    if momentum_color == "DarkBlue" and momentum > 0:
+        label = "擠壓中" if is_squeezing else "無擠壓"
+        text = (
+            f"🟢 多頭減速 {mom_str}"
+            if short
+            else f"🟢 多頭減速 / {label} (SQZ MOM: {mom_str})"
+        )
+        return text, "\u001b[1;32m"
+    if momentum_color == "Golden" and momentum < 0:
+        label = "擠壓中" if is_squeezing else "無擠壓"
+        text = (
+            f"🔴 空頭減速 {mom_str}"
+            if short
+            else f"🔴 空頭減速 / {label} (SQZ MOM: {mom_str})"
+        )
+        return text, "\u001b[1;31m"
 
     if is_squeezing:
         if momentum > 0:
@@ -377,6 +395,25 @@ def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
         )
 
 
+def _fmt_gex_notional(raw: float) -> str:
+    """GEX 原始值（OI×100×Γ×S²，每 100% 變動）→ 每 1% 變動避險名目，自動 $B/$M/$K。
+
+    docs/microstructure/01：原始值乘 0.01 才是每 1% 價格變動的做市商避險名目。
+    """
+    v = raw * 0.01
+    sign = "+" if v > 0 else ("-" if v < 0 else " ")
+    a = abs(v)
+    if a >= 1e9:
+        body = f"${a / 1e9:.2f}B"
+    elif a >= 1e6:
+        body = f"${a / 1e6:.1f}M"
+    elif a >= 1e3:
+        body = f"${a / 1e3:.0f}K"
+    else:
+        body = f"${a:.0f}"
+    return f"{sign}{body}"
+
+
 def gamma_flip_noise_note(materiality: Any, filtered_flip: float) -> str:
     """閘門 Gamma Flip 屬雜訊交叉時的揭露文字；否則回傳空字串（docs/microstructure/03 §5.6）。
 
@@ -390,9 +427,9 @@ def gamma_flip_noise_note(materiality: Any, filtered_flip: float) -> str:
         return ""
     after = f"${filtered_flip:.2f}" if filtered_flip > 0 else "無"
     return (
-        f"⚠️ 翻轉檔負值僅 -{materiality.neg_peak / 1000:.0f}K"
+        f"⚠️ 翻轉檔負值僅 {_fmt_gex_notional(-materiality.neg_peak)}"
         f"（視窗最大 |GEX| 的 {materiality.ratio * 100:.1f}%），屬雜訊交叉；"
-        f"排除後 Flip: {after}（閘門仍以原值為準）"
+        f"排除後 Flip: {after}（閘門暫用原值，待校準：microstructure/03 §5.6）"
     )
 
 
