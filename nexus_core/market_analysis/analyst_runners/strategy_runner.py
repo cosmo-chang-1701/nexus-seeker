@@ -3,6 +3,7 @@
 from __future__ import annotations
 from typing import Any
 
+import asyncio
 import logging
 import math
 from datetime import date, datetime, timezone, timedelta
@@ -166,18 +167,32 @@ async def run_fomc_escape_window_analysis(
 ) -> Optional[discord.Embed]:
     """Dynamically compute Multi-Factor Macro Liquidity Escape Matrix and return a styled Embed."""
 
-    # 1. 取得 FedWatch 概率
+    # 1. 取得 FedWatch 概率（同步 SQLite 讀取移出 event loop）
+    # 過期時 prob=None、prob_stale=True（與進場閘門相同的 fail-closed 語意，簡報與
+    # 閘門得出相同 tier）；例外時 prob=None（未知），不再冒充寫死的 0.50。
+    prob: Optional[float]
     try:
         from services.calendar_service import calendar_service
 
-        prob, is_fallback, fedwatch_details = (
-            calendar_service.get_latest_fedwatch_info()
-        )
+        (
+            prob,
+            is_fallback,
+            fedwatch_details,
+            prob_stale,
+        ) = await asyncio.to_thread(calendar_service.get_latest_fedwatch_info)
     except Exception as e:
         logger.warning(f"查詢 FedWatch 數據失敗: {e}")
-        prob = 0.50
+        prob = None
         is_fallback = True
         fedwatch_details = {}
+        prob_stale = False
+
+    from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+
+    if prob is not None:
+        prob_pct_str = f"{prob * 100:.1f}%"
+    else:
+        prob_pct_str = "資料過期" if prob_stale else "暫無數據"
 
     # 2. 載入使用者自訂逃頂窗口與自動滾動判定
     from database.user_settings import get_full_user_context
@@ -258,6 +273,12 @@ async def run_fomc_escape_window_analysis(
             f1_val = f"\u001b[1;33m🟡 {meeting_prefix}維持利率 ({detail_str})\u001b[0m"
         else:
             f1_val = f"\u001b[1;33m🟡 {meeting_prefix}均衡定價 ({detail_str})\u001b[0m"
+    elif prob is None:
+        f1_val = (
+            f"\u001b[1;33m⚪ FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），不計分\u001b[0m"
+            if prob_stale
+            else "⚪ 暫無數據"
+        )
     else:
         if prob > 0.70:
             f1_val = (
@@ -377,6 +398,7 @@ async def run_fomc_escape_window_analysis(
         fear_greed=fear_greed,
         prob=prob,
         is_negative_gamma=is_negative_gamma,
+        prob_stale=prob_stale,
     )
 
     if direction == "前移":
@@ -385,7 +407,7 @@ async def run_fomc_escape_window_analysis(
             "建議於窗口初段逢高分批減倉、收緊防守停損線並全面封鎖裸賣策略。"
         )
         reason = (
-            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 鷹派傾向分數達 {prob * 100:.1f}% 或通膨/結構承壓）。"
+            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 鷹派傾向分數達 {prob_pct_str} 或通膨/結構承壓）。"
             f"為防範估值回殺與流動性衰竭，系統自動將自訂反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前啟動防禦部署。"
         )
         adj_start_date = _shift_business_days(start_date, -shift_days)
@@ -397,7 +419,7 @@ async def run_fomc_escape_window_analysis(
             "建議延後撤退時機、讓利潤奔馳，可適度提高風險偏好。"
         )
         reason = (
-            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 鷹派傾向分數僅 {prob * 100:.1f}%、通膨放緩且大盤結構健康）。"
+            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 鷹派傾向分數僅 {prob_pct_str}、通膨放緩且大盤結構健康）。"
             f"系統自動將自訂反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退時機、充分享受流動性溢價。"
         )
         adj_start_date = _shift_business_days(start_date, shift_days)
@@ -409,7 +431,7 @@ async def run_fomc_escape_window_analysis(
             "建議按原定計畫嚴守關鍵支撐與壓力關卡，執行標準網格防禦。"
         )
         reason = (
-            f"當前 FedWatch 鷹派傾向分數 ({prob * 100:.1f}%) 與各項總經流動性因子處於常態均衡區間。"
+            f"當前 FedWatch 鷹派傾向分數 ({prob_pct_str}) 與各項總經流動性因子處於常態均衡區間。"
             "系統評估反彈逃頂窗口維持原訂日程 (偏移 0 天)，建議持續監控大盤結構變化。"
         )
         adj_start_date = start_date
@@ -422,6 +444,7 @@ async def run_fomc_escape_window_analysis(
 
     return create_fomc_escape_window_embed(
         prob=prob,
+        prob_stale=prob_stale,
         direction=direction,
         shift_days=shift_days,
         adjusted_start=adjusted_start,

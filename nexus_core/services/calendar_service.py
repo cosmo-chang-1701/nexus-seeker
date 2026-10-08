@@ -766,26 +766,41 @@ class CalendarService:
             await save_kv_cache("macro_cpi_is_fallback", 1)
             return False
 
-    def get_latest_fedwatch_probability(self) -> tuple[float, bool]:
-        """讀取最新 FedWatch 概率與是否為 Fallback 快取"""
+    def get_latest_fedwatch_probability(
+        self,
+    ) -> tuple[Optional[float], bool, bool]:
+        """讀取最新 FedWatch 概率，回傳 `(prob, is_fallback, is_stale)`。
+
+        - `is_stale=True`：kv 有值但已逾 `FEDWATCH_PROB_MAX_AGE_SECONDS`（與進場閘門
+          共用同一上限，簡報與閘門得到相同的過期判斷）。此時一律回傳
+          `(None, is_fallback, True)`——**不得**改用 `economic_calendar_events` 的備援
+          值（那是 `update_fedwatch_probability()` 同一次寫入的同一個數字，等於
+          繞過年齡上限），也不得回傳寫死的 0.50。`is_fallback` 沿用 kv 的實際旗標。
+        - 查無有效資料（非過期）：沿用既有日曆備援，再不行才 `(0.50, True, False)`。
+        """
         import sqlite3
-        from database.cache import get_fedwatch_probability_fresh, get_kv_cache
+        from database.cache import (
+            FEDWATCH_PROB_MAX_AGE_HOURS,
+            get_fedwatch_probability_fresh,
+            get_kv_cache,
+            should_warn_fedwatch_stale,
+        )
 
         fallback_val = get_kv_cache("macro_fedwatch_is_fallback")
         is_fallback = fallback_val is None or int(fallback_val) == 1
 
-        # 與宏觀逃頂評分／擠壓否決共用同一年齡上限（12h），避免 09:00 簡報與
-        # 進場閘門對同一份 FedWatch 資料的新鮮度判斷不一致。逾期視為不可用，
-        # 走下方 economic_calendar_events 備援並標記為 fallback。
         cached_prob, prob_is_stale = get_fedwatch_probability_fresh()
+        if should_warn_fedwatch_stale("briefing", prob_is_stale):
+            logger.warning(
+                f"FedWatch 快取已逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時，簡報標示資料過期（不使用備援值）"
+            )
         if prob_is_stale:
-            logger.warning("FedWatch 快取已逾 12 小時，簡報改用日曆備援並標記為備援")
-            is_fallback = True
+            return None, is_fallback, True
         if cached_prob is not None:
             try:
                 prob_val = float(cached_prob)
                 if 0.01 < prob_val < 0.99:
-                    return prob_val, is_fallback
+                    return prob_val, is_fallback, False
                 else:
                     is_fallback = True
             except (ValueError, TypeError):
@@ -817,18 +832,26 @@ class CalendarService:
             finally:
                 conn.close()
             if row and row["fedwatch_probability"] is not None:
-                return float(row["fedwatch_probability"]), is_fallback
+                return float(row["fedwatch_probability"]), is_fallback, False
         except Exception as e:
             logger.warning(f"查詢 FedWatch 概率失敗: {e}")
 
-        return 0.50, True
+        return 0.50, True, False
 
-    def get_latest_fedwatch_info(self) -> tuple[float, bool, dict[str, Any]]:
-        """讀取最新 FedWatch 概率、是否為 Fallback 快取，以及詳細期貨機率拆解"""
+    def get_latest_fedwatch_info(
+        self,
+    ) -> tuple[Optional[float], bool, dict[str, Any], bool]:
+        """讀取最新 FedWatch 概率，回傳 `(prob, is_fallback, details, is_stale)`。
+
+        過期時 `prob=None, is_stale=True, details={}`：不反推備援明細，避免把過期數字
+        包裝成看似有效的三桶機率。
+        """
         import json
         from database.cache import get_kv_cache
 
-        prob, is_fallback = self.get_latest_fedwatch_probability()  # 內含 12h 年齡上限
+        prob, is_fallback, is_stale = self.get_latest_fedwatch_probability()
+        if prob is None:
+            return None, is_fallback, {}, is_stale
         raw_details = get_kv_cache("macro_fedwatch_details")
         details: dict[str, Any] = {}
         if raw_details and not is_fallback:
@@ -870,7 +893,7 @@ class CalendarService:
                 "decision": decision,
                 "source": "fallback",
             }
-        return prob, is_fallback, details
+        return prob, is_fallback, details, False
 
 
 # Singleton instance

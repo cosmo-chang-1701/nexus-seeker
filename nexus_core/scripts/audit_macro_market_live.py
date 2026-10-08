@@ -482,7 +482,11 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
     fw_is_fallback = macro_data.get("fedwatch_is_fallback")
 
     if fw_prob is None:
-        b4_errors.append("FedWatch probability 數值缺失")
+        if macro_data.get("fedwatch_is_stale"):
+            # 快取逾期：簡報端刻意不顯示舊值，屬資料新鮮度問題而非解析錯誤
+            b4_warnings.append("FedWatch 快取已逾期（簡報端不顯示舊值）")
+        else:
+            b4_errors.append("FedWatch probability 數值缺失")
 
     prob_m = fw_details.get("prob_maintain")
     prob_h = fw_details.get("prob_hike")

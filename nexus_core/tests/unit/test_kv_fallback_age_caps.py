@@ -6,7 +6,7 @@
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from typing import Any, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -20,6 +20,20 @@ from market_analysis.intraday_pipeline.metrics import (
 )
 
 _AGE = "database.cache.get_kv_cache_with_age"
+_UPD = "database.cache.get_kv_cache_with_updated_at"
+
+
+@pytest.fixture(autouse=True)
+def _reset_stale_warn_and_calendar_cache() -> Any:
+    """FedWatch 過期警告為模組層節流狀態、行事曆為日級 lru_cache，測試間需重置。"""
+    import database.cache as cache_mod
+    import market_time
+
+    cache_mod._fedwatch_stale_warned.clear()
+    market_time._recent_session_closes.cache_clear()
+    yield
+    cache_mod._fedwatch_stale_warned.clear()
+    market_time._recent_session_closes.cache_clear()
 
 
 # ---------- get_kv_cache_fresh 邊界 ----------
@@ -52,8 +66,9 @@ def _et(y: int, m: int, d: int, h: int, mi: int = 0) -> datetime:
     return datetime(y, m, d, h, mi, tzinfo=_ET)
 
 
-def _age(written: datetime, now: datetime) -> float:
-    return (now - written).total_seconds()
+def _utc(dt: datetime) -> datetime:
+    """測試用：把 ET 時刻換成 kv updated_at 的形式（aware UTC）。"""
+    return dt.astimezone(timezone.utc)
 
 
 # 2026-10-05 為週一；10-02 週五、10-01 週四、09-30 週三
@@ -78,15 +93,67 @@ def test_trading_day_validity(written: datetime, now: datetime, expected: bool) 
     import market_time
 
     assert (
-        market_time.is_cache_age_within_last_session(_age(written, now), as_of=now)
-        is expected
+        market_time.is_updated_within_last_session(_utc(written), as_of=now) is expected
     )
 
 
-def test_trading_day_validity_unknown_age_is_invalid() -> None:
+def test_trading_day_validity_unknown_updated_at_is_invalid() -> None:
     import market_time
 
-    assert market_time.is_cache_age_within_last_session(None) is False
+    assert market_time.is_updated_within_last_session(None) is False
+
+
+# DST 邊界：2026-11-01（日）02:00 ET 回撥一小時（EDT→EST）。直接以 updated_at
+# （UTC）轉 ET 日期，不受「now − age」在 ET 本地時間相減差一小時的影響。
+@pytest.mark.parametrize(
+    "updated_utc, as_of, expected",
+    [
+        # 週五 10/30 16:30 EDT（20:30 UTC）寫入、週一 11/02 盤中讀取：有效
+        (datetime(2026, 10, 30, 20, 30, tzinfo=timezone.utc), (2026, 11, 2, 10), True),
+        # 週四 10/29 22:30 EDT = 10/30 02:30 UTC 寫入（ET 日期仍為 10/29）：無效
+        (datetime(2026, 10, 30, 2, 30, tzinfo=timezone.utc), (2026, 11, 2, 10), False),
+        # 回撥後週一 11/02 00:30 EST = 05:30 UTC 寫入、當日盤前讀取（上一交易日=週五）：有效
+        (datetime(2026, 11, 2, 5, 30, tzinfo=timezone.utc), (2026, 11, 2, 8), True),
+        # 週五 10/30 收盤後 17:00 EDT（21:00 UTC）寫入，11/02 17:00 EST 讀取
+        # （上一交易日=當日週一）：週五寫入無效
+        (datetime(2026, 10, 30, 21, 0, tzinfo=timezone.utc), (2026, 11, 2, 17), False),
+        # 週日 11/01 23:30 EST = 11/02 04:30 UTC 寫入（ET 日期 11/01，週日）；
+        # 週一 11/02 17:00 後讀取，上一交易日=11/02：無效
+        (datetime(2026, 11, 2, 4, 30, tzinfo=timezone.utc), (2026, 11, 2, 17), False),
+    ],
+)
+def test_trading_day_validity_dst_boundary(
+    updated_utc: datetime, as_of: tuple[int, int, int, int], expected: bool
+) -> None:
+    import market_time
+
+    now = _et(*as_of)
+    assert (
+        market_time.is_updated_within_last_session(updated_utc, as_of=now) is expected
+    )
+
+
+def test_last_completed_trading_date_is_cached_per_day() -> None:
+    """同一 ET 日期內重複查詢只建一次 NYSE schedule（雷達整輪重用）。"""
+    import market_time
+
+    with patch.object(
+        market_time.nyse_calendar,
+        "schedule",
+        wraps=market_time.nyse_calendar.schedule,
+    ) as sched:
+        for h in (9, 10, 11, 17):
+            market_time.get_last_completed_trading_date(_et(2026, 10, 5, h))
+    assert sched.call_count == 1
+    # 盤中（10:00）與收盤後（17:00）仍得出不同答案：快取的是行事曆而非判斷結果
+    assert (
+        market_time.get_last_completed_trading_date(_et(2026, 10, 5, 10))
+        == "2026-10-02"
+    )
+    assert (
+        market_time.get_last_completed_trading_date(_et(2026, 10, 5, 17))
+        == "2026-10-05"
+    )
 
 
 @pytest.mark.parametrize(
@@ -98,18 +165,18 @@ def test_trading_day_validity_unknown_age_is_invalid() -> None:
 )
 def test_level_fallback_uses_trading_day_window(getter: Any, key: str) -> None:
     now = _et(2026, 10, 5, 10)  # 週一
-    fri_age = _age(_et(2026, 10, 2, 11), now)
-    wed_age = _age(_et(2026, 9, 30, 11), now)
+    fri = _utc(_et(2026, 10, 2, 11))
+    wed = _utc(_et(2026, 9, 30, 11))
     with patch("market_time.datetime") as mdt:
         mdt.now.return_value = now
-        with patch(_AGE, return_value=(150.0, fri_age)) as m:
+        with patch(_UPD, return_value=(150.0, fri)) as m:
             assert getter("aapl") == 150.0
             m.assert_called_with(key)
-        with patch(_AGE, return_value=(150.0, wed_age)):
+        with patch(_UPD, return_value=(150.0, wed)):
             assert getter("aapl") is None
-        with patch(_AGE, return_value=(150.0, None)):
+        with patch(_UPD, return_value=(150.0, None)):
             assert getter("aapl") is None
-        with patch(_AGE, return_value=(None, None)):
+        with patch(_UPD, return_value=(None, None)):
             assert getter("aapl") is None
 
 
@@ -284,13 +351,18 @@ def test_scorer_stale_label_and_fail_closed() -> None:
     score, tier, _, factors = evaluate_macro_top_escape_score(**kwargs, prob_stale=True)
     assert (score, tier) == (0, "UNKNOWN")  # 仍 fail-closed，門檻不變
     label = dict(factors)["FOMC 鷹派傾向分數 (FedWatch)"]
-    assert "FedWatch 資料過期（逾 12 小時），不計分" in label
+    from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+
+    assert (
+        f"FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），不計分" in label
+    )
     _, _, _, factors_default = evaluate_macro_top_escape_score(**kwargs)
     assert "資料不足" in dict(factors_default)["FOMC 鷹派傾向分數 (FedWatch)"]
 
 
-def test_calendar_service_ignores_stale_kv_fedwatch() -> None:
-    """09:00 簡報路徑與進場閘門共用 12h 上限：逾期快取不得被當成有效值。"""
+def test_calendar_service_stale_kv_returns_unknown_not_calendar_fallback() -> None:
+    """逾期一律回傳 (None, is_fallback, True)：不查日曆備援（同一次寫入的同一個值）、
+    不回傳寫死的 0.50。"""
     from services.calendar_service import calendar_service
 
     def _kv(key: str) -> Any:
@@ -299,10 +371,141 @@ def test_calendar_service_ignores_stale_kv_fedwatch() -> None:
     with patch("database.cache.get_kv_cache", side_effect=_kv), patch(
         "database.cache.get_fedwatch_probability_fresh", return_value=(None, True)
     ), patch("services.calendar_service.get_read_connection") as conn:
-        conn.return_value.cursor.return_value.fetchone.return_value = None
-        prob, is_fallback = calendar_service.get_latest_fedwatch_probability()
-    assert prob == 0.50
-    assert is_fallback is True
+        result = calendar_service.get_latest_fedwatch_probability()
+        conn.assert_not_called()  # 沒有查 economic_calendar_events 備援
+    assert result == (None, False, True)
+
+
+def test_calendar_service_info_stale_has_no_fallback_details() -> None:
+    from services.calendar_service import calendar_service
+
+    with patch.object(
+        calendar_service,
+        "get_latest_fedwatch_probability",
+        return_value=(None, True, True),
+    ):
+        assert calendar_service.get_latest_fedwatch_info() == (None, True, {}, True)
+
+
+def test_stale_warning_logged_once_per_stale_period(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """同一段過期期間只警告一次；資料恢復後重置，下次過期再警告。"""
+    from services.calendar_service import calendar_service
+
+    def _kv(key: str) -> Any:
+        return 0
+
+    def _run(fresh: tuple[Any, bool]) -> None:
+        with patch("database.cache.get_kv_cache", side_effect=_kv), patch(
+            "database.cache.get_fedwatch_probability_fresh", return_value=fresh
+        ):
+            calendar_service.get_latest_fedwatch_probability()
+
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            _run((None, True))
+    assert caplog.text.count("FedWatch 快取已逾") == 1
+    _run((0.6, False))  # 恢復新鮮 -> 重置
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        _run((None, True))
+        _run((None, True))
+    assert caplog.text.count("FedWatch 快取已逾") == 1
+
+
+# ---------- 避險端沿用最後值 vs 進場閘門 fail-closed ----------
+
+
+def test_last_known_keeps_stale_value() -> None:
+    from database.cache import get_fedwatch_probability_last_known
+
+    with patch(_AGE, return_value=(0.8, 13 * 3600)):
+        assert get_fedwatch_probability_last_known() == (0.8, True)
+    with patch(_AGE, return_value=(0.8, 3600)):
+        assert get_fedwatch_probability_last_known() == (0.8, False)
+    with patch(_AGE, return_value=(None, None)):
+        assert get_fedwatch_probability_last_known() == (None, False)
+
+
+def test_scorer_carry_last_value_when_stale_scores_and_labels() -> None:
+    from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+    from market_analysis.index_microstructure import evaluate_macro_top_escape_score
+
+    score, tier, _, factors = evaluate_macro_top_escape_score(
+        vts_ratio=1.05,
+        fear_greed=40.0,
+        prob=0.80,
+        is_negative_gamma=False,
+        satellite_euphoria_ratio=None,
+        prob_stale=True,
+    )
+    assert score == 2 and tier == "ELEVATED"
+    label = dict(factors)["FOMC 鷹派傾向分數 (FedWatch)"]
+    assert (
+        f"FedWatch 資料過期（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時），沿用最後值"
+        in label
+    )
+
+
+def _patch_defense_inputs() -> list[Any]:
+    return [
+        patch(
+            "services.market_data_service.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"is_valid": True, "vts_ratio": 1.05},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={"fear_greed": 40.0},
+        ),
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stale_hawkish_fedwatch_hedges_but_entry_gate_stays_unknown() -> None:
+    """13 小時舊的鷹派 0.80＋VTS 倒掛：避險端沿用最後值 -> 仍產生保護性 Put；
+    進場閘門 fail-closed -> UNKNOWN。"""
+    from contextlib import ExitStack
+
+    import market_analysis.dynamic_rollover.macro_top_escape_defense as defense
+    from market_analysis.dynamic_rollover.constants import _MACRO_TOP_ESCAPE_PUT_TIERS
+    from market_analysis.squeeze_entry.vetoes import compute_macro_escape_tier
+
+    with ExitStack() as stack:
+        for p in _patch_defense_inputs():
+            stack.enter_context(p)
+        stack.enter_context(patch(_AGE, return_value=(0.8, 13 * 3600)))
+
+        # 進場閘門：過期值不計分（fail-closed）。VTS 倒掛只得 1 分 -> WATCH
+        # （若沿用最後值會是 ELEVATED）；VTS 正常時已知分數為 0 -> UNKNOWN。
+        assert await compute_macro_escape_tier() == "WATCH"
+        with patch(
+            "services.market_data_service.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"is_valid": True, "vts_ratio": 0.9},
+        ):
+            assert await compute_macro_escape_tier() == "UNKNOWN"
+
+        # 避險端：沿用最後值計分 -> VTS(1) + FedWatch(1) = 2 -> ELEVATED
+        ctx = MagicMock(enable_macro_top_escape_defense=True)
+        build = stack.enter_context(
+            patch.object(
+                defense, "_build_protective_put_instruction", return_value=["PUT"]
+            )
+        )
+        result = await defense.evaluate_macro_top_escape_defense_impl(
+            lambda uid: ctx, 1, []
+        )
+    assert result == ["PUT"]
+    assert build.call_args.args[2] in _MACRO_TOP_ESCAPE_PUT_TIERS
+    assert "沿用最後值" in build.call_args.args[4]
 
 
 # ---------- /x 雷達：POC 不繞過上限、不存回備援值 ----------
@@ -314,8 +517,8 @@ def test_radar_kv_snapshot_session_fresh() -> None:
     now = _et(2026, 10, 5, 10)
     snap = _KvSnapshot(
         {
-            "volume_poc_FRI": (100.0, _age(_et(2026, 10, 2, 11), now)),
-            "volume_poc_WED": (100.0, _age(_et(2026, 9, 30, 11), now)),
+            "volume_poc_FRI": (100.0, _utc(_et(2026, 10, 2, 11))),
+            "volume_poc_WED": (100.0, _utc(_et(2026, 9, 30, 11))),
         }
     )
     with patch("market_time.datetime") as mdt:
@@ -361,10 +564,13 @@ async def test_radar_slow_poc_fallback_respects_cap_and_not_resaved(
     async def fake_save_kv(k: str, v: Any) -> None:
         saved[k] = v
 
+    from datetime import timedelta
+
     def fake_age(key: str) -> tuple[Any, Any]:
+        updated = datetime.now(timezone.utc) - timedelta(seconds=poc_age)
         if key.startswith("volume_poc_"):
-            return 123.0, poc_age
-        return None, 0.0
+            return 123.0, updated
+        return None, datetime.now(timezone.utc)
 
     with patch(
         "services.market_data_service.get_quote",
@@ -398,13 +604,14 @@ async def test_radar_slow_poc_fallback_respects_cap_and_not_resaved(
     ), patch(
         "market_analysis.volume_profile.calculate_volume_profile", return_value={}
     ), patch("database.cache.save_kv_cache", side_effect=fake_save_kv), patch(
-        "database.cache.get_kv_cache_with_age", side_effect=fake_age
+        "database.cache.get_kv_cache_with_updated_at", side_effect=fake_age
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
         return_value={"max_pain": 100.0},
-    ), patch("market_time.is_cache_age_within_last_session") as mock_valid:
-        mock_valid.side_effect = lambda age, as_of=None: (
-            age is not None and age < 24 * 3600
+    ), patch("market_time.is_updated_within_last_session") as mock_valid:
+        mock_valid.side_effect = lambda updated, as_of=None: (
+            updated is not None
+            and (datetime.now(timezone.utc) - updated).total_seconds() < 24 * 3600
         )
         result = await cog._fetch_sym_radar_data_slow_raw("NVDA")
     assert result["volume_poc"] == expected_poc
