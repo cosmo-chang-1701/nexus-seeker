@@ -92,7 +92,7 @@ def create_macro_scan_embed(
 
 
 def create_fomc_escape_window_embed(
-    prob: float,
+    prob: float | None,
     direction: str,
     shift_days: int,
     adjusted_start: str,
@@ -108,6 +108,7 @@ def create_fomc_escape_window_embed(
     top_escape_tier: str | None = None,
     top_escape_factors: list[tuple[str, str]] | None = None,
     fedwatch_source: str | None = None,
+    prob_stale: bool = False,
 ) -> discord.Embed:
     """建立全維度宏觀流動性逃頂推演矩陣 Embed (繁體中文)"""
     if direction == "前移":
@@ -146,10 +147,21 @@ def create_fomc_escape_window_embed(
         )
     else:
         prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
+        if prob is None:
+            # 過期（或無資料）時不顯示舊數字，只標示狀態
+            from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
+
+            prob_text = (
+                f"**資料過期**（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時，不顯示舊值）"
+                if prob_stale
+                else "**暫無數據**"
+            )
+        else:
+            prob_text = f"**{prob * 100:.1f}%**{prob_suffix}"
         embed.add_field(
             name="📊 利率鷹派傾向分數 (FedWatch)",
             value=(
-                f"下週 FOMC 鷹派傾向分數：**{prob * 100:.1f}%**{prob_suffix}\n"
+                f"下週 FOMC 鷹派傾向分數：{prob_text}\n"
                 + fedwatch_source_note(fedwatch_source)
             ),
             inline=False,

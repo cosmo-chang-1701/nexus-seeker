@@ -420,7 +420,7 @@ async def test_radar_data_slow_gamma_flip_populates_portfolio_monitor(
 @patch("database.squeeze_cache.get_squeeze_cache", return_value={})
 # 雷達 fast path 的 kv_cache 讀取已改為一次批次查詢（get_kv_cache_many），
 # 不再逐 key 呼叫 get_kv_cache()／get_kv_cache_with_age()。
-@patch("database.cache.get_kv_cache_many")
+@patch("database.cache.get_kv_cache_many_with_updated_at")
 async def test_radar_data_fast_gamma_flip_populates_portfolio_monitor(
     mock_get_kv_many: Any,
     mock_squeeze: Any,
@@ -431,7 +431,7 @@ async def test_radar_data_fast_gamma_flip_populates_portfolio_monitor(
 
     mock_gex_profile = {"130": -1000.0, "140": -500.0, "148": 1000.0, "160": 2000.0}
 
-    # get_kv_cache_many 回傳 {key: (value, age_seconds)}，查無資料的 key 不出現。
+    # get_kv_cache_many 回傳 {key: (value, updated_at)}，查無資料的 key 不出現。
     mock_get_kv_many.return_value = {
         "radar_terminal_AAPL": (
             {

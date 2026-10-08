@@ -645,8 +645,8 @@ async def test_fetch_sym_radar_data_fast_stitches_month_max_pains_and_ma20(
         ),
         patch(
             # 雷達 fast path 的 kv_cache 讀取已改為一次批次查詢；
-            # 回傳格式為 {key: (value, age_seconds)}。
-            "database.cache.get_kv_cache_many",
+            # 回傳格式為 {key: (value, updated_at)}。
+            "database.cache.get_kv_cache_many_with_updated_at",
             return_value={
                 "radar_terminal_NVDA": (
                     {
@@ -689,7 +689,7 @@ async def test_fetch_sym_radar_data_fast_retains_stored_skew_when_percentile_non
             return_value={"c": 150.0, "volume": 1000000},
         ),
         patch(
-            "database.cache.get_kv_cache_many",
+            "database.cache.get_kv_cache_many_with_updated_at",
             return_value={
                 "radar_terminal_NVDA": (
                     {

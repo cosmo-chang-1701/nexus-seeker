@@ -1,6 +1,7 @@
 from typing import Any
 import pandas_market_calendars as mcal
 from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache
 from zoneinfo import ZoneInfo
 import logging
 
@@ -191,6 +192,37 @@ def get_trading_days_ago_utc(n_trading_days: int, for_purge: bool = False) -> st
     )
 
 
+def _normalize_to_et(as_of: datetime | None) -> datetime:
+    """as_of 正規化為帶美東時區的 datetime（None＝現在；naive 視為美東時間）。
+
+    `get_last_completed_trading_date` 與 `is_updated_within_last_session` 共用，
+    避免兩處各自複製一份時區處理而漂移。
+    """
+    if as_of is None:
+        return datetime.now(ny_tz)
+    if as_of.tzinfo is None:
+        return as_of.replace(tzinfo=ny_tz)
+    return as_of.astimezone(ny_tz)
+
+
+@lru_cache(maxsize=8)
+def _recent_session_closes(today_et: date) -> tuple[datetime, ...]:
+    """截至 `today_et`（含）近 20 個日曆日內各交易日的收盤時刻（UTC，由舊到新）。
+
+    以 ET 日期為 key 做日級快取：NYSE schedule 一天只會變一次，雷達整輪（數十個
+    標的、每標的多次交易日判斷）只需建一次，不必每次同步重算行事曆。快取內只存
+    收盤「時刻」而非判斷結果，因此盤中／收盤後的切換仍由呼叫端與 now 比較得出，
+    不會被日級快取卡在舊答案。行事曆查詢失敗時直接拋出例外（lru_cache 不快取
+    例外，下次呼叫會重試）。
+    """
+    schedule = nyse_calendar.schedule(
+        start_date=today_et - timedelta(days=20), end_date=today_et
+    )
+    return tuple(
+        c.tz_convert(timezone.utc).to_pydatetime() for c in schedule["market_close"]
+    )
+
+
 def get_last_completed_trading_date(as_of: datetime | None = None) -> str:
     """回傳最近一個**已收盤**交易日的美東日期 (`'YYYY-MM-DD'`)。
 
@@ -202,24 +234,13 @@ def get_last_completed_trading_date(as_of: datetime | None = None) -> str:
     國定假日，但呼叫端（canonical 日級快照補寫）對一個沒有盤中資料的日期只會
     寫入 0 筆，不會產生錯誤資料。
     """
-    if as_of is None:
-        now_ny = datetime.now(ny_tz)
-    elif as_of.tzinfo is None:
-        now_ny = as_of.replace(tzinfo=ny_tz)
-    else:
-        now_ny = as_of.astimezone(ny_tz)
+    now_ny = _normalize_to_et(as_of)
 
     try:
-        start = now_ny.date() - timedelta(days=20)
-        schedule = nyse_calendar.schedule(start_date=start, end_date=now_ny.date())
-        if not schedule.empty:
-            completed = [
-                c
-                for c in schedule["market_close"]
-                if c.tz_convert(ny_tz).to_pydatetime() <= now_ny
-            ]
-            if completed:
-                return str(completed[-1].tz_convert(ny_tz).strftime("%Y-%m-%d"))
+        closes = _recent_session_closes(now_ny.date())
+        completed = [c for c in closes if c <= now_ny]
+        if completed:
+            return completed[-1].astimezone(ny_tz).strftime("%Y-%m-%d")
     except Exception as e:
         logger.warning(f"取得最近已收盤交易日失敗，退回前一個平日: {e}")
 
@@ -229,30 +250,29 @@ def get_last_completed_trading_date(as_of: datetime | None = None) -> str:
     return fallback.strftime("%Y-%m-%d")
 
 
-def is_cache_age_within_last_session(
-    age_seconds: float | None, as_of: datetime | None = None
+def is_updated_within_last_session(
+    updated_at: datetime | None, as_of: datetime | None = None
 ) -> bool:
     """快取資料是否寫於「最近一個已收盤交易日當天或之後」（以交易日為準的新鮮度）。
 
     用於 Vol POC／GEX PutWall 這類「價位」型回退：固定小時數上限（如 24h）會被
     週末、連假吃掉（週五寫入、週一讀取已逾 48h），但價位的參考性其實只隨「交易
-    日數」衰減。規則：由 `age_seconds` 反推寫入時間的美東日期，須 >=
+    日數」衰減。規則：kv 的 `updated_at`（UTC）轉成美東日期，須 >=
     `get_last_completed_trading_date(as_of)`。例如週一盤中讀取，上一個已收盤交易日
     為週五，週五寫入有效；週五盤中讀取，上一個已收盤交易日為週四，週三寫入無效。
 
-    `age_seconds` 為 None（updated_at 無法解析）一律回傳 False。`as_of` 若為
-    naive datetime，視為美東時間；預設為現在。
+    時間基準：直接以 `updated_at`（UTC、aware）轉 ET 日期，不再用「now − age」
+    反推——後者在 DST 切換日前後會因 ET 本地時間減法差一小時而誤判日期。
+    `as_of` 只用來決定「上一個已收盤交易日」，與寫入日期無關；naive 視為美東時間，
+    預設為現在。`updated_at` 為 None（無法解析）一律回傳 False；naive 的
+    `updated_at` 視為 UTC（kv 的 CURRENT_TIMESTAMP 即 UTC）。
     """
-    if age_seconds is None:
+    if updated_at is None:
         return False
-    if as_of is None:
-        now_ny = datetime.now(ny_tz)
-    elif as_of.tzinfo is None:
-        now_ny = as_of.replace(tzinfo=ny_tz)
-    else:
-        now_ny = as_of.astimezone(ny_tz)
-    written_date = (now_ny - timedelta(seconds=age_seconds)).strftime("%Y-%m-%d")
-    return written_date >= get_last_completed_trading_date(now_ny)
+    if updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=timezone.utc)
+    written_date = updated_at.astimezone(ny_tz).strftime("%Y-%m-%d")
+    return written_date >= get_last_completed_trading_date(as_of)
 
 
 def get_session_bounds_utc(
