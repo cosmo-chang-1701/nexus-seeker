@@ -445,21 +445,17 @@ class SymbolDeepDiveMixin:
         em_context: dict[str, Any] = (
             raw_em_context if isinstance(raw_em_context, dict) else {}
         )
-        # 盤中跨式以即時現價定價，分布中心是現價而非前收；盤前／盤後維持前收為中心。
+        # 跨式以定價當下的現價（盤後為最新收盤）為中心，而非昨日前收。
         if isinstance(iv_metrics, dict):
-            _iv_src = iv_metrics.get("iv_source")
             _ref_spot = _safe_float(iv_metrics.get("reference_spot_price"), 0.0)
         else:
-            _iv_src = getattr(iv_metrics, "iv_source", None)
             _ref_spot = _safe_float(
                 getattr(iv_metrics, "reference_spot_price", None), 0.0
             )
         if (
             em_context
-            and _iv_src == "LIVE_IV"
             and _ref_spot > 0
             and _safe_float(em_context.get("expected_move_weekly"), 0.0) > 0
-            and is_market_open()
         ):
             from market_analysis.sentiment.iv_metrics import IVContext
 
@@ -471,13 +467,15 @@ class SymbolDeepDiveMixin:
                 reference_price=_ref_spot,
                 current_price=_safe_float(em_context.get("current_price"), 0.0),
             )
-            em_context["reference_label"] = "現價"
+            em_context["reference_label"] = "現價" if is_market_open() else "最新收盤"
         elif em_context:
             em_context["reference_label"] = "前收"
         result["expected_move_context"] = em_context
 
         safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
         result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
+        # 頭條 Max Pain 實際鎖定的到期日：結算前 1σ 必須用同一檔的 DTE
+        result["max_pain_expiry"] = safe_mp.get("expiry")
         result["month_max_pains"] = data.get("month_max_pains", [])
         result["gex_profile_data"] = gex_profile_data
         result["catalysts"] = catalysts

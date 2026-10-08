@@ -112,6 +112,25 @@ async def test_scale_error_is_corrected_before_db_write() -> None:
 
 
 @pytest.mark.asyncio
+async def test_scale_corrected_iv_tenor_follows_straddle_expiry() -> None:
+    """尺度修正後 IV 來自跨式，current_iv_expiry／dte 必須與跨式同源，不能停在最近到期。"""
+    from datetime import date, timedelta
+
+    today = date.today()
+    near = (today + timedelta(days=1)).isoformat()
+    straddle_exp = (today + timedelta(days=7)).isoformat()
+    res, _ = await _run_metrics(
+        live_iv=0.069,
+        straddle_em=SNDK_STRADDLE_EM,
+        expiries=[near, straddle_exp],
+    )
+    assert res.iv_scale_corrected
+    assert res.current_iv_expiry == straddle_exp
+    assert res.current_iv_dte == 7
+    assert res.straddle_expiry == res.current_iv_expiry
+
+
+@pytest.mark.asyncio
 async def test_event_premium_within_4x_is_not_corrected() -> None:
     """財報週週度 IV 為 30D IV 的 2.5 倍屬正常事件溢價。"""
     straddle_em = SNDK_SPOT * 1.0 * (7.0 / 365.0) ** 0.5  # 反推 IV = 100%
@@ -228,7 +247,7 @@ def test_high_vol_note_respects_sto_lockout_and_names_real_trigger() -> None:
         {
             "symbol": "SNDK",
             "quote": {"c": SNDK_SPOT},
-            "iv_data": _iv(current_iv=1.04),
+            "iv_data": _iv(current_iv=1.04, straddle_implied_iv=1.04),
             "psq_result": _psq(),
             "kelly_sizing": OptimizationResult(
                 suggested_contracts=0,
@@ -237,7 +256,7 @@ def test_high_vol_note_respects_sto_lockout_and_names_real_trigger() -> None:
             ),
         }
     )
-    assert "極端高波環境 (IV 104%)" in text
+    assert "極端高波環境 (跨式 IV 104%)" in text
     assert "賣方策略目前受風控禁用" in text
     assert "建議縮小部位或使用期權賣方策略保護" not in text
     assert "IVR > 50%" not in text
