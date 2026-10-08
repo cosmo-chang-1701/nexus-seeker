@@ -1,9 +1,13 @@
 """market_data_service 記憶體快取設定 (BoundedCache 實例 / TTL 常數 / clear_*)。"""
 
 from typing import Any
+import functools
 import gc
 import logging
+import math
+from datetime import date, datetime, timedelta
 
+from market_time import ny_tz, nyse_calendar
 from services.bounded_cache import BoundedCache  # noqa: F401 (re-exported via __init__)
 
 logger = logging.getLogger(__name__)
@@ -66,7 +70,123 @@ _valid_symbol_cache: Any = BoundedCache(max_size=_VALID_SYMBOL_CACHE_SIZE)
 # 歷史 K 線數據快取設定 (6 小時，避開盤中大量重複 API 查詢)
 # ---------------------------------------------------------------------------
 _history_cache: Any = BoundedCache(max_size=_HISTORY_CACHE_SIZE)
-_HISTORY_CACHE_TTL = 21600  # 6 小時
+_HISTORY_CACHE_TTL = (
+    21600  # 6 小時（僅作盤中「指標用日線」的上限；其餘依 history_cache_expiry）
+)
+
+# --- 依 interval × 交易時段決定到期時間（見 history_cache_expiry）---
+# intraday K 棒秒數：到期對齊「下一根 bar 收盤」而非固定 6 小時。
+_INTRADAY_BAR_SECONDS: dict[str, int] = {
+    "1m": 60,
+    "2m": 120,
+    "5m": 300,
+    "15m": 900,
+    "30m": 1800,
+    "60m": 3600,
+    "1h": 3600,
+    "90m": 5400,
+}
+# 被當「現值」使用的短期日線（VIX 期限結構、原油、跳空、2d 現價 fallback），
+# 盤中最後一根日線 bar 會隨成交更新，不能再讀 6 小時前的資料。
+_LIVE_DAILY_PERIODS: frozenset[str] = frozenset({"1d", "2d", "5d"})
+_LIVE_DAILY_TTL_SECONDS = 900  # 對齊 15 分鐘盤中巡邏
+_BAR_SETTLE_GRACE_SECONDS = (
+    60  # Yahoo 於 bar 收盤後需要時間定案；寬限內抓到的資料只快取到寬限結束
+)
+_POST_CLOSE_SETTLE_SECONDS = 1800  # 收盤後 30 分內日線／最後一根 bar 仍可能被修正
+_POST_CLOSE_SHORT_TTL_SECONDS = 300
+# 除權息調整於開盤前生效；08:45 盤前預熱需拿到新資料，故次交易日開盤前 60 分（08:30 ET）刷新
+_PRE_OPEN_REFRESH_OFFSET_MINUTES = 60
+
+
+@functools.lru_cache(maxsize=32)
+def _session_window(day: date) -> tuple[datetime, datetime] | None:
+    """NYSE 該日 (open, close)（ET aware）；非交易日回 None。半日市由行事曆給提前收盤時間。"""
+    schedule = nyse_calendar.schedule(start_date=day, end_date=day)
+    if schedule.empty:
+        return None
+    row = schedule.iloc[0]
+    return (
+        row["market_open"].tz_convert(ny_tz).to_pydatetime(),
+        row["market_close"].tz_convert(ny_tz).to_pydatetime(),
+    )
+
+
+def _next_trading_day_on_or_after(day: date) -> date:
+    """自 day 起（含）往後找第一個交易日，最多掃 14 天（涵蓋最長連假）；找不到回 day+14。"""
+    for offset in range(15):
+        candidate = day + timedelta(days=offset)
+        if _session_window(candidate) is not None:
+            return candidate
+    return day + timedelta(days=14)
+
+
+def history_cache_expiry(interval: str, period: str, now_ts: float) -> float:
+    """歷史 K 線快取到期時間（epoch 秒）。純函式：時間由 now_ts 注入，不讀系統時鐘。
+
+    1. 盤中：intraday 到期＝正好在下一根 bar 收盤時刻（不超過收盤）；若抓取當下
+       落在某根 bar 收盤後 60 秒定案寬限內，則只快取到該寬限結束；短期日線
+       （period 1d/2d/5d）15 分鐘；其餘指標用日線最長 6 小時；日線一律封頂於
+       收盤後 60 秒（`close + _BAR_SETTLE_GRACE_SECONDS`），不跨過收盤。
+    2. 收盤後 30 分內：5 分鐘（全 interval）。
+    3. 其餘盤外：到次一個「開盤前 60 分（08:30 ET）」刷新點；開盤前 60 分～開盤之間
+       到開盤後 60 秒；一律至少 now+60 秒。
+    """
+    now_et = datetime.fromtimestamp(now_ts, ny_tz)
+    min_expiry = now_ts + 60
+    today_window = _session_window(now_et.date())
+    pre_open_offset = timedelta(minutes=_PRE_OPEN_REFRESH_OFFSET_MINUTES)
+
+    if today_window is not None:
+        open_dt, close_dt = today_window
+        if open_dt <= now_et <= close_dt:
+            bar = _INTRADAY_BAR_SECONDS.get(interval)
+            if bar is not None:
+                elapsed = (now_et - open_dt).total_seconds()
+                n_done = math.floor(elapsed / bar)
+                prev_boundary = open_dt + timedelta(seconds=n_done * bar)
+                # 抓取當下落在某根 bar 收盤後的寬限期內（Yahoo 尚未定案）：
+                # 只快取到寬限結束，之後重抓才拿得到定案資料。
+                if (
+                    n_done >= 1
+                    and (now_et - prev_boundary).total_seconds()
+                    < _BAR_SETTLE_GRACE_SECONDS
+                ):
+                    return prev_boundary.timestamp() + _BAR_SETTLE_GRACE_SECONDS
+                # 其餘：正好在下一根 bar 收盤時刻到期。下游 trim_to_confirmed_15m_bars
+                # 以牆鐘判斷收盤，快取不可跨過收盤邊界，否則會把部分 K 棒當已收盤。
+                boundary = min(
+                    open_dt + timedelta(seconds=(n_done + 1) * bar), close_dt
+                )
+                return boundary.timestamp()
+            if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
+                # 日線 TTL 一律封頂於「收盤＋定案寬限」：盤中抓到的最後一根日線 bar
+                # 是未定案快照，不可跨過收盤沿用到收盤後（否則 6 小時 TTL 會讓 15:00
+                # 抓的 1y 日線在 21:00 仍是盤中值）。
+                close_cap = close_dt.timestamp() + _BAR_SETTLE_GRACE_SECONDS
+                if period in _LIVE_DAILY_PERIODS:
+                    return min(now_ts + _LIVE_DAILY_TTL_SECONDS, close_cap)
+                return min(now_ts + _HISTORY_CACHE_TTL, close_cap)
+            # 未知 interval：保守處理
+            return now_ts + _LIVE_DAILY_TTL_SECONDS
+        if (
+            close_dt
+            < now_et
+            <= close_dt + timedelta(seconds=_POST_CLOSE_SETTLE_SECONDS)
+        ):
+            return now_ts + _POST_CLOSE_SHORT_TTL_SECONDS
+        if now_et < open_dt - pre_open_offset:
+            return max((open_dt - pre_open_offset).timestamp(), min_expiry)
+        if now_et < open_dt:
+            return max(open_dt.timestamp() + _BAR_SETTLE_GRACE_SECONDS, min_expiry)
+
+    # 非交易日，或今日收盤 30 分後：下一交易日開盤前刷新點
+    next_day = _next_trading_day_on_or_after(now_et.date() + timedelta(days=1))
+    next_window = _session_window(next_day)
+    if next_window is None:  # 理論上不會發生（掃描上限 14 天）；保守 6 小時
+        return now_ts + _HISTORY_CACHE_TTL
+    return max((next_window[0] - pre_open_offset).timestamp(), min_expiry)
+
 
 # ---------------------------------------------------------------------------
 # 期權到期日與期權鏈快取設定 (避開盤中重複的 yfinance 查詢)

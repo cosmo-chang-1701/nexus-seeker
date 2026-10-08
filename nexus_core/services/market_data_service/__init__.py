@@ -39,11 +39,23 @@ from ._core import (  # noqa: F401,E402
     _sanitize_ticker,
     _to_yfinance_symbol,
     _yfinance_controls_by_loop,
+    _yahoo_rate_limit_until,
+    EdgeYahooResponse,
+    YahooEdgeBusyError,
+    YahooRateLimitedError,
+    edge_get_yahoo,
+    note_yahoo_rate_limited,
+    is_yf_rate_limit_error,
+    parse_retry_after,
     call_yf,
     get_edge_client,
     interactive,
     is_finnhub_rate_limited,
+    is_yahoo_rate_limited,
     mark_interactive_request,
+    mark_yahoo_ok,
+    mark_yahoo_rate_limited,
+    yahoo_slot,
 )
 from .caches import (  # noqa: F401,E402
     BoundedCache,
@@ -82,6 +94,7 @@ from .caches import (  # noqa: F401,E402
     clear_quote_cache,
     clear_sma_cache,
     clear_valid_symbol_cache,
+    history_cache_expiry,
     run_garbage_collection,
 )
 from .quote import (  # noqa: F401,E402

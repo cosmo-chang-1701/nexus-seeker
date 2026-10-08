@@ -40,8 +40,9 @@ def compute_atr_15m_from_df(df_15m: Optional[Any]) -> float:
 async def fetch_atr_15m(symbol: str, force_refresh: bool = True) -> float:
     """計算真正的 15 分鐘 K 棒 ATR(14)，供防洗盤停損參考使用。
 
-    force_refresh=True：ATR_15m 的價值建立在盤中即時性上，沿用
-    get_history_df() docstring 建議的短週期新鮮度模式（見 15 分鐘價量警報）。
+    force_refresh=True：ATR_15m 的價值建立在盤中即時性上；背景路徑的 intraday
+    force_refresh 由 get_history_df() 的 bar 對齊快取承接（到期 = 下一根 bar 收盤
+    + 60 秒），互動路徑（/x）才會真的強刷。
     資料不足或任何例外一律 fail-safe 回傳 0.0，交由呼叫端視為資料缺失。
     """
     try:
