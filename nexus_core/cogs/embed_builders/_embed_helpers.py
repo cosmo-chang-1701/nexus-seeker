@@ -1262,9 +1262,19 @@ def format_psq_matrix_lines(matrix: Any) -> list[str]:
     return lines
 
 
-def macro_iv_status_text(iv_source: Optional[str], event_loading_applied: bool) -> str:
-    """臨近總經事件時的 IV 狀態文字；只有真的套用 1.4x 事件加載才宣稱「已校正」。"""
+def macro_iv_status_text(
+    iv_source: Optional[str],
+    event_loading_applied: bool,
+    *,
+    omit_loading_note: bool = False,
+) -> str:
+    """臨近總經事件時的 IV 狀態文字；只有真的套用 1.4x 事件加載才宣稱「已校正」。
+
+    `omit_loading_note=True`：呼叫端的值行已揭露 ×1.4 事件加載時，省略括號註記。
+    """
     if event_loading_applied:
+        if omit_loading_note:
+            return "⚠️ 臨近總經大事件"
         return "⚠️ 臨近總經大事件（快取／HV 代理已套用 1.4x 事件加載）"
     if iv_source == "LIVE_IV":
         return "⚠️ 臨近總經大事件（即時 IV 已含事件定價）"

@@ -64,6 +64,10 @@ def _mrvl_data() -> dict[str, Any]:
             {"expiry": "2026-10-30", "max_pain": 260.0, "distance_pct": 9.49},
         ],
         "max_pain": 270.0,
+        "max_pain_expiry": "2026-10-09",
+        "option_expiries": [
+            "2026-10-09", "2026-10-16", "2026-10-23", "2026-10-30", "2026-11-06",
+        ],  # fmt: skip
         "uoa": [
             _uoa_row("2026-10-09", 280.0, "CALL", "🟢 買入開倉 (BTO - Ask)", 3540, 3947),
             _uoa_row("2026-10-16", 300.0, "CALL", "🔴 賣出開倉 (STO - Bid)", 5249, 16928),

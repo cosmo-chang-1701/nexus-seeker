@@ -29,6 +29,7 @@ FALLBACK_GEX: dict[str, Any] = {
     "call_wall": 0.0,
     "put_wall": 0.0,
     "gex_profile": {},
+    "expiry": None,
 }
 
 _GEX_MIN_DELTA_THRESHOLD = 0.02
@@ -229,8 +230,10 @@ async def scrape_symbol_gex_core(
                         exp_dy = int(match.group(3))
                         exp_date = date(exp_yr, exp_mo, exp_dy)
                         days_to_exp = (exp_date - today).days
+                        exp_iso: str | None = exp_date.isoformat()
                     else:
                         days_to_exp = 7
+                        exp_iso = None
 
                     # 防範假牆 (ISSUE-3.4)：0-DTE / 1-DTE 合約在結算日當天 t->0 導致 Gamma 虛高膨脹，
                     # 至少以 2.0 天作為 Gamma 定價底限，過濾即將歸零的幻影假牆 (Phantom Wall)。
@@ -243,6 +246,7 @@ async def scrape_symbol_gex_core(
                             "iv": iv_val_parsed,
                             "t": t,
                             "is_call": is_call,
+                            "exp": exp_iso,
                         }
                     )
                 except Exception:
@@ -357,12 +361,24 @@ async def scrape_symbol_gex_core(
         if put_wall_candidates:
             put_wall = max(put_wall_candidates, key=lambda k: put_wall_candidates[k])
 
+        # 被計入 GEX 的合約中最常見的到期日；供 core 在 /x 標註 GEX 涵蓋的到期日。
+        # 只新增欄位、向下相容：舊版 core 忽略它，沒解析到時為 None。
+        exp_counts: dict[str, int] = {}
+        for contract in option_chain:
+            _e = contract.get("exp")
+            if _e:
+                exp_counts[_e] = exp_counts.get(_e, 0) + 1
+        dominant_expiry = (
+            max(exp_counts, key=lambda e: (exp_counts[e], e)) if exp_counts else None
+        )
+
         return {
             "spot": round(spot_price, 2),
             "net_gex": round(net_gex, 2),
             "call_wall": round(call_wall, 2),
             "put_wall": round(put_wall, 2),
             "gex_profile": {k: round(v, 2) for k, v in gex_by_strike.items()},
+            "expiry": dominant_expiry,
         }
     except Exception as e:
         logger.warning(

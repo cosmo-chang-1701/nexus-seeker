@@ -256,6 +256,13 @@ class SymbolDeepDiveMixin:
             squeeze_task,
         )
 
+        # 完整期權到期日清單（任務已完成，僅取結果）：供 /x 推定 GEX 涵蓋的到期日，
+        # 不可用 month_max_pains——它會漏掉 Max Pain 計算失敗的到期日。
+        try:
+            option_expiries = [str(e) for e in (await expiries_task or [])]
+        except Exception:
+            option_expiries = []
+
         safe_reddit_text = (
             reddit_details[0] if isinstance(reddit_details, tuple) else reddit_details
         )
@@ -282,6 +289,7 @@ class SymbolDeepDiveMixin:
             "df_hist_1d": df_hist_1d,
             "df_hist_fetched_at": df_hist_fetched_at,
             "month_max_pains": month_max_pains,
+            "option_expiries": option_expiries,
             "gex_profile_data": gex_profile_data,
             "volume_profile": vp_data,
             "atr_15m": atr_15m_data,
@@ -477,6 +485,7 @@ class SymbolDeepDiveMixin:
         # 頭條 Max Pain 實際鎖定的到期日：結算前 1σ 必須用同一檔的 DTE
         result["max_pain_expiry"] = safe_mp.get("expiry")
         result["month_max_pains"] = data.get("month_max_pains", [])
+        result["option_expiries"] = data.get("option_expiries", [])
         result["gex_profile_data"] = gex_profile_data
         result["catalysts"] = catalysts
 
@@ -614,6 +623,8 @@ class SymbolDeepDiveMixin:
             # /x 以同時段中位數為基準（抗單日離群）；沒有時退回平均。
             tod_median = _clean_float(_extract_val("tod_median_volume"))
             tod_base = tod_median if tod_median is not None else tod_avg
+            # 面板標籤必須如實標示實際採用的統計（中位數缺失而退回平均時不得標中位數）
+            result["tod_stat"] = "median" if tod_median is not None else "mean"
             rvol_tod = (
                 (v_15m / tod_base)
                 if (v_15m is not None and tod_base is not None and tod_base > 0)

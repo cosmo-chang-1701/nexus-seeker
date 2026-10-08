@@ -53,14 +53,15 @@ class Confirmed15mBar:
 _TOD_MIN_SAMPLES: int = 3
 
 
-def compute_time_of_day_avg_volume(
+def compute_time_of_day_volume_stats(
     df_confirmed: pd.DataFrame,
-) -> tuple[Optional[float], int]:
-    """計算最後一根 K 棒在前幾個交易日同一時段的均量。
+) -> tuple[Optional[float], Optional[float], int]:
+    """最後一根 K 棒在前幾個交易日同一時段的 (均量, 中位數, 樣本數)。
 
     20 根滾動均量跨越日內 U 型量能曲線：開盤 09:30 與收盤 15:45 這兩根本來就含
-    競價量，對前 20 根（多為午盤）必然「放量」。以同一時段的前日均量作基準，才能
-    分辨真正的異常放量與時段季節性。樣本不足 `_TOD_MIN_SAMPLES` 回傳 (None, n)。
+    競價量，對前 20 根（多為午盤）必然「放量」。以同一時段的前日量能作基準，才能
+    分辨真正的異常放量與時段季節性。樣本不足 `_TOD_MIN_SAMPLES` 回傳 (None, None, n)；
+    均量／中位數不為正時各自為 None。
     """
     try:
         last_ts = df_confirmed.index[-1]
@@ -72,34 +73,29 @@ def compute_time_of_day_avg_volume(
         same_slot = prior.loc[mask, "Volume"].dropna()
         n = int(len(same_slot))
         if n < _TOD_MIN_SAMPLES:
-            return None, n
+            return None, None, n
         avg = float(same_slot.mean())
-        return (avg if avg > 0 else None), n
+        med = float(same_slot.median())
+        return (avg if avg > 0 else None), (med if med > 0 else None), n
     except Exception as e:
-        logger.warning(f"同時段均量計算失敗: {e}")
-        return None, 0
+        logger.warning(f"同時段量能統計計算失敗: {e}")
+        return None, None, 0
+
+
+def compute_time_of_day_avg_volume(
+    df_confirmed: pd.DataFrame,
+) -> tuple[Optional[float], int]:
+    """同時段前日均量與樣本數（`compute_time_of_day_volume_stats` 的薄包裝）。"""
+    avg, _, n = compute_time_of_day_volume_stats(df_confirmed)
+    return avg, n
 
 
 def compute_time_of_day_median_volume(
     df_confirmed: pd.DataFrame,
 ) -> tuple[Optional[float], int]:
-    """同 `compute_time_of_day_avg_volume`，但以中位數取代平均（抗單日離群量）。"""
-    try:
-        last_ts = df_confirmed.index[-1]
-        slot = last_ts.time()
-        prior = df_confirmed.iloc[:-1]
-        mask = [
-            (ts.time() == slot and ts.date() < last_ts.date()) for ts in prior.index
-        ]
-        same_slot = prior.loc[mask, "Volume"].dropna()
-        n = int(len(same_slot))
-        if n < _TOD_MIN_SAMPLES:
-            return None, n
-        med = float(same_slot.median())
-        return (med if med > 0 else None), n
-    except Exception as e:
-        logger.warning(f"同時段中位數計算失敗: {e}")
-        return None, 0
+    """同上，但回傳中位數（抗單日離群量）。"""
+    _, med, n = compute_time_of_day_volume_stats(df_confirmed)
+    return med, n
 
 
 def trim_to_confirmed_15m_bars(
@@ -262,8 +258,9 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
         else None
     )
 
-    tod_avg_volume, tod_samples = compute_time_of_day_avg_volume(df_confirmed)
-    tod_median_volume, _ = compute_time_of_day_median_volume(df_confirmed)
+    tod_avg_volume, tod_median_volume, tod_samples = compute_time_of_day_volume_stats(
+        df_confirmed
+    )
 
     return Confirmed15mBar(
         symbol=symbol,

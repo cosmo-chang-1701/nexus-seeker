@@ -117,9 +117,7 @@ def test_rvol_label_is_volume_only_and_uses_time_of_day_baseline() -> None:
         _mu_case(**_bar_fields(bar_time, rvol_15m_tod=1.86, tod_sample_count=4))
     )
     assert "放量突破" not in desc
-    assert (
-        "即時量比 (RVOL_15m): 2.45x｜同時段量比 1.86x (前 4 日中位數，樣本少)" in desc
-    )
+    assert "即時量比 (RVOL_15m): 2.45x｜同時段量比 1.86x (前 4 日中位數)" in desc
     assert "🟢 放量 >= 1.5x" in desc
     assert "@10-01 15:45 [前一交易日]" in desc
 

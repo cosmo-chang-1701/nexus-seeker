@@ -11,7 +11,7 @@ import math
 import psutil
 
 import re
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Literal, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
@@ -34,6 +34,7 @@ from market_analysis.room_threshold import (
     evaluate_wall_buffer,
     resolve_atr_15m,
 )
+from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 from market_analysis.sentiment.max_pain import find_settlement_gravity
 from market_analysis.dynamic_rollover.constants import (
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
@@ -81,39 +82,27 @@ _EXTREME_VOL_MIN_DTE = 5
 # ---------------------------------------------------------------------------
 
 
-def _iv_flag(iv_data: Any, name: str) -> bool:
-    """IVMetrics（物件）或 dict 皆可讀取的布林欄位。"""
-    if isinstance(iv_data, dict):
-        return bool(iv_data.get(name))
-    return bool(getattr(iv_data, name, False))
+def _resolve_gex_expiry(
+    gex_data: Any, data: Dict[str, Any], now_ny: datetime
+) -> str | None:
+    """/x GEX 區塊所涵蓋的到期日：實際值優先、推定後備。
 
-
-def _infer_gex_expiry(month_max_pains: Any, now_ny: datetime) -> str | None:
-    """推定 /x GEX 所涵蓋的到期日（Yahoo 預設頁＝最近一檔未到期）。
-
-    依到期日排序後取第一個 DTE >= 0 者；到期當日 16:00 ET 後已結算則跳過。
-    推定不到時回傳 None。
+    1. 過期快取（`_is_stale_cache`）不標到期日。
+    2. edge 回傳的 `expiry`（被計入 GEX 的合約最常見到期日）。
+    3. 後備：完整期權到期日清單的最近一檔未結算者（Yahoo 預設頁）；
+       到期當日 16:00 ET 後無法確定，回傳 None。
     """
-    if not isinstance(month_max_pains, list):
+    if not isinstance(gex_data, dict) or gex_data.get("_is_stale_cache"):
         return None
-    today = now_ny.date()
-    expiries: list[tuple[date, str]] = []
-    for item in month_max_pains:
-        if not isinstance(item, dict):
-            continue
-        try:
-            exp_dt = datetime.strptime(str(item.get("expiry", "")), "%Y-%m-%d").date()
-        except (TypeError, ValueError):
-            continue
-        expiries.append((exp_dt, exp_dt.isoformat()))
-    for exp_dt, exp_s in sorted(expiries):
-        dte = (exp_dt - today).days
-        if dte < 0:
-            continue
-        if dte == 0 and now_ny.hour >= 16:
-            continue
-        return exp_s
-    return None
+    actual = gex_data.get("expiry")
+    if actual:
+        return str(actual)
+    expiries = data.get("option_expiries")
+    if not isinstance(expiries, list) or not expiries:
+        return None
+    from market_analysis.sentiment.max_pain import next_unsettled_expiry
+
+    return next_unsettled_expiry(expiries, now_ny)
 
 
 def _session_phase(now_ny: datetime) -> Literal["盤中", "盤前", "盤後", "休市"]:
@@ -658,6 +647,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     iv_source = None
     current_iv_val = None
     _phase: str = "盤前"
+    # IV 區塊判定的事件加載（財報／總經）；供 Kelly 賣方前提共用，False＝無事件或無 IV 區塊
+    _event_loading_outer = False
 
     def _iv_attr(name: str, default: Any = None) -> Any:
         if iv_data is None:
@@ -881,6 +872,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else None
         )
         tod_samples = int(_to_float(data.get("tod_sample_count"), 0.0))
+        _tod_stat_word = "平均" if data.get("tod_stat") == "mean" else "中位數"
         _bt = data.get("bar_15m_time")
         is_auction_bar = isinstance(_bt, datetime) and (
             (_bt.hour, _bt.minute) in ((9, 30), (15, 45))
@@ -964,8 +956,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 if rvol_tod_val is not None:
                     tod_str = (
                         f"｜同時段量比 {rvol_tod_val:.2f}x"
-                        f" (前 {tod_samples} 日中位數"
-                        + ("，樣本少" if tod_samples < 5 else "")
+                        f" (前 {tod_samples} 日{_tod_stat_word}"
+                        + ("，樣本少" if tod_samples < 3 else "")
                         + ")"
                     )
                 elif is_auction_bar:
@@ -1245,6 +1237,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             except Exception:
                 pass
 
+        _event_loading_outer = bool(earnings_loading or macro_loading)
+
         earnings_date_val = _iv_attr("earnings_date")
         earnings_tag = f" {str(earnings_date_val)[5:10]}" if earnings_date_val else ""
         if earnings_loading:
@@ -1260,7 +1254,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 status_tw = f"⚠️ 臨近財報{earnings_tag}（近月 IV 含事件溢價）"
         elif macro_loading:
             status_tw = macro_iv_status_text(
-                iv_source, bool(_iv_attr("event_loading_applied", False))
+                iv_source,
+                bool(_iv_attr("event_loading_applied", False)),
+                omit_loading_note=True,  # 值行已揭露 ×1.4，狀態不重複
             )
 
         iv_status_str = f"狀態: {status_tw}"
@@ -1350,10 +1346,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if iv_rank_num is None and _hist_cnt > 0:
                 iv_status_str = f"樣本累積中 {_hist_cnt}/{_hist_req} 日，10/01 母體重置；{status_tw}"
             if _iv_attr("event_loading_applied", False) and current_iv_num:
-                # 值行已揭露 ×1.4，狀態字串不再重複。
-                iv_status_str = iv_status_str.replace(
-                    "（快取／HV 代理已套用 1.4x 事件加載）", ""
-                )
                 iv_val_str = (
                     f"{current_iv_num / 1.4 * 100:.1f}% ×1.4 事件加載 = {iv_val_str}"
                 )
@@ -1562,6 +1554,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _put_wall_net_outer: Optional[float] = None
     _local_short_gamma_outer: Optional[bool] = None
     _gamma_flip_outer: Optional[float] = None
+    _gex_price_outer: Optional[float] = None  # GEX 區塊採用的現價（與 Flip 同價）
 
     # 3.5 🧲 Gamma 曝險分布 (GEX Profile)
     gex_data = data.get("gex_profile_data")
@@ -1574,10 +1567,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             gex_prof = gex_data["gex_profile"]
             from market_time import ny_tz as _gex_tz
 
-            _gex_exp = _infer_gex_expiry(
-                data.get("month_max_pains"), datetime.now(_gex_tz)
-            )
-            _gex_exp_label = f"{_gex_exp[5:]} 到期" if _gex_exp else "全鏈加總"
+            _gex_exp = _resolve_gex_expiry(gex_data, data, datetime.now(_gex_tz))
+            _gex_exp_label = f"{_gex_exp[5:]} 到期" if _gex_exp else "最近到期"
             strike_keys: list[float] = []
             for k in gex_prof.keys():
                 try:
@@ -2238,7 +2229,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     gamma_flip_val = estimate_symbol_gamma_flip(
                         gex_prof, effective_c_val
                     )
-                    _gamma_flip_outer = gamma_flip_val
                     if gamma_flip_val > 0 and effective_c_val > 0:
                         flip_buffer_pct = (
                             (effective_c_val - gamma_flip_val) / effective_c_val * 100
@@ -2262,6 +2252,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         flip_zero = interpolate_gamma_flip_zero(
                             gex_prof, gamma_flip_val
                         )
+                        if not noise_note:
+                            # 雜訊交叉不構成「跌破 Flip」；比較用現價與本區塊同源
+                            _gamma_flip_outer = gamma_flip_val
+                            _gex_price_outer = effective_c_val
                         if noise_note:
                             flip_item += f"\n │  {noise_note}"
                         elif flip_zero > 0 and not math.isclose(
@@ -2377,12 +2371,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             momentum_color=str(_mom_color) if _mom_color else None,
         )
 
-        # 日內轉折：日線動能為正，但 65m／15m 動能轉負或價格跌破 Gamma Flip。
+        # 日內轉折：日線動能為正（與「方向狀態」同源的即時值 sqz_momentum），
+        # 但 65m／15m 動能轉負或價格跌破 Gamma Flip。
         _turn_note = ""
         _mtx = getattr(data.get("squeeze_eval"), "matrix", None)
-        if isinstance(_mtx, dict) and "D" in _mtx:
+        if isinstance(_mtx, dict):
             try:
-                if _mtx["D"].momentum_value > 0:
+                if sqz_momentum > 0:
                     if any(
                         tf in _mtx and _mtx[tf].momentum_value < 0
                         for tf in ("65m", "15m")
@@ -2391,8 +2386,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     elif (
                         _gamma_flip_outer is not None
                         and _gamma_flip_outer > 0
-                        and _to_float(data.get("price"), 0.0) > 0
-                        and _to_float(data.get("price"), 0.0) < _gamma_flip_outer
+                        and _gex_price_outer is not None
+                        and 0 < _gex_price_outer < _gamma_flip_outer
                     ):
                         _turn_note = "跌破 Gamma Flip"
             except (AttributeError, TypeError):
@@ -2669,6 +2664,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             "⚠️ IV Rank 極高：避免追價單腿多方；優先定義風險的價差/保護性結構，並縮小口數。"
         )
 
+    gravity: Optional[Dict[str, Any]] = None
     if not cb_triggered:
         from market_time import ny_tz as _gravity_tz
 
@@ -2803,18 +2799,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             kelly_lines.append(
                 f" ├─ 每口(未指定到期): β={_beta_str} → ≈{_k_unit:.1f} 股 SPY 等值"
             )
-        from market_time import ny_tz as _kelly_tz
-
+        # IVR：與 ivr_strategy_gate 同一判定（含門檻與未知／異常值語意）
         _pre_ivr = _to_float_or_none(ivr_val)
-        _pre_ivr_mark = "⚠" if _pre_ivr is None else ("❌" if _pre_ivr < 10.0 else "✅")
-        _pre_grav = (
-            "❌"
-            if find_settlement_gravity(
-                data.get("month_max_pains"), datetime.now(_kelly_tz)
-            )
-            is not None
-            else "✅"
-        )
+        if _pre_ivr is None or _pre_ivr < 0.0:
+            _pre_ivr_mark = "⚠"
+        else:
+            _pre_ivr_mark = "❌" if is_selling_locked_by_ivr(_pre_ivr) else "✅"
+        # 引力：沿用上方結算指引已算好的 gravity；斷路器觸發時不評估
+        _pre_grav = "—" if cb_triggered else ("❌" if gravity is not None else "✅")
         _pre_wall = (
             "—"
             if _put_wall_net_outer is None
@@ -2825,12 +2817,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if _local_short_gamma_outer is None
             else ("❌" if _local_short_gamma_outer else "✅")
         )
-        _pre_event = (
-            "⚠"
-            if _iv_flag(iv_data, "has_macro_event")
-            or _iv_flag(iv_data, "has_earnings_event")
-            else "✅"
-        )
+        _pre_event = "⚠" if _event_loading_outer else "✅"
         kelly_lines.append(
             f" ├─ 賣方前提: IVR{_pre_ivr_mark} 引力{_pre_grav} 牆淨GEX{_pre_wall}"
             f" 局部Γ{_pre_local} 事件{_pre_event}"

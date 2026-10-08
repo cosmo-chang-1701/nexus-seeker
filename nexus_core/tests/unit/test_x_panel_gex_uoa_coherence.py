@@ -9,7 +9,7 @@ import pandas as pd
 
 from cogs.embed_builders._embed_helpers import get_sqz_status_display
 from cogs.embed_builders.portfolio_embeds import (
-    _infer_gex_expiry,
+    _resolve_gex_expiry,
     create_tactical_symbol_embed,
 )
 from market_time import ny_tz
@@ -36,13 +36,60 @@ def _gex_present(names: list[str]) -> bool:
     return any("🧲 Gamma 曝險分布" in n for n in names)
 
 
-def test_infer_gex_expiry() -> None:
-    mps = [{"expiry": "2026-10-16"}, {"expiry": "2026-10-09"}]
-    assert _infer_gex_expiry(mps, _NOW) == "2026-10-09"
-    # 到期當日 16:00 ET 後已結算，跳到下一檔
-    after = datetime(2026, 10, 9, 17, 0, tzinfo=ny_tz)
-    assert _infer_gex_expiry(mps, after) == "2026-10-16"
-    assert _infer_gex_expiry(None, _NOW) is None
+def test_resolve_gex_expiry_actual_beats_inferred() -> None:
+    data = {"option_expiries": ["2026-10-09", "2026-10-16"]}
+    gex = {"expiry": "2026-10-16", "gex_profile": {"1": 1}}
+    assert _resolve_gex_expiry(gex, data, _NOW) == "2026-10-16"
+    assert _resolve_gex_expiry({"gex_profile": {"1": 1}}, data, _NOW) == "2026-10-09"
+
+
+def test_resolve_gex_expiry_stale_cache_not_annotated() -> None:
+    data = {"option_expiries": ["2026-10-09"]}
+    gex = {"expiry": "2026-10-09", "_is_stale_cache": True}
+    assert _resolve_gex_expiry(gex, data, _NOW) is None
+
+
+def test_resolve_gex_expiry_uses_full_expiry_list_not_max_pain_list() -> None:
+    """Max Pain 計算失敗而缺席的最近一檔，仍須被推定出來。"""
+    data = {
+        "month_max_pains": [{"expiry": "2026-10-16"}],
+        "option_expiries": ["2026-10-09", "2026-10-16"],
+    }
+    assert _resolve_gex_expiry({"gex_profile": {}}, data, _NOW) == "2026-10-09"
+
+
+def test_resolve_gex_expiry_expiry_day_after_settle_is_unknown() -> None:
+    data = {"option_expiries": ["2026-10-09", "2026-10-16"]}
+    after = datetime(2026, 10, 9, 16, 30, tzinfo=ny_tz)
+    assert _resolve_gex_expiry({"gex_profile": {}}, data, after) is None
+
+
+def test_gex_title_without_expiry_says_nearest_not_full_chain() -> None:
+    d = _mrvl_data()
+    d["option_expiries"] = []
+    text, names = _render(d)
+    assert _gex_present(names)
+    assert "Net GEX Regime (最近到期)" in text
+    assert "全鏈加總" not in text
+    assert "〔跨到期〕" not in text
+
+
+def test_gex_actual_expiry_drives_title_and_cross_expiry_tag() -> None:
+    d = _mrvl_data()
+    d["gex_profile_data"]["expiry"] = "2026-10-16"
+    text, names = _render(d)
+    assert _gex_present(names)
+    assert "Net GEX Regime (10-16 到期)" in text
+    assert "〔跨到期〕" not in text  # STO 大單 10-16 與 GEX 同一檔
+
+
+def test_gex_stale_cache_hides_expiry_label() -> None:
+    d = _mrvl_data()
+    d["gex_profile_data"]["_is_stale_cache"] = True
+    text, names = _render(d)
+    assert _gex_present(names)
+    assert "Net GEX Regime (最近到期)" in text
+    assert "〔跨到期〕" not in text
 
 
 def test_kelly_header_and_seller_prerequisites() -> None:
@@ -200,3 +247,148 @@ def test_sqz_block_no_turn_when_aligned() -> None:
 def test_skew_sign_note() -> None:
     text, _ = _render(_mrvl_data())
     assert "Skew (P−C):" in text and "Call溢價" in text
+
+
+# --- 審查修正 B-F2 / F3 / F4 / F5 ------------------------------------------
+
+
+def test_intraday_turn_requires_live_daily_momentum() -> None:
+    """日內轉弱的前提是方向狀態行同源的即時動能，不是矩陣的 D 欄。"""
+    d = _sqz_data()
+    d["psq_result"]["momentum"] = -0.3
+    d["squeeze_eval"] = SimpleNamespace(
+        result=None,
+        matrix={
+            "D": SimpleNamespace(momentum_value=0.8),
+            "65m": SimpleNamespace(momentum_value=-1.0),
+            "15m": SimpleNamespace(momentum_value=1.0),
+        },
+    )
+    text, _ = _render(d)
+    assert "日內轉弱" not in text
+
+    d2 = _sqz_data()
+    d2["psq_result"]["momentum"] = 0.5
+    d2["squeeze_eval"] = SimpleNamespace(
+        result=None,
+        matrix={
+            "D": SimpleNamespace(momentum_value=-0.2),
+            "65m": SimpleNamespace(momentum_value=-1.0),
+            "15m": SimpleNamespace(momentum_value=1.0),
+        },
+    )
+    text2, _ = _render(d2)
+    assert "⚠ 日內轉弱: 65m/15m 動能<0" in text2
+
+
+def test_gamma_flip_noise_cross_is_not_a_breakdown() -> None:
+    d = _sqz_data()
+    d["squeeze_eval"] = _matrix(1.0, 1.0)
+    d["price"] = 200.0
+    d["quote"] = {"c": 200.0, "d": 0.0, "dp": 0.0, "pc": 200.0}
+    d["gex_profile_data"]["gex_profile"] = {
+        "190.0": -5e8, "195.0": -4e8, "200.0": -1e8, "205.0": 3e8, "210.0": 6e8,
+    }  # fmt: skip
+    d["gex_profile_data"]["spot"] = 200.0
+    d["gex_profile_data"]["call_wall"] = 210.0
+    d["gex_profile_data"]["put_wall"] = 190.0
+    with patch(
+        "cogs.embed_builders.portfolio_embeds.gamma_flip_noise_note",
+        return_value="（負側量級過小，視為雜訊）",
+    ):
+        text, names = _render(d)
+    assert _gex_present(names)
+    assert "跌破 Gamma Flip" not in text
+
+
+def _tod_data(**kw: Any) -> dict[str, Any]:
+    d = _mrvl_data()
+    d.update(
+        {
+            "open_15m": 280.0, "high_15m": 283.0, "low_15m": 279.0,
+            "close_15m": 282.0, "volume_15m": 1_613_509,
+            "volume_15m_sma20": 481_138, "rvol_15m": 3.35,
+            "rvol_15m_tod": 1.41,
+        }
+    )  # fmt: skip
+    d.update(kw)
+    return d
+
+
+def test_tod_label_mean_when_median_unavailable() -> None:
+    text, _ = _render(_tod_data(tod_sample_count=4, tod_stat="mean"))
+    assert "同時段量比 1.41x (前 4 日平均" in text
+
+
+def test_tod_label_median_default() -> None:
+    text, _ = _render(_tod_data(tod_sample_count=4, tod_stat="median"))
+    assert "(前 4 日中位數" in text
+
+
+def test_tod_low_sample_threshold_is_three() -> None:
+    assert "樣本少" not in _render(_tod_data(tod_sample_count=4))[0]
+    assert "樣本少" not in _render(_tod_data(tod_sample_count=3))[0]
+    assert "樣本少" in _render(_tod_data(tod_sample_count=2))[0]
+
+
+def test_tod_stats_single_function_matches_wrappers() -> None:
+    from market_analysis.price_volume_alert import (
+        compute_time_of_day_avg_volume,
+        compute_time_of_day_median_volume,
+        compute_time_of_day_volume_stats,
+    )
+
+    idx = pd.DatetimeIndex(
+        [f"2026-10-0{d} 15:45" for d in (1, 2, 5, 6)] + ["2026-10-07 15:45"]
+    )
+    df = pd.DataFrame({"Volume": [100, 100, 100, 1000, 500]}, index=idx)
+    assert compute_time_of_day_volume_stats(df) == (325.0, 100.0, 4)
+    assert compute_time_of_day_avg_volume(df) == (325.0, 4)
+    assert compute_time_of_day_median_volume(df) == (100.0, 4)
+    short = df.iloc[-3:]
+    assert compute_time_of_day_volume_stats(short) == (None, None, 2)
+
+
+def test_kelly_gravity_dash_when_circuit_breaker_triggered() -> None:
+    d = _mrvl_data()
+    d["circuit_breaker_triggered"] = True
+    text, _ = _render(d)
+    assert "引力—" in text
+
+
+def test_kelly_ivr_unknown_negative_is_warning() -> None:
+    d = _mrvl_data()
+    d["iv_rank"] = -1.0
+    text, _ = _render(d)
+    assert "賣方前提: IVR⚠" in text
+
+
+def test_kelly_ivr_uses_gate_threshold(monkeypatch: Any) -> None:
+    import market_analysis.ivr_strategy_gate as gate
+
+    d = _mrvl_data()
+    d["iv_rank"] = 12.0
+    assert "賣方前提: IVR✅" in _render(d)[0]
+    monkeypatch.setattr(gate, "_IVR_SELLING_LOCKOUT", 15.0)
+    assert "賣方前提: IVR❌" in _render(d)[0]
+
+
+def test_macro_status_omits_loading_note_without_str_replace() -> None:
+    from cogs.embed_builders._embed_helpers import macro_iv_status_text
+
+    full = macro_iv_status_text("STORED_IV", True)
+    short = macro_iv_status_text("STORED_IV", True, omit_loading_note=True)
+    assert "1.4x" in full and "1.4x" not in short
+    assert macro_iv_status_text("LIVE_IV", False) == macro_iv_status_text(
+        "LIVE_IV", False, omit_loading_note=True
+    )
+
+
+def test_next_unsettled_expiry_helper() -> None:
+    from market_analysis.sentiment.max_pain import next_unsettled_expiry
+
+    assert (
+        next_unsettled_expiry(["2026-10-16", "2026-10-09", "bad"], _NOW) == "2026-10-09"
+    )
+    assert next_unsettled_expiry([], _NOW) is None
+    assert next_unsettled_expiry(["2026-10-01"], _NOW) is None
