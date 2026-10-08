@@ -851,7 +851,8 @@ async def test_run_loop_skips_round_when_memory_unsafe(intraday_pipeline: Any) -
 
     mock_users.assert_not_called()
     intraday_pipeline.evaluate_watchlist_symbol.assert_not_awaited()
-    assert slept == [intraday_pipeline.scan_interval_seconds]
+    # 10:00 ET 睡到下一個 :10 時間點 (600 秒)
+    assert slept == [600.0]
 
 
 @pytest.mark.asyncio
@@ -1951,3 +1952,50 @@ async def test_tactical_option_positions_fail_safe() -> None:
     pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
     with patch("database.get_all_trade_positions", side_effect=RuntimeError("db down")):
         assert await pipeline._load_tactical_option_positions_by_user() == {}
+
+
+@pytest.mark.parametrize(
+    "hh,mm,ss,expected",
+    [
+        (10, 9, 0, 60.0),  # 距 :10 僅 60 秒，剛好等於下限
+        (10, 9, 30, 60.0),  # 不足 60 秒，套用下限
+        (10, 11, 0, 29 * 60.0),  # 下一個為 :40
+        (10, 40, 0, 30 * 60.0),  # 恰在時間點上，取下一個 (11:10)
+        (10, 41, 0, 29 * 60.0),  # 跨小時到 11:10
+        (10, 10, 0, 30 * 60.0),
+    ],
+)
+def test_seconds_until_next_slot(hh: int, mm: int, ss: int, expected: float) -> None:
+    from datetime import datetime
+
+    from market_analysis.intraday_pipeline.pipeline import _seconds_until_next_slot
+    from market_time import ny_tz
+
+    now = datetime(2026, 10, 7, hh, mm, ss, tzinfo=ny_tz)
+    assert _seconds_until_next_slot(now) == expected
+
+
+@pytest.mark.parametrize(
+    "start,now,expected",
+    [
+        # 09:38 開始、09:39:30 結束：09:40 距開始僅 2 分鐘，須睡到 10:10
+        ((9, 38, 0), (9, 39, 30), 30 * 60.0 + 30.0),
+        # 09:10 開始、09:29 結束：最早 09:30，下一個時槽 09:40 合法
+        ((9, 10, 0), (9, 29, 0), 11 * 60.0),
+        # 10:10 開始、10:15 結束：10:40 距開始 30 分鐘，合法
+        ((10, 10, 0), (10, 15, 0), 25 * 60.0),
+        # 09:55 開始、09:56 結束：最早 10:15，下一個時槽 10:40
+        ((9, 55, 0), (9, 56, 0), 44 * 60.0),
+    ],
+)
+def test_seconds_until_next_slot_min_gap(
+    start: tuple[int, int, int], now: tuple[int, int, int], expected: float
+) -> None:
+    from datetime import datetime
+
+    from market_analysis.intraday_pipeline.pipeline import _seconds_until_next_slot
+    from market_time import ny_tz
+
+    last = datetime(2026, 10, 7, *start, tzinfo=ny_tz)
+    cur = datetime(2026, 10, 7, *now, tzinfo=ny_tz)
+    assert _seconds_until_next_slot(cur, last_scan_start=last) == expected

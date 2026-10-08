@@ -1,12 +1,12 @@
 """
 cogs/trading/price_volume_alert_monitor.py
 
-個股 15 分鐘價量突破警報背景排程器 (盤中每 15 分鐘執行一次)。
+個股 15 分鐘價量突破警報背景排程器 (盤中於 :02/:17/:32/:47 執行)。
 """
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any, Dict, List, Optional
 
 from discord.ext import commands, tasks
@@ -32,6 +32,16 @@ from cogs.embed_builders.alert_embeds import create_price_volume_alert_embed
 
 logger = logging.getLogger(__name__)
 
+# 觸發時間點：每小時 :02/:17/:32/:47（ET）。
+# 為什麼：15m K 棒於 :00/:15/:30/:45 收盤，Yahoo 需約 1~2 分鐘定案，
+# 配合 history_cache_expiry 的 bar 對齊快取（收盤 + 60 秒寬限），:02 起即可讀到
+# 已定案的 K 棒；同時與 :00 巡邏、:05 持倉監控錯開，避免同一瞬間搶 Yahoo 預算。
+_pv_alert_times: list[time] = [
+    time(hour=h, minute=m, tzinfo=market_time.ny_tz)
+    for h in range(24)
+    for m in (2, 17, 32, 47)
+]
+
 
 class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"):
     """個股 15 分鐘價量突破警報背景排程器。"""
@@ -43,9 +53,9 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
     async def cog_unload(self) -> None:
         self.price_volume_alert_monitor.cancel()
 
-    @tasks.loop(minutes=15)
+    @tasks.loop(time=_pv_alert_times)
     async def price_volume_alert_monitor(self) -> None:
-        """每 15 分鐘價量突破監控主循環，僅於盤中執行。"""
+        """價量突破監控主循環 (:02/:17/:32/:47 ET)，僅於盤中執行。"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
         if not market_time.is_market_open():
@@ -61,7 +71,9 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
     @price_volume_alert_monitor.before_loop
     async def before_price_volume_alert_monitor(self) -> None:
         await self.bot.wait_until_ready()
-        logger.info("📊 個股 15 分鐘價量突破警報監控器已啟動，盤中每 15 分鐘執行一次。")
+        logger.info(
+            "📊 個股 15 分鐘價量突破警報監控器已啟動，盤中於 :02/:17/:32/:47 (ET) 執行。"
+        )
 
     async def _evaluate_price_volume_alerts(self) -> None:
         """評估所有使用者的價量監測設定並觸發警報。"""
