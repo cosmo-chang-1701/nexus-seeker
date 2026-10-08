@@ -204,17 +204,25 @@ def test_a5_panel_shows_sigma_and_low_convergence() -> None:
         dt.now.return_value = now
         dt.strptime.side_effect = datetime.strptime
         text = _text(
-            create_tactical_symbol_embed(_data(iv, max_pain=270.0, month_max_pains=mps))
+            create_tactical_symbol_embed(
+                _data(
+                    iv,
+                    max_pain=270.0,
+                    month_max_pains=mps,
+                    max_pain_expiry="2026-10-09",
+                )
+            )
         )
     assert "±$12.9" in text
     assert "收斂機率低" in text
 
 
-@pytest.mark.parametrize("hour,word", [(21, "盤後"), (10, "盤前")])
+@pytest.mark.parametrize("hour,word", [(21, "盤後"), (8, "盤前")])
 def test_a6_title_session_word(hour: int, word: str) -> None:
     now = datetime(2026, 10, 7, hour, 0, tzinfo=ny_tz)
     with patch("cogs.embed_builders.portfolio_embeds.datetime") as dt:
         dt.now.return_value = now
         dt.strptime.side_effect = datetime.strptime
-        embed = create_tactical_symbol_embed(_data(_hv_iv()))
+        with patch("market_time.is_market_open", return_value=False):
+            embed = create_tactical_symbol_embed(_data(_hv_iv()))
     assert f"[{word}/HV代理]" in (embed.title or "")

@@ -474,6 +474,8 @@ class SymbolDeepDiveMixin:
 
         safe_mp = max_pain_data if isinstance(max_pain_data, dict) else {}
         result["max_pain"] = _safe_float(safe_mp.get("max_pain"), 0.0)
+        # 頭條 Max Pain 實際鎖定的到期日：結算前 1σ 必須用同一檔的 DTE
+        result["max_pain_expiry"] = safe_mp.get("expiry")
         result["month_max_pains"] = data.get("month_max_pains", [])
         result["gex_profile_data"] = gex_profile_data
         result["catalysts"] = catalysts
