@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from calibration.data_store import read_jsonl_dir, write_jsonl
 
@@ -559,12 +559,16 @@ _BOOTSTRAP_N = 2000
 _BOOTSTRAP_SEED = 7
 
 
-def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
-    """events = [(日期, held)]，只含 tested；CI 依日期叢集 bootstrap。"""
+def _rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
+    """events = [(日期, 是否命中)]；中性鍵 {n, hits, n_dates, rate, ci}，CI 依日期叢集 bootstrap。
+
+    n 為母體件數，由呼叫端決定母體（守住率＝tested 事件、條件率＝觸發事件、
+    無條件率＝全部 tested 事件）。
+    """
     from calibration.stats import clustered_bootstrap_mean
 
     if not events:
-        return {"tested": 0, "held": 0, "n_dates": 0, "hold_rate": None, "ci95": None}
+        return {"n": 0, "hits": 0, "n_dates": 0, "rate": None, "ci": None}
     rate, lo, hi = clustered_bootstrap_mean(
         [1.0 if h else 0.0 for _, h in events],
         [d for d, _ in events],
@@ -572,11 +576,23 @@ def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
         _BOOTSTRAP_SEED,
     )
     return {
-        "tested": len(events),
-        "held": sum(1 for _, h in events if h),
+        "n": len(events),
+        "hits": sum(1 for _, h in events if h),
         "n_dates": len({d for d, _ in events}),
-        "hold_rate": round(rate, 3),
-        "ci95": [round(lo, 3), round(hi, 3)],
+        "rate": round(rate, 3),
+        "ci": [round(lo, 3), round(hi, 3)],
+    }
+
+
+def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
+    """支撐守住率的既有輸出鍵（tested／held／hold_rate／ci95），內部走 `_rate_stats`。"""
+    st = _rate_stats(events)
+    return {
+        "tested": st["n"],
+        "held": st["hits"],
+        "n_dates": st["n_dates"],
+        "hold_rate": st["rate"],
+        "ci95": st["ci"],
     }
 
 
@@ -622,17 +638,21 @@ def compare_support_definitions(labeled: list[dict[str, Any]]) -> dict[str, Any]
     return {"n_labeled_dates": n_dates, "定義比較": table, "判讀": verdict}
 
 
-def _stop_buffer_definitions() -> dict[str, Any]:
-    from market_analysis.room_threshold import _BARS_PER_SESSION
+def _stop_buffer_definitions() -> dict[str, Callable[[float], float]]:
+    """停損墊片定義 {標籤: ATR₁D → 墊片}。延遲建立：import 本模組時不載入 market_analysis。"""
+    from market_analysis.room_threshold import (
+        _BARS_PER_SESSION,
+        _DAILY_NOISE_STOP_ATR_1D_MULT,
+        _ROOM_STOP_ATR_15M_MULTIPLIER,
+    )
 
+    cur = _ROOM_STOP_ATR_15M_MULTIPLIER
+    noise = _DAILY_NOISE_STOP_ATR_1D_MULT
     return {
-        "0.5×ATR15m(現行)": lambda a1d: 0.5 * a1d / math.sqrt(_BARS_PER_SESSION),
-        "0.25×ATR1D": lambda a1d: 0.25 * a1d,
+        f"{cur:g}×ATR15m(現行)": lambda a1d: cur * a1d / math.sqrt(_BARS_PER_SESSION),
+        f"{noise:g}×ATR1D": lambda a1d: noise * a1d,
         "0.5×ATR1D": lambda a1d: 0.5 * a1d,
     }
-
-
-STOP_BUFFER_DEFINITIONS = _stop_buffer_definitions()
 
 
 def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
@@ -641,9 +661,12 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
     - stopped：觀察期最低價 <= wall − buffer
     - whipsaw：stopped 且觀察期最後收盤 >= wall（掃損後收回）
     - true_break：stopped 且觀察期最後收盤 < stop（真破）
+    條件率（掃損收回率、真破率）的分母是該墊片的觸發數；另列無條件率
+    （whipsaw／true_break 對全部 tested 事件），三種墊片共用同一分母才能互比。
     ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）。
     """
     events: list[tuple[str, dict[str, Any]]] = []
+    excluded_atr = 0
     for x in labeled:
         w = (x.get("walls") or {}).get("edge_PutWall")
         path = x.get("_path")
@@ -651,35 +674,55 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
             continue
         atr = float(path.get("atr_1d") or 0.0)
         if atr <= 0 or not path.get("lows") or not path.get("closes"):
+            excluded_atr += 1
             continue
         events.append((x["date"], {"wall": float(w["strike"]), **path}))
 
     table: dict[str, Any] = {}
-    for name, buf_fn in STOP_BUFFER_DEFINITIONS.items():
+    for name, buf_fn in _stop_buffer_definitions().items():
         stopped: list[tuple[str, bool]] = []
         whipsaw: list[tuple[str, bool]] = []
         broken: list[tuple[str, bool]] = []
+        whipsaw_all: list[tuple[str, bool]] = []
+        broken_all: list[tuple[str, bool]] = []
         for d, e in events:
             stop = e["wall"] - buf_fn(e["atr_1d"])
             hit = min(e["lows"]) <= stop
             last = e["closes"][-1]
             stopped.append((d, hit))
+            whipsaw_all.append((d, hit and last >= e["wall"]))
+            broken_all.append((d, hit and last < stop))
             if hit:
                 whipsaw.append((d, last >= e["wall"]))
                 broken.append((d, last < stop))
+        n_trig = len(whipsaw)
         table[name] = {
-            "n": len(events),
-            "觸發率": _hold_rate_stats(stopped),
-            "掃損收回率": _hold_rate_stats(whipsaw),
-            "真破率": _hold_rate_stats(broken),
+            "n_tested": len(events),
+            "n_觸發": n_trig,
+            "觸發率": _rate_stats(stopped),
+            "掃損收回率": _rate_stats(whipsaw),
+            "真破率": _rate_stats(broken),
+            "掃損無條件率": _rate_stats(whipsaw_all),
+            "真破無條件率": _rate_stats(broken_all),
+            "條件率可判讀": n_trig >= _MIN_TESTED_PER_DEFINITION,
         }
+        if n_trig < _MIN_TESTED_PER_DEFINITION:
+            table[name]["註"] = (
+                f"觸發樣本不足（{n_trig}/{_MIN_TESTED_PER_DEFINITION}），條件率的 CI 不可判讀"
+            )
 
     n_dates = len({d for d, _ in events})
+    short = [n for n, t in table.items() if not t["條件率可判讀"]]
     if n_dates < _MIN_LABELED_DATES or len(events) < _MIN_TESTED_PER_DEFINITION:
         verdict = (
             f"樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ"
             f"（可標註日期 {n_dates}/{_MIN_LABELED_DATES}；"
             f"tested 事件 {len(events)}/{_MIN_TESTED_PER_DEFINITION}）"
+        )
+    elif short:
+        verdict = (
+            f"總事件已達門檻，但觸發樣本不足的墊片：{', '.join(short)}；"
+            "其條件率不判讀，可先比較無條件率，閘門不得先改"
         )
     else:
         verdict = (
@@ -687,7 +730,12 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
             "再決定是否調整墊片（閘門不得先改）"
         )
     return {
-        "備註": "ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）",
+        "備註": (
+            "ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）；"
+            f"atr_1d 缺失排除 {excluded_atr} 件，母體 {len(events)} 件，"
+            "與「支撐定義比較」的 edge_PutWall tested 件數差即為此排除數"
+        ),
+        "atr_1d缺失排除": excluded_atr,
         "定義比較": table,
         "判讀": verdict,
     }
@@ -774,6 +822,14 @@ def gamma_flip_materiality_stats(snaps: list[dict[str, Any]]) -> dict[str, Any]:
             for k, v in by_threshold.items()
         },
     }
+
+
+def _stop_buffer_report_and_drop_paths(labeled: list[dict[str, Any]]) -> dict[str, Any]:
+    """產生停損墊片比較後，剔除標註事件上僅供計算用的 `_path`（不進報表）。"""
+    out = stop_buffer_outcomes(labeled)
+    for x in labeled:
+        x.pop("_path", None)
+    return out
 
 
 def build_micro_report(
@@ -886,7 +942,7 @@ def build_micro_report(
         "支撐牆守住率_依深度四分位": hold_table
         or f"尚無走完 {horizon_days} 個交易日觀察期的快照",
         "支撐定義比較": compare_support_definitions(labeled),
-        "停損墊片比較": stop_buffer_outcomes(labeled),
+        "停損墊片比較": _stop_buffer_report_and_drop_paths(labeled),
         "PutWall處淨GEX": put_wall_net_gex_stats(snaps, labeled),
         "GammaFlip重要性": gamma_flip_materiality_stats(snaps),
         "n_labeled": len(labeled),

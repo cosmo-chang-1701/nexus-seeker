@@ -122,6 +122,10 @@ _BARS_PER_SESSION: float = 26.0
 # 一個 $0.015 的假緩衝。
 _ATR_14_PLACEHOLDER: float = 0.01
 
+# 日線噪音帶參考停損：Stop = PutWall − 0.25 × ATR₁D。/x 並列顯示與 calibration
+# 停損墊片比較共用此常數（docs/strategies/06 §5），閘門不使用。
+_DAILY_NOISE_STOP_ATR_1D_MULT: float = 0.25
+
 
 class RoomThreshold(NamedTuple):
     """``compute_dynamic_room_threshold()`` 的結構化輸出。
@@ -166,6 +170,11 @@ def _is_valid(value: float) -> bool:
     return math.isfinite(value) and value > 0.0
 
 
+def is_valid_daily_atr(value: float) -> bool:
+    """日線 ATR 是否為可用的真實值（有限、為正、且不是 0.01 佔位值）。"""
+    return _is_valid(value) and not math.isclose(value, _ATR_14_PLACEHOLDER)
+
+
 def resolve_atr_15m(atr_15m: float, atr_14: float) -> float:
     """解析可用的 15m ATR，真實值優先、日線折算次之，皆無則回 0.0。
 
@@ -178,7 +187,7 @@ def resolve_atr_15m(atr_15m: float, atr_14: float) -> float:
     """
     if _is_valid(atr_15m):
         return atr_15m
-    if _is_valid(atr_14) and not math.isclose(atr_14, _ATR_14_PLACEHOLDER):
+    if is_valid_daily_atr(atr_14):
         return atr_14 / math.sqrt(_BARS_PER_SESSION)
     return 0.0
 

@@ -24,6 +24,7 @@ from market_analysis.index_microstructure import (
     interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
+    _DAILY_NOISE_STOP_ATR_1D_MULT,
     _ROOM_ABSOLUTE_FLOOR_PCT,
     _ROOM_ATR_1D_MULTIPLIER,
     _ROOM_RISK_MULTIPLIER,
@@ -32,6 +33,7 @@ from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
     compute_reference_stop,
     evaluate_wall_buffer,
+    is_valid_daily_atr,
     resolve_atr_15m,
 )
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
@@ -1911,20 +1913,39 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"{fallback_marker}"
                                     "\n │  ⚠ PutWall 位於助跌區，閘門仍以 PutWall 為準"
                                 )
+                            # docs/strategies/06 §5：日線噪音帶參考停損，僅並列於
+                            # 停損行尾，閘門不動，待 calibration 停損墊片比較。
+                            # ATR₁D 先 atr_1d 後 atr_14，排除 0.01 佔位值；PutWall
+                            # 高於現價、降級分支、助跌區（PutWall 已宣告不可靠）不輸出。
+                            _daily_atr = next(
+                                (
+                                    v
+                                    for v in (
+                                        _to_float(data.get("atr_1d"), 0.0),
+                                        _to_float(data.get("atr_14"), 0.0),
+                                    )
+                                    if is_valid_daily_atr(v)
+                                ),
+                                0.0,
+                            )
+                            if (
+                                _daily_atr > 0
+                                and put_wall_float < effective_c_val
+                                and not fallback_marker
+                                and alt_net_supp <= 0
+                            ):
+                                _daily_stop = (
+                                    put_wall_float
+                                    - _DAILY_NOISE_STOP_ATR_1D_MULT * _daily_atr
+                                )
+                                if _daily_stop < effective_c_val:
+                                    _daily_pct = (
+                                        (effective_c_val - _daily_stop)
+                                        / effective_c_val
+                                        * 100
+                                    )
+                                    stop_item += f" ｜日線參考 ${_daily_stop:.2f} (↓{_daily_pct:.2f}%)"
                             put_items.append(stop_item)
-                            # docs/strategies/06 §5：日線噪音帶參考停損，僅並列，
-                            # 閘門不動，待 calibration 停損墊片比較。
-                            if _pw_atr_1d > 0:
-                                _daily_stop = put_wall_float - 0.25 * _pw_atr_1d
-                                _daily_pct = (
-                                    (effective_c_val - _daily_stop)
-                                    / effective_c_val
-                                    * 100
-                                )
-                                put_items[-1] += (
-                                    "\n │  日線參考 (−0.25×ATR₁D): "
-                                    f"${_daily_stop:.2f} (↓{_daily_pct:.2f}%)，待校準"
-                                )
 
                         if effective_c_val > 0:
                             sto_strikes = data.get("sto_physical_cap_strikes") or []

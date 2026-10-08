@@ -627,13 +627,13 @@ def test_stop_buffer_outcomes_classifies_whipsaw_true_break_and_no_trigger() -> 
     ]
     out = stop_buffer_outcomes(events)
     cur = out["定義比較"]["0.5×ATR15m(現行)"]
-    assert cur["n"] == 3
-    assert cur["觸發率"]["tested"] == 3 and cur["觸發率"]["held"] == 2
-    assert cur["掃損收回率"]["tested"] == 2 and cur["掃損收回率"]["held"] == 1
-    assert cur["真破率"]["held"] == 1
+    assert cur["n_tested"] == 3
+    assert cur["觸發率"]["n"] == 3 and cur["觸發率"]["hits"] == 2
+    assert cur["掃損收回率"]["n"] == 2 and cur["掃損收回率"]["hits"] == 1
+    assert cur["真破率"]["hits"] == 1
     wide = out["定義比較"]["0.25×ATR1D"]
-    assert wide["觸發率"]["held"] == 1  # 只有 d2
-    assert wide["掃損收回率"]["held"] == 0
+    assert wide["觸發率"]["hits"] == 1  # 只有 d2
+    assert wide["掃損收回率"]["hits"] == 0
     assert "ATR₁D/√26" in out["備註"]
 
 
@@ -645,7 +645,7 @@ def test_stop_buffer_outcomes_insufficient_sample_keeps_current() -> None:
     # 未 tested 或缺路徑者不入母體
     assert (
         stop_buffer_outcomes([{"walls": {}, "date": "d"}])["定義比較"]["0.25×ATR1D"][
-            "n"
+            "n_tested"
         ]
         == 0
     )
@@ -663,3 +663,95 @@ def test_label_symbol_keeps_path_for_stop_buffer() -> None:
     )
     (rec,) = _label_symbol([snap], hist, horizon_days=5)
     assert rec["_path"]["lows"] == [1.0] * 5 and len(rec["_path"]["closes"]) == 5
+
+
+def test_stop_buffer_unconditional_rates_share_one_denominator() -> None:
+    from calibration.microstructure import stop_buffer_outcomes
+
+    events = [
+        _stop_event("d1", [96.0, 99.0], [99.0, 101.0]),  # 僅現行墊片觸發，且收回
+        _stop_event("d2", [90.0, 91.0], [92.0, 90.0]),  # 全部觸發且真破
+        _stop_event("d3", [99.0, 100.0], [100.0, 101.0]),  # 都未觸發
+    ]
+    table = stop_buffer_outcomes(events)["定義比較"]
+    for t in table.values():
+        assert t["掃損無條件率"]["n"] == 3
+        assert t["真破無條件率"]["n"] == 3
+    cur = table["0.5×ATR15m(現行)"]
+    assert cur["掃損無條件率"]["hits"] == 1  # d1
+    assert cur["真破無條件率"]["hits"] == 1  # d2
+    # 條件率分母是觸發數，與無條件率不同
+    assert cur["掃損收回率"]["n"] == 2
+
+
+def test_stop_buffer_flags_short_trigger_sample_even_when_total_is_enough() -> None:
+    from calibration.microstructure import (
+        _MIN_LABELED_DATES,
+        _MIN_TESTED_PER_DEFINITION,
+        stop_buffer_outcomes,
+    )
+
+    n = max(_MIN_LABELED_DATES, _MIN_TESTED_PER_DEFINITION)
+    # 全部 tested，但只有 3 件掃穿較寬墊片；現行墊片全數觸發
+    events = [
+        _stop_event(f"d{i:02d}", [85.0], [86.0]) if i < 3
+        else _stop_event(f"d{i:02d}", [97.0], [101.0])
+        for i in range(n)
+    ]  # fmt: skip
+    out = stop_buffer_outcomes(events)
+    wide = out["定義比較"]["0.5×ATR1D"]
+    assert wide["n_觸發"] == 3 and not wide["條件率可判讀"]
+    assert "觸發樣本不足" in wide["註"]
+    assert "觸發樣本不足的墊片" in out["判讀"]
+    assert out["定義比較"]["0.5×ATR15m(現行)"]["條件率可判讀"] is True
+
+
+def test_stop_buffer_reports_atr_exclusions() -> None:
+    from calibration.microstructure import stop_buffer_outcomes
+
+    bad = _stop_event("d9", [90.0], [90.0])
+    bad["_path"]["atr_1d"] = 0.0
+    out = stop_buffer_outcomes([_stop_event("d1", [90.0], [90.0]), bad])
+    assert out["atr_1d缺失排除"] == 1
+    assert "atr_1d 缺失排除 1 件" in out["備註"]
+
+
+def test_stop_buffer_definitions_are_lazy_and_use_shared_constants() -> None:
+    import calibration.microstructure as m
+    from market_analysis.room_threshold import (
+        _DAILY_NOISE_STOP_ATR_1D_MULT,
+        _ROOM_STOP_ATR_15M_MULTIPLIER,
+    )
+
+    assert not hasattr(m, "STOP_BUFFER_DEFINITIONS")  # 不在 import 時建立
+    defs = m._stop_buffer_definitions()
+    assert f"{_ROOM_STOP_ATR_15M_MULTIPLIER:g}×ATR15m(現行)" in defs
+    assert f"{_DAILY_NOISE_STOP_ATR_1D_MULT:g}×ATR1D" in defs
+
+
+def test_rate_stats_neutral_keys_and_hold_wrapper_keeps_legacy_keys() -> None:
+    from calibration.microstructure import _hold_rate_stats, _rate_stats
+
+    ev = [("d1", True), ("d2", False), ("d3", True)]
+    st = _rate_stats(ev)
+    assert set(st) == {"n", "hits", "n_dates", "rate", "ci"}
+    assert st["n"] == 3 and st["hits"] == 2
+    legacy = _hold_rate_stats(ev)
+    assert legacy["tested"] == 3 and legacy["held"] == 2
+    assert set(legacy) >= {"hold_rate", "ci95", "n_dates"}
+    assert _rate_stats([])["rate"] is None
+
+
+def test_micro_report_json_has_no_internal_path(tmp_path: Any) -> None:
+    import json
+    from unittest.mock import patch
+
+    from calibration.microstructure import build_micro_report
+
+    labeled = [_stop_event("d1", [90.0], [90.0])]
+    labeled[0]["walls"]["edge_PutWall"].update(dist_pct=1.0, net_gex=1.0)
+    with patch("calibration.microstructure.label_wall_holds", return_value=labeled):
+        report = build_micro_report(tmp_path, snapshots=[_wall_snap("2026-09-21")])
+    assert "停損墊片比較" in report
+    assert "_path" not in json.dumps(report, ensure_ascii=False, default=str)
+    assert all("_path" not in x for x in labeled)

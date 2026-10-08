@@ -5234,7 +5234,7 @@ def test_create_tactical_symbol_embed_no_atr1d_degrade_when_atr14_present() -> N
     desc = get_embed_text(embed)
 
     assert "CallWall: $160.00" in desc
-    assert "日線參考 (−0.25×ATR₁D): $149.38 (↓3.00%)，待校準" in desc
+    assert " ｜日線參考 $149.38 (↓3.00%)" in desc
     assert "數據缺失（ATR₁D）" not in desc
 
 
