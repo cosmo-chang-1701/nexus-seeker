@@ -149,7 +149,7 @@ def test_cli_force_macro_update() -> None:
     """force-macro-update 呼叫共用刷新流程（含 VTS 與核心指標），並逐項呈現結果"""
     result_obj = _macro_refresh_result(
         ("GEX", True, "SPY: $510.00 / Gamma Flip: 515.00"),
-        ("流動性指標", True, "TED Spread: 0.15"),
+        ("流動性指標", True, "CP−T-Bill 利差: 0.15"),
         ("總經日曆", True, "已重新抓取並寫入快取"),
         ("FedWatch", True, "最新利率定價已寫入資料庫"),
         ("CPI 偏差值", True, "最新 CPI YoY 實際值與預測值已寫入資料庫"),

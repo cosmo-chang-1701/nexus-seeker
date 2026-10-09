@@ -265,11 +265,11 @@ async def _refresh_gex_and_liquidity(result: MacroRefreshResult) -> None:
         result.ted_spread = ted_spread
         if ted_spread is not None:
             result.steps.append(
-                RefreshStep(STEP_LIQUIDITY, True, f"TED Spread: {ted_spread:.2f}")
+                RefreshStep(STEP_LIQUIDITY, True, f"CP−T-Bill 利差: {ted_spread:.2f}")
             )
         else:
             result.steps.append(
-                RefreshStep(STEP_LIQUIDITY, False, "無法取得 TED Spread 即時數據")
+                RefreshStep(STEP_LIQUIDITY, False, "無法取得 CP−T-Bill 利差 即時數據")
             )
     except Exception as e:
         logger.warning(f"強制刷新 GEX 與流動性失敗: {e}")

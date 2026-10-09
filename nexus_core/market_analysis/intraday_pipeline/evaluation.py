@@ -164,7 +164,7 @@ async def evaluate_watchlist_symbol(
 
             tactical.scenario = "wait"
             tactical.sddm_route = "SYSTEMIC RISK FREEZE"
-            tactical.action_guideline = f"⛔ 【系統性流動性危機】TED Spread 飆升且大盤陷入 Negative Gamma 負螺旋{fb_tag}。已啟動最高層級防火牆：凍結所有網格左側買單，強制保留 BOXX 現金水位以防範系統性衰退。"
+            tactical.action_guideline = f"⛔ 【系統性流動性危機】CP−T-Bill 利差（TED 代理）飆升且大盤陷入 Negative Gamma 負螺旋{fb_tag}。已啟動最高層級防火牆：凍結所有網格左側買單，強制保留 BOXX 現金水位以防範系統性衰退。"
             tactical.alert_level = "red"
             tactical.capital_retreat_required = True
             higher_priority_lock = True

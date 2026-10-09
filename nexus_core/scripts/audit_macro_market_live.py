@@ -442,9 +442,9 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
     rrp_change_30d = macro_data.get("rrp_change_30d")
 
     if ted_spread is None:
-        b3_warnings.append("TED Spread 即時數據未取得 (None)")
+        b3_warnings.append("CP−T-Bill 利差即時數據未取得 (None)")
     elif float(ted_spread) < 0:
-        b3_errors.append(f"TED Spread 為負值: {ted_spread}")
+        b3_errors.append(f"CP−T-Bill 利差為負值: {ted_spread}")
 
     if rrp is None or float(rrp) < 0:
         b3_errors.append(f"RRP 逆回購餘額缺失或為負: {rrp}")
