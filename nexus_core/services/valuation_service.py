@@ -181,7 +181,7 @@ class FinnhubValuationDataProvider:
     """基於 Finnhub 免費公開 API 之估值數據提供者。
 
     指標經 `get_basic_financials` 走 SQLite 24 小時快取（同業之間共用）；同業清單於實例內
-    快取 7 天（排程執行器跨日重用同一實例），降低 Finnhub 背景限流（12 次/分）壓力。
+    快取 7 天（排程執行器跨日重用同一實例），降低 Finnhub 背景限流（最多 35 次/分，見 services/rate_gate.py）壓力。
     """
 
     def __init__(self) -> None:

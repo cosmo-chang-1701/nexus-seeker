@@ -61,6 +61,11 @@ class DDPInspector:
             logger.info(f"[{symbol}] DDP 略過：Yahoo 限流冷卻中")
             self._fail(symbol, "資料暫不可用（Yahoo 限流冷卻中）")
             return None
+        except market_data_service.YahooEdgeBusyError:
+            # Yahoo 閘門排隊逾時／佇列已滿：暫時性失敗，同樣 fail-safe 回 None
+            logger.info(f"[{symbol}] DDP 略過：Yahoo 請求排隊逾時")
+            self._fail(symbol, "資料暫不可用（Yahoo 排隊逾時）")
+            return None
 
         # 1. 產業過濾
         sector = info.get("sector")

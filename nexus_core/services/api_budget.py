@@ -1,7 +1,8 @@
-"""API 配額觀測：統計 Finnhub／Yahoo 每端點的呼叫量，每小時輸出一行摘要。
+"""API 配額觀測：統計各對外來源每端點的呼叫量，每小時輸出一行摘要。
 
 只計數、不改任何呼叫行為；不開背景 task、不寫 DB。摘要於「窗口到期後的下一次
-record_* 呼叫」時輸出並歸零，作為調整節流常數（limiter）的實測依據。
+record_* 呼叫」時輸出並歸零，作為調整閘門常數（`services/rate_gate.py` 的 POLICIES）
+的實測依據；各來源另附閘門的排隊 p95／最大值、逾時、滿載與冷卻次數。
 """
 
 import collections
@@ -12,9 +13,35 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from services import rate_gate
+
 logger = logging.getLogger(__name__)
 
-Source = Literal["finnhub", "yahoo"]
+Source = Literal[
+    "finnhub",
+    "yahoo",
+    "sec",
+    "llm",
+    "fred",
+    "tsa",
+    "twse",
+    "tpex",
+    "polymarket",
+    "alpaca_rest",
+]
+
+# 摘要固定先列的來源；其餘來源有呼叫量（或閘門有活動）才列
+_ALWAYS_LISTED: tuple[str, ...] = ("finnhub", "yahoo")
+_OPTIONAL_SOURCES: tuple[str, ...] = (
+    "sec",
+    "llm",
+    "fred",
+    "tsa",
+    "twse",
+    "tpex",
+    "polymarket",
+    "alpaca_rest",
+)
 
 # 摘要窗口 1 小時：與 Finnhub 60 次/分的分鐘級配額相比，小時級足以看出
 # 背景／互動的呼叫量級與尖峰端點，又不會讓 log 過於頻繁。
@@ -42,17 +69,30 @@ def _format_elapsed(seconds: float) -> str:
     return f"{seconds / 3600:.1f} 小時"
 
 
+def _format_gate_stats(stats: rate_gate.GateStats) -> str:
+    return (
+        f"排隊 p95 {stats.wait_p95:.1f}s／最大 {stats.wait_max:.1f}s，"
+        f"逾時 {stats.timeouts}，滿載 {stats.queue_full}，冷卻 {stats.cooldowns}"
+    )
+
+
 def _build_summary(
     calls: collections.Counter[tuple[str, str, str]],
     limited_counter: collections.Counter[tuple[str, str]],
     started_at: float,
     now: float,
+    gate_stats: dict[str, rate_gate.GateStats] | None = None,
 ) -> str:
     """由（已複製的）計數組出單行摘要文字；純函式，不碰全域狀態。"""
+    gate_stats = gate_stats or {}
     elapsed = max(now - started_at, 1.0)
     hours = elapsed / 3600
     parts: list[str] = []
-    for src in ("finnhub", "yahoo"):
+    sources = list(_ALWAYS_LISTED)
+    for src in _OPTIONAL_SOURCES:
+        if any(s == src for (s, _, _) in calls) or src in gate_stats:
+            sources.append(src)
+    for src in sources:
         total = sum(n for (s, _, _), n in calls.items() if s == src)
         bg = sum(
             n for (s, _, mode), n in calls.items() if s == src and mode == "background"
@@ -60,9 +100,11 @@ def _build_summary(
         inter = total - bg
         limited = sum(n for (s, _), n in limited_counter.items() if s == src)
         rate = total / hours
-        parts.append(
-            f"{src}={total}（背景 {bg}／互動 {inter}，429={limited}，平均 {rate:.0f}/小時）"
-        )
+        text = f"{src}={total}（背景 {bg}／互動 {inter}，429={limited}，平均 {rate:.0f}/小時）"
+        st = gate_stats.get(src)
+        if st is not None:
+            text += f"｜{_format_gate_stats(st)}"
+        parts.append(text)
 
     by_endpoint: collections.Counter[str] = collections.Counter()
     for (s, ep, _), n in calls.items():
@@ -91,7 +133,12 @@ def _flush_if_due() -> None:
         _rate_limited.clear()
         _window_started_at = now
 
-    logger.info(_build_summary(calls_copy, limited_copy, started_at, now))
+    try:
+        gate_stats = rate_gate.drain_stats()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("rate_gate.drain_stats 失敗（已忽略）: %s", e)
+        gate_stats = {}
+    logger.info(_build_summary(calls_copy, limited_copy, started_at, now, gate_stats))
 
 
 def record_call(source: Source, endpoint: str, *, interactive: bool) -> None:

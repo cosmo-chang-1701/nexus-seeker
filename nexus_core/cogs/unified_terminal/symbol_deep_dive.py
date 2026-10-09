@@ -147,9 +147,20 @@ class SymbolDeepDiveMixin:
         gex_profile_task = asyncio.create_task(
             fetch_symbol_gex_metrics(symbol, force_live=True)
         )
-        vp_task = asyncio.create_task(
-            asyncio.to_thread(calculate_volume_profile, symbol)
-        )
+
+        async def _throttled_volume_profile() -> Any:
+            # Volume Profile 為同步 yfinance 直連：套 Yahoo 預算閘門；冷卻／排隊逾時
+            # 時回 None（面板略過該欄），不得讓例外中斷整個 gather。
+            try:
+                async with market_data_service.yahoo_slot():
+                    return await asyncio.to_thread(calculate_volume_profile, symbol)
+            except (
+                market_data_service.YahooRateLimitedError,
+                market_data_service.YahooEdgeBusyError,
+            ):
+                return None
+
+        vp_task = asyncio.create_task(_throttled_volume_profile())
         # 刻意不在此並行 fetch_atr_1d：它內部走的是 get_history_df(symbol, "1y",
         # "1d")——與上方 df_hist_task 同一個 cache key，而 get_history_df 沒有
         # single-flight 去重（快取寫入在 await 之後），兩者同時於 t=0 查快取會在

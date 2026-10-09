@@ -452,3 +452,38 @@ async def test_volatility_inspector_yahoo_cooldown_returns_none() -> None:
         ),
     ):
         assert await VolatilityInspector().inspect_symbol("NVDA", None) is None
+
+
+@pytest.mark.asyncio
+async def test_ddp_inspector_yahoo_gate_busy_returns_none_without_raising() -> None:
+    """Yahoo 閘門排隊逾時／佇列滿載（YahooEdgeBusyError）：同樣 fail-safe 回 None。"""
+    from services.market_data_service import YahooEdgeBusyError
+
+    inspector = DDPInspector()
+    with patch(
+        "services.market_data_service.call_yf",
+        new_callable=AsyncMock,
+        side_effect=YahooEdgeBusyError("gate busy"),
+    ):
+        assert await inspector.inspect_symbol("NVDA") is None
+    assert "排隊逾時" in inspector.last_fail_reason["NVDA"]
+
+
+@pytest.mark.asyncio
+async def test_volatility_inspector_yahoo_gate_busy_returns_none() -> None:
+    from services.market_data_service import YahooEdgeBusyError
+
+    df = pd.DataFrame({"Close": [100.0 + i * 0.1 for i in range(260)]})
+    with (
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=df,
+        ),
+        patch(
+            "services.market_data_service.call_yf",
+            new_callable=AsyncMock,
+            side_effect=YahooEdgeBusyError("gate busy"),
+        ),
+    ):
+        assert await VolatilityInspector().inspect_symbol("NVDA", None) is None

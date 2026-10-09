@@ -2,7 +2,16 @@ from typing import Any
 import pytest
 import time
 from unittest.mock import AsyncMock, patch, MagicMock
+from services import rate_gate
 from services.market_data_service import _execute_api_call
+
+
+def _ygate() -> Any:
+    return rate_gate.get_gate("yahoo")
+
+
+def _fgate() -> Any:
+    return rate_gate.get_gate("finnhub")
 
 
 @pytest.mark.asyncio
@@ -15,51 +24,45 @@ async def test_execute_api_call_success() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_cooperative_backoff() -> None:
-    """Test that _execute_api_call cooperative backoff delay occurs if _rate_limit_until is set in the future."""
+async def test_execute_api_call_background_waits_out_cooldown() -> None:
+    """背景請求遇到冷卻：留在佇列等冷卻結束後才送出（不快速熔斷、不佔名額）。"""
     mock_func = MagicMock(return_value="delayed_success")
-    future_time = time.time() + 1.0
+    _fgate().trip(retry_after=0.2)
 
-    with (
-        patch("services.market_data_service._core._rate_limit_until", future_time),
-        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
-    ):
-        res = await _execute_api_call(mock_func)
-        assert res == "delayed_success"
+    t0 = time.monotonic()
+    res = await _execute_api_call(mock_func)
+    assert res == "delayed_success"
+    assert time.monotonic() - t0 >= 0.15
+    mock_func.assert_called_once()
 
-        # Verify that asyncio.sleep was called to wait out the rate limit
-        assert m_sleep.called
-        # The first sleep should be the remaining wait time
-        args, kwargs = m_sleep.call_args_list[0]
-        wait_time = args[0]
-        assert 0.0 < wait_time <= 1.0
+
+class _Resp429:
+    def __init__(self, retry_after: str) -> None:
+        self.headers = {"Retry-After": retry_after}
+
+
+class _Finnhub429(Exception):
+    def __init__(self, message: str, retry_after: str | None = None) -> None:
+        super().__init__(message)
+        self.response = _Resp429(retry_after) if retry_after is not None else None
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_sets_rate_limit_on_429() -> None:
-    """Test that _execute_api_call sets _rate_limit_until when hitting a 429."""
+async def test_execute_api_call_trips_gate_on_429_and_requeues() -> None:
+    """背景遇 429：啟動全域冷卻、離開 slot 後重新排隊，冷卻結束後成功。"""
+    from services import api_budget
+
+    api_budget.reset_for_tests()
     mock_func = MagicMock()
-    # Raise a 429 Exception on first call, succeed on second call
-    mock_func.side_effect = [Exception("429 Too Many Requests"), "recovered"]
+    mock_func.side_effect = [_Finnhub429("429 Too Many Requests", "0.1"), "recovered"]
 
-    # We must patch _rate_limit_until inside market_data_service so we don't pollute global state
-    with (
-        patch("services.market_data_service._core._rate_limit_until", 0.0),
-        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
-    ):
-        res = await _execute_api_call(mock_func)
-        assert res == "recovered"
-
-        # Verify sleep was called for the 429 delay
-        assert m_sleep.called
-
-        # Verify services.market_data_service._core._rate_limit_until was updated to a future time
-        import services.market_data_service
-
-        # Since it is patched, the actual module variable won't be modified in global namespace,
-        # but the local lookup in _execute_api_call modified the patched value.
-        # Let's verify that the module reference (which is patched) was set.
-        assert services.market_data_service._core._rate_limit_until > time.time()
+    res = await _execute_api_call(mock_func)
+    assert res == "recovered"
+    assert mock_func.call_count == 2
+    assert _fgate().drain_stats().cooldowns == 1
+    assert api_budget.snapshot()["finnhub/unknown/429"] == 1
+    # 重新排隊前已離開 slot：沒有名額洩漏
+    assert _fgate().in_flight() == 0
 
 
 @pytest.mark.asyncio
@@ -836,34 +839,36 @@ async def test_fetch_option_chain_raw_edge_tunnel_persistent_failure_falls_throu
 
 @pytest.mark.asyncio
 async def test_execute_api_call_respects_retry_after() -> None:
-    """Test that _execute_api_call respects Retry-After header when a 429 occurs."""
+    """429 的 Retry-After 標頭直接成為閘門冷卻秒數。"""
+    mock_func = MagicMock()
+    mock_func.side_effect = [
+        _Finnhub429("429 Too Many Requests", "0.15"),
+        "recovered_after_retry",
+    ]
 
-    class MockResponse:
-        def __init__(self, headers: Any) -> None:
-            self.headers = headers
+    gate = _fgate()
+    with patch.object(gate, "trip", wraps=gate.trip) as m_trip:
+        t0 = time.monotonic()
+        res = await _execute_api_call(mock_func)
+    assert res == "recovered_after_retry"
+    m_trip.assert_called_once_with(0.15)
+    assert time.monotonic() - t0 >= 0.12
 
-    class MockException(Exception):
-        def __init__(self, message: Any, response: Any) -> None:
-            super().__init__(message)
-            self.response = response
 
-    mock_response = MockResponse({"Retry-After": "5.5"})
-    mock_exception = MockException("429 Too Many Requests", mock_response)
+@pytest.mark.asyncio
+async def test_execute_api_call_connection_error_retries_outside_slot() -> None:
+    """連線錯誤：離開 slot 後睡眠再重試，睡眠期間不佔併發名額。"""
+    in_flight_during_sleep: list[int] = []
+
+    async def _fake_sleep(delay: float) -> None:
+        in_flight_during_sleep.append(_fgate().in_flight())
 
     mock_func = MagicMock()
-    mock_func.side_effect = [mock_exception, "recovered_after_retry"]
-
-    with (
-        patch("services.market_data_service._core._rate_limit_until", 0.0),
-        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
-    ):
-        res = await _execute_api_call(mock_func)
-        assert res == "recovered_after_retry"
-
-        assert m_sleep.called
-        sleep_args = [args[0] for args, _ in m_sleep.call_args_list]
-        # Includes 5.5 + jitter (5.5 <= delay <= 6.5)
-        assert any(5.5 <= a <= 6.5 for a in sleep_args)
+    mock_func.side_effect = [Exception("Connection aborted"), "ok"]
+    with patch("asyncio.sleep", side_effect=_fake_sleep):
+        assert await _execute_api_call(mock_func) == "ok"
+    assert in_flight_during_sleep == [0]
+    assert not _fgate().in_cooldown()
 
 
 @pytest.mark.asyncio
@@ -1338,88 +1343,78 @@ async def test_safe_yf_history_falls_back_to_direct_when_edge_fails() -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_get_finnhub_controls_structure() -> None:
-    """Test that _get_finnhub_controls provides a global master limiter and conservative limits."""
-    from services.market_data_service import _get_finnhub_controls
-
-    controls = _get_finnhub_controls()
-    assert "limiter_global" in controls
-    assert "limiter_background" in controls
-    assert "limiter_per_second" in controls
-    assert "sem_background" in controls
-    assert "sem_interactive" in controls
-    assert controls["limiter_global"].max_rate == 50
-    assert controls["limiter_per_second"].max_rate == 3
+def test_finnhub_gate_policy_structure() -> None:
+    """Finnhub 閘門：50/60s 窗口、互動保留 15（背景最多 35）、每秒 burst 3、併發 5/背景 2。"""
+    p = _fgate().policy
+    assert (p.window_limit, p.window_seconds) == (50, 60.0)
+    assert p.interactive_reserve == 15
+    assert p.burst_limit == 3
+    assert (p.max_concurrency, p.bg_concurrency) == (5, 2)
+    assert p.background_fail_fast_in_cooldown is False
 
 
 @pytest.mark.asyncio
 async def test_execute_api_call_interactive_fast_circuit_on_429() -> None:
-    """Test that interactive requests immediately raise on 429 without sleeping/retrying."""
+    """互動請求遇 429：不 sleep、不重試，直接外拋並啟動冷卻。"""
     from services.market_data_service import mark_interactive_request
-    import services.market_data_service
 
     mock_func = MagicMock()
     mock_func.side_effect = Exception("429 Too Many Requests")
 
     with (
         mark_interactive_request(),
-        patch("services.market_data_service._core._rate_limit_until", 0.0),
-        patch("asyncio.sleep", new_callable=AsyncMock),
+        patch("asyncio.sleep", new_callable=AsyncMock) as m_sleep,
     ):
         with pytest.raises(Exception, match="429"):
             await _execute_api_call(mock_func)
+        m_sleep.assert_not_called()
 
-        # Mock function should be called only once (no retries for interactive 429)
-        assert mock_func.call_count == 1
-        # Cooldown should be set to the future
-        assert services.market_data_service._core._rate_limit_until > time.time()
+    # 互動 429 不重試
+    assert mock_func.call_count == 1
+    assert _fgate().in_cooldown()
+    assert _fgate().in_flight() == 0
 
 
 @pytest.mark.asyncio
 async def test_execute_api_call_interactive_fast_circuit_when_in_cooldown() -> None:
-    """Test that interactive requests bypass Finnhub and fast-fail immediately when in cooldown."""
+    """冷卻中互動請求不進佇列：快速熔斷，訊息維持舊字串（呼叫端以字串判斷）。"""
     from services.market_data_service import mark_interactive_request
 
     mock_func = MagicMock()
-    future_time = time.time() + 10.0
+    _fgate().trip(retry_after=10)
 
     with (
         mark_interactive_request(),
-        patch("services.market_data_service._core._rate_limit_until", future_time),
         patch("asyncio.sleep", new_callable=AsyncMock),
     ):
         with pytest.raises(
             Exception, match="Finnhub rate limited, fast-circuit to fallback"
-        ):
+        ) as ei:
             await _execute_api_call(mock_func)
 
-        # Should never call the mock function or sleep for the 10s cooldown
-        mock_func.assert_not_called()
+    assert isinstance(ei.value, rate_gate.RateGateCooldownError)
+    mock_func.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() -> None:
-    """Regression test: when cooldown is set *while an interactive request is queued
-    on the concurrency semaphore* (a race the in-lock recheck exists to catch), the
-    fast circuit-break must fire before touching limiter_per_second/limiter_global —
-    an AsyncLimiter token can never be refunded once acquired, so a queued request
-    that ends up circuit-breaking must not have spent any global rate-limit budget."""
+async def test_execute_api_call_cooldown_while_queued_spends_no_budget() -> None:
+    """排隊期間才開始冷卻：佇列中的互動請求被快速熔斷，且不消耗窗口配額。"""
     import asyncio
-    import services.market_data_service
-    from services.market_data_service import (
-        _get_finnhub_controls,
-        mark_interactive_request,
-    )
 
-    services.market_data_service._core._rate_limit_until = 0.0
-    controls = _get_finnhub_controls()
-    sem = controls["sem_interactive"]
-    capacity = sem._value
+    from services.market_data_service import mark_interactive_request
 
-    # Saturate the interactive concurrency slots so the call under test must queue.
-    for _ in range(capacity):
-        await sem.acquire()
+    from dataclasses import replace
+
+    # 關掉 burst／最小間隔，避免佔滿併發名額的前置步驟被每秒 3 次的 burst 拖慢
+    relaxed = replace(rate_gate.POLICIES["finnhub"], burst_limit=None, min_interval=0)
+    rate_gate.reset_for_tests()
+    with patch.dict(rate_gate.POLICIES, {"finnhub": relaxed}):
+        gate = _fgate()
+    held = []
+    for _ in range(gate.policy.max_concurrency):  # 佔滿總併發，讓測試中的呼叫必須排隊
+        with mark_interactive_request():
+            held.append(await gate.acquire())
+    granted_before = len(gate._state().window)
 
     mock_func = MagicMock()
 
@@ -1428,34 +1423,23 @@ async def test_execute_api_call_interactive_inlock_recheck_spends_no_budget() ->
             await _execute_api_call(mock_func)
 
     task = asyncio.create_task(_call())
-    # Let the real micro-pacing sleep (30-60ms) elapse so the task reaches `sem.acquire()`
-    # and blocks (cooldown is still 0 at this point, so the pre-lock check "0" passes).
-    await asyncio.sleep(0.15)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert gate.queue_depth("interactive") == 1
 
-    # Simulate a sibling request setting the cooldown while this task is still queued.
-    services.market_data_service._core._rate_limit_until = time.time() + 10.0
-
-    # Free a slot so the queued task resumes and hits the in-lock recheck.
-    sem.release()
-
+    gate.trip(retry_after=10)  # 兄弟請求在此刻觸發冷卻
     try:
         with pytest.raises(
             Exception, match="Finnhub rate limited, fast-circuit to fallback"
         ):
-            await task
-
+            await asyncio.wait_for(task, 2)
         mock_func.assert_not_called()
-        # Core assertion: the aborted call must not have spent global rate-limit budget.
-        assert controls["limiter_global"]._level == 0
-        assert controls["limiter_per_second"]._level == 0
+        # 核心斷言：被熔斷的請求沒有扣到窗口配額
+        assert len(gate._state().window) == granted_before
     finally:
-        # Release the remaining slots this test manually acquired.
-        for _ in range(capacity - 1):
-            sem.release()
-        # Undo the simulated 10s cooldown: it is module-global state, and leaking it
-        # makes any get_quote test that runs within 10s on the same process (e.g. under
-        # pytest-xdist) take the rate-limited yfinance branch instead of Finnhub.
-        services.market_data_service._core._rate_limit_until = 0.0
+        for t in held:
+            gate.release(t)
+    assert gate.in_flight() == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1565,11 +1549,10 @@ def _ohlcv_df() -> Any:
 
 @pytest.fixture
 def _yahoo_clean() -> Any:
-    from services.market_data_service import _core, clear_history_cache
+    from services.market_data_service import clear_history_cache
 
     def _reset() -> None:
-        _core._yahoo_rate_limit_until = 0.0
-        _core._yahoo_backoff_seconds = 0.0
+        rate_gate.reset_for_tests()
         clear_history_cache()
 
     _reset()
@@ -1702,46 +1685,45 @@ async def test_edge_json_rate_limited_status_marks_cooldown(
 
 def test_yahoo_backoff_exponential_and_reset(_yahoo_clean: Any) -> None:
     from services.market_data_service import (
-        _core,
         mark_yahoo_ok,
         mark_yahoo_rate_limited,
     )
 
     clock = [1000.0]
-    with patch("time.time", side_effect=lambda: clock[0]):
+    with patch.object(rate_gate, "_clock", lambda: clock[0]):
         mark_yahoo_rate_limited()
-        assert _core._yahoo_rate_limit_until == pytest.approx(1060.0)
+        assert _ygate()._cd_until == pytest.approx(1060.0)
         clock[0] = 1061.0  # 冷卻結束後再次限流才升級
         mark_yahoo_rate_limited()
-        assert _core._yahoo_backoff_seconds == 120.0
+        assert _ygate()._backoff == 120.0
         for _ in range(10):
-            clock[0] = _core._yahoo_rate_limit_until + 1
+            clock[0] = _ygate()._cd_until + 1
             mark_yahoo_rate_limited()
-        assert _core._yahoo_backoff_seconds == 900.0
-        clock[0] = _core._yahoo_rate_limit_until + 1
+        assert _ygate()._backoff == 900.0
+        clock[0] = _ygate()._cd_until + 1
         mark_yahoo_ok(clock[0])  # 冷卻已結束且請求晚於最近一次 429：重置
-        assert _core._yahoo_backoff_seconds == 0.0
-        clock[0] = _core._yahoo_rate_limit_until + 1
+        assert _ygate()._backoff == 0.0
+        clock[0] = _ygate()._cd_until + 1
         mark_yahoo_rate_limited(retry_after=30)
-        assert _core._yahoo_rate_limit_until == pytest.approx(clock[0] + 30)
+        assert _ygate()._cd_until == pytest.approx(clock[0] + 30)
 
 
 def test_yahoo_backoff_not_escalated_during_cooldown(_yahoo_clean: Any) -> None:
     """同一波多個在途請求各自 429：冷卻中不重複升級退避倍數。"""
-    from services.market_data_service import _core, mark_yahoo_rate_limited
+    from services.market_data_service import mark_yahoo_rate_limited
 
-    with patch("time.time", return_value=1000.0):
+    with patch.object(rate_gate, "_clock", return_value=1000.0):
         mark_yahoo_rate_limited()
         for _ in range(5):
             mark_yahoo_rate_limited()
-        assert _core._yahoo_backoff_seconds == 60.0
-        assert _core._yahoo_rate_limit_until == pytest.approx(1060.0)
+        assert _ygate()._backoff == 60.0
+        assert _ygate()._cd_until == pytest.approx(1060.0)
         # 冷卻中的 Retry-After 較短：不縮短；較長：延長，但仍不升級倍數
         mark_yahoo_rate_limited(retry_after=10)
-        assert _core._yahoo_rate_limit_until == pytest.approx(1060.0)
+        assert _ygate()._cd_until == pytest.approx(1060.0)
         mark_yahoo_rate_limited(retry_after=300)
-        assert _core._yahoo_rate_limit_until == pytest.approx(1300.0)
-        assert _core._yahoo_backoff_seconds == 60.0
+        assert _ygate()._cd_until == pytest.approx(1300.0)
+        assert _ygate()._backoff == 60.0
 
 
 def test_is_yf_rate_limit_error_ignores_epoch_timestamp() -> None:
@@ -1762,7 +1744,7 @@ def test_is_yf_rate_limit_error_ignores_epoch_timestamp() -> None:
 async def test_call_yf_rate_limit_marks_cooldown_and_success_resets_backoff(
     _yahoo_clean: Any,
 ) -> None:
-    from services.market_data_service import _core, call_yf, is_yahoo_rate_limited
+    from services.market_data_service import call_yf, is_yahoo_rate_limited
 
     def _boom() -> None:
         raise Exception("Too Many Requests. Rate limited.")
@@ -1770,12 +1752,12 @@ async def test_call_yf_rate_limit_marks_cooldown_and_success_resets_backoff(
     with pytest.raises(Exception, match="Too Many"):
         await call_yf(_boom)
     assert is_yahoo_rate_limited() is True
-    assert _core._yahoo_backoff_seconds == 60.0
+    assert _ygate()._backoff == 60.0
 
     # 非限流錯誤不設冷卻；成功呼叫重置退避
-    _core._yahoo_rate_limit_until = 0.0
+    _ygate()._cd_until = 0.0
     assert await call_yf(lambda: 1) == 1
-    assert _core._yahoo_backoff_seconds == 0.0
+    assert _ygate()._backoff == 0.0
 
 
 @pytest.mark.asyncio
@@ -1810,7 +1792,6 @@ async def test_edge_options_429_enters_cooldown_and_success_resets(
 ) -> None:
     from services.market_data_service import (
         YahooRateLimitedError,
-        _core,
         is_yahoo_rate_limited,
     )
     from services.market_data_service.options import _edge_get_counted
@@ -1819,10 +1800,10 @@ async def test_edge_options_429_enters_cooldown_and_success_resets(
         await _edge_get_counted(_edge_resp(429, headers={"Retry-After": "120"}), "u")
     assert is_yahoo_rate_limited() is True
 
-    _core._yahoo_rate_limit_until = 0.0
-    _core._yahoo_backoff_seconds = 240.0
+    _ygate()._cd_until = 0.0
+    _ygate()._backoff = 240.0
     await _edge_get_counted(_edge_resp(200, {"status": "success", "data": []}), "u")
-    assert _core._yahoo_backoff_seconds == 0.0
+    assert _ygate()._backoff == 0.0
 
 
 @pytest.mark.asyncio
@@ -1936,7 +1917,7 @@ async def test_edge_connection_error_not_counted_as_yahoo_call(
     _yahoo_clean: Any,
 ) -> None:
     """edge 連不上／逾時（沒拿到 HTTP 回應）不計入 Yahoo 呼叫。"""
-    from services.market_data_service import api_budget
+    from services import api_budget
     from services.market_data_service.options import _edge_get_counted
 
     api_budget.reset_for_tests()
@@ -1955,7 +1936,8 @@ async def test_edge_connection_error_not_counted_as_yahoo_call(
 async def test_yahoo_429_counted_in_budget_for_edge_and_direct(
     _yahoo_clean: Any,
 ) -> None:
-    from services.market_data_service import _core, api_budget, call_yf
+    from services import api_budget
+    from services.market_data_service import call_yf
     from services.market_data_service.options import _edge_get_counted
 
     api_budget.reset_for_tests()
@@ -1963,7 +1945,7 @@ async def test_yahoo_429_counted_in_budget_for_edge_and_direct(
         await _edge_get_counted(_edge_resp(429), "u")
     assert api_budget.snapshot()["yahoo/edge_options/429"] == 1
 
-    _core._yahoo_rate_limit_until = 0.0
+    _ygate()._cd_until = 0.0
 
     def history() -> None:
         raise Exception("Too Many Requests")
@@ -1978,35 +1960,34 @@ def test_mark_yahoo_ok_does_not_reset_for_request_sent_before_429(
 ) -> None:
     """429 之前送出、之後才成功的請求不得重置退避；冷卻中也一律不重置。"""
     from services.market_data_service import (
-        _core,
         mark_yahoo_ok,
         mark_yahoo_rate_limited,
     )
 
     clock = [1000.0]
-    with patch("time.time", side_effect=lambda: clock[0]):
+    with patch.object(rate_gate, "_clock", lambda: clock[0]):
         mark_yahoo_rate_limited()  # t=1000，退避 60
-        assert _core._yahoo_backoff_seconds == 60.0
+        assert _ygate()._backoff == 60.0
         clock[0] = 1100.0  # 冷卻已過
         mark_yahoo_ok(999.0)  # 請求在 429 之前送出
-        assert _core._yahoo_backoff_seconds == 60.0
+        assert _ygate()._backoff == 60.0
         mark_yahoo_ok(1000.0)  # 與 429 同時刻：不算「晚於」
-        assert _core._yahoo_backoff_seconds == 60.0
+        assert _ygate()._backoff == 60.0
         mark_yahoo_ok(1050.0)  # 429 之後送出：重置
-        assert _core._yahoo_backoff_seconds == 0.0
+        assert _ygate()._backoff == 0.0
         # 冷卻中一律不重置
         clock[0] = 1200.0
         mark_yahoo_rate_limited()
         clock[0] = 1210.0
         mark_yahoo_ok(1205.0)
-        assert _core._yahoo_backoff_seconds == 60.0
+        assert _ygate()._backoff == 60.0
 
 
 @pytest.mark.asyncio
 async def test_call_yf_in_cooldown_does_not_call_func(_yahoo_clean: Any) -> None:
-    from services.market_data_service import YahooRateLimitedError, _core, call_yf
+    from services.market_data_service import YahooRateLimitedError, call_yf
 
-    _core._yahoo_rate_limit_until = time.time() + 60
+    _ygate().trip(retry_after=60)
     func = MagicMock(return_value=1)
     with pytest.raises(YahooRateLimitedError):
         await call_yf(func)
@@ -2014,44 +1995,88 @@ async def test_call_yf_in_cooldown_does_not_call_func(_yahoo_clean: Any) -> None
 
 
 @pytest.mark.asyncio
-async def test_cooldown_started_while_queued_blocks_after_slot_acquired(
+async def test_cooldown_started_while_queued_fails_queued_requests(
     _yahoo_clean: Any,
 ) -> None:
-    """排隊期間才開始冷卻：拿到名額後不送出 edge 請求，也不呼叫 yfinance。"""
+    """排隊期間才開始冷卻：閘門讓佇列中的請求以冷卻例外失敗，不送出 edge 請求、
+    也不呼叫 yfinance，且不消耗配額。"""
     import asyncio
-    from contextlib import asynccontextmanager
 
     from services.market_data_service import (
         YahooRateLimitedError,
-        _core,
         call_yf,
         edge_get_yahoo,
     )
 
-    real_slot = _core.yahoo_slot
-    gate = asyncio.Event()
-
-    @asynccontextmanager
-    async def _queued_slot() -> Any:
-        await gate.wait()  # 模擬排隊
-        async with real_slot():
-            yield
+    gate = _ygate()
+    held = [await gate.acquire() for _ in range(gate.policy.bg_concurrency)]
+    granted_before = len(gate._state().window)
 
     client = _edge_resp(200, {"status": "success"})
     func = MagicMock(return_value=1)
-    with patch("services.market_data_service._core.yahoo_slot", _queued_slot):
-        t_edge = asyncio.create_task(edge_get_yahoo(client, "u", "edge_history"))
-        t_yf = asyncio.create_task(call_yf(func))
+    t_edge = asyncio.create_task(edge_get_yahoo(client, "u", "edge_history"))
+    t_yf = asyncio.create_task(call_yf(func))
+    for _ in range(5):
         await asyncio.sleep(0)
-        _core._yahoo_rate_limit_until = time.time() + 60  # 排隊中冷卻開始
-        gate.set()
-        # 假 slot 包住真 slot，真 slot 在取得名額後檢查冷卻
-        with pytest.raises(YahooRateLimitedError):
-            await t_edge
-        with pytest.raises(YahooRateLimitedError):
-            await t_yf
+    assert gate.queue_depth("background") == 2
+
+    gate.trip(retry_after=60)  # 排隊中冷卻開始
+    with pytest.raises(YahooRateLimitedError):
+        await asyncio.wait_for(t_edge, 2)
+    with pytest.raises(YahooRateLimitedError):
+        await asyncio.wait_for(t_yf, 2)
     client.get.assert_not_called()
     func.assert_not_called()
+    assert len(gate._state().window) == granted_before
+    for t in held:
+        gate.release(t)
+
+
+@pytest.mark.asyncio
+async def test_yahoo_slot_maps_gate_errors(_yahoo_clean: Any) -> None:
+    """冷卻 → YahooRateLimitedError；排隊逾時／佇列滿載 → YahooEdgeBusyError（暫時性，不冷卻）。"""
+    import asyncio
+    from dataclasses import replace
+    from unittest.mock import patch as _patch
+
+    from services.market_data_service import (
+        YahooEdgeBusyError,
+        YahooRateLimitedError,
+        yahoo_slot,
+    )
+
+    # 冷卻
+    _ygate().trip(retry_after=30)
+    with pytest.raises(YahooRateLimitedError):
+        async with yahoo_slot():
+            pass
+    rate_gate.reset_for_tests()
+
+    # 排隊逾時與佇列滿載：以極短 max_wait 與深度 1 的政策重建 yahoo 閘門
+    tight = replace(
+        rate_gate.POLICIES["yahoo"],
+        max_concurrency=1,
+        background_concurrency=1,
+        max_wait_background=0.05,
+        max_queue_depth_background=1,
+    )
+    with _patch.dict(rate_gate.POLICIES, {"yahoo": tight}):
+        rate_gate.reset_for_tests()
+        gate = _ygate()
+        held = await gate.acquire()
+        with pytest.raises(YahooEdgeBusyError):  # 逾時
+            async with yahoo_slot():
+                pass
+        waiter = asyncio.create_task(gate.acquire())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        with pytest.raises(YahooEdgeBusyError):  # 佇列已滿
+            async with yahoo_slot():
+                pass
+        gate.release(held)
+        gate.release(await asyncio.wait_for(waiter, 1))
+        assert not gate.in_cooldown()  # 暫時性失敗不啟動冷卻
+    rate_gate.reset_for_tests()
 
 
 @pytest.mark.asyncio
@@ -2213,3 +2238,21 @@ async def test_stale_cache_not_used_for_live_daily_periods(_yahoo_clean: Any) ->
     ):
         assert (await get_history_df("^VIX", period="5d", interval="1d")).empty
         assert not (await get_history_df("^VIX", period="1mo", interval="1d")).empty
+
+
+@pytest.mark.asyncio
+async def test_direct_yf_history_gate_busy_returns_none_without_repair_retry(
+    _yahoo_clean: Any,
+) -> None:
+    """Yahoo 閘門排隊逾時／滿載：直連 K 線回 None，不以 repair=False 再排隊一輪，也不啟動冷卻。"""
+    from services.market_data_service import YahooEdgeBusyError, is_yahoo_rate_limited
+    from services.market_data_service.quote import _direct_yf_history
+
+    with patch(
+        "services.market_data_service.quote.call_yf",
+        new_callable=AsyncMock,
+        side_effect=YahooEdgeBusyError("gate busy"),
+    ) as m_call:
+        assert await _direct_yf_history(MagicMock(), period="1y") is None
+    assert m_call.await_count == 1
+    assert is_yahoo_rate_limited() is False
