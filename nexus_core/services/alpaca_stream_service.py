@@ -49,6 +49,7 @@ from market_analysis.stream_bars import (
     compute_technicals,
     rebuild_buffer,
 )
+from services.http_gate import gated_request
 
 logger = logging.getLogger(__name__)
 
@@ -971,8 +972,14 @@ class AlpacaStreamService:
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 for _ in range(_MAX_PAGES):
-                    resp = await client.get(
-                        HISTORICAL_BARS_URL, params=params, headers=headers
+                    resp = await gated_request(
+                        "alpaca_rest",
+                        client,
+                        "GET",
+                        HISTORICAL_BARS_URL,
+                        endpoint="historical_bars",
+                        params=params,
+                        headers=headers,
                     )
                     resp.raise_for_status()
                     payload = resp.json()

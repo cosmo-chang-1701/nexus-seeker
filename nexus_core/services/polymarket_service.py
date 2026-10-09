@@ -15,6 +15,7 @@ from services.notification_dispatcher import is_channel_enabled, notify
 from services.llm_service import generate_polymarket_summary, classify_uoa_intent
 from market_analysis.sentiment_engine import SentimentEngine
 from services.bounded_cache import BoundedCache
+from services.http_gate import gated_request
 
 import gc
 
@@ -571,8 +572,12 @@ class PolymarketService:
         if len(matched) < limit:
             try:
                 async with httpx.AsyncClient(timeout=10.0) as client:
-                    resp = await client.get(
+                    resp = await gated_request(
+                        "polymarket",
+                        client,
+                        "GET",
                         f"{GAMMA_API_BASE}/public-search",
+                        endpoint="gamma_public_search",
                         params={"q": query_clean, "limit": 20},
                     )
                     if resp.status_code == 200:
@@ -803,8 +808,13 @@ class PolymarketService:
         async with httpx.AsyncClient(timeout=10.0) as client:
             for aid in asset_ids:
                 try:
-                    resp = await client.get(
-                        f"{POLY_API_BASE}/book", params={"token_id": aid}
+                    resp = await gated_request(
+                        "polymarket",
+                        client,
+                        "GET",
+                        f"{POLY_API_BASE}/book",
+                        endpoint="clob_book",
+                        params={"token_id": aid},
                     )
                     if resp.status_code == 200:
                         data = resp.json()
@@ -816,8 +826,7 @@ class PolymarketService:
                         self._order_books[aid] = ob
                 except Exception as e:
                     logger.debug(f"Failed to fetch initial book for {aid}: {e}")
-                # 避免過快請求
-                await asyncio.sleep(0.1)
+                # 請求間隔由 rate_gate 的 polymarket 閘門（min_interval=0.1s）負責
 
     def _handle_order_book_update(self, data: Dict[str, Any]) -> Any:
         """處理增量 Order Book 更新"""
@@ -1081,7 +1090,14 @@ class PolymarketService:
                         "limit": 100,
                         "offset": offset,
                     }
-                    resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
+                    resp = await gated_request(
+                        "polymarket",
+                        client,
+                        "GET",
+                        f"{GAMMA_API_BASE}/markets",
+                        endpoint="gamma_markets",
+                        params=params,
+                    )
 
                     if resp.status_code == 200:
                         markets = resp.json()
@@ -1225,7 +1241,14 @@ class PolymarketService:
                 else:
                     params["token_id"] = asset_id
 
-                resp = await client.get(f"{GAMMA_API_BASE}/markets", params=params)
+                resp = await gated_request(
+                    "polymarket",
+                    client,
+                    "GET",
+                    f"{GAMMA_API_BASE}/markets",
+                    endpoint="gamma_market_lookup",
+                    params=params,
+                )
                 if resp.status_code == 200:
                     data = resp.json()
                     # Gamma API 返回通常是列表

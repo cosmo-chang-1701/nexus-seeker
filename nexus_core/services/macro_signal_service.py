@@ -52,6 +52,7 @@ from market_analysis.macro_signals import (
     usable,
     vix_term_inversion,
 )
+from services.http_gate import gated_request
 from services.single_flight import SingleFlightManager
 
 logger = logging.getLogger(__name__)
@@ -93,8 +94,13 @@ async def _download_fred(series_id: str, start: date) -> str:
     import httpx
 
     async with httpx.AsyncClient(timeout=FRED_TIMEOUT_SECONDS) as client:
-        resp = await client.get(
-            FRED_CSV_URL, params={"id": series_id, "cosd": start.isoformat()}
+        resp = await gated_request(
+            "fred",
+            client,
+            "GET",
+            FRED_CSV_URL,
+            endpoint="fredgraph",
+            params={"id": series_id, "cosd": start.isoformat()},
         )
         resp.raise_for_status()
         return str(resp.text)

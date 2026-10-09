@@ -19,6 +19,7 @@ from services.market_data_service import (
     get_macro_environment,
     get_quote,
 )
+from services.http_gate import gated_request
 from services.llm_service import generate_analyst_report
 from services.news_service import fetch_recent_news
 from services.reddit_service import get_reddit_context
@@ -52,8 +53,12 @@ async def _fetch_poly_events(bot: Any) -> list[dict]:
     events: list[dict] = []
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
+            resp = await gated_request(
+                "polymarket",
+                client,
+                "GET",
                 f"{_GAMMA_API_BASE}/markets",
+                endpoint="gamma_markets",
                 params={"active": "true", "closed": "false", "limit": 20},
             )
             if resp.status_code == 200:
