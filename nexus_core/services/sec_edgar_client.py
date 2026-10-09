@@ -1,7 +1,8 @@
 """SEC EDGAR 官方 API 專屬直連非同步客戶端。
 
 核心安全防護與架構原則：
-1. 嚴格限速：aiolimiter.AsyncLimiter(max_rate=8, time_period=1.0) ≤ 8 req/s (低於 SEC 10 req/s 上限)。
+1. 嚴格限速：所有請求經 `rate_gate` 的 sec 閘門（`SEC_LIMITER_MAX_RATE` 預設 8 req/s，低於 SEC 10 req/s
+   上限；全 process 共用一個閘門，不論建構幾個客戶端實例），429／含 Request Rate Threshold 的 403 觸發冷卻。
 2. 串流下載防爆：強制 1.5MB (1_500_000 bytes) 硬截斷，保障 1GB–2GB VPS 記憶體。
 3. 杜絕 XXE：全面透過 defusedxml.ElementTree 解析 XML 檔案。
 4. 認證檢查：強制驗證 SEC_USER_AGENT 格式（包含 @ 聯絡信箱），缺少時拋出 SecConfigError。
@@ -18,7 +19,6 @@ from datetime import datetime
 import logging
 import time
 from typing import Any
-from aiolimiter import AsyncLimiter
 import defusedxml.ElementTree as ET
 import httpx
 
@@ -31,6 +31,7 @@ from market_analysis.fundamental_pipeline.press_release import (
 from market_analysis.fundamental_pipeline.sec_item_router import (
     parse_sec_header_acceptance,
 )
+from services.http_gate import gated_request, gated_stream
 from services.single_flight import SingleFlightManager
 
 logger = logging.getLogger(__name__)
@@ -80,8 +81,6 @@ class SecEdgarClient:
         self,
         user_agent: str | None = None,
         timeout_seconds: float = 20.0,
-        max_rate: float = 8.0,
-        time_period: float = 1.0,
     ) -> None:
         ua = user_agent if user_agent is not None else config.SEC_USER_AGENT
         if not ua or "@" not in ua:
@@ -93,7 +92,6 @@ class SecEdgarClient:
             "User-Agent": ua.strip(),
             "Accept-Encoding": "gzip, deflate",
         }
-        self._limiter = AsyncLimiter(max_rate=max_rate, time_period=time_period)
         self._timeout = timeout_seconds
         self._cik_cache: dict[str, str] = dict(_COMMON_CIK_SEEDS)
         # 映射表最近一次成功載入 / 失敗的 monotonic 時間戳
@@ -119,13 +117,14 @@ class SecEdgarClient:
 
     async def _download_ticker_map(self) -> dict[str, str]:
         """下載 company_tickers.json 並轉成 {ticker: cik10}（含 . / - 雙向別名）。"""
-        async with self._limiter:
-            async with httpx.AsyncClient(
-                headers=self._headers, timeout=self._timeout
-            ) as client:
-                resp = await client.get(_COMPANY_TICKERS_URL)
-                resp.raise_for_status()
-                data = resp.json()
+        async with httpx.AsyncClient(
+            headers=self._headers, timeout=self._timeout
+        ) as client:
+            resp = await gated_request(
+                "sec", client, "GET", _COMPANY_TICKERS_URL, endpoint="company_tickers"
+            )
+            resp.raise_for_status()
+            data = resp.json()
 
         mapping: dict[str, str] = {}
         for entry in data.values():
@@ -220,14 +219,15 @@ class SecEdgarClient:
         cik10 = str(cik).strip().zfill(10)
         url = f"https://data.sec.gov/submissions/CIK{cik10}.json"
 
-        async with self._limiter:
-            async with httpx.AsyncClient(
-                headers=self._headers, timeout=self._timeout
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                data: dict[str, Any] = resp.json()
-                return data
+        async with httpx.AsyncClient(
+            headers=self._headers, timeout=self._timeout
+        ) as client:
+            resp = await gated_request(
+                "sec", client, "GET", url, endpoint="submissions"
+            )
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+            return data
 
     async def fetch_company_concept(
         self, cik: str, tag: str, taxonomy: str = "us-gaap"
@@ -243,37 +243,39 @@ class SecEdgarClient:
             f"https://data.sec.gov/api/xbrl/companyconcept/CIK{cik10}/"
             f"{taxonomy}/{tag}.json"
         )
-        async with self._limiter:
-            async with httpx.AsyncClient(
-                headers=self._headers, timeout=self._timeout
-            ) as client:
-                resp = await client.get(url)
-                if resp.status_code == 404:
-                    return None
-                resp.raise_for_status()
-                data: dict[str, Any] = resp.json()
-                return data
+        async with httpx.AsyncClient(
+            headers=self._headers, timeout=self._timeout
+        ) as client:
+            resp = await gated_request(
+                "sec", client, "GET", url, endpoint="companyconcept"
+            )
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            data: dict[str, Any] = resp.json()
+            return data
 
     async def fetch_document_text(self, url: str, byte_cap: int = 1_500_000) -> str:
         """串流拉取原始文本，到達 byte_cap 上限時執行防爆截斷。"""
-        async with self._limiter:
-            async with httpx.AsyncClient(
-                headers=self._headers, timeout=self._timeout
-            ) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
-                    chunks: list[bytes] = []
-                    total_bytes = 0
-                    async for chunk in response.aiter_bytes():
-                        chunks.append(chunk)
-                        total_bytes += len(chunk)
-                        if total_bytes >= byte_cap:
-                            logger.warning(
-                                f"SEC 文件超過記憶體防護門檻 {byte_cap} bytes，執行安全截斷: {url}"
-                            )
-                            break
-                    raw_content = b"".join(chunks)
-                    return raw_content.decode("utf-8", errors="replace")
+        async with httpx.AsyncClient(
+            headers=self._headers, timeout=self._timeout
+        ) as client:
+            async with gated_stream(
+                "sec", client, "GET", url, endpoint="document"
+            ) as response:
+                response.raise_for_status()
+                chunks: list[bytes] = []
+                total_bytes = 0
+                async for chunk in response.aiter_bytes():
+                    chunks.append(chunk)
+                    total_bytes += len(chunk)
+                    if total_bytes >= byte_cap:
+                        logger.warning(
+                            f"SEC 文件超過記憶體防護門檻 {byte_cap} bytes，執行安全截斷: {url}"
+                        )
+                        break
+                raw_content = b"".join(chunks)
+                return raw_content.decode("utf-8", errors="replace")
 
     async def fetch_xml_root(self, url: str, byte_cap: int = 1_500_000) -> ET.Element:
         """安全拉取 XML 並透過 defusedxml 解析根節點（自動移除命名空間前綴）。"""

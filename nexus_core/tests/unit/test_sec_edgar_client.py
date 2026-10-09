@@ -29,7 +29,11 @@ def test_sec_edgar_client_valid_user_agent() -> None:
     """驗證合法 User-Agent 可正常初始化。"""
     client = SecEdgarClient(user_agent="NexusSeeker test@sample.com")
     assert client._headers["User-Agent"] == "NexusSeeker test@sample.com"
-    assert client._limiter.max_rate == 8.0
+    # 限速由全域 sec 閘門負責（不再有實例層級 limiter）
+    from services import rate_gate
+
+    assert not hasattr(client, "_limiter")
+    assert rate_gate.get_gate("sec").policy.window_limit == 8
 
 
 @pytest.mark.asyncio
@@ -264,3 +268,96 @@ async def test_fetch_company_concept_url_and_404() -> None:
         "https://data.sec.gov/api/xbrl/companyconcept/CIK0000789019/us-gaap/"
         "PaymentsToAcquirePropertyPlantAndEquipment.json"
     )
+
+
+# ---------------------------------------------------------------------------
+# rate_gate 接線：429／403 Request Rate Threshold 冷卻、三個實例共用同一閘門
+# ---------------------------------------------------------------------------
+def _http_resp(
+    status: int, body: str = "", headers: dict[str, str] | None = None
+) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status
+    resp.headers = headers or {}
+    resp.text = body
+    resp.aread = AsyncMock(return_value=body.encode())
+    resp.raise_for_status = MagicMock()
+    resp.json.return_value = {}
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_sec_429_trips_global_gate_for_all_instances() -> None:
+    """任一實例收到 429：sec 閘門進入冷卻，其他實例的請求快速熔斷且不送出。"""
+    from services import api_budget, rate_gate
+
+    api_budget.reset_for_tests()
+    a = SecEdgarClient(user_agent="NexusSeeker a@sample.com")
+    b = SecEdgarClient(user_agent="NexusSeeker b@sample.com")
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = _http_resp(429, headers={"Retry-After": "120"})
+        await a.fetch_company_submissions("320193")
+        assert rate_gate.get_gate("sec").in_cooldown()
+        assert mock_get.call_count == 1
+        with pytest.raises(rate_gate.RateGateCooldownError):
+            await b.fetch_company_submissions("320193")
+        assert mock_get.call_count == 1  # 冷卻中不送出
+    assert api_budget.snapshot()["sec/submissions/429"] == 1
+
+
+@pytest.mark.asyncio
+async def test_sec_403_request_rate_threshold_is_rate_limit_but_other_403_is_not() -> (
+    None
+):
+    from services import rate_gate
+
+    client = SecEdgarClient(user_agent="NexusSeeker test@sample.com")
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        # UA 未申報等一般 403：不是限流
+        mock_get.return_value = _http_resp(403, "Undeclared Automated Tool")
+        await client.fetch_company_submissions("320193")
+        assert not rate_gate.get_gate("sec").in_cooldown()
+        # 含 Request Rate Threshold 的 403：視為限流
+        mock_get.return_value = _http_resp(
+            403, "<html>Request Rate Threshold Exceeded</html>"
+        )
+        await client.fetch_company_submissions("320193")
+        assert rate_gate.get_gate("sec").in_cooldown()
+
+
+@pytest.mark.asyncio
+async def test_sec_stream_429_trips_gate_and_instances_share_quota() -> None:
+    """三個實例共用同一個 sec 閘門：窗口計數合併；串流 429 同樣觸發冷卻。"""
+    from services import rate_gate
+
+    clients = [
+        SecEdgarClient(user_agent=f"NexusSeeker c{i}@sample.com") for i in range(3)
+    ]
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = _http_resp(200)
+        for c in clients:
+            await c.fetch_company_submissions("320193")
+            await c.fetch_company_concept("320193", "Revenues")
+    assert rate_gate.get_gate("sec").drain_stats().granted == 6
+
+    mock_resp = _http_resp(429, headers={"Retry-After": "60"})
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_resp
+    mock_cm.__aexit__.return_value = None
+    with patch("httpx.AsyncClient.stream", return_value=mock_cm):
+        await clients[0].fetch_document_text("https://sample.url/doc")
+    assert rate_gate.get_gate("sec").in_cooldown()
+    with pytest.raises(rate_gate.RateGateCooldownError):
+        await clients[2].fetch_document_text("https://sample.url/doc")
+
+
+@pytest.mark.asyncio
+async def test_get_cik_returns_none_during_sec_cooldown() -> None:
+    """冷卻中下載映射表失敗：get_cik 沿用既有 fail-safe（回 None 並進入失敗冷卻）。"""
+    from services import rate_gate
+
+    client = SecEdgarClient(user_agent="NexusSeeker test@sample.com")
+    rate_gate.get_gate("sec").trip(retry_after=60)
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        assert await client.get_cik("NOPE") is None
+        mock_get.assert_not_called()

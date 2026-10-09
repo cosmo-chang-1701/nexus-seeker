@@ -18,7 +18,7 @@
   冷卻與統計為 process 全域（`threading.Lock` 保護），DB writer 執行緒等其他 loop
   觸發的 `trip()` 會經 `call_soon_threadsafe` 喚醒主 loop 的佇列。額外的 loop 會有
   自己的窗口（與舊 AsyncLimiter 行為相同的已知限制）。
-- 本模組為 leaf：不 import 任何 service（避免循環相依）。
+- 本模組為 leaf：不 import 任何 service（避免循環相依）；僅讀取 `config` 的 SEC 限速常數。
 """
 
 import asyncio
@@ -33,6 +33,8 @@ import weakref
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Iterator, Literal
+
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +207,7 @@ POLICIES: dict[str, GatePolicy] = {
         ),
         GatePolicy(
             name="sec",
-            window_limit=8,
+            window_limit=config.SEC_LIMITER_MAX_RATE,
             window_seconds=1.0,
             max_concurrency=4,
             max_wait_interactive=30.0,
