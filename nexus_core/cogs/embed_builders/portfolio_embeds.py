@@ -82,18 +82,25 @@ logger = logging.getLogger(__name__)
 # GEX PutWall 與機構大額 STO PUT 履約價的分歧門檻（相對現價的距離百分比）。
 # 超過此門檻視為兩個支撐訊號互相矛盾，值得在顯示層揭露供使用者交叉參考。
 _GEX_STO_DIVERGENCE_THRESHOLD_PCT = 2.0
-# CallWall 貼牆帶：距牆 < max(1×ATR₁₅ₘ, 此下限%) 視為貼牆（PRE_CALIBRATION／僅呈現）。
+# CallWall 貼牆帶：距牆 < max(ATR₁₅ₘ/現價, 此下限%) 視為貼牆（文案一律印實際帶寬%）（PRE_CALIBRATION／僅呈現）。
 _CALLWALL_HUG_MIN_PCT = 0.10
 # 被跌破（價內）的 STO Put 往上掃描的最大範圍 %（PRE_CALIBRATION／僅呈現）。
 _STO_PUT_BREACH_MAX_PCT = 5.0
 
 
-def _num(value: Any, default: float = 0.0) -> float:
+def _to_float_or_none(value: Any) -> float | None:
     try:
-        v = float(value)
+        if value is None:
+            return None
+        val = float(value)
+        return None if (math.isnan(val) or math.isinf(val)) else val
     except (TypeError, ValueError):
-        return default
-    return v if math.isfinite(v) else default
+        return None
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    casted = _to_float_or_none(value)
+    return casted if casted is not None else default
 
 
 def _sto_cap_eligible(s: Any) -> bool:
@@ -112,7 +119,12 @@ def _sto_notional_suffix(notional: float) -> str:
 
 
 def _sto_exp_dte(expiry: str, today: Any) -> str:
-    """回傳「10-16(DTE7)」；到期日無法解析時為空字串。"""
+    """回傳「 10-16(DTE7)」（前置一個空白）。
+
+    - 空到期日 → 空字串；
+    - 格式無法解析 → 只回傳「 {expiry[5:]}」，不附 DTE；
+    - 已過期 → DTE 為負數，照實顯示（不遮蔽資料異常）。
+    """
     if not expiry:
         return ""
     try:
@@ -122,17 +134,38 @@ def _sto_exp_dte(expiry: str, today: Any) -> str:
     return f" {expiry[5:]}(DTE{dte})"
 
 
+def _sto_find_uoa_row(
+    uoa: Any, expiry: str, strike: float, opt_type: str
+) -> Optional[dict[str, Any]]:
+    """在前 5 大 UOA 表中找同 (到期日, 履約價, 類型) 的列；找不到回傳 None。"""
+    for u in uoa or []:
+        if (
+            isinstance(u, dict)
+            and str(u.get("expiry", "")) == expiry
+            and _to_float(u.get("strike"), 0.0) == strike
+            and str(u.get("type", "")).upper() == opt_type
+        ):
+            return u
+    return None
+
+
+def _sto_cross_expiry_tag(expiry: str, gex_exp: Optional[str]) -> str:
+    return "〔跨到期〕" if gex_exp and expiry != gex_exp else ""
+
+
 def _sto_best(cands: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     cands = [
         c
         for c in cands
-        if _num(c.get("strike"), 0.0) > 0 and _num(c.get("volume"), 0.0) > 0
+        if _to_float(c.get("strike"), 0.0) > 0 and _to_float(c.get("volume"), 0.0) > 0
     ]
     if not cands:
         return None
     return max(
         cands,
-        key=lambda c: _num(c.get("notional_value"), _num(c.get("volume"), 0.0)),
+        key=lambda c: _to_float(
+            c.get("notional_value"), _to_float(c.get("volume"), 0.0)
+        ),
     )
 
 
@@ -733,21 +766,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     遵循 Task 2 的 Traditional Chinese 模板。
     """
     symbol = data.get("symbol", "UNKNOWN")
-
-    def _to_float_or_none(value: Any) -> float | None:
-        try:
-            if value is None:
-                return None
-            val = float(value)
-            import math
-
-            return None if (math.isnan(val) or math.isinf(val)) else val
-        except (TypeError, ValueError):
-            return None
-
-    def _to_float(value: Any, default: float = 0.0) -> float:
-        casted = _to_float_or_none(value)
-        return casted if casted is not None else default
 
     # 處理盤前狀態與波動率 degradation
     iv_data = data.get("iv_data")
@@ -1692,6 +1710,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 供 Kelly「賣方前提」與日內轉折使用（GEX 區塊內賦值；None 表示未取得）。
     _put_wall_weak_outer: Optional[bool] = None  # 助跌或紙牆（None=未取得）
     _call_wall_hug_outer: Optional[float] = None  # 貼牆時的距離 %
+    _call_wall_band_outer: float = 0.0  # 貼牆判定帶（%）
     _local_short_gamma_outer: Optional[bool] = None
     _gamma_flip_outer: Optional[float] = None
     _gex_price_outer: Optional[float] = None  # GEX 區塊採用的現價（與 Flip 同價）
@@ -1712,16 +1731,21 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             strike_keys: list[float] = []
             # 履約價鍵可能是 "370" 或 "370.0"；一律以 float 正規化查表，避免整數鍵
             # 被查成 0 而顯示假的「+0K 紙牆」。
+            # 同一履約價有多個鍵時維持舊版優先序：str(float) 鍵 > float 物件鍵 > 其他。
             _prof_by_strike: dict[float, float] = {}
+            _prof_rank: dict[float, int] = {}
             for k in gex_prof.keys():
                 try:
                     f = float(k)
-                    if math.isfinite(f):
-                        strike_keys.append(f)
-                        _prof_by_strike[f] = _to_float(gex_prof[k], 0.0)
+                    if not math.isfinite(f):
+                        continue
                 except (ValueError, TypeError):
                     continue
-            strike_keys.sort()
+                _rank = 0 if k == str(f) else (1 if k == f else 2)
+                if f not in _prof_rank or _rank < _prof_rank[f]:
+                    _prof_rank[f] = _rank
+                    _prof_by_strike[f] = _to_float(gex_prof[k], 0.0)
+            strike_keys = sorted(_prof_by_strike)
             if strike_keys:
                 effective_c_val = (
                     c_val if c_val > 0.0 else _to_float(gex_data.get("spot"), 0.0)
@@ -1870,9 +1894,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         # 0 與薄牆門檻＝紙牆，都不是支撐——於 PutWall 行內嵌據實揭露，
                         # 並另列現價下方淨 GEX 最大的正支撐。僅影響呈現，引擎閘門仍以
                         # edge PutWall 為準（docs/microstructure/02 §7）。
-                        put_wall_net = _safe_gex(put_wall_float)
+                        # PutWall 履約價不在 profile 時淨 GEX 未知：不分類，避免把
+                        # 「查無資料」讀成 0 而誤判紙牆。
+                        _pw_net_known = _prof_by_strike.get(float(put_wall_float))
+                        put_wall_net = (
+                            _pw_net_known if _pw_net_known is not None else 0.0
+                        )
                         _pw_thin = thin_wall_threshold(gex_data.get("adv_dollar_20d"))
-                        if put_wall_net < 0:
+                        if _pw_net_known is None:
+                            put_wall_kind = ""
+                        elif put_wall_net < 0:
                             put_wall_kind = "助跌區"
                             put_items[0] += (
                                 f"〔淨GEX {_fmt_gex_notional(put_wall_net)}，實為助跌區〕"
@@ -1886,7 +1917,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         else:
                             put_wall_kind = ""
                         put_wall_weak = bool(put_wall_kind)
-                        _put_wall_weak_outer = put_wall_weak
+                        if _pw_net_known is not None:
+                            _put_wall_weak_outer = put_wall_weak
                         # PutWall 落在淨 GEX 助跌區時，供下方結構停損並列「以淨
                         # GEX 支撐為錨」的參考停損；僅呈現，閘門不變。
                         alt_net_supp: float = 0.0
@@ -2116,73 +2148,36 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 and _to_float(s.get("strike"), 0.0) < effective_c_val
                                 and _sto_cap_eligible(s)
                             ]
-                            if put_sto_candidates:
-                                best_sto = max(
-                                    put_sto_candidates,
-                                    key=lambda s: _to_float(
-                                        s.get("notional_value"),
-                                        _to_float(s.get("volume"), 0.0),
-                                    ),
-                                )
+                            best_sto = _sto_best(put_sto_candidates)
+                            if best_sto is not None:
                                 sto_strike = _to_float(best_sto.get("strike"), 0.0)
                                 sto_volume = int(_to_float(best_sto.get("volume"), 0.0))
-                                sto_notional = _to_float(
-                                    best_sto.get("notional_value"), 0.0
+                                sto_divergence_pct = (
+                                    abs(sto_strike - put_wall_float)
+                                    / effective_c_val
+                                    * 100
                                 )
-                                if sto_strike > 0 and sto_volume > 0:
-                                    sto_divergence_pct = (
-                                        abs(sto_strike - put_wall_float)
-                                        / effective_c_val
-                                        * 100
+                                if (
+                                    sto_divergence_pct
+                                    > _GEX_STO_DIVERGENCE_THRESHOLD_PCT
+                                ):
+                                    _sto_exp = str(best_sto.get("expiry", ""))
+                                    _sto_tags = (
+                                        ""
+                                        if _sto_find_uoa_row(
+                                            data.get("uoa"), _sto_exp, sto_strike, "PUT"
+                                        )
+                                        else "〔全鏈掃描，表外〕"
+                                    ) + _sto_cross_expiry_tag(_sto_exp, _gex_exp)
+                                    if best_sto.get("spread_credit"):
+                                        _sto_tags += "〔貸方價差〕"
+                                    put_items.append(
+                                        f"⚠️ 大單 ${sto_strike:.2f}"
+                                        f"{_sto_exp_dte(_sto_exp, datetime.now(_gex_tz).date())}"
+                                        f" STO PUT {sto_volume:,}口"
+                                        f"{_sto_notional_suffix(_to_float(best_sto.get('notional_value'), 0.0))}"
+                                        f" 與 PutWall 分歧{_sto_tags}"
                                     )
-                                    if (
-                                        sto_divergence_pct
-                                        > _GEX_STO_DIVERGENCE_THRESHOLD_PCT
-                                    ):
-                                        if sto_notional >= 1_000_000:
-                                            notional_str = (
-                                                f"${sto_notional / 1_000_000:.2f}M"
-                                            )
-                                        elif sto_notional > 0:
-                                            notional_str = (
-                                                f"${sto_notional / 1_000:.1f}k"
-                                            )
-                                        else:
-                                            notional_str = ""
-                                        notional_suffix = (
-                                            f", 權利金 {notional_str}"
-                                            if notional_str
-                                            else ""
-                                        )
-                                        _sto_exp = str(best_sto.get("expiry", ""))
-                                        _sto_dte = ""
-                                        try:
-                                            _sto_dte = f"(DTE{(datetime.strptime(_sto_exp, '%Y-%m-%d').date() - datetime.now(_gex_tz).date()).days})"
-                                        except ValueError:
-                                            pass
-                                        _in_table = any(
-                                            isinstance(_u, dict)
-                                            and str(_u.get("expiry", "")) == _sto_exp
-                                            and _to_float(_u.get("strike"), 0.0)
-                                            == sto_strike
-                                            and str(_u.get("type", "")).upper() == "PUT"
-                                            for _u in (data.get("uoa") or [])
-                                        )
-                                        _sto_tags = (
-                                            "" if _in_table else "〔全鏈掃描，表外〕"
-                                        ) + (
-                                            "〔跨到期〕"
-                                            if _gex_exp and _sto_exp != _gex_exp
-                                            else ""
-                                        )
-                                        if best_sto.get("spread_credit"):
-                                            _sto_tags += "〔貸方價差〕"
-                                        put_items.append(
-                                            f"⚠️ 大單 ${sto_strike:.2f}"
-                                            f"{' ' + _sto_exp[5:] + _sto_dte if _sto_exp else ''}"
-                                            f" STO PUT {sto_volume:,}口{notional_suffix}"
-                                            f" 與 PutWall 分歧{_sto_tags}"
-                                        )
                             # 被跌破的 STO Put：賣方已轉虧，承接失效（啟發式）
                             _breach = _sto_best(
                                 [
@@ -2202,7 +2197,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"⚠️ STO PUT ${_to_float(_breach.get('strike'), 0.0):.2f}"
                                     f"{_sto_exp_dte(str(_breach.get('expiry', '')), datetime.now(_gex_tz).date())}"
                                     f" {int(_to_float(_breach.get('volume'), 0.0)):,}口"
-                                    "已跌破(價內)：賣方轉虧，承接失效，續跌恐回補/指派拋壓（啟發式）"
+                                    " 已跌破(價內)：賣方轉虧，承接失效，續跌恐回補/指派拋壓（啟發式）"
                                 )
 
                         put_block_items = put_items
@@ -2329,8 +2324,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         if (call_wall_dist_pct >= 0 or is_call_zero) and (
                             call_wall_dist_pct < _cw_band_pct
                         ):
-                            _space_line += " 📌 貼牆(<1×ATR₁₅ₘ)"
+                            _space_line += f" 📌 貼牆(<{_cw_band_pct:.2f}%)"
                             _call_wall_hug_outer = max(call_wall_dist_pct, 0.0)
+                            _call_wall_band_outer = _cw_band_pct
                         if degrade_line:
                             _space_line += f"\n{degrade_line}"
                         call_reanchor_note = " (動態重錨)" if call_reanchored else ""
@@ -2358,16 +2354,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         if _cap_call is not None:
                             _cc_exp = str(_cap_call.get("expiry", ""))
                             _cc_k = _to_float(_cap_call.get("strike"), 0.0)
-                            _cc_row = next(
-                                (
-                                    u
-                                    for u in (data.get("uoa") or [])
-                                    if isinstance(u, dict)
-                                    and str(u.get("expiry", "")) == _cc_exp
-                                    and _to_float(u.get("strike"), 0.0) == _cc_k
-                                    and str(u.get("type", "")).upper() == "CALL"
-                                ),
-                                None,
+                            _cc_row = _sto_find_uoa_row(
+                                data.get("uoa"), _cc_exp, _cc_k, "CALL"
                             )
                             _cc_label = str((_cc_row or {}).get("spread_label") or "")
                             if _cc_label:
@@ -2386,6 +2374,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 )
                             else:
                                 _cc_tag = ""
+                            _cc_tag += _sto_cross_expiry_tag(_cc_exp, _gex_exp)
                             call_items.append(
                                 f"⚠️ 大單 ${_cc_k:.2f}"
                                 f"{_sto_exp_dte(_cc_exp, datetime.now(_gex_tz).date())}"
@@ -2423,7 +2412,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 # 貼牆：上檔已封頂，盈虧比無意義，單行帶過以省字數
                                 put_block_items.append(
                                     "短線盈虧比: ⛔ 上檔已封頂（距 CallWall "
-                                    f"{_call_wall_hug_outer:.2f}% < 1×ATR₁₅ₘ），不計"
+                                    f"{_call_wall_hug_outer:.2f}% < {_call_wall_band_outer:.2f}%），不計"
                                 )
                             else:
                                 _rr_cases = (
@@ -2615,6 +2604,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 )
         except Exception as e:
             logger.debug(f"GEX Profile rendering skipped: {e}")
+            # 區塊中途失敗時外層狀態可能只賦值一半：一律還原為「未取得」，
+            # 避免 Kelly／日內轉折讀到半成品。
+            _put_wall_weak_outer = None
+            _call_wall_hug_outer = None
+            _local_short_gamma_outer = None
+            _gamma_flip_outer = None
+            _gex_price_outer = None
+            _pin_strike = None
 
     # 3.8 🌊 動能與擠壓狀態 (Momentum & Squeeze)
     # 以每次 /x 強制重抓的 1y 日線計算（盤中含今日成型中的 K 棒，數值會隨盤中

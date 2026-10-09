@@ -177,7 +177,9 @@ _MRVL_BASELINE_CHARS = 4100
 
 
 def test_mrvl_net_increase_within_120_chars() -> None:
-    total = _total_chars(_render_at_night(_mrvl_data()))
+    embed = _render_at_night(_mrvl_data())
+    assert any("🧲 Gamma 曝險分布" in (f.name or "") for f in embed.fields)
+    total = _total_chars(embed)
     assert total - _MRVL_BASELINE_CHARS <= 120, f"淨增 {total - _MRVL_BASELINE_CHARS}"
 
 
