@@ -258,6 +258,8 @@ def record_regime_classification(
     session_vwap: float = 0.0,
     atr_15m: float = 0.0,
     rsi_15m: float = float("nan"),
+    *,
+    extra_features: Optional[dict] = None,
 ) -> None:
     try:
         row: dict[str, Any] = {
@@ -277,6 +279,8 @@ def record_regime_classification(
             "reason_digest": reason,
             "features_json": calibration_features(gex_profile_data, spot),
         }
+        if extra_features:
+            row["features_json"].update(extra_features)
         row.update(_walls(gex_profile_data))
         _append(row)
     except Exception as e:  # 記錄器永不影響交易路徑
@@ -391,6 +395,19 @@ def record_squeeze_entry(
         if broken is not None:
             features["res_broken_top"] = getattr(broken, "top", None)
         features["at_resistance"] = bool(getattr(resistance, "is_approaching", False))
+        # 閘門決策 (a) 的前向樣本：日內動能數值與「日內衝突」旗標（僅用矩陣判第 1 條）
+        for tf in ("65m", "15m"):
+            _st = matrix.get(tf)
+            try:
+                _mv = float(getattr(_st, "momentum_value"))
+                features[f"{tf}_mv"] = round(_mv, 2) if math.isfinite(_mv) else None
+            except (AttributeError, TypeError, ValueError):
+                features[f"{tf}_mv"] = None
+        from market_analysis.squeeze_entry.intraday_conflict import (
+            assess_intraday_conflict,
+        )
+
+        features["intraday_conflict"] = bool(assess_intraday_conflict(matrix))
         _append(
             {
                 "symbol": symbol.upper(),
