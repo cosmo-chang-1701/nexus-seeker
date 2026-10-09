@@ -2,8 +2,10 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+from fastapi.testclient import TestClient
 
 import yf_api
+from local_api import app
 from yf_api import (
     _is_rate_limit_error,
     fetch_nearest_option_chain,
@@ -170,3 +172,39 @@ async def test_options_chain_generic_error_stays_status_error() -> None:
         res = await scrape_yf_options_chain("AAPL", expiry="2026-10-16")
     assert isinstance(res, dict)
     assert res["status"] == "error"
+
+
+def test_scrape_yf_history_endpoint_nan_becomes_null() -> None:
+    """K 棒含 NaN 時端點回 200，NaN 轉 null（原本 JSON 序列化會 500）。"""
+    idx = pd.DatetimeIndex(
+        ["2026-10-07", "2026-10-08"], tz="America/New_York", name="Date"
+    )
+    df = pd.DataFrame({"Close": [101.5, float("nan")]}, index=idx)
+    fake_ticker = MagicMock()
+    fake_ticker.history.return_value = df
+
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = TestClient(app).get("/api/v1/scrape/yf/history/AAPL")
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    assert body["data"][0]["Close"] == 101.5
+    assert body["data"][1]["Close"] is None
+
+
+def test_scrape_yf_options_chain_endpoint_nan_becomes_null() -> None:
+    calls = pd.DataFrame({"strike": [100.0], "volume": [float("nan")]})
+    puts = pd.DataFrame({"strike": [100.0], "bid": [float("nan")]})
+    fake_ticker = _make_fake_ticker(("2026-10-16",), _FakeChain(calls, puts))
+
+    with patch("yf_api.yf.Ticker", return_value=fake_ticker):
+        res = TestClient(app).get(
+            "/api/v1/scrape/yf/options/AAPL/chain", params={"expiry": "2026-10-16"}
+        )
+
+    assert res.status_code == 200
+    body = res.json()
+    assert body["status"] == "success"
+    assert body["data"]["calls"][0]["volume"] is None
+    assert body["data"]["puts"][0]["bid"] is None

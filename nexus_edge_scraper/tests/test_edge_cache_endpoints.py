@@ -180,3 +180,19 @@ def test_get_gex_history_paginates() -> None:
     ).json()
     assert [r["spot"] for r in second["data"]] == [30.0]
     assert second["next_since"] is None
+
+
+def test_cached_option_chain_with_nan_returns_null() -> None:
+    """快照內含 NaN（yfinance 無成交履約價常見）時不得 500，NaN 轉 null。"""
+    database.save_option_chain_snapshot(
+        "AAPL",
+        "2026-10-16",
+        [{"strike": 100.0, "volume": float("nan"), "bid": 1.2}],
+        [{"strike": 100.0, "openInterest": float("inf")}],
+    )
+    response = client.get("/api/v1/cache/options/AAPL/chain")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["data"]["calls"][0] == {"strike": 100.0, "volume": None, "bid": 1.2}
+    assert data["data"]["puts"][0]["openInterest"] is None
