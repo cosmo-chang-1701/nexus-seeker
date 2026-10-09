@@ -110,8 +110,8 @@ def test_callwall_hug_caps_upside_and_skips_ratio() -> None:
         }
     )
     text = _render(d)
-    assert "📌 貼牆(<1×ATR₁₅ₘ)" in text
-    assert "上檔已封頂" in text
+    assert "📌 貼牆(<0.32%)" in text
+    assert "上檔已封頂（距 CallWall 0.01% < 0.32%）" in text
     assert ":1 ✅" not in text
 
 
@@ -147,7 +147,7 @@ def test_breached_sto_put_line() -> None:
          "notional_value": 2_000_000.0}
     ]  # fmt: skip
     text = _render(d)
-    assert "STO PUT $162.50" in text and "46,000口已跌破(價內)" in text
+    assert "STO PUT $162.50" in text and "46,000口 已跌破(價內)" in text
 
     d["sto_physical_cap_strikes"][0]["strike"] = 158.0
     assert "已跌破(價內)" not in _render(d)
@@ -162,3 +162,93 @@ def test_adv_injection_is_shallow_copy_and_guarded() -> None:
     assert _compute_adv_dollar_20d(None, 10.0) is None
     zero = pd.DataFrame({"Close": [10.0], "Volume": [0.0]})
     assert _compute_adv_dollar_20d(zero, 10.0) is None
+
+
+def test_hug_text_uses_floor_band_when_atr_missing() -> None:
+    """ATR 缺失時帶寬為 0.10% 下限，文案不得寫 1×ATR₁₅ₘ。"""
+    d = _case(80_000_000.0, price=372.48, atr_1d=0.0, atr_15m=0.0)
+    d["gex_profile_data"].update(
+        {
+            "spot": 372.48,
+            "put_wall": 360.0,
+            "call_wall": 372.5,
+            "gex_profile": {
+                "360.0": 80_000_000.0,
+                "370.0": -1_000_000.0,
+                "372.5": 3_000_000.0,
+            },
+        }
+    )
+    text = _render(d)
+    assert "📌 貼牆(<0.10%)" in text
+    assert "ATR₁₅ₘ）" not in text.split("貼牆")[1].split("\n")[0]
+
+
+def test_putwall_missing_from_profile_is_unknown_not_paper_wall() -> None:
+    d = _case(80_000_000.0)
+    d["gex_profile_data"]["put_wall"] = 151.0  # 不在 profile
+    text = _render(d)
+    assert "紙牆" not in text and "助跌區" not in text
+
+
+def test_mixed_keys_dedup_and_priority() -> None:
+    """ "150" 與 "150.0" 並存：熱力圖只有一列，且 "150.0" 優先。"""
+    d = _case(80_000_000.0)
+    prof = d["gex_profile_data"]["gex_profile"]
+    prof["150"] = -90_000_000.0  # 次優先鍵，不得覆蓋 "150.0"
+    text = _render(d)
+    assert text.count("150.00 |") == 1
+    assert "紙牆" not in text and "助跌區" not in text
+
+
+def test_exception_path_resets_outer_state(monkeypatch: Any) -> None:
+    """GEX 區塊中途例外：Kelly 賣方前提的牆淨GEX 須為「—」而非半成品。"""
+    import cogs.embed_builders.portfolio_embeds as pe
+    from tests.unit.test_x_panel_gex_uoa_coherence import _mrvl_data
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(pe, "_sto_best", _boom)
+    embed = create_tactical_symbol_embed(_mrvl_data())
+    text = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
+    assert not any(GEX_FIELD in (f.name or "") for f in embed.fields)
+    assert "牆淨GEX—" in text
+
+
+def test_sto_exp_dte_behaviour() -> None:
+    from datetime import date
+
+    from cogs.embed_builders.portfolio_embeds import _sto_exp_dte
+
+    today = date(2026, 10, 9)
+    assert _sto_exp_dte("2026-10-16", today) == " 10-16(DTE7)"
+    assert _sto_exp_dte("2026-10-08", today) == " 10-08(DTE-1)"  # 已過期照實顯示
+    assert _sto_exp_dte("2026-xx-yy", today) == " xx-yy"  # 無法解析：不附 DTE
+    assert _sto_exp_dte("", today) == ""
+
+
+def test_with_adv_shallow_copy_and_no_overwrite() -> None:
+    from cogs.unified_terminal.symbol_deep_dive import _with_adv
+
+    df = pd.DataFrame({"Close": [10.0] * 25, "Volume": [1000.0] * 25})
+    orig = {"gex_profile": {"1.0": 1.0}}
+    out = _with_adv(orig, df, 20.0)
+    assert out is not orig
+    assert "adv_dollar_20d" not in orig
+    assert out["adv_dollar_20d"] == 20_000.0
+    has = {"adv_dollar_20d": 5.0}
+    assert _with_adv(has, df, 20.0) is has and has["adv_dollar_20d"] == 5.0
+    assert _with_adv(orig, None, 20.0) is orig
+    assert _with_adv(None, df, 20.0) is None
+
+
+def test_sto_call_cap_cross_expiry_tag() -> None:
+    d = _case(80_000_000.0)
+    d["gex_profile_data"]["expiry"] = "2026-10-09"
+    d["sto_physical_cap_strikes"] = [
+        {"strike": 172.0, "type": "CALL", "expiry": "2026-10-16", "volume": 1200,
+         "notional_value": 1_200_000.0}
+    ]  # fmt: skip
+    text = _render(d)
+    assert "STO CALL 1,200口" in text and "〔跨到期〕" in text

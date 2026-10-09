@@ -75,6 +75,21 @@ def _compute_adv_dollar_20d(df_hist_1d: Any, price: float) -> Optional[float]:
     return None
 
 
+def _with_adv(gex_profile_data: Any, df_hist_1d: Any, price: float) -> Any:
+    """為 GEX profile 補上 `adv_dollar_20d`（與雷達同公式 avg_vol_20d × 現價）。
+
+    僅在 profile 為 dict 且尚無 ADV、且能算出有效值時回傳**淺拷貝**；
+    其餘情況原物件原樣回傳（不覆寫既有 ADV、不修改原 dict）。
+    ADV 與雷達一樣含當日未完成 K 棒，盤中會偏低。
+    """
+    if not isinstance(gex_profile_data, dict) or gex_profile_data.get("adv_dollar_20d"):
+        return gex_profile_data
+    adv = _compute_adv_dollar_20d(df_hist_1d, price)
+    if adv is None:
+        return gex_profile_data
+    return {**gex_profile_data, "adv_dollar_20d": adv}
+
+
 class SymbolDeepDiveMixin:
     if TYPE_CHECKING:
         bot: Any
@@ -504,16 +519,10 @@ class SymbolDeepDiveMixin:
         result["max_pain_expiry"] = safe_mp.get("expiry")
         result["month_max_pains"] = data.get("month_max_pains", [])
         result["option_expiries"] = data.get("option_expiries", [])
-        # 與雷達同源：注入 20 日平均成交額，使薄牆門檻（thin_wall_threshold）隨 ADV
-        # 正規化（radar_data.py 同公式 avg_vol_20d × price）。淺拷貝，不改共用快取。
-        if isinstance(gex_profile_data, dict) and not gex_profile_data.get(
-            "adv_dollar_20d"
-        ):
-            _adv = _compute_adv_dollar_20d(
-                df_hist_1d, _safe_float(result.get("price"), 0.0)
-            )
-            if _adv is not None:
-                gex_profile_data = {**gex_profile_data, "adv_dollar_20d": _adv}
+        # 與雷達同源注入 20 日平均成交額（淺拷貝，不改共用快取；見 _with_adv）。
+        gex_profile_data = _with_adv(
+            gex_profile_data, df_hist_1d, _safe_float(result.get("price"), 0.0)
+        )
         result["gex_profile_data"] = gex_profile_data
         result["catalysts"] = catalysts
 
