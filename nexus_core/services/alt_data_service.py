@@ -11,7 +11,7 @@
 
 嚴格遵循：
 - 外部抓取經 SingleFlightManager 合併、記憶體 TTL 快取（只保留解析後的精簡數列）。
-- asyncio.Semaphore(3) 節流 TSA / TWSE / TPEx；SEC 走 SecEdgarClient 的 8 req/s 限速。
+- TSA / TWSE / TPEx / FRED / SEC 的請求都經 `rate_gate` 的具名閘門（tsa／twse／tpex／fred／sec）限流並處理 429 冷卻。
 - 單一成員或單條鏈失敗不中斷其他鏈；零交易執行不變量（純顧問性分析，不推播）。
 """
 
@@ -58,6 +58,7 @@ from market_analysis.fundamental_pipeline.supply_chain_map import (
     SUPPLY_CHAIN_LINKS,
 )
 from market_analysis.macro_signals import SeriesKind, usable
+from services.http_gate import gated_request
 from services.macro_signal_service import fetch_fred_series
 from services.rate_gate import failure_log_level
 from services.single_flight import SingleFlightManager
@@ -148,7 +149,6 @@ class AltDataService:
         self, timeout_seconds: float = 15.0, sec_client: Any | None = None
     ) -> None:
         self._timeout = timeout_seconds
-        self._semaphore = asyncio.Semaphore(3)
         self._sec_client: Any | None = sec_client
         self._sec_unavailable_reason: str | None = None
 
@@ -182,31 +182,32 @@ class AltDataService:
         )
 
         async def _fetch() -> dict[date, int]:
-            async with self._semaphore:
-                try:
-                    headers = {
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/124.0.0.0 Safari/537.36"
-                        )
-                    }
-                    async with httpx.AsyncClient(
-                        timeout=self._timeout, headers=headers
-                    ) as client:
-                        resp = await client.get(url)
-                    if resp.status_code != 200:
-                        logger.warning(
-                            f"[AltData] TSA 頁面回應異常狀態碼 {resp.status_code}: {url}"
-                        )
-                        return {}
-                    parsed = parse_tsa_table(resp.text)
-                    if not parsed:
-                        logger.warning(f"[AltData] TSA 表格格式未匹配: {url}")
-                    return {d: v for d, v in parsed.items() if d.year == year}
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"[AltData] 拉取 TSA 客流失敗 ({url}): {e}")
+            try:
+                headers = {
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/124.0.0.0 Safari/537.36"
+                    )
+                }
+                async with httpx.AsyncClient(
+                    timeout=self._timeout, headers=headers
+                ) as client:
+                    resp = await gated_request(
+                        "tsa", client, "GET", url, endpoint="passenger_volumes"
+                    )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[AltData] TSA 頁面回應異常狀態碼 {resp.status_code}: {url}"
+                    )
                     return {}
+                parsed = parse_tsa_table(resp.text)
+                if not parsed:
+                    logger.warning(f"[AltData] TSA 表格格式未匹配: {url}")
+                return {d: v for d, v in parsed.items() if d.year == year}
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[AltData] 拉取 TSA 客流失敗 ({url}): {e}")
+                return {}
 
         result = cast(
             dict[date, int],
@@ -263,26 +264,31 @@ class AltDataService:
             return cached[1]
 
         async def _fetch() -> dict[str, TwRevenueRow]:
-            async with self._semaphore:
-                res: dict[str, TwRevenueRow] = {}
-                try:
-                    async with httpx.AsyncClient(timeout=self._timeout) as client:
-                        resp = await client.get(url)
-                    if resp.status_code != 200:
-                        logger.warning(
-                            f"[AltData] {market} OpenAPI 回傳狀態碼: {resp.status_code}"
-                        )
-                        return res
-                    data = resp.json()
-                    if not isinstance(data, list):
-                        return res
-                    for item in data:
-                        row = _parse_tw_item(item)
-                        if row is not None:
-                            res[row[0]] = row[1]
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"[AltData] 抓取 {market} 月營收失敗: {e}")
-                return res
+            res: dict[str, TwRevenueRow] = {}
+            try:
+                async with httpx.AsyncClient(timeout=self._timeout) as client:
+                    resp = await gated_request(
+                        market.lower(),
+                        client,
+                        "GET",
+                        url,
+                        endpoint="monthly_revenue",
+                    )
+                if resp.status_code != 200:
+                    logger.warning(
+                        f"[AltData] {market} OpenAPI 回傳狀態碼: {resp.status_code}"
+                    )
+                    return res
+                data = resp.json()
+                if not isinstance(data, list):
+                    return res
+                for item in data:
+                    row = _parse_tw_item(item)
+                    if row is not None:
+                        res[row[0]] = row[1]
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[AltData] 抓取 {market} 月營收失敗: {e}")
+            return res
 
         result = cast(
             dict[str, TwRevenueRow],
