@@ -13,6 +13,7 @@
 - `macro_calendar`   ：TradingView 總經行事曆抓取與中文化翻譯引擎
 - `fundamental`       ：SEC EDGAR 財報 Metadata/清單/文本抓取
 - `cache_and_sync`     ：watchlist 同步、背景排程快取讀取端點、系統健康檢查
+- `json_safe`        ：NaN／Inf 安全的預設 JSON 回應類別（app 層 default_response_class）
 - `yf_api`（既有獨立模組）：yfinance 歷史/期權資料代理
 """
 
@@ -27,6 +28,7 @@ from fastapi import FastAPI
 import scheduler
 
 from . import cache_and_sync, fundamental, macro, macro_calendar, reddit
+from .json_safe import NaNSafeJSONResponse
 
 # Suppress BS4 XML warning for SEC filings
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -43,7 +45,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         scheduler.stop()
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
 
 app.include_router(reddit.router)
 app.include_router(macro.router)
