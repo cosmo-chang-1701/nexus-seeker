@@ -165,6 +165,9 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 
 **個股週一／週三到期**：Nasdaq／MIAX 自 2026-01-26 起對合格個股（含 MU 等大型股）掛牌週一、週三到期，`get_all_option_expiries()` 不做星期過濾是正確行為；DTE ≤ 7 的非週五到期標為「期中特約/末日週線」。
 
+### 5.2b 結算後重心轉移提示（僅 /x）
+第一檔未結算痛點（DTE $\le$ `SETTLEMENT_GRAVITY_MAX_DTE`，未結算判定同 `find_settlement_gravity`）與其後一檔痛點的差距 $|MP_{next} - MP_{front}| / \text{Spot} \ge$ `_MP_SHIFT_MIN_PCT`（$3\%$，PRE_CALIBRATION／僅呈現；刻意不沿用 `SETTLEMENT_GRAVITY_MIN_DIST_PCT`）時，「結算價操作指引」追加「結算轉移」overlay：`結算後重心轉移：前檔痛點 → 次檔痛點 (±x%)，即期釘住結算後失效`。不影響評級、Kelly 與引力判定。
+
 ### 5.3 買賣價差過大與零成交量防護 (Wide Bid-Ask Spread Guard)
 若 ATM 期權無有效成交價且未提供 Bid/Ask 報價（`call_mid <= 0` 且 `put_mid <= 0`），系統自動跳過 Straddle 計算，平滑切換至 BSM 公式與歷史波動率降級管線，確保不拋出未捕捉異常。
 

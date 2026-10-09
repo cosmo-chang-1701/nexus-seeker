@@ -70,6 +70,8 @@ $$\text{Structural Divergence} \iff \begin{cases} (\text{Skew Percentile} > 85.0
 
 **參考級：量價／預測市場背離**（僅 `/x` 呈現，不設 `is_structural_divergence`、不觸發結構背離 overlay）：在上述判定皆未命中時，若最近一根已收盤 15m 為實體陽線、有效量比 $\ge 1.5$（優先採同時段量比，見 [`../platform/06_price_volume_alert_system.md`](../platform/06_price_volume_alert_system.md)），且 Polymarket 加權看多機率 $\le$ `POLYMARKET_BEARISH_PCT`（$45\%$），輸出「量價／預測市場背離（參考）：量價偏多 vs Polymarket 偏空」；實體陰線且 $\ge$ `POLYMARKET_BULLISH_PCT`（$55\%$）為鏡像。文案必附「Polymarket 多為目標價合約，機率≠方向偏好」——目標價型問句的 Yes 機率低只代表目標難達成，不等於巨鯨看空，因此只作參考。$45/55$ 與 `calculate_polymarket_weighted_odds()` 的分級共用 `skew_taxonomy.py` 常數。
 
+**高分位而未達背離門檻的呈現規則**（僅 `/x`，不設 `is_structural_divergence`）：判定皆未命中、Skew 分位 $>$ `SKEW_HIGH_DEFENSE_PERCENTILE`（$90$）且 Volume PCR $> 0$（盤前 PCR 為 $0.0$ 視為無資料，排除）時，「情緒背離偵測」改印黃色「未達結構背離門檻（Skew x% 高避險 vs Vol PCR y≥0.40）」，不再印「同步」；$0 < \text{PCR} < 0.90$ 另附「Call 量能偏多但下檔避險升溫，勿以 PCR 單獨判多」。此規則只補 $\Delta P \le 0$ 的盲區（$\Delta P > 0$ 已由 Warning 命中）。**門檻不動**：§5.5 的校準證據不支持調降。
+
 ### 2.4 微觀結構背離閘道 (Micro-Divergence Gate)
 在動能交易體系中，PSQ (Pro Squeeze) 動能柱向上翻綠（$\text{SQZ Momentum} > 0$）通常被視為多頭突破信號。但若此時做市商避險情緒高漲（$\text{Skew Percentile} > 85.0\%$），該突破往往是做市商掩護出貨或假突破流動性獵殺：
 $$\text{Micro Divergence} \iff (\text{SQZ Momentum} > 0) \land (\text{Skew Percentile} > 85.0)$$

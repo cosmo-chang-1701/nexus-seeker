@@ -24,6 +24,7 @@ from market_analysis.index_microstructure import (
     interpolate_gamma_flip_zero,
 )
 from market_analysis.room_threshold import (
+    _BUFFER_MAX_STOP_DISTANCE_PCT,
     _DAILY_NOISE_STOP_ATR_1D_MULT,
     _ROOM_ABSOLUTE_FLOOR_PCT,
     _ROOM_ATR_1D_MULTIPLIER,
@@ -39,6 +40,10 @@ from market_analysis.room_threshold import (
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 from market_analysis.sentiment.max_pain import find_settlement_gravity
 from market_analysis.gex_wall_depth import thin_wall_threshold
+from market_analysis.squeeze_entry.intraday_conflict import (
+    assess_intraday_conflict,
+    negative_momentum_tfs,
+)
 from market_analysis.dynamic_rollover.constants import (
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
 )
@@ -629,6 +634,53 @@ _PIN_FALLBACK_BAND_PCT: float = 1.0
 
 # 15m 量比「放量」門檻；沿用右側鐵律條件一的放量倍數，避免兩處漂移。
 RVOL_EXPANSION_THRESHOLD: float = _ENTRY_VOLUME_SURGE_MULTIPLIER
+# PRE_CALIBRATION／僅呈現：陽線量比低於此值且 15m 空方動能加速 → 疑似熊旗（無量反彈）
+_LOW_VOLUME_BOUNCE_RVOL: float = 0.7
+# PRE_CALIBRATION／僅呈現：次週痛點與即期痛點相差達此 % 才提示結算後重心轉移
+# （刻意不沿用 SETTLEMENT_GRAVITY_MIN_DIST_PCT，兩者語意不同）
+_MP_SHIFT_MIN_PCT: float = 3.0
+
+
+def _settlement_shift_overlay(month_mps: Any, price: float) -> Optional[str]:
+    """第一檔未結算痛點（DTE<=SETTLEMENT_GRAVITY_MAX_DTE）與次檔痛點差距 >= _MP_SHIFT_MIN_PCT 時回傳提示。
+
+    未結算判定同 `find_settlement_gravity`：DTE<0 跳過；DTE=0 且已過 16:00 ET 視為已結算。
+    """
+    if not isinstance(month_mps, list) or price <= 0:
+        return None
+    from market_time import ny_tz as _shift_tz
+    from market_analysis.sentiment.max_pain import (
+        _EXPIRY_SETTLE_HOUR_ET,
+        SETTLEMENT_GRAVITY_MAX_DTE,
+    )
+
+    now_ny = datetime.now(_shift_tz)
+    rows: list[tuple[int, str, float]] = []
+    for item in sorted(
+        (i for i in month_mps if isinstance(i, dict)),
+        key=lambda x: str(x.get("expiry", "")),
+    ):
+        try:
+            exp = str(item.get("expiry", ""))
+            dte = (datetime.strptime(exp, "%Y-%m-%d").date() - now_ny.date()).days
+            mp = float(item.get("max_pain") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if dte < 0 or (dte == 0 and now_ny.hour >= _EXPIRY_SETTLE_HOUR_ET):
+            continue
+        rows.append((dte, exp, mp))
+    if len(rows) < 2:
+        return None
+    (f_dte, f_exp, f_mp), (_, n_exp, n_mp) = rows[0], rows[1]
+    if f_dte > SETTLEMENT_GRAVITY_MAX_DTE or f_mp <= 0 or n_mp <= 0:
+        return None
+    shift_pct = (n_mp - f_mp) / price * 100
+    if abs(shift_pct) < _MP_SHIFT_MIN_PCT:
+        return None
+    return (
+        f"⚠️ 結算後重心轉移：{f_exp[5:]} 痛點 ${f_mp:.2f} → {n_exp[5:]} "
+        f"${n_mp:.2f} ({shift_pct:+.1f}%)，即期釘住結算後失效"
+    )
 
 
 _POLY_PCT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s*(?:巨鯨看多|巨鯨偏空|中性分歧)")
@@ -858,6 +910,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 供背離偵測（#情緒與邊緣偵測）沿用：最新已收盤 15m K 棒方向與有效量比
     rvol_effective: Optional[float] = None
     bar_body_dir = 0  # +1 實體陽線 / -1 實體陰線 / 0 未知或十字
+    # 供 Target Lock 的日內交叉檢核（B1）沿用最新 15m K 棒的開／收
+    _bar_o_outer: Optional[float] = None
+    _bar_c_outer: Optional[float] = None
 
     bar_15m = data.get("bar_15m")
     has_explicit_15m = (
@@ -900,6 +955,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             l_15m = _to_float_or_none(data.get("low_15m"))
         if c_15m is None:
             c_15m = _to_float_or_none(data.get("close_15m"))
+        _bar_o_outer = o_15m
+        _bar_c_outer = c_15m
         if vol_15m is None:
             vol_15m = _to_float_or_none(data.get("volume_15m"))
         if sma20_15m is None:
@@ -1005,6 +1062,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     )
                 elif bar_body_dir > 0:
                     status_str = f"❌ 缺乏放量代償 < {RVOL_EXPANSION_THRESHOLD}x（上漲未獲量能確認）"
+                    if status_basis < _LOW_VOLUME_BOUNCE_RVOL and negative_momentum_tfs(
+                        getattr(data.get("squeeze_eval"), "matrix", None),
+                        accelerating_only=True,
+                        tfs=("15m",),
+                    ):
+                        status_str = "❌ 無量反彈＋15m 空方動能加速（疑似熊旗）"
                 else:
                     status_str = f"⚪ 量能平淡 < {RVOL_EXPANSION_THRESHOLD}x"
                 tod_str = ""
@@ -1145,6 +1208,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             divergence_data_missing = True
             divergence = "資料不足（Skew 分位／PCR 缺失）"
             action = ""
+        elif (
+            skew_percentile is not None
+            and pcr_val_for_div is not None
+            and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE
+            and pcr_val_for_div > 0  # 盤前 PCR=0.0 為無資料，須排除
+        ):
+            # 僅呈現：Skew 高分位而 PCR 未達結構背離門檻（PCR<0.40 已於上方判為
+            # High Divergence）。不設 is_structural_divergence，門檻不動。
+            divergence = (
+                f"未達結構背離門檻（Skew {skew_percentile:.0f}% 高避險 "
+                f"vs Vol PCR {pcr_val_for_div:.2f}≥0.40）"
+            )
+            if pcr_val_for_div < 0.90:
+                action = "Call 量能偏多但下檔避險升溫，勿以 PCR 單獨判多"
 
     skew_color = (
         "\u001b[1;35m"
@@ -1166,7 +1243,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
     if divergence_data_missing:
         divergence_color = "\u001b[1;30m"
-    elif divergence.startswith("量價／預測市場背離"):
+    elif divergence.startswith(("量價／預測市場背離", "未達結構背離門檻")):
         divergence_color = "\u001b[1;33m"
     else:
         divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
@@ -2590,10 +2667,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         if isinstance(_mtx, dict):
             try:
                 if sqz_momentum > 0:
-                    if any(
-                        tf in _mtx and _mtx[tf].momentum_value < 0
-                        for tf in ("65m", "15m")
-                    ):
+                    if negative_momentum_tfs(_mtx):
                         _turn_note = "65m/15m 動能<0"
                     elif (
                         _gamma_flip_outer is not None
@@ -2897,6 +2971,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
     # Removed concatenation to allow structured multi-line formatting below
 
+    # 結算後重心轉移：即期痛點（DTE<=1）的釘住效應在結算後失效，次檔痛點差距大時提示
+    _shift_overlay = _settlement_shift_overlay(
+        data.get("month_max_pains"), _to_float(data.get("price"), 0.0)
+    )
+    if _shift_overlay:
+        scenario_overlays.append(_shift_overlay)
+
     month_mps = data.get("month_max_pains", [])
     mp_lines = []
     _any_sigma = False
@@ -2987,6 +3068,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             elif "結算日引力" in overlay:
                 label = "結算引力"
                 ov_color = "\u001b[1;31m"
+            elif "重心轉移" in overlay:
+                label = "結算轉移"
+                ov_color = "\u001b[1;33m"
             else:
                 label = "附加預警"
                 ov_color = "\u001b[1;33m"
@@ -3066,13 +3150,46 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
         _sq_stop: Optional[float] = getattr(_sq_res, "stop", None)
         _px_now = _to_float(data.get("price"), 0.0)
+        _sq_entry = str(_sq_res.status) == _sq_rules.STATUS_ENTRY
         if _sq_stop:
             _stop_pct = (
                 f" (↓{(_px_now - _sq_stop) / _px_now * 100:.2f}%)"
                 if _px_now > 0
                 else ""
             )
-            target_lines.append(f" ├─ 參考停損: ${_sq_stop:.2f}{_stop_pct}")
+            _wide_note = ""
+            if _sq_entry and _px_now > 0:
+                _stop_dist = (_px_now - _sq_stop) / _px_now * 100
+                if _stop_dist > _BUFFER_MAX_STOP_DISTANCE_PCT * 100:
+                    _sz = _to_float_or_none(_size)
+                    _risk = (
+                        f"；{_sz:g}% 部位單筆風險≈{_sz * _stop_dist / 100:.2f}% NAV"
+                        if _sz
+                        else ""
+                    )
+                    _wide_note = f" ⚠ 超寬{_risk}"
+            target_lines.append(f" ├─ 參考停損: ${_sq_stop:.2f}{_stop_pct}{_wide_note}")
+        if _sq_entry:
+            # 日線 T3 落後於日內：僅呈現，判定與參考停損不變（見 strategies/10）
+            _vp_raw = data.get("volume_profile")
+            _lvn_raw = _to_float_or_none(
+                _vp_raw.get("lvn") if isinstance(_vp_raw, dict) else None
+            )
+            _conflicts = assess_intraday_conflict(
+                getattr(data.get("squeeze_eval"), "matrix", None),
+                bar_open=_bar_o_outer,
+                bar_close=_bar_c_outer,
+                rvol_eff=rvol_effective,
+                lvn=_lvn_raw if _lvn_raw and _lvn_raw > 0 else None,
+            )
+            if _conflicts:
+                target_lines.append(
+                    f" ├─ ⚠ 日內衝突: {'、'.join(_conflicts)}（日線訊號落後，判定未改）"
+                )
+            if _call_wall_hug_outer is not None:
+                target_lines.append(
+                    f" ├─ ⚠ 上檔: 距 CallWall {_call_wall_hug_outer:.2f}% 已封頂"
+                )
         target_lines.append(
             f" ├─ 觸發: {'、'.join(getattr(_sq_res, 'triggers', []) or []) or '—'}"
         )
