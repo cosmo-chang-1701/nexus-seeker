@@ -61,6 +61,7 @@ from market_analysis.fundamental_pipeline.sec_item_router import (
     route_filing,
 )
 from services.fundamental_universe import get_fundamental_universe
+from services.rate_gate import failure_log_level
 from services.sec_edgar_client import SecEdgarClient
 
 logger = logging.getLogger(__name__)
@@ -160,8 +161,9 @@ class FilingEventService:
         try:
             submissions = await client.fetch_company_submissions(cik)
         except Exception as e:
-            logger.error(
-                f"[FilingEventService] 拉取 {sym_upper} (CIK: {cik}) 申報清單失敗: {e}"
+            logger.log(
+                failure_log_level(e),
+                f"[FilingEventService] 拉取 {sym_upper} (CIK: {cik}) 申報清單失敗: {e}",
             )
             return stats
 
@@ -234,8 +236,9 @@ class FilingEventService:
             try:
                 accepted_et = await client.fetch_acceptance_datetime(cik, accession)
             except Exception as e:
-                logger.error(
-                    f"[FilingEventService] 讀取申報表頭受理時間失敗 ({accession}, {sym_upper}): {e}"
+                logger.log(
+                    failure_log_level(e),
+                    f"[FilingEventService] 讀取申報表頭受理時間失敗 ({accession}, {sym_upper}): {e}",
                 )
                 stats["failed"] += 1
                 failure_floor = _earliest(
@@ -277,9 +280,10 @@ class FilingEventService:
                         raise_on_error=True,
                     )
                 except Exception as e:
-                    logger.error(
+                    logger.log(
+                        failure_log_level(e),
                         f"[FilingEventService] 下載或解析 Form 4 失敗 ({accession}, {sym_upper})，"
-                        f"游標將停在此筆之前並於下次重試: {e}"
+                        f"游標將停在此筆之前並於下次重試: {e}",
                     )
                     stats["failed"] += 1
                     failure_floor = _earliest(failure_floor, accepted_et)
@@ -485,8 +489,9 @@ class FilingEventService:
             try:
                 best_dt = await client.fetch_acceptance_datetime(cik, newest_accession)
             except Exception as e:
-                logger.error(
-                    f"[FilingEventService] 初始化 {symbol} 游標時讀取表頭失敗 ({newest_accession}): {e}"
+                logger.log(
+                    failure_log_level(e),
+                    f"[FilingEventService] 初始化 {symbol} 游標時讀取表頭失敗 ({newest_accession}): {e}",
                 )
                 return
             best_accession = newest_accession

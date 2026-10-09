@@ -138,7 +138,7 @@ LLM 用戶端另設 `AsyncOpenAI(timeout=120.0, max_retries=0)`：逾時由 SDK 
 |---|---|---|
 | `finnhub` | `market_data_service/_core.py::_execute_api_call` | 見 §3.3 |
 | `yahoo` | `market_data_service/_core.py::yahoo_slot`（`call_yf`、`edge_get_yahoo`、`/x` 深度分析的 volume profile） | 見 §3.3；冷卻 60→900 秒，429 不走資料中心直連 |
-| `sec` | `services/sec_edgar_client.py` 的四個請求點，經 `services/http_gate.py` 的 `gated_request`／`gated_stream` | HTTP 429，或 HTTP 403 且內文含 `Request Rate Threshold` → `trip()`；其他 403 不算限流；冷卻中 `RateGateCooldownError` 由 `filing_event_service` 等呼叫端既有的例外隔離接住 |
+| `sec` | `services/sec_edgar_client.py` 的四個請求點，經 `services/http_gate.py` 的 `gated_request`／`gated_stream` | HTTP 429，或 HTTP 403 且內文含 `Request Rate Threshold` → `trip()`；其他 403 不算限流；冷卻中 `RateGateCooldownError` 由 `filing_event_service` 等呼叫端既有的例外隔離接住；閘門主動拒絕（冷卻／逾時／滿載）經 `rate_gate.failure_log_level()` 記 WARNING，其他例外維持 ERROR |
 | `llm` | `services/llm_service.py` 的 `llm_parse`／`llm_create`（`attribution`、`fundamental_thesis`、`earnings_surprise_service`、`hedge_monitor_service` 與 `llm_service` 內 5 處皆已遷移） | `openai.RateLimitError` → `trip()`（Retry-After 取自回應標頭）；`RateLimitError`／`APIConnectionError`／`InternalServerError` 離開 slot 後重新排隊重試 1 次；`APITimeoutError` 不重試 |
 
 ---

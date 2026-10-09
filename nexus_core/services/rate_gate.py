@@ -118,6 +118,12 @@ class RateGateQueueFullError(RateGateError):
     """該通道佇列深度已滿，拒絕入列。"""
 
 
+def failure_log_level(exc: BaseException) -> int:
+    """呼叫端記錄失敗時的 log 等級：閘門主動拒絕（冷卻／逾時／滿載）屬預期的
+    流量控制，記 WARNING；其他例外維持 ERROR。"""
+    return logging.WARNING if isinstance(exc, RateGateError) else logging.ERROR
+
+
 # ---------------------------------------------------------------------------
 # 政策
 # ---------------------------------------------------------------------------

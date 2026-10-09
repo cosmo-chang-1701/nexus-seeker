@@ -16,6 +16,7 @@ from market_analysis.fundamental_pipeline.activist_gate import (
 )
 from market_analysis.fundamental_pipeline.models import FilingCursorRecord
 from services.filing_event_service import FilingEventService
+from services.rate_gate import RateGateCooldownError
 from services.sec_edgar_client import SecConfigError
 
 _ET = ZoneInfo("America/New_York")
@@ -792,3 +793,70 @@ async def test_first_run_failure_skips_earnings_handler() -> None:
     assert stats["failed"] == 1
     db["upsert_cursor"].assert_not_awaited()
     handler.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submissions_cooldown_logs_warning_not_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """SEC 閘門冷卻中拉取申報清單失敗屬預期流量控制：記 WARNING、不記 ERROR。"""
+    client = _make_client({}, {})
+    client.fetch_company_submissions = AsyncMock(
+        side_effect=RateGateCooldownError("sec", "Sec rate limited, fast-circuit")
+    )
+    service = FilingEventService(client=client)
+    with _patched_db(None), caplog.at_level("WARNING"):
+        await service.sync_symbol_filings("TSLA")
+
+    records = [r for r in caplog.records if "申報清單失敗" in r.getMessage()]
+    assert [r.levelname for r in records] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_header_cooldown_logs_warning_but_still_holds_cursor(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """表頭讀取遇冷卻：降為 WARNING，但仍計入 failed 並守住游標（語意不變）。"""
+    client = _make_client(
+        {
+            "accessionNumber": ["ACC-NEW", "ACC-OLD"],
+            "form": ["8-K", "8-K"],
+            "filingDate": ["2026-10-03", "2026-10-01"],
+            "acceptanceDateTime": ["2026-10-03T21:00:00Z", "2026-10-01T21:00:00Z"],
+            "primaryDocument": ["n.htm", "o.htm"],
+            "items": ["", ""],
+        },
+        {"ACC-OLD": _et(2026, 10, 1, 17, 0, 0)},
+    )
+
+    async def _acceptance(_cik: str, accession: str) -> datetime:
+        if accession == "ACC-NEW":
+            raise RateGateCooldownError("sec", "Sec rate limited, fast-circuit")
+        return _et(2026, 10, 1, 17, 0, 0)
+
+    client.fetch_acceptance_datetime = AsyncMock(side_effect=_acceptance)
+    service = FilingEventService(client=client)
+    with _patched_db(_cursor("2026-09-30T17:00:00-04:00")) as db, caplog.at_level(
+        "WARNING"
+    ):
+        stats = await service.sync_symbol_filings("TSLA")
+
+    assert stats["failed"] == 1
+    assert db["upsert_cursor"].call_args.args[0].last_accession == "ACC-OLD"
+    records = [r for r in caplog.records if "受理時間失敗" in r.getMessage()]
+    assert [r.levelname for r in records] == ["WARNING"]
+
+
+@pytest.mark.asyncio
+async def test_non_gate_submissions_failure_still_logs_error(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """非閘門例外（真正的 HTTP／解析錯誤）維持 ERROR。"""
+    client = _make_client({}, {})
+    client.fetch_company_submissions = AsyncMock(side_effect=RuntimeError("boom"))
+    service = FilingEventService(client=client)
+    with _patched_db(None), caplog.at_level("WARNING"):
+        await service.sync_symbol_filings("TSLA")
+
+    records = [r for r in caplog.records if "申報清單失敗" in r.getMessage()]
+    assert [r.levelname for r in records] == ["ERROR"]
