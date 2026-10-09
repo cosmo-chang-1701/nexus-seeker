@@ -26,6 +26,11 @@ from datetime import datetime
 from typing import Any, Iterator, Mapping, Optional
 from zoneinfo import ZoneInfo
 
+from market_analysis.squeeze_entry.intraday_conflict import (
+    assess_intraday_conflict,
+    momentum_value_2dp,
+)
+
 logger = logging.getLogger(__name__)
 
 _BUFFER_MAXLEN = 512
@@ -121,6 +126,11 @@ def _num(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if math.isfinite(f) and f != 0.0 else None
+
+
+def recording_active() -> bool:
+    """目前是否會真的寫入紀錄（已標記評估來源且功能開啟）；供昂貴的影子運算先行短路。"""
+    return _SOURCE.get() is not None and _enabled()
 
 
 def _append(row: dict[str, Any]) -> None:
@@ -258,6 +268,8 @@ def record_regime_classification(
     session_vwap: float = 0.0,
     atr_15m: float = 0.0,
     rsi_15m: float = float("nan"),
+    *,
+    extra_features: Optional[dict] = None,
 ) -> None:
     try:
         row: dict[str, Any] = {
@@ -277,6 +289,8 @@ def record_regime_classification(
             "reason_digest": reason,
             "features_json": calibration_features(gex_profile_data, spot),
         }
+        if extra_features:
+            row["features_json"].update(extra_features)
         row.update(_walls(gex_profile_data))
         _append(row)
     except Exception as e:  # 記錄器永不影響交易路徑
@@ -391,6 +405,10 @@ def record_squeeze_entry(
         if broken is not None:
             features["res_broken_top"] = getattr(broken, "top", None)
         features["at_resistance"] = bool(getattr(resistance, "is_approaching", False))
+        # 閘門決策 (a) 的前向樣本：日內動能數值與「日內衝突」旗標（僅用矩陣判第 1 條）
+        for tf in ("65m", "15m"):
+            features[f"{tf}_mv"] = momentum_value_2dp(matrix.get(tf))
+        features["intraday_conflict"] = bool(assess_intraday_conflict(matrix))
         _append(
             {
                 "symbol": symbol.upper(),

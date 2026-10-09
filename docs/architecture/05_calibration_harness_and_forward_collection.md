@@ -616,6 +616,14 @@ python -m calibration fetch --universe VOO,SPY,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,
 python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLTR,FCX,MRNA,GLD --start 2021-11-01 --end 2025-12-31 --cache-dir /app/.calibration_cache/multi_asset
 ```
 
+### 5.17 /x 閘門決策的前向紀錄（呈現先行，判定不動）
+
+下列三項閘門一律「呈現先行＋前向紀錄」，待 `forward-report` 樣本足夠再決定要不要接進判定；在此之前**不得**改閘門：
+
+- **(a) 擠壓 T3 遇日內破位是否否決**：`record_squeeze_entry` 的 `features_json` 新增 `65m_mv`、`15m_mv`（`momentum_value` 取兩位小數，缺框架為 `null`）與 `intraday_conflict`（`assess_intraday_conflict(matrix)`，僅判「65m／15m 動能負且增強」）。
+- **(b) 貸方價差賣出腿是否納入 STO 封頂**：`classify_dynamic_regime` 公開入口 wrapper 以相同參數重算 `detect_uoa_sto_call_physical_cap`，經 `record_regime_classification(extra_features=...)` 併入 `sto_cap_base_strike`（現行判定）與 `sto_cap_shadow_strike`（`include_credit_short_legs=True` 的影子值；皆為 0 時存 `null`），以及 `sto_cap_shadow_changes_decision`（`base` 無封頂而 `shadow` 有封頂＝納入貸方腿會改變判定）。影子運算只在紀錄器啟用（已標記評估來源且功能開啟）時才執行；計算失敗時改記 `sto_cap_shadow_error = true`，以區分「沒算」與「沒命中」。分類結果與 `is_structural_cap` **不使用**影子值；`include_credit_short_legs` 預設 `False`，行為不變。
+- **(c) PutWall 紙牆／助跌是否改停損錨點**：不需新欄位。`put_wall_gex`（PutWall 處**淨** GEX）與 `adv_dollar_20d` 已在 `features_json`，離線重建：`put_wall_gex < thin_wall_threshold(adv_dollar_20d)` 為紙牆，`put_wall_gex < 0` 為助跌。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)

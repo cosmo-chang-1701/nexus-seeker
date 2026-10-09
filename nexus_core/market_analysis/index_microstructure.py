@@ -855,6 +855,8 @@ def detect_uoa_sto_call_physical_cap(
     spot: float,
     ratio_threshold: float = 1.0,
     wall_reference: Optional[float] = None,
+    *,
+    include_credit_short_legs: bool = False,
 ) -> tuple[bool, float]:
     """掃描 UOA (異常期權活動) 清單，偵測是否存在單筆 ratio (成交量/未平倉量)
     超過 ratio_threshold 的 STO Call 物理封頂 (即機構單筆巨量賣出開倉 Call，物理上
@@ -874,6 +876,9 @@ def detect_uoa_sto_call_physical_cap(
     個股進場確認與大盤結構訊號兩處定義一致。刻意放在 index_microstructure.py
     而非 dynamic_rollover/ 內，維持既有的單向依賴方向
     (dynamic_rollover 已經 import index_microstructure，反向則不然)。
+
+    include_credit_short_legs（僅前向紀錄的影子判定用，預設 False 行為不變）：
+    為 True 時，貸方價差（Bear Call）的賣出腿 (`spread_credit`) 不再被 SHORT_LEG 排除。
     """
     position_ref = wall_reference if wall_reference and wall_reference > 0 else spot
     for entry in uoa_list:
@@ -885,7 +890,9 @@ def detect_uoa_sto_call_physical_cap(
             continue
         # 價差組合的賣出腿是價差的獲利上限，不是機構獨立封頂
         # (uoa_telemetry.annotate_spread_structures)
-        if entry.get("spread_role") == "SHORT_LEG":
+        if entry.get("spread_role") == "SHORT_LEG" and not (
+            include_credit_short_legs and entry.get("spread_credit")
+        ):
             continue
         strike = float(entry.get("strike", 0.0) or 0.0)
         ratio = float(entry.get("ratio", 0.0) or 0.0)

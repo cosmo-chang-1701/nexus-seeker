@@ -186,6 +186,18 @@ flowchart TD
 
 `/x` 的「動能與擠壓狀態」維持日線即時值（含今日成型中 K 棒），日線 Green Dot 回看窗改用 `GREEN_DOT_LOOKBACK["D"]`（3 根，先前誤用 1 根）。其下新增 W／3D／D／65m／15m／5m 矩陣（`evaluate_symbol()` 的 `PsqMatrix`，只用已收盤 K 棒；成型中等級與已收盤不同時才附註），Target Lock 欄位顯示判定、等級與部位 %（T1 1%／T2 1.5%／T3 2.5%）、參考停損與觸發條件。互動指令**不**呼叫 `evaluation_recorder`，不寫 DB。
 
+### 5.y 日內交叉檢核與前向紀錄（僅呈現，判定不動）
+
+日線／週線的 T3 前提落後於日內走勢。`squeeze_entry/intraday_conflict.py::assess_intraday_conflict()` 為純函式，`/x` 在判定為 `ENTRY` 時於 Target Lock 追加：
+
+- `⚠ 日內衝突`：(1) 65m 或 15m `momentum_value < 0` 且 `momentum_color == "Red"`（負且增強；Golden 為負但減弱，不算）；(2) 最新 15m 為實體陰線、有效量比 $\ge$ `INTRADAY_BREAK_RVOL`（直接引用 `dynamic_rollover/constants.py::_ENTRY_VOLUME_SURGE_MULTIPLIER`，$1.5$，與 `RVOL_EXPANSION_THRESHOLD` 同源）且 $\text{Close} < \text{LVN} \le \text{Open}$。文案附「（判定未改）」。
+- 判定行尾附 `⚠封頂`：CallWall 貼牆（距離 $<$ 1×ATR₁₅ₘ，見 strategies/06 §5）時（不另立一行以節省字數）。
+- 參考停損距離 $>$ `room_threshold._BUFFER_MAX_STOP_DISTANCE_PCT`（$8\%$）時尾附 `⚠ 超寬（{部位}%倉≈{部位×停損%}% NAV）`。
+- 擠壓欄位的「⚠ 日內轉弱」與本檢核共用 `negative_momentum_tfs()` 原語：轉弱提示只要求動能為負，日內衝突另要求 Red（負且增強），因此 65m 為 Golden 時擠壓欄位有「日內轉弱」而 Target Lock 無「日內衝突」，屬強度分級而非矛盾。
+- 15m 陽線量比 $<$ `_LOW_VOLUME_BOUNCE_RVOL`（$0.7$，PRE_CALIBRATION／僅呈現）且 15m 動能為負增強（Red）→ 即時量比狀態改印「無量反彈＋15m 空方動能加速（疑似熊旗）」。
+
+`evaluate_squeeze_entry()` 的判定、參考停損與推播閘門**不變**。「日內衝突要不要否決 T3」改由 `record_squeeze_entry` 新增的 `65m_mv`／`15m_mv`／`intraday_conflict` 前向樣本決定（見 architecture/05 §5.17）。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/psq_engine.py`：`analyze_psq()`（Green Dot 回看窗、Turbo、擠壓區間低點）、`compute_psq_series()`（逐根序列，回測用）。

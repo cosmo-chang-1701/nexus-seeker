@@ -70,6 +70,8 @@ $$\text{Structural Divergence} \iff \begin{cases} (\text{Skew Percentile} > 85.0
 
 **參考級：量價／預測市場背離**（僅 `/x` 呈現，不設 `is_structural_divergence`、不觸發結構背離 overlay）：在上述判定皆未命中時，若最近一根已收盤 15m 為實體陽線、有效量比 $\ge 1.5$（優先採同時段量比，見 [`../platform/06_price_volume_alert_system.md`](../platform/06_price_volume_alert_system.md)），且 Polymarket 加權看多機率 $\le$ `POLYMARKET_BEARISH_PCT`（$45\%$），輸出「量價／預測市場背離（參考）：量價偏多 vs Polymarket 偏空」；實體陰線且 $\ge$ `POLYMARKET_BULLISH_PCT`（$55\%$）為鏡像。文案必附「Polymarket 多為目標價合約，機率≠方向偏好」——目標價型問句的 Yes 機率低只代表目標難達成，不等於巨鯨看空，因此只作參考。$45/55$ 與 `calculate_polymarket_weighted_odds()` 的分級共用 `skew_taxonomy.py` 常數。
 
+**高分位而未達背離門檻的呈現規則**（僅 `/x`，不設 `is_structural_divergence`）：判定皆未命中、Skew 分位 $>$ `SKEW_HIGH_DEFENSE_PERCENTILE`（$90$）且 Volume PCR $\ge$ `_PCR_DIVERGENCE_LOW`（$0.40$；$< 0.40$ 已由 High Divergence 命中，此條件同時排除盤前 PCR $0.0$），且 IV 非盤前狀態（與 Target Lock 的盤前 PCR 顯示「--」一致）時，「情緒背離偵測」改印黃色「未達背離門檻（Skew x% 高避險／PCR y）」，不再印「同步」；PCR $<$ `_PCR_BULLISH_NEUTRAL`（$0.90$，與 DDP 區塊「中性偏多」共用）時另附「Call 量能偏多但下檔避險升溫，勿以 PCR 單獨判多」。此規則只補 $\Delta P \le 0$ 的盲區（$\Delta P > 0$ 已由 Warning 命中）。**門檻不動**：§5.5 的校準證據不支持調降。
+
 ### 2.4 微觀結構背離閘道 (Micro-Divergence Gate)
 在動能交易體系中，PSQ (Pro Squeeze) 動能柱向上翻綠（$\text{SQZ Momentum} > 0$）通常被視為多頭突破信號。但若此時做市商避險情緒高漲（$\text{Skew Percentile} > 85.0\%$），該突破往往是做市商掩護出貨或假突破流動性獵殺：
 $$\text{Micro Divergence} \iff (\text{SQZ Momentum} > 0) \land (\text{Skew Percentile} > 85.0)$$
@@ -143,6 +145,8 @@ flowchart TD
 | `CANONICAL_WINDOW_DAYS` | `252` 交易日 | 日級規範母體的百分位視窗 | `nexus_core/market_analysis/sentiment/canonical_history.py` |
 | `CANONICAL_MIN_SAMPLES` / `CANONICAL_MATURE_SAMPLES` | `20` / `60` 交易日 | 未滿 20 退回高頻池；滿 60 標記 `is_canonical=True` | `nexus_core/market_analysis/sentiment/canonical_history.py` |
 | `ROBUST_Z_MIN_IQR` | Skew `0.25` 百分點 / PCR `0.05` | IQR 低於此值時 robust Z 回傳 `None`，避免資料源卡住時分母趨近 0 | `nexus_core/market_analysis/sentiment/canonical_history.py` |
+| `_PCR_DIVERGENCE_LOW` | $0.40$（PRE_CALIBRATION／僅呈現） | `/x` 結構背離下緣（High Divergence 與「未達背離門檻」呈現共用，自我保護 PCR $\ge$ 此值） | `nexus_core/cogs/embed_builders/portfolio_embeds.py` |
+| `_PCR_BULLISH_NEUTRAL` | $0.90$（PRE_CALIBRATION／僅呈現） | `/x` PCR「中性偏多」上緣（DDP 區塊與 Skew 高避險提示共用） | `nexus_core/cogs/embed_builders/portfolio_embeds.py` |
 | `pcr_fomo_lower_threshold` | $< 0.40$ | 散戶極度瘋狂追多門檻（結構背離比對用） | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `pcr_panic_upper_threshold` | $> 1.50$ | 散戶非理性恐慌殺跌門檻（結構背離比對用） | `nexus_core/market_analysis/intraday_pipeline/skew_commentary.py` |
 | `uoa_institutional_min_dte` | $\ge 7$ 天 | 判定實質機構買盤護航的最小到期日要求 | `nexus_core/cogs/embed_builders/market_embeds.py` |
