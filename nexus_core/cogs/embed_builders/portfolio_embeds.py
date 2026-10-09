@@ -38,6 +38,7 @@ from market_analysis.room_threshold import (
 )
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
 from market_analysis.sentiment.max_pain import find_settlement_gravity
+from market_analysis.gex_wall_depth import thin_wall_threshold
 from market_analysis.dynamic_rollover.constants import (
     _ENTRY_VOLUME_SURGE_MULTIPLIER,
 )
@@ -72,6 +73,58 @@ logger = logging.getLogger(__name__)
 # GEX PutWall 與機構大額 STO PUT 履約價的分歧門檻（相對現價的距離百分比）。
 # 超過此門檻視為兩個支撐訊號互相矛盾，值得在顯示層揭露供使用者交叉參考。
 _GEX_STO_DIVERGENCE_THRESHOLD_PCT = 2.0
+# CallWall 貼牆帶：距牆 < max(1×ATR₁₅ₘ, 此下限%) 視為貼牆（PRE_CALIBRATION／僅呈現）。
+_CALLWALL_HUG_MIN_PCT = 0.10
+# 被跌破（價內）的 STO Put 往上掃描的最大範圍 %（PRE_CALIBRATION／僅呈現）。
+_STO_PUT_BREACH_MAX_PCT = 5.0
+
+
+def _num(value: Any, default: float = 0.0) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return v if math.isfinite(v) else default
+
+
+def _sto_cap_eligible(s: Any) -> bool:
+    """STO 大單是否可作方向性牆體訊號：非價差／跨式腿，或為貸方價差賣出腿。"""
+    return isinstance(s, dict) and (
+        not s.get("structure_leg") or bool(s.get("spread_credit"))
+    )
+
+
+def _sto_notional_suffix(notional: float) -> str:
+    if notional >= 1_000_000:
+        return f", 權利金 ${notional / 1_000_000:.2f}M"
+    if notional > 0:
+        return f", 權利金 ${notional / 1_000:.1f}k"
+    return ""
+
+
+def _sto_exp_dte(expiry: str, today: Any) -> str:
+    """回傳「10-16(DTE7)」；到期日無法解析時為空字串。"""
+    if not expiry:
+        return ""
+    try:
+        dte = (datetime.strptime(expiry, "%Y-%m-%d").date() - today).days
+    except ValueError:
+        return f" {expiry[5:]}"
+    return f" {expiry[5:]}(DTE{dte})"
+
+
+def _sto_best(cands: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    cands = [
+        c
+        for c in cands
+        if _num(c.get("strike"), 0.0) > 0 and _num(c.get("volume"), 0.0) > 0
+    ]
+    if not cands:
+        return None
+    return max(
+        cands,
+        key=lambda c: _num(c.get("notional_value"), _num(c.get("volume"), 0.0)),
+    )
 
 
 # 「極端高波」採用的 IV 至少要有的 DTE：太短的到期日含結算 Gamma，IV 被墊高。
@@ -1553,7 +1606,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 釘住成立時的釘住履約價（GEX 區塊內賦值，供 Max Pain 指引取用）。
     _pin_strike: Optional[float] = None
     # 供 Kelly「賣方前提」與日內轉折使用（GEX 區塊內賦值；None 表示未取得）。
-    _put_wall_net_outer: Optional[float] = None
+    _put_wall_weak_outer: Optional[bool] = None  # 助跌或紙牆（None=未取得）
+    _call_wall_hug_outer: Optional[float] = None  # 貼牆時的距離 %
     _local_short_gamma_outer: Optional[bool] = None
     _gamma_flip_outer: Optional[float] = None
     _gex_price_outer: Optional[float] = None  # GEX 區塊採用的現價（與 Flip 同價）
@@ -1572,11 +1626,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _gex_exp = _resolve_gex_expiry(gex_data, data, datetime.now(_gex_tz))
             _gex_exp_label = f"{_gex_exp[5:]} 到期" if _gex_exp else "最近到期"
             strike_keys: list[float] = []
+            # 履約價鍵可能是 "370" 或 "370.0"；一律以 float 正規化查表，避免整數鍵
+            # 被查成 0 而顯示假的「+0K 紙牆」。
+            _prof_by_strike: dict[float, float] = {}
             for k in gex_prof.keys():
                 try:
                     f = float(k)
                     if math.isfinite(f):
                         strike_keys.append(f)
+                        _prof_by_strike[f] = _to_float(gex_prof[k], 0.0)
                 except (ValueError, TypeError):
                     continue
             strike_keys.sort()
@@ -1598,7 +1656,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 display_strikes = strike_keys[start_idx:end_idx]
 
                 def _safe_gex(k_val: float) -> float:
-                    return _to_float(gex_prof.get(str(k_val), gex_prof.get(k_val)), 0.0)
+                    return _prof_by_strike.get(float(k_val), 0.0)
 
                 is_gex_empty = all(abs(_safe_gex(k)) == 0.0 for k in display_strikes)
                 gex_putwall = gex_data.get("put_wall")
@@ -1689,6 +1747,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     # 停損距離過窄時的合格下界 (2.5×ATR₁₅ₘ，佔現價比例)；盈虧比須
                     # 另以此重算，否則過窄停損會把比值灌水成 ✅。
                     put_min_stop_frac: Optional[float] = None
+                    # TOO_TIGHT（含降級、min_pct 為 None）時盈虧比須標示比值虛高。
+                    put_too_tight = False
+                    # PutWall 為助跌區或紙牆（淨 GEX 不構成支撐）。
+                    put_wall_weak = False
                     alt_stop_for_rr = 0.0
                     alt_anchor_for_rr = 0.0
                     upside_room_pct: Optional[float] = None
@@ -1720,16 +1782,27 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             f"PutWall: ${put_wall_float:.2f}{put_reanchor_note}"
                         ]
                         # edge 的 PutWall 取「Put 端 Gamma 最大」的履約價，熱力圖畫的
-                        # 卻是淨 GEX；兩者不同源。PutWall 處淨 GEX 為負代表做市商在那
-                        # 裡要跟著賣現貨避險（助跌），不是支撐——據實揭露，並另列現價下方
-                        # 淨 GEX 最大的正支撐。僅影響呈現，引擎閘門仍以 edge PutWall 為準。
+                        # 卻是淨 GEX；兩者不同源。PutWall 處淨 GEX 為負＝助跌區，介於
+                        # 0 與薄牆門檻＝紙牆，都不是支撐——於 PutWall 行內嵌據實揭露，
+                        # 並另列現價下方淨 GEX 最大的正支撐。僅影響呈現，引擎閘門仍以
+                        # edge PutWall 為準（docs/microstructure/02 §7）。
                         put_wall_net = _safe_gex(put_wall_float)
-                        _put_wall_net_outer = put_wall_net
+                        _pw_thin = thin_wall_threshold(gex_data.get("adv_dollar_20d"))
                         if put_wall_net < 0:
-                            put_items.append(
-                                f"⚠ 該履約價淨 GEX {_fmt_gex_notional(put_wall_net)} 為負"
-                                "（Put 端 Gamma 最大 ≠ 淨支撐，實為助跌區）"
+                            put_wall_kind = "助跌區"
+                            put_items[0] += (
+                                f"〔淨GEX {_fmt_gex_notional(put_wall_net)}，實為助跌區〕"
                             )
+                        elif put_wall_net < _pw_thin:
+                            put_wall_kind = "紙牆"
+                            put_items[0] += (
+                                f"〔紙牆：淨GEX {_fmt_gex_notional(put_wall_net)}"
+                                f" < 門檻 {_fmt_gex_notional(_pw_thin)}〕"
+                            )
+                        else:
+                            put_wall_kind = ""
+                        put_wall_weak = bool(put_wall_kind)
+                        _put_wall_weak_outer = put_wall_weak
                         # PutWall 落在淨 GEX 助跌區時，供下方結構停損並列「以淨
                         # GEX 支撐為錨」的參考停損；僅呈現，閘門不變。
                         alt_net_supp: float = 0.0
@@ -1742,7 +1815,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 and not math.isclose(
                                     net_supp, put_wall_float, abs_tol=1e-4
                                 )
-                                and (net_supp > put_wall_float or put_wall_net < 0)
+                                and (net_supp > put_wall_float or put_wall_weak)
                             ):
                                 net_supp_pct = (
                                     (effective_c_val - net_supp) / effective_c_val * 100
@@ -1750,7 +1823,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 put_items.append(
                                     f"淨 GEX 最大支撐: ${net_supp:.2f} (↓{net_supp_pct:.2f}%)"
                                 )
-                                if put_wall_net < 0 and net_supp < effective_c_val:
+                                if put_wall_weak and net_supp < effective_c_val:
                                     alt_net_supp = net_supp
                         _pw_atr_15m: float = 0.0
 
@@ -1813,6 +1886,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
                                 # 有公式卻無數值的誤導文案——該情境走的是降級的
                                 # 固定 5% 判定，應改為據實揭露降級原因。
+                                put_too_tight = True
                                 if put_buffer_eval.min_pct is not None:
                                     put_min_stop_frac = put_buffer_eval.min_pct
                                     _note = (
@@ -1911,7 +1985,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"\n │  引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): "
                                     f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
                                     f"{fallback_marker}"
-                                    "\n │  ⚠ PutWall 位於助跌區，閘門仍以 PutWall 為準"
+                                    f"\n │  ⚠ PutWall 為{put_wall_kind}，閘門仍以 PutWall 為準"
                                 )
                             # docs/strategies/06 §5：日線噪音帶參考停損，僅並列於
                             # 停損行尾，閘門不動，待 calibration 停損墊片比較。
@@ -1956,7 +2030,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 and str(s.get("type", "")).upper() == "PUT"
                                 # 價內 STO Put 不是地板；跨式／價差腿非方向性
                                 and _to_float(s.get("strike"), 0.0) < effective_c_val
-                                and not s.get("structure_leg")
+                                and _sto_cap_eligible(s)
                             ]
                             if put_sto_candidates:
                                 best_sto = max(
@@ -2017,12 +2091,35 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                             if _gex_exp and _sto_exp != _gex_exp
                                             else ""
                                         )
+                                        if best_sto.get("spread_credit"):
+                                            _sto_tags += "〔貸方價差〕"
                                         put_items.append(
                                             f"⚠️ 大單 ${sto_strike:.2f}"
                                             f"{' ' + _sto_exp[5:] + _sto_dte if _sto_exp else ''}"
                                             f" STO PUT {sto_volume:,}口{notional_suffix}"
                                             f" 與 PutWall 分歧{_sto_tags}"
                                         )
+                            # 被跌破的 STO Put：賣方已轉虧，承接失效（啟發式）
+                            _breach = _sto_best(
+                                [
+                                    s
+                                    for s in sto_strikes
+                                    if isinstance(s, dict)
+                                    and str(s.get("type", "")).upper() == "PUT"
+                                    and effective_c_val
+                                    < _to_float(s.get("strike"), 0.0)
+                                    <= effective_c_val
+                                    * (1 + _STO_PUT_BREACH_MAX_PCT / 100)
+                                    and _sto_cap_eligible(s)
+                                ]
+                            )
+                            if _breach is not None:
+                                put_items.append(
+                                    f"⚠️ STO PUT ${_to_float(_breach.get('strike'), 0.0):.2f}"
+                                    f"{_sto_exp_dte(str(_breach.get('expiry', '')), datetime.now(_gex_tz).date())}"
+                                    f" {int(_to_float(_breach.get('volume'), 0.0)):,}口"
+                                    "已跌破(價內)：賣方轉虧，承接失效，續跌恐回補/指派拋壓（啟發式）"
+                                )
 
                         put_block_items = put_items
 
@@ -2142,6 +2239,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             f"距現價空間: {call_arrow}"
                             f"{abs(call_wall_dist_pct):.2f}%{space_flag}"
                         )
+                        _cw_band_pct = max(
+                            _cw_atr_15m / effective_c_val * 100, _CALLWALL_HUG_MIN_PCT
+                        )
+                        if (call_wall_dist_pct >= 0 or is_call_zero) and (
+                            call_wall_dist_pct < _cw_band_pct
+                        ):
+                            _space_line += " 📌 貼牆(<1×ATR₁₅ₘ)"
+                            _call_wall_hug_outer = max(call_wall_dist_pct, 0.0)
                         if degrade_line:
                             _space_line += f"\n{degrade_line}"
                         call_reanchor_note = " (動態重錨)" if call_reanchored else ""
@@ -2150,6 +2255,60 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             _space_line,
                             f"深度: {_fmt_gex_notional(call_wall_depth)}",
                         ]
+                        _cap_call = _sto_best(
+                            [
+                                s
+                                for s in (data.get("sto_physical_cap_strikes") or [])
+                                if isinstance(s, dict)
+                                and str(s.get("type", "")).upper() == "CALL"
+                                and _to_float(s.get("strike"), 0.0) > effective_c_val
+                                and (
+                                    (_to_float(s.get("strike"), 0.0) - call_wall_float)
+                                    / effective_c_val
+                                    * 100
+                                    <= _GEX_STO_DIVERGENCE_THRESHOLD_PCT
+                                )
+                                and _sto_cap_eligible(s)
+                            ]
+                        )
+                        if _cap_call is not None:
+                            _cc_exp = str(_cap_call.get("expiry", ""))
+                            _cc_k = _to_float(_cap_call.get("strike"), 0.0)
+                            _cc_row = next(
+                                (
+                                    u
+                                    for u in (data.get("uoa") or [])
+                                    if isinstance(u, dict)
+                                    and str(u.get("expiry", "")) == _cc_exp
+                                    and _to_float(u.get("strike"), 0.0) == _cc_k
+                                    and str(u.get("type", "")).upper() == "CALL"
+                                ),
+                                None,
+                            )
+                            _cc_label = str((_cc_row or {}).get("spread_label") or "")
+                            if _cc_label:
+                                _cc_tag = (
+                                    "〔"
+                                    + _cc_label.replace(
+                                        "熊市價差 (Bear Call Spread)", "熊市Call價差"
+                                    )
+                                    + "〕"
+                                )
+                            elif _cc_row is None:
+                                _cc_tag = (
+                                    "〔貸方價差，表外〕"
+                                    if _cap_call.get("spread_credit")
+                                    else "〔全鏈掃描，表外〕"
+                                )
+                            else:
+                                _cc_tag = ""
+                            call_items.append(
+                                f"⚠️ 大單 ${_cc_k:.2f}"
+                                f"{_sto_exp_dte(_cc_exp, datetime.now(_gex_tz).date())}"
+                                f" STO CALL {int(_to_float(_cap_call.get('volume'), 0.0)):,}口"
+                                f"{_sto_notional_suffix(_to_float(_cap_call.get('notional_value'), 0.0))}"
+                                f" 封頂{_cc_tag}"
+                            )
                         call_block_items = call_items
                         if call_wall_dist_pct >= 0 or is_call_zero:
                             upside_room_pct = max(call_wall_dist_pct, 0.0)
@@ -2176,41 +2335,61 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         ):
                             reward = call_wall_float - effective_c_val
                             rr_parts: List[str] = []
-                            for _label, _stop in (
-                                ("", put_stop_for_rr),
-                                (
-                                    f"淨 GEX 支撐錨 ${alt_anchor_for_rr:.2f}",
-                                    alt_stop_for_rr,
-                                ),
-                            ):
-                                if not (0 < _stop < effective_c_val):
-                                    continue
-                                _rr = max(reward, 0.0) / (effective_c_val - _stop)
-                                _flag = "✅" if _rr >= _ROOM_RISK_MULTIPLIER else "❌"
+                            if _call_wall_hug_outer is not None:
+                                # 貼牆：上檔已封頂，盈虧比無意義，單行帶過以省字數
+                                put_block_items.append(
+                                    "短線盈虧比: ⛔ 上檔已封頂（距 CallWall "
+                                    f"{_call_wall_hug_outer:.2f}% < 1×ATR₁₅ₘ），不計"
+                                )
+                            else:
+                                _rr_cases = (
+                                    (
+                                        "閘門"
+                                        if (put_wall_weak and alt_stop_for_rr > 0)
+                                        else "",
+                                        put_stop_for_rr,
+                                    ),
+                                    (
+                                        f"淨 GEX 支撐錨 ${alt_anchor_for_rr:.2f}",
+                                        alt_stop_for_rr,
+                                    ),
+                                )
+                                for _label, _stop in _rr_cases:
+                                    if not (0 < _stop < effective_c_val):
+                                        continue
+                                    _rr = max(reward, 0.0) / (effective_c_val - _stop)
+                                    _flag = (
+                                        "✅" if _rr >= _ROOM_RISK_MULTIPLIER else "❌"
+                                    )
+                                    if (
+                                        not _label.startswith("淨 GEX")
+                                        and put_too_tight
+                                        and _flag == "✅"
+                                    ):
+                                        _flag = "⚠ 停損過窄、比值虛高"
+                                    _prefix = f"{_label} " if _label else ""
+                                    rr_parts.append(f"{_prefix}{_rr:.2f}:1 {_flag}")
                                 if (
-                                    not _label
-                                    and put_min_stop_frac is not None
-                                    and _flag == "✅"
+                                    put_min_stop_frac is not None
+                                    and put_min_stop_frac > 0
                                 ):
-                                    _flag = "⚠ 停損過窄、比值虛高"
-                                _prefix = f"{_label} " if _label else ""
-                                rr_parts.append(f"{_prefix}{_rr:.2f}:1 {_flag}")
-                            if put_min_stop_frac is not None and put_min_stop_frac > 0:
-                                _rr_min = max(reward, 0.0) / (
-                                    effective_c_val * put_min_stop_frac
+                                    _rr_min = max(reward, 0.0) / (
+                                        effective_c_val * put_min_stop_frac
+                                    )
+                                    _flag_min = (
+                                        "✅"
+                                        if _rr_min >= _ROOM_RISK_MULTIPLIER
+                                        else "❌"
+                                    )
+                                    rr_parts.append(
+                                        f"合格停損 ↓{put_min_stop_frac * 100:.2f}% "
+                                        f"{_rr_min:.2f}:1 {_flag_min}"
+                                    )
+                                put_block_items.append(
+                                    f"短線盈虧比 (期權視角，至 CallWall ${call_wall_float:.2f}): "
+                                    + "｜".join(rr_parts)
+                                    + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
                                 )
-                                _flag_min = (
-                                    "✅" if _rr_min >= _ROOM_RISK_MULTIPLIER else "❌"
-                                )
-                                rr_parts.append(
-                                    f"合格停損 ↓{put_min_stop_frac * 100:.2f}% "
-                                    f"{_rr_min:.2f}:1 {_flag_min}"
-                                )
-                            put_block_items.append(
-                                f"短線盈虧比 (期權視角，至 CallWall ${call_wall_float:.2f}): "
-                                + "｜".join(rr_parts)
-                                + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
-                            )
                         _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
                     if call_block_items is not None:
                         _append_tree_block(gex_lines, "🚧 上檔壓力", call_block_items)
@@ -2842,8 +3021,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _pre_grav = "—" if cb_triggered else ("❌" if gravity is not None else "✅")
         _pre_wall = (
             "—"
-            if _put_wall_net_outer is None
-            else ("❌" if _put_wall_net_outer < 0 else "✅")
+            if _put_wall_weak_outer is None
+            else ("❌" if _put_wall_weak_outer else "✅")
         )
         _pre_local = (
             "—"
