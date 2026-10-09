@@ -74,7 +74,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - **Valuation & Volatility** ([`docs/valuation_pricing/`](docs/valuation_pricing/)): TDP/DDP valuation (`01`), Expected move & Max Pain gravity (`02`), Skew 25-Delta & PCR divergence (`03`), IVR & seller lockout gate (`04`), Earnings surprise & guidance delta (`05`), Revision momentum & fair value (`06`).
 - **Portfolio & Risk** ([`docs/risk_portfolio/`](docs/risk_portfolio/)): Beta-weighted Greeks (`01`), VIX battle ladder & Kelly (`02`), AROC gate (`03`), DITM convexity (`04`), Runway & liquidity (`05`), Brinson attribution (`06`), Downside risk (Sortino/MDD/CVaR) (`07`).
 - **Macro & Sentiment** ([`docs/macro_sentiment/`](docs/macro_sentiment/)): Macro escape top (`01`), SEC filing moat scanner (`02`), WTI crude monitor (`03`), Polymarket VWBP sentiment (`04`), Liquidity regime & macro surprise (`05`), SEC event stream & governance gate (`06`), Alt data & channel checks (`07`).
-- **Architecture & Platform** ([`docs/architecture/`](docs/architecture/) & [`docs/platform/`](docs/platform/)): Dual watchlist pipelines (`arch/01`), Pre-market cache-aside (`arch/02`), Dual service & proxy (`arch/03`), Engineering standards & DB single writer (`arch/04`), Calibration harness (`arch/05`), Fundamental pipeline & event clock (`arch/06`), Notification center (`platform/03`), Scheduled jobs (`platform/08`).
+- **Architecture & Platform** ([`docs/architecture/`](docs/architecture/) & [`docs/platform/`](docs/platform/)): Dual watchlist pipelines (`arch/01`), Pre-market cache-aside (`arch/02`), Dual service & proxy (`arch/03`), Engineering standards & DB single writer (`arch/04`), Calibration harness (`arch/05`), Fundamental pipeline & event clock (`arch/06`), Outbound rate gate (`arch/07`), Notification center (`platform/03`), Scheduled jobs (`platform/08`).
 
 ---
 
@@ -114,6 +114,9 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - **Timezone Invariant**: `get_history_df` returns **tz-naive US/Eastern** indexes (never UTC). Treating them as UTC shifts intraday bars by 4–5 hours and daily bars by one day.
 - **Single-Flight Deduplication**: Concurrent market requests must route through `services/single_flight.py::SingleFlightManager.run()` to prevent redundant inflight API calls.
 
+### 3b. Outbound API Rate Limiting
+- Every rate-limited external API call (Finnhub, Yahoo, SEC, LLM, FRED, …) must go through a named gate in `nexus_core/services/rate_gate.py` (`get_gate(name).slot()`); never add a private `AsyncLimiter`/semaphore. Gate parameters live in `rate_gate.POLICIES`; spec: [`docs/architecture/07_outbound_rate_gate.md`](docs/architecture/07_outbound_rate_gate.md). Enforced by `tests/unit/test_rate_gate_centralization.py`.
+
 ### 4. Memory & VPS Safety (1GB–2GB RAM)
 - Use `BoundedCache` for high-frequency in-memory caching.
 - Gate all background loops and LLM pipelines with `is_memory_safe()` (85% RAM threshold).
@@ -142,7 +145,7 @@ docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml
 # Edge scraper tests
 PYTHONPATH=nexus_edge_scraper pytest nexus_edge_scraper/tests
 ```
-- **Markers & Pre-Push Hook**: Tests taking $\ge 1\text{s}$ must be marked `@pytest.mark.slow`. `tests/integration/` is auto-marked `integration`. The 4 AST invariant tests (`test_db_write_centralization.py`, `test_output_centralization.py`, `test_notification_dispatch_centralization.py`, `test_kv_cache_dedup_whitelist.py`) must remain in the fast subset. `NEXUS_FULL_TESTS=1 git push` forces the full test suite.
+- **Markers & Pre-Push Hook**: Tests taking $\ge 1\text{s}$ must be marked `@pytest.mark.slow`. `tests/integration/` is auto-marked `integration`. The 5 AST invariant tests (`test_db_write_centralization.py`, `test_output_centralization.py`, `test_notification_dispatch_centralization.py`, `test_kv_cache_dedup_whitelist.py`, `test_rate_gate_centralization.py`) must remain in the fast subset. `NEXUS_FULL_TESTS=1 git push` forces the full test suite.
 - **Focused Unit Runs**: `docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py` (or `test_embed_builder.py`, `test_order_ui.py`, `test_settings_interactive.py`).
 - **Documentation Exemption & Verification**: Pure documentation updates (`.md` files) are exempt from Docker test suite runs. When modifying `docs/`, run `python3 scripts/verify_docs_integrity.py` to audit 100% compliance across all 7 batteries.
 - **Offline Calibration**: Run on dev machines via `python -m calibration` (runs as host UID/GID with `-e HOME=/tmp`, see [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md)):

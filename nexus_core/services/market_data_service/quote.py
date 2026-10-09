@@ -130,8 +130,9 @@ async def _direct_yf_history(
             kwargs["interval"] = interval
 
         df = await call_yf(ticker.history, **kwargs)
-    except YahooRateLimitedError:
-        # yahoo_slot 拿到名額後才發現冷卻中：不重試、不改參數再打
+    except (YahooRateLimitedError, YahooEdgeBusyError):
+        # 冷卻中，或 yahoo 閘門排隊逾時／佇列已滿（暫時性失敗）：不重試、不改參數
+        # 再打——改 repair=False 重新排隊只會在飽和的閘門上再等一輪
         return None
     except Exception as e:
         if is_yf_rate_limit_error(e):
@@ -151,7 +152,7 @@ async def _direct_yf_history(
             if interval is not None:
                 kwargs_fallback["interval"] = interval
             df = await call_yf(ticker.history, **kwargs_fallback)
-        except YahooRateLimitedError:
+        except (YahooRateLimitedError, YahooEdgeBusyError):
             return None
         except Exception as e2:
             if is_yf_rate_limit_error(e2) and not is_yahoo_rate_limited():

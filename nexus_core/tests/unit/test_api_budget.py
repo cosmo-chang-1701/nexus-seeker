@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from services.market_data_service import api_budget
+from services import api_budget
 
 
 @pytest.fixture(autouse=True)
@@ -32,15 +32,13 @@ def test_window_rollover_logs_once_and_resets(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     base = api_budget._window_started_at
-    with patch(
-        "services.market_data_service.api_budget.time.time", return_value=base + 10
-    ):
+    with patch("services.api_budget.time.time", return_value=base + 10):
         api_budget.record_call("finnhub", "quote", interactive=False)
         api_budget.record_rate_limited("finnhub", "quote")
         api_budget.record_call("yahoo", "edge_history", interactive=True)
     with caplog.at_level(logging.INFO, logger=api_budget.logger.name):
         with patch(
-            "services.market_data_service.api_budget.time.time",
+            "services.api_budget.time.time",
             return_value=base + 3601,
         ):
             api_budget.record_call("finnhub", "profile", interactive=False)
@@ -56,14 +54,12 @@ def test_window_rollover_logs_once_and_resets(
 
 def _flush_msgs(caplog: pytest.LogCaptureFixture, elapsed: float) -> list[str]:
     base = api_budget._window_started_at
-    with patch(
-        "services.market_data_service.api_budget.time.time", return_value=base + 5
-    ):
+    with patch("services.api_budget.time.time", return_value=base + 5):
         for _ in range(10):
             api_budget.record_call("yahoo", "history", interactive=False)
     with caplog.at_level(logging.INFO, logger=api_budget.logger.name):
         with patch(
-            "services.market_data_service.api_budget.time.time",
+            "services.api_budget.time.time",
             return_value=base + elapsed,
         ):
             api_budget.record_call("yahoo", "history", interactive=False)
@@ -94,7 +90,7 @@ def test_record_never_raises_even_if_logger_fails() -> None:
     base = api_budget._window_started_at
     with patch.object(api_budget.logger, "info", side_effect=RuntimeError("boom")):
         with patch(
-            "services.market_data_service.api_budget.time.time",
+            "services.api_budget.time.time",
             return_value=base + 4000,
         ):
             api_budget.record_call("finnhub", "quote", interactive=False)

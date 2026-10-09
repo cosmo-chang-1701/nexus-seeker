@@ -2,7 +2,8 @@
 
 import pytest
 
-from services.market_data_service import _core, api_budget
+from services import api_budget
+from services.market_data_service import _core
 
 
 @pytest.fixture(autouse=True)

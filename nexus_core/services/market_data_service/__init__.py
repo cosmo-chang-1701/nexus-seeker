@@ -3,7 +3,7 @@
 
 所有對 Finnhub REST API / yfinance 的呼叫統一經過此套件，確保：
 1. API Key 集中管理
-2. Rate limiting（免費方案 60 calls/min, 使用 aiolimiter 控制）
+2. Rate limiting（免費方案 60 calls/min，統一由 `services/rate_gate.py` 的具名閘門控制）
 3. 錯誤處理與 fallback
 4. 回傳格式與既有程式碼相容（pandas DataFrame）
 
@@ -12,10 +12,10 @@
 `from services import market_data_service; market_data_service.get_quote(...)`
 兩種風格皆繼續運作）。實作依領域拆分為子模組：
 
-- `_core`  ：互動請求標記、ticker 清洗、Finnhub/yfinance rate limiting、
-             Edge HTTP 連線池、`_execute_api_call`（單一權威來源，尤其是
-             `global _rate_limit_until` 冷卻旗標 —— 需要直接讀寫該旗標的
-             測試必須 patch `services.market_data_service._core._rate_limit_until`）
+- `_core`  ：ticker 清洗、Finnhub/yfinance 限流閘門接線（互動請求標記與冷卻狀態在
+             `services/rate_gate.py`；測試以 `rate_gate.reset_for_tests()` 與
+             `get_gate(...).trip()` 操作冷卻）、Edge HTTP 連線池、
+             `_execute_api_call`（單一權威來源）
 - `caches` ：所有 BoundedCache 實例、TTL 常數、`clear_*_cache()`
 - `quote`  ：即時報價、標的驗證
 - `history`：歷史 K 線、SMA/EMA
@@ -30,16 +30,10 @@ from ._core import (  # noqa: F401,E402
     _edge_clients_by_loop,
     _EdgeClientContext,
     _execute_api_call,
-    _finnhub_controls_by_loop,
     _get_client,
-    _get_finnhub_controls,
-    _get_yfinance_controls,
     _is_interactive_request,
-    _rate_limit_until,
     _sanitize_ticker,
     _to_yfinance_symbol,
-    _yfinance_controls_by_loop,
-    _yahoo_rate_limit_until,
     EdgeYahooResponse,
     YahooEdgeBusyError,
     YahooRateLimitedError,

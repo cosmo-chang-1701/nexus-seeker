@@ -65,8 +65,11 @@ class VolatilityInspector:
             info = await market_data_service.call_yf(
                 lambda sym: yf.Ticker(sym).info, symbol, _endpoint="info"
             )
-        except market_data_service.YahooRateLimitedError:
-            # Yahoo 429 冷卻中：fail-safe 略過此標的
+        except (
+            market_data_service.YahooRateLimitedError,
+            market_data_service.YahooEdgeBusyError,
+        ):
+            # Yahoo 429 冷卻中或閘門排隊逾時／佇列已滿：fail-safe 略過此標的
             return None
         iv_current = info.get("impliedVolatility")
         if not iv_current or iv_current <= 0:
