@@ -58,6 +58,17 @@ def mock_finnhub_client() -> Any:
 
 
 @pytest.fixture(autouse=True)
+def reset_rate_gates() -> Any:
+    """對外 API 限流閘門（冷卻、統計、佇列）是 process 全域狀態；每個測試前後清空，
+    避免前一個測試觸發的 429 冷卻讓下一個測試被快速熔斷。"""
+    from services import rate_gate
+
+    rate_gate.reset_for_tests()
+    yield
+    rate_gate.reset_for_tests()
+
+
+@pytest.fixture(autouse=True)
 def mock_fetch_symbol_gex_metrics() -> Any:
     """全域 mock `fetch_symbol_gex_metrics`，避免微觀結構出場決策矩陣的
     force_live GEX 刷新 (portfolio_monitor.py) 在單元測試中真的發動網路呼叫
