@@ -26,6 +26,11 @@ from datetime import datetime
 from typing import Any, Iterator, Mapping, Optional
 from zoneinfo import ZoneInfo
 
+from market_analysis.squeeze_entry.intraday_conflict import (
+    assess_intraday_conflict,
+    momentum_value_2dp,
+)
+
 logger = logging.getLogger(__name__)
 
 _BUFFER_MAXLEN = 512
@@ -121,6 +126,11 @@ def _num(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if math.isfinite(f) and f != 0.0 else None
+
+
+def recording_active() -> bool:
+    """目前是否會真的寫入紀錄（已標記評估來源且功能開啟）；供昂貴的影子運算先行短路。"""
+    return _SOURCE.get() is not None and _enabled()
 
 
 def _append(row: dict[str, Any]) -> None:
@@ -397,16 +407,7 @@ def record_squeeze_entry(
         features["at_resistance"] = bool(getattr(resistance, "is_approaching", False))
         # 閘門決策 (a) 的前向樣本：日內動能數值與「日內衝突」旗標（僅用矩陣判第 1 條）
         for tf in ("65m", "15m"):
-            _st = matrix.get(tf)
-            try:
-                _mv = float(getattr(_st, "momentum_value"))
-                features[f"{tf}_mv"] = round(_mv, 2) if math.isfinite(_mv) else None
-            except (AttributeError, TypeError, ValueError):
-                features[f"{tf}_mv"] = None
-        from market_analysis.squeeze_entry.intraday_conflict import (
-            assess_intraday_conflict,
-        )
-
+            features[f"{tf}_mv"] = momentum_value_2dp(matrix.get(tf))
         features["intraday_conflict"] = bool(assess_intraday_conflict(matrix))
         _append(
             {

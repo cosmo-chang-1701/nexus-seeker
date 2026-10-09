@@ -4,6 +4,7 @@
 所有子模組皆應改用 `NexusEmbed` 取代 `discord.Embed` 來建立 Embed 物件。
 """
 
+import logging
 from typing import Any, Optional
 import discord
 
@@ -11,6 +12,8 @@ from datetime import datetime, timezone
 
 from ui.panel_renderer import truncate_with_boundary
 
+
+logger = logging.getLogger(__name__)
 
 # 保存原始 Embed 參照，NexusEmbed.from_dict 內部需要用原生版本解析 dict。
 _OriginalEmbed = discord.Embed
@@ -239,11 +242,22 @@ class NexusEmbed(discord.Embed):
 
         overflowed_by_length = total_len > _MAX_TOTAL_LEN
         if overflowed_by_length:
+            original_total = total_len
+            dropped_names: list[str] = []
             while total_len > _MAX_TOTAL_LEN and fields:
                 field = fields.pop()
+                dropped_names.append(str(field.get("name") or ""))
                 total_len -= len(field.get("name") or "") + len(
                     field.get("value") or ""
                 )
+
+            # 靜默丟欄曾讓整塊 UOA／Target Lock 無聲消失，至少留下可追查的警告。
+            logger.warning(
+                "[NexusEmbed] 總字數 %d 超過 %d，已捨棄尾端欄位：%s",
+                original_total,
+                _MAX_TOTAL_LEN,
+                "、".join(dropped_names),
+            )
 
         result["fields"] = fields
 

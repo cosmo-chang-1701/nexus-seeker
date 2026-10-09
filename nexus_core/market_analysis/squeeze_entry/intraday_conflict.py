@@ -9,13 +9,30 @@ Target Lock 與擠壓欄位（同源）以及 `evaluation_recorder` 的前向紀
 
 from __future__ import annotations
 
+import math
 from typing import Any, List, Mapping, Optional
 
-# PRE_CALIBRATION／僅呈現：放量陰線的量比門檻，沿用 /x 的 RVOL 放量定義（1.5x）。
-INTRADAY_BREAK_RVOL: float = 1.5
+from market_analysis.dynamic_rollover.constants import _ENTRY_VOLUME_SURGE_MULTIPLIER
+
+# PRE_CALIBRATION／僅呈現：放量陰線的量比門檻，直接引用 /x 的 RVOL 放量定義，避免漂移。
+INTRADAY_BREAK_RVOL: float = _ENTRY_VOLUME_SURGE_MULTIPLIER
 
 _INTRADAY_TFS: tuple[str, ...] = ("65m", "15m")
 _ACCELERATING_COLOR = "Red"  # 負且增強（Golden 為負但減弱）
+
+
+def _momentum_or_none(state: Any) -> Optional[float]:
+    try:
+        mv = float(getattr(state, "momentum_value"))
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return mv if math.isfinite(mv) else None
+
+
+def momentum_value_2dp(state: Any) -> Optional[float]:
+    """單一框架的 momentum_value 取兩位小數；缺失或非有限值為 None（前向紀錄用）。"""
+    mv = _momentum_or_none(state)
+    return round(mv, 2) if mv is not None else None
 
 
 def negative_momentum_tfs(
@@ -36,11 +53,8 @@ def negative_momentum_tfs(
         st = matrix.get(tf)
         if st is None:
             continue
-        try:
-            mv = float(getattr(st, "momentum_value"))
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if mv != mv or mv >= 0:
+        mv = _momentum_or_none(st)
+        if mv is None or mv >= 0:
             continue
         if (
             accelerating_only
@@ -68,7 +82,7 @@ def assess_intraday_conflict(
     """
     reasons: List[str] = []
     for tf, mv in negative_momentum_tfs(matrix, accelerating_only=True):
-        reasons.append(f"{tf} 動能 {mv:.2f} 加速向下")
+        reasons.append(f"{tf} 動能{mv:.2f}加速向下")
     if (
         bar_open is not None
         and bar_close is not None
@@ -79,5 +93,5 @@ def assess_intraday_conflict(
         and rvol_eff >= INTRADAY_BREAK_RVOL
         and bar_close < lvn <= bar_open
     ):
-        reasons.append(f"15m 放量陰線 {rvol_eff:.2f}x 跌穿 LVN ${lvn:.2f}")
+        reasons.append(f"15m 放量陰線{rvol_eff:.2f}x破LVN ${lvn:.2f}")
     return reasons

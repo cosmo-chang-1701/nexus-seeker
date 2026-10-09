@@ -38,7 +38,11 @@ from market_analysis.room_threshold import (
     resolve_atr_15m,
 )
 from market_analysis.ivr_strategy_gate import is_selling_locked_by_ivr
-from market_analysis.sentiment.max_pain import find_settlement_gravity
+from market_analysis.sentiment.max_pain import (
+    _EXPIRY_SETTLE_HOUR_ET,
+    SETTLEMENT_GRAVITY_MAX_DTE,
+    find_settlement_gravity,
+)
 from market_analysis.gex_wall_depth import thin_wall_threshold
 from market_analysis.squeeze_entry.intraday_conflict import (
     assess_intraday_conflict,
@@ -639,6 +643,10 @@ _LOW_VOLUME_BOUNCE_RVOL: float = 0.7
 # PRE_CALIBRATION／僅呈現：次週痛點與即期痛點相差達此 % 才提示結算後重心轉移
 # （刻意不沿用 SETTLEMENT_GRAVITY_MIN_DIST_PCT，兩者語意不同）
 _MP_SHIFT_MIN_PCT: float = 3.0
+# PRE_CALIBRATION／僅呈現：Volume PCR 結構背離下緣（< 此值且 Skew 高分位 → High Divergence）
+_PCR_DIVERGENCE_LOW: float = 0.40
+# PRE_CALIBRATION／僅呈現：PCR「中性偏多」上緣（DDP 區塊與 Skew 高避險提示共用）
+_PCR_BULLISH_NEUTRAL: float = 0.90
 
 
 def _settlement_shift_overlay(month_mps: Any, price: float) -> Optional[str]:
@@ -649,10 +657,6 @@ def _settlement_shift_overlay(month_mps: Any, price: float) -> Optional[str]:
     if not isinstance(month_mps, list) or price <= 0:
         return None
     from market_time import ny_tz as _shift_tz
-    from market_analysis.sentiment.max_pain import (
-        _EXPIRY_SETTLE_HOUR_ET,
-        SETTLEMENT_GRAVITY_MAX_DTE,
-    )
 
     now_ny = datetime.now(_shift_tz)
     rows: list[tuple[int, str, float]] = []
@@ -668,18 +672,20 @@ def _settlement_shift_overlay(month_mps: Any, price: float) -> Optional[str]:
             continue
         if dte < 0 or (dte == 0 and now_ny.hour >= _EXPIRY_SETTLE_HOUR_ET):
             continue
+        if not (math.isfinite(mp) and mp > 0):
+            continue  # 無效痛點先濾掉，避免 [285/None/250] 時以中間缺值擋掉後兩檔
         rows.append((dte, exp, mp))
     if len(rows) < 2:
         return None
     (f_dte, f_exp, f_mp), (_, n_exp, n_mp) = rows[0], rows[1]
-    if f_dte > SETTLEMENT_GRAVITY_MAX_DTE or f_mp <= 0 or n_mp <= 0:
+    if f_dte > SETTLEMENT_GRAVITY_MAX_DTE:
         return None
     shift_pct = (n_mp - f_mp) / price * 100
     if abs(shift_pct) < _MP_SHIFT_MIN_PCT:
         return None
     return (
-        f"⚠️ 結算後重心轉移：{f_exp[5:]} 痛點 ${f_mp:.2f} → {n_exp[5:]} "
-        f"${n_mp:.2f} ({shift_pct:+.1f}%)，即期釘住結算後失效"
+        f"⚠️ 重心轉移：{f_exp[5:]} ${f_mp:.2f} → {n_exp[5:]} "
+        f"${n_mp:.2f} ({shift_pct:+.1f}%)，結算後釘住失效"
     )
 
 
@@ -1129,7 +1135,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if skew_percentile is not None and pcr_val_for_div is not None:
         if (
             skew_percentile > SKEW_DIVERGENCE_HIGH_PERCENTILE
-            and 0.0 < pcr_val_for_div < 0.4
+            and 0.0 < pcr_val_for_div < _PCR_DIVERGENCE_LOW
         ):
             is_structural_divergence = True
             divergence_level = "High Divergence"
@@ -1212,15 +1218,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             skew_percentile is not None
             and pcr_val_for_div is not None
             and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE
-            and pcr_val_for_div > 0  # 盤前 PCR=0.0 為無資料，須排除
+            and pcr_val_for_div >= _PCR_DIVERGENCE_LOW  # 盤前 PCR=0.0 亦被排除
+            and not is_premarket  # 與 Target Lock 的盤前 PCR 顯示一致
         ):
             # 僅呈現：Skew 高分位而 PCR 未達結構背離門檻（PCR<0.40 已於上方判為
             # High Divergence）。不設 is_structural_divergence，門檻不動。
             divergence = (
-                f"未達結構背離門檻（Skew {skew_percentile:.0f}% 高避險 "
-                f"vs Vol PCR {pcr_val_for_div:.2f}≥0.40）"
+                f"未達背離門檻（Skew {skew_percentile:.0f}% 高避險／"
+                f"PCR {pcr_val_for_div:.2f}）"
             )
-            if pcr_val_for_div < 0.90:
+            if pcr_val_for_div < _PCR_BULLISH_NEUTRAL:
                 action = "Call 量能偏多但下檔避險升溫，勿以 PCR 單獨判多"
 
     skew_color = (
@@ -1243,7 +1250,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
     if divergence_data_missing:
         divergence_color = "\u001b[1;30m"
-    elif divergence.startswith(("量價／預測市場背離", "未達結構背離門檻")):
+    elif divergence.startswith(("量價／預測市場背離", "未達背離門檻")):
         divergence_color = "\u001b[1;33m"
     else:
         divergence_color = "\u001b[1;31m" if divergence != "同步" else "\u001b[1;32m"
@@ -2854,7 +2861,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             vol_pcr_str = f"{vol_pcr:.2f}"
             if "volume_pcr_state" in pcr_dict:
                 volume_state = pcr_dict["volume_pcr_state"]
-            elif vol_pcr < 0.90:
+            elif vol_pcr < _PCR_BULLISH_NEUTRAL:
                 volume_state = "🐂 中性偏多/看漲主導"
             elif vol_pcr > 1.10:
                 volume_state = "🐻 偏向空頭/看空主導"
@@ -2862,7 +2869,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 volume_state = "⚖️ 結構平衡"
             vol_pcr_color = (
                 "\u001b[1;32m"
-                if vol_pcr < 0.90
+                if vol_pcr < _PCR_BULLISH_NEUTRAL
                 else ("\u001b[1;31m" if vol_pcr > 1.10 else "\u001b[1;36m")
             )
 
@@ -2874,7 +2881,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             oi_pcr_str = f"{oi_pcr:.2f}"
             if "oi_pcr_state" in pcr_dict:
                 oi_state = pcr_dict["oi_pcr_state"]
-            elif oi_pcr < 0.90:
+            elif oi_pcr < _PCR_BULLISH_NEUTRAL:
                 oi_state = "🏹 結構激進/看漲多頭沉澱"
             elif oi_pcr > 1.20:
                 oi_state = "🛡️ 結構防禦/虛值 Put 沉澱"
@@ -2882,7 +2889,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 oi_state = "⚖️ 籌碼結構中性"
             oi_pcr_color = (
                 "\u001b[1;32m"
-                if oi_pcr < 0.90
+                if oi_pcr < _PCR_BULLISH_NEUTRAL
                 else ("\u001b[1;31m" if oi_pcr > 1.10 else "\u001b[1;36m")
             )
     else:
@@ -3147,6 +3154,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         target_lines.append(" 現貨擠壓進場 (Squeeze Entry · strategies/10)")
         target_lines.append(
             f" ├─ 判定: {_status_map.get(str(_sq_res.status), str(_sq_res.status))}{_tier_txt}"
+            + (
+                " ⚠封頂"
+                if str(_sq_res.status) == _sq_rules.STATUS_ENTRY
+                and _call_wall_hug_outer is not None
+                else ""
+            )
         )
         _sq_stop: Optional[float] = getattr(_sq_res, "stop", None)
         _px_now = _to_float(data.get("price"), 0.0)
@@ -3163,7 +3176,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 if _stop_dist > _BUFFER_MAX_STOP_DISTANCE_PCT * 100:
                     _sz = _to_float_or_none(_size)
                     _risk = (
-                        f"；{_sz:g}% 部位單筆風險≈{_sz * _stop_dist / 100:.2f}% NAV"
+                        f"（{_sz:g}%倉≈{_sz * _stop_dist / 100:.2f}% NAV）"
                         if _sz
                         else ""
                     )
@@ -3184,11 +3197,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             )
             if _conflicts:
                 target_lines.append(
-                    f" ├─ ⚠ 日內衝突: {'、'.join(_conflicts)}（日線訊號落後，判定未改）"
-                )
-            if _call_wall_hug_outer is not None:
-                target_lines.append(
-                    f" ├─ ⚠ 上檔: 距 CallWall {_call_wall_hug_outer:.2f}% 已封頂"
+                    f" ├─ ⚠ 日內衝突: {'、'.join(_conflicts)}（判定未改）"
                 )
         target_lines.append(
             f" ├─ 觸發: {'、'.join(getattr(_sq_res, 'triggers', []) or []) or '—'}"

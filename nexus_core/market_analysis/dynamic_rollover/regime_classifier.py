@@ -50,11 +50,19 @@ async def classify_dynamic_regime(
     regime, reason, market_data = await _classify_dynamic_regime_impl(
         candidate_symbol, target_spot, gex_profile_data, uoa_list, df_15m
     )
-    from market_analysis.evaluation_recorder import record_regime_classification
+    from market_analysis.evaluation_recorder import (
+        record_regime_classification,
+        recording_active,
+    )
 
     # 前向紀錄用影子判定（僅寫入 features_json）：貸方價差賣出腿若納入 STO 封頂，
     # 封頂履約價會是多少。分類結果與 is_structural_cap 完全不使用此值。
-    shadow_features = _sto_cap_shadow_features(target_spot, gex_profile_data, uoa_list)
+    # 只在紀錄器真的會寫入時才計算（兩次全鏈掃描不應在未啟用時白跑）。
+    shadow_features = (
+        _sto_cap_shadow_features(target_spot, gex_profile_data, uoa_list)
+        if recording_active()
+        else None
+    )
 
     record_regime_classification(
         candidate_symbol,
@@ -102,10 +110,13 @@ def _sto_cap_shadow_features(
         return {
             "sto_cap_base_strike": base or None,
             "sto_cap_shadow_strike": shadow or None,
+            # 納入貸方價差賣出腿會讓「無封頂」變成「有封頂」＝影子會改變判定
+            "sto_cap_shadow_changes_decision": (not base and bool(shadow)),
         }
     except Exception as e:
         logger.debug(f"STO 封頂影子判定失敗: {e}")
-        return None
+        # 區分「沒算（失敗）」與「沒命中」
+        return {"sto_cap_shadow_error": True}
 
 
 async def _classify_dynamic_regime_impl(
