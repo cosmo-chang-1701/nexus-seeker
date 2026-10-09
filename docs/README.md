@@ -213,6 +213,7 @@ flowchart TB
 | 29 | [`04_engineering_standards.md`](architecture/04_engineering_standards.md) | 量化系統工程規範與 Discord 防爆分頁原則 | 10 標的分頁 (37.7% 安全裕度), `chunk_embeds` 雙約束背包, 單訊息就地換頁 | `cogs/embed_builders/market_embeds.py` |
 | 30 | [`05_calibration_harness_and_forward_collection.md`](architecture/05_calibration_harness_and_forward_collection.md) | 回測校準工具與前向蒐集管線 | 次一根開盤進場無前視, 方向中性 $\pm k\,\text{ATR}_{1D}$ 屏障標註, 2025 全量多資產轉倉回測基準, Wilson + 交易日叢集 bootstrap, $n \ge 100$／收縮 $n_0 = 200$, 只產報告不改參數 | `calibration/pipeline.py` |
 | 30b | [`06_fundamental_pipeline_and_event_clock.md`](architecture/06_fundamental_pipeline_and_event_clock.md) | 基本面分析管線與事件時鐘架構 | 5 分鐘固定巡邏步長, 開閉原則全域時鐘註冊表, 15 分鐘時間桶去重, 80 檔持倉優先標的池 | `market_analysis/fundamental_pipeline/event_clock.py` |
+| 30c | [`07_outbound_rate_gate.md`](architecture/07_outbound_rate_gate.md) | 對外 API 統一限流閘門（RateGate） | 雙通道優先佇列（互動永遠優先）, 滑動窗口 $N(t) < W - R$ 互動保留額, 配額於核發當下才扣, 全域 429 冷卻指數退避, 排隊逾時與佇列深度上限 | `services/rate_gate.py` |
 
 ---
 

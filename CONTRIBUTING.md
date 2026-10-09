@@ -37,8 +37,9 @@
    - **新增的慢測試必須標記 `pytest.mark.slow`**：單一測試約 1 秒以上者逐一加 `@pytest.mark.slow`；
      成本分散在多個測試、整檔累計約 3 秒以上者整檔 `pytestmark = pytest.mark.slow`。
      pytest 以 `--strict-markers` 執行，拼錯的 marker 會直接報錯。
-   - 四個 AST 不變式測試（`test_db_write_centralization.py`、`test_output_centralization.py`、
-     `test_notification_dispatch_centralization.py`、`test_kv_cache_dedup_whitelist.py`）**不得**標記為 slow，
+   - 五個 AST 不變式測試（`test_db_write_centralization.py`、`test_output_centralization.py`、
+     `test_notification_dispatch_centralization.py`、`test_kv_cache_dedup_whitelist.py`、
+     `test_rate_gate_centralization.py`）**不得**標記為 slow，
      必須留在快速子集。
    - `nexus_edge_scraper/` 有變更時才會觸發 `scraper-test`（edge pytest）與 `edge-mypy`
      （`scripts/docker_edge_mypy.sh`，在 edge 映像內以完整依賴跑全量 Mypy）。

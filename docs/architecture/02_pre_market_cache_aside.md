@@ -143,8 +143,8 @@ flowchart TD
 
 | 資料源 | 限制 | 對應設計約束 |
 | :--- | :--- | :--- |
-| Finnhub 免費 | 60 次/分＋30 次/秒全域上限，超過回 429；`company_eps_estimates` 實測 403 | 靜態／日更資料持久化快取；403 端點負向快取 |
-| Yahoo | 無官方配額，依 IP 觸發 429／`YFRateLimitError`；1m 約 7 天、<1d 約 60 天、1h 約 730 天 | 全部 Yahoo 流量（本地 yfinance＋core→edge 即時 scrape）共用 `yahoo_slot()` 預算與全域 429 冷卻；429 時**不得**改用資料中心 IP 直連 |
+| Finnhub 免費 | 60 次/分＋30 次/秒全域上限，超過回 429；`company_eps_estimates` 實測 403 | 靜態／日更資料持久化快取；403 端點負向快取；所有呼叫經 `rate_gate` 的 finnhub 閘門（50 次/分窗口、互動保留 15 次、背景最多 35 次、每秒 burst 3；見 [`07_outbound_rate_gate.md`](07_outbound_rate_gate.md)） |
+| Yahoo | 無官方配額，依 IP 觸發 429／`YFRateLimitError`；1m 約 7 天、<1d 約 60 天、1h 約 730 天 | 全部 Yahoo 流量（本地 yfinance＋core→edge 即時 scrape＋`/x` 深度分析的 volume profile）共用 `yahoo_slot()`（`rate_gate` 的 yahoo 閘門）預算與全域 429 冷卻；429 時**不得**改用資料中心 IP 直連；排隊逾時／佇列滿載視為暫時性失敗（`YahooEdgeBusyError`） |
 | Yahoo 資料節奏 | 盤中 K 棒在 bar 收盤後才定案；期權約延遲 15 分、OI 日更；除權息調整於開盤前生效 | TTL 對齊 K 棒邊界、edge 快照週期（30 分）與交易時段 |
 
 歷史 K 線記憶體快取（`_history_cache`）到期時間由純函式 `history_cache_expiry(interval, period, now_ts)` 決定，不再對所有 interval 固定 6 小時：
