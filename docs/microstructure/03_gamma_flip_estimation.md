@@ -177,6 +177,10 @@ flowchart TD
 
 **後續觀察（僅進 calibration，不接閘門）**：以「掃描假設現價、重算總 GEX 曲線求零點」取代逐檔內插，再與前向價格路徑比較。
 
+### 5.y /market 面板的 SPY 緩衝顯示（2026-10-09）
+
+`/market` 的 GEX Flip 行附加 `(SPY 緩衝 ±x.xx%)`，其中 $buf = (S_{SPY} - Flip_{SPY}) / Flip_{SPY} \times 100$，與 `short_gamma_critical` 閘門使用同一組 `spy_spot`／`spy_gamma_flip`（避開 SPX 與 SPY 的 10 倍基差）。踩踏欄位因此有三態：低於 Flip（🟡 負 Gamma 區）、緩衝小於 `_FLIP_KNIFE_EDGE_PCT`（0.5%，PRE_CALIBRATION／僅呈現）的臨界、其餘 NORMAL；GEX 快取過期或任一值缺失時不顯示緩衝。閘門判定不變，詳見 [`../macro_sentiment/01_macro_escape_top_matrix.md`](../macro_sentiment/01_macro_escape_top_matrix.md) §2.7。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`：

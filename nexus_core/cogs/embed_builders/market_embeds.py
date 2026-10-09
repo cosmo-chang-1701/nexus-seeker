@@ -32,6 +32,7 @@ from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.insight_generator import compute_realtime_insights
 from market_analysis.insights_engine import InsightsEngine, RiskInsightsContext
 from market_analysis.room_threshold import resolve_atr_15m
+from market_analysis.trading_orchestration import RRP_MATERIAL_BALANCE_BILLIONS
 
 # UOA kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
 # _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
@@ -544,10 +545,10 @@ def build_radar_scan_embed(
                         " \u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
                     )
                     ted_color = "\u001b[1;31m" if ted_val > 0.5 else "\u001b[1;36m"
-                    ted_str = f"TED Spread (流動性指標): {ted_color}{ted_val:.2f}\u001b[0m{ted_alert}"
+                    ted_str = f"CP−T-Bill 利差 (TED 代理): {ted_color}{ted_val:.2f}\u001b[0m{ted_alert}"
                 elif ted_spread is not None:
                     ted_str = (
-                        "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m"
+                        "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m"
                     )
                 else:
                     ted_str = ""
@@ -1723,6 +1724,77 @@ def _format_cache_age(age_seconds: Any) -> str:
     return f"{max(1, round(age_seconds / 3600))} 小時前"
 
 
+# PRE_CALIBRATION／僅呈現：/market 面板的標示門檻，不接任何閘門。
+_FLIP_KNIFE_EDGE_PCT = 0.5  # SPY 距 Gamma Flip 的臨界緩衝（%）
+_COMPLACENCY_VIX_MAX = 16.0  # 低波自滿：VIX 上限
+_COMPLACENCY_US10Y = 5.0  # 低波自滿：10Y 殖利率下限（%）
+_COMPLACENCY_WTI = 90.0  # 低波自滿：WTI 下限（美元）
+_COMPLACENCY_HIKE_PROB_PCT = 15.0  # 低波自滿：FedWatch 升息機率下限（%）
+
+
+def _opt_float(value: Any) -> Optional[float]:
+    """轉成有限 float；None、無法轉換或非有限值回傳 None。"""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if math.isfinite(f) else None
+
+
+def _spy_flip_buffer_pct(
+    macro_data: Dict[str, Any], gex_is_expired: bool
+) -> Optional[float]:
+    """SPY 現價相對 SPY Gamma Flip 的緩衝（%），與 short_gamma_critical 閘門同基準。
+
+    任一缺值、非正值或 GEX 快取過期時回傳 None（維持原顯示）。
+    """
+    if gex_is_expired:
+        return None
+    spot = _opt_float(macro_data.get("spy_spot"))
+    flip = _opt_float(macro_data.get("spy_gamma_flip"))
+    if spot is None or flip is None or spot <= 0 or flip <= 0:
+        return None
+    return (spot - flip) / flip * 100.0
+
+
+def _format_rrp_change(rrp: Any, rrp_change_30d: Any) -> str:
+    """RRP 30 天變動；小基數（< RRP_MATERIAL_BALANCE_BILLIONS）改顯示絕對變動。"""
+    chg = _opt_float(rrp_change_30d)
+    if chg is None:
+        return ""
+    rrp_f = _opt_float(rrp)
+    if rrp_f is not None and rrp_f < RRP_MATERIAL_BALANCE_BILLIONS:
+        if chg <= -100.0:
+            return ""
+        past = rrp_f / (1 + chg / 100.0)
+        return f" (30天 \u001b[1;35m{rrp_f - past:+.1f}B\u001b[0m，小基數不計%)"
+    return f" (30天變動: \u001b[1;35m{chg:+.1f}%\u001b[0m)"
+
+
+def _complacency_note(
+    macro_data: Dict[str, Any], vix: Any, us10y: Any, wti: Any
+) -> str:
+    """低波自滿（參考級）：VIX 低檔卻有高利率／高油價／升息機率，僅提示不影響判定。"""
+    vix_f = _opt_float(vix)
+    if vix_f is None or vix_f <= 0 or vix_f >= _COMPLACENCY_VIX_MAX:
+        return ""
+    y = _opt_float(us10y)
+    w = _opt_float(wti)
+    parts: List[str] = []
+    if y is not None and y >= _COMPLACENCY_US10Y:
+        parts.append(f"10Y {y:.2f}%")
+    if w is not None and w >= _COMPLACENCY_WTI:
+        parts.append(f"WTI ${w:.0f}")
+    if not macro_data.get("fedwatch_is_stale"):
+        details = macro_data.get("fedwatch_details") or {}
+        hike = _opt_float(details.get("prob_hike"))
+        if hike is not None and hike >= _COMPLACENCY_HIKE_PROB_PCT:
+            parts.append(f"升息機率 {hike:.0f}%")
+    if not parts:
+        return ""
+    return f" ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
+
+
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     """
     建立美股總體經濟與大盤風險防禦指標 (Macro & Risk Dashboard) Embed。
@@ -1774,11 +1846,18 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     else:
         gex_suffix = ""
 
-    short_gamma_desc = (
-        "🚨 CRITICAL (網格步長 1.5x 已生效)"
-        if macro_data.get("short_gamma_critical", False)
-        else "🟢 NORMAL (網格步長正常)"
-    )
+    flip_buf = _spy_flip_buffer_pct(macro_data, gex_is_expired)
+    if macro_data.get("short_gamma_critical", False):
+        short_gamma_desc = "🚨 CRITICAL (網格步長 1.5x 已生效)"
+    elif flip_buf is not None and flip_buf < 0:
+        short_gamma_desc = (
+            f"🟡 負 Gamma 區（低於 Flip {flip_buf:+.2f}%），"
+            "VIX/VTS 未達危機門檻，網格維持"
+        )
+    elif flip_buf is not None and flip_buf < _FLIP_KNIFE_EDGE_PCT:
+        short_gamma_desc = f"🟡 臨界（緩衝 {flip_buf:+.2f}%），盤中轉負即踩踏"
+    else:
+        short_gamma_desc = "🟢 NORMAL (網格步長正常)"
     if gex_is_fallback:
         short_gamma_desc += " [備援估算]"
 
@@ -1786,6 +1865,8 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         short_gamma_status = "\u001b[1;33m⚪ 未知 (GEX 快取過期，不納入判定)\u001b[0m"
     elif macro_data.get("short_gamma_critical", False):
         short_gamma_status = f"\u001b[1;31m{short_gamma_desc}\u001b[0m"
+    elif short_gamma_desc.startswith("🟡"):
+        short_gamma_status = f"\u001b[1;33m{short_gamma_desc}\u001b[0m"
     else:
         short_gamma_status = f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
     recession_status = (
@@ -1941,6 +2022,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     )
     flip_val_str = (
         f"\u001b[1;35m{float(gamma_flip_line):,.2f}\u001b[0m{gex_suffix}"
+        + (f" (SPY 緩衝 {flip_buf:+.2f}%)" if flip_buf is not None else "")
         if (gamma_flip_line is not None and float(gamma_flip_line) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
@@ -1959,6 +2041,9 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         f" ├─ 利率逃頂窗口: {escape_win_display}",
         f" └─ 安全提領紅線: \u001b[1;31m${payout_threshold:,.0f}\u001b[0m",
     ]
+    complacency_note = _complacency_note(macro_data, vix, us10y, wti)
+    if complacency_note:
+        risk_lines.append(complacency_note)
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
 
     wti_val_str = (
@@ -1966,11 +2051,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         if (wti is not None and float(wti) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
-    rrp_change_str = (
-        f" (30天變動: \u001b[1;35m{float(rrp_change_30d):+.1f}%\u001b[0m)"
-        if rrp_change_30d is not None
-        else ""
-    )
+    rrp_change_str = _format_rrp_change(rrp, rrp_change_30d)
     rrp_val_str = (
         f"\u001b[1;36m${float(rrp):,.1f}B\u001b[0m{rrp_change_str}"
         # RRP 餘額趨近 0 是真實狀態（2026 年約 $0.2–0.3B），0 不代表抓取失敗

@@ -1299,7 +1299,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         )
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
-        assert "TED Spread (流動性指標): \u001b[1;36m-0.07\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m-0.07\u001b[0m" in text
         assert "獲取數據失敗" not in text
         assert "⚠️ 流動性警戒" not in text
 
@@ -1314,7 +1314,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         )
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
-        assert "TED Spread (流動性指標): \u001b[1;36m0.00\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m0.00\u001b[0m" in text
         assert "獲取數據失敗" not in text
         assert "⚠️ 流動性警戒" not in text
 
@@ -1330,7 +1330,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
         assert (
-            "TED Spread (流動性指標): \u001b[1;31m0.65\u001b[0m \u001b[1;31m⚠️ 流動性警戒\u001b[0m"
+            "CP−T-Bill 利差 (TED 代理): \u001b[1;31m0.65\u001b[0m \u001b[1;31m⚠️ 流動性警戒\u001b[0m"
             in text
         )
         assert "獲取數據失敗" not in text
@@ -1346,7 +1346,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         )
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
-        assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m" in text
 
     # 5. GEX Flip 無效格式情境 ("INVALID_GEX")
     with patch("database.cache.get_kv_cache") as mock_kv:
@@ -1360,7 +1360,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
         assert "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m" in text
-        assert "TED Spread (流動性指標): \u001b[1;36m-0.05\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m-0.05\u001b[0m" in text
 
     # 6. 非有限數值防護 ("nan", "inf", "-inf")
     for non_finite in ("nan", "inf", "-inf"):
@@ -1374,7 +1374,9 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
             )
             embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
             text = get_embed_text(embeds[0])
-            assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+            assert (
+                "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+            )
             assert "nan" not in text
             assert "inf" not in text
 
@@ -1389,7 +1391,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         )
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
-        assert "TED Spread (流動性指標): \u001b[1;31m獲取數據失敗\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m" in text
         assert "1.00" not in text
 
     # 8. GEX Flip 非有限數值防護 ("nan", "inf")
@@ -1407,7 +1409,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
             assert (
                 "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m" in text
             )
-            assert "TED Spread (流動性指標): \u001b[1;36m-0.05\u001b[0m" in text
+            assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m-0.05\u001b[0m" in text
 
     # 9. 僅 GEX Flip 存在，TED Spread 為 None：不應出現 TED Spread 行
     with patch("database.cache.get_kv_cache") as mock_kv:
@@ -1424,7 +1426,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         mock_kv.side_effect = lambda k: ("-0.07" if k == "macro_ted_spread" else None)
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
-        assert "TED Spread (流動性指標): \u001b[1;36m-0.07\u001b[0m" in text
+        assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m-0.07\u001b[0m" in text
         assert "SPY 零 Gamma 線" not in text
 
     # 11. 兩者皆為 None：不應出現宏觀數據表頭
