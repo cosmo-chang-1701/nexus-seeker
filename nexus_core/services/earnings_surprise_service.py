@@ -64,7 +64,7 @@ from services.fundamental_providers import (
     NullWhisperProvider,
     WhisperProvider,
 )
-from services.llm_service import client as llm_client
+from services.llm_service import client as llm_client, llm_parse
 from services.llm_service import is_memory_safe
 from services.sec_edgar_client import SecEdgarClient
 
@@ -403,7 +403,8 @@ class EarningsSurpriseService:
             f"標的代號: {symbol}\n申報編號: {accession}\n\n新聞稿原文內容:\n{doc_text}"
         )
 
-        completion = await llm_client.beta.chat.completions.parse(
+        completion = await llm_parse(
+            _client=llm_client,
             model=config.LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},

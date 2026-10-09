@@ -505,3 +505,23 @@ def test_invalid_policy_rejected() -> None:
             max_concurrency=1,
             background_concurrency=2,
         )
+
+
+def test_failure_log_level_downgrades_gate_errors_only() -> None:
+    """閘門主動拒絕（冷卻／逾時／滿載）記 WARNING；其他例外維持 ERROR。"""
+    import logging
+
+    from services.rate_gate import (
+        RateGateCooldownError,
+        RateGateQueueFullError,
+        RateGateTimeoutError,
+        failure_log_level,
+    )
+
+    for exc_cls in (
+        RateGateCooldownError,
+        RateGateTimeoutError,
+        RateGateQueueFullError,
+    ):
+        assert failure_log_level(exc_cls("sec", "x")) == logging.WARNING
+    assert failure_log_level(RuntimeError("boom")) == logging.ERROR

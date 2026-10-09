@@ -133,7 +133,7 @@ flowchart TD
 | 守衛 | 時鐘迴圈先檢查 `ENABLE_FUNDAMENTAL_PIPELINE_LOG`、Leader 與 `is_memory_safe()`；`SecFilingSyncRunner.trigger` 啟動前再確認一次 Leader 與記憶體 |
 | 執行方式 | `trigger` 以背景 `asyncio.Task` 執行 `sync_universe_filings` 並立即返回，不阻塞同一時鐘上的 08:30 / 10:00 / 16:15 工作；上一輪未完成時略過本輪（防重疊） |
 | 缺少 `SEC_USER_AGENT` | 建立客戶端時捕捉 `SecConfigError`，**只記一次** error，之後每輪靜默略過（設定後重啟即生效） |
-| 客戶端重用 | 跨輪重用同一個 `FilingEventService` / `SecEdgarClient`（共用 8 req/s 限速器、CIK 快取與 24 小時映射表 TTL） |
+| 客戶端重用 | 跨輪重用同一個 `FilingEventService` / `SecEdgarClient`（共用 CIK 快取與 24 小時映射表 TTL；8 req/s 限速由全域 sec 閘門負責，見 [`07_outbound_rate_gate.md`](../architecture/07_outbound_rate_gate.md)） |
 | 財報事件掛點 | `FilingEventService(earnings_handler=...)`：route 含 `EARNINGS` 的 8-K / 8-K/A Item 2.02（含回填）在事件入庫、游標推進後交給 `EarningsSurpriseService.process_filing_event`（共用同一個 `SecEdgarClient`）；只處理游標已涵蓋的事件，例外只記 warning、不計入 `failed`。規格見 [`05_earnings_surprise_and_guidance_delta.md`](../valuation_pricing/05_earnings_surprise_and_guidance_delta.md) §2.9 |
 
 **頻率選擇（每小時而非每 30 分鐘）**：一輪的請求量約為
@@ -152,7 +152,8 @@ $$R \approx N + 2 \cdot F_{\text{new}} \quad (N \le 80 \text{ 檔標的的 submi
 
 | 具名常數 | 數值 / 類型 | 物理意義與約束說明 |
 |---|---|---|
-| `SEC_LIMITER_MAX_RATE` | `8` (float) | SEC API 每秒請求上限（官方上限 10 req/s，硬性安全餘量） |
+| `SEC_LIMITER_MAX_RATE` | `8` (int，`config.py` 讀取環境變數) | SEC API 每秒請求上限（官方上限 10 req/s，硬性安全餘量）；成為 `rate_gate` 的 sec 閘門窗口上限（`window_limit`，窗口 1 秒），全 process 共用，不論建構幾個 `SecEdgarClient` 實例 |
+| sec 閘門冷卻 | `600` → `1800` 秒 | 收到 HTTP 429，或 HTTP 403 且回應內文含 `Request Rate Threshold` 時啟動全域冷卻（有 `Retry-After` 以其為準）；其他 403（如 User-Agent 未申報）不算限流。冷卻中請求以 `RateGateCooldownError` 快速熔斷，由 `FilingEventService` 既有的例外隔離接住 |
 | `SEC_STREAM_BYTE_CAP` | `1_500_000` (int) | SEC 文件串流拉取位元組硬截斷上限（1.5MB，防禦 VPS OOM） |
 | `DEFAULT_REVIEW_DAYS` | `30` (int) | 治理審查旗標預設有效風控天數 |
 | `MIN_CLUSTER_BUY_INSIDERS` | `2` (int) | 觸發聚類增持的最少獨立內部人人數門檻 |

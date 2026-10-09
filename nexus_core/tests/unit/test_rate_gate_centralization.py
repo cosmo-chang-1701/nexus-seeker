@@ -29,22 +29,16 @@ _EXCLUDED_PARTS = {
     "data",
 }
 
-# 仍保有自己 AsyncLimiter 的檔案（遷移完成後應為空）
-_ASYNC_LIMITER_ALLOWLIST = {
-    "services/sec_edgar_client.py",
-}
+# 仍保有自己 AsyncLimiter 的檔案（已全數遷移至 rate_gate，應維持為空）
+_ASYNC_LIMITER_ALLOWLIST: set[str] = set()
 
 _FINNHUB_CLIENT_ALLOWLIST = {
     "services/market_data_service/_core.py",
 }
 
-# 直接呼叫 OpenAI chat completions 的檔案（遷移完成後應只剩 llm_service.py）
+# 直接呼叫 OpenAI chat completions 的檔案（僅 llm_service.py 的 llm_parse／llm_create）
 _LLM_CALL_ALLOWLIST = {
     "services/llm_service.py",
-    "market_analysis/attribution.py",
-    "market_analysis/dynamic_rollover/fundamental_thesis.py",
-    "services/earnings_surprise_service.py",
-    "services/hedge_monitor_service.py",
 }
 
 
@@ -95,14 +89,11 @@ def test_async_limiter_only_in_allowlist() -> None:
     )
 
 
-def test_allowlisted_limiter_files_still_exist() -> None:
-    """allowlist 不得殘留已遷移完畢的檔案（遷移後請從 allowlist 移除）。"""
-    for rel in _ASYNC_LIMITER_ALLOWLIST:
-        path = _CORE_ROOT / rel
-        assert path.exists(), f"{rel} 已不存在，請從 allowlist 移除"
-        assert "AsyncLimiter(" in path.read_text(
-            encoding="utf-8"
-        ), f"{rel} 已不再使用 AsyncLimiter，請從 allowlist 移除"
+def test_async_limiter_allowlist_is_empty_and_dependency_removed() -> None:
+    """所有限流已遷移至 rate_gate：allowlist 必須維持為空，且 aiolimiter 不再是依賴。"""
+    assert not _ASYNC_LIMITER_ALLOWLIST
+    pyproject = (_CORE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "aiolimiter" not in pyproject
 
 
 def test_finnhub_client_only_constructed_in_core() -> None:
@@ -155,11 +146,11 @@ def test_llm_chat_completions_only_in_allowlist() -> None:
 
 
 def test_rate_gate_is_a_leaf_module() -> None:
-    """rate_gate 不得 import 任何 service／業務模組（避免循環相依）。"""
+    """rate_gate 不得 import 任何 service／業務模組（避免循環相依）；僅允許讀取 config。"""
     tree = ast.parse(
         (_CORE_ROOT / "services" / "rate_gate.py").read_text(encoding="utf-8")
     )
-    forbidden = ("services", "market_analysis", "cogs", "database", "config")
+    forbidden = ("services", "market_analysis", "cogs", "database")
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             assert node.module.split(".")[0] not in forbidden, node.module

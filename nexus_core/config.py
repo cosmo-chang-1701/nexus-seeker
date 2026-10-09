@@ -124,6 +124,14 @@ FUNDAMENTAL_PIPELINE_DRY_RUN = (
     get_env_or_secret("FUNDAMENTAL_PIPELINE_DRY_RUN", "true").lower() == "true"
 )
 SEC_USER_AGENT = get_env_or_secret("SEC_USER_AGENT", "")
+# SEC EDGAR 每秒請求上限（官方上限 10 req/s，預設 8 保留安全餘量）；全 process 共用
+# rate_gate 的 sec 閘門，不論建構幾個 SecEdgarClient 實例。
+try:
+    SEC_LIMITER_MAX_RATE = max(
+        1, int(float(get_env_or_secret("SEC_LIMITER_MAX_RATE", 8)))
+    )
+except (ValueError, TypeError):
+    SEC_LIMITER_MAX_RATE = 8
 try:
     FUNDAMENTAL_UNIVERSE_MAX_SYMBOLS = int(
         get_env_or_secret("FUNDAMENTAL_UNIVERSE_MAX_SYMBOLS", 80)

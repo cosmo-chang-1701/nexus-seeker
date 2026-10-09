@@ -59,6 +59,7 @@ from market_analysis.fundamental_pipeline.supply_chain_map import (
 )
 from market_analysis.macro_signals import SeriesKind, usable
 from services.macro_signal_service import fetch_fred_series
+from services.rate_gate import failure_log_level
 from services.single_flight import SingleFlightManager
 
 logger = logging.getLogger(__name__)
@@ -659,8 +660,9 @@ class AltDataService:
                 )
                 results.append(res)
             except Exception as e:  # noqa: BLE001
-                logger.error(
-                    f"[AltDataService] 執行產業鏈檢驗 {link.link_key} 異常: {e}"
+                logger.log(
+                    failure_log_level(e),
+                    f"[AltDataService] 執行產業鏈檢驗 {link.link_key} 異常: {e}",
                 )
 
         if persist and results:
