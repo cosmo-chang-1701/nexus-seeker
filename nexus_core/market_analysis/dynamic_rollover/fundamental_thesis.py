@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional
 
 from . import logger
 from .models import FundamentalThesisResult
+from services.llm_service import llm_parse
 
 # Per-form-type prompt supplement, appended AFTER the shared 4-criteria
 # framework + exclusion rule. Empty/unknown form_type -> no supplement
@@ -154,7 +155,8 @@ async def evaluate_fundamental_thesis_impl(
     )
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await llm_parse(
+            _client=client,
             model=llm_model_name,
             messages=[
                 {

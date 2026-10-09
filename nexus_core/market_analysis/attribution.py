@@ -188,9 +188,9 @@ class AttributionEngine:
             字數 100 字以內，語氣專業精煉。
             """
 
-            from services.llm_service import client, LLM_MODEL_NAME
+            from services.llm_service import llm_create, LLM_MODEL_NAME
 
-            response = await client.chat.completions.create(
+            response = await llm_create(
                 model=LLM_MODEL_NAME,
                 messages=[
                     {

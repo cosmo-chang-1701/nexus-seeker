@@ -1,5 +1,8 @@
+import asyncio
+from typing import Any
+
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from services.llm_service import generate_analyst_report
 
 
@@ -113,3 +116,136 @@ async def test_generate_watchlist_roundup_commentary() -> None:
     }
     res_3 = await generate_watchlist_roundup_commentary(raw_data_3)
     assert "🟢 **全局安全**" in res_3
+
+
+# ---------------------------------------------------------------------------
+# rate_gate 接線：llm 閘門的併發上限、429 冷卻、單次重試與逾時設定
+# ---------------------------------------------------------------------------
+def _httpx_pair() -> tuple[Any, Any]:
+    import httpx
+
+    req = httpx.Request("POST", "http://llm.test/v1/chat/completions")
+    return req, httpx
+
+
+def _rate_limit_error(retry_after: str = "0.05") -> Any:
+    from openai import RateLimitError
+
+    req, httpx = _httpx_pair()
+    resp = httpx.Response(429, request=req, headers={"Retry-After": retry_after})
+    return RateLimitError("rate limited", response=resp, body=None)
+
+
+def test_client_disables_sdk_retries_and_sets_120s_timeout() -> None:
+    from services import llm_service
+
+    assert llm_service.client.max_retries == 0
+    assert llm_service.client.timeout == 120.0
+
+
+async def test_llm_gate_limits_concurrency_to_two() -> None:
+    from services.llm_service import llm_parse
+
+    running = 0
+    peak = 0
+    release = asyncio.Event()
+
+    async def _slow(**_kw: Any) -> str:
+        nonlocal running, peak
+        running += 1
+        peak = max(peak, running)
+        await release.wait()
+        running -= 1
+        return "ok"
+
+    with patch(
+        "services.llm_service.client.beta.chat.completions.parse",
+        side_effect=_slow,
+    ):
+        tasks = [asyncio.create_task(llm_parse(model="m")) for _ in range(5)]
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert running == 2
+        release.set()
+        assert await asyncio.gather(*tasks) == ["ok"] * 5
+    assert peak == 2
+
+
+async def test_llm_rate_limit_trips_and_retries_once() -> None:
+    from services import rate_gate
+    from services.llm_service import llm_create
+
+    err = _rate_limit_error()
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[err, "recovered"],
+    ) as m_create:
+        assert await llm_create(model="m") == "recovered"
+    assert m_create.await_count == 2
+    assert rate_gate.get_gate("llm").drain_stats().cooldowns == 1
+    assert rate_gate.get_gate("llm").in_flight() == 0
+
+
+async def test_llm_retry_happens_only_once() -> None:
+    from openai import RateLimitError
+
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[_rate_limit_error(), _rate_limit_error(), "never"],
+    ) as m_create:
+        with pytest.raises(RateLimitError):
+            await llm_create(model="m")
+    assert m_create.await_count == 2
+
+
+async def test_llm_connection_error_retried_but_timeout_is_not() -> None:
+    from openai import APIConnectionError, APITimeoutError
+
+    from services.llm_service import llm_create
+
+    req, _ = _httpx_pair()
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[APIConnectionError(request=req), "ok"],
+    ) as m_create:
+        assert await llm_create(model="m") == "ok"
+    assert m_create.await_count == 2
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[APITimeoutError(request=req), "never"],
+    ) as m_create:
+        with pytest.raises(APITimeoutError):
+            await llm_create(model="m")
+    assert m_create.await_count == 1
+
+
+async def test_llm_non_retryable_error_propagates_immediately() -> None:
+    from services import rate_gate
+    from services.llm_service import llm_parse
+
+    with patch(
+        "services.llm_service.client.beta.chat.completions.parse",
+        new_callable=AsyncMock,
+        side_effect=ValueError("bad schema"),
+    ) as m_parse:
+        with pytest.raises(ValueError):
+            await llm_parse(model="m")
+    assert m_parse.await_count == 1
+    assert not rate_gate.get_gate("llm").in_cooldown()
+    assert rate_gate.get_gate("llm").in_flight() == 0
+
+
+async def test_llm_injected_client_is_used() -> None:
+    from services.llm_service import llm_parse
+
+    fake = MagicMock()
+    fake.beta.chat.completions.parse = AsyncMock(return_value="injected")
+    assert await llm_parse(_client=fake, model="m") == "injected"
+    fake.beta.chat.completions.parse.assert_awaited_once_with(model="m")

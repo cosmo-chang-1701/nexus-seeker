@@ -39,10 +39,6 @@ _FINNHUB_CLIENT_ALLOWLIST = {
 # 直接呼叫 OpenAI chat completions 的檔案（僅 llm_service.py 的 llm_parse／llm_create）
 _LLM_CALL_ALLOWLIST = {
     "services/llm_service.py",
-    "market_analysis/attribution.py",
-    "market_analysis/dynamic_rollover/fundamental_thesis.py",
-    "services/earnings_surprise_service.py",
-    "services/hedge_monitor_service.py",
 }
 
 
@@ -93,9 +89,11 @@ def test_async_limiter_only_in_allowlist() -> None:
     )
 
 
-def test_async_limiter_allowlist_is_empty() -> None:
-    """所有限流已遷移至 rate_gate：allowlist 必須維持為空。"""
+def test_async_limiter_allowlist_is_empty_and_dependency_removed() -> None:
+    """所有限流已遷移至 rate_gate：allowlist 必須維持為空，且 aiolimiter 不再是依賴。"""
     assert not _ASYNC_LIMITER_ALLOWLIST
+    pyproject = (_CORE_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert "aiolimiter" not in pyproject
 
 
 def test_finnhub_client_only_constructed_in_core() -> None:

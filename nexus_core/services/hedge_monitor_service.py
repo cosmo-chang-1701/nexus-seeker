@@ -264,7 +264,7 @@ class HedgeMonitorService:
         """
         # We can use a simplified call to llm_service
         try:
-            from services.llm_service import client, LLM_MODEL_NAME, is_memory_safe
+            from services.llm_service import llm_create, LLM_MODEL_NAME, is_memory_safe
 
             if not is_memory_safe():
                 logger.warning(
@@ -272,7 +272,7 @@ class HedgeMonitorService:
                 )
                 return "市場波動劇烈，組合 Delta 已偏離中性。建議執行對沖以鎖定風險。"
 
-            response = await client.chat.completions.create(
+            response = await llm_create(
                 model=LLM_MODEL_NAME,
                 messages=[
                     {

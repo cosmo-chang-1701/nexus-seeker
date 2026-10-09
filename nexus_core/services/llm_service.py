@@ -1,11 +1,24 @@
 import json
 import logging
 import psutil
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APITimeoutError,
+    AsyncOpenAI,
+    InternalServerError,
+    RateLimitError,
+)
 from pydantic import BaseModel, Field, ConfigDict
 from typing import Literal, cast, Any
 
 from config import LLM_API_BASE, LLM_MODEL_NAME, API_KEY
+from services import api_budget
+from services.rate_gate import (
+    _is_interactive_request,
+    clock,
+    get_gate,
+    parse_retry_after,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +50,73 @@ if API_KEY:
     client_args["api_key"] = API_KEY
 if LLM_API_BASE:
     client_args["base_url"] = LLM_API_BASE
-client = AsyncOpenAI(**client_args)
+# 逾時由預設 600 秒收緊為 120 秒；關閉 SDK 內建重試（max_retries=0），讓每一次實際送出的
+# 請求都經過 rate_gate 的 llm 閘門計數，重試改由下方 `_gated_llm_call` 重新排隊一次。
+client = AsyncOpenAI(timeout=120.0, max_retries=0, **client_args)
+
+
+# ==========================================
+# 🚦 LLM 請求閘門（併發上限、429 冷卻、單次重試）
+# ==========================================
+async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
+    """經 `rate_gate` 的 llm 閘門呼叫 chat completions。
+
+    - `kind="parse"` → `client.beta.chat.completions.parse`；`"create"` →
+      `client.chat.completions.create`。執行時才讀取模組層 `client`（測試可 patch）；
+      `_client` 供依賴注入（呼叫端已持有 client 時）。
+    - `RateLimitError`：`trip()` 啟動冷卻（Retry-After 取自回應標頭）；
+      `APIConnectionError`／`InternalServerError`：暫時性故障。兩類都在**離開 slot 後**
+      重新排隊重試 1 次（`llm` 閘門背景不快速熔斷，冷卻中會排隊等待）。
+    - `APITimeoutError`（`APIConnectionError` 的子類）不重試：逾時已佔用 120 秒。
+    """
+    gate = get_gate("llm")
+    endpoint = f"chat_{kind}"
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        async with gate.slot():
+            c = _client if _client is not None else client
+            fn = (
+                c.beta.chat.completions.parse
+                if kind == "parse"
+                else c.chat.completions.create
+            )
+            api_budget.record_call(
+                "llm", endpoint, interactive=_is_interactive_request.get()
+            )
+            started_at = clock()
+            try:
+                result = await fn(**kwargs)
+            except APITimeoutError:
+                raise
+            except RateLimitError as e:
+                api_budget.record_rate_limited("llm", endpoint)
+                gate.trip(
+                    parse_retry_after(
+                        getattr(getattr(e, "response", None), "headers", None)
+                    )
+                )
+                last_exc = e
+            except (APIConnectionError, InternalServerError) as e:
+                last_exc = e
+            else:
+                gate.mark_ok(started_at)
+                return result
+        if attempt == 0:
+            logger.warning(
+                f"LLM 請求暫時性失敗，離開名額後重新排隊重試 1 次: {last_exc}"
+            )
+    assert last_exc is not None
+    raise last_exc
+
+
+async def llm_parse(*, _client: Any = None, **kwargs: Any) -> Any:
+    """經閘門呼叫 `beta.chat.completions.parse`（結構化輸出）。"""
+    return await _gated_llm_call("parse", _client, **kwargs)
+
+
+async def llm_create(*, _client: Any = None, **kwargs: Any) -> Any:
+    """經閘門呼叫 `chat.completions.create`（純文字生成）。"""
+    return await _gated_llm_call("create", _client, **kwargs)
 
 
 # ==========================================
@@ -107,7 +186,7 @@ async def evaluate_reddit_sentiment(symbol: str, raw_text: str) -> str:
         return "⚖️ 中性"
 
     try:
-        completion = await client.beta.chat.completions.parse(
+        completion = await llm_parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {
@@ -151,7 +230,7 @@ async def classify_uoa_intent(
     user_prompt = f"標的: {symbol}\nUOA 數據: {json.dumps(uoa_data, ensure_ascii=False)}\n巨鯨意圖: {whale_intent or '無'}"
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await llm_parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -222,7 +301,7 @@ async def evaluate_trade_risk(
     """
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await llm_parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -308,7 +387,7 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     user_prompt = f"Report Type: {report_type}\nRaw Data: {json.dumps(raw_data, ensure_ascii=False)}\nGenerate the report."
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await llm_parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -422,7 +501,7 @@ async def generate_polymarket_summary(
     """
 
     try:
-        response = await client.beta.chat.completions.parse(
+        response = await llm_parse(
             model=LLM_MODEL_NAME,
             messages=[
                 {"role": "system", "content": system_prompt},
