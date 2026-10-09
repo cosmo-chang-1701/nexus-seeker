@@ -1757,17 +1757,54 @@ def _spy_flip_buffer_pct(
     return (spot - flip) / flip * 100.0
 
 
+_SPX_SPY_RATIO_RANGE = (9.8, 10.3)  # 與 unified_terminal/utils.py 的比例換算區間一致
+
+
+def _spy_ratio_suspect(macro_data: Dict[str, Any]) -> bool:
+    """SPX/SPY 比值超出合理區間（報價時點不一致等）時，SPY 緩衝數字不可信。"""
+    spx = _opt_float(macro_data.get("spx"))
+    spot = _opt_float(macro_data.get("spy_spot"))
+    if spx is None or spot is None or spx <= 0 or spot <= 0:
+        return False
+    lo, hi = _SPX_SPY_RATIO_RANGE
+    return not (lo <= spx / spot <= hi)
+
+
+def _gamma_unmet_reasons(macro_data: Dict[str, Any]) -> str:
+    """依實際資料組出 short_gamma_critical 尚未成立的原因（只描述已檢查的事實）。
+
+    閘門：VIX > 20 且 VTS 倒掛（VTS 缺值／過期時改依 VIX > 25），見 unified_terminal/utils.py。
+    """
+    vix = _opt_float(macro_data.get("vix"))
+    vts = _opt_float(macro_data.get("vts_ratio"))
+    vix_ok = vix is not None and vix > 0
+    vts_ok = vts is not None and vts > 0
+    reasons: List[str] = []
+    if not vix_ok:
+        reasons.append("VIX 缺值")
+    elif vix is not None and vix <= 20.0:
+        reasons.append(f"VIX {vix:.1f} ≤ 20")
+    if vts_ok and vts is not None:
+        if vts < 1.0:
+            reasons.append(f"VTS {vts:.2f} 未倒掛")
+    elif vix_ok and vix is not None and vix <= 25.0:
+        reasons.append(f"VTS 缺值且 VIX {vix:.1f} ≤ 25")
+    elif not vix_ok:
+        reasons.append("VTS 缺值")
+    return "、".join(reasons)
+
+
 def _format_rrp_change(rrp: Any, rrp_change_30d: Any) -> str:
     """RRP 30 天變動；小基數（< RRP_MATERIAL_BALANCE_BILLIONS）改顯示絕對變動。"""
     chg = _opt_float(rrp_change_30d)
     if chg is None:
         return ""
     rrp_f = _opt_float(rrp)
-    if rrp_f is not None and rrp_f < RRP_MATERIAL_BALANCE_BILLIONS:
-        if chg <= -100.0:
-            return ""
+    if rrp_f is not None and chg > -100.0:
         past = rrp_f / (1 + chg / 100.0)
-        return f" (30天 \u001b[1;35m{rrp_f - past:+.1f}B\u001b[0m，小基數不計%)"
+        # 現值與 30 天前兩端都是小基數才改顯示絕對變動；任一端具實質規模仍印百分比
+        if max(rrp_f, past) < RRP_MATERIAL_BALANCE_BILLIONS:
+            return f" (30天 \u001b[1;35m{rrp_f - past:+.1f}B\u001b[0m，小基數不計%)"
     return f" (30天變動: \u001b[1;35m{chg:+.1f}%\u001b[0m)"
 
 
@@ -1785,14 +1822,17 @@ def _complacency_note(
         parts.append(f"10Y {y:.2f}%")
     if w is not None and w >= _COMPLACENCY_WTI:
         parts.append(f"WTI ${w:.0f}")
-    if not macro_data.get("fedwatch_is_stale"):
-        details = macro_data.get("fedwatch_details") or {}
+    details = macro_data.get("fedwatch_details") or {}
+    is_fb = bool(macro_data.get("fedwatch_is_fallback")) or (
+        str(details.get("source", "")).lower() == "fallback"
+    )
+    if not macro_data.get("fedwatch_is_stale") and not is_fb:
         hike = _opt_float(details.get("prob_hike"))
         if hike is not None and hike >= _COMPLACENCY_HIKE_PROB_PCT:
             parts.append(f"升息機率 {hike:.0f}%")
     if not parts:
         return ""
-    return f" ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
+    return f" └─ ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
 
 
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
@@ -1812,6 +1852,16 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         color = discord.Color.red()
     elif is_degraded:
         color = discord.Color.orange()
+    # 🟡 負 Gamma／臨界（非 CRITICAL）：邊框改 gold，優先於降級橘色以外的綠色預設
+    _pre_buf = _spy_flip_buffer_pct(
+        macro_data, bool(macro_data.get("gex_is_expired", False))
+    )
+    if (
+        color == discord.Color.green()
+        and _pre_buf is not None
+        and _pre_buf < _FLIP_KNIFE_EDGE_PCT
+    ):
+        color = discord.Color.gold()
 
     embed = NexusEmbed(
         title="🌌 全局宏觀風控情報中心 (Macro Risk Control Hub)",
@@ -1847,25 +1897,31 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         gex_suffix = ""
 
     flip_buf = _spy_flip_buffer_pct(macro_data, gex_is_expired)
+    gamma_state: str  # CRITICAL／NEGATIVE／KNIFE_EDGE／NORMAL
     if macro_data.get("short_gamma_critical", False):
+        gamma_state = "CRITICAL"
         short_gamma_desc = "🚨 CRITICAL (網格步長 1.5x 已生效)"
     elif flip_buf is not None and flip_buf < 0:
+        gamma_state = "NEGATIVE"
+        unmet = _gamma_unmet_reasons(macro_data)
         short_gamma_desc = (
             f"🟡 負 Gamma 區（低於 Flip {flip_buf:+.2f}%），"
-            "VIX/VTS 未達危機門檻，網格維持"
+            f"踩踏條件未全成立（{unmet or '未達危機門檻'}），網格維持"
         )
     elif flip_buf is not None and flip_buf < _FLIP_KNIFE_EDGE_PCT:
+        gamma_state = "KNIFE_EDGE"
         short_gamma_desc = f"🟡 臨界（緩衝 {flip_buf:+.2f}%），盤中轉負即踩踏"
     else:
+        gamma_state = "NORMAL"
         short_gamma_desc = "🟢 NORMAL (網格步長正常)"
     if gex_is_fallback:
         short_gamma_desc += " [備援估算]"
 
     if gex_is_expired:
         short_gamma_status = "\u001b[1;33m⚪ 未知 (GEX 快取過期，不納入判定)\u001b[0m"
-    elif macro_data.get("short_gamma_critical", False):
+    elif gamma_state == "CRITICAL":
         short_gamma_status = f"\u001b[1;31m{short_gamma_desc}\u001b[0m"
-    elif short_gamma_desc.startswith("🟡"):
+    elif gamma_state in ("NEGATIVE", "KNIFE_EDGE"):
         short_gamma_status = f"\u001b[1;33m{short_gamma_desc}\u001b[0m"
     else:
         short_gamma_status = f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
@@ -2022,7 +2078,11 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     )
     flip_val_str = (
         f"\u001b[1;35m{float(gamma_flip_line):,.2f}\u001b[0m{gex_suffix}"
-        + (f" (SPY 緩衝 {flip_buf:+.2f}%)" if flip_buf is not None else "")
+        + (
+            f" (SPY 緩衝 {flip_buf:+.2f}%)"
+            if flip_buf is not None and not _spy_ratio_suspect(macro_data)
+            else ""
+        )
         if (gamma_flip_line is not None and float(gamma_flip_line) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
@@ -2043,6 +2103,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     ]
     complacency_note = _complacency_note(macro_data, vix, us10y, wti)
     if complacency_note:
+        risk_lines[-1] = risk_lines[-1].replace(" └─ ", " ├─ ", 1)
         risk_lines.append(complacency_note)
     risk_panel = "```ansi\n" + "\n".join(risk_lines) + "\n```"
 

@@ -19,7 +19,7 @@ def _text(embed: Any) -> str:
 
 def _macro(**over: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
-        "spx": 5150.0,
+        "spx": 1000.0,
         "vix": 18.0,
         "us10y": 4.25,
         "gamma_flip_line": 5180.0,
@@ -139,3 +139,89 @@ def test_complacency_not_fired() -> None:
         fedwatch_is_stale=True,
     )
     assert "低波自滿" not in stale
+
+
+# ───────────── 審查修正 ─────────────
+
+
+def _neg(**over: Any) -> str:
+    return _render(spy_spot=99.7, spy_gamma_flip=100.0, **over)
+
+
+def test_negative_gamma_reason_vix_missing() -> None:
+    text = _neg(vix=None)
+    assert "VIX 缺值" in text
+    assert "VIX/VTS 未達危機門檻" not in text
+
+
+def test_negative_gamma_reason_vix_high_vts_not_inverted() -> None:
+    text = _neg(vix=30.0, vts_ratio=0.95)
+    assert "VTS 0.95 未倒掛" in text
+    assert "VIX 30.0 ≤ 20" not in text
+
+
+def test_negative_gamma_reason_vts_stale_uses_vix_25() -> None:
+    text = _neg(vix=22.0, vts_ratio=None)
+    assert "VTS 缺值且 VIX 22.0 ≤ 25" in text
+    assert "VIX 22.0 ≤ 20" not in text
+
+
+def test_negative_gamma_reason_vix_low() -> None:
+    assert "VIX 18.0 ≤ 20" in _neg(vix=18.0, vts_ratio=0.9)
+
+
+def test_rrp_near_total_drain_past_large_prints_percentage() -> None:
+    # 0.3B 較 30 天前約 300B 下降 99.9%：過去為實質規模，百分比有意義
+    text = _render(rrp=0.3, rrp_change_30d=-99.9)
+    assert "-99.9%" in text and "小基數" not in text
+
+
+def test_rrp_full_drain_prints_percentage_not_omitted() -> None:
+    text = _render(rrp=0.3, rrp_change_30d=-100.0)
+    assert "30天變動" in text and "-100.0%" in text
+
+
+def test_rrp_large_past_prints_percentage() -> None:
+    # 現值 5B 但 30 天前約 50B：過去為實質規模，印百分比
+    text = _render(rrp=5.0, rrp_change_30d=-90.0)
+    assert "-90.0%" in text and "小基數" not in text
+
+
+def test_complacency_skips_fallback_fedwatch() -> None:
+    assert "低波自滿" not in _render(
+        vix=14.0, fedwatch_is_fallback=True, fedwatch_details={"prob_hike": 30.0}
+    )
+    assert "低波自滿" not in _render(
+        vix=14.0, fedwatch_details={"prob_hike": 30.0, "source": "fallback"}
+    )
+
+
+def test_complacency_line_is_last_tree_node() -> None:
+    text = _render(vix=15.4, us10y=5.23)
+    assert "├─ 安全提領紅線" in text
+    assert "└─ ⚠ 低波自滿" in text
+    assert "└─ 安全提領紅線" not in text
+    assert "└─ 安全提領紅線" in _render(vix=18.0)
+
+
+def test_spy_buffer_suffix_hidden_when_ratio_out_of_range() -> None:
+    # SPX 5150 / SPY 100 = 51.5：SPY 報價不可信
+    text = _render(spx=5150.0, spy_spot=100.07, spy_gamma_flip=100.0)
+    assert "SPY 緩衝" not in text
+    ok = _render(spx=1001.0, spy_spot=100.07, spy_gamma_flip=100.0)
+    assert "(SPY 緩衝 +0.07%)" in ok
+
+
+def test_border_warning_for_negative_and_knife_edge_only() -> None:
+    # NexusEmbed 會把 gold 正規化為警示色 0xF39C12、green 為 0x2ECC71、red 為 0xE74C3C
+    def _c(**over: Any) -> int:
+        emb = build_market_macro_overview_embed(_macro(**over))
+        return int(getattr(emb.color, "value"))
+
+    assert _c(spy_spot=99.7, spy_gamma_flip=100.0) == 0xF39C12
+    assert _c(spy_spot=100.07, spy_gamma_flip=100.0) == 0xF39C12
+    assert _c(spy_spot=102.0, spy_gamma_flip=100.0) == 0x2ECC71
+    assert (
+        _c(spy_spot=99.0, spy_gamma_flip=100.0, short_gamma_critical=True) == 0xE74C3C
+    )
+    assert _c(spy_spot=99.0, spy_gamma_flip=100.0, gex_is_expired=True) == 0x2ECC71
