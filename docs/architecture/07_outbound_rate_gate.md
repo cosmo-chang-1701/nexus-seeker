@@ -131,11 +131,15 @@ Finnhub 429：`trip(retry_after)`；互動請求直接外拋，背景請求**離
 | `api_budget._WINDOW_SECONDS` | `3600` (int) | 每小時配額摘要窗口；摘要同時輸出各來源的排隊 p95／最大值、逾時、滿載與冷卻次數 |
 | leaf 模組約束 | — | `rate_gate` 不 import 任何 service、不寫 DB、不開背景 task（`test_rate_gate_is_a_leaf_module` 強制） |
 
+LLM 用戶端另設 `AsyncOpenAI(timeout=120.0, max_retries=0)`：逾時由 SDK 預設 600 秒縮為 120 秒，並關閉 SDK 內建重試，使每一次實際送出的請求都經過閘門計數。HTTP 類來源（SEC 與後續低頻來源）共用 `services/http_gate.py`：取得 slot → `api_budget.record_call` → 送出 → 429／限流型 403 時 `trip(Retry-After)`、2xx 時 `mark_ok`，回應原樣回傳。
+
 ### 4.3 各閘門接線點
 | 閘門 | 接線位置 | 429／冷卻行為 |
 |---|---|---|
 | `finnhub` | `market_data_service/_core.py::_execute_api_call` | 見 §3.3 |
 | `yahoo` | `market_data_service/_core.py::yahoo_slot`（`call_yf`、`edge_get_yahoo`、`/x` 深度分析的 volume profile） | 見 §3.3；冷卻 60→900 秒，429 不走資料中心直連 |
+| `sec` | `services/sec_edgar_client.py` 的四個請求點，經 `services/http_gate.py` 的 `gated_request`／`gated_stream` | HTTP 429，或 HTTP 403 且內文含 `Request Rate Threshold` → `trip()`；其他 403 不算限流；冷卻中 `RateGateCooldownError` 由 `filing_event_service` 等呼叫端既有的例外隔離接住 |
+| `llm` | `services/llm_service.py` 的 `llm_parse`／`llm_create`（`attribution`、`fundamental_thesis`、`earnings_surprise_service`、`hedge_monitor_service` 與 `llm_service` 內 5 處皆已遷移） | `openai.RateLimitError` → `trip()`（Retry-After 取自回應標頭）；`RateLimitError`／`APIConnectionError`／`InternalServerError` 離開 slot 後重新排隊重試 1 次；`APITimeoutError` 不重試 |
 
 ---
 
@@ -153,6 +157,10 @@ Finnhub 429：`trip(retry_after)`；互動請求直接外拋，背景請求**離
 ## 6. 核心程式碼檔案路徑關聯
 - `nexus_core/services/rate_gate.py`
 - `nexus_core/services/api_budget.py`
+- `nexus_core/services/http_gate.py`
+- `nexus_core/services/sec_edgar_client.py`
+- `nexus_core/services/llm_service.py`
+- `nexus_core/config.py`
 - `nexus_core/services/market_data_service/_core.py`
 - `nexus_core/cogs/unified_terminal/symbol_deep_dive.py`
 - `nexus_core/market_analysis/volume_profile.py`
