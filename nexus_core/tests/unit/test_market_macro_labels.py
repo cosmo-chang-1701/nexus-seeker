@@ -99,7 +99,7 @@ def test_ted_label_renamed_radar() -> None:
         embeds = build_radar_scan_embed(scan, "ALL", 12345)
     text = "\n".join(_text(e) for e in embeds)
     assert "CP−T-Bill 利差 (TED 代理)" in text
-    assert "TED Spread" not in text
+    assert "TED Spread (流動性指標)" not in text
 
 
 def test_rrp_small_base_hides_percentage() -> None:

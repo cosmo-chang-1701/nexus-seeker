@@ -1419,7 +1419,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
         assert "SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m515.00\u001b[0m" in text
-        assert "TED Spread" not in text
+        assert "CP−T-Bill 利差" not in text
 
     # 10. 僅 TED Spread 存在，GEX Flip 為 None：不應出現 GEX Flip 行
     with patch("database.cache.get_kv_cache") as mock_kv:
@@ -1435,7 +1435,7 @@ def test_build_radar_scan_embed_ted_spread_rendering() -> None:
         embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
         text = get_embed_text(embeds[0])
         assert "🌍 雷達：宏觀數據發布與流動性枯竭警告" not in text
-        assert "TED Spread" not in text
+        assert "CP−T-Bill 利差" not in text
         assert "SPY 零 Gamma 線" not in text
 
 

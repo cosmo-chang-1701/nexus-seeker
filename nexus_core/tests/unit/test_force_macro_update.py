@@ -124,7 +124,7 @@ async def test_all_success_reports_every_component(env: _Env) -> None:
     title, desc = await _run()
     assert "系統控制" in title
     assert "**GEX**: SPY: $600.00 / Gamma Flip: 590.00" in desc
-    assert "**流動性指標**: TED Spread: 0.21" in desc
+    assert "**流動性指標**: CP−T-Bill 利差: 0.21" in desc
     assert "**FedWatch**: 最新利率定價已寫入資料庫" in desc
     assert "**總經日曆**: 已重新抓取並寫入快取" in desc
     assert "**CPI 偏差值**: 最新 CPI YoY 實際值與預測值已寫入資料庫" in desc
@@ -274,7 +274,7 @@ async def test_liquidity_fallback_is_not_shown_as_live_value(env: _Env) -> None:
     title, desc = await _run()
     assert "更新部分失敗" in title
     assert "流動性指標 更新失敗" in desc
-    assert "TED Spread: 0.15" not in desc
+    assert "CP−T-Bill 利差: 0.15" not in desc
     assert "SPY: $600.00 / Gamma Flip: 590.00" in desc
 
 
