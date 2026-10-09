@@ -311,3 +311,42 @@ def test_straddle_opposite_directions_not_paired() -> None:
     ]
     annotate_straddle_structures(entries)
     assert not any(e.get("structure") for e in entries)
+
+
+def test_credit_spread_short_leg_semantics() -> None:
+    """貸方價差（Bear Call／Bull Put）賣出腿標 spread_credit；借方與多腿不標。"""
+    # Bear Call（貸方）：賣低買高 Call
+    s, b = _entry(280.0, STO, 1000), _entry(290.0, BTO, 1000)
+    annotate_spread_structures([s, b])
+    assert s["spread_credit"] is True
+    assert s["spread_role"] == "SHORT_LEG"
+    assert "Bear Call Spread" in s["spread_label"]
+    assert "賣方看跌上限（貸方價差，定義風險封頂）" in s["intent"]
+
+    # Bull Put（貸方）：賣高買低 Put
+    s, b = _entry(100.0, STO, 1000, opt="PUT"), _entry(95.0, BTO, 1000, opt="PUT")
+    annotate_spread_structures([s, b])
+    assert s["spread_credit"] is True
+    assert "Bull Put Spread" in s["spread_label"]
+    assert "賣方看守地板（貸方價差，定義風險承接）" in s["intent"]
+
+    # Bull Call（借方）
+    s, b = _entry(1850.0, STO, 1000), _entry(1800.0, BTO, 1000)
+    annotate_spread_structures([s, b])
+    assert s["spread_credit"] is False
+    assert "價差獲利上限而非機構獨立封頂" in s["intent"]
+
+    # Bear Put（借方）
+    s, b = _entry(95.0, STO, 1000, opt="PUT"), _entry(100.0, BTO, 1000, opt="PUT")
+    annotate_spread_structures([s, b])
+    assert s["spread_credit"] is False
+    assert "Bear Put Spread" in s["spread_label"]
+    assert "屬價差下行目標，非機構獨立承接地板" in s["intent"]
+
+    # 多腿組合：維持舊文案
+    s = _entry(1075.0, STO, 12000)
+    annotate_spread_structures(
+        [s, _entry(1070.0, BTO, 12700), _entry(1080.0, BTO, 14000)]
+    )
+    assert s["spread_credit"] is False
+    assert "多腿組合" in s["spread_label"]

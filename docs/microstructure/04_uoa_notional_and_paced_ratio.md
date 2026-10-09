@@ -175,6 +175,8 @@ flowchart TD
    - **生效日 2026-10-07**：此日起 30 分鐘管線的物理封頂 STO 清單會比先前少（過時成交與窄價差不再算 STO）。這是資料清洗，不是閘門門檻變更；calibration 比較前後樣本時須以此日分段。
 
 8. **推測語氣與交叉引用對齊（2026-10-08 起）**：價差配對只依「同到期日、同類型、成交量 1:1」的日累積量推測，未必是同一筆下單，因此 intent 一律寫「疑似{標籤}賣出腿／買入腿（日累積配對）」；`spread_label`、`spread_role` 的**值不變**。`/x` 的「大單 ↔ PutWall 分歧」取自全鏈封頂掃描，與前 5 大 UOA 表母體不同：該筆 (到期日, 履約價, PUT) 不在表內時標〔全鏈掃描，表外〕，到期日與 GEX 涵蓋的到期日不同時標〔跨到期〕（見 [`01_gex_topology_and_walls.md`](01_gex_topology_and_walls.md) §2.1）。
+9. **價差四分類與貸方賣出腿（PR fix/x-panel-wall-integrity）**：`annotate_spread_structures()` 依買入腿相對賣出腿的位置分類——Bull Call（借方）、Bear Call（**貸方**，賣低買高 Call）、Bull Put（**貸方**，賣高買低 Put）、Bear Put（借方）；多腿組合（兩側皆有買入腿）維持舊文案。賣出腿新增欄位 `spread_credit`（貸方為 True），貸方 `role_note` 改為「賣方看跌上限（貸方價差，定義風險封頂）」／「賣方看守地板（貸方價差，定義風險承接）」；`spread_role`、`spread_label` 的值不變，`detect_uoa_sto_call_physical_cap` 照樣跳過 SHORT_LEG（閘門不動）。全鏈封頂清單對應項同步標 `spread_credit`，`/x` 以「非價差腿，或貸方價差賣出腿」為呈現條件：PutWall 分歧加〔貸方價差〕、上檔新增 STO CALL「封頂」行（距 CallWall 不超過 `_GEX_STO_DIVERGENCE_THRESHOLD_PCT` 或在其下方）。
+10. **被跌破的 STO Put（呈現層）**：STO PUT 履約價 $>$ 現價且 $\le$ 現價 $\times (1+5\%)$（`_STO_PUT_BREACH_MAX_PCT = 5.0`，PRE_CALIBRATION）時，`/x` 下檔輸出「已跌破(價內)：賣方轉虧，承接失效，續跌恐回補/指派拋壓（啟發式）」，避免護盤型 STO Put 被跌破後訊號消失。
 
 ## 6. 核心程式碼檔案路徑關聯
 
