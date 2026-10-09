@@ -148,3 +148,65 @@ def test_mrvl_without_callwall_within_budget() -> None:
         total += len(embed.footer.text)
     total += sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
     assert total <= 5600, f"總字數 {total} 超過 5600 緩衝線"
+
+
+def _total_chars(embed: Any) -> int:
+    total = len(embed.title or "") + len(embed.description or "")
+    if embed.footer and embed.footer.text:
+        total += len(embed.footer.text)
+    return total + sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
+
+
+def _render_at_night(data: dict[str, Any]) -> Any:
+    from market_time import ny_tz
+    from datetime import datetime
+
+    now = datetime(2026, 10, 7, 21, 14, tzinfo=ny_tz)
+
+    class _FakeDT(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> "_FakeDT":
+            return now  # type: ignore[return-value]
+
+    with patch("cogs.embed_builders.portfolio_embeds.datetime", _FakeDT):
+        return create_tactical_symbol_embed(data)
+
+
+# PR-A（牆體真偽）前的 MRVL fixture 總字數基準；淨增須 ≤ +120。
+_MRVL_BASELINE_CHARS = 4100
+
+
+def test_mrvl_net_increase_within_120_chars() -> None:
+    embed = _render_at_night(_mrvl_data())
+    assert any("🧲 Gamma 曝險分布" in (f.name or "") for f in embed.fields)
+    total = _total_chars(embed)
+    assert total - _MRVL_BASELINE_CHARS <= 120, f"淨增 {total - _MRVL_BASELINE_CHARS}"
+
+
+def test_wall_integrity_worst_case_within_budget() -> None:
+    """紙牆＋貼牆＋STO CALL 封頂行＋STO PUT 跌破行同時觸發：不得被 5800 靜默丟欄。"""
+    d = _mrvl_data()
+    d["gex_profile_data"]["gex_profile"]["270.0"] = 200_000  # 紙牆
+    d["gex_profile_data"]["call_wall"] = 284.9  # 貼牆
+    d["gex_profile_data"]["gex_profile"]["285.0"] = 522188798
+    d["sto_physical_cap_strikes"] = d["sto_physical_cap_strikes"] + [
+        {
+            "strike": 286.0, "type": "CALL", "expiry": "2026-10-16",
+            "volume": 1200, "oi": 3000, "ratio": 0.4,
+            "notional_value": 1_200_000.0, "structure_leg": True,
+            "spread_credit": True,
+        },
+        {
+            "strike": 287.0, "type": "PUT", "expiry": "2026-10-09",
+            "volume": 46000, "oi": 50000, "ratio": 0.9,
+            "notional_value": 9_000_000.0,
+        },
+    ]  # fmt: skip
+    embed = _render_at_night(d)
+    names = [f.name or "" for f in embed.fields]
+    assert any("🧲 Gamma 曝險分布" in n for n in names)
+    assert len(embed.to_dict()["fields"]) == len(embed.fields), "欄位被靜默 pop"
+    text = "\n".join(f.value or "" for f in embed.fields)
+    assert "〔紙牆" in text and "貼牆" in text
+    assert "STO CALL 1,200口" in text and "已跌破(價內)" in text
+    assert _total_chars(embed) <= 5600

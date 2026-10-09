@@ -91,7 +91,7 @@ def test_mu_putwall_on_negative_net_gex_is_disclosed() -> None:
         }
     )
     assert "PutWall: $1045.00" in text
-    assert "淨 GEX -$394K 為負" in text
+    assert "淨GEX -$394K，實為助跌區" in text
     assert "淨 GEX 最大支撐: $1040.00" in text
 
 

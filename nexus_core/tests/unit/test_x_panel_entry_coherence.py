@@ -55,9 +55,23 @@ def test_sweet_spot_downgraded_when_upside_room_insufficient() -> None:
     assert "✅ 進場甜蜜點" not in desc
     assert "✅ 停損距離合格" in desc
     assert "❌ 上檔空間 0.24% 不足 10.47%，非進場點" in desc
-    # (1100 − 1097.39) / (1097.39 − 1045.16) = 0.05；淨 GEX 錨 (1070 → 1065.16) = 0.08
-    assert "短線盈虧比 (期權視角，至 CallWall $1100.00): 0.05:1 ❌" in desc
-    assert "淨 GEX 支撐錨 $1070.00 0.08:1 ❌" in desc
+    # CallWall 距現價 0.24% < 貼牆帶 0.88%（9.68/1097.39）：盈虧比改為單行「上檔已封頂」
+    assert "📌 貼牆(<0.88%)" in desc
+    assert "短線盈虧比: ⛔ 上檔已封頂（距 CallWall 0.24% < 0.88%），不計" in desc
+    assert ":1 ❌" not in desc
+
+
+def test_rr_alt_anchor_kept_when_not_hugging_callwall() -> None:
+    """非貼牆（CallWall 距 1.15% > 貼牆帶 0.88%）時，盈虧比雙錨邏輯維持。"""
+    data = _mu_case()
+    data["gex_profile_data"]["call_wall"] = 1110.0
+    data["gex_profile_data"]["gex_profile"]["1110.0"] = 8_850_000_000
+    desc = _embed_text(data)
+    assert "🧲 Gamma 曝險分布" in desc
+    assert "貼牆" not in desc
+    # (1110 − 1097.39) / (1097.39 − 1045.16) = 0.24；淨 GEX 錨 (1070 → 1065.16) = 0.39
+    assert "短線盈虧比 (期權視角，至 CallWall $1110.00): 閘門 0.24:1 ❌" in desc
+    assert "淨 GEX 支撐錨 $1070.00 0.39:1 ❌" in desc
     assert "(門檻 2.2:1)" in desc
 
 

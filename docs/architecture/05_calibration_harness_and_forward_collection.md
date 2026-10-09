@@ -459,6 +459,8 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **前向蒐集新欄位**：`regime_evaluation_log.features_json` 於 `REGIME_CLASSIFIER` 與右側／左側進場閘門紀錄中加入 `support_wall`、`support_gex`（現價下方淨 GEX 最大正值，不套薄牆門檻）、`put_wall_gex`、`adv_dollar_20d`，以及閘門紀錄的 `skew_percentile`、`skew_percentile_source`（`CANONICAL`／`INTRADAY_FALLBACK`，雷達快速路徑可能為空，可由 `sentiment_daily_canonical` 在該日之前的筆數離線推回）。有了這些欄位，production 資料就能以事後走勢驗證牆體深度比與 Skew 門檻。
 
+**生效日 2026-10-09（ADV 同源注入）**：此日起 `/x`（`SYMBOL_VIEW` 來源，含「進場檢核」按鈕）的 `gex_profile_data` 帶 `adv_dollar_20d`，其 regime 紀錄的牆體門檻（`_scan_gex_walls`、`_scan_resistance_wall_above_spot`、`_shared.py` 重錨）改用 ADV 正規化的薄牆門檻，與雷達來源一致；先前 `SYMBOL_VIEW` 紀錄只有 500K 絕對下限。calibration 比較前後樣本須以此日分段。ADV 與雷達同公式（`avg_vol_20d × 現價`），皆含當日未完成 K 棒，盤中會偏低。PutWall 真偽可離線重建：`put_wall_gex < thin_wall_threshold(adv_dollar_20d)` 為紙牆，`put_wall_gex < 0` 為助跌區。
+
 此外，`gex_profile` 可用時會再記錄 Gamma Flip 重要性：`gamma_flip_raw`（閘門用的 `estimate_symbol_gamma_flip()`）、`gamma_flip_ratio`、`gamma_flip_neg_peak`、`gamma_flip_material_5pct`（排除重要性比 < 5% 的交叉後的 Flip）。沿用 `_num()` 慣例，0 記為 None，因此 `gamma_flip_raw` 有值而 `gamma_flip_material_5pct` 為空，代表排除雜訊後就沒有 Flip。
 
 **基準結果（2026-09-22 單日快照，106 檔；^SKEW 2000-01 ~ 2026-09，6,586 個交易日）**：

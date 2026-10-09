@@ -565,23 +565,32 @@ async def detect_uoa_with_physical_caps(
         top5_uoa_list = sorted(
             uoa_list, key=lambda x: x["notional_value"], reverse=True
         )[:5]
+
         # 跨式／價差賣出腿不是方向性地板或天花板：標記供呈現層過濾
-        leg_keys = {
-            (
+        def _leg_key(e: dict) -> tuple:
+            return (
                 e.get("expiry"),
                 float(e.get("strike", 0.0)),
                 str(e.get("type", "")).upper(),
             )
+
+        leg_keys = {
+            _leg_key(e)
             for e in uoa_list
             if e.get("structure") == "STRADDLE" or e.get("spread_role") == "SHORT_LEG"
         }
+        # 貸方價差（Bear Call／Bull Put）賣出腿另記，供呈現層與影子判定使用
+        credit_keys = {
+            _leg_key(e)
+            for e in uoa_list
+            if e.get("spread_role") == "SHORT_LEG" and e.get("spread_credit")
+        }
         for cap in physical_cap_strikes:
-            if (
-                cap.get("expiry"),
-                float(cap.get("strike", 0.0)),
-                str(cap.get("type", "")).upper(),
-            ) in leg_keys:
+            _ck = _leg_key(cap)
+            if _ck in leg_keys:
                 cap["structure_leg"] = True
+                if _ck in credit_keys:
+                    cap["spread_credit"] = True
         return top5_uoa_list, physical_cap_strikes
 
     except Exception as e:

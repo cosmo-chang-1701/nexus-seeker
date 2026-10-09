@@ -560,11 +560,22 @@ def annotate_spread_structures(entries: list[dict]) -> None:
             if basis_note and intent.endswith(basis_note):
                 intent = intent[: -len(basis_note)]
             head = intent.rsplit("，", 1)[0] if "，" in intent else intent
-            role_note = (
-                "代表價差獲利上限而非機構獨立封頂"
-                if is_call
-                else "屬價差結構邊界，非機構獨立承接地板"
+            # 貸方價差（Bear Call／Bull Put）的賣出腿是該方向的核心觀點（賣方看跌
+            # 上限／看守地板，風險由買入腿定義封頂）；借方價差與多腿組合維持舊文案。
+            credit = (is_call and bool(above) and not below) or (
+                not is_call and bool(below) and not above
             )
+            short_leg["spread_credit"] = credit
+            if credit and is_call:
+                role_note = "賣方看跌上限（貸方價差，定義風險封頂）"
+            elif credit:
+                role_note = "賣方看守地板（貸方價差，定義風險承接）"
+            elif is_call:
+                role_note = "代表價差獲利上限而非機構獨立封頂"
+            elif above and not below:
+                role_note = "屬價差下行目標，非機構獨立承接地板"
+            else:
+                role_note = "屬價差結構邊界，非機構獨立承接地板"
             short_leg["intent"] = (
                 f"{head}，🔗 疑似{label}賣出腿（日累積配對），{role_note}{basis_note}"
             )

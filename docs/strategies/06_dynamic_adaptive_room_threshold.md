@@ -205,9 +205,12 @@ flowchart TD
     - Gamma 體制區塊在「全鏈 Long Gamma 且 $0 \le$ 上檔空間 $\le 1 \times \text{ATR}_{1D}/\text{Spot}$」（ATR₁D 不可得退回 $1\%$，`_PIN_FALLBACK_BAND_PCT`）時加註「📌 釘住效應」：做市商逆勢避險壓制突破延續。
     - 以上皆為呈現層；引擎閘門（`opportunity_cost.py` 條件三本來就交叉判定空間）不變。
 
+    - **降級 TOO_TIGHT 與主錨標示（PR fix/x-panel-wall-integrity）**：只要下行緩衝為 `TOO_TIGHT`（含 `min_pct` 為 None 的降級路徑），主盈虧比 ✅ 一律改標「⚠ 停損過窄、比值虛高」（旗標 `put_too_tight`，不再依賴 `put_min_stop_frac`）；PutWall 為助跌區或紙牆且有淨 GEX 支撐錨時，主項前綴加「閘門」。
+    - **CallWall 貼牆帶**：距 CallWall $< \max(\text{ATR}_{15m}/\text{Spot},\ 0.10\%)$（常數 `_CALLWALL_HUG_MIN_PCT = 0.10`，PRE_CALIBRATION／僅呈現）時，空間行尾加「📌 貼牆(<帶寬%)」（帶寬為實際 $\max(\text{ATR}_{15m}/\text{Spot},\ 0.10\%)$，ATR 缺失時即 0.10%），盈虧比改為單行「上檔已封頂，不計」，不再算出 ✅ 或虛低比值。
+
 9. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
-10. **日線噪音帶參考停損（並列、待校準）**：`/x` 在結構停損行尾並列「｜日線參考 $x (↓y%)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（倍數為 `room_threshold._DAILY_NOISE_STOP_ATR_1D_MULT`，/x 與 calibration 共用）。ATR₁D 先取 `atr_1d`、再取 `atr_14`，並以 `is_valid_daily_atr()` 排除 $0.01$ 佔位值（與 §5 第 2 點同一判定）；PutWall 不低於現價、停損不低於現價、PutWall 異常降級分支、淨 GEX 助跌區分支（PutWall 已被宣告不可靠）皆不輸出。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
+10. **日線噪音帶參考停損（並列、待校準）**：`/x` 在結構停損行尾並列「｜日線參考 $x (↓y%)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（倍數為 `room_threshold._DAILY_NOISE_STOP_ATR_1D_MULT`，/x 與 calibration 共用）。ATR₁D 先取 `atr_1d`、再取 `atr_14`，並以 `is_valid_daily_atr()` 排除 $0.01$ 佔位值（與 §5 第 2 點同一判定）；PutWall 不低於現價、停損不低於現價、PutWall 異常降級分支、淨 GEX 助跌區或紙牆分支（PutWall 已被宣告不可靠）皆不輸出。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
 
 11. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
 
