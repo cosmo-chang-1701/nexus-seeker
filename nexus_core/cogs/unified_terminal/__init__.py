@@ -1,6 +1,6 @@
 from typing import Any
 from .cog import UnifiedTerminalCog
-from .symbol_view import SymbolHubView
+from .symbol_view import SymbolHubView, SymbolBatchHubView
 from .portfolio_view import PortfolioHubView
 from .pulse_view import PulseHubView
 from .batch_scan_view import BatchScanPaginatedView, BatchScanWarningButton
@@ -22,6 +22,7 @@ from cogs.embed_builder import (
 __all__ = [
     "UnifiedTerminalCog",
     "SymbolHubView",
+    "SymbolBatchHubView",
     "PortfolioHubView",
     "PulseHubView",
     "BatchScanPaginatedView",

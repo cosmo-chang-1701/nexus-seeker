@@ -3,6 +3,7 @@
 import asyncio
 import math
 import logging
+import re
 from typing import TYPE_CHECKING, Any, List, Optional
 
 import discord
@@ -22,7 +23,7 @@ from market_analysis.sentiment.max_pain import find_settlement_gravity
 import market_math
 
 from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
-from .symbol_view import SymbolHubView
+from .symbol_view import SymbolBatchHubView, SymbolHubPage, SymbolHubView
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,32 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return float(value) if value is not None else default
     except (TypeError, ValueError):
         return default
+
+
+# /x 多標的（逗號分隔）批次分析的上限與逾時。
+_MAX_BATCH_SYMBOLS = 10  # 單次最多標的數（一則訊息逐檔換頁）
+_BATCH_CONCURRENCY = 2  # 同時分析的標的數；CPU／記憶體併發上限，非對外 API 限流
+# 整批期限：互動 token 壽命 15 分鐘，結果訊息的 View 逾時（300 秒）移除按鈕仍要用
+# 原 token，故 540 + 300 < 900。不設單檔逾時：SingleFlight 以 shield 包住抓取，
+# 取消等待端並不會停止抓取，單檔逾時後釋放併發名額只會讓背景抓取越疊越多。
+_BATCH_DEADLINE_S = 540.0
+_PROGRESS_EDIT_TIMEOUT_S = 5.0  # 進度訊息編輯的等待上限（撞 webhook 限流時不拖慢整批）
+
+# 合法代號不含這些分隔字元（見 quote.py `_TICKER_PATTERN`）
+_SYMBOL_SPLIT_RE = re.compile(r"[,，、;；\s]+")
+
+
+def parse_symbol_list(raw: str) -> list[str]:
+    """將 /x symbol 參數切成代號清單：支援半／全形逗號、頓號、分號與空白分隔，
+    逐段清洗（去 `$`、轉大寫）、丟棄空段，並保序去重。"""
+    seen: set[str] = set()
+    result: list[str] = []
+    for part in _SYMBOL_SPLIT_RE.split(raw or ""):
+        sym = _sanitize_ticker(part)
+        if sym and sym not in seen:
+            seen.add(sym)
+            result.append(sym)
+    return result
 
 
 # /x 的 Kelly 欄位以「賣出 16Δ Put」為參考單位（單口 Delta 再乘 β×S/SPY×100 換成 SPY 等值股數）
@@ -823,38 +850,28 @@ class SymbolDeepDiveMixin:
 
         return result
 
-    @market_data_service.interactive
-    async def _run_single_symbol_hub(
-        self,
-        interaction: discord.Interaction,
-        symbol: str,
-        user_id: int,
-        embeds_accumulator: Optional[List[discord.Embed]] = None,
-    ) -> Any:
+    async def _build_symbol_hub_page(self, symbol: str, user_id: int) -> SymbolHubPage:
+        """建構單一標的的分析頁；任何失敗皆回傳錯誤頁（base_data 為 None），不拋例外。
+
+        單檔與多檔流程共用。例外細節只寫入日誌，不顯示給使用者。
+        """
         # 與 market_data_service 各抓取函式同一套清洗規則（去空白、去 `$` 前後綴、
         # 轉大寫，保留 BRK.B 的 `.`）。只做 upper() 會讓 " nvda" 以 " NVDA" 通過
         # validate_symbol（其內部自行 strip），卻以帶空白的代號組 SingleFlight 鍵、
         # 比對持倉成本、傳給不自行清洗的下游；"$NVDA" 則會被誤判為無效代號。
         symbol = _sanitize_ticker(symbol)
-        if not symbol or not await market_data_service.validate_symbol(symbol):
-            error_emb = create_error_embed(
-                (
-                    f"無效的標的代號: `{symbol}`"
-                    if symbol
-                    else "請輸入有效的股票代號（例如 NVDA、BRK.B）。"
-                ),
-                title="輸入錯誤",
-            )
-            if embeds_accumulator is not None:
-                embeds_accumulator.append(error_emb)
-                return
-            else:
-                return await interaction.followup.send(
-                    embed=error_emb,
-                    ephemeral=True,
-                )
-
         try:
+            if not symbol or not await market_data_service.validate_symbol(symbol):
+                error_emb = create_error_embed(
+                    (
+                        f"無效的標的代號: `{symbol}`"
+                        if symbol
+                        else "請輸入有效的股票代號（例如 NVDA、BRK.B）。"
+                    ),
+                    title="輸入錯誤",
+                )
+                return SymbolHubPage(symbol, None, error_emb)
+
             # 🚀 Task 2 Hook: Coalesced fetch using SingleFlightManager
             from services.single_flight import SingleFlightManager
 
@@ -867,26 +884,131 @@ class SymbolDeepDiveMixin:
             result = await self._process_symbol_hub_data(symbol, user_id, data)
 
             main_embed = create_tactical_symbol_embed(result)
-
-            view = SymbolHubView(symbol, user_id, self.bot)
-            view.base_data = result
-
-            if embeds_accumulator is not None:
-                embeds_accumulator.append(main_embed)
-            else:
-                await interaction.followup.send(
-                    embed=main_embed, view=view, ephemeral=True
-                )
+            return SymbolHubPage(symbol, result, main_embed)
 
         except Exception as e:
             logger.exception(f"Symbol Hub Error for {symbol}: {e}")
             error_emb = create_error_embed(
                 f"載入 `{symbol}` 資料時發生錯誤，請稍後再試。"
             )
-            if embeds_accumulator is not None:
-                embeds_accumulator.append(error_emb)
-            else:
-                await interaction.followup.send(
-                    embed=error_emb,
-                    ephemeral=True,
+            return SymbolHubPage(symbol, None, error_emb)
+
+    @market_data_service.interactive
+    async def _run_single_symbol_hub(
+        self,
+        interaction: discord.Interaction,
+        symbol: str,
+        user_id: int,
+        embeds_accumulator: Optional[List[discord.Embed]] = None,
+    ) -> Any:
+        page = await self._build_symbol_hub_page(symbol, user_id)
+
+        if embeds_accumulator is not None:
+            embeds_accumulator.append(page.embed)
+            return
+
+        if page.base_data is None:
+            return await interaction.followup.send(embed=page.embed, ephemeral=True)
+
+        view = SymbolHubView(page.symbol, user_id, self.bot)
+        view.base_data = page.base_data
+        # wait=True：讓 View 以 message id 登記。未帶時會以 message_id=None 登記，
+        # 而 SymbolHubView 的 custom_id 固定，後送出的 /x 會覆蓋前一個 View，
+        # 點舊訊息的按鈕會作用在最新那個 View 上。
+        await interaction.followup.send(
+            embed=page.embed, view=view, ephemeral=True, wait=True
+        )
+
+    @market_data_service.interactive
+    async def _run_multi_symbol_hub(
+        self,
+        interaction: discord.Interaction,
+        symbols: list[str],
+        user_id: int,
+    ) -> Any:
+        """多標的深度分析：全程不使用 followup，結果以單則訊息逐檔換頁呈現。"""
+        from services.llm_service import is_memory_safe
+
+        total = len(symbols)
+        # CPU／記憶體併發上限，不是對外 API 限流（對外限流仍由 rate_gate 負責）。
+        # 名額持有到該檔抓取真正結束（不設單檔逾時），背景抓取數因此不超過此值。
+        sem = asyncio.Semaphore(_BATCH_CONCURRENCY)
+
+        def _error_page(sym: str, message: str, title: str) -> SymbolHubPage:
+            return SymbolHubPage(sym, None, create_error_embed(message, title=title))
+
+        async def _analyze(sym: str) -> SymbolHubPage:
+            async with sem:
+                if not is_memory_safe():
+                    return _error_page(
+                        sym, f"記憶體水位過高，已略過 `{sym}`。", "資源不足"
+                    )
+                return await self._build_symbol_hub_page(sym, user_id)
+
+        tasks = [asyncio.create_task(_analyze(sym)) for sym in symbols]
+
+        # 進度更新由此處依序送出（數字單調遞增），不佔用各檔任務的時間
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BATCH_DEADLINE_S
+        pending: set[asyncio.Task[SymbolHubPage]] = set(tasks)
+        while pending:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            _, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            if pending:
+                try:
+                    await asyncio.wait_for(
+                        interaction.edit_original_response(
+                            content=f"⏳ 分析中 {total - len(pending)}/{total}…"
+                        ),
+                        _PROGRESS_EDIT_TIMEOUT_S,
+                    )
+                except Exception as e:
+                    logger.debug(f"/x 多檔進度更新失敗（忽略）: {e}")
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        # 依輸入順序重組；未完成者為逾時頁，例外者為一般錯誤頁
+        pages: list[SymbolHubPage] = []
+        for sym, t in zip(symbols, tasks):
+            if t.cancelled():
+                pages.append(
+                    _error_page(sym, f"⏱️ `{sym}` 分析逾時，請改為單獨查詢。", "逾時")
                 )
+            elif t.exception() is not None:
+                logger.error(f"/x 多檔分析任務例外 {sym}: {t.exception()!r}")
+                pages.append(
+                    _error_page(
+                        sym, f"載入 `{sym}` 資料時發生錯誤，請稍後再試。", "錯誤"
+                    )
+                )
+            else:
+                pages.append(t.result())
+
+        first_ok = next(
+            (i for i, p in enumerate(pages) if p.base_data is not None), None
+        )
+        if first_ok is None:
+            # 逐檔列出原因（無效代號／資源不足／逾時），避免使用者誤以為系統故障
+            reasons = "\n".join(
+                f"• {p.symbol or '（空白）'}：{p.embed.description or '載入失敗'}"
+                for p in pages
+            )
+            await interaction.edit_original_response(
+                content=None,
+                embed=create_error_embed(
+                    f"以下標的皆無法載入：\n{reasons}", title="載入失敗"
+                ),
+            )
+            return
+
+        view = SymbolBatchHubView(pages, user_id, self.bot, start_index=first_ok)
+        view.last_interaction = interaction
+        await interaction.edit_original_response(
+            content=None, embed=view.current_embed(), view=view
+        )
