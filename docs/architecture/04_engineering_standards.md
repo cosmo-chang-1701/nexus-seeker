@@ -173,6 +173,10 @@ sequenceDiagram
 | `EMBED_CHUNK_MAX_COUNT`| `10` 個 | `chunk_embeds` 單包 Embed 數量硬上限 | `nexus_core/cogs/embed_builders/_embed_helpers.py:1010` |
 | `TEMP_TABLE_PATTERN` | `^[a-zA-Z0-9_]+$` | SQLite 殘留暫存表名稱安全白名單正則 | `nexus_core/database/core.py:72` |
 | `VIEW_TIMEOUT` | `300.0` 秒 | 批次分頁 View 之互動存活逾時限制 | `nexus_core/cogs/unified_terminal/batch_scan_view.py:141` |
+| `_MAX_BATCH_SYMBOLS` | `10` 檔 | `/x symbol:` 逗號分隔多標的單次查詢上限（一則訊息逐檔換頁） | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:39` |
+| `_BATCH_CONCURRENCY` | `2` 檔 | `/x` 多標的同時分析數；CPU／記憶體併發上限，非對外 API 限流（限流由 `rate_gate` 負責） | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:40` |
+| `_BATCH_DEADLINE_S` | `540.0` 秒 | `/x` 多標的整批期限，未完成者轉逾時錯誤頁；540 + View 逾時 300 < 互動 token 15 分鐘壽命（逾時移除按鈕仍需原 token）。不設單檔逾時：SingleFlight 以 shield 包住抓取，取消等待端不會停止抓取 | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:44` |
+| `_PROGRESS_EDIT_TIMEOUT_S` | `5.0` 秒 | `/x` 多標的進度訊息編輯等待上限，撞 webhook 限流時不拖慢整批 | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:45` |
 | `QUEUE_DM_SPLIT_LIMIT` | `2000` 字元 | 持久化 DM 佇列純文字切割安全門檻（程式碼區塊友善） | `nexus_core/bot.py` |
 | `_BUSY_TIMEOUT_MS` | `15000` 毫秒 (15 秒) | 統一連線 busy timeout 設定，取代散落之 5s/15s/30s | `nexus_core/database/connection.py:19` |
 | `_WRITER_BUSY_TIMEOUT_MS` | `5000` 毫秒 (5 秒) | 寫入 worker 單次等待上限，配合退避重試控制最壞延遲 | `nexus_core/database/connection.py:23` |
@@ -268,6 +272,8 @@ sequenceDiagram
   - `chunk_embeds`: 5500 字元 / 10 個 Embed 雙約束背包切片器
 - `nexus_core/cogs/unified_terminal/batch_scan_view.py`
   - `BatchScanPaginatedView`: 單一訊息就地換頁視圖控制器（防 40094 限制）
+- `nexus_core/cogs/unified_terminal/symbol_view.py`
+  - `SymbolBatchHubView`: `/x symbol:NVDA,TSLA` 多標的單訊息逐檔換頁視圖（繼承 `SymbolHubView` 重用五顆功能按鈕；以 `edit_original_response` 送出使 View 以 message id 登記，防 40094 與 View 串線）
 - `nexus_core/database/core.py`
   - `run_migrations`: 70+ 版本 SQLite 遷移引擎與 `*_new` 暫存表自癒清理
 - `nexus_core/bot.py`

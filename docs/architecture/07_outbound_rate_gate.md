@@ -154,6 +154,7 @@ LLM 用戶端另設 `AsyncOpenAI(timeout=120.0, max_retries=0)`：逾時由 SDK 
 - **關閉的 loop**：`trip()` 通知時略過已關閉的 loop，`call_soon_threadsafe` 的 `RuntimeError` 被吞下。
 - **互動熔斷訊息相容**：`RateGateCooldownError` 的訊息固定為 `<Name> rate limited, fast-circuit to fallback`，`fundamentals.py` 等以字串判斷限流的呼叫端不需改動；`is_finnhub_rate_limit_error()` 另外以 `isinstance(exc, RateGateError)` 判斷 finnhub 來源的閘門例外。
 - **行為變更（上線後須用每小時 `📈 [API 配額]` 摘要確認）**：Finnhub 背景吞吐由 12 次/分提高到最多 35 次/分（總量仍 $\le 50$ 次/分）；背景排隊超過上限改拋例外（原本無限等待），呼叫端已有 except 路徑退回快取或回空；Finnhub 互動排隊超過 15 秒改用 yfinance，Yahoo 互動排隊超過 20 秒回傳 `None`；`/x` 深度分析的 volume profile 開始受 Yahoo 預算節流。目標：各來源 429 為 0、背景排隊 p95 小於 30 秒、逾時與滿載次數接近 0。
+- **`/x` 多標的深度分析**：`/x symbol:NVDA,TSLA` 最多 10 檔，以 `asyncio.Semaphore(2)` 限制同時分析的標的數（CPU／記憶體併發上限，不是對外限流，對外限流仍全由本閘門負責），整批沿用 `@interactive` 走互動通道；某檔因互動排隊逾時（`RateGateTimeoutError`）時，僅該檔個別欄位降級，不影響其他標的。整批期限 540 秒，未完成者轉為逾時錯誤頁；不設單檔逾時，併發名額持有到該檔抓取真正結束，背景抓取數因此不超過 2。
 - **測試輔助**：`rate_gate.reset_for_tests()` 清空所有閘門、冷卻與統計；`tests/conftest.py` 以 autouse fixture 於每個測試前後呼叫。測試以 `rate_gate._clock` 假時鐘搭配手動 `pump()` 驅動時間相關案例。
 
 ---

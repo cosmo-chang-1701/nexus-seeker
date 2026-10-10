@@ -3,7 +3,8 @@ import discord
 import asyncio
 import logging
 import math
-from typing import Dict, Optional
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 import database
 from services import news_service, reddit_service
@@ -98,10 +99,19 @@ class SymbolHubView(discord.ui.View):
         self, interaction: discord.Interaction, embed: Any = None
     ) -> Any:
         """恢復按鈕狀態並更新內容"""
+        self._apply_button_states()
+        # 守衛：embed=None 時不傳 embed 參數，避免按鈕失敗時把原畫面清空
+        # （比照 PulseHubView）；成功路徑一律帶 embed，行為不變。
+        kwargs: Dict[str, Any] = {"view": self}
+        if embed is not None:
+            kwargs["embed"] = embed
+        await interaction.edit_original_response(**kwargs)
+
+    def _apply_button_states(self) -> None:
+        """讀取結束後套用按鈕可用狀態的鉤子；預設全部啟用，子類別可覆寫。"""
         for child in self.children:
             if isinstance(child, discord.ui.Button):
                 child.disabled = False
-        await interaction.edit_original_response(embed=embed, view=self)
 
     @discord.ui.button(
         label="🏠 核心指標", style=discord.ButtonStyle.success, custom_id="btn_home"
@@ -463,6 +473,181 @@ class SymbolHubView(discord.ui.View):
             evaluation_recorder.reset_evaluation_source(eval_source_token)
             await self._reset_loading(interaction, embed=embed)
             await evaluation_recorder.flush_evaluations()
+
+
+# SymbolHubView 五顆功能按鈕的 custom_id（換頁 View 以此判斷是否需標記忙碌）
+_HUB_FEATURE_CUSTOM_IDS = frozenset(
+    {"btn_home", "btn_media", "btn_refresh", "btn_hedge", "btn_entry_rules"}
+)
+
+
+@dataclass
+class SymbolHubPage:
+    """多標的換頁中的單一頁面。`base_data` 為 None 代表該標的載入失敗（錯誤頁）。"""
+
+    symbol: str
+    base_data: Optional[Dict[str, Any]]
+    embed: discord.Embed
+
+
+class SymbolBatchHubView(SymbolHubView):
+    """/x 多標的深度分析：單則訊息逐檔換頁。
+
+    一檔 tactical embed 已逼近 6000 字上限，無法一則訊息放多檔；逐檔 followup.send
+    又會撞 Discord 40094（見 BatchScanPaginatedView），因此沿用 SymbolHubView 的
+    五顆功能按鈕，換頁時切換 `symbol`／`base_data` 即可重用所有 callback。
+    """
+
+    def __init__(
+        self,
+        pages: List[SymbolHubPage],
+        user_id: int,
+        bot: Any,
+        start_index: int = 0,
+    ) -> None:
+        if not pages:
+            raise ValueError("SymbolBatchHubView 至少需要一頁")
+        super().__init__(pages[0].symbol, user_id, bot)
+        self.pages = pages
+        self.index = min(max(start_index, 0), len(pages) - 1)
+        # 功能按鈕（含即時整理）執行中不得換頁，否則結果會寫到別頁
+        self._busy = False
+        self.last_interaction: Optional[discord.Interaction] = None
+
+        self.btn_prev: discord.ui.Button[Any] = discord.ui.Button(
+            label="◀ 上一檔",
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_batch_prev",
+            row=2,
+        )
+        self.btn_pos: discord.ui.Button[Any] = discord.ui.Button(
+            label="",
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_batch_pos",
+            disabled=True,
+            row=2,
+        )
+        self.btn_next: discord.ui.Button[Any] = discord.ui.Button(
+            label="下一檔 ▶",
+            style=discord.ButtonStyle.secondary,
+            custom_id="btn_batch_next",
+            row=2,
+        )
+        self.btn_prev.callback = self._on_prev  # type: ignore[method-assign]
+        self.btn_next.callback = self._on_next  # type: ignore[method-assign]
+        self.add_item(self.btn_prev)
+        self.add_item(self.btn_pos)
+        self.add_item(self.btn_next)
+
+        self._select_page(self.index)
+        self._apply_button_states()
+
+    def _select_page(self, index: int) -> None:
+        """切換目前頁，並同步 SymbolHubView 各 callback 讀取的 symbol／base_data。"""
+        self.index = index
+        page = self.pages[index]
+        self.symbol = page.symbol
+        self.base_data = page.base_data if page.base_data is not None else {}
+
+    def current_embed(self) -> discord.Embed:
+        """成功頁以最新 base_data（含即時整理後的資料）重建 embed，失敗退回快取。"""
+        page = self.pages[self.index]
+        if page.base_data is None:
+            return page.embed
+        try:
+            return create_tactical_symbol_embed(self.base_data)
+        except Exception as e:
+            logger.exception(f"[{page.symbol}] 換頁重建 embed 失敗，退回快取: {e}")
+            return page.embed
+
+    def _apply_button_states(self) -> None:
+        page = self.pages[self.index]
+        is_error_page = page.base_data is None
+        for child in self.children:
+            if isinstance(child, discord.ui.Button):
+                child.disabled = is_error_page
+        self.btn_prev.disabled = self.index <= 0
+        self.btn_next.disabled = self.index >= len(self.pages) - 1
+        self.btn_pos.disabled = True
+        prefix = "⚠️ " if is_error_page else ""
+        self.btn_pos.label = (
+            f"{prefix}{self.index + 1}/{len(self.pages)} · {page.symbol}"
+        )
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        """功能按鈕在 callback 開頭就先 defer，到 _set_loading 才停用按鈕；
+        若等到 _set_loading 才標記忙碌，這段空窗內換頁會讓功能按鈕讀到別頁的
+        symbol／base_data。因此在派送 callback 前就標記忙碌。"""
+        data: dict[str, Any] = (
+            dict(interaction.data) if isinstance(interaction.data, dict) else {}
+        )
+        if data.get("custom_id") in _HUB_FEATURE_CUSTOM_IDS:
+            if self._busy:
+                # 上一個功能按鈕仍在執行：僅確認互動，不重複執行
+                await interaction.response.defer()
+                return False
+            self._busy = True
+        return True
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        # callback 在 _reset_loading 之前就拋出例外時，不可讓換頁永久鎖死
+        self._busy = False
+        await super().on_error(interaction, error, item)
+
+    async def _set_loading(self, interaction: discord.Interaction) -> Any:
+        self.last_interaction = interaction
+        self._busy = True
+        try:
+            return await super()._set_loading(interaction)
+        except Exception:
+            self._busy = False
+            raise
+
+    async def _reset_loading(
+        self, interaction: discord.Interaction, embed: Any = None
+    ) -> Any:
+        self.last_interaction = interaction
+        try:
+            return await super()._reset_loading(interaction, embed=embed)
+        finally:
+            self._busy = False
+
+    async def _goto(self, interaction: discord.Interaction, new_index: int) -> None:
+        if self._busy:
+            # 功能按鈕仍在執行：僅確認互動，避免「此互動失敗」，不動頁面
+            await interaction.response.defer()
+            return
+        if not 0 <= new_index < len(self.pages):
+            await interaction.response.defer()
+            return
+        # 保留即時整理後的新資料；錯誤頁的 {} 佔位不可寫回而變成成功頁
+        current = self.pages[self.index]
+        if current.base_data is not None:
+            current.base_data = self.base_data
+        self._select_page(new_index)
+        self._apply_button_states()
+        self.last_interaction = interaction
+        await interaction.response.edit_message(embed=self.current_embed(), view=self)
+
+    async def _on_prev(self, interaction: discord.Interaction) -> None:
+        await self._goto(interaction, self.index - 1)
+
+    async def _on_next(self, interaction: discord.Interaction) -> None:
+        await self._goto(interaction, self.index + 1)
+
+    async def on_timeout(self) -> None:
+        """逾時後移除按鈕，避免殘留點了只會顯示「此互動失敗」的殭屍按鈕。"""
+        if self.last_interaction is None:
+            return
+        try:
+            await self.last_interaction.edit_original_response(view=None)
+        except Exception as e:
+            logger.debug(f"SymbolBatchHubView 逾時移除按鈕失敗: {e}")
 
 
 class WatchlistHeartbeatView(discord.ui.View):

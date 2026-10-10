@@ -19,7 +19,11 @@ from .utils import get_macro_overview_data
 from .portfolio_view import PortfolioHubView
 from .pulse_view import PulseHubView
 from .batch_scan import BatchScanMixin
-from .symbol_deep_dive import SymbolDeepDiveMixin
+from .symbol_deep_dive import (
+    _MAX_BATCH_SYMBOLS,
+    SymbolDeepDiveMixin,
+    parse_symbol_list,
+)
 from .radar_data import RadarDataMixin
 
 logger = logging.getLogger(__name__)
@@ -41,7 +45,7 @@ class UnifiedTerminalCog(
         name="x", description="🌌 標的分析中心：一站式獲取報價、量化掃描與情緒分析"
     )
     @app_commands.describe(
-        symbol="股票代號 (如 NVDA，與 scan_type 二擇一)",
+        symbol="股票代號 (如 NVDA；多檔以逗號分隔如 NVDA,TSLA，上限 10 檔；與 scan_type 二擇一)",
         scan_type="批次掃描類型 (留空則開啟量化雷達面板)",
         tag="Watchlist 標籤過濾 (僅在 scan_type 為 WATCHLIST 時生效)",
         squeeze="僅顯示擠壓觸發且動能轉正 (Squeeze Firing) 的標的",
@@ -89,10 +93,40 @@ class UnifiedTerminalCog(
                     ephemeral=True,
                 )
 
-            # 2. 單一標的深度分析（代號正規化與格式驗證由 _run_single_symbol_hub
-            # 統一處理：去空白、去 `$` 前後綴、轉大寫）
+            # 2. 標的深度分析：單檔走 _run_single_symbol_hub（代號正規化與格式驗證
+            # 在 _build_symbol_hub_page 統一處理：去空白、去 `$` 前後綴、轉大寫）；
+            # 逗號分隔多檔則以單則訊息逐檔換頁呈現。
             if symbol is not None:
-                await self._run_single_symbol_hub(interaction, symbol, user_id)
+                symbols = parse_symbol_list(symbol)
+                if len(symbols) <= 1:
+                    # ",," 或 "$" 解析為空清單時，傳空字串落入既有「請輸入有效的股票代號」
+                    await self._run_single_symbol_hub(
+                        interaction, symbols[0] if symbols else "", user_id
+                    )
+                    return
+
+                if len(symbols) > _MAX_BATCH_SYMBOLS:
+                    return await interaction.followup.send(
+                        embed=create_error_embed(
+                            f"一次最多查詢 {_MAX_BATCH_SYMBOLS} 檔標的"
+                            f"（本次 {len(symbols)} 檔），請分批查詢。",
+                            title="輸入錯誤",
+                        ),
+                        ephemeral=True,
+                    )
+
+                from services.llm_service import is_memory_safe
+
+                if not is_memory_safe():
+                    return await interaction.followup.send(
+                        embed=create_error_embed(
+                            "系統記憶體水位過高，請改查單一標的或稍後再試。",
+                            title="資源不足",
+                        ),
+                        ephemeral=True,
+                    )
+
+                await self._run_multi_symbol_hub(interaction, symbols, user_id)
                 return
 
             # 3. 批次掃描邏輯 / 開啟面板
