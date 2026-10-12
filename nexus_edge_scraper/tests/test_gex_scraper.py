@@ -278,17 +278,23 @@ def test_risk_free_rate_matches_nexus_core_config() -> None:
 
 async def test_expiry_is_most_common_contract_expiry() -> None:
     """B-F1：回傳新增 expiry＝被計入 GEX 的合約中最常見的到期日。"""
+    from datetime import date, timedelta
+
+    exp1 = date.today() + timedelta(days=30)
+    exp2 = date.today() + timedelta(days=60)
+    d1 = exp1.strftime("%y%m%d")
+    d2 = exp2.strftime("%y%m%d")
     html = _make_html(
         spot=100.0,
         call_rows=[
-            _row("TEST261016C00105000", 105.0, 500, 20),
-            _row("TEST261016C00110000", 110.0, 500, 20),
-            _row("TEST261023C00105000", 105.0, 500, 20),
+            _row(f"TEST{d1}C00100000", 100.0, 500, 20),
+            _row(f"TEST{d1}C00101000", 101.0, 500, 20),
+            _row(f"TEST{d2}C00100000", 100.0, 500, 20),
         ],
-        put_rows=[_row("TEST261016P00095000", 95.0, 500, 20)],
+        put_rows=[_row(f"TEST{d1}P00100000", 100.0, 500, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
-    assert result["expiry"] == "2026-10-16"
+    assert result["expiry"] == exp1.isoformat()
     assert result["call_wall"] > 0  # 既有欄位不受影響
 
 
