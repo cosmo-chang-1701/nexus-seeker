@@ -79,3 +79,7 @@ nexus_core/reports/
 handoff.md
 handoff_watchlist_advisor.md
 handoff_dimensional_mismatch_and_resampling_plan.md
+
+# Git Worktree & Bare Repo Topology
+.bare/
+.worktrees/

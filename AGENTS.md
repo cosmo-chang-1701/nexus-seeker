@@ -129,6 +129,16 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 - Security: parameterized SQL queries only; never use raw string interpolation in SQL execution.
 - User-facing text must be **100% Traditional Chinese**. Private settings use `ephemeral=True`.
 
+### 6. Git Worktree Bare Repo 拓撲與開發規範
+- **架構支援**：專案支援 Git Worktree Bare Repo（`.bare/` + `main/`）拓撲結構。底層 Git 物件由 `.bare/` 集中託管，各分支以獨立 Worktree 目錄形式平行並存（例如主分支位於 `main/`，功能分支位於 `<branch-name>/`），根目錄透過 `.git` 指標導向 `./.bare`。
+- **指令執行位置**：所有開發、測試與 Docker 指令必須進入具體工作區目錄內執行（例如 `cd main/nexus_core` 或 `cd <branch-name>/nexus_core`），切勿在容器根目錄直接執行服務層級之 docker compose 指令。
+- **分支與工作區管理工具**：統一使用 `./scripts/wt.sh`（或根目錄輔助腳本 `./wt`）管理平行分支工作區：
+  - `./scripts/wt.sh list`：列出所有目前活躍的 Git Worktrees。
+  - `./scripts/wt.sh add <branch> [base]`：自指定基準分支建立新工作區，並自動同步複製 `nexus_core/.env` 與 `nexus_edge_scraper/.env` 機密設定。
+  - `./scripts/wt.sh remove <branch>`：安全移除指定工作區（禁止移除 `main`）並自動清理修剪工作樹參照（`git worktree prune`）。
+- **架構遷移與回滾**：透過 `scripts/migrate_to_bare.sh` 執行自動化遷移（含快照備份、目錄搬遷、虛擬環境 shebang 修復與 hooks 註冊）；若需還原，可透過 `scripts/rollback_bare.sh` 自備份快照安全回滾。
+- **語言與文檔規範**：嚴格遵守 100% 繁體中文規範，禁止使用簡體中文詞彙。
+
 ---
 
 ## Testing & Quality Gates

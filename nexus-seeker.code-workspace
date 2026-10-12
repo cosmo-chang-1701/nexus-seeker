@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "name": "nexus-seeker (main)",
+      "path": "main"
+    }
+  ],
+  "settings": {
+    "chat.tools.terminal.autoApprove": {
+      "docker compose": true
+    }
+  }
+}
