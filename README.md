@@ -216,6 +216,15 @@ docker compose run --rm nexus-seeker python -m pytest tests/unit/test_edge_detec
 # 列出所有活躍工作區
 ./scripts/wt.sh list
 
+# 檢視所有工作區的 Dirty / Clean 狀態
+./scripts/wt.sh status
+
+# 簡寫模式與緊湊輸出
+./scripts/wt.sh st -s
+
+# 自動化 CI 檢查 (若有髒污退出碼為 1)
+./scripts/wt.sh st --check
+
 # 建立新分支工作區（自動複製 .env 設定檔）
 ./scripts/wt.sh add feat-new-feature origin/main
 
