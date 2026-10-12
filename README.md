@@ -207,6 +207,30 @@ docker compose run --rm nexus-seeker python -m pytest tests
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_edge_detection_sentiment.py
 ```
 
+### 🌿 Git Worktree 多工作區架構 (Bare Worktree Pattern)
+
+專案支援 Git Worktree Bare Repo 拓撲架構，透過集中託管 `.bare/` 實現多分支平行工作區，並以 `nexus-seeker.code-workspace` 支援 VS Code 與 Antigravity 多工作區統一載入：
+
+#### Worktree 管理輔助工具 (`scripts/wt.sh`)
+```bash
+# 列出所有活躍工作區
+./scripts/wt.sh list
+
+# 建立新分支工作區（自動複製 .env 設定檔）
+./scripts/wt.sh add feat-new-feature origin/main
+
+# 進入工作區目錄執行開發與測試
+cd feat-new-feature/nexus_core
+docker compose run --rm nexus-seeker python -m pytest tests/unit/test_db_write_centralization.py
+
+# 移除工作區並清理參照（保護 main 不被移除）
+./scripts/wt.sh remove feat-new-feature
+```
+
+#### 自動化遷移與回滾腳本
+- **遷移至 Bare Repo**：執行 `./scripts/migrate_to_bare.sh`，自動建立防護快照、重構 `.bare/` 拓撲並搬遷環境設定至 `main/`。
+- **安全回滾**：若需還原為單一工作區目錄，執行 `./scripts/rollback_bare.sh` 即由備份快照安全回滾。
+
 ---
 
 ## 📄 授權條款 (License)
