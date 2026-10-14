@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import _truncate_with_boundary
+from cogs.embed_builders._embed_helpers import _add_ansi_field_safely, _ansi_tree_lines
 
 
 def create_polymarket_list_embed(
@@ -154,12 +155,17 @@ def create_polymarket_prob_shift_embed(
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="🐋 市場名稱", value=f"**{market}**", inline=False)
-    embed.add_field(
-        name="📊 機率變化",
-        value=f"`{old_prob*100:.1f}%` ➔ `{new_prob*100:.1f}%`",
-        inline=True,
+    delta_color = "\u001b[1;32m" if delta > 0 else "\u001b[1;31m"
+    _add_ansi_field_safely(
+        embed,
+        "📊 機率變化",
+        _ansi_tree_lines(
+            [
+                f"機率: \u001b[1;37m{old_prob*100:.1f}%\u001b[0m ➔ \u001b[1;37m{new_prob*100:.1f}%\u001b[0m",
+                f"Delta: {delta_color}{delta:+.1f}%\u001b[0m",
+            ]
+        ),
     )
-    embed.add_field(name="📐 Delta", value=f"`{delta:+.1f}%`", inline=True)
     embed.add_field(
         name="🔍 可能原因",
         value="📰 **突發新聞、重大事件落地、或大戶倒貨重新定價**",

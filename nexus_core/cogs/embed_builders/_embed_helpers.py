@@ -404,6 +404,20 @@ def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
         )
 
 
+_ANSI_W = "\u001b[1;37m"
+_ANSI_R = "\u001b[1;31m"
+_ANSI_G = "\u001b[1;32m"
+_ANSI_0 = "\u001b[0m"
+
+
+def _ansi_tree_lines(rows: list, *, indent: str = " ") -> list:
+    """將已著色的資料列加上 ` ├─ ` / ` └─ ` 樹狀前綴（最後一列用 └─）。"""
+    last = len(rows) - 1
+    return [
+        f"{indent}{'└─' if i == last else '├─'} {row}" for i, row in enumerate(rows)
+    ]
+
+
 def _fmt_gex_notional(raw: float) -> str:
     """GEX 原始值（OI×100×Γ×S²，每 100% 變動）→ 每 1% 變動避險名目，自動 $B/$M/$K。
 
@@ -711,33 +725,24 @@ def _add_market_overview_fields(embed: Any, data: Any):  # type: ignore
     beta_status = "🚀" if beta > 1.3 else ("⚖️" if beta >= 0.8 else "🧊")
     if data.get("beta_estimated"):
         beta_status = "⚠️ 資料不足，暫以 1.0 估算"
-    embed.add_field(
-        name="🏷️ 標價 / Beta\u2800\u2800",
-        value=f"${data['price']:.2f} / `{beta:.2f}` {beta_status}\n\u200b",
-        inline=True,
-    )
-    embed.add_field(
-        name="📈 RSI / 20MA\u2800\u2800\u2800",
-        value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}\n\u200b",
-        inline=True,
-    )
     hvr_status = (
         "🔥 高"
         if data["hv_rank"] >= 50
         else ("⚡ 中" if data["hv_rank"] >= 30 else "🧊 低")
     )
-    embed.add_field(
-        name="🔥 HV Rank\u2800\u2800\u2800\u2800",
-        value=f"`{data['hv_rank']:.1f}%` {hvr_status}\n\u200b",
-        inline=True,
-    )
+    rows = [
+        f"標價 / Beta   : {_ANSI_W}${data['price']:.2f} / {beta:.2f}{_ANSI_0} {beta_status}",
+        f"RSI / 20MA    : {_ANSI_W}{data['rsi']:.2f} / ${data['sma20']:.2f}{_ANSI_0}",
+        f"HV Rank       : {_ANSI_W}{data['hv_rank']:.1f}%{_ANSI_0} {hvr_status}",
+    ]
+    _add_ansi_field_safely(embed, "📊 市場概覽", _ansi_tree_lines(rows))
 
 
 def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignore
     vrp_raw = _to_float_or_none(data.get("vrp"))
     if vrp_raw is None:
         # 缺值不做優劣判定（不以 0 冒充中性）
-        vrp_text = "`--%`"
+        vrp_text = f"{_ANSI_W}--%{_ANSI_0}"
     else:
         vrp_pct = vrp_raw * 100
         vrp_icon = (
@@ -748,34 +753,18 @@ def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignor
             )
             else "⚠️"
         )
-        vrp_text = f"`{vrp_pct:+.2f}%` {vrp_icon}"
-    embed.add_field(
-        name="⚖️ VRP 溢酬\u2800\u2800\u2800\u2800",
-        value=f"{vrp_text}\n\u200b",
-        inline=True,
-    )
-    ts_ratio_str = f"`{data['ts_ratio']:.2f}` {data['ts_state']}"
-    embed.add_field(
-        name="⏳ 個股 IV 期限結構\u2800\u2800",
-        value=f"{ts_ratio_str}\n\u200b",
-        inline=True,
-    )
-    v_skew_str = f"`{data['v_skew']:.2f}` {data.get('v_skew_state', '')}"
-    embed.add_field(
-        name="📉 垂直偏態\u2800\u2800\u2800\u2800",
-        value=f"{v_skew_str}\n\u200b",
-        inline=True,
+        vrp_text = f"{_ANSI_W}{vrp_pct:+.2f}%{_ANSI_0} {vrp_icon}"
+    ts_ratio_str = f"{_ANSI_W}{data['ts_ratio']:.2f}{_ANSI_0} {data['ts_state']}"
+    v_skew_str = (
+        f"{_ANSI_W}{data['v_skew']:.2f}{_ANSI_0} {data.get('v_skew_state', '')}"
     )
 
     # ---------------- VIX 306 Volatility Metrics ----------------
     vts_ratio = _to_float_or_none(data.get("vix_vts_ratio"))
     if vts_ratio is None:
-        vts_str = "`--`"
+        vts_str = f"{_ANSI_W}--{_ANSI_0}"
     else:
-        vts_str = f"`{vts_ratio:.2f}` {data.get('vix_regime', '')}"
-    embed.add_field(
-        name="🌐 大盤 VIX 期限結構\u2800", value=f"{vts_str}\n\u200b", inline=True
-    )
+        vts_str = f"{_ANSI_W}{vts_ratio:.2f}{_ANSI_0} {data.get('vix_regime', '')}"
 
     z30 = _to_float_or_none(data.get("vix_z30"))
     z60 = _to_float_or_none(data.get("vix_z60"))
@@ -783,23 +772,25 @@ def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignor
         z_icon = ""
     else:
         z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
-    embed.add_field(
-        name="🔥 VIX 30/60 Z-Score",
-        value=f"Z30:`{fmt_or_dash(z30, '.1f')}` Z60:`{fmt_or_dash(z60, '.1f')}` {z_icon}".rstrip()
-        + "\n\u200b",
-        inline=True,
-    )
+    z_str = (
+        f"Z30:{_ANSI_W}{fmt_or_dash(z30, '.1f')}{_ANSI_0} "
+        f"Z60:{_ANSI_W}{fmt_or_dash(z60, '.1f')}{_ANSI_0} {z_icon}"
+    ).rstrip()
 
     tail_risk = (
-        "🚨 觸發降規 (1/4 Kelly)"
+        f"{_ANSI_R}🚨 觸發降規 (1/4 Kelly){_ANSI_0}"
         if data.get("is_high_tail_risk", False)
-        else "✅ 正常 (1/2 Kelly)"
+        else f"{_ANSI_G}✅ 正常 (1/2 Kelly){_ANSI_0}"
     )
-    embed.add_field(
-        name="🛡️ 尾部風險管理\u2800\u2800\u2800",
-        value=f"{tail_risk}\n\u200b",
-        inline=True,
-    )
+    rows = [
+        f"VRP 溢酬         : {vrp_text}",
+        f"個股 IV 期限結構 : {ts_ratio_str}",
+        f"垂直偏態         : {v_skew_str}",
+        f"大盤 VIX 期限結構: {vts_str}",
+        f"VIX 30/60 Z-Score: {z_str}",
+        f"尾部風險管理     : {tail_risk}",
+    ]
+    _add_ansi_field_safely(embed, "🌪️ 波動率結構", _ansi_tree_lines(rows))
 
 
 def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):  # type: ignore
@@ -818,35 +809,26 @@ def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):
     pos_multiplier = position_delta_sign(strategy)
     pos_weighted_shares = weighted_delta * pos_multiplier
 
-    embed.add_field(
-        name="🧩 Delta (部位加權)\u2800\u2800",
-        value=f"{raw_delta:.3f} (`{pos_weighted_shares:+.1f}`股)\n\u200b",
-        inline=True,
-    )
-
-    embed.add_field(
-        name="💰 AROC / IV\u2800\u2800\u2800\u2800",
-        value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b",
-        inline=True,
-    )
-
     alloc_pct = data.get("alloc_pct", 0.0)
     suggested = data.get("suggested_contracts", 0)
 
     if alloc_pct <= 0:
-        kelly_value = "`不建議建倉`"
+        kelly_value = "不建議建倉"
     elif not user_capital or user_capital <= 0:
-        kelly_value = f"`未設資金` ({alloc_pct*100:.1f}%)"
+        kelly_value = f"未設資金 ({alloc_pct*100:.1f}%)"
     else:
         kelly_value = (
-            f"`{suggested} 口` ({min(alloc_pct, 0.25)*100:.1f}%)"
+            f"{suggested} 口 ({min(alloc_pct, 0.25)*100:.1f}%)"
             if suggested > 0
-            else "`本金不足`"
+            else "本金不足"
         )
 
-    embed.add_field(
-        name="🧮 凱利原始建議\u2800\u2800", value=f"{kelly_value}\n\u200b", inline=True
-    )
+    rows = [
+        f"Delta (部位加權): {_ANSI_W}{raw_delta:.3f}{_ANSI_0} ({_ANSI_W}{pos_weighted_shares:+.1f}{_ANSI_0}股)",
+        f"AROC / IV       : {_ANSI_W}{data['aroc']:.1f}%{_ANSI_0} / {data['iv']:.1%}",
+        f"凱利原始建議    : {_ANSI_W}{kelly_value}{_ANSI_0}",
+    ]
+    _add_ansi_field_safely(embed, "🧩 部位與凱利", _ansi_tree_lines(rows))
 
 
 def _add_earnings_fields(embed: Any, data: Any, strategy: Any):  # type: ignore
@@ -1007,25 +989,21 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
 
     if is_overloaded:
         sim_status = "🚨 警告：曝險過載"
-        sim_block = (
-            f"```diff\n"
-            f"- 成交後預期總曝險: {projected_pct:+.1f}%\n"
-            f"- 超過 {RISK_THRESHOLD}% 宏觀紅線\n"
-            f"```"
-        )
+        sim_lines = [
+            f"{_ANSI_R}成交後預期總曝險: {projected_pct:+.1f}%{_ANSI_0}",
+            f"{_ANSI_R}超過 {RISK_THRESHOLD}% 宏觀紅線{_ANSI_0}",
+        ]
     else:
         sim_status = "✅ 狀態：風險受控"
-        sim_block = (
-            f"```yaml\n"
-            f"成交後的預期總曝險: {projected_pct:+.1f}%\n"
-            f"符合資產組合平衡標準\n"
-            f"```"
-        )
+        sim_lines = [
+            f"{_ANSI_G}成交後的預期總曝險: {projected_pct:+.1f}%{_ANSI_0}",
+            f"{_ANSI_G}符合資產組合平衡標準{_ANSI_0}",
+        ]
 
-    embed.add_field(
-        name=f"🛡️ What-if 曝險模擬 | {sim_status}",
-        value=f"{sim_block}\n\u200b",
-        inline=False,
+    _add_ansi_field_safely(
+        embed,
+        f"🛡️ What-if 曝險模擬 | {sim_status}",
+        _ansi_tree_lines(sim_lines),
     )
 
     # NRO 風控警示 (含 VIX/SPY 資料不足的 fail-closed 說明)
@@ -1043,20 +1021,21 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
 
         spy_p = data.get("spy_price")
 
-        actions = ["--- 偵測到風險超標，執行自動降規 ---"]
-        actions.append(f"❌ 原始建議: {suggested} 口")
-        actions.append(f"✅ 安全成交: {safe_qty} 口 (符合風控)")
+        actions = [
+            f"{_ANSI_R}❌ 原始建議: {suggested} 口{_ANSI_0}",
+            f"{_ANSI_G}✅ 安全成交: {safe_qty} 口 (符合風控){_ANSI_0}",
+        ]
 
         if safe_qty == 0 and hedge_spy != 0:
-            actions.append("\n⚠️ 警告: 即使下 1 口也過載")
+            actions.append(f"{_ANSI_R}⚠️ 警告: 即使下 1 口也過載{_ANSI_0}")
             direction = "賣出" if hedge_spy > 0 else "買入"
             spy_label = f"@${float(spy_p):.1f}" if spy_p else "SPY 現價 --"
             actions.append(
                 f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY ({spy_label})"
             )
 
-        opt_block = "```diff\n" + "\n".join(actions) + "\n```"
-        embed.add_field(name=opt_title, value=f"{opt_block}\n\u200b", inline=False)
+        opt_lines = [" 偵測到風險超標，執行自動降規"] + _ansi_tree_lines(actions)
+        _add_ansi_field_safely(embed, opt_title, opt_lines)
 
 
 def _add_hedge_unlock_fields(embed: Any, data: Any):  # type: ignore
@@ -1163,30 +1142,20 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
     pcr = data.get("pcr")
     if pcr is None:
         # PCR 缺值：顯示 `--`，不以 0.8/0.0 冒充
-        pcr_value = "`--` 資料不足"
+        pcr_value = f"{_ANSI_W}--{_ANSI_0} 資料不足"
     else:
         pcr_label = "🐂 偏多" if pcr < 0.7 else ("🐻 偏空" if pcr > 1.0 else "⚖️ 中性")
-        pcr_value = f"`{pcr:.2f}` {pcr_label}"
-    embed.add_field(
-        name="📊 P/C Ratio\u2800\u2800\u2800",
-        value=f"{pcr_value}\n\u200b",
-        inline=True,
-    )
+        pcr_value = f"{_ANSI_W}{pcr:.2f}{_ANSI_0} {pcr_label}"
 
     skew = _to_float_or_none(data.get("skew"))
     if skew is None:
         # Skew 缺值：顯示 `--`，不以 0 冒充「平衡」
-        skew_value = "`--` 資料不足"
+        skew_value = f"{_ANSI_W}--{_ANSI_0} 資料不足"
     else:
         skew_label = (
             "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
         )
-        skew_value = f"`{skew:.2f}` {skew_label}"
-    embed.add_field(
-        name="📐 Skew\u2800\u2800\u2800\u2800\u2800\u2800",
-        value=f"{skew_value}\n\u200b",
-        inline=True,
-    )
+        skew_value = f"{_ANSI_W}{skew:.2f}{_ANSI_0} {skew_label}"
 
     iv_rank_raw = data.get("iv_rank")
     # 歷史 IV 樣本不足時 iv_rank 為 None：顯示「未知」，不可當成 0% 低 IVR
@@ -1197,14 +1166,15 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
             if iv_rank >= 50
             else ("⚡ 中 IVR" if iv_rank >= 30 else "🧊 低 IVR")
         )
-        ivr_value = f"`{iv_rank:.1f}%` {ivr_label}"
+        ivr_value = f"{_ANSI_W}{iv_rank:.1f}%{_ANSI_0} {ivr_label}"
     else:
-        ivr_value = "`--%` ⏳ 樣本積累中"
-    embed.add_field(
-        name="📉 IV Rank\u2800\u2800\u2800\u2800",
-        value=f"{ivr_value}\n\u200b",
-        inline=True,
-    )
+        ivr_value = f"{_ANSI_W}--%{_ANSI_0} ⏳ 樣本積累中"
+    rows = [
+        f"P/C Ratio : {pcr_value}",
+        f"Skew      : {skew_value}",
+        f"IV Rank   : {ivr_value}",
+    ]
+    _add_ansi_field_safely(embed, "🧭 情緒指標", _ansi_tree_lines(rows))
 
 
 def get_embed_length(embed: discord.Embed) -> int:

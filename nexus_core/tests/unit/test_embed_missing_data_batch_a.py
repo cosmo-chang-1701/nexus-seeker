@@ -149,7 +149,7 @@ def test_strategic_dash_degraded() -> None:
     )
     assert "[降級模式]" in (embed.title or "")
     text = _fields_text(embed)
-    assert "`--`" in text
+    assert "總資產 (NAV): \x1b[1;37m-- (" in text
     assert "BoundedCache" not in text
     assert "$0" not in text.split("總資產")[1].split("\n")[0]
     full = create_strategic_dash_embed(
@@ -221,8 +221,8 @@ def test_volatility_fields_missing_show_dash() -> None:
         "STO_PUT",
     )
     text = _fields_text(embed)
-    assert "`--%`" in text
-    assert "Z30:`--` Z60:`--`" in text
+    assert "VRP 溢酬         : \x1b[1;37m--%" in text
+    assert "Z30:\x1b[1;37m--\x1b[0m Z60:\x1b[1;37m--\x1b[0m" in text
     assert "收斂" not in text and "擴張" not in text
     assert "0.00" not in text.split("VIX 期限結構")[1].split("尾部")[0]
 
@@ -232,7 +232,7 @@ def test_sentiment_skew_missing_dash() -> None:
     _add_sentiment_fields(embed, {"pcr": None, "skew": None, "iv_rank": None})
     text = _fields_text(embed)
     assert "平衡" not in text
-    assert "`--` 資料不足" in text
+    assert "\x1b[1;37m--\x1b[0m 資料不足" in text
 
 
 def test_expected_move_missing_skips_safety_verdict() -> None:

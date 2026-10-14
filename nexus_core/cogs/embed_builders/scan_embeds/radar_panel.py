@@ -58,8 +58,10 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
         f"• 磁吸門檻: `{min_dev_pct:.0f}%`"
     )
 
-    embed.add_field(name="⚙️ 量化過濾條件 (Filters)", value=filters_display, inline=True)
-    embed.add_field(name="📐 微調參數 (Params)", value=params_str, inline=True)
+    embed.add_field(
+        name="⚙️ 量化過濾條件 (Filters)", value=filters_display, inline=False
+    )
+    embed.add_field(name="📐 微調參數 (Params)", value=params_str, inline=False)
 
     # Render selected tag if any
     selected_tag = state.get("selected_tag")

@@ -52,6 +52,12 @@ from cogs.embed_builder import (
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
+def _strip_ansi(text: str) -> str:
+    import re as _re
+
+    return _re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def _runway_snapshot() -> Any:
     from database.withdrawal_runway import RunwaySnapshot
 
@@ -796,9 +802,12 @@ def test_create_quote_embed() -> None:
         {"c": 150.0, "dp": 1.3, "h": 155.0, "l": 145.0, "pc": 148.0},
     )
     assert "AAPL" in embed.title  # type: ignore
-    assert embed.fields[0].value == "**$150.0**"
-    assert embed.fields[1].value == "`1.3%`"
-    assert "155.0" in embed.fields[2].value  # type: ignore
+    quote = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "現價 (Current) : $150.0" in quote
+    assert "漲跌幅 (%)     : 1.3%" in quote
+    assert "H: $155.0 / L: $145.0" in quote
+    assert "前收盤 (PC)    : $148.0" in quote
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_max_pain_embed_with_guidance() -> None:
@@ -925,8 +934,9 @@ def test_create_profit_lock_alert_embed() -> None:
 def test_create_gamma_fragility_embed() -> None:
     embed = create_gamma_fragility_embed({"net_gamma": -25.5, "threshold": -20})
     assert "🆘 警報：Gamma 脆弱性與斷層" in embed.title  # type: ignore
-    assert "`-25.5`" == embed.fields[0].value
-    assert "`-20`" == embed.fields[1].value
+    gamma = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "目前淨 Gamma : -25.5" in gamma
+    assert "安全臨界點   : -20" in gamma
 
 
 def test_create_ditm_transition_alert_embed() -> None:
@@ -940,8 +950,12 @@ def test_create_ditm_transition_alert_embed() -> None:
     )
     assert "🚨 警報：DITM 凸性防護與獲利鎖定 | TSLA" in embed.title  # type: ignore
     assert "TSLA" in get_embed_text(embed)
-    assert "12.50%" in embed.fields[3].value  # type: ignore
-    assert "賣出 10 股 SPY" in embed.fields[4].value  # type: ignore
+    text = _strip_ansi(get_embed_text(embed))
+    assert "Delta 接近 1.0" in text
+    assert "已平倉 (Closed)" in text
+    assert "$1250.00" in text
+    assert "12.50%" in text
+    assert "賣出 10 股 SPY" in text
 
 
 def test_create_vtr_settlement_notice_embed() -> None:
@@ -955,9 +969,13 @@ def test_create_vtr_settlement_notice_embed() -> None:
         hedge={"action": "買入 5 股 SPY", "gap": 5},
     )
     assert "TSLA" in embed.title  # type: ignore
-    assert "`9.50%`" in embed.fields[1].value  # type: ignore
-    assert "`Balanced`" in embed.fields[2].value  # type: ignore
-    assert "買入 5 股 SPY" in embed.fields[4].value  # type: ignore
+    text = _strip_ansi(get_embed_text(embed))
+    assert "$850.00" in text
+    assert "9.50%" in text
+    assert "Balanced" in text
+    assert "12.0 Delta" in text
+    assert "買入 5 股 SPY" in text
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_holdings_embed_chunking() -> None:

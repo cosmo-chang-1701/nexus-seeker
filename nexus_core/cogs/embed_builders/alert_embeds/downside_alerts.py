@@ -8,6 +8,7 @@ from typing import Literal, Optional, Sequence
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import _add_ansi_field_safely, _ansi_tree_lines
 from market_analysis.downside_monitor import (
     CVAR_EXPANSION_RATIO,
     DRAWDOWN_REARM_BUFFER,
@@ -47,13 +48,15 @@ def create_downside_snapshot_fields(
         ]
 
     def _block(snap: DownsideSnapshot) -> str:
-        return "\n".join(
+        w, z = "\u001b[1;37m", "\u001b[0m"
+        rows = _ansi_tree_lines(
             [
-                f"• **Sortino（主）**：一季 `{_ratio(snap.sortino_63)}`｜一年 `{_ratio(snap.sortino_252)}`",
-                f"• 最大回撤 (MDD)：`{_pct(snap.max_drawdown)}`｜距高點 `{_pct(snap.current_drawdown)}`",
-                f"• 1 日 VaR95：`{_pct(snap.var_95)}`｜CVaR95：`{_pct(snap.cvar_95)}`",
+                f"Sortino（主）：一季 {w}{_ratio(snap.sortino_63)}{z}｜一年 {w}{_ratio(snap.sortino_252)}{z}",
+                f"最大回撤 (MDD)：{w}{_pct(snap.max_drawdown)}{z}｜距高點 {w}{_pct(snap.current_drawdown)}{z}",
+                f"1 日 VaR95：{w}{_pct(snap.var_95)}{z}｜CVaR95：{w}{_pct(snap.cvar_95)}{z}",
             ]
         )
+        return "```ansi\n" + "\n".join(rows) + "\n```"
 
     fields = [
         (
@@ -111,15 +114,16 @@ def create_portfolio_downside_alert_embed(
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(
-            name="📏 1 日 CVaR95 / 預算",
-            value=f"`{_pct(snapshot.cvar_95)}` / `{_pct(budget)}`",
-            inline=True,
-        )
-        embed.add_field(
-            name="🌡️ 近一季 CVaR95 / 60 日基準",
-            value=f"`{_pct(snapshot.cvar_short)}` / `{_pct(snapshot.cvar_short_baseline)}`",
-            inline=True,
+        w, z = "\u001b[1;37m", "\u001b[0m"
+        _add_ansi_field_safely(
+            embed,
+            "📏 CVaR95 水位",
+            _ansi_tree_lines(
+                [
+                    f"1 日 CVaR95 / 預算 : {w}{_pct(snapshot.cvar_95)}{z} / {w}{_pct(budget)}{z}",
+                    f"近一季 CVaR95 / 60 日基準 : {w}{_pct(snapshot.cvar_short)}{z} / {w}{_pct(snapshot.cvar_short_baseline)}{z}",
+                ]
+            ),
         )
     for name, value, inline in create_downside_snapshot_fields(snapshot):
         embed.add_field(name=name, value=value, inline=inline)

@@ -355,8 +355,9 @@ async def test_withdrawal_reminder_sell_list_and_state(db_conn: Any) -> None:
     embed = bot.queue_dm.await_args.kwargs["embed"]
     assert "前置提醒" in embed.title
     sells = next(f.value for f in embed.fields if "賣出清單" in f.name)
-    assert "BOXX：`$5,500`" in sells
-    assert "NVDA：`$4,500`" in sells
+    assert "BOXX：\x1b[1;37m$5,500\x1b[0m" in sells
+    assert "NVDA：\x1b[1;37m$4,500\x1b[0m" in sells
+    assert sells.startswith("```ansi")
     assert "TSLA" not in sells
     assert "年度再平衡" in embed.description
     assert database.get_kv_cache("runway_state_remind_5103") == "PRE_2027-01-04"
@@ -396,5 +397,5 @@ async def test_withdrawal_reminder_shortfall_and_disabled_channel(
     await svc._notify_reminder(bot, uid, snap, _ctx(uid), nav, **kwargs)
     embed = bot.queue_dm.await_args.kwargs["embed"]
     sells = next(f.value for f in embed.fields if "賣出清單" in f.name)
-    assert "差額 `$9,000`" in sells
+    assert "差額 $9,000" in sells
     assert "年度再平衡" not in (embed.description or "")

@@ -64,6 +64,7 @@ from cogs.embed_builders._ansi_utils import (
 )
 from cogs.embed_builders._embed_helpers import (
     _add_ansi_field_safely,
+    _ansi_tree_lines,
     format_psq_matrix_lines,
     format_runway_lines,
     _fmt_gex_notional,
@@ -443,14 +444,19 @@ def create_holdings_embed(
             inline=False,
         )
 
-    summary = (
-        f"💰 **持倉總市值**: `${total_value:,.2f}`\n"
-        f"📈 **累計未實現損益**: `${total_pnl:,.2f}`\n"
-        f"⚖️ **佔總預算比例**: `{ (total_value / total_capital * 100) if total_capital > 0 else 0:.1f}%`"
-    )
+    _w, _z = "\u001b[1;37m", "\u001b[0m"
+    _pnl_c = "\u001b[1;32m" if total_pnl >= 0 else "\u001b[1;31m"
+    _ratio = (total_value / total_capital * 100) if total_capital > 0 else 0
+    summary_rows = [
+        f"💰 持倉總市值: {_w}${total_value:,.2f}{_z}",
+        f"📈 累計未實現損益: {_pnl_c}${total_pnl:,.2f}{_z}",
+        f"⚖️ 佔總預算比例: {_w}{_ratio:.1f}%{_z}",
+    ]
     if missing_quotes:
-        summary += f"\n⚠️ {missing_quotes} 檔缺報價，未計入市值與損益"
-    embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
+        summary_rows.append(
+            f"\u001b[1;33m⚠️ {missing_quotes} 檔缺報價，未計入市值與損益{_z}"
+        )
+    _add_ansi_field_safely(embed, "🏁 財務摘要", _ansi_tree_lines(summary_rows))
 
     embed.set_footer(text="Accounting Engine | 專業股權追蹤")
     return embed
@@ -532,16 +538,23 @@ def create_trades_embed(
     if missing_quotes > 0:
         embed.title = f"{embed.title} [部分報價缺失/降級模式]"
 
-    summary = (
-        f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
-        f"⚖️ **佔總預算比例**: `{ (total_cost / total_capital * 100) if total_capital > 0 else 0:.1f}%`\n"
-        f"📈 **總未實現損益 (Unrealized PnL)**: `${total_unrealized_pnl:,.2f}`"
-    )
+    _w, _z = "\u001b[1;37m", "\u001b[0m"
+    _pnl_c = "\u001b[1;32m" if total_unrealized_pnl >= 0 else "\u001b[1;31m"
+    _ratio = (total_cost / total_capital * 100) if total_capital > 0 else 0
+    summary_rows = [
+        f"💰 持倉總權利金成本 (概算): {_w}${total_cost:,.2f}{_z}",
+        f"⚖️ 佔總預算比例: {_w}{_ratio:.1f}%{_z}",
+        f"📈 總未實現損益 (Unrealized PnL): {_pnl_c}${total_unrealized_pnl:,.2f}{_z}",
+    ]
     if missing_quotes:
-        summary += f"\n⚠️ {missing_quotes} 筆部位報價缺失，未計入損益"
+        summary_rows.append(
+            f"\u001b[1;33m⚠️ {missing_quotes} 筆部位報價缺失，未計入損益{_z}"
+        )
     if has_estimate:
-        summary += "\n`*` 零 bid，現價以 ask/2 估算"
-    embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
+        summary_rows.append("* 零 bid，現價以 ask/2 估算")
+    _add_ansi_field_safely(
+        embed, "🏁 財務摘要 (Financial Summary)", _ansi_tree_lines(summary_rows)
+    )
 
     embed.set_footer(text="Portfolio Engine | 專業實單與損益監控")
     return embed
@@ -589,9 +602,10 @@ def create_strategic_dash_embed(
     # NAV 按市價：現金 + 現貨市值 + 期權市值 (賣方為負債)，見
     # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
     # 資本 + 未實現損益——那會忽略現貨漲跌並重複計入賣方權利金)。
+    nav_missing = ""
     if nav_data is not None:
         _nav_txt = fmt_or_dash(nav_data.get("nav"), ",.0f", prefix="$")
-        nav_line = f"`{_nav_txt}` (按市價，{status_mode})"
+        nav_line = f"{_nav_txt} (按市價，{status_mode})"
         missing_parts: List[str] = []
         if nav_data.get("missing_spot_symbols"):
             missing_parts.append(
@@ -600,24 +614,27 @@ def create_strategic_dash_embed(
         if nav_data.get("missing_option_quotes"):
             missing_parts.append(f"期權 {nav_data.get('missing_option_quotes')} 筆")
         if missing_parts:
-            nav_line += f"\n  ⚠️ 報價缺失未計入：{'；'.join(missing_parts)}"
+            nav_missing = f"⚠️ 報價缺失未計入：{'；'.join(missing_parts)}"
     else:
-        nav_line = f"`--` ({status_mode})"
+        nav_line = f"-- ({status_mode})"
 
-    runway_info = (
-        f"* **總資產 (NAV):** {nav_line}\n" f"* **現金儲備:** `${cash_reserve:,.2f}`\n"
-    )
+    _w, _y, _z = "\u001b[1;37m", "\u001b[1;33m", "\u001b[0m"
+    runway_rows = [f"總資產 (NAV): {_w}{nav_line}{_z}"]
+    if nav_missing:
+        runway_rows.append(f"{_y}{nav_missing}{_z}")
+    runway_rows.append(f"現金儲備: {_w}${cash_reserve:,.2f}{_z}")
     for line in format_runway_lines(runway, stale=runway_stale):
-        runway_info += f"* {line}\n"
-    runway_info += (
-        f"* **收租效率:** 每日 Theta `${daily_theta:,.2f}`"
+        runway_rows.append(line)
+    runway_rows.append(
+        f"收租效率: 每日 Theta {_w}${daily_theta:,.2f}{_z}"
         + (f" (覆蓋期權熔斷月支出 {coverage_pct:.1f}%)" if daily_expense > 0 else "")
-        + "\n"
-        f"* **安全提領紅線:** `${payout_threshold:,.0f}` (流動性防守限制)\n"
+    )
+    runway_rows.append(
+        f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z} (流動性防守限制)"
     )
 
-    embed.add_field(
-        name="🏁 提領跑道 (Withdrawal Runway)", value=runway_info, inline=False
+    _add_ansi_field_safely(
+        embed, "🏁 提領跑道 (Withdrawal Runway)", _ansi_tree_lines(runway_rows)
     )
 
     # 2. 組合風險精算 (NRO Integrity)
@@ -650,22 +667,27 @@ def create_strategic_dash_embed(
     else:
         hedge_instruction = "目前曝險平衡，無需立即調整"
 
-    nro_info = (
-        f"* **Beta-Delta:** `{total_delta:+.1f}` (相對於 SPY 的整體曝險)\n"
-        + (
-            f"* **Vanna 敏感度:** 若 VIX 上升 10%，隱含 Delta 將變動至 `{new_delta:+.1f}`。\n"
+    nro_rows = [
+        f"Beta-Delta: {_w}{total_delta:+.1f}{_z} (相對於 SPY 的整體曝險)",
+        (
+            f"Vanna 敏感度: 若 VIX 上升 10%，隱含 Delta 將變動至 {_w}{new_delta:+.1f}{_z}。"
             if new_delta is not None
-            else "* **Vanna 敏感度:** `--` (VIX 資料不足，無法壓力測試)\n"
-        )
-        + f"* **對沖狀態:** {hedge_status}\n"
-        f"> 🎯 建議對沖位：{hedge_instruction}"
+            else f"Vanna 敏感度: {_w}--{_z} (VIX 資料不足，無法壓力測試)"
+        ),
+        f"對沖狀態: {hedge_status}",
+        f"🎯 建議對沖位：{hedge_instruction}",
+    ]
+    _add_ansi_field_safely(
+        embed, "🛡️ 組合風險精算 (NRO Integrity)", _ansi_tree_lines(nro_rows)
     )
-    embed.add_field(name="🛡️ 組合風險精算 (NRO Integrity)", value=nro_info, inline=False)
 
     # 3. 系統健康
     ram_usage = psutil.virtual_memory().percent
-    sys_health = f"RAM {ram_usage}%"
-    embed.add_field(name="⚙️ 系統健康", value=sys_health, inline=False)
+    _add_ansi_field_safely(
+        embed,
+        "⚙️ 系統健康",
+        _ansi_tree_lines([f"RAM {_w}{ram_usage}%{_z}"]),
+    )
 
     embed.set_footer(text="戰術風險管理終端")
     return embed
@@ -3252,10 +3274,15 @@ def create_tactical_hedge_embed(
         color=discord.Color.red(),
     )
     ivr_str = f"{ivr:.1f}%" if ivr is not None else "--% (資料不足)"
-    embed.add_field(
-        name="📊 當前波動率狀態 (Volatility Context)",
-        value=f"* **IV Rank:** `{ivr_str}`\n* **推薦防禦策略:** `{rec_strategy}`",
-        inline=False,
+    _add_ansi_field_safely(
+        embed,
+        "📊 當前波動率狀態 (Volatility Context)",
+        _ansi_tree_lines(
+            [
+                f"IV Rank: \u001b[1;37m{ivr_str}\u001b[0m",
+                f"推薦防禦策略: \u001b[1;37m{rec_strategy}\u001b[0m",
+            ]
+        ),
     )
     embed.add_field(
         name="🛠️ 推薦執行步驟",
