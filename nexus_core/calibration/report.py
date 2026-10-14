@@ -301,12 +301,13 @@ def render_markdown(results: dict[str, Any]) -> str:
                         "",
                         f"  母體來源 `{src}`",
                         "",
-                        "| 區間 | n | 勝率 | 逆向先觸及 | 狀態 |",
-                        "|---|---|---|---|---|",
+                        "| 區間 | n | 交易日數 | 勝率 | 逆向先觸及 | 狀態 |",
+                        "|---|---|---|---|---|---|",
                     ]
                     for r in rows:
                         lines.append(
-                            f"| {r['bucket']} | {r['n']} | {_fmt(r['win_rate'])} "
+                            f"| {r['bucket']} | {r['n']} | {_fmt(r.get('n_dates'))} "
+                            f"| {_fmt(r['win_rate'])} "
                             f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
                         )
                 lines.append("")

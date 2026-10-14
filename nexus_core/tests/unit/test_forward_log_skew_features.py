@@ -207,12 +207,14 @@ def test_threshold_studies_split_skew_by_evaluator() -> None:
             {
                 "evaluator": "ENTRY_SQUEEZE",
                 "features_json": feat(50, "INTRADAY_FALLBACK"),
+                "date": "2026-10-05",
                 "win": 0,
                 "outcome": -1,
             },
             {
                 "evaluator": "ENTRY_SQUEEZE",
                 "features_json": feat(50, "INTRADAY_FALLBACK"),
+                "date": "2026-10-06",
                 "win": 1,
                 "outcome": 1,
             },
@@ -228,6 +230,8 @@ def test_threshold_studies_split_skew_by_evaluator() -> None:
     by_ev = studies["skew_percentile_by_evaluator"]
     assert by_ev["REGIME_CLASSIFIER"]["CANONICAL"][0]["n"] == 1
     assert by_ev["ENTRY_SQUEEZE"]["INTRADAY_FALLBACK"][0]["n"] == 2
+    # 交易日數欄沿用 #76 的 _bucket_rows（有效樣本約等於交易日數）
+    assert by_ev["ENTRY_SQUEEZE"]["INTRADAY_FALLBACK"][0]["n_dates"] == 2
     assert by_ev["其他"]["CANONICAL"][0]["bucket"] == "<15"
     # 既有「依母體來源」總表維持不變
     assert set(studies["skew_percentile"]) == {"CANONICAL", "INTRADAY_FALLBACK"}
