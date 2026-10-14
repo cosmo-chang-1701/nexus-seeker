@@ -1080,9 +1080,15 @@ def _add_ai_verification_fields(embed: Any, data: Any):  # type: ignore
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
 
-def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
-    """將 EMA 訊號清單轉化為 Discord 友善的文字流。"""
+def get_ema_signal_ui(ema_signals: List[Dict[str, Any]], *, ansi: bool = False) -> Any:
+    """將 EMA 訊號清單轉化為 Discord 友善的文字流。
+
+    預設回傳 markdown 字串（/x 面板沿用）；`ansi=True` 回傳 ansi 樹狀行清單
+    （交給 `_add_ansi_field_safely`），空清單時回傳單行提示。
+    """
     if not ema_signals:
+        if ansi:
+            return _ansi_tree_lines(["⚪ 暫無關鍵 EMA 觸碰訊號"])
         return "⚪ *暫無關鍵 EMA 觸碰訊號*"
 
     ui_lines = []
@@ -1099,9 +1105,15 @@ def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
             icon = "🛡️" if direction == "SUPPORT" else "🛑"
             action = "回測支撐" if direction == "SUPPORT" else "觸碰壓力"
 
-        line = f"{icon} **EMA {window} {action}** (偏離: `{dist}%`)"
-        ui_lines.append(line)
+        if ansi:
+            ui_lines.append(
+                f"{icon} {_ANSI_W}EMA {window} {action}{_ANSI_0} (偏離: {_ANSI_W}{dist}%{_ANSI_0})"
+            )
+        else:
+            ui_lines.append(f"{icon} **EMA {window} {action}** (偏離: `{dist}%`)")
 
+    if ansi:
+        return _ansi_tree_lines(ui_lines)
     return "\n".join(ui_lines)
 
 

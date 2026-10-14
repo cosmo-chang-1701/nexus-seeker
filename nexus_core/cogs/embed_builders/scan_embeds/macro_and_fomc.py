@@ -218,14 +218,14 @@ def create_fomc_escape_window_embed(
     embed.add_field(
         name="🔄 逃頂窗口調整方向",
         value=f"調整方向：{shift_label}",
-        inline=True,
+        inline=False,
     )
 
     rollover_note = " *(已自動滾動至下季)*" if was_auto_rolled else ""
     embed.add_field(
         name="📆 調整後逃頂窗口預期",
         value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**{rollover_note}",
-        inline=True,
+        inline=False,
     )
 
     if tactical_directive:

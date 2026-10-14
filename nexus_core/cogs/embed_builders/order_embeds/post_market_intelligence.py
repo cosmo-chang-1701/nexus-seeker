@@ -18,6 +18,10 @@ from cogs.embed_builders._ansi_utils import (
     _format_macro_report_ansi,
 )
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
     _parse_and_format_positions_table,
     format_runway_lines,
     split_embed_by_fields,
@@ -139,10 +143,10 @@ def build_post_market_intelligence_embed(
     )
 
     runway_lines = format_runway_lines(runway, stale=runway_stale)
-    embed.description = "\n".join(
-        ["```ansi", " 🏁 提領跑道 (Withdrawal Runway)"]
-        + [f" • {ln}" for ln in runway_lines]
-        + ["```"]
+    _add_ansi_field_safely(
+        embed,
+        "🏁 提領跑道 (Withdrawal Runway)",
+        _ansi_tree_lines([f"{_ANSI_W}{ln}{_ANSI_0}" for ln in runway_lines]),
     )
 
     positions_list = []

@@ -444,8 +444,10 @@ def test_create_hedge_settlement_embed() -> None:
     embed = create_hedge_settlement_embed(12, "SPY", 8)
     assert embed.title == "✅ 對沖結算完成"
     assert "#12" in get_embed_text(embed)
-    assert embed.fields[0].value == "`SPY`"
-    assert embed.fields[1].value == "`8`"
+    record = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "執行標的: SPY" in record
+    assert "執行數量: 8" in record
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_hedge_list_embed() -> None:
@@ -487,8 +489,11 @@ def test_create_hedge_alert_embed() -> None:
     )
     assert embed.title == "🚨 【戰位報告：自動化對沖警報】"
     assert "Aggressive" in get_embed_text(embed)
-    assert "140.0" in embed.fields[0].value  # type: ignore
-    assert "SPY" in embed.fields[3].value  # type: ignore
+    fields = {str(f.name): _strip_ansi(str(f.value)) for f in embed.fields}
+    assert "140.0" in fields["📊 風險指標"]
+    assert "SPY" in fields["🛡️ 對沖建議指令"]
+    assert "62%" in fields["🌐 [快取快照] Polymarket 即時機率"]
+    assert all(not f.inline for f in embed.fields)
     assert embed.footer.text == "🌌 Nexus Seeker • Battle Station | Alert ID: 7"
 
 
@@ -689,9 +694,11 @@ def test_create_memory_alert_embed() -> None:
     embed = create_memory_alert_embed(91.2, 512.4, 120, 87)
     assert embed.title == "🆘 【系統緊急警報：記憶體不足】 - Droplet (主節點)"
     assert "91.2%" in get_embed_text(embed)
-    assert embed.fields[0].value == "`91.2%`"
-    assert embed.fields[1].value == "`512.4 MB`"
-    assert embed.fields[2].value == "SMA/EMA: `120/87` 筆"
+    mem = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "當前總占用: 91.2%" in mem
+    assert "512.4 MB" in mem
+    assert "SMA/EMA: 120/87 筆" in mem
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_polymarket_whale_alert_embed() -> None:
@@ -917,9 +924,12 @@ def test_create_transition_simulation_embed() -> None:
         capital_efficiency_gain=2.7,
     )
     assert "NVDA" in embed.title  # type: ignore
-    assert "$100.00" in embed.fields[0].value  # type: ignore
-    assert "7,500.00" in embed.fields[2].value  # type: ignore
-    assert "符合 15% 門檻" in embed.fields[3].value  # type: ignore
+    fields = {str(f.name): _strip_ansi(str(f.value)) for f in embed.fields}
+    assert "$100.00" in fields["📊 轉軌模擬概覽"]
+    assert "$2,500.00" in fields["📊 轉軌模擬概覽"]
+    assert "7,500.00" in fields["🚀 資本重分配路線圖 (Roadmap)"]
+    assert "符合 15% 門檻" in fields["📊 資本效率評估"]
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_profit_lock_alert_embed() -> None:
@@ -4476,9 +4486,10 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
 
     # 1. Description contains runway (without timestamp or pnl)
-    desc = embed.description or ""
-    assert "🏁 提領跑道" in desc
-    assert "壓力跑道 2.3 年" in desc
+    runway_val = _strip_ansi(field_dict.get("🏁 提領跑道 (Withdrawal Runway)", ""))
+    assert runway_val, "runway must live in a 🏁 field, not the description"
+    assert "🏁 提領跑道" not in (embed.description or "")
+    assert "壓力跑道 2.3 年" in runway_val
 
     fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
     assert "Debit Cost" in fin_val
@@ -5017,11 +5028,12 @@ def test_create_short_entry_embed_renders_short_levels_and_sizing() -> None:
     text = " ".join(f"{f.name} {f.value}" for f in embed.fields)
     assert "SELL SHORT" in text
     assert "$92.00" in text and "$80.00" in text
-    assert "結構停損 `$97.50`／出場引擎停損 `$98.00`" in text
+    text = _strip_ansi(text)
+    assert "結構停損 $97.50／出場引擎停損 $98.00" in text
     assert "收復 Put Wall $95.00 即論點失效" in text
-    assert "`45` 股" in text
-    assert "VIX `未知`" in text
-    assert "做空倉位乘數 `0.50x`" in text
+    assert "45 股" in text
+    assert "VIX 未知" in text
+    assert "做空倉位乘數 0.50x" in text
     assert "BUY" not in text.upper().replace("BUYING", "")
     assert "Buy Shares" not in (embed.description or "")
     assert embed.footer.text is not None and "負股數" in embed.footer.text

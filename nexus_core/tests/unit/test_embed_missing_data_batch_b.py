@@ -1,5 +1,6 @@
 """R4/R5 缺資料降級（batch b）：缺值顯示 `--`，不得以 0 冒充；以缺值做的判斷需跳過。"""
 
+import re
 from types import SimpleNamespace
 from typing import Any
 
@@ -60,6 +61,11 @@ def _text(embed: discord.Embed) -> str:
     for f in embed.fields:
         parts.append(f"{f.name}\n{f.value}")
     return "\n".join(parts)
+
+
+def _plain(embed: discord.Embed) -> str:
+    """去除 ANSI 色碼後的全文（ansi 樹狀欄位的數值斷言用）。"""
+    return re.sub(r"\x1b\[[0-9;]*m", "", _text(embed))
 
 
 # ---------------------------------------------------------------- sentiment_scan
@@ -482,8 +488,8 @@ def test_max_pain_embed_missing_distance_dash() -> None:
     embed = create_max_pain_embed(
         "AAA", {"max_pain": 100.0, "current_price": 100.0, "expiry": "2099-01-01"}
     )
-    text = _text(embed)
-    assert "`--%`" in text
+    text = _plain(embed)
+    assert "--%" in text
     assert "貼近最大痛點" not in text
 
 
@@ -515,10 +521,10 @@ def test_macro_overview_degraded_title_and_missing_probs_dash() -> None:
 
 def test_short_entry_missing_plan_values_dash() -> None:
     embed = create_short_entry_embed("AAA", "r", {"sub_mode": "x"})
-    text = _text(embed)
+    text = _plain(embed)
     assert "$0.00" not in text
-    assert "R:R：`N/A`" in text
-    assert "`--` 股" in text
+    assert "R:R：N/A" in text
+    assert "建議股數：-- 股" in text
     assert "0.00x" not in text
 
 
@@ -537,18 +543,18 @@ def test_short_entry_full_plan_formats() -> None:
             "short_vix_multiplier": 0.5,
         },
     )
-    text = _text(embed)
-    assert "`$10.00`" in text and "R:R：`2.00`" in text and "`100` 股" in text
+    text = _plain(embed)
+    assert "$10.00" in text and "R:R：2.00" in text and "100 股" in text
 
 
 def test_pyramid_add_missing_plan_values_dash() -> None:
     embed = create_transition_pyramid_embed(
         "AAA", "r", "s", scenario="PYRAMID_ADD", pyramid_add_plan={"vix_spot": None}
     )
-    text = _text(embed)
+    text = _plain(embed)
     assert "$0.00" not in text
-    assert "`--` 股" in text
-    assert "第 `--` 次加碼" in text
+    assert "建議加碼股數：-- 股" in text
+    assert "第 -- 次加碼" in text
 
 
 # --------------------------------------------------------------------- hedge_embeds
@@ -587,9 +593,9 @@ def test_hedge_alert_missing_odds_dash() -> None:
             }
         ],
     )
-    text = _text(embed)
-    assert "Yes: `--%`" in text
-    assert "`0%`" not in text
+    text = _plain(embed)
+    assert "Yes: --%" in text
+    assert "0%" not in text.replace("--%", "")
 
 
 # ------------------------------------------------------------------------ watchlist

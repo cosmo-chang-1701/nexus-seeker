@@ -25,7 +25,15 @@ from cogs.embed_builders._ansi_utils import (
     _truncate_with_boundary,
     fmt_or_dash,
 )
-from cogs.embed_builders._embed_helpers import fedwatch_source_note
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_G,
+    _ANSI_R,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+    fedwatch_source_note,
+)
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
@@ -131,38 +139,37 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     mp_val = data.get("max_pain")
     mp_display = fmt_or_dash(mp_val, prefix="$", placeholder="N/A")
 
-    embed.add_field(name="到期日", value=f"`{data.get('expiry', 'N/A')}`", inline=True)
-    embed.add_field(
-        name="最大痛點 Strike",
-        value=f"**{mp_display}**",
-        inline=True,
-    )
-
     spot_val = data.get("current_price")
     spot_display = fmt_or_dash(spot_val, prefix="$", placeholder="N/A")
-    embed.add_field(
-        name="目前價格",
-        value=f"`{spot_display}`",
-        inline=True,
-    )
 
     if cb_triggered:
-        embed.add_field(
-            name="偏離度", value="N/A (偏離度過大，已觸發自動斷路)", inline=False
-        )
+        distance_text = "N/A (偏離度過大，已觸發自動斷路)"
         # Suppress converging and execution recommendation
     else:
         distance_pct = _to_float_or_none(data.get("distance_pct"))
         if distance_pct is None:
-            distance_text = "偏離度 `--%`（缺少現價或痛點）"
+            distance_text = f"{_ANSI_W}--%{_ANSI_0}（缺少現價或痛點）"
         elif distance_pct > 0:
-            distance_text = f"現價高於痛點 `{distance_pct:.2f}%`"
+            distance_text = f"現價高於痛點 {_ANSI_W}{distance_pct:.2f}%{_ANSI_0}"
         elif distance_pct < 0:
-            distance_text = f"現價低於痛點 `{abs(distance_pct):.2f}%`"
+            distance_text = f"現價低於痛點 {_ANSI_W}{abs(distance_pct):.2f}%{_ANSI_0}"
         else:
-            distance_text = "現價貼近最大痛點 `0.00%`"
-        embed.add_field(name="偏離度", value=distance_text, inline=False)
+            distance_text = f"現價貼近最大痛點 {_ANSI_W}0.00%{_ANSI_0}"
 
+    _add_ansi_field_safely(
+        embed,
+        "📍 最大痛點概覽",
+        _ansi_tree_lines(
+            [
+                f"到期日        : {_ANSI_W}{data.get('expiry', 'N/A')}{_ANSI_0}",
+                f"最大痛點 Strike: {_ANSI_W}{mp_display}{_ANSI_0}",
+                f"目前價格      : {_ANSI_W}{spot_display}{_ANSI_0}",
+                f"偏離度        : {distance_text}",
+            ]
+        ),
+    )
+
+    if not cb_triggered:
         if data.get("is_converging"):
             embed.description = "🎯 **價格正向最大痛點收斂中** (預期結算日波動縮小)"
 
@@ -339,24 +346,36 @@ def create_transition_simulation_embed(
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True)
-    embed.add_field(
-        name="期權獲利 (Option PnL)", value=f"`${initial_pnl:,.2f}`", inline=True
+    _add_ansi_field_safely(
+        embed,
+        "📊 轉軌模擬概覽",
+        _ansi_tree_lines(
+            [
+                f"現價 (Price)         : {_ANSI_W}${current_price:.2f}{_ANSI_0}",
+                f"期權獲利 (Option PnL): {_ANSI_W}${initial_pnl:,.2f}{_ANSI_0}",
+            ]
+        ),
     )
-    roadmap = (
-        "1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
-        f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
-        f"3. **追加資本**：需額外投入 **`${additional_capital_required:,.2f}`**。\n"
-        f"4. **成本調整**：調整後每股成本為 **`${adjusted_cost_basis:.2f}`**。\n"
-        f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
+    roadmap_rows = [
+        "1. 執行動作：平倉現有 DITM 部位，回收收益。",
+        f"2. 購入現股：以 {_ANSI_W}${current_price:.2f}{_ANSI_0} 購入 100 股。",
+        f"3. 追加資本：需額外投入 {_ANSI_W}${additional_capital_required:,.2f}{_ANSI_0}。",
+        f"4. 成本調整：調整後每股成本為 {_ANSI_W}${adjusted_cost_basis:.2f}{_ANSI_0}。",
+        f"5. 建立 CC：賣出 ${target_cc_strike} Call，收取 {_ANSI_W}${target_cc_premium:.2f}{_ANSI_0} 權利金。",
+    ]
+    _add_ansi_field_safely(
+        embed,
+        "🚀 資本重分配路線圖 (Roadmap)",
+        _ansi_tree_lines(roadmap_rows),
     )
-    embed.add_field(name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False)
-    efficiency = (
-        f"• **預期年化回報 (AROC)**：`{projected_aroc:.1f}%` "
-        f"{'✅ 符合 15% 門檻' if projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
-        f"• **單次收租殖利率**：`{capital_efficiency_gain:.2f}%`"
-    )
-    embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
+    aroc_ok = projected_aroc >= 15
+    aroc_color = _ANSI_G if aroc_ok else _ANSI_R
+    efficiency_rows = [
+        f"預期年化回報 (AROC): {aroc_color}{projected_aroc:.1f}%{_ANSI_0} "
+        f"{'✅ 符合 15% 門檻' if aroc_ok else '⚠️ 低於效率門檻'}",
+        f"單次收租殖利率     : {_ANSI_W}{capital_efficiency_gain:.2f}%{_ANSI_0}",
+    ]
+    _add_ansi_field_safely(embed, "📊 資本效率評估", _ansi_tree_lines(efficiency_rows))
     embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
     return embed
 
