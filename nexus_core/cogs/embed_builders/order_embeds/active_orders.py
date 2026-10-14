@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 
 import discord
 
+from cogs.embed_builders._ansi_utils import fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -55,19 +56,19 @@ def _build_active_order_ansi_card(order: Dict[str, Any]) -> str:
     price_conditions = []
     if order.get("order_type") in ("LIMIT", "STOP_LIMIT"):
         price_conditions.append(
-            f"限價: \u001b[1;32m${order.get('limit_price', 0.0):.2f}\u001b[0m"
+            f"限價: \u001b[1;32m{fmt_or_dash(order.get('limit_price'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") in ("STOP", "STOP_LIMIT"):
         price_conditions.append(
-            f"停損價: \u001b[1;31m${order.get('stop_price', 0.0):.2f}\u001b[0m"
+            f"停損價: \u001b[1;31m{fmt_or_dash(order.get('stop_price'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") == "TRAILING_STOP_USD":
         price_conditions.append(
-            f"追蹤值: \u001b[1;35m${order.get('trailing_value', 0.0):.2f}\u001b[0m"
+            f"追蹤值: \u001b[1;35m{fmt_or_dash(order.get('trailing_value'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") == "TRAILING_STOP_PCT":
         price_conditions.append(
-            f"追蹤值: \u001b[1;35m{order.get('trailing_value', 0.0):.2f}%\u001b[0m"
+            f"追蹤值: \u001b[1;35m{fmt_or_dash(order.get('trailing_value'), suffix='%', placeholder='--%')}\u001b[0m"
         )
 
     if price_conditions:

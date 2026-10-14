@@ -28,6 +28,12 @@ def _to_float_or_none(value: Any) -> float | None:
         return None
 
 
+def _positive_float_or_none(value: Any) -> float | None:
+    """指數／殖利率等水位值：缺失或 <= 0（舊上游以 0.0 代表缺值）一律回傳 None。"""
+    v = _to_float_or_none(value)
+    return v if v is not None and v > 0 else None
+
+
 def fmt_or_dash(
     value: Any,
     spec: str = ",.2f",

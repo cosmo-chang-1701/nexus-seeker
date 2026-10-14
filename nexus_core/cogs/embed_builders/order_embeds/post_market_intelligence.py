@@ -10,6 +10,8 @@ from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
     _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
     _is_macro_report_marker,
     _is_correlation_report_marker,
     _chunk_text_blocks,
@@ -386,8 +388,19 @@ def build_post_market_intelligence_embed(
 
     if sectors_data is not None:
         if sectors_data:
+            # 漲跌缺值者不得歸入領漲／領跌，另列「資料缺失」
+            known_sectors = [
+                s
+                for s in sectors_data
+                if _to_float_or_none(s.get("pct_change")) is not None
+            ]
+            unknown_sectors = [
+                s
+                for s in sectors_data
+                if _to_float_or_none(s.get("pct_change")) is None
+            ]
             sorted_sectors = sorted(
-                sectors_data,
+                known_sectors,
                 key=lambda item: _safe_float(item.get("pct_change")),
                 reverse=True,
             )
@@ -408,11 +421,13 @@ def build_post_market_intelligence_embed(
                     symbol = item.get("symbol", "N/A")
                     sec_name = item.get("name", "N/A")
                     change = _safe_float(item.get("pct_change"))
-                    rel_vol = _safe_float(item.get("rel_vol"))
-                    skew = _safe_float(item.get("skew"))
+                    rel_vol_str = fmt_or_dash(
+                        item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"
+                    )
+                    skew_str = fmt_or_dash(item.get("skew"), "+.1f")
                     uoa_count = int(item.get("uoa_count", 0))
                     sector_content_lines.append(
-                        f" • {symbol} ({sec_name})：\u001b[1;32m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                        f" • {symbol} ({sec_name})：\u001b[1;32m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol_str} ｜ Skew {skew_str} ｜ UOA {uoa_count}"
                     )
 
             if outflows:
@@ -425,14 +440,30 @@ def build_post_market_intelligence_embed(
                     symbol = item.get("symbol", "N/A")
                     sec_name = item.get("name", "N/A")
                     change = _safe_float(item.get("pct_change"))
-                    rel_vol = _safe_float(item.get("rel_vol"))
-                    skew = _safe_float(item.get("skew"))
+                    rel_vol_str = fmt_or_dash(
+                        item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"
+                    )
+                    skew_str = fmt_or_dash(item.get("skew"), "+.1f")
                     uoa_count = int(item.get("uoa_count", 0))
                     sector_content_lines.append(
-                        f" • {symbol} ({sec_name})：\u001b[1;31m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol:.2f}x ｜ Skew {skew:+.1f} ｜ UOA {uoa_count}"
+                        f" • {symbol} ({sec_name})：\u001b[1;31m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol_str} ｜ Skew {skew_str} ｜ UOA {uoa_count}"
                     )
 
-            if not inflows and not outflows:
+            if unknown_sectors:
+                if inflows or outflows:
+                    sector_content_lines.append("")
+                sector_content_lines.append(
+                    " \u001b[1;30m⚪ 資料缺失 (No Data)\u001b[0m"
+                )
+                for item in unknown_sectors:
+                    symbol = item.get("symbol", "N/A")
+                    sec_name = item.get("name", "N/A")
+                    uoa_count = int(item.get("uoa_count", 0))
+                    sector_content_lines.append(
+                        f" • {symbol} ({sec_name})：--% ｜ UOA {uoa_count}"
+                    )
+
+            if not inflows and not outflows and not unknown_sectors:
                 sector_content_lines.append(" • 暫無波動資料")
 
             sector_content = "\n".join(sector_content_lines)

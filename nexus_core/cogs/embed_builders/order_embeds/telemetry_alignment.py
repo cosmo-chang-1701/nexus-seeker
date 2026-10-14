@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Tuple
 
 import discord
 
+from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -16,7 +17,9 @@ from cogs.embed_builders._embed_helpers import (
 def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str]:
     """建構 Telemetry 實時對齊快照卡片。回傳 (卡片內容, 數據降級狀態後綴)。"""
     sym = str(item.get("symbol") or "").upper()
-    current_price = float(item.get("live_price") or item.get("current_price") or 0.0)
+    # 注意：item["current_price"] 是委託單限價，不是現價；缺 live_price 時不得以限價冒充
+    live_price_val = _to_float_or_none(item.get("live_price"))
+    current_price = live_price_val if live_price_val and live_price_val > 0 else None
 
     avg_cost_val = item.get("avg_cost")
     avg_cost = float(avg_cost_val) if avg_cost_val is not None else None
@@ -35,9 +38,9 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str
     wall_dist_pct = float(wall_dist_pct_val) if wall_dist_pct_val is not None else None
 
     order_id = int(item.get("order_id") or 0)
-    limit_price = float(item.get("current_price") or 0.0)
+    limit_price = _to_float_or_none(item.get("current_price"))
     shares = int(round(float(item.get("original_qty") or 0.0)))
-    proximity_pct = float(item.get("proximity_pct") or 0.0)
+    proximity_pct = _to_float_or_none(item.get("proximity_pct"))
 
     skew_val_val = item.get("skew_val")
     skew_val = float(skew_val_val) if skew_val_val is not None else None
@@ -69,7 +72,8 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str
     iv_source = item.get("iv_source", "UNAVAILABLE")
 
     is_degraded = (
-        put_wall is None
+        current_price is None
+        or put_wall is None
         or skew_val is None
         or iv_val is None
         or item.get("iv_status") == "UNAVAILABLE"
@@ -107,6 +111,9 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str
         iv_val_str = f"{iv_val:.2f}%" if iv_val is not None else "--%"
         iv_rank_str = f"{iv_rank:.2f}%" if iv_rank is not None else "--%"
         iv_status = item.get("iv_status", "Normal")
+
+    if current_price is None and not degraded_suffix:
+        degraded_suffix = " [數據未更新/降級模式]"
 
     # ANSI Coloring values
     holding_shares = int(item.get("holding_shares", 0))
@@ -211,7 +218,7 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str
     )
     lines.append(
         " ├─ 成本對齊: "
-        f"平均成本 \u001b[1;33m{avg_cost_str}\u001b[0m ｜ 當前現價: \u001b[1;37m${current_price:.2f}\u001b[0m (損益: {pnl_color})"
+        f"平均成本 \u001b[1;33m{avg_cost_str}\u001b[0m ｜ 當前現價: \u001b[1;37m{fmt_or_dash(current_price, prefix='$')}\u001b[0m (損益: {pnl_color})"
     )
     lines.append(
         " └─ 做市商牆: "
@@ -231,8 +238,8 @@ def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str
     lines.append("")
     lines.append("⚔️ \u001b[1;36m【捕獸夾雷達 (Order Radar)】\u001b[0m")
     lines.append(
-        f" └─ ID \u001b[1;33m{order_id}\u001b[0m ({sym} {side_color}{side_zh}{type_zh}\u001b[0m ${limit_price:.2f} / \u001b[1;37m{shares}\u001b[0m股) ── 距離成交差: "
-        f"\u001b[1;37m{proximity_pct:.2f}%\u001b[0m [{radar_status_color}]"
+        f" └─ ID \u001b[1;33m{order_id}\u001b[0m ({sym} {side_color}{side_zh}{type_zh}\u001b[0m {fmt_or_dash(limit_price, prefix='$')} / \u001b[1;37m{shares}\u001b[0m股) ── 距離成交差: "
+        f"\u001b[1;37m{fmt_or_dash(proximity_pct, '.2f', suffix='%', placeholder='--%')}\u001b[0m [{radar_status_color}]"
     )
     lines.append("")
     lines.append("⚙️ \u001b[1;36m【最高主權指令 (Sovereign Command)】\u001b[0m")
@@ -264,6 +271,10 @@ def create_telemetry_alignment_embeds(
         if any(i.get("is_size_down") for i in alignment_items)
         else discord.Color.orange()
     )
+
+    all_cards = [_build_telemetry_alignment_ansi_card(i) for i in alignment_items]
+    if any("降級" in sfx or "未更新" in sfx for _, sfx in all_cards):
+        title += " [降級模式]"
 
     description_lines = [f"共 `{len(alignment_items)}` 筆委託單需要進行遙測對齊。"]
 
@@ -299,7 +310,7 @@ def create_telemetry_alignment_embeds(
             global_idx = chunk_idx * 15 + idx + 1
             sym = str(item.get("symbol") or "").upper()
             order_id = item.get("order_id")
-            card_content, degraded_suffix = _build_telemetry_alignment_ansi_card(item)
+            card_content, degraded_suffix = all_cards[global_idx - 1]
 
             name_prefix = f"📦 委託單 #{global_idx}"
             if order_id is not None:

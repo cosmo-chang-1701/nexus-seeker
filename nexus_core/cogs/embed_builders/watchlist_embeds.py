@@ -13,7 +13,12 @@ import discord
 from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
-from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
+from cogs.embed_builders._ansi_utils import (
+    _pad_string,
+    _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._embed_helpers import (
     UOA_DELTA_OI_NOTE,
     UOA_HEURISTIC_DISCLOSURE,
@@ -414,7 +419,7 @@ def create_watchlist_signal_embed(
             max_pain_str = "N/A (⚠️ 數據源缺失)"
         else:
             max_pain = float(mp_val)
-            pain_dist = float(max_pain_data.get("distance_pct") or 0.0)
+            pain_dist = _to_float_or_none(max_pain_data.get("distance_pct"))
             mp_updated_at = max_pain_data.get("updated_at")
             mp_age_seconds = None
             if mp_updated_at:
@@ -433,7 +438,7 @@ def create_watchlist_signal_embed(
                 calculation_mode=max_pain_data.get("calculation_mode", "OI"),
             )
             age_suffix = format_cache_age_suffix(mp_age_seconds)
-            max_pain_str = f"${max_pain:.2f}{freshness_suffix}{age_suffix} (當前價差: {pain_dist:+.2f}%)"
+            max_pain_str = f"${max_pain:.2f}{freshness_suffix}{age_suffix} (當前價差: {fmt_or_dash(pain_dist, '+.2f', suffix='%', placeholder='--%')})"
     else:
         max_pain_str = "N/A (⚠️ 數據源缺失)"
 
@@ -490,7 +495,7 @@ def create_watchlist_signal_embed(
     if uoa_list:
         for item in uoa_list[:3]:
             exp = item.get("expiry", "")
-            strike_val = float(item.get("strike", 0.0))
+            strike_str = fmt_or_dash(item.get("strike"), ".2f", prefix="$")
             opt_type = str(item.get("type", "")).upper()
             action = item.get("action", "")
 
@@ -510,20 +515,25 @@ def create_watchlist_signal_embed(
                 else f"{vol_val:,}({oi_change:+})"
             )
 
-            ratio_str = item.get("ratio_str", "0.00x")
+            ratio_str = item.get("ratio_str") or "--x"
             intent = item.get("intent", "")
 
             uoa_table_lines.append(
-                f" {exp:<10} | ${strike_val:<9.2f} | {opt_type:<4} | {action_display:<32} | {oi_str:<14} | {ratio_str:<6} | {intent}"
+                f" {exp:<10} | {strike_str:<10} | {opt_type:<4} | {action_display:<32} | {oi_str:<14} | {ratio_str:<6} | {intent}"
             )
 
     # Holding status
-    shares_str = f"{int(holding_quantity)}" if holding_quantity is not None else "0"
-    avg_cost_str = (
-        f"${holding_avg_cost:.2f}" if holding_avg_cost is not None else "$0.00"
-    )
-    pnl_str = (
-        f"{holding_pnl_pct * 100:+.2f}%" if holding_pnl_pct is not None else "0.00%"
+    # 無持倉時股數為 0 是事實；有持倉卻缺值則顯示 `--`，成本／損益缺值一律 `--`
+    if holding_quantity is not None:
+        shares_str = f"{int(holding_quantity)}"
+    else:
+        shares_str = "--" if has_position else "0"
+    avg_cost_str = fmt_or_dash(holding_avg_cost, prefix="$")
+    pnl_str = fmt_or_dash(
+        holding_pnl_pct * 100 if holding_pnl_pct is not None else None,
+        "+.2f",
+        suffix="%",
+        placeholder="--%",
     )
 
     inst_str = (
@@ -539,10 +549,10 @@ def create_watchlist_signal_embed(
             for leg in legs:
                 action = getattr(leg, "action", "")
                 opt_type = getattr(leg, "opt_type", "")
-                strike = getattr(leg, "strike", 0.0)
-                mid = getattr(leg, "mid_price", 0.0)
+                strike = getattr(leg, "strike", None)
+                mid = getattr(leg, "mid_price", None)
                 expiry = getattr(leg, "expiry", "")
-                inst_str += f"\n ├─ 合約: {action} {opt_type} {expiry} ${strike:.2f} (Mid: ${mid:.2f})"
+                inst_str += f"\n ├─ 合約: {action} {opt_type} {expiry} {fmt_or_dash(strike, prefix='$')} (Mid: {fmt_or_dash(mid, prefix='$')})"
             if not legs:
                 # 0 口 / 空 legs 是「本輪不執行」的 WAIT 計畫（財報 event-lock、
                 # 期權鏈流動性不足等）。這種情況下 rationale 才是使用者真正需要
@@ -552,10 +562,8 @@ def create_watchlist_signal_embed(
                     inst_str += f"\n └─ {reason}"
             else:
                 contracts = getattr(option_plan, "suggested_contracts", 0)
-                risk = getattr(option_plan, "max_risk_amount", 0.0)
-                inst_str += (
-                    f"\n └─ 建議口數上限: {contracts} 口 (風險配額: ${risk:.2f})"
-                )
+                risk = getattr(option_plan, "max_risk_amount", None)
+                inst_str += f"\n └─ 建議口數上限: {contracts} 口 (風險配額: {fmt_or_dash(risk, prefix='$')})"
 
     # 注意：skew_percentile (skew_per) is None 刻意不計入 is_degraded——分位數需要
     # 20 筆 sentiment_history 樣本才能算出，樣本不足時回傳 None 是設計上的

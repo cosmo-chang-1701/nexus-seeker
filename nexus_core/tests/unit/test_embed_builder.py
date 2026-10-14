@@ -4245,8 +4245,8 @@ def test_holding_pnl_pct_negative_displayed_correctly() -> None:
     assert "-10.00%" in get_embed_text(embed)
 
 
-def test_holding_pnl_pct_none_shows_zero() -> None:
-    """holding_pnl_pct=None 時，顯示為 0.00%（向後相容的 fallback）。"""
+def test_holding_pnl_pct_none_shows_placeholder() -> None:
+    """holding_pnl_pct=None 時顯示 `--%`，不以 0.00% 冒充損益。"""
     embed = create_watchlist_signal_embed(
         symbol="NVDA",
         has_position=True,
@@ -4259,7 +4259,8 @@ def test_holding_pnl_pct_none_shows_zero() -> None:
     )
     assert embed is not None
     assert get_embed_text(embed)
-    assert "0.00%" in get_embed_text(embed)
+    assert "當前損益: --%" in get_embed_text(embed)
+    assert "當前損益: 0.00%" not in get_embed_text(embed)
 
 
 def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:

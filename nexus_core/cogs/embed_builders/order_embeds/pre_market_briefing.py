@@ -5,7 +5,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 import discord
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import (
+    _pad_string,
+    _positive_float_or_none,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import _safe_embed_field_value
 
@@ -45,6 +50,21 @@ def build_pre_market_briefing_embed(
         base_color = discord.Color.blue()
         status_suffix = " [✅ 總經平穩・無即期財報]"
 
+    # 總經數據缺值（None／<=0）時不得宣稱「總經平穩」，標題改標降級
+    dxy = _positive_float_or_none(macro_data.get("dxy"))
+    tnx = _positive_float_or_none(macro_data.get("tnx"))
+    us2y = _positive_float_or_none(macro_data.get("us2y"))
+    vix = _positive_float_or_none(macro_data.get("vix"))
+    tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
+    vix_change = _to_float_or_none(macro_data.get("vix_change"))
+    macro_degraded = dxy is None or tnx is None or us2y is None or vix is None
+    if macro_degraded:
+        degraded_tag = "[盤前數據未更新/降級模式]"
+        if status_suffix == " [✅ 總經平穩・無即期財報]":
+            status_suffix = f" {degraded_tag}"
+        else:
+            status_suffix += f" {degraded_tag}"
+
     embed = NexusEmbed(
         title=f"🌅 報告：盤前綜合宏觀與自選股{status_suffix}",
         color=base_color,
@@ -54,15 +74,12 @@ def build_pre_market_briefing_embed(
     embed.description = None
 
     # 1. 巨觀數據指標 ANSI 控制台
-    dxy = macro_data.get("dxy", 0.0)
-    tnx = macro_data.get("tnx", 0.0)
-    tnx_change = macro_data.get("tnx_change_bps", 0.0)
-    us2y = macro_data.get("us2y", 0.0)
-    vix = macro_data.get("vix", 0.0)
-    vix_change = macro_data.get("vix_change", 0.0)
-    spread = tnx - us2y
+    spread = tnx - us2y if tnx is not None and us2y is not None else None
 
-    vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
+    if vix is None:
+        vix_emoji = "--"
+    else:
+        vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
 
     lines = ["```ansi"]
     headers = ["指標", "數值", "變動 / 備註"]
@@ -76,21 +93,27 @@ def build_pre_market_briefing_embed(
     lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
 
     lines.append(
-        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(f'{dxy:.2f}', widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
+        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(fmt_or_dash(dxy), widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
     )
     lines.append(
-        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(f'{tnx:.2f}%', widths[1], 'right')} | {_pad_string(f'{tnx_change:+.1f} bps', widths[2], 'right')}"
+        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(fmt_or_dash(tnx, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(fmt_or_dash(tnx_change, '+.1f', suffix=' bps'), widths[2], 'right')}"
     )
-    spread_note = f"利差 {spread:+.2f}%"
+    spread_note = "利差 " + fmt_or_dash(spread, "+.2f", suffix="%", placeholder="--%")
     lines.append(
-        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(f'{us2y:.2f}%', widths[1], 'right')} | {_pad_string(spread_note, widths[2], 'right')}"
+        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(spread_note, widths[2], 'right')}"
     )
-    vix_color_start = (
-        "\u001b[0;31m" if vix > 25 else ("\u001b[0;33m" if vix > 20 else "\u001b[0;32m")
-    )
-    vix_note = f"{vix_change:+.2f} ({vix_emoji})"
-    vix_note_colored = f"{vix_color_start}{vix_change:+.2f}\u001b[0m ({vix_emoji})"
-    vix_val_str = f"{vix:.2f}"
+    if vix is None:
+        vix_color_start = "\u001b[1;30m"
+    else:
+        vix_color_start = (
+            "\u001b[0;31m"
+            if vix > 25
+            else ("\u001b[0;33m" if vix > 20 else "\u001b[0;32m")
+        )
+    vix_change_str = fmt_or_dash(vix_change, "+.2f")
+    vix_note = f"{vix_change_str} ({vix_emoji})"
+    vix_note_colored = f"{vix_color_start}{vix_change_str}\u001b[0m ({vix_emoji})"
+    vix_val_str = fmt_or_dash(vix)
     lines.append(
         f"{_pad_string('VIX 恐慌指數', widths[0])} | {_pad_string(vix_val_str, widths[1], 'right')} | {_pad_string(vix_note, widths[2], 'right').replace(vix_note, vix_note_colored)}"
     )
@@ -114,15 +137,27 @@ def build_pre_market_briefing_embed(
             value=_safe_embed_field_value("\n".join(alert_lines), "無警示"),
             inline=False,
         )
+    elif macro_degraded:
+        # 缺值時跳過所有「平穩／合規」判定
+        embed.add_field(
+            name="⚠️ 宏觀狀態",
+            value=_safe_embed_field_value(
+                "```ansi\n 部分總經數據缺失（以 `--` 標示），無法判定宏觀狀態\n```",
+                "數據缺失",
+            ),
+            inline=False,
+        )
     else:
+        assert vix is not None and tnx is not None and dxy is not None
+        vix_chg = fmt_or_dash(vix_change, "+.2f")
         if vix < 15.0:
-            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_change:+.2f})\u001b[0m 低波動沉睡區間，注意權利金較薄"
+            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 低波動沉睡區間，注意權利金較薄"
         elif vix <= 20.0:
-            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_change:+.2f})\u001b[0m 常態健康位階，未見異常避險情緒"
+            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 常態健康位階，未見異常避險情緒"
         else:
-            vol_status = f"\u001b[1;33mVIX {vix:.2f} ({vix_change:+.2f})\u001b[0m 位階偏高但平穩，維持正常戒備"
+            vol_status = f"\u001b[1;33mVIX {vix:.2f} ({vix_chg})\u001b[0m 位階偏高但平穩，維持正常戒備"
 
-        bond_status = f"\u001b[1;36m10Y {tnx:.2f}% ({tnx_change:+.1f} bps)\u001b[0m 殖利率平穩 (利差 {spread:+.2f}%)"
+        bond_status = f"\u001b[1;36m10Y {tnx:.2f}% ({fmt_or_dash(tnx_change, '+.1f', suffix=' bps')})\u001b[0m 殖利率平穩 (利差 {fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%')})"
         fx_status = f"\u001b[1;37mDXY {dxy:.2f}\u001b[0m 美元走勢溫和，跨國流動性充裕"
         guide_status = (
             "\u001b[1;32m指標全數合規\u001b[0m，維持常態部位與安全邊際"

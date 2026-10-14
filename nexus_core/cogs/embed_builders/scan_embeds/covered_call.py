@@ -2,6 +2,7 @@
 
 import discord
 
+from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 
 
@@ -158,9 +159,9 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
 def create_cc_recovery_embed(data: dict) -> discord.Embed:
     """建立 Covered Call 備兌合約防禦性收租指引 Embed (繁體中文)"""
     symbol = data.get("symbol", "")
-    current_price = data.get("current_price", 0.0)
+    current_price = data.get("current_price")
     recs = data.get("recommendations", [])
-    fallback_iv = data.get("fallback_iv", 0.0)
+    fallback_iv = _to_float_or_none(data.get("fallback_iv"))
 
     # Note: color parameter triggers appropriate NexusEmbed palette mapping automatically
     embed = NexusEmbed(
@@ -168,11 +169,16 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
         color=discord.Color.blue() if recs else discord.Color.orange(),
     )
 
+    iv_ref_str = (
+        f"{fallback_iv * 100.0:.2f}% (HV 代理/備援)"
+        if fallback_iv is not None
+        else "--%"
+    )
     spot_lines = [
         "```ansi",
         " 標的現貨狀態 (Spot Asset Status)",
-        f" ├─ 當前現價: \u001b[1;32m${current_price:,.2f}\u001b[0m",
-        f" └─ 波動率參考值: \u001b[1;35m{fallback_iv * 100.0:.2f}%\u001b[0m",
+        f" ├─ 當前現價: \u001b[1;32m{fmt_or_dash(current_price, prefix='$')}\u001b[0m",
+        f" └─ 波動率參考值: \u001b[1;35m{iv_ref_str}\u001b[0m",
         "```",
     ]
 

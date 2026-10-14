@@ -18,7 +18,11 @@ from cogs.embed_builders._core import NexusEmbed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from cogs.embed_builders._ansi_utils import _truncate_with_boundary
+from cogs.embed_builders._ansi_utils import (
+    _to_float_or_none,
+    _truncate_with_boundary,
+    fmt_or_dash,
+)
 from cogs.embed_builders._embed_helpers import split_embed_by_fields
 
 
@@ -146,9 +150,18 @@ def create_hedge_alert_embed(
             question = str(event.get("question", "N/A"))
             truncated = _truncate_with_boundary(question, 40)
             odds = event.get("odds_distribution", [])
+
+            def _odds_pct(item: Dict[str, Any]) -> str:
+                o = _to_float_or_none(item.get("odds"))
+                return fmt_or_dash(
+                    o * 100 if o is not None else None,
+                    ".0f",
+                    suffix="%",
+                    placeholder="--%",
+                )
+
             odds_str = " | ".join(
-                f"{item.get('outcome')}: `{item.get('odds', 0.0) * 100:.0f}%`"
-                for item in odds[:2]
+                f"{item.get('outcome')}: `{_odds_pct(item)}`" for item in odds[:2]
             )
             snapshot_lines.append(f"• **{truncated}**\n  └ {odds_str}")
 
@@ -197,7 +210,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
     for event in events:
         if isinstance(event, dict):
             name = str(event.get("name", "⚠️ 重大事件"))
-            tte_hours = float(event.get("tte_hours", 0.0) or 0.0)
+            tte_hours = _to_float_or_none(event.get("tte_hours"))
             risk_status = str(event.get("risk_status", "持倉風險狀態暫不可用"))
             instruction = str(event.get("instruction", "請先降低曝險並觀察事件落地。"))
         else:
@@ -207,11 +220,14 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
             else:
                 name = f"📊 財報預警: {event.symbol}"
                 instruction = "已啟動 IV Crush 防護機制。"
-            tte_hours = float(getattr(event, "tte_hours", 0.0) or 0.0)
+            tte_hours = _to_float_or_none(getattr(event, "tte_hours", None))
             risk_status = "持倉風險狀態未提供，請搭配組合 Greeks 自行覆核。"
 
         # Determine colors for TTE
-        if tte_hours <= 12.0:
+        # TTE 缺值時不判斷緊急度（不上紅），改中性灰
+        if tte_hours is None:
+            tte_color = "\u001b[1;30m"
+        elif tte_hours <= 12.0:
             tte_color = "\u001b[1;31m"  # Urgent Red
         elif tte_hours <= 24.0:
             tte_color = "\u001b[1;33m"  # Warning Yellow
@@ -233,7 +249,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
         event_lines = [
             "```ansi",
             " 距離發布 (Time to Event)",
-            f" └─ 剩餘時間: {tte_color}{tte_hours:.1f} 小時\u001b[0m",
+            f" └─ 剩餘時間: {tte_color}{fmt_or_dash(tte_hours, '.1f')} 小時\u001b[0m",
             " 持倉風險狀態 (Position Risk Status)",
             f" └─ 狀態: {risk_color}{risk_status}\u001b[0m",
             " NRO 指令 (NRO Instruction)",

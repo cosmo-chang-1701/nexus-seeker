@@ -3,7 +3,7 @@ import logging
 from typing import Optional, Any, Callable, Coroutine, Dict, Mapping
 
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import _pad_string, fmt_or_dash
 from ui.panel_renderer import truncate_with_boundary
 
 logger = logging.getLogger(__name__)
@@ -864,16 +864,17 @@ def create_transition_pyramid_embed(
     if is_pyramid_add and pyramid_add_plan:
 
         def _money(key: str) -> str:
-            try:
-                return f"${float(pyramid_add_plan.get(key) or 0.0):,.2f}"
-            except (TypeError, ValueError):
-                return "N/A"
+            # 缺值（None／非數值）顯示 `--`，不以 $0.00 冒充
+            return fmt_or_dash(pyramid_add_plan.get(key), ",.2f", prefix="$")
+
+        def _count(key: str) -> str:
+            return fmt_or_dash(pyramid_add_plan.get(key), ",.0f")
 
         binding = str(pyramid_add_plan.get("binding_constraint") or "")
         vix_spot = pyramid_add_plan.get("vix_spot")
-        vix_text = f"{float(vix_spot):.1f}" if vix_spot is not None else "未知"
+        vix_text = fmt_or_dash(vix_spot, ".1f", placeholder="未知")
         sizing_lines = [
-            f"建議加碼股數：`{int(pyramid_add_plan.get('share_qty') or 0):,}` 股"
+            f"建議加碼股數：`{_count('share_qty')}` 股"
             f"（名目 {_money('notional_usd')}）",
             f"風險預算：`{_money('risk_budget_usd')}`",
             f"停損距離：`{_money('stop_distance_usd')}`"
@@ -881,7 +882,7 @@ def create_transition_pyramid_embed(
             f"約束來源：{_PYRAMID_ADD_BINDING_LABELS.get(binding, binding or 'N/A')}",
             f"VIX `{vix_text}`｜{pyramid_add_plan.get('vix_tier_name') or 'N/A'}"
             "（僅供參考，不調整倉位）",
-            f"第 `{int(pyramid_add_plan.get('pyramid_count_after') or 0)}` 次加碼",
+            f"第 `{_count('pyramid_count_after')}` 次加碼",
         ]
         embed.add_field(
             name="⚖️ 倉位",
@@ -936,10 +937,8 @@ def create_short_entry_embed(
     )
 
     def _money(key: str) -> str:
-        try:
-            return f"${float(plan.get(key) or 0.0):,.2f}"
-        except (TypeError, ValueError):
-            return "N/A"
+        # 缺值（None／非數值）顯示 `--`，不以 $0.00 冒充
+        return fmt_or_dash(plan.get(key), ",.2f", prefix="$")
 
     action_lines = [
         f"動作：**SELL SHORT** `{symbol}`",
@@ -967,24 +966,23 @@ def create_short_entry_embed(
             f"`${stop_exit_engine:,.2f}` (取較遠者)"
         )
     level_lines.append(f"目標：`{_money('target_price')}`")
-    try:
-        level_lines.append(f"R:R：`{float(plan.get('reward_risk_ratio') or 0.0):.2f}`")
-    except (TypeError, ValueError):
-        pass
+    level_lines.append(
+        f"R:R：`{fmt_or_dash(plan.get('reward_risk_ratio'), '.2f', placeholder='N/A')}`"
+    )
     if plan.get("invalidation_note"):
         level_lines.append(f"⚠️ {plan.get('invalidation_note')}")
     embed.add_field(name="📐 價位", value="\n".join(level_lines), inline=False)
 
     binding = str(plan.get("binding_constraint") or "")
     vix_spot = plan.get("vix_spot")
-    vix_text = f"{float(vix_spot):.1f}" if vix_spot is not None else "未知"
+    vix_text = fmt_or_dash(vix_spot, ".1f", placeholder="未知")
     sizing_lines = [
         f"風險預算：`{_money('risk_budget_usd')}`",
-        f"建議股數：`{int(plan.get('share_qty') or 0):,}` 股"
+        f"建議股數：`{fmt_or_dash(plan.get('share_qty'), ',.0f')}` 股"
         f"（名目 {_money('notional_usd')}）",
         f"約束來源：{_SHORT_ENTRY_BINDING_LABELS.get(binding, binding or 'N/A')}",
         f"VIX `{vix_text}`｜{plan.get('vix_tier_name') or 'N/A'}｜"
-        f"做空倉位乘數 `{float(plan.get('short_vix_multiplier') or 0.0):.2f}x`",
+        f"做空倉位乘數 `{fmt_or_dash(plan.get('short_vix_multiplier'), '.2f', suffix='x', placeholder='N/A')}`",
         "以期權表達時：Long Put 權利金總額、或 Bear Call Spread 最大虧損"
         "（價差寬度 − 收入）皆不應超過上方風險預算",
     ]

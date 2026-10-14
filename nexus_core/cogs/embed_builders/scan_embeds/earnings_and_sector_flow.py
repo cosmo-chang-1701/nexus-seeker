@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from cogs.embed_builders._ansi_utils import (
     _pad_string,
     _truncate_with_boundary,
-    _safe_float,
+    _to_float_or_none,
     _visual_truncate,
+    fmt_or_dash,
 )
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -119,19 +120,20 @@ def create_sector_flow_report_embed(
 ) -> discord.Embed:
     """建立收盤資金流向與板塊輪動報告 Embed。"""
     batch_label = _extract_report_batch(report_type)
-    vix = _safe_float(raw_data.get("vix"))
-    spy_price = _safe_float(raw_data.get("spy_price"))
+    vix = _to_float_or_none(raw_data.get("vix"))
+    spy_price = _to_float_or_none(raw_data.get("spy_price"))
+    degraded_suffix = " [降級模式]" if vix is None or spy_price is None else ""
     vix_tier_name = str(raw_data.get("vix_tier_name", "Unknown"))
     sectors = raw_data.get("sectors", []) or []
     poly_events = raw_data.get("poly_events", []) or []
     spy_max_pain = raw_data.get("spy_max_pain", {}) or {}
 
     embed = NexusEmbed(
-        title="📊 Nexus Seeker 收盤資金流向與板塊輪動報告",
+        title=f"📊 Nexus Seeker 收盤資金流向與板塊輪動報告{degraded_suffix}",
         description=(
             f"**更新批次：** {batch_label}\n"
-            f"**SPY 現價：** `${spy_price:.2f}` ｜ "
-            f"**VIX：** `{vix:.2f}` (`{vix_tier_name}`)\n"
+            f"**SPY 現價：** `{fmt_or_dash(spy_price, prefix='$')}` ｜ "
+            f"**VIX：** `{fmt_or_dash(vix)}` (`{vix_tier_name}`)\n"
             "沿用欄位式收盤戰報版型，彙整板塊輪動、事件定價與 AI 收斂結論。"
         ),
         color=_report_embed_color(report_content),
@@ -140,8 +142,8 @@ def create_sector_flow_report_embed(
 
     market_panel_body = "\n".join(
         [
-            f"SPY 現價: ${spy_price:.2f}",
-            f"VIX: {vix:.2f} ({vix_tier_name})",
+            f"SPY 現價: {fmt_or_dash(spy_price, prefix='$')}",
+            f"VIX: {fmt_or_dash(vix)} ({vix_tier_name})",
             f"掃描板塊數: {len(sectors)}",
             f"Polymarket 訊號: {len(poly_events)}",
         ]
@@ -174,7 +176,7 @@ def create_sector_flow_report_embed(
         sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
         sorted_sectors = sorted(
             sectors,
-            key=lambda item: abs(_safe_float(item.get("pct_change"))),
+            key=lambda item: abs(_to_float_or_none(item.get("pct_change")) or 0.0),
             reverse=True,
         )
         for item in sorted_sectors:
@@ -190,17 +192,27 @@ def create_sector_flow_report_embed(
                             widths[1],
                         ),
                         _pad_string(
-                            f"{_safe_float(item.get('pct_change')):+.2f}%",
+                            fmt_or_dash(
+                                item.get("pct_change"),
+                                "+.2f",
+                                suffix="%",
+                                placeholder="--%",
+                            ),
                             widths[2],
                             "right",
                         ),
                         _pad_string(
-                            f"{_safe_float(item.get('rel_vol')):.2f}x",
+                            fmt_or_dash(
+                                item.get("rel_vol"),
+                                ".2f",
+                                suffix="x",
+                                placeholder="--x",
+                            ),
                             widths[3],
                             "right",
                         ),
                         _pad_string(
-                            f"{_safe_float(item.get('skew')):+.1f}",
+                            fmt_or_dash(item.get("skew"), "+.1f"),
                             widths[4],
                             "right",
                         ),
@@ -229,7 +241,7 @@ def create_sector_flow_report_embed(
     event_bullets: list[str] = []
     max_pain_value = spy_max_pain.get("max_pain")
     if max_pain_value is not None:
-        event_bullets.append(f"SPY Max Pain: ${_safe_float(max_pain_value):.2f}")
+        event_bullets.append(f"SPY Max Pain: {fmt_or_dash(max_pain_value, prefix='$')}")
 
     for event in poly_events[:3]:
         question = _truncate_with_boundary(str(event.get("question", "N/A")), 140)

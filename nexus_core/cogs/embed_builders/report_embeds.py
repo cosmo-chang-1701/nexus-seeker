@@ -32,6 +32,8 @@ from cogs.embed_builders._ansi_utils import (
     _chunk_text_blocks,
     _truncate_with_boundary,
     _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
     _pad_string,
     _format_macro_report_ansi,
 )
@@ -439,10 +441,10 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     )
 
     # 1. Greeks 區塊 (從 result 中提取)
-    g_delta = result.get("delta", 0.0)
-    g_theta = result.get("theta", 0.0)
-    g_gamma = result.get("gamma", 0.0)
-    g_iv = result.get("iv", 0.0)
+    g_delta = result.get("delta")
+    g_theta = result.get("theta")
+    g_gamma = result.get("gamma")
+    g_iv = result.get("iv")
 
     greeks_lines = ["```ansi"]
     g_headers = ["希臘字母", "數據值"]
@@ -453,16 +455,16 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     greeks_lines.append("-" * (sum(g_widths) + 3))
 
     greeks_lines.append(
-        f"{_pad_string('Delta', g_widths[0])} | {_pad_string(f'{g_delta:+.3f}', g_widths[1])}"
+        f"{_pad_string('Delta', g_widths[0])} | {_pad_string(fmt_or_dash(g_delta, '+.3f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('Theta', g_widths[0])} | {_pad_string(f'{g_theta:+.4f}', g_widths[1])}"
+        f"{_pad_string('Theta', g_widths[0])} | {_pad_string(fmt_or_dash(g_theta, '+.4f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('Gamma', g_widths[0])} | {_pad_string(f'{g_gamma:+.6f}', g_widths[1])}"
+        f"{_pad_string('Gamma', g_widths[0])} | {_pad_string(fmt_or_dash(g_gamma, '+.6f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('IV (隱含波動率)', g_widths[0])} | {_pad_string(f'{g_iv:.1%}', g_widths[1])}"
+        f"{_pad_string('IV (隱含波動率)', g_widths[0])} | {_pad_string(fmt_or_dash(g_iv, '.1%', placeholder='--%'), g_widths[1])}"
     )
     greeks_lines.append("```")
     greeks_info = "\n".join(greeks_lines)
@@ -470,11 +472,15 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
 
     # 2. NRO 風控區塊
     safe_qty = result.get("safe_qty", 0)
-    projected = result.get("projected_exposure_pct", 0.0)
-    risk_limit = result.get("risk_limit", 15.0)
+    projected = _to_float_or_none(result.get("projected_exposure_pct"))
+    risk_limit = _to_float_or_none(result.get("risk_limit", 15.0))
 
-    proj_color = "\033[0;31m" if projected > risk_limit else "\033[0;32m"
-    proj_str = f"{projected:+.1f}%"
+    # 曝險或紅線缺值時不做超限判定（不上紅／綠）
+    if projected is None or risk_limit is None:
+        proj_color = "\033[1;30m"
+    else:
+        proj_color = "\033[0;31m" if projected > risk_limit else "\033[0;32m"
+    proj_str = fmt_or_dash(projected, "+.1f", suffix="%", placeholder="--%")
 
     nro_lines = ["```ansi"]
     n_headers = ["風控項目", "數據值"]
@@ -489,7 +495,7 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
         f"{_pad_string('預期總曝險', n_widths[0])} | {_pad_string(proj_str, n_widths[1]).replace(proj_str, f'{proj_color}{proj_str}\033[0m')}"
     )
     nro_lines.append(
-        f"{_pad_string('曝險風控紅線', n_widths[0])} | {_pad_string(f'{risk_limit:.1f}%', n_widths[1])}"
+        f"{_pad_string('曝險風控紅線', n_widths[0])} | {_pad_string(fmt_or_dash(risk_limit, '.1f', suffix='%', placeholder='--%'), n_widths[1])}"
     )
     nro_lines.append("```")
     nro_info = "\n".join(nro_lines)
@@ -500,12 +506,17 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     embed.add_field(name="📈 趨勢與指標動態", value=ema_ui, inline=False)
 
     # 4. 加上宏觀背景燈號 (VIX/Oil)
-    vix = result.get("macro_vix", result.get("vix", 0))
-    oil = result.get("macro_oil", result.get("oil", 0))
-    vix_status = "🔴" if vix > 25 else "🟢"
+    vix = _to_float_or_none(result.get("macro_vix", result.get("vix")))
+    oil = _to_float_or_none(result.get("macro_oil", result.get("oil")))
+    if vix is None:
+        vix_status = "⚪"
+    else:
+        vix_status = "🔴" if vix > 25 else "🟢"
+    vix_text = "--" if vix is None else f"{vix:g}"
+    oil_text = fmt_or_dash(oil, "g", prefix="$")
 
     embed.set_footer(
-        text=f"環境感知: VIX {vix} {vix_status} | WTI ${oil} | 基準 SPY: ${result.get('spy_price', 0):.1f}"
+        text=f"環境感知: VIX {vix_text} {vix_status} | WTI {oil_text} | 基準 SPY: {fmt_or_dash(result.get('spy_price'), '.1f', prefix='$')}"
     )
 
     return embed
@@ -575,7 +586,9 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     score = report["confidence_score"]
 
     # 計算 P/E 均值回歸空間 (預期漲幅)
-    pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
+    pe_upside: float | None = (
+        (pe_mean / curr_pe - 1) * 100 if curr_pe and curr_pe > 0 else None
+    )
 
     embed = NexusEmbed(
         title=f"🚨 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
@@ -597,9 +610,15 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         f"{_pad_string('3 年本益比均值 (3Y Mean)', widths[0])} | {_pad_string(f'{pe_mean:.2f}', widths[1])}"
     )
 
-    upside_str = f"+{pe_upside:.1f}%" if pe_upside >= 0 else f"{pe_upside:.1f}%"
+    if pe_upside is None:
+        # 本益比 <= 0（虧損）時回歸空間無意義，不上色
+        upside_str = "N/A"
+        upside_color = "\033[1;30m"
+    else:
+        upside_str = f"+{pe_upside:.1f}%" if pe_upside >= 0 else f"{pe_upside:.1f}%"
+        upside_color = "\033[0;32m" if pe_upside >= 0 else "\033[0;31m"
     ddp_lines.append(
-        f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'\033[0;32m{upside_str}\033[0m' if pe_upside >= 0 else f'\033[0;31m{upside_str}\033[0m')}"
+        f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'{upside_color}{upside_str}\033[0m')}"
     )
 
     # ASCII 進度條
@@ -758,14 +777,16 @@ def build_hedge_analysis_field(embed: Any, analysis: Any):  # type: ignore
 
     status = str(analysis.get("status", "UNKNOWN"))
     status_emoji = "✅" if status == "OPTIMAL" else "⚠️"
-    effectiveness = _safe_float(analysis.get("effectiveness", 0.0), 0.0)
-    alpha_contribution = _safe_float(analysis.get("alpha_contribution", 0.0), 0.0)
-    hedge_contribution = _safe_float(analysis.get("hedge_contribution", 0.0), 0.0)
-    hedge_ratio = _safe_float(analysis.get("hedge_ratio", 0.0), 0.0)
-    net_pnl = _safe_float(analysis.get("net_pnl", 0.0), 0.0)
+    effectiveness = _to_float_or_none(analysis.get("effectiveness"))
+    alpha_contribution = analysis.get("alpha_contribution")
+    hedge_contribution = analysis.get("hedge_contribution")
+    hedge_ratio = analysis.get("hedge_ratio")
+    net_pnl = analysis.get("net_pnl")
 
-    # 決定有效性評價
-    if effectiveness >= 0.8:
+    # 決定有效性評價（缺值時跳過判定）
+    if effectiveness is None:
+        eff_text = "⚪ 無法判定"
+    elif effectiveness >= 0.8:
         eff_text = "🎯 精準"
     elif effectiveness >= 0.6:
         eff_text = "⚖️ 適中"
@@ -773,11 +794,11 @@ def build_hedge_analysis_field(embed: Any, analysis: Any):  # type: ignore
         eff_text = "🌪️ 偏差"
 
     content = (
-        f"🔹 **個股 Alpha 損益**: `${alpha_contribution:,.2f}`\n"
-        f"🔸 **對沖 Beta 損益**: `${hedge_contribution:,.2f}`\n"
-        f"📊 **對沖比率 (HR)**: `{hedge_ratio:.2%}` {status_emoji}\n"
-        f"🧩 **對沖有效性 (ES)**: `{effectiveness:.2%}` ({eff_text})\n"
-        f"🏁 **最終淨損益**: **`${net_pnl:,.2f}`**"
+        f"🔹 **個股 Alpha 損益**: `{fmt_or_dash(alpha_contribution, prefix='$')}`\n"
+        f"🔸 **對沖 Beta 損益**: `{fmt_or_dash(hedge_contribution, prefix='$')}`\n"
+        f"📊 **對沖比率 (HR)**: `{fmt_or_dash(hedge_ratio, '.2%', placeholder='--%')}` {status_emoji}\n"
+        f"🧩 **對沖有效性 (ES)**: `{fmt_or_dash(effectiveness, '.2%', placeholder='--%')}` ({eff_text})\n"
+        f"🏁 **最終淨損益**: **`{fmt_or_dash(net_pnl, prefix='$')}`**"
     )
 
     embed.add_field(
