@@ -12,22 +12,40 @@ regime_evaluation_outcome，分析 GEX 相關條件的實際效果。
 """
 
 import json
-from typing import Any
+import math
+from bisect import bisect_left
+from datetime import date
+from pathlib import Path
+from typing import Any, Mapping, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from calibration.config import CalibrationConfig
-from calibration.stats import summarize
+from calibration.stats import (
+    clustered_bootstrap_diff,
+    clustered_bootstrap_mean,
+    summarize,
+)
 from market_analysis.outcome_labeling import directional_touch
 
 FORWARD_MIN_ROWS = 100
 _CONDITION_NAMES = "一二三四五六"
 
 
-def load_forward_rows() -> pd.DataFrame:
+def _open_readonly(snapshot_db: Optional[Path]) -> Any:
+    """指定快照時以唯讀模式開啟，否則沿用 NEXUS_DB_NAME 的讀取連線。"""
+    if snapshot_db is not None:
+        from database.connection import connect_external_readonly
+
+        return connect_external_readonly(str(snapshot_db))
     from database.connection import get_read_connection
 
-    conn = get_read_connection()
+    return get_read_connection()
+
+
+def load_forward_rows(snapshot_db: Optional[Path] = None) -> pd.DataFrame:
+    conn = _open_readonly(snapshot_db)
     try:
         return pd.read_sql_query(
             """
@@ -61,6 +79,7 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
     report: dict[str, Any] = {"total_labeled": int(len(rows)), "sections": []}
     if rows.empty:
         report["status"] = "資料累積中 (尚無已標註紀錄)"
+        report["regime_breakdown"] = []
         return report
     df = _prepare(rows, "first_touch_k15")
     report["status"] = "OK"
@@ -153,6 +172,7 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
         ]
     report["magnitudes"] = magnitudes
     report["exit_tiers"] = build_exit_tier_breakdown(df)
+    report["regime_breakdown"] = build_regime_breakdown(df, cfg)
     report["threshold_studies"] = build_threshold_studies(entries)
     return report
 
@@ -190,6 +210,7 @@ def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
             {
                 "bucket": str(label),
                 "n": n,
+                "n_dates": int(g["date"].nunique()) if "date" in g.columns else None,
                 "win_rate": float(g["win"].mean()),
                 "adverse_rate": float((g["outcome"] == -1).mean()),
                 "status": "OK"
@@ -216,7 +237,12 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
         adv = pd.to_numeric(feats["adv_dollar_20d"], errors="coerce")
         ratio = (sg * 0.01 / adv).where((sg > 0) & (adv > 0))
         frame = pd.DataFrame(
-            {"x": ratio, "win": entries["win"], "outcome": entries["outcome"]}
+            {
+                "x": ratio,
+                "date": entries["date"] if "date" in entries.columns else "",
+                "win": entries["win"],
+                "outcome": entries["outcome"],
+            }
         ).dropna()
         if len(frame) < FORWARD_MIN_ROWS:
             result["wall_depth_ratio"] = f"資料累積中 ({len(frame)}/{FORWARD_MIN_ROWS})"
@@ -239,6 +265,7 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
             {
                 "x": pct,
                 "source": source,
+                "date": entries["date"] if "date" in entries.columns else "",
                 "win": entries["win"],
                 "outcome": entries["outcome"],
             }
@@ -380,3 +407,270 @@ def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+# ----------------------------------------------------------------- 體制／來源分組
+_REGIME_CI_MIN_N = 30
+
+
+def build_regime_breakdown(
+    df: pd.DataFrame, cfg: Optional[CalibrationConfig] = None
+) -> list[dict[str, Any]]:
+    """REGIME_CLASSIFIER 依 (體制, 來源) 分組的結果。
+
+    v1.16.0 起 Regime III／III-B 的多頭建倉交給擠壓規則，分類器的 decision=1
+    不再等於「進場」，需依體制拆開才能正確解讀。n < FORWARD_MIN_ROWS 時照樣輸出
+    數值，但 status 標示「資料累積中」——有數字但不可判讀。
+    """
+    cfg = cfg or CalibrationConfig()
+    if df.empty or "evaluator" not in df.columns:
+        return []
+    if "outcome" not in df.columns:
+        df = _prepare(df, "first_touch_k15")
+    sub = df[df["evaluator"] == "REGIME_CLASSIFIER"].copy()
+    if sub.empty:
+        return []
+    sub["regime"] = sub["regime"].fillna("(未知)").astype(str)
+    sub["source"] = sub["source"].fillna("(未知)").astype(str)
+    out: list[dict[str, Any]] = []
+    for (regime, source), grp in sub.groupby(["regime", "source"], sort=True):
+        n = int(len(grp))
+        win_rate = float((grp["outcome"] == 1).mean())
+        adverse = float((grp["outcome"] == -1).mean())
+        expectancy = float(grp["r_multiple"].mean())
+        ci: Optional[list[float]] = None
+        if n >= _REGIME_CI_MIN_N:
+            _m, lo, hi = clustered_bootstrap_mean(
+                grp["r_multiple"].to_numpy(),
+                grp["date"].to_numpy(),
+                cfg.n_boot,
+                cfg.seed,
+            )
+            ci = [lo, hi]
+        out.append(
+            {
+                "regime": str(regime),
+                "source": str(source),
+                "n": n,
+                "n_dates": int(grp["date"].nunique()),
+                "win_rate": win_rate,
+                "adverse_rate": adverse,
+                "timeout_rate": 1.0 - win_rate - adverse,
+                "expectancy": expectancy,
+                "expectancy_ci": ci,
+                "status": "OK"
+                if n >= FORWARD_MIN_ROWS
+                else f"資料累積中 ({n}/{FORWARD_MIN_ROWS})",
+            }
+        )
+    return out
+
+
+# ----------------------------------------------------------------- 擠壓乾跑翻轉檢核
+# docs/architecture/05 §5.8 G：第 1–3 條由本段計算，第 4 條為人工項目。
+SQUEEZE_PRIMARY_SOURCE = "WATCHLIST_ADVISOR"
+SQUEEZE_DEDUP_TRADING_DAYS = 10
+SQUEEZE_MIN_EVENTS = 30
+SQUEEZE_MIN_PER_TIER = 5
+SQUEEZE_HORIZON_DAYS = 20
+SQUEEZE_TIERS = (1, 2, 3)
+SQUEEZE_T_THRESHOLD = 2.0
+SQUEEZE_G3_NOTE = "無顯著擇時優勢，翻轉僅為自動化使用者規則，不得宣稱 alpha（§5.8 G-3）"
+SQUEEZE_G4_REMINDER = (
+    "G.4 人工抽查：至少 3 檔標的的 W／3D／65m K 棒須與 TradingView 一致（本報表不計算）"
+)
+SQUEEZE_FOOTER = "本段只供人工審核；`SQUEEZE_ENTRY_DRY_RUN` 是否翻轉由使用者決定。"
+PRICE_UNAVAILABLE = "價格不可得"
+
+Closes = Mapping[str, Sequence[tuple[date, float]]]
+
+
+def load_squeeze_rows(snapshot_db: Optional[Path] = None) -> pd.DataFrame:
+    """讀取全部 ENTRY_SQUEEZE 判定列（含尚未標註者，不 JOIN outcome 表）。"""
+    conn = _open_readonly(snapshot_db)
+    try:
+        return pd.read_sql_query(
+            """
+            SELECT id, bar_ts, symbol, source, sub_mode, decision, conditions_mask
+            FROM regime_evaluation_log
+            WHERE evaluator = 'ENTRY_SQUEEZE'
+            """,
+            conn,
+        )
+    finally:
+        conn.close()
+
+
+def _event_date(bar_ts: Any) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(bar_ts)[:10])
+    except ValueError:
+        return None
+
+
+def _trade_pos(sym_dates: Optional[list[date]], d: date, anchor: date) -> int:
+    """交易日序位。有價格時為 `d` 當日（非交易日取下一交易日）在日線中的位置；
+    無價格時以週一至週五估算（未計休市日），序位僅供相對間距使用。"""
+    if sym_dates:
+        return bisect_left(sym_dates, d)
+    return int(np.busday_count(anchor.isoformat(), d.isoformat()))
+
+
+def _independent_events(
+    rows: pd.DataFrame, dates_by_sym: Mapping[str, list[date]]
+) -> list[dict[str, Any]]:
+    """decision=1 的列依 (標的, 等級) 去重：與上一個被保留事件相距 < 10 個交易日者丟棄。"""
+    events: list[dict[str, Any]] = []
+    anchor = date(2000, 1, 3)
+    pos = rows[rows["decision"] == 1]
+    parsed: list[tuple[str, Any, date, Any]] = []
+    for r in pos.itertuples(index=False):
+        d = _event_date(r.bar_ts)
+        if d is None:
+            continue
+        tier = None if pd.isna(r.conditions_mask) else int(r.conditions_mask)
+        parsed.append((str(r.symbol), tier, d, r.bar_ts))
+    parsed.sort(key=lambda x: (x[0], str(x[1]), x[2], str(x[3])))
+    last: dict[tuple[str, Any], int] = {}
+    for sym, tier, d, _ts in parsed:
+        p = _trade_pos(dates_by_sym.get(sym), d, anchor)
+        key = (sym, tier)
+        if key in last and p - last[key] < SQUEEZE_DEDUP_TRADING_DAYS:
+            continue
+        last[key] = p
+        events.append({"symbol": sym, "tier": tier, "date": d})
+    return events
+
+
+def _ret20(closes: Sequence[tuple[date, float]], d: date) -> Optional[float]:
+    """事件日（非交易日取下一交易日）起 20 個交易日的報酬；資料不足回傳 None。"""
+    dates = [c[0] for c in closes]
+    t = bisect_left(dates, d)
+    if t + SQUEEZE_HORIZON_DAYS >= len(closes):
+        return None
+    base = closes[t][1]
+    if not base or not math.isfinite(base):
+        return None
+    return float(closes[t + SQUEEZE_HORIZON_DAYS][1] / base - 1.0)
+
+
+def _squeeze_analysis(
+    rows: pd.DataFrame, closes: Closes, cfg: CalibrationConfig
+) -> dict[str, Any]:
+    dates_by_sym: dict[str, list[date]] = {
+        s: [c[0] for c in v] for s, v in closes.items() if v
+    }
+    events = _independent_events(rows, dates_by_sym)
+    by_tier = {t: sum(1 for e in events if e["tier"] == t) for t in SQUEEZE_TIERS}
+    g1 = {
+        "independent_events": len(events),
+        "by_tier": by_tier,
+        "decision1_rows": int((rows["decision"] == 1).sum()),
+        "no_price_events": sum(1 for e in events if e["symbol"] not in dates_by_sym),
+        "g1_passed": len(events) >= SQUEEZE_MIN_EVENTS
+        and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
+    }
+    result: dict[str, Any] = {"g1": g1}
+    if not dates_by_sym:
+        result["g2"] = {"status": PRICE_UNAVAILABLE, "g2_passed": None}
+        result["g3"] = None
+        return result
+
+    treat_v: list[float] = []
+    treat_c: list[str] = []
+    pending = 0
+    no_price = 0
+    for e in events:
+        series = closes.get(e["symbol"])
+        if not series:
+            no_price += 1
+            continue
+        r = _ret20(series, e["date"])
+        if r is None:
+            pending += 1
+            continue
+        treat_v.append(r)
+        treat_c.append(e["date"].isoformat())
+
+    control_v: list[float] = []
+    control_c: list[str] = []
+    if events:
+        lo_d = min(e["date"] for e in events)
+        hi_d = max(e["date"] for e in events)
+        ctrl = rows[rows["decision"] == 0].copy()
+        ctrl["_d"] = [_event_date(x) for x in ctrl["bar_ts"]]
+        ctrl = ctrl.dropna(subset=["_d"]).sort_values("bar_ts")
+        ctrl = ctrl[(ctrl["_d"] >= lo_d) & (ctrl["_d"] <= hi_d)]
+        ctrl = ctrl.drop_duplicates(subset=["symbol", "_d"], keep="first")
+        for sym_, d_ in zip(ctrl["symbol"], ctrl["_d"]):
+            series = closes.get(str(sym_))
+            if not series:
+                continue
+            r = _ret20(series, d_)
+            if r is None:
+                continue
+            control_v.append(r)
+            control_c.append(d_.isoformat())
+    g2: dict[str, Any] = {
+        "n_treat": len(treat_v),
+        "n_control": len(control_v),
+        "pending": pending,
+        "no_price_events": no_price,
+        "excess": None,
+        "excess_ci": None,
+        "t_stat": None,
+        "g2_passed": None,
+    }
+    if len(treat_v) >= 1 and len(control_v) >= 1:
+        diff, lo, hi, se = clustered_bootstrap_diff(
+            treat_v, treat_c, control_v, control_c, cfg.n_boot, cfg.seed
+        )
+        g2["excess"] = diff
+        g2["g2_passed"] = bool(diff >= 0)
+        if math.isfinite(lo) and math.isfinite(hi):
+            g2["excess_ci"] = [lo, hi]
+        if math.isfinite(se) and se > 0:
+            g2["t_stat"] = diff / se
+    else:
+        g2["status"] = "樣本不足"
+    result["g2"] = g2
+    t_stat = g2["t_stat"]
+    if t_stat is None:
+        result["g3"] = "樣本不足，尚無法判讀 t 值"
+    elif abs(t_stat) < SQUEEZE_T_THRESHOLD:
+        result["g3"] = SQUEEZE_G3_NOTE
+    else:
+        result["g3"] = (
+            f"|t| ≥ {SQUEEZE_T_THRESHOLD:g}，超額報酬達統計顯著（仍須人工審核）"
+        )
+    return result
+
+
+def build_squeeze_flip_check(
+    rows: pd.DataFrame, closes: Closes, cfg: Optional[CalibrationConfig] = None
+) -> dict[str, Any]:
+    """擠壓乾跑翻轉檢核 (docs §5.8 G 第 1–3 條)。
+
+    主結果只用 `WATCHLIST_ADVISOR`（將來要翻轉推播的路徑）；`SYMBOL_VIEW` 為使用者
+    手動 /x 查詢，有選樣偏差，只併入「全部來源（參考）」，不參與達標判定。
+    """
+    cfg = cfg or CalibrationConfig()
+    base: pd.DataFrame = (
+        rows
+        if not rows.empty
+        else pd.DataFrame(
+            columns=["bar_ts", "symbol", "source", "decision", "conditions_mask"]
+        )
+    )
+    primary = base[base["source"] == SQUEEZE_PRIMARY_SOURCE]
+    return {
+        "primary_source": SQUEEZE_PRIMARY_SOURCE,
+        "n_rows": int(len(primary)),
+        "primary": _squeeze_analysis(primary, closes, cfg),
+        "all_sources": {
+            "n_rows": int(len(base)),
+            **_squeeze_analysis(base, closes, cfg),
+        },
+        "g4_reminder": SQUEEZE_G4_REMINDER,
+        "footer": SQUEEZE_FOOTER,
+    }

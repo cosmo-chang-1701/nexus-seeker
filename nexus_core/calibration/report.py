@@ -96,6 +96,83 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _render_regime_breakdown(forward: dict[str, Any]) -> list[str]:
+    rows = forward.get("regime_breakdown") or []
+    if not rows:
+        return []
+    lines = [
+        "",
+        "### 體制分組 (REGIME_CLASSIFIER)",
+        "",
+        "Regime III／III-B 自 v1.16.0 起不再是多頭進場閘門（建倉改由擠壓規則判定），"
+        "分類器 decision=1 不等於進場，請依體制解讀。",
+        "",
+        "| 體制 | 來源 | n | 交易日數 | 勝率 | 逆向 | 逾時 | 期望值 [95% CI] | 狀態 |",
+        "|---|---|---|---|---|---|---|---|---|",
+    ]
+    for r in rows:
+        exp = _fmt(r["expectancy"])
+        if r.get("expectancy_ci"):
+            exp += f" {_fmt(r['expectancy_ci'])}"
+        lines.append(
+            f"| {r['regime']} | {r['source']} | {r['n']} | {r['n_dates']} "
+            f"| {_fmt(r['win_rate'])} | {_fmt(r['adverse_rate'])} "
+            f"| {_fmt(r['timeout_rate'])} | {exp} | {r['status']} |"
+        )
+    return lines
+
+
+def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
+    g1, g2 = data.get("g1") or {}, data.get("g2") or {}
+    tiers = g1.get("by_tier") or {}
+    tier_txt = "、".join(
+        f"等級{t}＝{tiers.get(t, tiers.get(str(t), 0))}" for t in (1, 2, 3)
+    )
+    lines = [
+        f"**{title}**",
+        "",
+        f"- G.1 獨立事件：{g1.get('independent_events', 0)}（{tier_txt}）；"
+        f"達標：{_flag(g1.get('g1_passed'))}（需 ≥ 30 且各等級 ≥ 5）",
+    ]
+    if g2.get("status") == "價格不可得":
+        lines.append("- G.2 20 日超額報酬：價格不可得")
+    else:
+        extra = f"；{g2['status']}" if g2.get("status") else ""
+        lines.append(
+            f"- G.2 20 日超額報酬：處理組 n={g2.get('n_treat', 0)}、對照組 n={g2.get('n_control', 0)}、"
+            f"待滿 20 日 {g2.get('pending', 0)}；超額 {_fmt(g2.get('excess'))} "
+            f"{_fmt(g2.get('excess_ci'))}、t={_fmt(g2.get('t_stat'))}；"
+            f"達標：{_flag(g2.get('g2_passed'))}{extra}"
+        )
+    if data.get("g3"):
+        lines.append(f"- G.3 判讀：{data['g3']}")
+    lines.append("")
+    return lines
+
+
+def _flag(value: Any) -> str:
+    return "—" if value is None else ("是" if value else "否")
+
+
+def _render_squeeze_flip_check(check: Optional[dict[str, Any]]) -> list[str]:
+    if not check:
+        return []
+    lines = ["", "### 擠壓乾跑翻轉檢核 (§5.8 G)", ""]
+    if check.get("status"):
+        return lines + [f"- {check['status']}", ""]
+    lines += _render_squeeze_block(
+        f"主結果（`{check.get('primary_source')}`，n 列={check.get('n_rows', 0)}）",
+        check.get("primary") or {},
+    )
+    allsrc = check.get("all_sources") or {}
+    lines += _render_squeeze_block(
+        f"全部來源（參考，含 `SYMBOL_VIEW`，不參與達標判定；n 列={allsrc.get('n_rows', 0)}）",
+        allsrc,
+    )
+    lines += [f"- {check.get('g4_reminder')}", "", f"**{check.get('footer')}**", ""]
+    return lines
+
+
 def render_markdown(results: dict[str, Any]) -> str:
     lines = [
         "# 回測校準報告",
@@ -172,9 +249,17 @@ def render_markdown(results: dict[str, Any]) -> str:
                     f"| {_fmt(e['timeout_rate'])} | {_fmt(e['median_fwd_ret_5d'])} "
                     f"| {e['status']} |"
                 )
+    lines += _render_regime_breakdown(forward or {})
+    lines += _render_squeeze_flip_check((forward or {}).get("squeeze_flip_check"))
     studies = (forward or {}).get("threshold_studies") or {}
     if studies:
-        lines += ["", "### 門檻前向驗證 (docs §5.13)", ""]
+        lines += [
+            "",
+            "### 門檻前向驗證 (docs §5.13)",
+            "",
+            "狀態 OK 只代表 n ≥ 100；同一交易日的樣本高度相關，有效樣本約等於交易日數。",
+            "",
+        ]
         for name, title in (
             ("wall_depth_ratio", "牆體深度比四分位 (D-04)"),
             ("skew_percentile", "Skew 分位區間"),
@@ -193,12 +278,13 @@ def render_markdown(results: dict[str, Any]) -> str:
                     lines.append(f"- 母體來源 `{group}`")
                 lines += [
                     "",
-                    "| 區間 | n | 勝率 | 逆向先觸及 | 狀態 |",
-                    "|---|---|---|---|---|",
+                    "| 區間 | n | 交易日數 | 勝率 | 逆向先觸及 | 狀態 |",
+                    "|---|---|---|---|---|---|",
                 ]
                 for r in rows:
                     lines.append(
-                        f"| {r['bucket']} | {r['n']} | {_fmt(r['win_rate'])} "
+                        f"| {r['bucket']} | {r['n']} | {_fmt(r.get('n_dates'))} "
+                        f"| {_fmt(r['win_rate'])} "
                         f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
                     )
                 lines.append("")

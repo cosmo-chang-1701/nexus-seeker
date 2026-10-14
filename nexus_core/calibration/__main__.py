@@ -6,7 +6,7 @@ import dataclasses
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from calibration.config import CalibrationConfig
 from calibration.data_store import DataStore
@@ -59,7 +59,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         "--snapshot-db",
         default=None,
         help=(
-            "notif-report / macro-forward-report / fundamental-forward-report：以唯讀模式讀取複製來的 production 快照；"
+            "forward-report / notif-report / macro-forward-report / fundamental-forward-report：以唯讀模式讀取複製來的 production 快照；"
             "未指定時用 NEXUS_DB_NAME"
         ),
     )
@@ -199,14 +199,17 @@ async def _main(args: argparse.Namespace) -> int:
     if args.command in ("forward-report", "all"):
         from calibration.forward_log import build_forward_report, load_forward_rows
 
+        snapshot = Path(args.snapshot_db) if args.snapshot_db else None
         try:
-            forward = build_forward_report(load_forward_rows(), cfg)
+            forward = build_forward_report(load_forward_rows(snapshot), cfg)
         except Exception as e:
             forward = {
                 "status": f"無法讀取前向蒐集資料: {e}",
                 "total_labeled": 0,
                 "sections": [],
             }
+        else:
+            forward["squeeze_flip_check"] = await _squeeze_flip_check(cfg, snapshot)
 
     results = report.build_results(
         cfg,
@@ -218,6 +221,32 @@ async def _main(args: argparse.Namespace) -> int:
     target = report.write_report(cfg, results, {"symbols": symbols})
     print(f"報告已輸出：{target}")
     return 0
+
+
+async def _squeeze_flip_check(
+    cfg: CalibrationConfig, snapshot: Optional[Path]
+) -> dict[str, Any]:
+    """擠壓乾跑翻轉檢核；任何失敗（讀取、取價）都只降級該段，不得讓整份報告失敗。"""
+    from calibration.forward_log import build_squeeze_flip_check, load_squeeze_rows
+
+    try:
+        rows = load_squeeze_rows(snapshot)
+    except Exception as e:
+        return {"status": f"無法讀取擠壓判定紀錄: {e}"}
+    closes: dict[str, Any] = {}
+    if not cfg.offline:
+        symbols = sorted({str(s) for s in rows["symbol"].dropna()})
+        try:
+            from calibration.macro_forward_report import load_prices
+
+            closes = dict(await load_prices(symbols))
+        except Exception as e:
+            print(f"擠壓檢核取價失敗，G.2 以「價格不可得」呈現：{e}", file=sys.stderr)
+            closes = {}
+    try:
+        return build_squeeze_flip_check(rows, closes, cfg)
+    except Exception as e:
+        return {"status": f"擠壓檢核計算失敗: {e}"}
 
 
 async def _run_alpaca(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
