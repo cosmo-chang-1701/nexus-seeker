@@ -193,8 +193,9 @@ def test_find_gamma_flip_rejects_tail_noise_crossing() -> None:
     """尾端雜訊交叉：現價到尾端之間沒有實質交叉時，不得把 BS 尾端的符號變化當翻轉線。
 
     情境（2026-10-14 SPY 778.01 → 834.48 的縮影）：Put 主導的區間內總 GEX 為負，
-    僅一檔高 IV、低 OI 的深價外 Call 在 530 附近使符號翻正，但該處 |G| 不到
-    全區峰值的 1%，屬數值尾端雜訊，應回傳 0.0 交由 core 缺值路徑處理。
+    僅一檔高 IV、低 OI 的深價外 Call 讓 500→530 之間（約 517.6）符號翻正，但該側
+    |G| 不到全區峰值的 1%，屬數值尾端雜訊；修正前會回傳約 517.6，修正後應回傳
+    0.0 交由 core 缺值路徑處理。
     """
     from local_api.macro import calculate_total_gex, find_gamma_flip
 
@@ -204,7 +205,7 @@ def test_find_gamma_flip_rejects_tail_noise_crossing() -> None:
         {"strike": 495.0, "oi": 8000, "iv": 0.10, "t": t, "is_call": False},
         {"strike": 560.0, "oi": 5, "iv": 1.50, "t": t, "is_call": True},
     ]
-    # 前置斷言：530 處確有符號變化，但量級遠小於現價處
+    # 前置斷言：500 與 530 之間確有符號變化，但 530 側量級遠小於現價處
     assert calculate_total_gex(500.0, chain) < 0 < calculate_total_gex(530.0, chain)
     assert abs(calculate_total_gex(530.0, chain)) < 0.01 * abs(
         calculate_total_gex(500.0, chain)
@@ -225,10 +226,13 @@ def test_find_gamma_flip_keeps_material_crossing_over_tail_noise() -> None:
         {"strike": 520.0, "oi": 5000, "iv": 0.20, "t": t, "is_call": True},
         {"strike": 400.0, "oi": 5, "iv": 1.50, "t": t, "is_call": True},
     ]
-    # 前置斷言：410 與 420 之間存在尾端符號變化，且量級遠小於區間峰值
+    # 前置斷言：410 與 420 之間存在尾端符號變化，且量級遠小於網格峰值
     g_lo, g_hi = (calculate_total_gex(p, chain) for p in (410.0, 420.0))
     assert g_lo * g_hi < 0
-    assert max(abs(g_lo), abs(g_hi)) < 0.01 * abs(calculate_total_gex(500.0, chain))
+    grid_peak = max(
+        abs(calculate_total_gex(400.0 + 2.0 * i, chain)) for i in range(101)
+    )
+    assert max(abs(g_lo), abs(g_hi)) < 0.01 * grid_peak
     flip = find_gamma_flip(500.0, chain)
     assert 480.0 < flip < 520.0
 
