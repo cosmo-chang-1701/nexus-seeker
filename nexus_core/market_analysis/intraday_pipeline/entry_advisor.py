@@ -22,7 +22,7 @@
 """
 
 import logging
-from typing import Any, Dict, Literal, NamedTuple, Optional
+from typing import Any, Dict, Literal, Mapping, NamedTuple, Optional
 
 from market_analysis.evaluation_recorder import current_bar_ts
 from services.bounded_cache import BoundedCache
@@ -149,6 +149,8 @@ async def _evaluate_squeeze_long(
     spot: float,
     regime_value: Optional[str] = None,
     regime_reason: Optional[str] = None,
+    *,
+    radar: Optional[Mapping[str, Any]] = None,
 ) -> EntryAdvice:
     """多頭建倉：多時間框架擠壓規則（取代右側六重鐵律，見 docs/strategies/10）。
 
@@ -163,7 +165,13 @@ async def _evaluate_squeeze_long(
     ev = await evaluate_symbol(symbol, spot, vetoes, downgrade)
     r = ev.result
     evaluation_recorder.record_squeeze_entry(
-        symbol, spot, r, ev.matrix, ev.resistance, regime=regime_value
+        symbol,
+        spot,
+        r,
+        ev.matrix,
+        ev.resistance,
+        regime=regime_value,
+        candidate_radar=radar,
     )
     reason = r.reason
     if r.resistance_note:
@@ -231,7 +239,11 @@ async def _evaluate_uncached(
         )
 
         regime, regime_reason, market_data = await classify_dynamic_regime(
-            symbol, spot, radar.get("gex_profile_data") or {}, radar.get("uoa") or []
+            symbol,
+            spot,
+            radar.get("gex_profile_data") or {},
+            radar.get("uoa") or [],
+            candidate_radar=radar,
         )
         regime_value = regime.value
         df_15m = market_data.df_15m
@@ -260,10 +272,10 @@ async def _evaluate_uncached(
             # （Regime IV 宏觀分支）由擠壓路徑的否決條件獨立判定；個股 Call Wall
             # 封頂改由擠壓路徑的壓力區閘門處理（見 docs/strategies/10 §1）。
             return await _evaluate_squeeze_long(
-                strategy, symbol, spot, regime_value, regime_reason
+                strategy, symbol, spot, regime_value, regime_reason, radar=radar
             )
     else:
-        return await _evaluate_squeeze_long(strategy, symbol, spot)
+        return await _evaluate_squeeze_long(strategy, symbol, spot, radar=radar)
 
     if direction == "SHORT":
         assert short_ev is not None
