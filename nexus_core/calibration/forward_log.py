@@ -512,6 +512,13 @@ def _trade_pos(sym_dates: Optional[list[date]], d: date, anchor: date) -> int:
     """交易日序位。有價格時為 `d` 當日（非交易日取下一交易日）在日線中的位置；
     無價格時以週一至週五估算（未計休市日），序位僅供相對間距使用。"""
     if sym_dates:
+        if d > sym_dates[-1]:
+            # 價格序列結尾之後：以最後價格日為起點估算，避免全部落在同一序位
+            return (
+                len(sym_dates)
+                - 1
+                + int(np.busday_count(sym_dates[-1].isoformat(), d.isoformat()))
+            )
         return bisect_left(sym_dates, d)
     return int(np.busday_count(anchor.isoformat(), d.isoformat()))
 
@@ -597,8 +604,24 @@ def _squeeze_analysis(
     if events:
         lo_d = min(e["date"] for e in events)
         hi_d = max(e["date"] for e in events)
+        # 任何 decision=1 原始列（含被 10 日規則丟棄者）的 (標的, 日) 不得進入對照組
+        treated_pairs = {
+            (str(sym_), _event_date(ts))
+            for sym_, ts in zip(
+                rows.loc[rows["decision"] == 1, "symbol"],
+                rows.loc[rows["decision"] == 1, "bar_ts"],
+            )
+        }
         ctrl = rows[rows["decision"] == 0].copy()
         ctrl["_d"] = [_event_date(x) for x in ctrl["bar_ts"]]
+        keep = np.array(
+            [
+                (str(s_), d_) not in treated_pairs
+                for s_, d_ in zip(ctrl["symbol"], ctrl["_d"])
+            ],
+            dtype=bool,
+        )
+        ctrl = ctrl.loc[keep]
         ctrl = ctrl.dropna(subset=["_d"]).sort_values("bar_ts")
         ctrl = ctrl[(ctrl["_d"] >= lo_d) & (ctrl["_d"] <= hi_d)]
         ctrl = ctrl.drop_duplicates(subset=["symbol", "_d"], keep="first")

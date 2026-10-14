@@ -117,7 +117,7 @@ def test_control_group_dedup_and_period_filter() -> None:
         ]
     )
     g2 = build_squeeze_flip_check(rows, {"AAA": cl}, CFG)["primary"]["g2"]
-    assert g2["n_control"] == 2
+    assert g2["n_control"] == 1  # days[10] 與處理組同 (標的, 日) 被排除，只剩 days[12]
 
 
 def test_clustered_bootstrap_diff_reproducible_and_zero() -> None:
@@ -248,3 +248,31 @@ def test_report_renders_squeeze_section() -> None:
     md = render_markdown(results)
     assert "擠壓乾跑翻轉檢核" in md
     assert "SQUEEZE_ENTRY_DRY_RUN" in md
+
+
+def test_control_excludes_symbol_days_with_any_decision1_row() -> None:
+    cl = _closes(n=80)
+    days = [d for d, _ in cl]
+    rows = pd.DataFrame(
+        [
+            _sq(days[10], tier=1),
+            _sq(days[10], decision=0),  # 同標的同日有 decision=1 -> 排除
+            _sq(days[12], tier=1),  # 被 10 日規則丟棄的原始列
+            _sq(days[12], decision=0),  # 仍須排除
+            _sq(days[16], tier=2),  # 讓期間涵蓋 days[14]
+            _sq(days[14], decision=0),
+            _sq(days[14], symbol="BBB", decision=0),
+        ]
+    )
+    closes = {"AAA": cl, "BBB": cl}
+    g2 = build_squeeze_flip_check(rows, closes, CFG)["primary"]["g2"]
+    assert g2["n_treat"] == 2
+    assert g2["n_control"] == 2  # AAA 14 日、BBB 14 日（BBB 日期在期間內）
+
+
+def test_events_after_last_price_date_not_wrongly_deduped() -> None:
+    cl = _closes(n=20)
+    last = cl[-1][0]
+    rows = pd.DataFrame([_sq(last + timedelta(days=7)), _sq(last + timedelta(days=28))])
+    g1 = build_squeeze_flip_check(rows, {"AAA": cl}, CFG)["primary"]["g1"]
+    assert g1["independent_events"] == 2
