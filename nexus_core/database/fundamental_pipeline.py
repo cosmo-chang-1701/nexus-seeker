@@ -1496,8 +1496,9 @@ INSERT INTO fair_value_log (
     equity_risk_premium,
     flags_json,
     method,
-    spot_price
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    spot_price,
+    comps_detail_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(symbol, trading_date) DO UPDATE SET
     dcf_value = excluded.dcf_value,
     comps_value = excluded.comps_value,
@@ -1507,7 +1508,8 @@ ON CONFLICT(symbol, trading_date) DO UPDATE SET
     spot_price = excluded.spot_price,
     discount_rate = excluded.discount_rate,
     equity_risk_premium = excluded.equity_risk_premium,
-    flags_json = excluded.flags_json
+    flags_json = excluded.flags_json,
+    comps_detail_json = excluded.comps_detail_json
 """
 
 _UPSERT_WATCH_CANDIDATE_SQL = """
@@ -1630,6 +1632,7 @@ async def save_fair_value(record: FairValueRecord) -> None:
         record.flags_json,
         record.method,
         record.spot_price,
+        record.comps_detail_json,
     )
     await execute_write_async(_UPSERT_FAIR_VALUE_SQL, params)
 
@@ -1651,6 +1654,7 @@ async def save_fair_values(records: Sequence[FairValueRecord]) -> None:
             r.flags_json,
             r.method,
             r.spot_price,
+            r.comps_detail_json,
         )
         for r in records
     ]
@@ -1665,7 +1669,8 @@ def get_fair_value(symbol: str, trading_date: str) -> FairValueRecord | None:
             """
             SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
                    margin_of_safety, discount_rate, equity_risk_premium,
-                   flags_json, created_at, method, spot_price
+                   flags_json, created_at, method, spot_price,
+                   comps_detail_json
             FROM fair_value_log
             WHERE symbol = ? AND trading_date = ?
             """,
@@ -1686,6 +1691,7 @@ def get_fair_value(symbol: str, trading_date: str) -> FairValueRecord | None:
             method=str(row[10]) if row[10] else "NONE",
             spot_price=float(row[11]) if row[11] is not None else None,
             created_at=row[9] if row[9] else "",
+            comps_detail_json=row[12],
         )
     finally:
         conn.close()
@@ -1699,7 +1705,8 @@ def get_latest_fair_value(symbol: str) -> FairValueRecord | None:
             """
             SELECT symbol, trading_date, dcf_value, comps_value, fair_value,
                    margin_of_safety, discount_rate, equity_risk_premium,
-                   flags_json, created_at, method, spot_price
+                   flags_json, created_at, method, spot_price,
+                   comps_detail_json
             FROM fair_value_log
             WHERE symbol = ?
             ORDER BY trading_date DESC, created_at DESC
@@ -1722,6 +1729,7 @@ def get_latest_fair_value(symbol: str) -> FairValueRecord | None:
             method=str(row[10]) if row[10] else "NONE",
             spot_price=float(row[11]) if row[11] is not None else None,
             created_at=row[9] if row[9] else "",
+            comps_detail_json=row[12],
         )
     finally:
         conn.close()

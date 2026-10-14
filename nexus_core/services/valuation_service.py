@@ -345,10 +345,12 @@ class ValuationService:
 
         # 前瞻 EPS = 現價 / forwardPE；缺值時以近四季 EPS 代理並標註
         fwd_eps = derive_forward_eps(metrics, spot_val)
+        fwd_eps_source: str | None = "FORWARD_PE" if fwd_eps is not None else None
         if fwd_eps is None:
             trailing_eps = _first_metric(metrics, ("epsTTM", "epsExclExtraItemsTTM"))
             if trailing_eps is not None:
                 fwd_eps = trailing_eps
+                fwd_eps_source = "TRAILING_EPS"
                 input_flags.append(FLAG_FORWARD_EPS_TRAILING)
 
         # g_est：前瞻 EPS 相對近四季 EPS 的隱含成長率；缺值退回歷史、再退回預設
@@ -362,15 +364,22 @@ class ValuationService:
         # 3. 同業本益比（優先前瞻本益比，上限 MAX_PEERS 檔）
         peers = await self.data_provider.get_peers(sym_upper)
         peer_pes: list[float] = []
+        peer_symbols: list[str] = []
+        peer_rows: list[dict[str, Any]] = []
+        peers_requested: list[str] = peers[:MAX_PEERS]
         used_trailing_peer = False
-        if peers:
+        if peers_requested:
             peers_metrics = await asyncio.gather(
-                *(self.data_provider.get_company_metrics(p) for p in peers[:MAX_PEERS])
+                *(self.data_provider.get_company_metrics(p) for p in peers_requested)
             )
-            for pm in peers_metrics:
+            for peer_sym, pm in zip(peers_requested, peers_metrics):
                 pe_val, is_trailing = peer_pe(pm)
                 if pe_val is not None:
                     peer_pes.append(pe_val)
+                    peer_symbols.append(peer_sym)
+                    peer_rows.append(
+                        {"symbol": peer_sym, "pe": pe_val, "trailing": is_trailing}
+                    )
                     used_trailing_peer = used_trailing_peer or is_trailing
         if used_trailing_peer:
             input_flags.append(FLAG_PEER_PE_TRAILING)
@@ -397,8 +406,19 @@ class ValuationService:
                 forward_eps=fwd_eps if fwd_eps is not None else 0.0,
                 peer_pes=peer_pes,
                 nfci=nfci,
+                peer_symbols=peer_symbols,
             )
         )
+        comps_detail: dict[str, Any] = {
+            "forward_eps": fwd_eps,
+            "forward_eps_source": fwd_eps_source,
+            "forward_pe": _safe_float(metrics.get("forwardPE")),
+            "peers": peer_rows,
+            "peers_requested": peers_requested,
+            "median_pe": comps_res.median_pe,
+            "liquidity_penalty": comps_res.liquidity_penalty_factor,
+            "rejection_reason": comps_res.rejection_reason,
+        }
 
         # 5. 治理閘門：只有 HIGH / CRITICAL 視為紅旗（REVIEW / INFO 僅待人工複核）
         gov_flags = await asyncio.to_thread(get_active_governance_flags, sym_upper)
@@ -471,6 +491,7 @@ class ValuationService:
             flags_json=json.dumps(fv_res.flags, ensure_ascii=False),
             method=fv_res.method,
             spot_price=spot_val if spot_val > 0 else None,
+            comps_detail_json=json.dumps(comps_detail, ensure_ascii=False),
         )
         await save_fair_value(fv_record)
 

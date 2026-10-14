@@ -7,6 +7,7 @@ Fixture 使用 Finnhub `/stock/metric?metric=all` 的真實鍵名（2026-10 實�
 from __future__ import annotations
 
 import json
+import math
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -360,3 +361,85 @@ async def test_revision_uses_fiscal_period_pairing_and_trading_day_pead(
     assert rev.details["days_since_surprise"] == 10
     assert rev.is_pead_aligned is True
     assert rev.details["current_snapshot_date"] == "2026-10-05"
+
+
+@pytest.mark.asyncio
+async def test_comps_detail_is_persisted_with_peer_symbol_pairing(db_conn: Any) -> None:
+    """comps_detail_json 記錄 forward EPS、同業代號與 PE 的配對；無效 PE 的同業不列入 peers。"""
+
+    class PerPeerProvider(FakeProvider):
+        PE: dict[str, dict[str, Any]] = {
+            "P1": {"forwardPE": 10.0},
+            "P2": {},
+            "P3": {"peTTM": 30.0},
+            "P4": {"forwardPE": 20.0},
+        }
+
+        async def get_company_metrics(self, symbol: str) -> dict[str, Any]:
+            if symbol in self.PE:
+                return self.PE[symbol]
+            return self.metrics
+
+    await _save_liquidity()
+    service = ValuationService(
+        data_provider=PerPeerProvider(MSFT_METRICS, peers=["P1", "P2", "P3", "P4"])
+    )
+    await service.compute_and_save_valuation(
+        symbol="MSFT", as_of_date=date(2026, 10, 5)
+    )
+    saved = get_fair_value("MSFT", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+
+    assert detail["forward_eps"] == pytest.approx(MSFT_SPOT / 24.19122)
+    assert detail["forward_eps_source"] == "FORWARD_PE"
+    assert detail["forward_pe"] == pytest.approx(24.19122)
+    assert detail["peers_requested"] == ["P1", "P2", "P3", "P4"]
+    assert detail["peers"] == [
+        {"symbol": "P1", "pe": 10.0, "trailing": False},
+        {"symbol": "P3", "pe": 30.0, "trailing": True},
+        {"symbol": "P4", "pe": 20.0, "trailing": False},
+    ]
+    assert detail["median_pe"] == 20.0
+    assert detail["liquidity_penalty"] == pytest.approx(math.exp(0.025), abs=1e-4)
+    assert detail["rejection_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_comps_detail_trailing_eps_source_and_rejection(db_conn: Any) -> None:
+    """缺 forwardPE 時 forward_eps_source == TRAILING_EPS；同業不足時記錄拒絕原因。"""
+    service = ValuationService(
+        data_provider=FakeProvider(
+            {"pfcfShareTTM": 25.0, "epsTTM": 4.0},
+            spot=100.0,
+            peer_metrics={"forwardPE": 20.0},
+            peers=["P1", "P2"],
+        )
+    )
+    await service.compute_and_save_valuation(
+        symbol="TEST", as_of_date=date(2026, 10, 5)
+    )
+    saved = get_fair_value("TEST", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["forward_eps"] == 4.0
+    assert detail["forward_eps_source"] == "TRAILING_EPS"
+    assert detail["forward_pe"] is None
+    assert detail["median_pe"] is None
+    assert detail["rejection_reason"] == "INSUFFICIENT_PEERS"
+    assert len(detail["peers"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_comps_detail_without_any_eps_source_is_none(db_conn: Any) -> None:
+    service = ValuationService(
+        data_provider=FakeProvider(ETF_METRICS, spot=570.0, peers=[])
+    )
+    await service.compute_and_save_valuation(symbol="SPY", as_of_date=date(2026, 10, 5))
+    saved = get_fair_value("SPY", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["forward_eps"] is None
+    assert detail["forward_eps_source"] is None
+    assert detail["peers"] == []
+    assert detail["peers_requested"] == []
