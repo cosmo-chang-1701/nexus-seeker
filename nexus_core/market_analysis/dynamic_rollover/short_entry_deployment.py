@@ -122,6 +122,7 @@ class _ShortEntryMixin:
                 spot,
                 radar_dict.get("gex_profile_data") or {},
                 radar_dict.get("uoa") or [],
+                candidate_radar=radar_dict,
             )
             if regime != DynamicRegime.REGIME_V_BREAKDOWN_CHASE:
                 result = (None, regime.value, None)

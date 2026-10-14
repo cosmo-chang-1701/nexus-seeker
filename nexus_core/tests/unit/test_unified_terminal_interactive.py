@@ -157,7 +157,9 @@ async def test_symbol_hub_entry_rules_uses_squeeze_check(  # type: ignore
 
         await view.btn_entry_rules.callback(mock_interaction)
 
-        mock_squeeze.assert_called_once_with("RIGHT_SIDE", "AAPL", 101.0)
+        mock_squeeze.assert_called_once_with(
+            "RIGHT_SIDE", "AAPL", 101.0, radar=view.base_data
+        )
         mock_rules_builder.assert_not_called()
         mock_builder.assert_called_once_with(
             "AAPL",
@@ -212,8 +214,15 @@ async def test_symbol_hub_entry_rules_dynamic_non_left_short_uses_squeeze(  # ty
         await view.btn_entry_rules.callback(mock_interaction)
 
         mock_squeeze.assert_called_once_with(
-            "DYNAMIC", "AAPL", 101.0, "REGIME_II_CHAOS_STANDASIDE", "休眠"
+            "DYNAMIC",
+            "AAPL",
+            101.0,
+            "REGIME_II_CHAOS_STANDASIDE",
+            "休眠",
+            radar=view.base_data,
         )
+        assert mock_classify.await_args is not None
+        assert mock_classify.await_args.kwargs["candidate_radar"] is view.base_data
         assert mock_builder.call_args.kwargs["dynamic_regime"] == (
             "REGIME_II_CHAOS_STANDASIDE"
         )

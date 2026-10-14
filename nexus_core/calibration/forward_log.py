@@ -270,21 +270,53 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
                 "outcome": entries["outcome"],
             }
         ).dropna(subset=["x"])
-        by_source: dict[str, Any] = {}
-        for src, g in frame.groupby("source"):
-            g = g.copy()
-            g["bucket"] = pd.cut(
-                g["x"],
-                bins=[b[0] for b in _SKEW_BUCKETS] + [_SKEW_BUCKETS[-1][1]],
-                labels=[b[2] for b in _SKEW_BUCKETS],
-                right=False,
-            )
-            by_source[str(src)] = _bucket_rows(g.dropna(subset=["bucket"]), "bucket")
+        by_source = _skew_by_source(frame)
         result["skew_percentile"] = by_source or "資料累積中 (尚無 skew_percentile)"
+        result["skew_percentile_by_evaluator"] = _skew_by_evaluator(entries, frame)
     else:
         result["skew_percentile"] = "資料累積中 (尚無 skew_percentile 欄位)"
+        result["skew_percentile_by_evaluator"] = (
+            "資料累積中 (尚無 skew_percentile 欄位)"
+        )
     result["gamma_flip_materiality"] = _gamma_flip_materiality_study(entries, feats)
     return result
+
+
+def _skew_by_source(frame: pd.DataFrame) -> dict[str, Any]:
+    """Skew 分位區間表，依母體來源 (`source` 欄) 分開。"""
+    by_source: dict[str, Any] = {}
+    for src, g in frame.groupby("source"):
+        g = g.copy()
+        g["bucket"] = pd.cut(
+            g["x"],
+            bins=[b[0] for b in _SKEW_BUCKETS] + [_SKEW_BUCKETS[-1][1]],
+            labels=[b[2] for b in _SKEW_BUCKETS],
+            right=False,
+        )
+        by_source[str(src)] = _bucket_rows(g.dropna(subset=["bucket"]), "bucket")
+    return by_source
+
+
+_SKEW_EVALUATOR_GROUPS: tuple[str, ...] = ("REGIME_CLASSIFIER", "ENTRY_SQUEEZE")
+
+
+def _skew_by_evaluator(entries: pd.DataFrame, frame: pd.DataFrame) -> Any:
+    """Skew 分位區間表再依評估器拆分 (REGIME_CLASSIFIER／ENTRY_SQUEEZE／其他)。
+
+    不同評估器的母體與 `decision` 語意不同，混在同一張表會無法判讀。
+    `frame` 為已去除缺 skew 的列，索引沿用 `entries`。
+    """
+    if "evaluator" not in entries.columns:
+        return "資料累積中 (尚無 evaluator 欄位)"
+    ev = entries["evaluator"].reindex(frame.index).astype("object")
+    group = ev.where(ev.isin(_SKEW_EVALUATOR_GROUPS), "其他")
+    out: dict[str, Any] = {}
+    for name in (*_SKEW_EVALUATOR_GROUPS, "其他"):
+        sub = frame[group == name]
+        out[name] = (
+            _skew_by_source(sub) if len(sub) else "資料累積中 (尚無 skew_percentile)"
+        )
+    return out
 
 
 _FLIP_BOOT_N = 2000

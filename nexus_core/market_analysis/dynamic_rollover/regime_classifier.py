@@ -1,5 +1,5 @@
 import math
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from market_analysis.room_threshold import (
     compute_dynamic_room_threshold,
@@ -41,6 +41,8 @@ async def classify_dynamic_regime(
     gex_profile_data: Optional[dict],
     uoa_list: Optional[list] = None,
     df_15m: Optional[Any] = None,
+    *,
+    candidate_radar: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[DynamicRegime, str, RegimeMarketData]:
     """`_classify_dynamic_regime_impl` 的公開入口：分類後寫入前向蒐集紀錄。
 
@@ -74,6 +76,7 @@ async def classify_dynamic_regime(
         atr_15m=market_data.atr_15m,
         rsi_15m=market_data.rsi_15m,
         extra_features=shadow_features,
+        candidate_radar=candidate_radar,
     )
     return regime, reason, market_data
 

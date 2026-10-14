@@ -503,6 +503,9 @@ class SymbolDeepDiveMixin:
         # 假的 0.0 去排名；直接沿用上游回傳值即可，順帶省下一次查詢。
         result["skew_percentile"] = safe_skew.get("skew_percentile")
         result["skew_sample_size"] = safe_skew.get("skew_sample_size")
+        # 母體來源與分位同源（同一個 calculate_skew 結果）；僅供前向蒐集記錄，
+        # 不顯示於任何 embed。取不到（快取／中性回退）則為 None。
+        result["skew_percentile_source"] = safe_skew.get("skew_percentile_source")
 
         result["pcr"] = pcr_data if pcr_data is not None else {}
         result["uoa"] = uoa_data if uoa_data is not None else []

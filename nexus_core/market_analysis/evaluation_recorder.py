@@ -270,6 +270,7 @@ def record_regime_classification(
     rsi_15m: float = float("nan"),
     *,
     extra_features: Optional[dict] = None,
+    candidate_radar: Optional[Mapping[str, Any]] = None,
 ) -> None:
     try:
         row: dict[str, Any] = {
@@ -287,7 +288,9 @@ def record_regime_classification(
             "atr_15m": _num(atr_15m),
             "rsi_15m": _clean(float(rsi_15m)) if rsi_15m is not None else None,
             "reason_digest": reason,
-            "features_json": calibration_features(gex_profile_data, spot),
+            "features_json": calibration_features(
+                gex_profile_data, spot, candidate_radar
+            ),
         }
         if extra_features:
             row["features_json"].update(extra_features)
@@ -378,6 +381,8 @@ def record_squeeze_entry(
     matrix: Mapping[str, Any],
     resistance: Any = None,
     regime: Optional[str] = None,
+    *,
+    candidate_radar: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """記錄多時間框架擠壓進場判定（`SqueezeEntryResult` 以 duck typing 讀取）。
 
@@ -409,6 +414,12 @@ def record_squeeze_entry(
         for tf in ("65m", "15m"):
             features[f"{tf}_mv"] = momentum_value_2dp(matrix.get(tf))
         features["intraday_conflict"] = bool(assess_intraday_conflict(matrix))
+        # Skew 分位與母體來源（純記錄，供 Skew 門檻前向驗證；不參與判定）
+        if candidate_radar:
+            features["skew_percentile"] = _num(candidate_radar.get("skew_percentile"))
+            features["skew_percentile_source"] = candidate_radar.get(
+                "skew_percentile_source"
+            )
         _append(
             {
                 "symbol": symbol.upper(),
