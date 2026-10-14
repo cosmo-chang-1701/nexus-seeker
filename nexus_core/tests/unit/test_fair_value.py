@@ -2,6 +2,9 @@
 
 import pytest
 from market_analysis.fundamental_pipeline.fair_value import (
+    FLAG_VALUATION_DIVERGENCE,
+    VALUATION_FLAG_LABELS_ZH,
+    VALUATION_DIVERGENCE_RATIO,
     calculate_comps_value,
     calculate_cost_of_equity,
     calculate_dcf_value,
@@ -234,3 +237,68 @@ def test_calculate_comps_value_optional_nfci() -> None:
     assert res.median_pe == 22.0
     assert pytest.approx(res.liquidity_penalty_factor, rel=1e-4) == 1.0
     assert pytest.approx(res.comps_value, rel=1e-2) == 110.0
+
+
+def _comps(value: float) -> CompsResult:
+    return CompsResult(
+        comps_value=value, median_pe=20.0, liquidity_penalty_factor=1.0, is_valid=True
+    )
+
+
+def test_valuation_divergence_flag_threshold_and_symmetry() -> None:
+    """BLENDED 且 max/min >= 3 才加旗標（DCF 高或 Comps 高皆可）；< 3 不加。"""
+    assert VALUATION_DIVERGENCE_RATIO == 3.0
+    assert FLAG_VALUATION_DIVERGENCE in VALUATION_FLAG_LABELS_ZH
+
+    hi_comps = integrate_fair_value(
+        80.0, DCFResult(dcf_value=100.0, is_valid=True), _comps(300.0), 0.08, 0.045
+    )
+    assert FLAG_VALUATION_DIVERGENCE in hi_comps.flags
+    hi_dcf = integrate_fair_value(
+        80.0, DCFResult(dcf_value=300.0, is_valid=True), _comps(100.0), 0.08, 0.045
+    )
+    assert FLAG_VALUATION_DIVERGENCE in hi_dcf.flags
+    just_below = integrate_fair_value(
+        80.0, DCFResult(dcf_value=100.0, is_valid=True), _comps(299.0), 0.08, 0.045
+    )
+    assert FLAG_VALUATION_DIVERGENCE not in just_below.flags
+
+
+def test_valuation_divergence_not_flagged_for_single_method() -> None:
+    comps_invalid = CompsResult(
+        comps_value=None, median_pe=None, liquidity_penalty_factor=1.0, is_valid=False
+    )
+    dcf_invalid = DCFResult(dcf_value=None, is_valid=False, rejection_reason="X")
+    dcf_only = integrate_fair_value(
+        80.0, DCFResult(dcf_value=500.0, is_valid=True), comps_invalid, 0.08, 0.045
+    )
+    comps_only = integrate_fair_value(80.0, dcf_invalid, _comps(500.0), 0.08, 0.045)
+    assert dcf_only.method == "DCF_ONLY"
+    assert comps_only.method == "COMPS_ONLY"
+    assert FLAG_VALUATION_DIVERGENCE not in dcf_only.flags
+    assert FLAG_VALUATION_DIVERGENCE not in comps_only.flags
+
+
+def test_valuation_divergence_is_annotation_only() -> None:
+    """加旗標前後 is_deep_value / margin_of_safety / fair_value / method 一致，DEEP_VALUE 照常。"""
+    # 分歧（比值 5）：中樞 (60 + 300) / 2 = 180，MOS 遠高於 25%
+    diverged = integrate_fair_value(
+        80.0, DCFResult(dcf_value=60.0, is_valid=True), _comps(300.0), 0.08, 0.045
+    )
+    assert FLAG_VALUATION_DIVERGENCE in diverged.flags
+    assert diverged.method == "BLENDED"
+    assert diverged.fair_value == 180.0
+    assert diverged.margin_of_safety == pytest.approx((180.0 - 80.0) / 180.0, abs=1e-4)
+    assert diverged.is_deep_value is True
+    assert "DEEP_VALUE" in diverged.flags
+
+    # 同一組中樞、無分歧（120 + 240 之外取 90 + 90 = 180）：判定欄位完全相同
+    plain = integrate_fair_value(
+        80.0, DCFResult(dcf_value=150.0, is_valid=True), _comps(210.0), 0.08, 0.045
+    )
+    assert FLAG_VALUATION_DIVERGENCE not in plain.flags
+    assert plain.fair_value == diverged.fair_value
+    assert plain.margin_of_safety == diverged.margin_of_safety
+    assert plain.is_deep_value == diverged.is_deep_value
+    assert plain.method == diverged.method
+    assert [f for f in diverged.flags if f != FLAG_VALUATION_DIVERGENCE] == plain.flags

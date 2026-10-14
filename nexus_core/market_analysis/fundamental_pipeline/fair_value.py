@@ -66,6 +66,12 @@ FLAG_FORWARD_EPS_TRAILING = "FORWARD_EPS_TRAILING"
 FLAG_PEER_PE_TRAILING = "PEER_PE_TRAILING"
 FLAG_SPOT_UNAVAILABLE = "SPOT_UNAVAILABLE"
 FLAG_GOVERNANCE_RISK = "GOVERNANCE_RISK"
+FLAG_VALUATION_DIVERGENCE = "VALUATION_DIVERGENCE"
+
+# DCF 與 Comps 的比值（大/小）達此倍數時，BLENDED 加註分歧旗標。
+# 純標註：不影響 is_deep_value、margin_of_safety、method。
+# 數值為暫定值，未經校準，僅供人工複核。
+VALUATION_DIVERGENCE_RATIO: float = 3.0
 
 VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_US10Y_DEFAULT: f"10 年債殖利率缺值，套用預設 {DEFAULT_US10Y_PCT:.2f}%",
@@ -78,6 +84,7 @@ VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_PEER_PE_TRAILING: "部分同業缺前瞻本益比，改用近四季本益比",
     FLAG_SPOT_UNAVAILABLE: "無現價，安全邊際不計",
     FLAG_GOVERNANCE_RISK: "HIGH／CRITICAL 治理旗標生效中，深度價值判定壓制",
+    FLAG_VALUATION_DIVERGENCE: "DCF 與同業乘數估值相差 3 倍以上，混合中樞可信度低，請人工複核",
 }
 
 
@@ -265,6 +272,19 @@ def integrate_fair_value(
             flags=flags,
             method="NONE",
         )
+
+    # 純標註：兩模型相差過大時提示人工複核，不參與任何判定
+    if (
+        method == "BLENDED"
+        and dcf_res.dcf_value is not None
+        and comps_res.comps_value is not None
+        and dcf_res.dcf_value > 0
+        and comps_res.comps_value > 0
+        and max(dcf_res.dcf_value, comps_res.comps_value)
+        / min(dcf_res.dcf_value, comps_res.comps_value)
+        >= VALUATION_DIVERGENCE_RATIO
+    ):
+        flags.append(FLAG_VALUATION_DIVERGENCE)
 
     final_fv = round(final_fv, 2)
     mos: float | None = None

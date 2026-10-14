@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
@@ -453,6 +454,9 @@ class FairValueRecord:
     method: str = "NONE"  # BLENDED / DCF_ONLY / COMPS_ONLY / NONE
     spot_price: float | None = None
     created_at: str = ""
+    comps_detail_json: str | None = (
+        None  # v095：同業乘數法輸入（稽核用，舊資料為 None）
+    )
 
 
 FairValueDTO = FairValueRecord
@@ -500,6 +504,9 @@ class CompsInputs:
     forward_eps: float
     peer_pes: list[float]
     nfci: float | None = None
+    peer_symbols: Sequence[
+        str
+    ] = ()  # 與 peer_pes 對應的同業代號（僅供稽核，不參與計算）
 
 
 @dataclass(frozen=True)
