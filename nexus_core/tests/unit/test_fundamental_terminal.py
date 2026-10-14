@@ -740,6 +740,33 @@ async def test_valuation_section_capped_method_label() -> None:
 
 
 @pytest.mark.asyncio
+async def test_valuation_section_cyclical_label_wins_over_divergence() -> None:
+    from cogs.fundamental_terminal import ValuationEngineSection
+    from market_analysis.fundamental_pipeline.models import FairValueRecord
+
+    fv = FairValueRecord(
+        symbol="MU",
+        trading_date="2026-10-13",
+        dcf_value=1184.0,
+        comps_value=2068.0,
+        fair_value=1184.0,
+        margin_of_safety=0.2,
+        discount_rate=0.0866,
+        equity_risk_premium=0.0425,
+        flags_json='["VALUATION_DIVERGENCE_CAPPED","CYCLICAL_DCF_CAP"]',
+        method="BLENDED",
+        spot_price=950.0,
+    )
+    with (
+        patch("cogs.fundamental_terminal.get_latest_fair_value", return_value=fv),
+        patch("cogs.fundamental_terminal.get_latest_revision_score", return_value=None),
+    ):
+        _, body = await ValuationEngineSection().render("MU")
+    assert "景氣循環股，以 DCF 為上限" in body
+    assert "DCF 與同業倍數分歧，取較低值" not in body
+
+
+@pytest.mark.asyncio
 async def test_watch_candidate_section_shows_list_date() -> None:
     from cogs.fundamental_terminal import WatchCandidateSection
     from market_analysis.fundamental_pipeline.models import WatchCandidateRecord

@@ -24,7 +24,7 @@ PEER_GROUPS: dict[str, tuple[str, ...]] = {
     "券商與加密平台": ("HOOD", "COIN", "SCHW", "IBKR"),
     "太空": ("RKLB", "SPCX", "ASTS", "LUNR"),
     "AI 電力設備": ("BE", "GEV", "VRT", "ETN"),
-    "銅礦": ("FCX", "SCCO", "TECK"),
+    "銅礦": ("FCX", "SCCO", "TECK", "BHP", "RIO"),
     "稀土與關鍵礦產": ("CRML", "MP", "USAR"),
 }
 CYCLICAL_GROUPS: frozenset[str] = frozenset({"記憶體與儲存", "銅礦", "稀土與關鍵礦產"})

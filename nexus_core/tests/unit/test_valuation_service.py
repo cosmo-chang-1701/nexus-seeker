@@ -551,5 +551,7 @@ async def test_finnhub_symbol_detail_has_source_fields(db_conn: Any) -> None:
     assert saved is not None and saved.comps_detail_json is not None
     detail = json.loads(saved.comps_detail_json)
     assert detail["peer_source"] == "FINNHUB"
+    non_cyc_flags = json.loads(saved.flags_json)
+    assert not any(f.startswith("CYCLICAL_") for f in non_cyc_flags)
     assert detail["peer_group"] is None
     assert detail["cyclical"] is False

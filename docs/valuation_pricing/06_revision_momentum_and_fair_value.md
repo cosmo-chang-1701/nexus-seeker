@@ -96,7 +96,7 @@ $$FV_{\text{Comps}} = \text{Forward EPS} \times \left( \text{Median}(\text{Peers
 | 券商與加密平台 | HOOD, COIN, SCHW, IBKR |
 | 太空 | RKLB, SPCX, ASTS, LUNR |
 | AI 電力設備 | BE, GEV, VRT, ETN |
-| 銅礦（週期） | FCX, SCCO, TECK |
+| 銅礦（週期） | FCX, SCCO, TECK, BHP, RIO |
 | 稀土與關鍵礦產（週期） | CRML, MP, USAR |
 
 **新增標的時的維護方式**：在 `nexus_core/market_analysis/fundamental_pipeline/peer_groups.py` 的 `PEER_GROUPS` 把代號加入合適的組（一個標的至多屬於一組，測試會檢查）；若無合理可比同業則加入 `NO_COMPS_SYMBOLS`；若為週期性產業再把組名加入 `CYCLICAL_GROUPS`。同組有效 PE 不足 3 檔時 Comps 會無效，需補足成員或接受 DCF_ONLY。
@@ -127,6 +127,14 @@ $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 - **門檻 3.0 為暫定值，未經校準**。
 - **`method` 仍為 `BLENDED`**：`fair_value_log.method` 在 v094 有 `CHECK(method IN ('BLENDED','DCF_ONLY','COMPS_ONLY','NONE'))` 約束，不可新增值，故以旗標區分；`/fa` 看到 `VALUATION_DIVERGENCE_CAPPED` 時顯示「DCF 與同業倍數分歧，取較低值」而非「各半」。
 - **對 10/8–10/13 資料的影響**：已寫入的歷史列不會重算，其公允價值仍是舊的平均值（無 `CAPPED` 旗標；離線報表以比值現算分歧筆數）。新規則自部署後的估值排程起生效，候選名單會因此改變（此變動已取得使用者同意）。離線報表「候選名單穩健度」另列「取低值觸發筆數」。
+
+### 2.4.2 景氣循環組 DCF 上限
+- **規則**：標的屬於 `CYCLICAL_GROUPS`（記憶體與儲存、銅礦、稀土與關鍵礦產）時，先套用 2.4.1 的分歧取低值，再檢查：若 DCF 有效且大於 0，且此時的 $FV > FV_{\text{DCF}}$，則 $FV = FV_{\text{DCF}}$ 並記 `CYCLICAL_DCF_CAP`。`method` 維持原值（`BLENDED` 或 `COMPS_ONLY` 等，受 v094 CHECK 約束）。MOS、`DEEP_VALUE`、治理壓制皆以封頂後的 $FV$ 計算。
+- **DCF 無效時**無法封頂：$FV$ 不變，改記 `CYCLICAL_NO_DCF_CAP`，讓 `/fa` 看得出這是未封頂的景氣循環估值，請人工複核。
+- **理由**：MU 換成正確同業（SNDK、SKHY、WDC、STX）後，Comps 為 2068、DCF 為 1184，比值只有 1.75，3 倍分歧門檻抓不到。記憶體股在週期高峰時，同業的本益比也同步被壓低，同業倍數乘上高峰 EPS 仍會高估公允價值，因此以現金流折現值為上限。
+- **`/fa`**：方法名稱遇到 `CYCLICAL_DCF_CAP` 顯示「景氣循環股，以 DCF 為上限」；若同時有分歧取低值，以景氣循環標籤為準。
+- **預覽結果（即時 Finnhub，NFCI 取不到、10 年債用預設 4.25%）**：MU 公允價值 1626 → 1184，MOS +41.4% → +19.5%，不再是 `DEEP_VALUE`；SNDK 2052 → 1782，MOS +27.7% → +16.8%，不再是 `DEEP_VALUE`；FCX 58.67 → 54.60，MOS 仍為負；SKHY 已被分歧取低值壓到 DCF，不受影響；CRML 無有效估值。封頂後 MOS > 0 的只剩 MU 與 SNDK，且皆未達 25%。
+- 離線報表「候選名單穩健度」另列「景氣循環 DCF 封頂觸發」筆數。
 
 ### 2.5 分析師修正動能模型與 PEAD 捕捉 (Revision Momentum & PEAD)
 依據標的同一財期在 $t$ 與 $t-30d$ 的每股盈餘預估值變動斜率與調升廣度，量化分析師修正動能。

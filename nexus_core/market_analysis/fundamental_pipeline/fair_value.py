@@ -69,6 +69,8 @@ FLAG_GOVERNANCE_RISK = "GOVERNANCE_RISK"
 FLAG_VALUATION_DIVERGENCE = "VALUATION_DIVERGENCE"
 FLAG_VALUATION_DIVERGENCE_CAPPED = "VALUATION_DIVERGENCE_CAPPED"
 FLAG_NO_COMPARABLE_PEERS = "NO_COMPARABLE_PEERS"
+FLAG_CYCLICAL_DCF_CAP = "CYCLICAL_DCF_CAP"
+FLAG_CYCLICAL_NO_DCF_CAP = "CYCLICAL_NO_DCF_CAP"
 
 # DCF 與 Comps 的比值（大/小）達此倍數時，加註分歧旗標，且公允價值改取兩者較低值
 # （method 仍為 BLENDED：fair_value_log.method 有 CHECK 約束，不可新增值）。
@@ -90,6 +92,8 @@ VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_VALUATION_DIVERGENCE: f"DCF 與同業倍數相差 {VALUATION_DIVERGENCE_RATIO:g} 倍以上",
     FLAG_VALUATION_DIVERGENCE_CAPPED: "兩者分歧，公允價值改取較低者",
     FLAG_NO_COMPARABLE_PEERS: "無合理可比同業，不採同業倍數",
+    FLAG_CYCLICAL_DCF_CAP: "景氣循環股：公允價值以 DCF 為上限（避免以週期高點 EPS 高估）",
+    FLAG_CYCLICAL_NO_DCF_CAP: "景氣循環股但 DCF 無效，同業倍數估值未封頂，請人工複核",
 }
 
 
@@ -239,11 +243,15 @@ def integrate_fair_value(
     discount_rate: float,
     equity_risk_premium: float,
     is_governance_clean: bool = True,
+    *,
+    cyclical: bool = False,
 ) -> FairValueResult:
     """整合 DCF 與同業乘數法公允價值，計算安全邊際與深度價值旗標。
 
     - 兩者皆有效：50% / 50% 混合中樞 (BLENDED)；兩者相差 >= VALUATION_DIVERGENCE_RATIO 倍
       時改取較低者（method 仍為 BLENDED），並加註 VALUATION_DIVERGENCE／_CAPPED 旗標。
+    - 景氣循環組（cyclical=True）：分歧取低值之後，若 DCF 有效且 FV 高於 DCF，封頂為 DCF
+      （CYCLICAL_DCF_CAP，method 不變）；DCF 無效而 FV 存在時只加 CYCLICAL_NO_DCF_CAP 旗標。
     - DCF 失效但 Comps 有效：採用 Comps (COMPS_ONLY)。
     - Comps 失效但 DCF 有效：採用 DCF (DCF_ONLY)。
     - 兩者皆失效：回傳 None (NONE)。
@@ -289,6 +297,15 @@ def integrate_fair_value(
             flags=flags,
             method="NONE",
         )
+
+    if cyclical:
+        dcf_v2 = dcf_res.dcf_value
+        if dcf_res.is_valid and dcf_v2 is not None and dcf_v2 > 0:
+            if final_fv > dcf_v2:
+                final_fv = dcf_v2
+                flags.append(FLAG_CYCLICAL_DCF_CAP)
+        else:
+            flags.append(FLAG_CYCLICAL_NO_DCF_CAP)
 
     final_fv = round(final_fv, 2)
     mos: float | None = None

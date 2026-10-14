@@ -38,3 +38,8 @@ def test_cyclical_flag_only_for_cyclical_groups() -> None:
     assert resolve_peer_group("FCX").cyclical is True
     assert resolve_peer_group("MP").cyclical is True
     assert resolve_peer_group("NVDA").cyclical is False
+
+
+def test_copper_group_includes_bhp_rio() -> None:
+    assert PEER_GROUPS["銅礦"] == ("FCX", "SCCO", "TECK", "BHP", "RIO")
+    assert resolve_peer_group("fcx").peers == ("SCCO", "TECK", "BHP", "RIO")

@@ -332,3 +332,95 @@ def test_below_threshold_keeps_fifty_fifty_average() -> None:
     assert FLAG_VALUATION_DIVERGENCE not in plain.flags
     assert FLAG_VALUATION_DIVERGENCE_CAPPED not in plain.flags
     assert plain.is_deep_value is True
+
+
+def _cyc(dcf: float | None, comps: float | None, spot: float = 80.0, **kw: bool):  # type: ignore[no-untyped-def]
+    d = (
+        DCFResult(dcf_value=dcf, is_valid=True)
+        if dcf is not None
+        else DCFResult(dcf_value=None, is_valid=False, rejection_reason="X")
+    )
+    c = (
+        _comps(comps)
+        if comps is not None
+        else CompsResult(
+            comps_value=None,
+            median_pe=None,
+            liquidity_penalty_factor=1.0,
+            is_valid=False,
+        )
+    )
+    return integrate_fair_value(spot, d, c, 0.08, 0.045, **kw)
+
+
+def test_cyclical_caps_blended_at_dcf() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_CYCLICAL_DCF_CAP,
+        FLAG_CYCLICAL_NO_DCF_CAP,
+    )
+
+    assert FLAG_CYCLICAL_DCF_CAP in VALUATION_FLAG_LABELS_ZH
+    assert FLAG_CYCLICAL_NO_DCF_CAP in VALUATION_FLAG_LABELS_ZH
+    res = _cyc(100.0, 250.0, cyclical=True)  # 平均 175 > DCF 100；比值 2.5 未分歧
+    assert res.fair_value == 100.0
+    assert res.method == "BLENDED"
+    assert FLAG_CYCLICAL_DCF_CAP in res.flags
+    assert res.margin_of_safety == pytest.approx((100.0 - 80.0) / 100.0, abs=1e-4)
+    assert "MODERATE_DISCOUNT" in res.flags
+    # 非景氣循環：行為不變
+    plain = _cyc(100.0, 250.0)
+    assert plain.fair_value == 175.0
+    assert FLAG_CYCLICAL_DCF_CAP not in plain.flags
+
+
+def test_cyclical_not_capped_when_fv_not_above_dcf() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_CYCLICAL_DCF_CAP,
+        FLAG_CYCLICAL_NO_DCF_CAP,
+    )
+
+    res = _cyc(200.0, 100.0, cyclical=True)  # 平均 150 <= DCF 200
+    assert res.fair_value == 150.0
+    assert FLAG_CYCLICAL_DCF_CAP not in res.flags
+    assert FLAG_CYCLICAL_NO_DCF_CAP not in res.flags
+    only = _cyc(200.0, None, cyclical=True)  # DCF_ONLY：FV == DCF
+    assert only.fair_value == 200.0 and only.method == "DCF_ONLY"
+    assert FLAG_CYCLICAL_DCF_CAP not in only.flags
+
+
+def test_cyclical_without_dcf_flags_but_keeps_value() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_CYCLICAL_DCF_CAP,
+        FLAG_CYCLICAL_NO_DCF_CAP,
+    )
+
+    res = _cyc(None, 300.0, cyclical=True)
+    assert res.method == "COMPS_ONLY" and res.fair_value == 300.0
+    assert FLAG_CYCLICAL_NO_DCF_CAP in res.flags
+    assert FLAG_CYCLICAL_DCF_CAP not in res.flags
+    assert FLAG_CYCLICAL_NO_DCF_CAP not in _cyc(None, 300.0).flags
+
+
+def test_cyclical_cap_after_divergence_min() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_CYCLICAL_DCF_CAP,
+        FLAG_VALUATION_DIVERGENCE_CAPPED,
+    )
+
+    # 分歧取低後 = DCF → 不再封頂
+    low_dcf = _cyc(60.0, 300.0, cyclical=True)
+    assert low_dcf.fair_value == 60.0
+    assert FLAG_VALUATION_DIVERGENCE_CAPPED in low_dcf.flags
+    assert FLAG_CYCLICAL_DCF_CAP not in low_dcf.flags
+    # 分歧取低後 = Comps(100) < DCF(400) → 不封頂
+    low_comps = _cyc(400.0, 100.0, cyclical=True)
+    assert low_comps.fair_value == 100.0
+    assert FLAG_CYCLICAL_DCF_CAP not in low_comps.flags
+
+
+def test_cyclical_cap_governance_and_deep_value_use_capped_value() -> None:
+    res = _cyc(100.0, 250.0, spot=60.0, cyclical=True)  # 封頂 100 → MOS 40%
+    assert res.fair_value == 100.0 and res.is_deep_value is True
+    sup = _cyc(100.0, 250.0, spot=60.0, cyclical=True, is_governance_clean=False)
+    assert sup.is_deep_value is False
+    assert "DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE" in sup.flags

@@ -460,6 +460,7 @@ class ValuationService:
             discount_rate=cost_of_equity,
             equity_risk_premium=erp,
             is_governance_clean=not governance_red,
+            cyclical=resolution.cyclical,
         )
         fv_res = replace(fv_res, flags=[*input_flags, *fv_res.flags])
 
