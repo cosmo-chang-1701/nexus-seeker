@@ -45,6 +45,7 @@ from market_analysis.fundamental_pipeline.fair_value import (
     FLAG_G_EST_DEFAULT,
     FLAG_G_EST_HISTORICAL,
     FLAG_NFCI_MISSING,
+    FLAG_NO_COMPARABLE_PEERS,
     FLAG_PEER_PE_TRAILING,
     FLAG_US10Y_DEFAULT,
     calculate_comps_value,
@@ -57,6 +58,7 @@ from market_analysis.fundamental_pipeline.governance_gate import (
 )
 from market_analysis.fundamental_pipeline.models import (
     CompsInputs,
+    CompsResult,
     DCFInputs,
     DCFResult,
     EPSEstimateSnapshotRecord,
@@ -64,6 +66,11 @@ from market_analysis.fundamental_pipeline.models import (
     FairValueResult,
     RevisionMomentumResult,
     RevisionScoreRecord,
+)
+from market_analysis.fundamental_pipeline.peer_groups import (
+    SOURCE_GROUP,
+    SOURCE_NO_COMPS,
+    resolve_peer_group,
 )
 from market_analysis.fundamental_pipeline.revision_momentum import (
     evaluate_revision_momentum,
@@ -362,7 +369,15 @@ class ValuationService:
             input_flags.append(growth_flag)
 
         # 3. 同業本益比（優先前瞻本益比，上限 MAX_PEERS 檔）
-        peers = await self.data_provider.get_peers(sym_upper)
+        resolution = resolve_peer_group(sym_upper)
+        peers: list[str]
+        if resolution.source == SOURCE_GROUP:
+            peers = list(resolution.peers)  # 分組表優先，不呼叫 Finnhub 同業 API
+        elif resolution.source == SOURCE_NO_COMPS:
+            peers = []
+            input_flags.append(FLAG_NO_COMPARABLE_PEERS)
+        else:
+            peers = await self.data_provider.get_peers(sym_upper)
         peer_pes: list[float] = []
         peer_symbols: list[str] = []
         peer_rows: list[dict[str, Any]] = []
@@ -401,14 +416,23 @@ class ValuationService:
                     cost_of_equity=cost_of_equity,
                 )
             )
-        comps_res = calculate_comps_value(
-            CompsInputs(
-                forward_eps=fwd_eps if fwd_eps is not None else 0.0,
-                peer_pes=peer_pes,
-                nfci=nfci,
-                peer_symbols=peer_symbols,
+        if resolution.source == SOURCE_NO_COMPS:
+            comps_res = CompsResult(
+                comps_value=None,
+                median_pe=None,
+                liquidity_penalty_factor=1.0,
+                is_valid=False,
+                rejection_reason=FLAG_NO_COMPARABLE_PEERS,
             )
-        )
+        else:
+            comps_res = calculate_comps_value(
+                CompsInputs(
+                    forward_eps=fwd_eps if fwd_eps is not None else 0.0,
+                    peer_pes=peer_pes,
+                    nfci=nfci,
+                    peer_symbols=peer_symbols,
+                )
+            )
         comps_detail: dict[str, Any] = {
             "forward_eps": fwd_eps,
             "forward_eps_source": fwd_eps_source,
@@ -418,6 +442,9 @@ class ValuationService:
             "median_pe": comps_res.median_pe,
             "liquidity_penalty": comps_res.liquidity_penalty_factor,
             "rejection_reason": comps_res.rejection_reason,
+            "peer_source": resolution.source,
+            "peer_group": resolution.group,
+            "cyclical": resolution.cyclical,
         }
 
         # 5. 治理閘門：只有 HIGH / CRITICAL 視為紅旗（REVIEW / INFO 僅待人工複核）

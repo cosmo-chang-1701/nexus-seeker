@@ -70,11 +70,42 @@ $$FV_{\text{Comps}} = \text{Forward EPS} \times \left( \text{Median}(\text{Peers
   2. 具備正向本益比之有效同業數量必須滿足 $N_{\text{peers}} \ge 3$。
   3. $\text{Median}(\text{Peers Forward PE}) \le 0$ 則乘數無效。
 
+### 2.3.1 同業分組表（`peer_groups.py`）
+同業清單的來源依下列優先序解析（`resolve_peer_group`，輸入先轉大寫並去除空白）：
+
+1. **GROUP**：標的屬於分組表某一組時，同業 = 同組成員去掉自己（保持表內順序），**不呼叫** Finnhub 的 `company_peers`。若同組成員中取得有效 PE 的不足 3 檔，沿用 `INSUFFICIENT_PEERS` 判定 Comps 無效，**不退回** Finnhub 同業清單。
+2. **NO_COMPS**：MRNA, TSLA 無合理可比同業，不抓同業，Comps 直接無效（`rejection_reason = NO_COMPARABLE_PEERS`，並記旗標 `NO_COMPARABLE_PEERS`，`/fa` 顯示「無合理可比同業，不採同業倍數」）。
+3. **FINNHUB**：其餘標的維持原流程（Finnhub 同業清單，至多 10 檔）。
+
+同業的 `get_company_metrics` 仍走既有 provider（已受 RateGate 管制），`MAX_PEERS = 10` 上限不變。`comps_detail_json` 因此新增 `peer_source`（`GROUP`／`NO_COMPS`／`FINNHUB`）、`peer_group`（組名或 null）、`cyclical`（是否週期組；只用於標註與報表，不影響任何計算）。
+
+**動機**：Finnhub 同業 API 只分到「半導體」層級。MU 被配到 NVDA、AVGO 等 AI 邏輯晶片股，同業中位數 PE 為 34.9，而 MU 自身 PE 僅 6.5；SNDK 被配到 AAPL、IONQ。這類錯配使 Comps 估值失真。
+
+**分組表**（標示「週期」者屬 `CYCLICAL_GROUPS`）：
+
+| 組別 | 成員 |
+|---|---|
+| 記憶體與儲存（週期） | MU, SNDK, SKHY, WDC, STX |
+| AI 運算與網通晶片 | NVDA, AMD, MRVL, ALAB, AVGO, CRDO |
+| 半導體 IP 與 EDA | ARM, CDNS, SNPS, RMBS |
+| 整合元件製造 | INTC, TXN, ADI, MCHP, ON, NXPI |
+| 光通訊與化合物半導體 | LITE, AAOI, AXTI, COHR, FN, CIEN |
+| 超大型平台 | GOOGL, META, AAPL, MSFT, AMZN |
+| 資安與雲端軟體 | CRWD, NET, PLTR, DDOG, ZS, PANW |
+| AI 雲端算力 | CRWV, NBIS, CIFR, IREN |
+| 券商與加密平台 | HOOD, COIN, SCHW, IBKR |
+| 太空 | RKLB, SPCX, ASTS, LUNR |
+| AI 電力設備 | BE, GEV, VRT, ETN |
+| 銅礦（週期） | FCX, SCCO, TECK |
+| 稀土與關鍵礦產（週期） | CRML, MP, USAR |
+
+**新增標的時的維護方式**：在 `nexus_core/market_analysis/fundamental_pipeline/peer_groups.py` 的 `PEER_GROUPS` 把代號加入合適的組（一個標的至多屬於一組，測試會檢查）；若無合理可比同業則加入 `NO_COMPS_SYMBOLS`；若為週期性產業再把組名加入 `CYCLICAL_GROUPS`。同組有效 PE 不足 3 檔時 Comps 會無效，需補足成員或接受 DCF_ONLY。
+
 ### 2.4 公允價值整合與安全邊際模型 (Margin of Safety, MOS)
 系統依模型有效性執行公允價值中樞整合：
 
 $$FV = \begin{cases}
-\frac{FV_{\text{DCF}} + FV_{\text{Comps}}}{2} & \text{若兩者皆有效 (BLENDED)} \\
+\frac{FV_{\text{DCF}} + FV_{\text{Comps}}}{2} & \text{若兩者皆有效 (BLENDED；相差 3 倍以上改取較低者，見 2.4.1)} \\
 FV_{\text{Comps}} & \text{若 } FCF_0 \le 0 \lor \text{DCF 拒絕 (COMPS\_ONLY)} \\
 FV_{\text{DCF}} & \text{若同業不足 3 家 (DCF\_ONLY)} \\
 \text{None} & \text{若兩者皆無效 (NONE)}
@@ -85,10 +116,17 @@ FV_{\text{DCF}} & \text{若同業不足 3 家 (DCF\_ONLY)} \\
 $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 
 - 深度價值評估：當 $MOS \ge 0.25$（安全邊際達 25% 以上）且標的沒有生效中的 `HIGH`／`CRITICAL` 治理旗標時，正式評估為深度價值標的（`DEEP_VALUE`）；有 `HIGH`／`CRITICAL` 旗標時改記 `DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE`。`REVIEW`／`INFO`（例如預設為 `REVIEW` 的 8-K 5.02）只待人工複核，不壓制。
-- **估值分歧標註（`VALUATION_DIVERGENCE`，純標註）**：方法為 `BLENDED` 且 $\max(FV_{\text{DCF}}, FV_{\text{Comps}}) / \min(\cdot) \ge 3$ 時加註此旗標，`/fa` 顯示「混合中樞可信度低，請人工複核」。門檻 `VALUATION_DIVERGENCE_RATIO = 3.0` 為暫定值、未經校準；**旗標不影響 `DEEP_VALUE`、MOS、`method` 與候選排序**（`DCF_ONLY`／`COMPS_ONLY` 不加）。
-- **同業乘數輸入留存（`comps_detail_json`，v095）**：每次估值把 Comps 的輸入寫入 `fair_value_log.comps_detail_json`（可為 NULL；v095 以前的列為 NULL），供事後稽核：`forward_eps`、`forward_eps_source`（`FORWARD_PE`／`TRAILING_EPS`／null）、`forward_pe`、`peers`（只列取得有效 PE 的同業，依序含 `symbol`、`pe`、`trailing`）、`peers_requested`（實際請求的前 10 檔）、`median_pe`、`liquidity_penalty`、`rejection_reason`。純記錄，不參與任何判定。
+- **估值分歧（`VALUATION_DIVERGENCE`／`VALUATION_DIVERGENCE_CAPPED`）**：方法為 `BLENDED` 且 $\max/\min \ge 3$ 時，公允價值改取兩者較低值並加註兩旗標，`/fa` 顯示「DCF 與同業倍數相差 3 倍以上」「兩者分歧，公允價值改取較低者」；**會**影響 `fair_value`、MOS 與 `DEEP_VALUE`（`method` 仍為 `BLENDED`，`DCF_ONLY`／`COMPS_ONLY` 不適用）。門檻 `VALUATION_DIVERGENCE_RATIO = 3.0` 為暫定值、未經校準。詳見 2.4.1。
+- **同業乘數輸入留存（`comps_detail_json`，v095）**：每次估值把 Comps 的輸入寫入 `fair_value_log.comps_detail_json`（可為 NULL；v095 以前的列為 NULL），供事後稽核：`forward_eps`、`forward_eps_source`（`FORWARD_PE`／`TRAILING_EPS`／null）、`forward_pe`、`peers`（只列取得有效 PE 的同業，依序含 `symbol`、`pe`、`trailing`）、`peers_requested`（實際請求的前 10 檔）、`median_pe`、`liquidity_penalty`、`rejection_reason`、`peer_source`、`peer_group`、`cyclical`。純記錄，不參與任何判定。
 - **無效值存 NULL**：方法為 `NONE` 時 `fair_value` 與 `margin_of_safety` 皆存 NULL；有公允價值但無現價時 `margin_of_safety` 存 NULL 並記 `SPOT_UNAVAILABLE`。不以 0.0 作為哨兵值。下游 `/fa` 與離線報告依 NULL 與 `method = 'NONE'` 排除。
 - **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、$g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
+
+### 2.4.1 DCF／Comps 分歧取低值
+- **規則**：兩模型皆有效且皆大於 0，且 $\max(FV_{\text{DCF}}, FV_{\text{Comps}}) / \min(\cdot) \ge$ `VALUATION_DIVERGENCE_RATIO`（3.0）時，$FV = \min(FV_{\text{DCF}}, FV_{\text{Comps}})$，並同時記 `VALUATION_DIVERGENCE` 與 `VALUATION_DIVERGENCE_CAPPED`。MOS、`DEEP_VALUE`、治理壓制皆以取低後的 $FV$ 計算。未達門檻時仍為 50/50 平均。
+- **理由**：（1）同業錯配（見 2.3.1）；（2）週期高點的 forward EPS 失真，例如 MU 的 forward EPS 為 146、TTM EPS 僅 74，以高點 EPS 乘上倍數會高估公允價值。兩者相差懸殊時平均值的可信度低，改取較保守者。
+- **門檻 3.0 為暫定值，未經校準**。
+- **`method` 仍為 `BLENDED`**：`fair_value_log.method` 在 v094 有 `CHECK(method IN ('BLENDED','DCF_ONLY','COMPS_ONLY','NONE'))` 約束，不可新增值，故以旗標區分；`/fa` 看到 `VALUATION_DIVERGENCE_CAPPED` 時顯示「DCF 與同業倍數分歧，取較低值」而非「各半」。
+- **對 10/8–10/13 資料的影響**：已寫入的歷史列不會重算，其公允價值仍是舊的平均值（無 `CAPPED` 旗標；離線報表以比值現算分歧筆數）。新規則自部署後的估值排程起生效，候選名單會因此改變（此變動已取得使用者同意）。離線報表「候選名單穩健度」另列「取低值觸發筆數」。
 
 ### 2.5 分析師修正動能模型與 PEAD 捕捉 (Revision Momentum & PEAD)
 依據標的同一財期在 $t$ 與 $t-30d$ 的每股盈餘預估值變動斜率與調升廣度，量化分析師修正動能。
@@ -249,6 +287,7 @@ flowchart TD
 - 純量化演算法葉模組：
   - `nexus_core/market_analysis/fundamental_pipeline/revision_momentum.py`
   - `nexus_core/market_analysis/fundamental_pipeline/fair_value.py`
+  - `nexus_core/market_analysis/fundamental_pipeline/peer_groups.py`
 - 非同步協調與時鐘服務：
   - `nexus_core/services/valuation_service.py`
   - `nexus_core/services/fundamental_clock_service.py`

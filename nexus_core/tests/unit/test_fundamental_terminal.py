@@ -712,6 +712,34 @@ async def test_valuation_section_blended_with_method_label() -> None:
 
 
 @pytest.mark.asyncio
+async def test_valuation_section_capped_method_label() -> None:
+    from cogs.fundamental_terminal import ValuationEngineSection
+    from market_analysis.fundamental_pipeline.models import FairValueRecord
+
+    fv = FairValueRecord(
+        symbol="MU",
+        trading_date="2026-10-13",
+        dcf_value=100.0,
+        comps_value=400.0,
+        fair_value=100.0,
+        margin_of_safety=-0.5,
+        discount_rate=0.0866,
+        equity_risk_premium=0.0425,
+        flags_json='["VALUATION_DIVERGENCE","VALUATION_DIVERGENCE_CAPPED"]',
+        method="BLENDED",
+        spot_price=150.0,
+    )
+    with (
+        patch("cogs.fundamental_terminal.get_latest_fair_value", return_value=fv),
+        patch("cogs.fundamental_terminal.get_latest_revision_score", return_value=None),
+    ):
+        _, body = await ValuationEngineSection().render("MU")
+    assert "DCF 與同業倍數分歧，取較低值" in body
+    assert "各半" not in body
+    assert "兩者分歧，公允價值改取較低者" in body
+
+
+@pytest.mark.asyncio
 async def test_watch_candidate_section_shows_list_date() -> None:
     from cogs.fundamental_terminal import WatchCandidateSection
     from market_analysis.fundamental_pipeline.models import WatchCandidateRecord

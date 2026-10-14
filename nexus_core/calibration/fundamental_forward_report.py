@@ -23,6 +23,7 @@ from market_analysis.fundamental_pipeline.fair_value import (
     DEEP_VALUE_MOS_THRESHOLD,
     FAIR_VALUE_MOS_BAND,
     FLAG_VALUATION_DIVERGENCE,
+    FLAG_VALUATION_DIVERGENCE_CAPPED,
     MODERATE_DISCOUNT_MOS,
     VALUATION_DIVERGENCE_RATIO,
 )
@@ -306,6 +307,7 @@ def build_valuation_robustness(
 
     dcf_only_pass = 0
     diverged = 0
+    capped = 0
     for _, fv_row in matched:
         dcf, spot = _positive(fv_row.get("dcf_value")), _row_spot(fv_row)
         if dcf is not None and spot is not None:
@@ -314,11 +316,14 @@ def build_valuation_robustness(
         flags = _safe_flags(fv_row.get("flags_json"))
         if FLAG_VALUATION_DIVERGENCE in flags or _is_diverged(fv_row):
             diverged += 1
+        if FLAG_VALUATION_DIVERGENCE_CAPPED in flags:
+            capped += 1
     result["candidate_robustness"] = {
         "n_candidates": len(cand_rows),
         "n_matched": len(matched),
         "dcf_only_still_deep_value": dcf_only_pass,
         "valuation_divergence": diverged,
+        "valuation_divergence_capped": capped,
     }
 
     latest: dict[str, dict[str, Any]] = {}
@@ -490,6 +495,10 @@ def generate_fundamental_forward_report(logs: dict[str, list[dict[str, Any]]]) -
             lines.append(
                 f"    - DCF 與 Comps 相差 {VALUATION_DIVERGENCE_RATIO:.0f} 倍以上 : "
                 f"{cr['valuation_divergence']}/{cr['n_matched']} 筆（舊資料由比值現算）"
+            )
+            lines.append(
+                f"    - 分歧取低值（VALUATION_DIVERGENCE_CAPPED）觸發 : "
+                f"{cr['valuation_divergence_capped']}/{cr['n_matched']} 筆"
             )
         details = robustness["candidate_comps_detail"]
         if details:

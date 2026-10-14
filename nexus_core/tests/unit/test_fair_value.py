@@ -279,26 +279,56 @@ def test_valuation_divergence_not_flagged_for_single_method() -> None:
     assert FLAG_VALUATION_DIVERGENCE not in comps_only.flags
 
 
-def test_valuation_divergence_is_annotation_only() -> None:
-    """加旗標前後 is_deep_value / margin_of_safety / fair_value / method 一致，DEEP_VALUE 照常。"""
-    # 分歧（比值 5）：中樞 (60 + 300) / 2 = 180，MOS 遠高於 25%
+def test_valuation_divergence_takes_lower_value() -> None:
+    """比值 >= 3：取低值、兩旗標齊備、method 仍 BLENDED、MOS 與 DEEP_VALUE 以低值計算。"""
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_VALUATION_DIVERGENCE_CAPPED,
+    )
+
+    assert FLAG_VALUATION_DIVERGENCE_CAPPED in VALUATION_FLAG_LABELS_ZH
+    assert "3" in VALUATION_FLAG_LABELS_ZH[FLAG_VALUATION_DIVERGENCE]
+    # 分歧（比值 5）：舊邏輯中樞 180（深度價值），新邏輯取低值 60 → 現價 80 溢價
     diverged = integrate_fair_value(
         80.0, DCFResult(dcf_value=60.0, is_valid=True), _comps(300.0), 0.08, 0.045
     )
     assert FLAG_VALUATION_DIVERGENCE in diverged.flags
+    assert FLAG_VALUATION_DIVERGENCE_CAPPED in diverged.flags
     assert diverged.method == "BLENDED"
-    assert diverged.fair_value == 180.0
-    assert diverged.margin_of_safety == pytest.approx((180.0 - 80.0) / 180.0, abs=1e-4)
-    assert diverged.is_deep_value is True
-    assert "DEEP_VALUE" in diverged.flags
+    assert diverged.fair_value == 60.0
+    assert diverged.margin_of_safety == pytest.approx((60.0 - 80.0) / 60.0, abs=1e-4)
+    assert diverged.is_deep_value is False
+    assert "OVERVALUED" in diverged.flags
 
-    # 同一組中樞、無分歧（120 + 240 之外取 90 + 90 = 180）：判定欄位完全相同
+    # 取低後仍深度價值：Comps 低、DCF 高
+    deep = integrate_fair_value(
+        80.0, DCFResult(dcf_value=900.0, is_valid=True), _comps(300.0), 0.08, 0.045
+    )
+    assert deep.fair_value == 300.0
+    assert deep.is_deep_value is True and "DEEP_VALUE" in deep.flags
+
+    # 取低後的治理壓制
+    gov = integrate_fair_value(
+        80.0,
+        DCFResult(dcf_value=900.0, is_valid=True),
+        _comps(300.0),
+        0.08,
+        0.045,
+        is_governance_clean=False,
+    )
+    assert gov.is_deep_value is False
+    assert "DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE" in gov.flags
+
+
+def test_below_threshold_keeps_fifty_fifty_average() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_VALUATION_DIVERGENCE_CAPPED,
+    )
+
     plain = integrate_fair_value(
         80.0, DCFResult(dcf_value=150.0, is_valid=True), _comps(210.0), 0.08, 0.045
     )
+    assert plain.fair_value == 180.0
+    assert plain.method == "BLENDED"
     assert FLAG_VALUATION_DIVERGENCE not in plain.flags
-    assert plain.fair_value == diverged.fair_value
-    assert plain.margin_of_safety == diverged.margin_of_safety
-    assert plain.is_deep_value == diverged.is_deep_value
-    assert plain.method == diverged.method
-    assert [f for f in diverged.flags if f != FLAG_VALUATION_DIVERGENCE] == plain.flags
+    assert FLAG_VALUATION_DIVERGENCE_CAPPED not in plain.flags
+    assert plain.is_deep_value is True

@@ -44,6 +44,7 @@ from market_analysis.fundamental_pipeline.earnings_surprise import FLOOR_EPS
 from market_analysis.fundamental_pipeline.fair_value import (
     DEEP_VALUE_MOS_THRESHOLD,
     FAIR_VALUE_MOS_BAND,
+    FLAG_VALUATION_DIVERGENCE_CAPPED,
     MODERATE_DISCOUNT_MOS,
     VALUATION_FLAG_LABELS_ZH,
 )
@@ -478,6 +479,8 @@ _VALUATION_METHOD_ZH: dict[str, str] = {
     "COMPS_ONLY": "僅同業倍數",
 }
 
+_VALUATION_METHOD_CAPPED_ZH = "DCF 與同業倍數分歧，取較低值"
+
 _REVISION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_NO_CURRENT_SNAPSHOT: "尚無分析師 EPS 共識快照（待 19:00 快照排程）",
     FLAG_NO_PRIOR_SNAPSHOT: "t-30 日（28–35 日前）尚無共識快照，動能待累積",
@@ -573,6 +576,11 @@ class ValuationEngineSection:
                     else "不成立"
                 )
                 method_zh = _VALUATION_METHOD_ZH.get(fv_record.method, fv_record.method)
+                if (
+                    fv_record.method == "BLENDED"
+                    and FLAG_VALUATION_DIVERGENCE_CAPPED in flags
+                ):
+                    method_zh = _VALUATION_METHOD_CAPPED_ZH
                 lines.append(
                     f"• 公允價值中樞（{fv_record.trading_date}，{method_zh}）: "
                     f"**${fv_record.fair_value:.2f}** (DCF: `{dcf_str}` ｜ 同業倍數: `{comps_str}`)"
