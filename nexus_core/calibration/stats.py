@@ -46,6 +46,55 @@ def clustered_bootstrap_mean(
     return (mean, float(lo), float(hi))
 
 
+def clustered_bootstrap_diff(
+    treat_values: Sequence[float],
+    treat_clusters: Sequence[object],
+    control_values: Sequence[float],
+    control_clusters: Sequence[object],
+    n_boot: int,
+    seed: int,
+) -> tuple[float, float, float, float]:
+    """(超額＝處理組平均 − 對照組平均, 2.5%, 97.5%, bootstrap 標準誤)。
+
+    以叢集 (日期) 為單位重抽：被抽中的日期，其處理組與對照組樣本一起帶入，
+    保留同日橫斷面相關性。任一組為空、或可用日期不足 2 個時 CI／SE 為 NaN。
+    """
+    tv = np.asarray(treat_values, dtype="float64")
+    cv = np.asarray(control_values, dtype="float64")
+    nan = float("nan")
+    if tv.size == 0 or cv.size == 0:
+        return (nan, nan, nan, nan)
+    diff = float(tv.mean() - cv.mean())
+    t_lab = pd.Series(list(treat_clusters)).astype(str).to_numpy()
+    c_lab = pd.Series(list(control_clusters)).astype(str).to_numpy()
+    uniq = np.unique(np.concatenate([t_lab, c_lab]))
+    if len(uniq) < 2:
+        return (diff, nan, nan, nan)
+    t_idx = np.searchsorted(uniq, t_lab)
+    c_idx = np.searchsorted(uniq, c_lab)
+    t_sum = np.bincount(t_idx, weights=tv, minlength=len(uniq))
+    t_cnt = np.bincount(t_idx, minlength=len(uniq)).astype("float64")
+    c_sum = np.bincount(c_idx, weights=cv, minlength=len(uniq))
+    c_cnt = np.bincount(c_idx, minlength=len(uniq)).astype("float64")
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(uniq), size=(n_boot, len(uniq)))
+    tn, cn = t_cnt[idx].sum(axis=1), c_cnt[idx].sum(axis=1)
+    valid = (tn > 0) & (cn > 0)
+    if not valid.any():
+        return (diff, nan, nan, nan)
+    boot = (
+        t_sum[idx].sum(axis=1)[valid] / tn[valid]
+        - c_sum[idx].sum(axis=1)[valid] / cn[valid]
+    )
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return (
+        diff,
+        float(lo),
+        float(hi),
+        float(boot.std(ddof=1)) if boot.size > 1 else nan,
+    )
+
+
 def effective_oos_split(dates: pd.Series, default_split: str) -> str:
     """樣本外切點。
 
