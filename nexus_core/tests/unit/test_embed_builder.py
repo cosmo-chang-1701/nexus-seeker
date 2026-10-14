@@ -202,8 +202,8 @@ def test_create_trades_embed() -> None:
     assert desc_field is not None
     assert "數量" in desc_field
     assert "現價" in desc_field
-    assert "  6.50" in desc_field  # Visual formatting check
-    assert "  -1" in desc_field  # Visual formatting check for negative quantity
+    assert " 6.50 " in desc_field  # 動態欄寬：成本欄靠右對齊
+    assert "-1\x1b[0m" in desc_field  # 負數量（含色碼）
 
 
 def test_create_portfolio_report_embed() -> None:
@@ -1260,7 +1260,9 @@ def test_create_active_orders_embed() -> None:
     embeds_many = create_active_orders_embed(many_orders)
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
-    assert " (1/" in embeds_many[0].title  # type: ignore
+    assert len(embeds_many) == 3
+    assert " (第 1/3 頁)" in embeds_many[0].title  # type: ignore
+    assert all(len(e.fields) <= 10 for e in embeds_many)
 
 
 def test_build_radar_scan_embed() -> None:
@@ -3304,7 +3306,7 @@ def test_create_telemetry_alignment_embeds() -> None:
     # 5. Test pagination (16 items -> should produce at least 2 embeds if split or chunked)
     items_16 = [dict(item, order_id=i) for i in range(16)]
     embeds_16 = create_telemetry_alignment_embeds(items_16)
-    assert len(embeds_16) >= 2
+    assert len(embeds_16) >= 2  # 每頁 10 筆 -> 16 筆至少 2 頁
     assert "(第 1/" in embeds_16[0].title  # type: ignore
     assert "頁)" in embeds_16[0].title  # type: ignore
 

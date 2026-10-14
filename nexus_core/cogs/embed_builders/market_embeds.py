@@ -438,7 +438,7 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    for res in results[:15]:
+    for res in results[:10]:
         risk_icon = "🚨" if res.get("is_high_risk_vol") else "⚠️"
         embed.add_field(
             name=f"{risk_icon} {res.get('symbol', 'N/A')} (IVR: {fmt_or_dash(res.get('iv_rank'), 'g', suffix='%', placeholder='--%')})",
@@ -448,6 +448,8 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
             ),
             inline=False,
         )
+    if len(results) > 10:
+        embed.description = f"…另有 {len(results) - 10} 檔未列出"
     embed.set_footer(text="IV Rank Scanner")
     return embed
 
@@ -2355,7 +2357,7 @@ def build_calendar_embed(
     # Format Earnings Events
     earn_text = ""
     if earnings_events:
-        for ev in earnings_events[:15]:
+        for ev in earnings_events[:10]:
             sym = getattr(ev, "symbol", "Unknown")
             tte = getattr(ev, "tte_hours", "N/A")
             date_val = getattr(ev, "date", "N/A")
@@ -2367,6 +2369,8 @@ def build_calendar_embed(
             except Exception:
                 date_str = f"`{date_val}`"
                 earn_text += f"* 🗓️ {date_str} **{sym}** 財報發布 (TTE: {tte}h)\n"
+        if len(earnings_events) > 10:
+            earn_text += f"…另有 {len(earnings_events) - 10} 檔未列出\n"
     else:
         earn_text = "📭 您的自選標的近期無財報。"
 

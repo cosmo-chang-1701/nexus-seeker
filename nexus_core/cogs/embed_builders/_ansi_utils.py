@@ -73,6 +73,54 @@ def _pad_string(s: str, width: int, align: str = "left") -> str:
         return s + " " * pad_len
 
 
+def _render_aligned_table(
+    header: list[str],
+    rows: list[list[str]],
+    aligns: list[str] | None = None,
+    *,
+    sep: str = " ",
+) -> list[str]:
+    """依視覺寬度動態對齊的純文字／ANSI 表格。
+
+    回傳 ``[header_line, divider, *row_lines]``。欄寬以去除 ANSI 色碼後的
+    ``_visual_len`` 最大值計算（CJK／emoji 視為雙倍寬），儲存格內的 ANSI 色碼原樣保留。
+    ``aligns`` 每欄 ``left``／``right``／``center``，預設全部 left；
+    最後一欄不補尾端空白；欄間以 ``sep`` 連接（預設單一空白）。divider 為 ``"-" * _visual_len(header_line)``。
+    """
+    ncols = len(header)
+    aligns = list(aligns) if aligns else []
+    aligns += ["left"] * (ncols - len(aligns))
+
+    def _norm(row: list[str]) -> list[str]:
+        cells = [str(c) for c in row[:ncols]]
+        return cells + [""] * (ncols - len(cells))
+
+    norm_rows = [_norm(r) for r in rows]
+    widths = [_visual_len(_clean_ansi(h)) for h in header]
+    for r in norm_rows:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], _visual_len(_clean_ansi(c)))
+
+    def _line(cells: list[str]) -> str:
+        parts = []
+        for i, c in enumerate(cells):
+            pad = max(0, widths[i] - _visual_len(_clean_ansi(c)))
+            al = aligns[i]
+            if al == "right":
+                parts.append(" " * pad + c)
+            elif al == "center":
+                parts.append(" " * (pad // 2) + c + " " * (pad - pad // 2))
+            elif i == ncols - 1:
+                parts.append(c)
+            else:
+                parts.append(c + " " * pad)
+        return sep.join(parts)
+
+    header_line = _line(list(header))
+    divider = "-" * _visual_len(_clean_ansi(header_line))
+    return [header_line, divider, *[_line(r) for r in norm_rows]]
+
+
 def _visual_truncate(s: str, max_vlen: int) -> str:
     """根據視覺寬度截斷字串，避免中文字元被切成一半。"""
     return panel_renderer.visual_truncate(s, max_vlen)

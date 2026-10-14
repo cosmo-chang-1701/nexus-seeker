@@ -7,7 +7,11 @@ from typing import Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
-from cogs.embed_builders._ansi_utils import _pad_string, _to_float_or_none, fmt_or_dash
+from cogs.embed_builders._ansi_utils import (
+    _render_aligned_table,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     UOA_HEURISTIC_DISCLOSURE,
@@ -357,34 +361,21 @@ def create_sentiment_scan_embed(
                 "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
             )
 
-    metrics_lines = ["```ansi"]
-    m_headers = ["指標項目", "數據值", "狀態 / 備註"]
-    m_widths = [14, 20, 24]
-    metrics_lines.append(
-        " | ".join(
-            _pad_string(h, w, "left" if i == 0 or i == 2 else "right")
-            for i, (h, w) in enumerate(zip(m_headers, m_widths))
-        )
-    )
-    metrics_lines.append("-" * (sum(m_widths) + 3 * (len(m_widths) - 1)))
-
-    # Skew 渲染
     skew_val_str = fmt_or_dash(skew_val, ".2f", suffix="%", placeholder="--%")
-    metrics_lines.append(
-        f"{_pad_string('Option Skew', m_widths[0])} | {_pad_string(skew_val_str, m_widths[1], 'right')} | {_pad_string(skew_state, m_widths[2])}"
-    )
-    # Volume PCR 渲染
-    metrics_lines.append(
-        f"{_pad_string('Volume PCR', m_widths[0])} | {_pad_string(vol_pcr_str, m_widths[1], 'right')} | {_pad_string(vol_pcr_state, m_widths[2])}"
-    )
-    # OI PCR 渲染
-    metrics_lines.append(
-        f"{_pad_string('OI PCR', m_widths[0])} | {_pad_string(oi_pcr_str, m_widths[1], 'right')} | {_pad_string(oi_pcr_state, m_widths[2])}"
-    )
-    # Max Pain 渲染
-    metrics_lines.append(
-        f"{_pad_string('Max Pain', m_widths[0])} | {_pad_string(mp_strike_str, m_widths[1], 'right')} | {_pad_string(is_conv, m_widths[2])}"
-    )
+    metrics_lines = [
+        "```ansi",
+        *_render_aligned_table(
+            ["指標項目", "數據值", "狀態 / 備註"],
+            [
+                ["Option Skew", skew_val_str, skew_state],
+                ["Volume PCR", vol_pcr_str, vol_pcr_state],
+                ["OI PCR", oi_pcr_str, oi_pcr_state],
+                ["Max Pain", mp_strike_str, is_conv],
+            ],
+            ["left", "right", "left"],
+            sep=" | ",
+        ),
+    ]
     metrics_lines.append("```")
 
     embed.add_field(

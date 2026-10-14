@@ -175,3 +175,16 @@ def test_g4_embed_builders_hex_literals_are_curated() -> None:
                 if int(match, 16) not in CURATED_PALETTE:
                     offenders.append(f"{_rel(path)}:{lineno} {match}")
     assert offenders == []
+
+
+def test_g5_embed_builders_tree_glyphs_use_full_connector() -> None:
+    """G5：樹狀符號必須是 `├─`／`└─`；`├ `／`└ `（缺 ─）與 `├──`／`└──` 皆違規。"""
+    pattern = re.compile(r"[├└] |[├└]──")
+    offenders = []
+    for path in sorted(_BUILDERS_DIR.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        for lineno, line in enumerate(_read_text(path).splitlines(), start=1):
+            if pattern.search(line):
+                offenders.append(f"{_rel(path)}:{lineno} {line.strip()[:60]}")
+    assert offenders == []

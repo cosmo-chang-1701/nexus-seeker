@@ -5,13 +5,14 @@ import discord
 from datetime import datetime, timezone
 
 from cogs.embed_builders._ansi_utils import (
-    _pad_string,
+    _render_aligned_table,
     _truncate_with_boundary,
     _to_float_or_none,
     _visual_truncate,
     fmt_or_dash,
 )
 from cogs.embed_builders._embed_helpers import (
+    _chunk_ansi_table,
     _safe_embed_field_value,
     _safe_embed_codeblock_value,
     _build_watchlist_style_panel,
@@ -21,6 +22,16 @@ from cogs.embed_builders._embed_helpers import (
     _append_ai_report_fields,
 )
 from cogs.embed_builders._core import NexusEmbed
+
+
+def _add_table_fields(embed: NexusEmbed, name: str, chunks: list[str]) -> None:
+    """把已切好的 ANSI 表格區塊寫入欄位；多塊時欄名加 (i/n)。"""
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
+            value=chunk,
+            inline=False,
+        )
 
 
 def create_earnings_report_embed(
@@ -47,33 +58,26 @@ def create_earnings_report_embed(
     )
 
     if upcoming:
-        earnings_lines = ["```ansi"]
-        headers = ["標的", "財報日", "情緒覆蓋"]
-        widths = [8, 14, 12]
-        earnings_lines.append(
-            " | ".join(_pad_string(h, w) for h, w in zip(headers, widths))
-        )
-        earnings_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
+        earnings_rows: list[list[str]] = []
         for sym, events in upcoming.items():
             for event in events:
-                date = event.get("date", "未知日期")
+                date = str(event.get("date") or "未知日期")
                 sentiment_status = "新聞+社群" if sym in sentiment else "日曆"
-                earnings_lines.append(
-                    " | ".join(
-                        [
-                            _pad_string(_visual_truncate(sym, widths[0]), widths[0]),
-                            _pad_string(_visual_truncate(date, widths[1]), widths[1]),
-                            _pad_string(
-                                _visual_truncate(sentiment_status, widths[2]), widths[2]
-                            ),
-                        ]
-                    )
+                earnings_rows.append(
+                    [
+                        _visual_truncate(sym, 8),
+                        _visual_truncate(date, 14),
+                        sentiment_status,
+                    ]
                 )
-        earnings_lines.append("```")
-        embed.add_field(
-            name="📅 即將發布財報標的",
-            value=_safe_embed_field_value("\n".join(earnings_lines), "近期無財報事件"),
-            inline=False,
+        header_line, divider, *data_lines = _render_aligned_table(
+            ["標的", "財報日", "情緒覆蓋"], earnings_rows, sep=" | "
+        )
+        # 以 _chunk_ansi_table 切分，每塊自帶完整收尾 fence，不會被 1024 截斷切掉
+        _add_table_fields(
+            embed,
+            "📅 即將發布財報標的",
+            _chunk_ansi_table(header_line, divider, data_lines),
         )
     else:
         embed.add_field(
@@ -161,69 +165,35 @@ def create_sector_flow_report_embed(
     )
 
     if sectors:
-        sector_lines = ["```ansi"]
-        sector_lines.append(" 🔄 板塊輪動快照 (Sector Rotation)")
-        sector_lines.append(" ----------------------------------")
-        headers = ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"]
-        widths = [5, 18, 8, 6, 8, 4]
-        sector_lines.append(
-            " ".join(
-                [
-                    " | ".join(_pad_string(h, w) for h, w in zip(headers, widths)),
-                ]
-            )
-        )
-        sector_lines.append("-" * (sum(widths) + 3 * (len(widths) - 1)))
         sorted_sectors = sorted(
             sectors,
             key=lambda item: abs(_to_float_or_none(item.get("pct_change")) or 0.0),
             reverse=True,
         )
-        for item in sorted_sectors:
-            sector_lines.append(
-                " | ".join(
-                    [
-                        _pad_string(
-                            _visual_truncate(str(item.get("symbol", "N/A")), widths[0]),
-                            widths[0],
-                        ),
-                        _pad_string(
-                            _visual_truncate(str(item.get("name", "N/A")), widths[1]),
-                            widths[1],
-                        ),
-                        _pad_string(
-                            fmt_or_dash(
-                                item.get("pct_change"),
-                                "+.2f",
-                                suffix="%",
-                                placeholder="--%",
-                            ),
-                            widths[2],
-                            "right",
-                        ),
-                        _pad_string(
-                            fmt_or_dash(
-                                item.get("rel_vol"),
-                                ".2f",
-                                suffix="x",
-                                placeholder="--x",
-                            ),
-                            widths[3],
-                            "right",
-                        ),
-                        _pad_string(
-                            fmt_or_dash(item.get("skew"), "+.1f"),
-                            widths[4],
-                            "right",
-                        ),
-                        _pad_string(
-                            str(int(item.get("uoa_count", 0))), widths[5], "right"
-                        ),
-                    ]
-                )
-            )
-        sector_lines.append("```")
-        sector_value = "\n".join(sector_lines)
+        sector_rows = [
+            [
+                _visual_truncate(str(item.get("symbol", "N/A")), 5),
+                _visual_truncate(str(item.get("name", "N/A")), 18),
+                fmt_or_dash(
+                    item.get("pct_change"), "+.2f", suffix="%", placeholder="--%"
+                ),
+                fmt_or_dash(item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"),
+                fmt_or_dash(item.get("skew"), "+.1f"),
+                str(int(item.get("uoa_count", 0))),
+            ]
+            for item in sorted_sectors
+        ]
+        header_line, divider, *data_lines = _render_aligned_table(
+            ["ETF", "板塊", "日變動", "量比", "Skew", "UOA"],
+            sector_rows,
+            ["left", "left", "right", "right", "right", "right"],
+            sep=" | ",
+        )
+        _add_table_fields(
+            embed,
+            "🔄 板塊輪動快照",
+            _chunk_ansi_table(header_line, divider, data_lines),
+        )
     else:
         sector_panel = _build_watchlist_style_panel(
             "🔄 板塊輪動快照 (Sector Rotation)",
@@ -231,12 +201,13 @@ def create_sector_flow_report_embed(
             width=45,
             empty_msg="目前無板塊輪動資料。",
         )
-        sector_value = f"```ansi\n{sector_panel}\n```"
-    embed.add_field(
-        name="🔄 板塊輪動快照",
-        value=_safe_embed_field_value(sector_value, "目前無板塊輪動資料。"),
-        inline=False,
-    )
+        embed.add_field(
+            name="🔄 板塊輪動快照",
+            value=_safe_embed_field_value(
+                f"```ansi\n{sector_panel}\n```", "目前無板塊輪動資料。"
+            ),
+            inline=False,
+        )
 
     event_bullets: list[str] = []
     max_pain_value = spy_max_pain.get("max_pain")

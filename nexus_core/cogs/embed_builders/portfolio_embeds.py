@@ -57,7 +57,8 @@ from market_analysis.dynamic_rollover.structural_signals import (
 )
 
 from cogs.embed_builders._ansi_utils import (
-    _pad_string,
+    _render_aligned_table,
+    _visual_len,
     _safe_float,
     _to_float_or_none,
     fmt_or_dash,
@@ -365,9 +366,7 @@ def create_holdings_embed(
     total_pnl = 0.0
     missing_quotes = 0
 
-    data_lines = []
-    header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 20, 'right')} | {_pad_string('建倉日', 10, 'right')}"
-    divider = "-" * len(header)
+    table_rows: List[List[str]] = []
     # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：僅供參考，
     # 不會自動套用生效，獨立列於表格外的提示區塊，避免與已實際生效的配置欄位混淆。
     target_alloc_suggestions: List[str] = []
@@ -386,11 +385,10 @@ def create_holdings_embed(
             total_pnl += pnl
             total_value += curr_p * h["quantity"]
 
-        sym = _pad_string(h["symbol"], 8)
-        qty = _pad_string(f"{h['quantity']:,.0f}", 8, "right")
-        cost = _pad_string(f"${h['avg_cost']:,.2f}", 10, "right")
-        curr_price_str = "--" if price_missing else f"${curr_p:,.2f}"
-        curr_p_fmt = _pad_string(curr_price_str, 10, "right")
+        sym = h["symbol"]
+        qty = f"{h['quantity']:,.0f}"
+        cost = f"${h['avg_cost']:,.2f}"
+        curr_p_fmt = "--" if price_missing else f"${curr_p:,.2f}"
 
         # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
         if price_missing:
@@ -399,9 +397,7 @@ def create_holdings_embed(
         else:
             color_start = "\u001b[0;32m" if pnl >= 0 else "\u001b[0;31m"
             pnl_pct_str = f"{pnl_pct:+.1%}"
-        pnl_fmt = _pad_string(pnl_pct_str, 10, "right").replace(
-            pnl_pct_str, f"{color_start}{pnl_pct_str}\u001b[0m"
-        )
+        pnl_fmt = f"{color_start}{pnl_pct_str}\u001b[0m"
 
         # 核心/衛星分類與配置上限：透過 /edit_holding 設定，供動態轉倉引擎
         # (Scenario 3 核心衛星再平衡) 判斷是否超限。target 僅在使用者設定過
@@ -423,14 +419,26 @@ def create_holdings_embed(
                     f" • {h['symbol']}：建議目標配置 {suggested_target:.0f}%"
                     "（依當前總經市況自動評估，未生效，需自行以 /edit_holding 設定）"
                 )
-        alloc_fmt = _pad_string(alloc_str, 20, "right")
-        acquired_fmt = _pad_string(h.get("acquired_at") or "—", 10, "right")
-
-        data_lines.append(
-            f"{sym} | {qty} | {cost} | {curr_p_fmt} | {pnl_fmt} | {alloc_fmt} | {acquired_fmt}"
+        table_rows.append(
+            [
+                sym,
+                qty,
+                cost,
+                curr_p_fmt,
+                pnl_fmt,
+                alloc_str,
+                h.get("acquired_at") or "—",
+            ]
         )
 
-    chunks = _chunk_ansi_table(header, divider, data_lines)
+    # 動態欄寬：依 _visual_len 計算，5 碼代號（GOOGL）與 CJK 欄位都不會錯位。
+    header_line, divider, *data_lines = _render_aligned_table(
+        ["標的", "數量", "平均成本", "現價", "當前損益", "配置", "建倉日"],
+        table_rows,
+        ["left", "right", "right", "right", "right", "right", "right"],
+        sep=" | ",
+    )
+    chunks = _chunk_ansi_table(header_line, divider, data_lines)
     for i, chunk in enumerate(chunks):
         name = (
             f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
@@ -479,10 +487,7 @@ def create_trades_embed(
         embed.description = "📭 目前無持倉紀錄。"
         return embed
 
-    data_lines = []
-    # 標頭 (調整 Python len 以匹配可見寬度)
-    header = f"{'ID'.ljust(2)} | {'標的'.ljust(4)} | {'到期日'.ljust(7)} | {'履約'.ljust(5)} | {'數量'.rjust(2)} | {'成本'.rjust(4)} | {'現價'.rjust(4)} | {'帳面損益'.rjust(10)}"
-    divider = "-" * 77
+    table_rows: List[List[str]] = []
 
     total_cost = 0.0
     for t in trades:
@@ -499,33 +504,47 @@ def create_trades_embed(
 
         total_cost += abs(entry_p * qty * 100)
 
-        id_fmt = f"{trade_id:02d}".ljust(2)
-        sym_fmt = sym.ljust(4)
-        exp_fmt = exp.ljust(10)
-        st_type_fmt = f"{strike}{o_type[0].upper()}".ljust(7)
+        id_fmt = f"{trade_id:02d}"
+        sym_fmt = sym
+        exp_fmt = exp
+        st_type_fmt = f"{strike}{o_type[0].upper()}"
 
         color_code = "\x1b[0;32m" if qty > 0 else "\x1b[0;31m"
-        qty_val = f"{qty:>4}"
-        qty_fmt = f"{color_code}{qty_val}\x1b[0m"
+        qty_fmt = f"{color_code}{qty}\x1b[0m"
 
-        cost_fmt = f"{entry_p:6.2f}"
+        cost_fmt = f"{entry_p:.2f}"
         # 報價缺失 (current_price None) 顯示 `--`，不再顯示 ±100% 損益；
         # ask/2 估算值加註 `*`。
         if curr_p is None or unrealized_pnl is None or pnl_pct is None:
-            curr_fmt = f"{'--':>6}"
-            pnl_fmt = f"\x1b[0;33m{'報價缺失':>10}\x1b[0m"
+            curr_fmt = "--"
+            pnl_fmt = "\x1b[0;33m報價缺失\x1b[0m"
         else:
             est_mark = "*" if t.get("quote_source") == "ASK_HALF" else ""
-            curr_fmt = f"{curr_p:6.2f}{est_mark}"
+            curr_fmt = f"{curr_p:.2f}{est_mark}"
             pnl_color = "\x1b[0;32m" if unrealized_pnl >= 0 else "\x1b[0;31m"
             pnl_val = f"${unrealized_pnl:+.0f} ({pnl_pct:+.1%})"
-            pnl_fmt = f"{pnl_color}{pnl_val:>14}\x1b[0m"
+            pnl_fmt = f"{pnl_color}{pnl_val}\x1b[0m"
 
-        data_lines.append(
-            f"{id_fmt} | {sym_fmt} | {exp_fmt} | {st_type_fmt} | {qty_fmt} | {cost_fmt} | {curr_fmt} | {pnl_fmt}"
+        table_rows.append(
+            [
+                id_fmt,
+                sym_fmt,
+                exp_fmt,
+                st_type_fmt,
+                qty_fmt,
+                cost_fmt,
+                curr_fmt,
+                pnl_fmt,
+            ]
         )
 
-    chunks = _chunk_ansi_table(header, divider, data_lines)
+    header_line, divider, *data_lines = _render_aligned_table(
+        ["ID", "標的", "到期日", "履約", "數量", "成本", "現價", "帳面損益"],
+        table_rows,
+        ["left", "left", "left", "left", "right", "right", "right", "right"],
+        sep=" | ",
+    )
+    chunks = _chunk_ansi_table(header_line, divider, data_lines)
     for i, chunk in enumerate(chunks):
         name = (
             f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
@@ -1350,7 +1369,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     edge_lines.extend(
         [
             " 情緒背離偵測 (Divergence Check)",
-            f" └─ 狀態: {divergence_color}{divergence}\u001b[0m",
+            f" {'├─' if action else '└─'} 狀態: {divergence_color}{divergence}\u001b[0m",
         ]
     )
     if action:
@@ -3292,123 +3311,169 @@ def create_tactical_hedge_embed(
     return embed
 
 
+def _treeify_rule_detail(lines: List[str]) -> List[str]:
+    """把鐵律說明的 `•` 子項改成 ` ├─ ` / ` └─ ` 樹狀（每個條件區塊最後一項用 └─）。
+
+    `•` 開頭為新子項；以空白縮排開頭者為前一子項的續行。分隔線長度由
+    `_visual_len` 依說明首段最寬的一行計算。
+    """
+    out: List[str] = []
+    header: List[str] = []
+    in_header = True
+    items: List[List[str]] = []
+
+    def _flush() -> None:
+        for idx, item in enumerate(items):
+            last = idx == len(items) - 1
+            out.append(f" {'└─' if last else '├─'} {item[0]}")
+            cont = "    " if last else " │  "
+            out.extend(f"{cont}{c.strip()}" for c in item[1:])
+        items.clear()
+
+    for line in lines:
+        if line == "```ansi" or line == "```":
+            _flush()
+            out.append(line)
+        elif in_header:
+            if set(line.strip()) == {"-"}:
+                width = max((_visual_len(h) for h in header), default=34)
+                out.append(" " + "-" * width)
+                in_header = False
+            else:
+                header.append(line)
+                out.append(line)
+        elif line.startswith("•"):
+            items.append([line[1:]])
+        elif line.startswith(" ") and items:
+            items[-1].append(line)
+        else:
+            _flush()
+            out.append(line)
+    _flush()
+    return out
+
+
 # 左側交易六重鐵律的條件說明區塊 (create_entry_rules_embed 使用)。與右側說明
 # 分開維護：兩套鐵律的技術定義方向相反，共用同一份說明會讓使用者看到與實際
 # 判定結果自相矛盾的解釋。
-_ENTRY_RULES_DETAIL_LEFT = [
-    "```ansi",
-    " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
-    " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
-    " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
-    " ----------------------------------",
-    "條件一",
-    "•結構性空頭力竭與極值乖離確認",
-    "•現價 ≤ Session VWAP − 1.5 × ATR₁₅ₘ (極度負向乖離)，且 15m RSI ≤ 30",
-    "•K棒形態須拒絕灌壓：排除大陰線實體灌破 (Close≈Low)；須出現錘頭/Pin Bar",
-    "  (下影線 ≥ 實體 1.5 倍)、蜻蜓十字 (實體 ≤ 全距 10% 且下影線 ≥ 全距 60%)",
-    "  或連續 2 根實體收窄且未破前低",
-    "•量能二擇一：縮量窒息 (≤ 前20根均量 × 0.7) 或恐慌吸收 (≥ × 2.0 但未收最低點)",
-    "•一律以「已收盤」15m K 棒判定：成型中 K 棒只累積部分量能，會讓縮量條件偽陽性",
-    "",
-    "條件二",
-    "•做市商 Put Wall / 負 Gamma 吸附牆密著截擊",
-    "•現價距 Put Wall 須落在 −1.0% ~ +1.5% 區間 (允許微幅穿刺洗盤或提前掛單)",
-    "•防禦厚度：該履約價絕對 GEX 曝險量級 ≥ $5,000,000",
-    "•下檔緩衝雙邊界 (防 Liquidity Sweep)：停損距離 (現價−(PutWall−0.5×ATR₁₅ₘ))/現價",
-    "  須落在 [0.5×ATR₁₅ₘ, 絕對 8%] 之內。量停損距離而非牆距——條件二本來",
-    "  就要求密著 Put Wall，牆距趨近於零，量牆距會把理想進場點誤判為緩衝過窄",
-    "•左側下界 0.5× 與停損墊片 0.5× 綁定：貼牆時停損距離恆等於 0.5×ATR₁₅ₘ，",
-    "  下界一旦高於它，策略的設計中心點本身就永遠無法通過",
-    "•⚠️ 厚度為 GEX 曝險量級代理值，非真實 Put OI 名目金額",
-    "  (現有 GEX 資料源沒有逐履約價的 OI 名目金額欄位)",
-    "",
-    "條件三",
-    "•下檔無恐慌踩踏斷崖 + 向上均值回歸空間",
-    "•UOA 不得存在 strike < Put Wall 且 ratio > 1.2x、權利金 ≥ $200,000 的",
-    "  PUT BTO 追空踩踏單 (防做市商破牆後進入負 Gamma 螺旋式拋售)",
-    "•(min(Session VWAP, Gamma Flip) − 現價)/現價 ≥ 動態自適應波動率門檻",
-    "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
-    "  Risk = (現價 − (PutWall − 0.5×ATR₁₅ₘ)) / 現價 (與引擎軌道一停損一致)",
-    "•即「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 盈虧比",
-    "  成為結構性保證；3.5% 僅為資料缺失時的絕對底線，非主要判據",
-    "",
-    "條件四",
-    "•主力大額吸收認證 (二擇一即可)",
-    "•PUT STO 護盤：DTE ≥ 14、ratio ≥ 1.0x、名目 ≥ $300,000、strike ≤ 現價",
-    "•CALL BTO 長天期潛伏：DTE ≥ 30、ratio ≥ 0.8x、名目 ≥ $200,000",
-    "•⚠️ 規格的「過去 4 小時內」時間窗無法實作：UOA 為選擇權鏈的當日累計快照",
-    "  (volume 為當日累計、oi 為前一日收盤)，並非逐筆成交，故不帶時間戳",
-    "",
-    "條件五",
-    "•總經流動性危機與財報黑天鵝安全閥",
-    "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
-    "•重用右側條件五的財報緩衝期與大盤 Regime 子檢查 (門檻校準單一來源)",
-    "•額外疊加 VIX 期限結構倒掛防禦：vts_ratio ≥ 1.10 直接判定未通過",
-    "•任一外部資料抓取失敗一律 fail-safe 判定未通過 (不預設放行)",
-    "",
-    "條件六",
-    "•Candidate 自身 Theta 磨底防禦",
-    "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
-    "•最近效期 DTE ≥ 21：左側須承受底部震盪整理期，嚴禁 0~7 DTE 合約",
-    "•IVR ≤ 50 建議輕度 ITM/ATM Call 買進",
-    "•IVR > 50 強制改以 Bull Call Spread 或 Short Put (避免恐慌插針時高買隱波)",
-    "```",
-]
+_ENTRY_RULES_DETAIL_LEFT = _treeify_rule_detail(
+    [
+        "```ansi",
+        " 條件一～四為核心結構性進場門檻；條件五、六屬總經財報與",
+        " candidate 自身 DTE 雜訊安全閥，僅於前置條件皆通過後才會真正發動判定",
+        " (未發動時上方仍會列出「⏭️ 略過」標記，六項條件永遠完整列出)",
+        " ----------------------------------",
+        "條件一",
+        "•結構性空頭力竭與極值乖離確認",
+        "•現價 ≤ Session VWAP − 1.5 × ATR₁₅ₘ (極度負向乖離)，且 15m RSI ≤ 30",
+        "•K棒形態須拒絕灌壓：排除大陰線實體灌破 (Close≈Low)；須出現錘頭/Pin Bar",
+        "  (下影線 ≥ 實體 1.5 倍)、蜻蜓十字 (實體 ≤ 全距 10% 且下影線 ≥ 全距 60%)",
+        "  或連續 2 根實體收窄且未破前低",
+        "•量能二擇一：縮量窒息 (≤ 前20根均量 × 0.7) 或恐慌吸收 (≥ × 2.0 但未收最低點)",
+        "•一律以「已收盤」15m K 棒判定：成型中 K 棒只累積部分量能，會讓縮量條件偽陽性",
+        "",
+        "條件二",
+        "•做市商 Put Wall / 負 Gamma 吸附牆密著截擊",
+        "•現價距 Put Wall 須落在 −1.0% ~ +1.5% 區間 (允許微幅穿刺洗盤或提前掛單)",
+        "•防禦厚度：該履約價絕對 GEX 曝險量級 ≥ $5,000,000",
+        "•下檔緩衝雙邊界 (防 Liquidity Sweep)：停損距離 (現價−(PutWall−0.5×ATR₁₅ₘ))/現價",
+        "  須落在 [0.5×ATR₁₅ₘ, 絕對 8%] 之內。量停損距離而非牆距——條件二本來",
+        "  就要求密著 Put Wall，牆距趨近於零，量牆距會把理想進場點誤判為緩衝過窄",
+        "•左側下界 0.5× 與停損墊片 0.5× 綁定：貼牆時停損距離恆等於 0.5×ATR₁₅ₘ，",
+        "  下界一旦高於它，策略的設計中心點本身就永遠無法通過",
+        "•⚠️ 厚度為 GEX 曝險量級代理值，非真實 Put OI 名目金額",
+        "  (現有 GEX 資料源沒有逐履約價的 OI 名目金額欄位)",
+        "",
+        "條件三",
+        "•下檔無恐慌踩踏斷崖 + 向上均值回歸空間",
+        "•UOA 不得存在 strike < Put Wall 且 ratio > 1.2x、權利金 ≥ $200,000 的",
+        "  PUT BTO 追空踩踏單 (防做市商破牆後進入負 Gamma 螺旋式拋售)",
+        "•(min(Session VWAP, Gamma Flip) − 現價)/現價 ≥ 動態自適應波動率門檻",
+        "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
+        "  Risk = (現價 − (PutWall − 0.5×ATR₁₅ₘ)) / 現價 (與引擎軌道一停損一致)",
+        "•即「上方要留多少空間」由「下方實際要冒多少風險」反推，使 2.2:1 盈虧比",
+        "  成為結構性保證；3.5% 僅為資料缺失時的絕對底線，非主要判據",
+        "",
+        "條件四",
+        "•主力大額吸收認證 (二擇一即可)",
+        "•PUT STO 護盤：DTE ≥ 14、ratio ≥ 1.0x、名目 ≥ $300,000、strike ≤ 現價",
+        "•CALL BTO 長天期潛伏：DTE ≥ 30、ratio ≥ 0.8x、名目 ≥ $200,000",
+        "•⚠️ 規格的「過去 4 小時內」時間窗無法實作：UOA 為選擇權鏈的當日累計快照",
+        "  (volume 為當日累計、oi 為前一日收盤)，並非逐筆成交，故不帶時間戳",
+        "",
+        "條件五",
+        "•總經流動性危機與財報黑天鵝安全閥",
+        "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
+        "•重用右側條件五的財報緩衝期與大盤 Regime 子檢查 (門檻校準單一來源)",
+        "•額外疊加 VIX 期限結構倒掛防禦：vts_ratio ≥ 1.10 直接判定未通過",
+        "•任一外部資料抓取失敗一律 fail-safe 判定未通過 (不預設放行)",
+        "",
+        "條件六",
+        "•Candidate 自身 Theta 磨底防禦",
+        "•前五項須全數通過才會真正發動，否則列「⏭️ 略過」",
+        "•最近效期 DTE ≥ 21：左側須承受底部震盪整理期，嚴禁 0~7 DTE 合約",
+        "•IVR ≤ 50 建議輕度 ITM/ATM Call 買進",
+        "•IVR > 50 強制改以 Bull Call Spread 或 Short Put (避免恐慌插針時高買隱波)",
+        "```",
+    ]
+)
 
 
-_ENTRY_RULES_DETAIL_SHORT: List[str] = [
-    "```ansi",
-    " 做空六重鐵律：結構破位追空／做市商負 Gamma 順勢助跌。",
-    " ⚠️ 這是本系統唯一的空頭方向進場路徑——左側交易雖然技術定義與右側相反，",
-    "    本質仍是做多 (Put Wall 底牆接刀、向上回歸空間)。",
-    " 條件一～四為核心結構性門檻；條件五、六屬事件安全閥與 candidate 自身效期",
-    " 檢查，僅於前置條件皆通過後才真正發動 (未發動時列「⏭️ 略過」)",
-    " ----------------------------------",
-    "條件一",
-    "•結構性放量破位確認 (全面鏡像右側條件一)",
-    "•15m 實體『陰線』收盤價 < Gamma Flip 估算門檻",
-    "•若全鏈 Net GEX > 0 且無交叉點：做市商正 Gamma 買跌賣漲吸收波動，",
-    "  結構性多頭直接判定未通過 (右側「Net GEX < 0 直接不通過」的鏡像)",
-    "•若全鏈 Net GEX < 0 且無交叉點：改以跌破 Session VWAP − 0.5×ATR₁₅ₘ 確認",
-    "•15m 成交量 ≥ 前20根均量 × 1.5 倍，且收盤須跌破 Session VWAP",
-    "",
-    "條件二",
-    "•做市商負 Gamma 壓制頂牆完好",
-    "•阻力牆強制約束在現價上方 (K > Spot)，即 Resistance Wall = argmax_{K > Spot} (Net GEX(K))",
-    "•曝險低於 500k 薄紙牆門檻視為未偵測到有效頂牆 (未通過)",
-    "•停損距離 (現價→頂牆+0.5×ATR₁₅ₘ) 落在 [2.5×ATR₁₅ₘ, 絕對 8%]：下界防停損",
-    "  落在日內雜訊帶內遭反抽掃損，上界為絕對風險兜底",
-    "  (空單停損設在頂牆上方，牆太近時任何反抽都會先掃穿停損)",
-    "",
-    "條件三",
-    "•下行獲利空間充足 + 無主力大額接刀",
-    "•UOA 不得存在 ratio > 1.2x、權利金 ≥ $200,000、strike ≤ 現價的 PUT STO",
-    "  接刀單 (主力賣 PUT 為下跌提供接盤，拋壓路徑會被墊住)",
-    "•[區間內做空] 現價 > Put Wall：(現價−PutWall)/現價 ≥ 動態門檻",
-    "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
-    "  Risk = ((頂牆 + 0.5×ATR₁₅ₘ) − 現價)/現價 (停損設在頂牆上方)",
-    "•[破位追空] 現價 ≤ Put Wall：改判次級節點空間 ≥ 2.0 × ATR₁D，",
-    "  收復剛跌破的 Put Wall 即論點失效",
-    "",
-    "條件四",
-    "•主力跨週期賣壓認證 (二擇一即可，皆須 DTE ≥ 7、ratio ≥ 0.8x、名目 ≥ $200,000)",
-    "•PUT BTO 方向性押注：strike ≥ 現價 × 0.85 (排除深度價外低成本尾部樂透單)",
-    "•CALL STO 上方築頂：strike ≥ 現價 (排除賣出價內 Call 的平倉單)",
-    "",
-    "條件五",
-    "•總經與財報事件安全閥",
-    "•完全重用右側條件五 (財報緩衝期 + 大盤 Regime)：二元事件風險對做多做空",
-    "  同樣致命，空單遇上優於預期的財報會被跳空軋空",
-    "•刻意不疊加 VIX 倒掛檢查：左側視倒掛為流動性凍結風險，對做空卻是順風，",
-    "  兩者語意相反，硬套會方向性地誤殺",
-    "",
-    "條件六",
-    "•Candidate 自身效期防禦與 IVR 結構分流",
-    "•最近效期 DTE ≥ 14：破位後常有劇烈反抽回測，短天期會被 Theta/Vega 雙殺",
-    "•IVR ≤ 50 建議 Long Put (輕度 OTM)",
-    "•IVR > 50 強制改 Bear Call Spread (改當賣方收取恐慌溢價，避免 Vega 崩塌)",
-    "```",
-]
+_ENTRY_RULES_DETAIL_SHORT: List[str] = _treeify_rule_detail(
+    [
+        "```ansi",
+        " 做空六重鐵律：結構破位追空／做市商負 Gamma 順勢助跌。",
+        " ⚠️ 這是本系統唯一的空頭方向進場路徑——左側交易雖然技術定義與右側相反，",
+        "    本質仍是做多 (Put Wall 底牆接刀、向上回歸空間)。",
+        " 條件一～四為核心結構性門檻；條件五、六屬事件安全閥與 candidate 自身效期",
+        " 檢查，僅於前置條件皆通過後才真正發動 (未發動時列「⏭️ 略過」)",
+        " ----------------------------------",
+        "條件一",
+        "•結構性放量破位確認 (全面鏡像右側條件一)",
+        "•15m 實體『陰線』收盤價 < Gamma Flip 估算門檻",
+        "•若全鏈 Net GEX > 0 且無交叉點：做市商正 Gamma 買跌賣漲吸收波動，",
+        "  結構性多頭直接判定未通過 (右側「Net GEX < 0 直接不通過」的鏡像)",
+        "•若全鏈 Net GEX < 0 且無交叉點：改以跌破 Session VWAP − 0.5×ATR₁₅ₘ 確認",
+        "•15m 成交量 ≥ 前20根均量 × 1.5 倍，且收盤須跌破 Session VWAP",
+        "",
+        "條件二",
+        "•做市商負 Gamma 壓制頂牆完好",
+        "•阻力牆強制約束在現價上方 (K > Spot)，即 Resistance Wall = argmax_{K > Spot} (Net GEX(K))",
+        "•曝險低於 500k 薄紙牆門檻視為未偵測到有效頂牆 (未通過)",
+        "•停損距離 (現價→頂牆+0.5×ATR₁₅ₘ) 落在 [2.5×ATR₁₅ₘ, 絕對 8%]：下界防停損",
+        "  落在日內雜訊帶內遭反抽掃損，上界為絕對風險兜底",
+        "  (空單停損設在頂牆上方，牆太近時任何反抽都會先掃穿停損)",
+        "",
+        "條件三",
+        "•下行獲利空間充足 + 無主力大額接刀",
+        "•UOA 不得存在 ratio > 1.2x、權利金 ≥ $200,000、strike ≤ 現價的 PUT STO",
+        "  接刀單 (主力賣 PUT 為下跌提供接盤，拋壓路徑會被墊住)",
+        "•[區間內做空] 現價 > Put Wall：(現價−PutWall)/現價 ≥ 動態門檻",
+        "  門檻 = max(2.2 × Risk, 1.5 × ATR₁D/現價, 3.5%)",
+        "  Risk = ((頂牆 + 0.5×ATR₁₅ₘ) − 現價)/現價 (停損設在頂牆上方)",
+        "•[破位追空] 現價 ≤ Put Wall：改判次級節點空間 ≥ 2.0 × ATR₁D，",
+        "  收復剛跌破的 Put Wall 即論點失效",
+        "",
+        "條件四",
+        "•主力跨週期賣壓認證 (二擇一即可，皆須 DTE ≥ 7、ratio ≥ 0.8x、名目 ≥ $200,000)",
+        "•PUT BTO 方向性押注：strike ≥ 現價 × 0.85 (排除深度價外低成本尾部樂透單)",
+        "•CALL STO 上方築頂：strike ≥ 現價 (排除賣出價內 Call 的平倉單)",
+        "",
+        "條件五",
+        "•總經與財報事件安全閥",
+        "•完全重用右側條件五 (財報緩衝期 + 大盤 Regime)：二元事件風險對做多做空",
+        "  同樣致命，空單遇上優於預期的財報會被跳空軋空",
+        "•刻意不疊加 VIX 倒掛檢查：左側視倒掛為流動性凍結風險，對做空卻是順風，",
+        "  兩者語意相反，硬套會方向性地誤殺",
+        "",
+        "條件六",
+        "•Candidate 自身效期防禦與 IVR 結構分流",
+        "•最近效期 DTE ≥ 14：破位後常有劇烈反抽回測，短天期會被 Theta/Vega 雙殺",
+        "•IVR ≤ 50 建議 Long Put (輕度 OTM)",
+        "•IVR > 50 強制改 Bear Call Spread (改當賣方收取恐慌溢價，避免 Vega 崩塌)",
+        "```",
+    ]
+)
 
 
 def create_entry_rules_embed(

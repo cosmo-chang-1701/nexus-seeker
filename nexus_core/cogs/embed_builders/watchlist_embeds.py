@@ -14,12 +14,13 @@ from datetime import datetime, timezone, timedelta
 from typing import Dict, List
 
 from cogs.embed_builders._ansi_utils import (
-    _pad_string,
+    _render_aligned_table,
     _safe_float,
     _to_float_or_none,
     fmt_or_dash,
 )
 from cogs.embed_builders._embed_helpers import (
+    _chunk_ansi_table,
     UOA_DELTA_OI_NOTE,
     UOA_HEURISTIC_DISCLOSURE,
     UOA_OI_PREV_DAY_NOTE,
@@ -90,18 +91,17 @@ def create_watchlist_embed(
             "目前沒有追蹤任何項目" if not query else f"沒有符合「{query}」的項目"
         )
     else:
-        lines = ["```ansi"]
-        header = f"{_pad_string('標的 [標籤]', 24)}{_pad_string('快取價 (MP偏離)', 20)}"
-        lines.append(header)
-        lines.append("-" * 44)
-
-        for sym, tags in page_data:
-            display_sym = f"{sym} [{tags}]" if tags else sym
-            sym_fmt = _pad_string(display_sym, 24)
-            price_info = _format_watchlist_price_info(sym)
-            lines.append(f"{sym_fmt}{price_info}")
-
-        lines.append("```")
+        table_rows = [
+            [f"{sym} [{tags}]" if tags else str(sym), _format_watchlist_price_info(sym)]
+            for sym, tags in page_data
+        ]
+        lines = [
+            "```ansi",
+            *_render_aligned_table(
+                ["標的 [標籤]", "快取價 (MP偏離)"], table_rows, sep="  "
+            ),
+            "```",
+        ]
         description = "\n".join(lines)
 
     filter_note_parts = []
@@ -111,8 +111,16 @@ def create_watchlist_embed(
         filter_note_parts.append(f"搜尋: 「{query}」")
     filter_note = f"（{' ｜ '.join(filter_note_parts)}）" if filter_note_parts else ""
 
+    title = "📡 【您的專屬觀察清單】"
+    try:
+        _multi_page = int(total_pages) > 1
+    except (TypeError, ValueError):
+        _multi_page = False
+    if _multi_page:
+        title += f" (第 {current_page}/{total_pages} 頁)"
+
     embed = NexusEmbed(
-        title="📡 【您的專屬觀察清單】",
+        title=title,
         description=(
             f"目前監控中的標的清單{filter_note}。系統將每 30 分鐘自動執行量化掃描。"
             f"價格為每日盤前預熱之快取參考價，非即時報價。\n\n{description}"
@@ -120,9 +128,7 @@ def create_watchlist_embed(
         color=discord.Color.blurple(),
     )
 
-    embed.set_footer(
-        text=f"頁次: {current_page}/{total_pages} ｜ 📊 總項目: {total_items}"
-    )
+    embed.set_footer(text=f"📊 總項目: {total_items}")
     return embed
 
 
@@ -491,7 +497,7 @@ def create_watchlist_signal_embed(
     )
 
     # Unusual Options Activity (UOA) table formatting
-    uoa_table_lines = []
+    uoa_table_rows: list[list[str]] = []
     if uoa_list:
         for item in uoa_list[:3]:
             exp = item.get("expiry", "")
@@ -518,8 +524,16 @@ def create_watchlist_signal_embed(
             ratio_str = item.get("ratio_str") or "--x"
             intent = item.get("intent", "")
 
-            uoa_table_lines.append(
-                f" {exp:<10} | {strike_str:<10} | {opt_type:<4} | {action_display:<32} | {oi_str:<14} | {ratio_str:<6} | {intent}"
+            uoa_table_rows.append(
+                [
+                    str(exp),
+                    strike_str,
+                    opt_type,
+                    action_display,
+                    oi_str,
+                    str(ratio_str),
+                    str(intent),
+                ]
             )
 
     # Holding status
@@ -929,22 +943,46 @@ def create_watchlist_signal_embed(
             inline=False,
         )
 
-    if show_uoa and uoa_table_lines:
-        uoa_content = (
-            "```ansi\n"
-            " 到期日     | 履約價      | 類型 | 標籤 & 交易流向 [買/賣]          | 成交量(ΔOI*)   | 比例   | 戰略意圖映射\n"
-            " ------------------------------------------------------------------------------------------------------\n"
-            + "\n".join(uoa_table_lines)
-            + f"\n\n {UOA_HEURISTIC_DISCLOSURE}"
-            + f"\n {UOA_OI_PREV_DAY_NOTE}"
-            + f"\n {UOA_DELTA_OI_NOTE}"
-            + "\n```"
+    if show_uoa and uoa_table_rows:
+        # 含 emoji 的 UOA 表：依視覺寬度動態對齊，欄寬不再寫死
+        header_line, divider, *data_lines = _render_aligned_table(
+            [
+                "到期日",
+                "履約價",
+                "類型",
+                "標籤 & 交易流向 [買/賣]",
+                "成交量(ΔOI*)",
+                "比例",
+                "戰略意圖映射",
+            ],
+            uoa_table_rows,
+            sep=" | ",
         )
-        embed.add_field(
-            name="🎯 雷達：期權 Alpha 與 UOA 異常穿透",
-            value=_safe_embed_field_value(uoa_content, "無異常大單"),
-            inline=False,
+        uoa_chunks = _chunk_ansi_table(
+            " " + header_line, " " + divider, [" " + ln for ln in data_lines]
         )
+        # 揭露備註必須保留：能放進最後一塊就放在表下方，放不下就獨立成欄位
+        uoa_notes = f"\n {UOA_HEURISTIC_DISCLOSURE}\n {UOA_OI_PREV_DAY_NOTE}\n {UOA_DELTA_OI_NOTE}"
+        last = uoa_chunks[-1]
+        notes_field: Optional[str] = None
+        if len(last) + len(uoa_notes) + 1 <= 1024:
+            uoa_chunks[-1] = last[: -len("\n```")] + "\n" + uoa_notes + "\n```"
+        else:
+            notes_field = "```ansi" + uoa_notes + "\n```"
+        for idx, chunk in enumerate(uoa_chunks, start=1):
+            embed.add_field(
+                name="🎯 雷達：期權 Alpha 與 UOA 異常穿透"
+                if len(uoa_chunks) == 1
+                else f"🎯 雷達：期權 Alpha 與 UOA 異常穿透 ({idx}/{len(uoa_chunks)})",
+                value=chunk,
+                inline=False,
+            )
+        if notes_field is not None:
+            embed.add_field(
+                name="ℹ️ UOA 判定說明",
+                value=_safe_embed_field_value(notes_field, "無說明"),
+                inline=False,
+            )
 
     embed.set_footer(
         text="Watchlist Heartbeat | 核心作戰雷達每 30 分鐘自動校準\n"

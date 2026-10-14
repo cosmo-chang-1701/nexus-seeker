@@ -3,12 +3,13 @@ import logging
 from typing import Optional, Any, Callable, Coroutine, Dict, Mapping
 
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._ansi_utils import _pad_string, fmt_or_dash
+from cogs.embed_builders._ansi_utils import _render_aligned_table, fmt_or_dash
 from cogs.embed_builders._embed_helpers import (
     _ANSI_0,
     _ANSI_W,
     _add_ansi_field_safely,
     _ansi_tree_lines,
+    _chunk_ansi_table,
 )
 from ui.panel_renderer import truncate_with_boundary
 
@@ -1273,6 +1274,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "COVERED_CALL_PROFIT_LOCK": "CC停利",
     "TRANSITION_ENGINE": "動態切換",
     "SHORT_ENTRY": "做空進場",
+    "PYRAMID_ADD": "金字塔加碼",
     # 已移除的情境：審計軌跡仍保有舊紀錄，保留短標籤以免撐開固定寬度表格。
     "OPPORTUNITY_COST": "機會成本",
 }
@@ -1295,24 +1297,36 @@ def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embe
         embed.description = "📭 目前尚無轉倉建議推送紀錄。"
         return embed
 
-    header = f"{_pad_string('時間 (UTC)', 16)} | {_pad_string('標的', 6)} | {_pad_string('情境', 8)} | {_pad_string('動作', 9)} | {_pad_string('比例', 6, 'right')}"
-    divider = "-" * 55
-    lines = [header, divider]
+    rows: list[list[str]] = []
     for r in records:
         scenario_label = _SCENARIO_SHORT_LABELS.get(
             str(r.get("scenario", "")), str(r.get("scenario", "N/A"))
         )
-        created_at = str(r.get("created_at", ""))[:16]
-        action = str(r.get("action", "N/A"))
         sell_ratio = float(r.get("sell_ratio", 0.0) or 0.0)
-        lines.append(
-            f"{_pad_string(created_at, 16)} | {_pad_string(r.get('symbol', ''), 6)} "
-            f"| {_pad_string(scenario_label, 8)} | {_pad_string(action, 9)} "
-            f"| {_pad_string(f'{sell_ratio:.0%}', 6, 'right')}"
+        rows.append(
+            [
+                str(r.get("created_at", ""))[:16],
+                str(r.get("symbol", "")),
+                scenario_label,
+                str(r.get("action", "N/A")),
+                f"{sell_ratio:.0%}",
+            ]
         )
-
-    table = "```\n" + "\n".join(lines) + "\n```"
-    safe_table = truncate_with_boundary(table, _EMBED_FIELD_VALUE_LIMIT)
-    embed.add_field(name="🕰️ 近期推送紀錄", value=safe_table, inline=False)
+    header_line, divider, *data_lines = _render_aligned_table(
+        ["時間 (UTC)", "標的", "情境", "動作", "比例"],
+        rows,
+        ["left", "left", "left", "left", "right"],
+        sep=" | ",
+    )
+    # 分塊保證每個欄位都有完整的 ```ansi 收尾 fence（不被 1024 截斷切掉）
+    chunks = _chunk_ansi_table(header_line, divider, data_lines)
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name="🕰️ 近期推送紀錄"
+            if len(chunks) == 1
+            else f"🕰️ 近期推送紀錄 ({idx}/{len(chunks)})",
+            value=chunk,
+            inline=False,
+        )
     embed.set_footer(text="Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果")
     return embed

@@ -292,9 +292,9 @@ def create_telemetry_alignment_embeds(
             "此為通知版本（不含按鈕）。若要一鍵套用，請使用 `/telemetry_alert` 開啟互動面板。"
         )
 
-    # 實施分頁原則：每頁最多封裝 15 個標的
+    # 實施分頁原則：每頁最多封裝 10 個標的
     chunked_groups = [
-        alignment_items[i : i + 15] for i in range(0, len(alignment_items), 15)
+        alignment_items[i : i + 10] for i in range(0, len(alignment_items), 10)
     ]
     all_embeds = []
 
@@ -307,7 +307,7 @@ def create_telemetry_alignment_embeds(
         )
 
         for idx, item in enumerate(chunk):
-            global_idx = chunk_idx * 15 + idx + 1
+            global_idx = chunk_idx * 10 + idx + 1
             sym = str(item.get("symbol") or "").upper()
             order_id = item.get("order_id")
             card_content, degraded_suffix = all_cards[global_idx - 1]

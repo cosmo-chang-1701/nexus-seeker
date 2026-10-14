@@ -2,8 +2,54 @@
 
 import discord
 
-from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
+from cogs.embed_builders._ansi_utils import (
+    _render_aligned_table,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import _chunk_ansi_table
+
+_CC_REC_HEADER = ["到期日", "履約價", "預估 Delta", "參考權利金", "年化收益率"]
+_CC_REC_ALIGNS = ["left", "right", "right", "right", "right"]
+
+
+def _cc_recommendation_tables(recs: list, *, allow_missing_yield: bool) -> list[str]:
+    """備兌推薦合約表（動態欄寬，保留 ANSI 配色），回傳已切分、fence 完整的區塊。"""
+    rows: list[list[str]] = []
+    for r in recs:
+        # 權利金一律為 bid/ask 中間價；零 bid 時為 ask/2 估算，加註 `*`。
+        est = "*" if r.get("premium_source") == "ASK_HALF" else ""
+        if allow_missing_yield and "annualized_yield" not in r:
+            yield_str = "\u001b[1;30mN/A\u001b[0m"
+        else:
+            ann_yield = r.get("annualized_yield", 0.0)
+            color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
+            yield_str = f"{color_yield}{ann_yield:.2f}%\u001b[0m"
+        rows.append(
+            [
+                str(r.get("expiration", "")),
+                f"\u001b[1;33m${r.get('strike', 0.0):.2f}\u001b[0m",
+                f"\u001b[1;36m{r.get('delta', 0.0):.3f}\u001b[0m",
+                f"\u001b[1;32m${r.get('premium', 0.0):.2f}{est}\u001b[0m",
+                yield_str,
+            ]
+        )
+    header_line, divider, *data_lines = _render_aligned_table(
+        _CC_REC_HEADER, rows, _CC_REC_ALIGNS, sep=" | "
+    )
+    return _chunk_ansi_table(
+        " " + header_line, " " + divider, [" " + ln for ln in data_lines]
+    )
+
+
+def _add_cc_table_fields(embed: NexusEmbed, name: str, chunks: list[str]) -> None:
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
+            value=chunk,
+            inline=False,
+        )
 
 
 def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
@@ -78,46 +124,17 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
         )
 
     if recs:
-        # 建立 ANSI 備兌推薦合約表格
-        rec_table_lines = [
-            "```ansi",
-            " 到期日     | 履約價    | 預估 Delta | 參考權利金 | 年化收益率",
-            " -----------------------------------------------------------",
-        ]
-        for r in recs:
-            exp = r.get("expiration", "")
-            strike = r.get("strike", 0.0)
-            d_val = r.get("delta", 0.0)
-            premium = r.get("premium", 0.0)
-            ann_yield = r.get("annualized_yield", 0.0)
-
-            # 預先格式化字串，保持欄位對齊
-            exp_str = f"{exp:<10}"
-            strike_str = f"${strike:<7.2f}"
-            delta_str = f"{d_val:<10.3f}"
-            # 權利金一律為 bid/ask 中間價；零 bid 時為 ask/2 估算，加註 `*`。
-            est = "*" if r.get("premium_source") == "ASK_HALF" else " "
-            premium_str = f"${premium:<8.2f}{est}"
-
-            if "annualized_yield" in r:
-                yield_str = f"{ann_yield:>9.2f}%"
-                color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
-            else:
-                yield_str = "      N/A"
-                color_yield = "\u001b[1;30m"
-
-            rec_table_lines.append(
-                f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
-            )
-        rec_table_lines.append("```")
-        if any(r.get("premium_source") == "ASK_HALF" for r in recs):
-            rec_table_lines.append("`*` 零 bid，權利金以 ask/2 估算")
-
-        embed.add_field(
-            name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
-            value="\n".join(rec_table_lines),
-            inline=False,
+        _add_cc_table_fields(
+            embed,
+            "🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
+            _cc_recommendation_tables(recs, allow_missing_yield=True),
         )
+        if any(r.get("premium_source") == "ASK_HALF" for r in recs):
+            embed.add_field(
+                name="ℹ️ 權利金備註",
+                value="`*` 零 bid，權利金以 ask/2 估算",
+                inline=False,
+            )
 
         unlock_guide_lines = [
             "```ansi",
@@ -189,46 +206,20 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
     )
 
     if recs:
-        # 建立 ANSI 備兌推薦合約表格
-        rec_table_lines = [
-            "```ansi",
-            " 到期日     | 履約價    | 預估 Delta | 參考權利金 | 年化收益率",
-            " -----------------------------------------------------------",
-        ]
-        for r in recs:
-            exp = r.get("expiration", "")
-            strike = r.get("strike", 0.0)
-            d_val = r.get("delta", 0.0)
-            premium = r.get("premium", 0.0)
-            ann_yield = r.get("annualized_yield", 0.0)
-
-            # 預先格式化字串，保持欄位對齊
-            exp_str = f"{exp:<10}"
-            strike_str = f"${strike:<7.2f}"
-            delta_str = f"{d_val:<10.3f}"
-            # 權利金一律為 bid/ask 中間價；零 bid 時為 ask/2 估算，加註 `*`。
-            est = "*" if r.get("premium_source") == "ASK_HALF" else " "
-            premium_str = f"${premium:<8.2f}{est}"
-
-            yield_str = f"{ann_yield:>9.2f}%"
-            color_yield = "\u001b[1;32m" if ann_yield >= 10.0 else "\u001b[1;35m"
-
-            rec_table_lines.append(
-                f" {exp_str} | \u001b[1;33m{strike_str}\u001b[0m | \u001b[1;36m{delta_str}\u001b[0m | \u001b[1;32m{premium_str}\u001b[0m | {color_yield}{yield_str}\u001b[0m"
-            )
-        rec_table_lines.append("```")
+        rec_notes: list[str] = []
         if any(r.get("premium_source") == "ASK_HALF" for r in recs):
-            rec_table_lines.append("`*` 零 bid，權利金以 ask/2 估算")
-
-        rec_table_str = "\n".join(rec_table_lines)
+            rec_notes.append("`*` 零 bid，權利金以 ask/2 估算")
         if any(r.get("has_earnings_risk") for r in recs):
-            rec_table_str += "\n🔴 **警示標籤**：此合約橫跨財報日，隱含波動率（IV）可能於選後崩跌（IV Crush），請謹慎開倉。"
-
-        embed.add_field(
-            name="🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
-            value=rec_table_str,
-            inline=False,
+            rec_notes.append(
+                "🔴 **警示標籤**：此合約橫跨財報日，隱含波動率（IV）可能於選後崩跌（IV Crush），請謹慎開倉。"
+            )
+        _add_cc_table_fields(
+            embed,
+            "🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
+            _cc_recommendation_tables(recs, allow_missing_yield=False),
         )
+        if rec_notes:
+            embed.add_field(name="ℹ️ 備註", value="\n".join(rec_notes), inline=False)
 
         embed.add_field(
             name="💡 防禦性收租指引 (Defensive Yield Guidance)",
