@@ -154,6 +154,7 @@ def create_media_sentiment_embed(
         " 輿情籌碼共振 (Resonance Check)",
         f" └─ 評級: {resonance_rating}",
         f" └─ 指引: \u001b[1;37m{resonance_guide}\u001b[0m",
+        " ⚠️ 共振評級為關鍵字啟發式判定",
         "```",
     ]
     _add_ansi_field_safely(embed, "📊 輿情與期權共振雷達", radar_lines)

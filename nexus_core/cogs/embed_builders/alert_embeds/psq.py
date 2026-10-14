@@ -4,6 +4,7 @@ import discord
 
 from datetime import datetime, timezone
 
+from cogs.embed_builders._ansi_utils import fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import add_news_field
 
@@ -28,7 +29,7 @@ def create_psq_embed(data: dict) -> discord.Embed:
 
     embed = NexusEmbed(
         title=f"⚡ PowerSqueeze 戰情報告 | {sym}",
-        description=f"💰 最新股價: `${data.get('price', 0.0):.2f}`\n\u200b",
+        description=f"💰 最新股價: `{fmt_or_dash(data.get('price'), '.2f', prefix='$')}`\n\u200b",
         color=color,
         timestamp=datetime.now(timezone.utc),
     )

@@ -5,6 +5,7 @@ import discord
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
+from cogs.embed_builders._ansi_utils import _to_float_or_none
 from cogs.embed_builders._core import NexusEmbed
 
 
@@ -12,14 +13,26 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     """建構即時報價 Embed。"""
     dp = data.get("dp")
     pc = data.get("pc")
+    # 封盤或上游無資料時 Finnhub 以 0 填值：現價缺失／為 0 一律視為無報價
+    c = _to_float_or_none(data.get("c"))
+    no_quote = c is None or c == 0
+    h = _to_float_or_none(data.get("h"))
+    low = _to_float_or_none(data.get("l"))
+    if no_quote:
+        dp = None
     embed = NexusEmbed(
-        title=f"💹 {symbol} 即時報價 (Real-time Quote)",
+        title=f"💹 {symbol} 即時報價 (Real-time Quote)"
+        + (" [封盤中/數據未更新]" if no_quote else ""),
         color=discord.Color.red()
         if dp is not None and dp < 0
         else discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="💲 現價 (Current)", value=f"**${data['c']}**", inline=True)
+    embed.add_field(
+        name="💲 現價 (Current)",
+        value=f"**${data['c']}**" if not no_quote else "**--**",
+        inline=True,
+    )
     embed.add_field(
         name="📈 漲跌幅 (%)",
         value=f"`{dp}%`" if dp is not None else "`--`",
@@ -27,12 +40,16 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     )
     embed.add_field(
         name="📊 今日高/低",
-        value=f"H: `${data['h']}` / L: `${data['l']}`",
+        value=(
+            f"H: `${data['h']}` / L: `${data['l']}`"
+            if not no_quote and h is not None and low is not None and h != 0
+            else "H: `--` / L: `--`"
+        ),
         inline=False,
     )
     embed.add_field(
         name="📉 前收盤 (PC)",
-        value=f"`${pc}`" if pc is not None else "`--`",
+        value=f"`${pc}`" if pc is not None and not no_quote else "`--`",
         inline=True,
     )
     embed.set_footer(text="Market Intelligence Feed")

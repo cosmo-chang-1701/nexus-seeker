@@ -19,13 +19,22 @@ from typing import List, Dict, Optional
 from ui import panel_renderer
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
+    _to_float_or_none,
     _truncate_with_boundary,
+    fmt_or_dash,
 )
 
 
 # ============================================================================
 # Shared Embed Formatting Helpers
 # ============================================================================
+
+# UOA 異常大單表格的代理判定揭露（watchlist／sentiment_scan 共用）
+UOA_HEURISTIC_DISCLOSURE = (
+    "⚠️ SWEEP/BLOCK 為成交量整數手數啟發式代理判定，非真實 order-type 逐筆 tape 數據。"
+)
+UOA_OI_PREV_DAY_NOTE = "⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
+UOA_DELTA_OI_NOTE = "⚠️ ΔOI* 於上游未提供實際未平倉變動時，以「當日成交量 − 前一日 OI」代理推估，非真實 ΔOI。"
 
 
 def get_sqz_status_display(
@@ -484,6 +493,7 @@ def _parse_and_format_positions_table(
     total_debit_cost = 0.0
     total_credit_cash = 0.0
     total_unrealized_pnl = 0.0
+    missing_price_count = 0
 
     for pos_item in positions_list:
         # Regex parsing
@@ -520,8 +530,11 @@ def _parse_and_format_positions_table(
         cost_val = (
             float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
         )
-        price_val = (
-            float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
+        # 缺現價時不得以 0 計算損益（會把部位顯示成 -100%）：price_val 為 None
+        price_val: Optional[float] = (
+            _to_float_or_none(price_match.group(1).strip().replace(",", ""))
+            if price_match
+            else None
         )
 
         is_stock = "STOCK" in opt_type.upper() or type_letter.upper() == "STOCK"
@@ -530,13 +543,24 @@ def _parse_and_format_positions_table(
         if direction == "BTO":
             debit_cost = cost_val * multiplier * qty
             total_debit_cost += debit_cost
-            pnl_val = (price_val - cost_val) * multiplier * qty
+            pnl_val = (
+                (price_val - cost_val) * multiplier * qty
+                if price_val is not None
+                else None
+            )
         else:
             credit_cash = cost_val * multiplier * qty
             total_credit_cash += credit_cash
-            pnl_val = (cost_val - price_val) * multiplier * qty
+            pnl_val = (
+                (cost_val - price_val) * multiplier * qty
+                if price_val is not None
+                else None
+            )
 
-        total_unrealized_pnl += pnl_val
+        if pnl_val is not None:
+            total_unrealized_pnl += pnl_val
+        else:
+            missing_price_count += 1
 
         dte_val = dte_match.group(1).strip() if dte_match else "0"
         if "天" in dte_val:
@@ -545,7 +569,7 @@ def _parse_and_format_positions_table(
         qty_str = f"{int(qty)}" if qty.is_integer() else f"{qty}"
 
         pnl_pct = 0.0
-        if cost_val > 0.0:
+        if cost_val > 0.0 and price_val is not None:
             if direction == "BTO":
                 pnl_pct = (price_val - cost_val) / cost_val
             else:
@@ -555,25 +579,29 @@ def _parse_and_format_positions_table(
         status = status_match.group(1).strip() if status_match else "HOLD"
         status = _clean_ansi(status)
 
-        pnl_sign = "+" if pnl_val > 0 else "-" if pnl_val < 0 else ""
-        pnl_abs_usd = abs(pnl_val)
-        pnl_emoji = "🟢" if pnl_val > 0 else "🚨" if pnl_val < 0 else "⚖️"
-        pnl_formatted = (
-            f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
-        )
+        if pnl_val is None:
+            pnl_formatted = "**-- (--%)** ⚪"
+        else:
+            pnl_sign = "+" if pnl_val > 0 else "-" if pnl_val < 0 else ""
+            pnl_abs_usd = abs(pnl_val)
+            pnl_emoji = "🟢" if pnl_val > 0 else "🚨" if pnl_val < 0 else "⚖️"
+            pnl_formatted = (
+                f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
+            )
+        price_txt = fmt_or_dash(price_val, ".2f", prefix="$")
 
         if is_stock:
             pos_block = (
                 f"**當前持倉明細 (標的: {symbol})**\n"
                 f"* 部位：`現貨 (HOLDING)` | 數量：`{qty_str} 股` | 永久持有 (PERPETUAL)\n"
-                f"* 價格：買入成本 `${cost_val:.2f}` | 現價 `${price_val:.2f}` | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 價格：買入成本 `${cost_val:.2f}` | 現價 `{price_txt}` | IV/IVR: `{iv_ivr_str}`\n"
                 f"* 損益：{pnl_formatted} *{status}*"
             )
         else:
             pos_block = (
                 f"**當前持倉明細 (標的: {symbol})**\n"
                 f"* 部位：`{direction} {type_letter}` | 數量：`{qty_str}` | {expiry} (**{dte_val}d DTE**)\n"
-                f"* 價格：履約價 `${strike_val}` | 現價 `${price_val:.2f}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 價格：履約價 `${strike_val}` | 現價 `{price_txt}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
                 f"* 損益：{pnl_formatted} *{status}*"
             )
         parsed_blocks.append(pos_block)
@@ -594,6 +622,8 @@ def _parse_and_format_positions_table(
     summary_lines.append(
         f"* 盤中實時未實現損益 (Unrealized PnL): **{pnl_sign}${abs(total_unrealized_pnl):,.2f}** USD {pnl_emoji}"
     )
+    if missing_price_count:
+        summary_lines.append(f"* ⚠️ {missing_price_count} 筆缺現價，未計入上述損益")
 
     if runway_lines:
         summary_lines.append("* 🏁 提領跑道 (Withdrawal Runway):")
@@ -704,15 +734,24 @@ def _add_market_overview_fields(embed: Any, data: Any):  # type: ignore
 
 
 def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignore
-    vrp_pct = data.get("vrp", 0.0) * 100
-    vrp_icon = (
-        "✅"
-        if (("STO" in strategy and vrp_pct > 0) or ("BTO" in strategy and vrp_pct < 0))
-        else "⚠️"
-    )
+    vrp_raw = _to_float_or_none(data.get("vrp"))
+    if vrp_raw is None:
+        # 缺值不做優劣判定（不以 0 冒充中性）
+        vrp_text = "`--%`"
+    else:
+        vrp_pct = vrp_raw * 100
+        vrp_icon = (
+            "✅"
+            if (
+                ("STO" in strategy and vrp_pct > 0)
+                or ("BTO" in strategy and vrp_pct < 0)
+            )
+            else "⚠️"
+        )
+        vrp_text = f"`{vrp_pct:+.2f}%` {vrp_icon}"
     embed.add_field(
         name="⚖️ VRP 溢酬\u2800\u2800\u2800\u2800",
-        value=f"`{vrp_pct:+.2f}%` {vrp_icon}\n\u200b",
+        value=f"{vrp_text}\n\u200b",
         inline=True,
     )
     ts_ratio_str = f"`{data['ts_ratio']:.2f}` {data['ts_state']}"
@@ -729,17 +768,25 @@ def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignor
     )
 
     # ---------------- VIX 306 Volatility Metrics ----------------
-    vts_str = f"`{data.get('vix_vts_ratio', 1.0):.2f}` {data.get('vix_regime', '')}"
+    vts_ratio = _to_float_or_none(data.get("vix_vts_ratio"))
+    if vts_ratio is None:
+        vts_str = "`--`"
+    else:
+        vts_str = f"`{vts_ratio:.2f}` {data.get('vix_regime', '')}"
     embed.add_field(
         name="🌐 大盤 VIX 期限結構\u2800", value=f"{vts_str}\n\u200b", inline=True
     )
 
-    z30 = data.get("vix_z30", 0.0)
-    z60 = data.get("vix_z60", 0.0)
-    z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
+    z30 = _to_float_or_none(data.get("vix_z30"))
+    z60 = _to_float_or_none(data.get("vix_z60"))
+    if z30 is None or z60 is None:
+        z_icon = ""
+    else:
+        z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
     embed.add_field(
         name="🔥 VIX 30/60 Z-Score",
-        value=f"Z30:`{z30:.1f}` Z60:`{z60:.1f}` {z_icon}\n\u200b",
+        value=f"Z30:`{fmt_or_dash(z30, '.1f')}` Z60:`{fmt_or_dash(z60, '.1f')}` {z_icon}".rstrip()
+        + "\n\u200b",
         inline=True,
     )
 
@@ -843,57 +890,76 @@ def _add_covered_call_fields(embed: Any, data: Any, stock_cost: Any):  # type: i
 
 def _add_expected_move_fields(embed: Any, data: Any, strategy: Any, is_covered: Any):  # type: ignore
     """添加預期波動區間與損益兩平防線欄位"""
-    em = data.get("expected_move", 0.0)
-    em_lower = data.get("em_lower", 0.0)
-    em_upper = data.get("em_upper", 0.0)
+    em = _to_float_or_none(data.get("expected_move"))
+    em_lower = _to_float_or_none(data.get("em_lower"))
+    em_upper = _to_float_or_none(data.get("em_upper"))
+    # 預期波動缺失或為 0 時，區間無意義：顯示 `--` 並跳過防線判定
+    # （過去以 0 區間得出「防線已建構於區間外」的錯誤結論）。
+    em_ok = em is not None and em > 0
+    em_dn = fmt_or_dash(em, ",.2f", prefix="-$") if em_ok else "--"
+    em_up = fmt_or_dash(em, ",.2f", prefix="+$") if em_ok else "--"
+    no_judge = "⚪ 預期波動資料不足，無法判定防線"
 
     if "STO_PUT" in strategy:
         breakeven = data["strike"] - data.get("bid", 0)
-        safe = breakeven < em_lower
-        safety_text = (
-            "✅ 防線已建構於預期暴跌區間外"
-            if safe
-            else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
-        )
-        em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
+        if em_ok and em_lower is not None:
+            safe = breakeven < em_lower
+            safety_text = (
+                "✅ 防線已建構於預期暴跌區間外"
+                if safe
+                else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
+            )
+        else:
+            safety_text = no_judge
+        lower_txt = fmt_or_dash(em_lower if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期下緣: `{lower_txt}` (預期最大跌幅 {em_dn})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "STO_CALL" in strategy:
         breakeven = data["strike"] + data.get("bid", 0)
-        safe = breakeven > em_upper
         if is_covered:
             safety_text = "✅ 若漲破此價位，將以最高獲利出場 (股票被 Call 走)"
-        else:
+        elif em_ok and em_upper is not None:
+            safe = breakeven > em_upper
             safety_text = (
                 "✅ 防線已建構於預期暴漲區聯外"
                 if safe
                 else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
             )
+        else:
+            safety_text = no_judge
 
-        em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
+        upper_txt = fmt_or_dash(em_upper if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期上緣: `{upper_txt}` (預期最大漲幅 {em_up})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "BTO_PUT" in strategy:
         breakeven = data["strike"] - data.get("ask", 0)
-        em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標跌破此防線即開始獲利\n\u200b"
+        lower_txt = fmt_or_dash(em_lower if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期下緣: `{lower_txt}` (預期最大跌幅 {em_dn})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標跌破此防線即開始獲利\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "BTO_CALL" in strategy:
         breakeven = data["strike"] + data.get("ask", 0)
-        em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標突破此防線即開始獲利\n\u200b"
+        upper_txt = fmt_or_dash(em_upper if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期上緣: `{upper_txt}` (預期最大漲幅 {em_up})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標突破此防線即開始獲利\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
 
 def _add_liquidity_fields(embed: Any, data: Any):  # type: ignore
     """添加報價與流動性分析欄位"""
-    mid_price = data.get("mid_price", (data.get("bid", 0) + data.get("ask", 0)) / 2)
+    bid_v = _to_float_or_none(data.get("bid"))
+    ask_v = _to_float_or_none(data.get("ask"))
+    mid_v = _to_float_or_none(data.get("mid_price"))
+    if mid_v is None and bid_v is not None and ask_v is not None:
+        mid_v = (bid_v + ask_v) / 2
     liq_status = data.get("liq_status", "N/A")
     liq_msg = data.get("liq_msg", "")
 
     spread_info = (
-        f"**Bid:** `{data.get('bid', 0):.2f}` ｜ **Ask:** `{data.get('ask', 0):.2f}` (價差 `{data.get('spread_ratio', 0):.1f}%`)\n"
+        f"**Bid:** `{fmt_or_dash(bid_v, '.2f')}` ｜ **Ask:** `{fmt_or_dash(ask_v, '.2f')}` (價差 `{fmt_or_dash(data.get('spread_ratio'), '.1f', suffix='%')}`)\n"
         f"**狀態:** {liq_status} {liq_msg}\n"
-        f"🎯 **Limit (中價掛單建議):** `{mid_price:.2f}`\n\u200b"
+        f"🎯 **Limit (中價掛單建議):** `{fmt_or_dash(mid_v, '.2f')}`\n\u200b"
     )
     embed.add_field(name="💱 報價與流動性分析", value=spread_info, inline=False)
 
@@ -1107,13 +1173,18 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
         inline=True,
     )
 
-    skew = data.get("skew") or 0.0
-    skew_label = (
-        "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
-    )
+    skew = _to_float_or_none(data.get("skew"))
+    if skew is None:
+        # Skew 缺值：顯示 `--`，不以 0 冒充「平衡」
+        skew_value = "`--` 資料不足"
+    else:
+        skew_label = (
+            "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
+        )
+        skew_value = f"`{skew:.2f}` {skew_label}"
     embed.add_field(
         name="📐 Skew\u2800\u2800\u2800\u2800\u2800\u2800",
-        value=f"`{skew:.2f}` {skew_label}\n\u200b",
+        value=f"{skew_value}\n\u200b",
         inline=True,
     )
 

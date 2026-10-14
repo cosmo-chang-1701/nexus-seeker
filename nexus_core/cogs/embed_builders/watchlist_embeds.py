@@ -15,6 +15,9 @@ from typing import Dict, List
 
 from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
 from cogs.embed_builders._embed_helpers import (
+    UOA_DELTA_OI_NOTE,
+    UOA_HEURISTIC_DISCLOSURE,
+    UOA_OI_PREV_DAY_NOTE,
     _safe_embed_field_value,
     gamma_flip_noise_note,
 )
@@ -924,9 +927,9 @@ def create_watchlist_signal_embed(
             " 到期日     | 履約價      | 類型 | 標籤 & 交易流向 [買/賣]          | 成交量(ΔOI*)   | 比例   | 戰略意圖映射\n"
             " ------------------------------------------------------------------------------------------------------\n"
             + "\n".join(uoa_table_lines)
-            + "\n\n ⚠️ SWEEP/BLOCK 為成交量整數手數啟發式代理判定，非真實 order-type 逐筆 tape 數據。"
-            + "\n ⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
-            + "\n ⚠️ ΔOI* 於上游未提供實際未平倉變動時，以「當日成交量 − 前一日 OI」代理推估，非真實 ΔOI。"
+            + f"\n\n {UOA_HEURISTIC_DISCLOSURE}"
+            + f"\n {UOA_OI_PREV_DAY_NOTE}"
+            + f"\n {UOA_DELTA_OI_NOTE}"
             + "\n```"
         )
         embed.add_field(

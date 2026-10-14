@@ -4,6 +4,7 @@
 無 Discord Embed 物件依賴，可獨立測試。
 """
 
+import math
 import re
 
 from typing import List, Any
@@ -14,6 +15,32 @@ from ui import panel_renderer
 # ============================================================================
 # Visual-width and character utilities
 # ============================================================================
+
+
+def _to_float_or_none(value: Any) -> float | None:
+    """安全轉 float；None／NaN／Inf／無法轉換一律回傳 None。"""
+    try:
+        if value is None:
+            return None
+        val = float(value)
+        return None if (math.isnan(val) or math.isinf(val)) else val
+    except (TypeError, ValueError):
+        return None
+
+
+def fmt_or_dash(
+    value: Any,
+    spec: str = ",.2f",
+    *,
+    prefix: str = "",
+    suffix: str = "",
+    placeholder: str = "--",
+) -> str:
+    """缺值（None／NaN／Inf／非數值）回傳 placeholder，否則格式化。"""
+    v = _to_float_or_none(value)
+    if v is None:
+        return placeholder
+    return f"{prefix}{format(v, spec)}{suffix}"
 
 
 def _visual_len(s: str) -> int:

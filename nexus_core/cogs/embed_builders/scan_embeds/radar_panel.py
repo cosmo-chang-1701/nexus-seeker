@@ -46,10 +46,15 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
 
     params = state.get("params", {})
     min_dev_pct = float(params.get("min_max_pain_dev", 0.10) or 0.10) * 100
+
+    def _param(key: str, suffix: str) -> str:
+        v = params.get(key)
+        return f"{v}{suffix}" if v is not None else f"--{suffix}"
+
     params_str = (
-        f"• Max Pain 偏離: `{params.get('max_pain_threshold')}%`\n"
-        f"• 絕對支撐容錯: `{params.get('abs_support_tolerance')}%`\n"
-        f"• 靜默期避讓: `{params.get('silent_period_days')} 天`\n"
+        f"• Max Pain 偏離: `{_param('max_pain_threshold', '%')}`\n"
+        f"• 絕對支撐容錯: `{_param('abs_support_tolerance', '%')}`\n"
+        f"• 靜默期避讓: `{_param('silent_period_days', ' 天')}`\n"
         f"• 磁吸門檻: `{min_dev_pct:.0f}%`"
     )
 

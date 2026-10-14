@@ -138,7 +138,7 @@ def create_downside_snapshot_embed(
     `unavailable_reason` 有值時（例如記憶體水位過高、計算失敗）只顯示原因。
     """
     embed = NexusEmbed(
-        title="📉 投組下行風險快照",
+        title="📉 投組下行風險快照" + (" [降級模式]" if unavailable_reason else ""),
         description=(
             "以 **Sortino 為主**、最大回撤與 VaR / CVaR 為輔。"
             "「現部位回推一年」是以目前持倉套用過去一年的價格，回答的是這組部位的下行風險，"

@@ -56,7 +56,12 @@ from market_analysis.dynamic_rollover.structural_signals import (
     _scan_resistance_wall_above_spot,
 )
 
-from cogs.embed_builders._ansi_utils import _pad_string, _safe_float
+from cogs.embed_builders._ansi_utils import (
+    _pad_string,
+    _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._embed_helpers import (
     _add_ansi_field_safely,
     format_psq_matrix_lines,
@@ -86,16 +91,6 @@ _GEX_STO_DIVERGENCE_THRESHOLD_PCT = 2.0
 _CALLWALL_HUG_MIN_PCT = 0.10
 # 被跌破（價內）的 STO Put 往上掃描的最大範圍 %（PRE_CALIBRATION／僅呈現）。
 _STO_PUT_BREACH_MAX_PCT = 5.0
-
-
-def _to_float_or_none(value: Any) -> float | None:
-    try:
-        if value is None:
-            return None
-        val = float(value)
-        return None if (math.isnan(val) or math.isinf(val)) else val
-    except (TypeError, ValueError):
-        return None
 
 
 def _to_float(value: Any, default: float = 0.0) -> float:
@@ -367,6 +362,7 @@ def create_holdings_embed(
 
     total_value = 0.0
     total_pnl = 0.0
+    missing_quotes = 0
 
     data_lines = []
     header = f"{_pad_string('標的', 8)} | {_pad_string('數量', 8, 'right')} | {_pad_string('平均成本', 10, 'right')} | {_pad_string('現價', 10, 'right')} | {_pad_string('當前損益', 10, 'right')} | {_pad_string('配置', 20, 'right')} | {_pad_string('建倉日', 10, 'right')}"
@@ -376,24 +372,32 @@ def create_holdings_embed(
     target_alloc_suggestions: List[str] = []
 
     for h in sorted_holdings:
-        curr_p = h.get("current_price", 0.0)
-        pnl = (curr_p - h["avg_cost"]) * h["quantity"] if curr_p > 0 else 0.0
-        pnl_pct = (
-            (curr_p / h["avg_cost"] - 1) if h["avg_cost"] > 0 and curr_p > 0 else 0.0
-        )
-
-        total_pnl += pnl
-        total_value += curr_p * h["quantity"]
+        _curr_raw = _to_float_or_none(h.get("current_price"))
+        price_missing = _curr_raw is None or _curr_raw <= 0
+        curr_p = 0.0 if _curr_raw is None else _curr_raw
+        pnl = 0.0
+        pnl_pct = 0.0
+        if price_missing:
+            missing_quotes += 1
+        else:
+            pnl = (curr_p - h["avg_cost"]) * h["quantity"]
+            pnl_pct = (curr_p / h["avg_cost"] - 1) if h["avg_cost"] > 0 else 0.0
+            total_pnl += pnl
+            total_value += curr_p * h["quantity"]
 
         sym = _pad_string(h["symbol"], 8)
         qty = _pad_string(f"{h['quantity']:,.0f}", 8, "right")
         cost = _pad_string(f"${h['avg_cost']:,.2f}", 10, "right")
-        curr_price_str = f"${curr_p:,.2f}"
+        curr_price_str = "--" if price_missing else f"${curr_p:,.2f}"
         curr_p_fmt = _pad_string(curr_price_str, 10, "right")
 
         # 使用 ANSI 顏色：綠色表示正損益，紅色表示負損益
-        color_start = "\u001b[0;32m" if pnl >= 0 else "\u001b[0;31m"
-        pnl_pct_str = f"{pnl_pct:+.1%}"
+        if price_missing:
+            color_start = "\u001b[0;30m"
+            pnl_pct_str = "--%"
+        else:
+            color_start = "\u001b[0;32m" if pnl >= 0 else "\u001b[0;31m"
+            pnl_pct_str = f"{pnl_pct:+.1%}"
         pnl_fmt = _pad_string(pnl_pct_str, 10, "right").replace(
             pnl_pct_str, f"{color_start}{pnl_pct_str}\u001b[0m"
         )
@@ -444,6 +448,8 @@ def create_holdings_embed(
         f"📈 **累計未實現損益**: `${total_pnl:,.2f}`\n"
         f"⚖️ **佔總預算比例**: `{ (total_value / total_capital * 100) if total_capital > 0 else 0:.1f}%`"
     )
+    if missing_quotes:
+        summary += f"\n⚠️ {missing_quotes} 檔缺報價，未計入市值與損益"
     embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
 
     embed.set_footer(text="Accounting Engine | 專業股權追蹤")
@@ -523,6 +529,8 @@ def create_trades_embed(
     total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
     missing_quotes = int(pnl_data.get("missing_quote_count", 0) or 0)
     has_estimate = any(t.get("quote_source") == "ASK_HALF" for t in trades)
+    if missing_quotes > 0:
+        embed.title = f"{embed.title} [部分報價缺失/降級模式]"
 
     summary = (
         f"💰 **持倉總權利金成本 (概算)**: `${total_cost:,.2f}`\n"
@@ -562,6 +570,10 @@ def create_strategic_dash_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
+    # VIX／SPY 缺值屬主資料降級（Vanna 壓力測試與對沖判定皆無法進行）
+    if vix_spot is None or spy_price is None:
+        embed.title = f"{embed.title} [降級模式]"
+
     # 1. 提領跑道 (Withdrawal Runway；docs/risk_portfolio/05)
     daily_theta = _safe_float(user_ctx.total_theta)
     monthly_expense = _safe_float(user_ctx.monthly_expense)
@@ -578,7 +590,8 @@ def create_strategic_dash_embed(
     # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
     # 資本 + 未實現損益——那會忽略現貨漲跌並重複計入賣方權利金)。
     if nav_data is not None:
-        nav_line = f"`${_safe_float(nav_data.get('nav')):,.0f}` (按市價，{status_mode})"
+        _nav_txt = fmt_or_dash(nav_data.get("nav"), ",.0f", prefix="$")
+        nav_line = f"`{_nav_txt}` (按市價，{status_mode})"
         missing_parts: List[str] = []
         if nav_data.get("missing_spot_symbols"):
             missing_parts.append(
@@ -651,8 +664,7 @@ def create_strategic_dash_embed(
 
     # 3. 系統健康
     ram_usage = psutil.virtual_memory().percent
-    # 假設 BoundedCache 正常，這裡簡單寫死或從某處獲取
-    sys_health = f"RAM {ram_usage}% | BoundedCache 穩定"
+    sys_health = f"RAM {ram_usage}%"
     embed.add_field(name="⚙️ 系統健康", value=sys_health, inline=False)
 
     embed.set_footer(text="戰術風險管理終端")
@@ -857,23 +869,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     d_val = _to_float(d_raw)
 
     o_raw = quote.get("o")
-    o_val = _to_float(o_raw)
-
     h_raw = quote.get("h")
-    h_val = _to_float(h_raw)
-
     l_raw = quote.get("l")
-    l_val = _to_float(l_raw)
-
     pc_raw = quote.get("pc")
-    pc_val = _to_float(pc_raw)
-
     price_emoji = "📈" if dp_val >= 0 else "📉"
     if not quote or c_val == 0.0:
         quote_lines = [
             "```ansi",
             " 當前現價 (Current Price)",
-            f" └─ 現價: \u001b[1;37m${c_val:.2f}\u001b[0m (暫無即時報價數據)",
+            " └─ 現價: \u001b[1;37m--\u001b[0m (暫無即時報價數據)",
             "```",
         ]
     else:
@@ -883,17 +887,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             " 當前現價 (Current Price)",
             f" └─ 現價: {color_code}${c_val:.2f}\u001b[0m ({price_emoji} {color_code}{dp_val:+.2f}%\u001b[0m / {color_code}{d_val:+.2f}\u001b[0m)",
             " 今日區間 (Daily Range)",
-            f" └─ 開盤: \u001b[1;36m{o_val:.2f}\u001b[0m | 最高: \u001b[1;31m{h_val:.2f}\u001b[0m | 最低: \u001b[1;32m{l_val:.2f}\u001b[0m | 前收: \u001b[1;30m{pc_val:.2f}\u001b[0m",
+            f" └─ 開盤: \u001b[1;36m{fmt_or_dash(o_raw, '.2f')}\u001b[0m | 最高: \u001b[1;31m{fmt_or_dash(h_raw, '.2f')}\u001b[0m | 最低: \u001b[1;32m{fmt_or_dash(l_raw, '.2f')}\u001b[0m | 前收: \u001b[1;30m{fmt_or_dash(pc_raw, '.2f')}\u001b[0m",
         ]
 
         vp = data.get("volume_profile")
         if vp:
-            hvn = _to_float(vp.get("hvn"))
-            lvn = _to_float(vp.get("lvn"))
+            hvn = fmt_or_dash(vp.get("hvn"), ".2f", prefix="$")
+            lvn = fmt_or_dash(vp.get("lvn"), ".2f", prefix="$")
             quote_lines.extend(
                 [
                     " 近期成交量分佈 (Volume Profile, 20D)",
-                    f" └─ 高密集區 (HVN): \u001b[1;35m${hvn:.2f}\u001b[0m | 籌碼真空區 (LVN): \u001b[1;33m${lvn:.2f}\u001b[0m",
+                    f" └─ 高密集區 (HVN): \u001b[1;35m{hvn}\u001b[0m | 籌碼真空區 (LVN): \u001b[1;33m{lvn}\u001b[0m",
                 ]
             )
 
@@ -3243,7 +3247,8 @@ def create_tactical_hedge_embed(
 ) -> discord.Embed:
     """建構標的對沖防禦中心的 Embed（ivr 為 None 代表樣本不足/未知，不捏造數值）"""
     embed = NexusEmbed(
-        title=f"🛡️ {symbol} 對沖防禦中心 (Tactical Hedging)",
+        title=f"🛡️ {symbol} 對沖防禦中心 (Tactical Hedging)"
+        + (" [資料不足/降級模式]" if ivr is None else ""),
         color=discord.Color.red(),
     )
     ivr_str = f"{ivr:.1f}%" if ivr is not None else "--% (資料不足)"

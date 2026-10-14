@@ -86,8 +86,10 @@ def create_squeeze_entry_embed(
     matrix = getattr(evaluation, "matrix", None) or {}
     resistance = getattr(evaluation, "resistance", None)
 
+    no_data = getattr(result, "status", None) == "NO_DATA"
     embed = NexusEmbed(
-        title=f"🗜️ {symbol} 多時間框架擠壓進場檢核",
+        title=f"🗜️ {symbol} 多時間框架擠壓進場檢核"
+        + (" [資料不足/降級模式]" if no_data else ""),
         color=discord.Color.green() if passed else discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )

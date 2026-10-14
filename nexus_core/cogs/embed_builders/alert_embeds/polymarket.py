@@ -68,10 +68,14 @@ def create_polymarket_list_embed(
             if tokens:
                 for t in tokens[:2]:
                     outcome = str(t.get("outcome", "")).strip()
-                    price = t.get("price", 0)
+                    price = t.get("price")
 
                     # 排除單字元的雜訊 (例如 [ or " )
                     if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
+                        continue
+
+                    if price is None:
+                        price_info_parts.append(f"**{outcome}**: `--%`")
                         continue
 
                     try:
