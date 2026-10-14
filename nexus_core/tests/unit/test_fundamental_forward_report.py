@@ -396,6 +396,25 @@ def test_valuation_divergence_counts_flag_or_ratio() -> None:
     )
 
 
+def test_capped_count_only_counts_capped_flag() -> None:
+    fv = [
+        _fv(
+            "A",
+            "2026-10-13",
+            100.0,
+            400.0,
+            80.0,
+            0.3,
+            flags=["VALUATION_DIVERGENCE", "VALUATION_DIVERGENCE_CAPPED"],
+        ),
+        _fv("B", "2026-10-13", 100.0, 400.0, 80.0, 0.3),  # 舊資料：比值現算但無 CAPPED
+    ]
+    watch = [_cand(s, "2026-10-13") for s in ("A", "B")]
+    cr = build_valuation_robustness(fv, watch)["candidate_robustness"]
+    assert cr["valuation_divergence"] == 2
+    assert cr["valuation_divergence_capped"] == 1
+
+
 def test_report_includes_new_sections_and_old_data_has_no_error() -> None:
     fv = [_fv("MU", "2026-10-13", 1120.0, 5353.0, 953.0, 0.7)]
     logs: dict[str, list[dict[str, Any]]] = {
@@ -409,6 +428,7 @@ def test_report_includes_new_sections_and_old_data_has_no_error() -> None:
     assert "各估值法單獨計算的 MOS" in report
     assert "DCF_ONLY 假設下仍 >= 25% : 0/1" in report
     assert "相差 3 倍以上 : 1/1" in report
+    assert "VALUATION_DIVERGENCE_CAPPED）觸發 : 0/1" in report
     assert "MU: —" in report
 
 

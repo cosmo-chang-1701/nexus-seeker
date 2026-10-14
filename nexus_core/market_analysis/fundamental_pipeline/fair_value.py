@@ -67,10 +67,15 @@ FLAG_PEER_PE_TRAILING = "PEER_PE_TRAILING"
 FLAG_SPOT_UNAVAILABLE = "SPOT_UNAVAILABLE"
 FLAG_GOVERNANCE_RISK = "GOVERNANCE_RISK"
 FLAG_VALUATION_DIVERGENCE = "VALUATION_DIVERGENCE"
+FLAG_VALUATION_DIVERGENCE_CAPPED = "VALUATION_DIVERGENCE_CAPPED"
+FLAG_NO_COMPARABLE_PEERS = "NO_COMPARABLE_PEERS"
+FLAG_CYCLICAL_DCF_CAP = "CYCLICAL_DCF_CAP"
+FLAG_CYCLICAL_NO_DCF_CAP = "CYCLICAL_NO_DCF_CAP"
 
-# DCF 與 Comps 的比值（大/小）達此倍數時，BLENDED 加註分歧旗標。
-# 純標註：不影響 is_deep_value、margin_of_safety、method。
-# 數值為暫定值，未經校準，僅供人工複核。
+# DCF 與 Comps 的比值（大/小）達此倍數時，加註分歧旗標，且公允價值改取兩者較低值
+# （method 仍為 BLENDED：fair_value_log.method 有 CHECK 約束，不可新增值）。
+# MOS、DEEP_VALUE、治理壓制皆以取低後的 fair_value 計算。
+# 數值為暫定值，未經校準。
 VALUATION_DIVERGENCE_RATIO: float = 3.0
 
 VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
@@ -84,7 +89,11 @@ VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_PEER_PE_TRAILING: "部分同業缺前瞻本益比，改用近四季本益比",
     FLAG_SPOT_UNAVAILABLE: "無現價，安全邊際不計",
     FLAG_GOVERNANCE_RISK: "HIGH／CRITICAL 治理旗標生效中，深度價值判定壓制",
-    FLAG_VALUATION_DIVERGENCE: "DCF 與同業乘數估值相差 3 倍以上，混合中樞可信度低，請人工複核",
+    FLAG_VALUATION_DIVERGENCE: f"DCF 與同業倍數相差 {VALUATION_DIVERGENCE_RATIO:g} 倍以上",
+    FLAG_VALUATION_DIVERGENCE_CAPPED: "兩者分歧，公允價值改取較低者",
+    FLAG_NO_COMPARABLE_PEERS: "無合理可比同業，不採同業倍數",
+    FLAG_CYCLICAL_DCF_CAP: "景氣循環股：公允價值以 DCF 為上限（避免以週期高點 EPS 高估）",
+    FLAG_CYCLICAL_NO_DCF_CAP: "景氣循環股但 DCF 無效，同業倍數估值未封頂，請人工複核",
 }
 
 
@@ -234,10 +243,15 @@ def integrate_fair_value(
     discount_rate: float,
     equity_risk_premium: float,
     is_governance_clean: bool = True,
+    *,
+    cyclical: bool = False,
 ) -> FairValueResult:
     """整合 DCF 與同業乘數法公允價值，計算安全邊際與深度價值旗標。
 
-    - 兩者皆有效：50% / 50% 混合中樞 (BLENDED)。
+    - 兩者皆有效：50% / 50% 混合中樞 (BLENDED)；兩者相差 >= VALUATION_DIVERGENCE_RATIO 倍
+      時改取較低者（method 仍為 BLENDED），並加註 VALUATION_DIVERGENCE／_CAPPED 旗標。
+    - 景氣循環組（cyclical=True）：分歧取低值之後，若 DCF 有效且 FV 高於 DCF，封頂為 DCF
+      （CYCLICAL_DCF_CAP，method 不變）；DCF 無效而 FV 存在時只加 CYCLICAL_NO_DCF_CAP 旗標。
     - DCF 失效但 Comps 有效：採用 Comps (COMPS_ONLY)。
     - Comps 失效但 DCF 有效：採用 DCF (DCF_ONLY)。
     - 兩者皆失效：回傳 None (NONE)。
@@ -251,8 +265,19 @@ def integrate_fair_value(
 
     if dcf_res.is_valid and comps_res.is_valid:
         if dcf_res.dcf_value is not None and comps_res.comps_value is not None:
-            final_fv = (dcf_res.dcf_value + comps_res.comps_value) / 2.0
+            dcf_v, comps_v = dcf_res.dcf_value, comps_res.comps_value
+            final_fv = (dcf_v + comps_v) / 2.0
             method = "BLENDED"
+            # 分歧過大時中樞可信度低：取較低者（保守），MOS 等判定皆以此值計算
+            if (
+                dcf_v > 0
+                and comps_v > 0
+                and max(dcf_v, comps_v) / min(dcf_v, comps_v)
+                >= VALUATION_DIVERGENCE_RATIO
+            ):
+                final_fv = min(dcf_v, comps_v)
+                flags.append(FLAG_VALUATION_DIVERGENCE)
+                flags.append(FLAG_VALUATION_DIVERGENCE_CAPPED)
     elif dcf_res.is_valid and dcf_res.dcf_value is not None:
         final_fv = dcf_res.dcf_value
         method = "DCF_ONLY"
@@ -273,18 +298,14 @@ def integrate_fair_value(
             method="NONE",
         )
 
-    # 純標註：兩模型相差過大時提示人工複核，不參與任何判定
-    if (
-        method == "BLENDED"
-        and dcf_res.dcf_value is not None
-        and comps_res.comps_value is not None
-        and dcf_res.dcf_value > 0
-        and comps_res.comps_value > 0
-        and max(dcf_res.dcf_value, comps_res.comps_value)
-        / min(dcf_res.dcf_value, comps_res.comps_value)
-        >= VALUATION_DIVERGENCE_RATIO
-    ):
-        flags.append(FLAG_VALUATION_DIVERGENCE)
+    if cyclical:
+        dcf_v2 = dcf_res.dcf_value
+        if dcf_res.is_valid and dcf_v2 is not None and dcf_v2 > 0:
+            if final_fv > dcf_v2:
+                final_fv = dcf_v2
+                flags.append(FLAG_CYCLICAL_DCF_CAP)
+        else:
+            flags.append(FLAG_CYCLICAL_NO_DCF_CAP)
 
     final_fv = round(final_fv, 2)
     mos: float | None = None

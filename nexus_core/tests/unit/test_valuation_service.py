@@ -152,7 +152,7 @@ async def test_compute_and_save_blended_with_real_keys(db_conn: Any) -> None:
     service = ValuationService(data_provider=FakeProvider(MSFT_METRICS))
 
     fv_res, rev_res = await service.compute_and_save_valuation(
-        symbol="MSFT", as_of_date=date(2026, 10, 5)
+        symbol="ZZCO", as_of_date=date(2026, 10, 5)
     )
 
     assert fv_res.method == "BLENDED"
@@ -171,12 +171,12 @@ async def test_compute_and_save_blended_with_real_keys(db_conn: Any) -> None:
         assert flag not in fv_res.flags
     assert rev_res.score_30d is None  # 尚無快照
 
-    saved = get_latest_fair_value("MSFT")
+    saved = get_latest_fair_value("ZZCO")
     assert saved is not None
     assert saved.method == "BLENDED"
     assert saved.spot_price == MSFT_SPOT
     assert saved.fair_value == fv_res.fair_value
-    saved_rev = get_latest_revision_score("MSFT")
+    saved_rev = get_latest_revision_score("ZZCO")
     assert saved_rev is not None
     assert saved_rev.score_30d is None
 
@@ -287,7 +287,7 @@ def _snapshot(
     day: str, horizon: str, eps: float, period: str
 ) -> EPSEstimateSnapshotRecord:
     return EPSEstimateSnapshotRecord(
-        symbol="MSFT",
+        symbol="ZZCO",
         snapshot_date=day,
         horizon=horizon,  # type: ignore[arg-type]
         source="finnhub_calendar",
@@ -306,11 +306,11 @@ async def test_snapshot_queries_respect_as_of_and_prior_window(db_conn: Any) -> 
             _snapshot("2026-10-06", "0q", 9.99, "2027-Q1"),  # 晚於 as_of
         ]
     )
-    curr = get_eps_estimate_snapshots("MSFT", None, "2026-10-05")
+    curr = get_eps_estimate_snapshots("ZZCO", None, "2026-10-05")
     assert [s.snapshot_date for s in curr] == ["2026-10-05"]
     assert curr[0].fiscal_period == "2027-Q1"
-    assert get_eps_estimate_snapshots("MSFT")[0].snapshot_date == "2026-10-06"
-    prior = get_prior_eps_estimate_snapshots("MSFT", "2026-08-31", "2026-09-07")
+    assert get_eps_estimate_snapshots("ZZCO")[0].snapshot_date == "2026-10-06"
+    prior = get_prior_eps_estimate_snapshots("ZZCO", "2026-08-31", "2026-09-07")
     assert [s.snapshot_date for s in prior] == ["2026-09-05"]
 
 
@@ -331,14 +331,14 @@ async def test_revision_uses_fiscal_period_pairing_and_trading_day_pead(
     await save_earnings_surprises(
         [
             EarningsSurpriseDTO(
-                symbol="MSFT",
+                symbol="ZZCO",
                 fiscal_period="2027-Q1",
                 composite_score=40.0,
                 status="PROCESSED",
                 announced_on="2026-09-21",  # 週一
             ),
             EarningsSurpriseDTO(
-                symbol="MSFT",
+                symbol="ZZCO",
                 fiscal_period="2027-Q2",
                 composite_score=None,
                 status="PENDING",
@@ -346,13 +346,13 @@ async def test_revision_uses_fiscal_period_pairing_and_trading_day_pead(
             ),
         ]
     )
-    latest = get_latest_processed_earnings_surprise("MSFT", "2026-10-05")
+    latest = get_latest_processed_earnings_surprise("ZZCO", "2026-10-05")
     assert latest is not None
     assert latest.fiscal_period == "2027-Q1"
 
     service = ValuationService(data_provider=FakeProvider(MSFT_METRICS))
     _, rev = await service.compute_and_save_valuation(
-        "MSFT", as_of_date=date(2026, 10, 5)
+        "ZZCO", as_of_date=date(2026, 10, 5)
     )
     assert set(rev.slopes) == {"0q"}
     assert rev.slopes["0q"] == pytest.approx(0.20)
@@ -385,9 +385,9 @@ async def test_comps_detail_is_persisted_with_peer_symbol_pairing(db_conn: Any) 
         data_provider=PerPeerProvider(MSFT_METRICS, peers=["P1", "P2", "P3", "P4"])
     )
     await service.compute_and_save_valuation(
-        symbol="MSFT", as_of_date=date(2026, 10, 5)
+        symbol="ZZCO", as_of_date=date(2026, 10, 5)
     )
-    saved = get_fair_value("MSFT", "2026-10-05")
+    saved = get_fair_value("ZZCO", "2026-10-05")
     assert saved is not None and saved.comps_detail_json is not None
     detail = json.loads(saved.comps_detail_json)
 
@@ -443,3 +443,115 @@ async def test_comps_detail_without_any_eps_source_is_none(db_conn: Any) -> None
     assert detail["forward_eps_source"] is None
     assert detail["peers"] == []
     assert detail["peers_requested"] == []
+
+
+class _CountingProvider(FakeProvider):
+    """記錄 get_peers 呼叫與被查詢指標的同業，並可逐檔指定 PE。"""
+
+    def __init__(self, *args: Any, pe_by_symbol: dict[str, Any], **kw: Any) -> None:
+        super().__init__(*args, **kw)
+        self.pe_by_symbol = pe_by_symbol
+        self.get_peers_calls = 0
+        self.metrics_calls: list[str] = []
+
+    async def get_peers(self, symbol: str) -> list[str]:
+        self.get_peers_calls += 1
+        return self.peers
+
+    async def get_company_metrics(self, symbol: str) -> dict[str, Any]:
+        self.metrics_calls.append(symbol)
+        if symbol in self.pe_by_symbol:
+            return self.pe_by_symbol[symbol]  # type: ignore[no-any-return]
+        return self.metrics
+
+
+@pytest.mark.asyncio
+async def test_group_symbol_uses_group_peers_without_calling_get_peers(
+    db_conn: Any,
+) -> None:
+    await _save_liquidity()
+    provider = _CountingProvider(
+        MSFT_METRICS,
+        peers=["X1", "X2", "X3"],
+        pe_by_symbol={
+            s: {"forwardPE": 10.0 + i} for i, s in enumerate(["SNDK", "SKHY", "WDC"])
+        },
+    )
+    await ValuationService(data_provider=provider).compute_and_save_valuation(
+        symbol="MU", as_of_date=date(2026, 10, 5)
+    )
+    assert provider.get_peers_calls == 0
+    saved = get_fair_value("MU", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["peers_requested"] == ["SNDK", "SKHY", "WDC", "STX"]
+    assert detail["peer_source"] == "GROUP"
+    assert detail["peer_group"] == "記憶體與儲存"
+    assert detail["cyclical"] is True
+    assert (
+        detail["median_pe"] == 11.5
+    )  # 10, 11, 12, STX 回傳預設指標 PE 24.19 → 中位 11.5
+
+
+@pytest.mark.asyncio
+async def test_group_with_fewer_than_three_valid_pe_is_invalid_without_finnhub_fallback(
+    db_conn: Any,
+) -> None:
+    await _save_liquidity()
+    provider = _CountingProvider(
+        MSFT_METRICS,
+        peers=["X1", "X2", "X3"],
+        pe_by_symbol={
+            "SNDK": {"forwardPE": 10.0},
+            "SKHY": {"forwardPE": 12.0},
+            "WDC": {},
+            "STX": {},
+        },
+    )
+    await ValuationService(data_provider=provider).compute_and_save_valuation(
+        symbol="MU", as_of_date=date(2026, 10, 5)
+    )
+    assert provider.get_peers_calls == 0
+    assert not any(c.startswith("X") for c in provider.metrics_calls)
+    saved = get_fair_value("MU", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["rejection_reason"] == "INSUFFICIENT_PEERS"
+    assert saved.comps_value is None
+
+
+@pytest.mark.asyncio
+async def test_no_comps_symbol_skips_peers_and_flags(db_conn: Any) -> None:
+    await _save_liquidity()
+    provider = _CountingProvider(MSFT_METRICS, pe_by_symbol={})
+    fv_res, _ = await ValuationService(
+        data_provider=provider
+    ).compute_and_save_valuation(symbol="TSLA", as_of_date=date(2026, 10, 5))
+    assert provider.get_peers_calls == 0
+    assert provider.metrics_calls == ["TSLA"]
+    assert fv_res.comps_value is None
+    assert "NO_COMPARABLE_PEERS" in fv_res.flags
+    saved = get_fair_value("TSLA", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["rejection_reason"] == "NO_COMPARABLE_PEERS"
+    assert detail["peer_source"] == "NO_COMPS"
+    assert detail["peers_requested"] == []
+
+
+@pytest.mark.asyncio
+async def test_finnhub_symbol_detail_has_source_fields(db_conn: Any) -> None:
+    await _save_liquidity()
+    provider = _CountingProvider(MSFT_METRICS, pe_by_symbol={})
+    await ValuationService(data_provider=provider).compute_and_save_valuation(
+        symbol="ZZCO", as_of_date=date(2026, 10, 5)
+    )
+    assert provider.get_peers_calls == 1
+    saved = get_fair_value("ZZCO", "2026-10-05")
+    assert saved is not None and saved.comps_detail_json is not None
+    detail = json.loads(saved.comps_detail_json)
+    assert detail["peer_source"] == "FINNHUB"
+    non_cyc_flags = json.loads(saved.flags_json)
+    assert not any(f.startswith("CYCLICAL_") for f in non_cyc_flags)
+    assert detail["peer_group"] is None
+    assert detail["cyclical"] is False
