@@ -102,12 +102,26 @@ def calculate_total_gex(
     return total_gex
 
 
+# 交叉點遠側（遠離現價那一側）總 GEX 峰值須達全搜尋區間 max|G| 的此比例，
+# 否則該交叉位於 BS 尾端數值區（正負號由少數高 IV 深價外合約決定），剔除。
+# 盤前 Yahoo IV 不穩（數分鐘內中位數 0.188→0.125），現價到尾端之間可能沒有實質交叉，
+# 最近候選便退化成尾端雜訊點。2026-10-14 實例：SPY 778.01 → 834.48（+7.25%），
+# 該處 |G| 僅為全區最大值的 2.75e-8。
+_GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO = 0.01
+
+
 def find_gamma_flip(
     spot_price: float,
     option_chain: list[dict[str, Any]],
     r: float = RISK_FREE_RATE,
     q: float = 0.013,
 ) -> float:
+    """在 [0.8, 1.2] x spot 網格上掃描總 GEX 曲線，回傳距現價最近的有效零交叉價。
+
+    有效交叉：遠側（遠離現價那一側）的 |G| 峰值須達全區 max|G| 的
+    _GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO，否則視為 BS 尾端雜訊並剔除。
+    無有效候選（含恆正／恆負）時回傳 0.0，由呼叫端走缺值路徑。
+    """
     if spot_price <= 0 or not option_chain:
         return 0.0
     low_price = spot_price * 0.8
@@ -122,21 +136,35 @@ def find_gamma_flip(
     if max(gex_values) <= 0.0 or min(gex_values) >= 0.0:
         return 0.0
 
-    candidates: list[float] = []
+    max_abs = max(abs(g) for g in gex_values)
+    candidates: list[tuple[float, int]] = []
     for i in range(len(prices) - 1):
         g1, g2 = gex_values[i], gex_values[i + 1]
         p1, p2 = prices[i], prices[i + 1]
         # 嚴格符號變化：一正一負
         if g1 * g2 < 0:
-            candidates.append(p1 - g1 * (p2 - p1) / (g2 - g1))
+            candidates.append((p1 - g1 * (p2 - p1) / (g2 - g1), i))
         # 剛好觸碰 0 且兩側變號
         elif g1 == 0.0 and i > 0 and gex_values[i - 1] * g2 < 0:
-            candidates.append(p1)
+            candidates.append((p1, i))
 
-    if not candidates:
+    valid: list[float] = []
+    for x, i in candidates:
+        far_side = gex_values[i + 1 :] if x >= spot_price else gex_values[: i + 1]
+        far_peak = max((abs(g) for g in far_side), default=0.0)
+        if far_peak >= _GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO * max_abs:
+            valid.append(x)
+        else:
+            logger.info(
+                "find_gamma_flip: 剔除尾端雜訊交叉 %.2f（遠側峰值/max|G| = %.3e）",
+                x,
+                far_peak / max_abs,
+            )
+
+    if not valid:
         return 0.0
     # 最近距離選取：若存在多次局部交叉，優先選取距現價最近者
-    return min(candidates, key=lambda k: abs(k - spot_price))
+    return min(valid, key=lambda k: abs(k - spot_price))
 
 
 @router.get("/api/v1/scrape/macro/gex")

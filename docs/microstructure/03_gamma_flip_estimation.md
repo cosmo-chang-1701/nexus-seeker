@@ -78,7 +78,7 @@ $$
 Flip 或 Spot 缺值、非數值、$\le 0$ 時回傳 `False`——「缺值」與「離群」分開處理，由呼叫端各自視為未知或觸發自癒。
 
 **為什麼非對稱**：
-- **上方 20%**：崩跌時做市商被壓進負 Gamma，真實 Flip 會遠高於現價（SPY 急跌 12% 時約高 10–14%）。對稱 $\pm 8\%$ 會在最需要的時候把真訊號當成雜訊丟掉，`short_gamma_critical` 因此失效。20% 與 edge `find_gamma_flip()` 的搜尋區間（$[0.8, 1.2] \times \text{Spot}$）一致：edge 不可能算出超過此範圍的合法 Flip，超過者必為資料錯誤（例如 SPY 774.8 時的 948.9，+22.5%）。
+- **上方 20%**：崩跌時做市商被壓進負 Gamma，真實 Flip 會遠高於現價（SPY 急跌 12% 時約高 10–14%）。對稱 $\pm 8\%$ 會在最需要的時候把真訊號當成雜訊丟掉，`short_gamma_critical` 因此失效。20% 與 edge `find_gamma_flip()` 的搜尋區間（$[0.8, 1.2] \times \text{Spot}$）一致：edge 不可能算出超過此範圍的合法 Flip，超過者必為資料錯誤（例如 SPY 774.8 時的 948.9，+22.5%）。此外 edge 端會剔除 BS 尾端的雜訊交叉（遠側 $|G|$ 峰值不足全區最大值 1%），詳見 §5.z。
 - **下方 8%**：Flip 在現價下方代表正 Gamma（寬鬆）。誤丟只會讓判定降為未知（fail-closed，不開新倉），誤收遠端雜訊卻會把 regime 確定判成寬鬆，因此維持較嚴門檻。
 
 **套用點（單一判定函式）**：
@@ -130,6 +130,7 @@ flowchart TD
 | `MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT` | `0.08` | 大盤 Flip 低於現價（long gamma 方向）的容許上限；亦為大盤備援 bracket 下界 | `nexus_core/market_analysis/index_microstructure.py` |
 | `GAMMA_FLIP_MATERIALITY_CANDIDATES` | `(0.02, 0.05, 0.10)` | 重要性比的離線比較候選門檻（§5.6），閘門不使用 | `nexus_core/market_analysis/index_microstructure.py` |
 | `GAMMA_FLIP_MATERIALITY_DISPLAY` | `0.05` | 呈現層「雜訊交叉」標註與前向記錄分組門檻；**未經校準，不得用於閘門** | `nexus_core/market_analysis/index_microstructure.py` |
+| `_GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO` | `0.01` | 大盤 edge 零交叉的遠側（遠離現價一側）總 GEX 峰值須達全區 max\|G\| 的此比例，否則視為 BS 尾端雜訊並剔除（§5.z） | `nexus_edge_scraper/local_api/macro.py` |
 | `Gamma Flip Fallback` | `VWAP + 0.5 ATR_15m` | 當 Flip 估算為 0.0 且全鏈正 Gamma 時的替代突破門檻 | `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` |
 
 ---
@@ -181,8 +182,27 @@ flowchart TD
 
 `/market` 的 GEX Flip 行附加 `(SPY 緩衝 ±x.xx%)`，其中 $buf = (S_{SPY} - Flip_{SPY}) / Flip_{SPY} \times 100$，與 `short_gamma_critical` 閘門使用同一組 `spy_spot`／`spy_gamma_flip`（避開 SPX 與 SPY 的 10 倍基差）。踩踏欄位因此有三態：低於 Flip（🟡 負 Gamma 區）、緩衝小於 `_FLIP_KNIFE_EDGE_PCT`（0.5%，PRE_CALIBRATION／僅呈現）的臨界、其餘 NORMAL；GEX 快取過期或任一值缺失時不顯示緩衝。閘門判定不變，詳見 [`../macro_sentiment/01_macro_escape_top_matrix.md`](../macro_sentiment/01_macro_escape_top_matrix.md) §2.7。
 
+### 5.z 大盤 edge Flip 尾端雜訊交叉剔除（2026-10-14）
+
+**現象**：`/market` 面板顯示「零 Gamma 翻轉線 8,371.99（SPY 緩衝 −6.77%）」，VIX 15.75 的平靜盤卻出現負緩衝。實測 edge `/api/v1/scrape/macro/gex` 回傳 `spy_spot` 778.01、`gamma_flip` 834.48（高於現價 7.25%），core 閘門的 +20% 上限（`MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT`）放行。
+
+**根因**：edge `find_gamma_flip()` 在 $[0.8, 1.2] \times \text{Spot}$ 網格上掃總 GEX 曲線，任何正負號變化都當候選，再取距現價最近者。834.48 處的 $|G|$ 僅為全區最大值的 $2.75 \times 10^{-8}$：正負號由少數高 IV 深價外合約的 BS 尾端決定，是數值雜訊。盤前 Yahoo IV 不穩（數分鐘內中位數 0.188 → 0.125），某次抓取現價到尾端之間沒有實質交叉，最近候選便退化成尾端雜訊點。
+
+**規則**：對每個交叉點，取其遠側（交叉點 $\ge$ 現價取上方網格，否則取下方網格）的總 GEX 峰值，須滿足
+
+$$
+\max_{j \in \text{far}} |G(P_j)| \ge 0.01 \cdot \max_j |G(P_j)|
+$$
+
+不滿足者剔除並以 `logger.info` 記錄（交叉價與比值）。常數為 `_GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO = 0.01`（見 §4）。其餘不變：多個有效候選取距現價最近者。
+
+**全部剔除時**：回傳 `0.0`，由 core 既有缺值路徑接手——`fetch_gex_metrics()` 不寫 KV，改走 last-known-good 與 SPY 鏈備援。
+
+**與其他機制的關係**：本規則與 §5.6 的逐檔重要性門檻（`estimate_symbol_gamma_flip()`）無關；core 閘門與 `MACRO_GEX_FLIP_MAX_*` 皆不變。
+
 ## 6. 核心程式碼檔案路徑關聯
 
+- `nexus_edge_scraper/local_api/macro.py`：`find_gamma_flip()`（大盤總 GEX 曲線零點、尾端交叉剔除）
 - `nexus_core/market_analysis/index_microstructure.py`：
   - 核心估算函式：`estimate_symbol_gamma_flip()`；大盤 SPY 備援：`estimate_macro_spy_gamma_flip()`
   - 大盤合理性閘門（§2.2）：`is_macro_gamma_flip_outlier()`、`MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT`、`MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT`；套用於 `fetch_gex_metrics()`、`_compute_market_regime_uncached()`
