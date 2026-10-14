@@ -162,7 +162,7 @@ PYTHONPATH=nexus_edge_scraper pytest nexus_edge_scraper/tests
 - **Offline Calibration**: Run on dev machines via `python -m calibration` (runs as host UID/GID with `-e HOME=/tmp`, see [`docs/architecture/05_calibration_harness_and_forward_collection.md`](docs/architecture/05_calibration_harness_and_forward_collection.md)):
 ```bash
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration micro-report
-docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration forward-report
+docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration forward-report --snapshot-db /app/.calibration_cache/snapshot.db
 docker compose run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp nexus-seeker python -m calibration macro-forward-report --snapshot-db /app/.calibration_cache/snapshot.db
 ```
 

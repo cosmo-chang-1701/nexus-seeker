@@ -161,7 +161,9 @@ flowchart TD
 核心服務映像以 uid 1001 執行，無法寫入 bind-mount 的 repo（通常 uid 1000）。離線工具須以宿主使用者的 uid／gid 執行容器並把 `HOME` 指向可寫目錄（實際指令見貢獻者文件 `AGENTS.md`）；權限不足時 CLI 會印出正確的執行方式並以代碼 2 結束。快取 `nexus_core/.calibration_cache/` 與報告 `nexus_core/reports/` 皆已 gitignore，且刻意不放在 production 的 `/app/data` named volume。
 
 ### 5.4 前向報告只讀快照
-`forward-report` 透過 `database.connection.get_read_connection()` 讀取 `NEXUS_DB_NAME` 指向的**複製快照**（VPS 上以 `sqlite3 ... ".backup"` 產生），絕不直接讀 production 資料庫檔。
+`forward-report` 預設透過 `database.connection.get_read_connection()` 讀取 `NEXUS_DB_NAME` 指向的**複製快照**（VPS 上以 `sqlite3 ... ".backup"` 產生），絕不直接讀 production 資料庫檔；也可用 `--snapshot-db <path>` 以 `connect_external_readonly()` 唯讀開啟快照（與 `notif-report` 相同）。
+
+報告除條件勝率、只差一條件與 GEX 量值分佈外，另有兩個段落：**體制分組**（`build_regime_breakdown`）依 `REGIME_CLASSIFIER` 的 (體制, 來源) 分開統計——Regime III／III-B 的多頭建倉自 v1.16.0 起交給擠壓規則，分類器的 `decision = 1` 不再等於「進場」，必須依體制解讀；**擠壓乾跑翻轉檢核**（`build_squeeze_flip_check`，見 §5.8 G）直接讀 `ENTRY_SQUEEZE` 全部判定列（含尚未標註者），20 日報酬由日線自行計算，不依賴 labeler，也不改 `LABEL_VERSION`。價格不可得（`--offline` 或取價失敗）時 G.2 顯示「價格不可得」，不會讓整份報告失敗。
 
 ### 5.5 已知限制（報告必須揭露）
 1. **倖存者偏差**：標的池取自現在的 watchlist／持倉與固定流動性清單。
@@ -268,6 +270,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 2. 以 03:30 labeler 的前向標註比較「`decision = 1`」與同期間 `decision = 0` 的 20 日報酬：超額報酬不得為負。
 3. 日線事件研究（[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) §3.2）已顯示 W／3D／D 層級**沒有**顯著擇時優勢；盤中時間框架（65m／15m／5m）只能靠前向紀錄證明。若前向結果同樣 $|t| < 2$，推播的價值僅止於「把使用者自己的判斷規則自動化、省去看盤」，翻轉與否由使用者決定，不得宣稱有 alpha。
 4. 抽查至少 3 檔標的的 W／3D／65m K 棒與 TradingView 一致（切分規則已依 TradingView Bar alignment 實作，此項只防資料源差異）。
+
+第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
