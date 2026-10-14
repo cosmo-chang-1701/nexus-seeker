@@ -28,7 +28,7 @@ def create_macro_scan_embed(
     vix = _positive_float_or_none(macro_data.get("vix"))
     tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
     vix_change = _to_float_or_none(macro_data.get("vix_change"))
-    degraded = dxy is None or tnx is None or vix is None
+    degraded = dxy is None or tnx is None or us2y is None or vix is None
     embed = NexusEmbed(
         title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)"
         + (" [降級模式]" if degraded else ""),

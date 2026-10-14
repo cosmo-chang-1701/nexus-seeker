@@ -418,11 +418,13 @@ def test_whale_alert_description_split_into_emoji_fields() -> None:
         },
     )
     _assert_layout(embed)
-    assert len(embed.fields) == 4
+    # AI 總結改放 description（避免 field 1024 上限截斷），其餘維持 3 個 emoji 欄位
+    assert len(embed.fields) == 3
     assert all(
         str(f.name)[0] != " " and not str(f.name).isascii() for f in embed.fields
     )
     assert "nvda-earnings" in (embed.description or "")
+    assert "市場預期財報後仍有延續動能。" in (embed.description or "")
     assert "強力看多" in (embed.description or "")
     f = _fields(embed)
     assert "$65,000.00" in f["📊 交易概況"] and "6.50x" in f["📊 交易概況"]

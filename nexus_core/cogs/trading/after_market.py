@@ -155,9 +155,17 @@ class AfterMarketCog(commands.Cog):
                 logger.exception(f"建立盤後報告 Embed 失敗，uid={uid}")
                 continue
 
-            position_chars = len(embed.fields[0].value) if len(embed.fields) >= 1 else 0
-            macro_chars = len(embed.fields[1].value) if len(embed.fields) >= 2 else 0
-            hedge_chars = len(embed.fields[2].value) if len(embed.fields) >= 3 else 0
+            # 依欄位名稱統計（首欄為提領跑道，次欄為財務摘要，位置不固定）
+            def _chars(prefix: str) -> int:
+                return sum(
+                    len(f.value or "")
+                    for f in embed.fields
+                    if (f.name or "").startswith(prefix)
+                )
+
+            position_chars = _chars("📊 持倉明細")
+            macro_chars = _chars("🌐")
+            hedge_chars = _chars("🛡️")
             logger.info(
                 f"[AfterMarketReport] uid={uid}, mode={mode}, lines={len(report_lines)}, "
                 f"fields={len(embed.fields)}, chars=({position_chars},{macro_chars},{hedge_chars})"

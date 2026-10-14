@@ -105,35 +105,72 @@ def build_macro_alerts(macro_data: dict) -> list[str]:
     return alerts
 
 
+def _num_or_none(value: Any) -> float | None:
+    """安全轉 float；None／NaN／Inf／無法轉換回傳 None。"""
+    try:
+        if value is None:
+            return None
+        val = float(value)
+        return None if (math.isnan(val) or math.isinf(val)) else val
+    except (TypeError, ValueError):
+        return None
+
+
+def _level_or_none(value: Any) -> float | None:
+    """水位值（VIX／DXY／殖利率）：缺失或 <= 0（舊上游以 0.0 代表缺值）視為缺失。"""
+    v = _num_or_none(value)
+    return v if v is not None and v > 0 else None
+
+
 def build_macro_healthy_status(macro_data: dict) -> str:
-    """生成動態四維度宏觀狀態結構化判讀 (4-Dimensional Macro Healthy Status Interpretation)"""
-    vix = macro_data.get("vix", 0.0)
-    vix_change = macro_data.get("vix_change", 0.0)
-    dxy = macro_data.get("dxy", 0.0)
-    tnx = macro_data.get("tnx", 0.0)
-    tnx_change_bps = macro_data.get("tnx_change_bps", 0.0)
-    us2y = macro_data.get("us2y", 0.0)
-    spread = tnx - us2y
+    """生成動態四維度宏觀狀態結構化判讀 (4-Dimensional Macro Healthy Status Interpretation)
+
+    缺值（None／NaN／<=0 的水位）不會被當成 0.0 判讀：對應子判讀改為「數據缺失」。
+    """
+    vix = _level_or_none(macro_data.get("vix"))
+    vix_change = _num_or_none(macro_data.get("vix_change"))
+    dxy = _level_or_none(macro_data.get("dxy"))
+    tnx = _level_or_none(macro_data.get("tnx"))
+    tnx_change_bps = _num_or_none(macro_data.get("tnx_change_bps"))
+    us2y = _level_or_none(macro_data.get("us2y"))
+    spread = tnx - us2y if tnx is not None and us2y is not None else None
 
     # 1. 波動率環境
-    if vix < 15.0:
-        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，處於低波動沉睡區間，恐慌情緒極低，注意權利金較薄。"
-    elif vix <= 20.0:
-        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，處於常態健康位階，未見異常避險情緒。"
+    if vix is None:
+        vol_text = "VIX 數據缺失，無法判讀波動率環境。"
     else:
-        vol_text = f"VIX {vix:.2f} (變動 {vix_change:+.2f})，位階略微偏高但波動率平穩，維持正常戒備。"
+        chg = f" (變動 {vix_change:+.2f})" if vix_change is not None else ""
+        if vix < 15.0:
+            vol_text = f"VIX {vix:.2f}{chg}，處於低波動沉睡區間，恐慌情緒極低，注意權利金較薄。"
+        elif vix <= 20.0:
+            vol_text = f"VIX {vix:.2f}{chg}，處於常態健康位階，未見異常避險情緒。"
+        else:
+            vol_text = f"VIX {vix:.2f}{chg}，位階略微偏高但波動率平穩，維持正常戒備。"
 
     # 2. 公債與利差
-    bond_text = f"10Y 美債 {tnx:.2f}% (變動 {tnx_change_bps:+.1f} bps)，殖利率曲線平穩 (利差 {spread:+.2f}%)，未見異常倒掛或惡性陡峭化。"
+    if tnx is None:
+        bond_text = "10Y 美債數據缺失，無法判讀公債與利差。"
+    else:
+        chg = f" (變動 {tnx_change_bps:+.1f} bps)" if tnx_change_bps is not None else ""
+        if spread is None:
+            bond_text = (
+                f"10Y 美債 {tnx:.2f}%{chg}，2Y 殖利率缺失，無法判讀利差與曲線形態。"
+            )
+        else:
+            bond_text = f"10Y 美債 {tnx:.2f}%{chg}，殖利率曲線平穩 (利差 {spread:+.2f}%)，未見異常倒掛或惡性陡峭化。"
 
     # 3. 美元與匯率
-    if dxy <= 103.0:
+    if dxy is None:
+        fx_text = "DXY 數據缺失，無法判讀美元與匯率。"
+    elif dxy <= 103.0:
         fx_text = f"DXY {dxy:.2f}，美元走勢溫和，跨國資產流動性充裕。"
     else:
         fx_text = f"DXY {dxy:.2f}，美元匯率處於平穩區間 (≤ 105.0)，無流動性緊縮壓力。"
 
     # 4. 操盤風控指引
-    if vix < 15.0:
+    if None in (vix, tnx, dxy, us2y):
+        guide_text = "部分總經數據缺失，無法宣稱風控指標全數合規；請稍後重試。"
+    elif vix is not None and vix < 15.0:
         guide_text = (
             "總經風控指標全數合規，維持常規市場部位；賣方策略留意合約點位與安全邊際。"
         )

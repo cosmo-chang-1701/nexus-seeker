@@ -6,6 +6,7 @@
 
 import math
 import re
+import unicodedata
 
 from typing import List, Any
 
@@ -59,6 +60,26 @@ def _visual_len(s: str) -> int:
     )
 
 
+def _display_width(s: str) -> int:
+    """終端機等寬顯示寬度（去除 ANSI 後量測）。
+
+    與 ``_visual_len`` 不同：``_visual_len`` 把所有 ord>127 字元視為雙倍寬（供舊版
+    呼叫端與 /x 面板字數預算使用，不可更動）；本函式依 East Asian Width 判定——
+    W／F 與 U+1F000 以上 emoji 為 2，組合符號與 U+FE0F／U+FE0E／U+200D 為 0，
+    其餘（→、—、Δ、●、±、框線字元等）為 1。
+    """
+    width = 0
+    for c in _clean_ansi(s):
+        cp = ord(c)
+        if cp in (0xFE0F, 0xFE0E, 0x200D) or unicodedata.combining(c):
+            continue
+        if cp >= 0x1F000 or unicodedata.east_asian_width(c) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
+
+
 def _pad_string(s: str, width: int, align: str = "left") -> str:
     """根據視覺寬度對字串進行填充。"""
     vlen = _visual_len(s)
@@ -83,9 +104,9 @@ def _render_aligned_table(
     """依視覺寬度動態對齊的純文字／ANSI 表格。
 
     回傳 ``[header_line, divider, *row_lines]``。欄寬以去除 ANSI 色碼後的
-    ``_visual_len`` 最大值計算（CJK／emoji 視為雙倍寬），儲存格內的 ANSI 色碼原樣保留。
+    ``_display_width`` 最大值計算（CJK／emoji 視為雙倍寬，→／—／Δ 等視為單寬），儲存格內的 ANSI 色碼原樣保留。
     ``aligns`` 每欄 ``left``／``right``／``center``，預設全部 left；
-    最後一欄不補尾端空白；欄間以 ``sep`` 連接（預設單一空白）。divider 為 ``"-" * _visual_len(header_line)``。
+    最後一欄不補尾端空白；欄間以 ``sep`` 連接（預設單一空白）。divider 為 ``"-" * _display_width(header_line)``。
     """
     ncols = len(header)
     aligns = list(aligns) if aligns else []
@@ -96,15 +117,15 @@ def _render_aligned_table(
         return cells + [""] * (ncols - len(cells))
 
     norm_rows = [_norm(r) for r in rows]
-    widths = [_visual_len(_clean_ansi(h)) for h in header]
+    widths = [_display_width(h) for h in header]
     for r in norm_rows:
         for i, c in enumerate(r):
-            widths[i] = max(widths[i], _visual_len(_clean_ansi(c)))
+            widths[i] = max(widths[i], _display_width(c))
 
     def _line(cells: list[str]) -> str:
         parts = []
         for i, c in enumerate(cells):
-            pad = max(0, widths[i] - _visual_len(_clean_ansi(c)))
+            pad = max(0, widths[i] - _display_width(c))
             al = aligns[i]
             if al == "right":
                 parts.append(" " * pad + c)
@@ -117,7 +138,7 @@ def _render_aligned_table(
         return sep.join(parts)
 
     header_line = _line(list(header))
-    divider = "-" * _visual_len(_clean_ansi(header_line))
+    divider = "-" * _display_width(header_line)
     return [header_line, divider, *[_line(r) for r in norm_rows]]
 
 

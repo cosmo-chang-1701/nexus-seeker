@@ -1,6 +1,5 @@
 """Telemetry 委託單實時對齊警報 Embed 建構函式。"""
 
-import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
@@ -10,6 +9,7 @@ from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
+    no_title_suffix,
     split_embed_by_fields,
 )
 
@@ -328,16 +328,13 @@ def create_telemetry_alignment_embeds(
             )
 
         embed.set_footer(text="待成交委託單管理系統")
-        sub_embeds = split_embed_by_fields(embed)
+        sub_embeds = split_embed_by_fields(embed, title_suffix=no_title_suffix)
         all_embeds.extend(sub_embeds)
 
     # 動態頁碼標記：當分頁數大於 1 時，Embed Title 尾部動態添加 ` (第 X/Y 頁)` 標記。
     if len(all_embeds) > 1:
         for idx, emb in enumerate(all_embeds, start=1):
-            base_title = emb.title or ""
-            # 移除 split_embed_by_fields 自帶的 "(index/total)" 尾碼
-            base_title = re.sub(r"\s*\(\d+/\d+\)$", "", base_title).rstrip()
-            emb.title = f"{base_title} (第 {idx}/{len(all_embeds)} 頁)"
+            emb.title = f"{emb.title or ''} (第 {idx}/{len(all_embeds)} 頁)"
 
     return all_embeds
 

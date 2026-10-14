@@ -9,7 +9,7 @@ from cogs.embed_builders._embed_helpers import (
     _ANSI_W,
     _add_ansi_field_safely,
     _ansi_tree_lines,
-    _chunk_ansi_table,
+    _add_ansi_table_fields,
 )
 from ui.panel_renderer import truncate_with_boundary
 
@@ -1319,14 +1319,6 @@ def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embe
         sep=" | ",
     )
     # 分塊保證每個欄位都有完整的 ```ansi 收尾 fence（不被 1024 截斷切掉）
-    chunks = _chunk_ansi_table(header_line, divider, data_lines)
-    for idx, chunk in enumerate(chunks, start=1):
-        embed.add_field(
-            name="🕰️ 近期推送紀錄"
-            if len(chunks) == 1
-            else f"🕰️ 近期推送紀錄 ({idx}/{len(chunks)})",
-            value=chunk,
-            inline=False,
-        )
+    _add_ansi_table_fields(embed, "🕰️ 近期推送紀錄", header_line, divider, data_lines)
     embed.set_footer(text="Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果")
     return embed

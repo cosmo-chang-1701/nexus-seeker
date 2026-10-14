@@ -5,6 +5,8 @@ from typing import Any
 import discord
 
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
     _build_embed_base,
     _add_vix_battle_status_field,
     _add_market_overview_fields,
@@ -58,7 +60,7 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
         support_tag = " | 🛡️ 支撐已確認" if gap.is_support_confirmed else ""
         is_up = gap.gap_size > 0
         gap_c = "\u001b[1;32m" if is_up else "\u001b[1;31m"
-        w, z = "\u001b[1;37m", "\u001b[0m"
+        w, z = _ANSI_W, _ANSI_0
         gap_rows = [
             f"{'🟢' if is_up else '🔴'} {'向上跳空 (UP-GAP)' if is_up else '向下跳空 (DOWN-GAP)'}: "
             f"{gap_c}{gap.gap_pct:+.2f}% (${gap.gap_size:+.2f}){z}",

@@ -8,7 +8,12 @@ from typing import Literal, Optional, Sequence
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._embed_helpers import _add_ansi_field_safely, _ansi_tree_lines
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+)
 from market_analysis.downside_monitor import (
     CVAR_EXPANSION_RATIO,
     DRAWDOWN_REARM_BUFFER,
@@ -48,7 +53,7 @@ def create_downside_snapshot_fields(
         ]
 
     def _block(snap: DownsideSnapshot) -> str:
-        w, z = "\u001b[1;37m", "\u001b[0m"
+        w, z = _ANSI_W, _ANSI_0
         rows = _ansi_tree_lines(
             [
                 f"Sortino（主）：一季 {w}{_ratio(snap.sortino_63)}{z}｜一年 {w}{_ratio(snap.sortino_252)}{z}",
@@ -114,7 +119,7 @@ def create_portfolio_downside_alert_embed(
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
         )
-        w, z = "\u001b[1;37m", "\u001b[0m"
+        w, z = _ANSI_W, _ANSI_0
         _add_ansi_field_safely(
             embed,
             "📏 CVaR95 水位",

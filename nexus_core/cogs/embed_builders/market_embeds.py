@@ -438,7 +438,18 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    for res in results[:10]:
+
+    # 高風險 (🚨) 優先，其次 IV Rank 由高到低（缺值排最後），避免截斷時藏起最危險的標的
+    def _sort_key(r: Dict[str, Any]) -> tuple:
+        ivr = _to_float_or_none(r.get("iv_rank"))
+        return (
+            0 if r.get("is_high_risk_vol") else 1,
+            ivr is None,
+            -(ivr if ivr is not None else 0.0),
+        )
+
+    ordered = sorted(results, key=_sort_key)
+    for res in ordered[:10]:
         risk_icon = "🚨" if res.get("is_high_risk_vol") else "⚠️"
         embed.add_field(
             name=f"{risk_icon} {res.get('symbol', 'N/A')} (IVR: {fmt_or_dash(res.get('iv_rank'), 'g', suffix='%', placeholder='--%')})",
@@ -448,8 +459,11 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
             ),
             inline=False,
         )
-    if len(results) > 10:
-        embed.description = f"…另有 {len(results) - 10} 檔未列出"
+    if len(ordered) > 10:
+        omitted = [str(r.get("symbol", "N/A")) for r in ordered[10:]]
+        shown = omitted[:30]
+        names = ", ".join(shown) + (", …" if len(omitted) > len(shown) else "")
+        embed.description = f"…另有 {len(omitted)} 檔未列出：{names}"
     embed.set_footer(text="IV Rank Scanner")
     return embed
 

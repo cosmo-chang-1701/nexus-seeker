@@ -14,7 +14,7 @@ import re
 import discord
 from cogs.embed_builders._core import NexusEmbed
 
-from typing import List, Dict, Optional
+from typing import Callable, List, Dict, Optional
 
 from ui import panel_renderer
 from cogs.embed_builders._ansi_utils import (
@@ -245,10 +245,22 @@ def _append_ai_report_fields(
     )
 
 
+def no_title_suffix(index: int, total: int) -> str:
+    """`split_embed_by_fields(title_suffix=...)` 用：不在標題附加分頁尾碼。"""
+    return ""
+
+
 def split_embed_by_fields(
-    embed: discord.Embed, max_size: int = 5000
+    embed: discord.Embed,
+    max_size: int = 5000,
+    *,
+    title_suffix: Callable[[int, int], str] | None = None,
 ) -> list[discord.Embed]:
-    """將多欄位報告拆成多則 Embed，儘量合併欄位以防訊息過於零碎，且確保單則長度不超過 max_size。"""
+    """將多欄位報告拆成多則 Embed，儘量合併欄位以防訊息過於零碎，且確保單則長度不超過 max_size。
+
+    `title_suffix(index, total)` 回傳要附加在標題後的尾碼；預設為 `" (index/total)"`，
+    傳入 `no_title_suffix` 則不加尾碼（由呼叫端自行標註頁碼）。
+    """
     if len(embed.fields) <= 1:
         return [embed]
 
@@ -307,7 +319,12 @@ def split_embed_by_fields(
         payload = dict(base_payload)
         title = payload.get("title")
         if title:
-            payload["title"] = f"{title} ({index}/{total})"
+            suffix = (
+                title_suffix(index, total)
+                if title_suffix is not None
+                else f" ({index}/{total})"
+            )
+            payload["title"] = f"{title}{suffix}"
         if index > 1:
             payload.pop("description", None)
 
@@ -408,6 +425,7 @@ _ANSI_W = "\u001b[1;37m"
 _ANSI_R = "\u001b[1;31m"
 _ANSI_G = "\u001b[1;32m"
 _ANSI_0 = "\u001b[0m"
+_ANSI_Y = "\u001b[1;33m"
 
 
 def _ansi_tree_lines(rows: list, *, indent: str = " ") -> list:
@@ -416,6 +434,31 @@ def _ansi_tree_lines(rows: list, *, indent: str = " ") -> list:
     return [
         f"{indent}{'└─' if i == last else '├─'} {row}" for i, row in enumerate(rows)
     ]
+
+
+def _add_chunked_fields(embed: Any, name: str, chunks: List[str]) -> None:
+    """把已切好的 ANSI 表格區塊寫入欄位；多塊時欄名加 ` (i/n)`。"""
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
+            value=chunk,
+            inline=False,
+        )
+
+
+def _add_ansi_table_fields(
+    embed: Any,
+    name: str,
+    header: str,
+    divider: str,
+    data_lines: List[str],
+    *,
+    max_len: int = 1024,
+) -> None:
+    """切分 ANSI 表格（每塊自帶完整收尾 fence）並寫成欄位，多塊時欄名加 ` (i/n)`。"""
+    _add_chunked_fields(
+        embed, name, _chunk_ansi_table(header, divider, data_lines, max_len)
+    )
 
 
 def _fmt_gex_notional(raw: float) -> str:
@@ -508,6 +551,7 @@ def _parse_and_format_positions_table(
     total_credit_cash = 0.0
     total_unrealized_pnl = 0.0
     missing_price_count = 0
+    has_estimate = False
 
     for pos_item in positions_list:
         # Regex parsing
@@ -515,8 +559,9 @@ def _parse_and_format_positions_table(
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2}|PERPETUAL|現貨|N/A)`", pos_item)
         strike_type_match = re.search(r"`?\$([\d\.,]+)`?\s*\*\*(.*?)\*\*", pos_item)
 
-        cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
-        price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
+        cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)[^`]*`", pos_item)
+        # 現價可帶尾註（如 ASK_HALF 的「 (ask/2 估)」），尾註保留在 group(2)
+        price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)([^`]*)`", pos_item)
         dte_match = re.search(r"DTE:\s*`(.*?)`", pos_item)
         status_match = re.search(r"動作:\s*(.*)", pos_item)
 
@@ -603,6 +648,9 @@ def _parse_and_format_positions_table(
                 f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
             )
         price_txt = fmt_or_dash(price_val, ".2f", prefix="$")
+        if price_val is not None and price_match and "ask/2" in price_match.group(2):
+            price_txt += "*"
+            has_estimate = True
 
         if is_stock:
             pos_block = (
@@ -638,6 +686,8 @@ def _parse_and_format_positions_table(
     )
     if missing_price_count:
         summary_lines.append(f"* ⚠️ {missing_price_count} 筆缺現價，未計入上述損益")
+    if has_estimate:
+        summary_lines.append("* `*` 零 bid，現價以 ask/2 估算")
 
     if runway_lines:
         summary_lines.append("* 🏁 提領跑道 (Withdrawal Runway):")

@@ -12,7 +12,7 @@ from cogs.embed_builders._ansi_utils import (
     fmt_or_dash,
 )
 from cogs.embed_builders._embed_helpers import (
-    _chunk_ansi_table,
+    _add_ansi_table_fields,
     _safe_embed_field_value,
     _safe_embed_codeblock_value,
     _build_watchlist_style_panel,
@@ -22,16 +22,6 @@ from cogs.embed_builders._embed_helpers import (
     _append_ai_report_fields,
 )
 from cogs.embed_builders._core import NexusEmbed
-
-
-def _add_table_fields(embed: NexusEmbed, name: str, chunks: list[str]) -> None:
-    """把已切好的 ANSI 表格區塊寫入欄位；多塊時欄名加 (i/n)。"""
-    for idx, chunk in enumerate(chunks, start=1):
-        embed.add_field(
-            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
-            value=chunk,
-            inline=False,
-        )
 
 
 def create_earnings_report_embed(
@@ -74,10 +64,8 @@ def create_earnings_report_embed(
             ["標的", "財報日", "情緒覆蓋"], earnings_rows, sep=" | "
         )
         # 以 _chunk_ansi_table 切分，每塊自帶完整收尾 fence，不會被 1024 截斷切掉
-        _add_table_fields(
-            embed,
-            "📅 即將發布財報標的",
-            _chunk_ansi_table(header_line, divider, data_lines),
+        _add_ansi_table_fields(
+            embed, "📅 即將發布財報標的", header_line, divider, data_lines
         )
     else:
         embed.add_field(
@@ -189,10 +177,8 @@ def create_sector_flow_report_embed(
             ["left", "left", "right", "right", "right", "right"],
             sep=" | ",
         )
-        _add_table_fields(
-            embed,
-            "🔄 板塊輪動快照",
-            _chunk_ansi_table(header_line, divider, data_lines),
+        _add_ansi_table_fields(
+            embed, "🔄 板塊輪動快照", header_line, divider, data_lines
         )
     else:
         sector_panel = _build_watchlist_style_panel(

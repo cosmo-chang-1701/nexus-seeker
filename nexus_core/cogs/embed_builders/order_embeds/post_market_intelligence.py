@@ -24,6 +24,7 @@ from cogs.embed_builders._embed_helpers import (
     _ansi_tree_lines,
     _parse_and_format_positions_table,
     format_runway_lines,
+    no_title_suffix,
     split_embed_by_fields,
 )
 
@@ -544,12 +545,10 @@ def build_post_market_intelligence_embed(
         embed.add_field(name=name, value=value, inline=inline)
 
     embed.set_footer(text="盤後綜合策略簡報")
-    all_embeds = split_embed_by_fields(embed)
+    all_embeds = split_embed_by_fields(embed, title_suffix=no_title_suffix)
 
     if len(all_embeds) > 1:
         for idx, emb in enumerate(all_embeds, start=1):
-            base_title = emb.title or ""
-            base_title = re.sub(r"\s*\(\d+/\d+\)$", "", base_title).rstrip()
-            emb.title = f"{base_title} (第 {idx}/{len(all_embeds)} 頁)"
+            emb.title = f"{emb.title or ''} (第 {idx}/{len(all_embeds)} 頁)"
 
     return all_embeds

@@ -45,7 +45,17 @@ def _matrix_lines(matrix: Any) -> List[str]:
     for tf in _TF_ORDER:
         st = matrix.get(tf) if matrix else None
         if st is None:
-            entries.append({"tf": tf, "row": None})
+            # 缺資料列一併進對齊表，確保 │ 與有資料列同欄
+            table_rows.append([tf, "資料不足", ""])
+            entries.append(
+                {
+                    "tf": tf,
+                    "row": len(table_rows) - 1,
+                    "flags": [],
+                    "preview": None,
+                    "no_data": True,
+                }
+            )
             continue
         flags: List[str] = []
         if st.green_dot:
@@ -84,10 +94,9 @@ def _matrix_lines(matrix: Any) -> List[str]:
     )
     lines = ["```ansi"]
     for e in entries:
-        if e["row"] is None:
-            lines.append(f" {e['tf']:<4}│ 資料不足")
-            continue
         line = " " + rendered[e["row"]]
+        if e.get("no_data"):
+            line = line.rstrip(" │")
         if e["flags"]:
             line += " │ " + "、".join(e["flags"])
         lines.append(line)

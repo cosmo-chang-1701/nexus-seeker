@@ -64,6 +64,9 @@ from cogs.embed_builders._ansi_utils import (
     fmt_or_dash,
 )
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
+    _ANSI_Y,
     _add_ansi_field_safely,
     _ansi_tree_lines,
     format_psq_matrix_lines,
@@ -71,7 +74,7 @@ from cogs.embed_builders._embed_helpers import (
     _fmt_gex_notional,
     gamma_flip_noise_note,
     macro_iv_status_text,
-    _chunk_ansi_table,
+    _add_ansi_table_fields,
     _truncate_with_boundary,
 )
 from market_analysis.sentiment.skew_taxonomy import (
@@ -438,12 +441,7 @@ def create_holdings_embed(
         ["left", "right", "right", "right", "right", "right", "right"],
         sep=" | ",
     )
-    chunks = _chunk_ansi_table(header_line, divider, data_lines)
-    for i, chunk in enumerate(chunks):
-        name = (
-            f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
-        )
-        embed.add_field(name=name, value=chunk, inline=False)
+    _add_ansi_table_fields(embed, "📦 持倉明細", header_line, divider, data_lines)
 
     if target_alloc_suggestions:
         embed.add_field(
@@ -452,7 +450,7 @@ def create_holdings_embed(
             inline=False,
         )
 
-    _w, _z = "\u001b[1;37m", "\u001b[0m"
+    _w, _z = _ANSI_W, _ANSI_0
     _pnl_c = "\u001b[1;32m" if total_pnl >= 0 else "\u001b[1;31m"
     _ratio = (total_value / total_capital * 100) if total_capital > 0 else 0
     summary_rows = [
@@ -544,12 +542,7 @@ def create_trades_embed(
         ["left", "left", "left", "left", "right", "right", "right", "right"],
         sep=" | ",
     )
-    chunks = _chunk_ansi_table(header_line, divider, data_lines)
-    for i, chunk in enumerate(chunks):
-        name = (
-            f"📦 持倉明細 ({i+1}/{len(chunks)})" if len(chunks) > 1 else "📦 持倉明細"
-        )
-        embed.add_field(name=name, value=chunk, inline=False)
+    _add_ansi_table_fields(embed, "📦 持倉明細", header_line, divider, data_lines)
 
     total_unrealized_pnl = pnl_data.get("total_unrealized_pnl", 0.0)
     missing_quotes = int(pnl_data.get("missing_quote_count", 0) or 0)
@@ -557,7 +550,7 @@ def create_trades_embed(
     if missing_quotes > 0:
         embed.title = f"{embed.title} [部分報價缺失/降級模式]"
 
-    _w, _z = "\u001b[1;37m", "\u001b[0m"
+    _w, _z = _ANSI_W, _ANSI_0
     _pnl_c = "\u001b[1;32m" if total_unrealized_pnl >= 0 else "\u001b[1;31m"
     _ratio = (total_cost / total_capital * 100) if total_capital > 0 else 0
     summary_rows = [
@@ -637,7 +630,7 @@ def create_strategic_dash_embed(
     else:
         nav_line = f"-- ({status_mode})"
 
-    _w, _y, _z = "\u001b[1;37m", "\u001b[1;33m", "\u001b[0m"
+    _w, _y, _z = _ANSI_W, _ANSI_Y, _ANSI_0
     runway_rows = [f"總資產 (NAV): {_w}{nav_line}{_z}"]
     if nav_missing:
         runway_rows.append(f"{_y}{nav_missing}{_z}")

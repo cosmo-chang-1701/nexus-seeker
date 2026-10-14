@@ -413,15 +413,18 @@ def create_polymarket_whale_alert_embed(
             inline=False,
         )
 
-    if summary and summary != "（未啟用 AI 分析）":
-        embed.add_field(name="🤖 AI 總結分析", value=summary, inline=False)
-
     market_url = (
         f"https://polymarket.com/event/{event_slug}"
         if event_slug
         else "https://polymarket.com"
     )
-    embed.description = f"## {intent_emoji} {intent_label}\n[🔗 前往市場]({market_url})"
+    description = f"## {intent_emoji} {intent_label}\n[🔗 前往市場]({market_url})"
+    if summary and summary != "（未啟用 AI 分析）":
+        # AI 總結放 description（上限 4096），避免被 field 的 1024 上限截斷
+        room = 4096 - len(description) - 2
+        body = summary if len(summary) <= room else summary[: room - 1] + "…"
+        description = f"{description}\n\n{body}"
+    embed.description = description
     embed.set_footer(text=f"監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
     return embed
 

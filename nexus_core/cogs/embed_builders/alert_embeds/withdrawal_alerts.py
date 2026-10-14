@@ -9,6 +9,9 @@ import discord
 
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_R,
+    _ANSI_W,
     _add_ansi_field_safely,
     _ansi_tree_lines,
     format_runway_lines,
@@ -21,17 +24,15 @@ from market_analysis.withdrawal_runway import (
 
 _FOOTER = "提領跑道 (歷史壓力重演)"
 
-_W = "\u001b[1;37m"
-_R = "\u001b[1;31m"
-_Z = "\u001b[0m"
-
 
 def _add_runway_field(embed: NexusEmbed, snap: RunwaySnapshot) -> None:
     """跑道行為純文字（format_runway_lines 不帶格式），由此處包裝成 ansi 樹狀。"""
     _add_ansi_field_safely(
         embed,
         "📊 目前跑道",
-        _ansi_tree_lines([f"{_W}{ln}{_Z}" for ln in format_runway_lines(snap)]),
+        _ansi_tree_lines(
+            [f"{_ANSI_W}{ln}{_ANSI_0}" for ln in format_runway_lines(snap)]
+        ),
     )
 
 
@@ -83,13 +84,19 @@ def create_withdrawal_reminder_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    sell_rows = [f"BOXX：{_W}${plan.from_boxx:,.0f}{_Z}"] if plan.from_boxx > 0 else []
+    sell_rows = (
+        [f"BOXX：{_ANSI_W}${plan.from_boxx:,.0f}{_ANSI_0}"]
+        if plan.from_boxx > 0
+        else []
+    )
     for sym, value in sorted(plan.sells.items(), key=lambda kv: kv[1], reverse=True):
-        sell_rows.append(f"{sym}：{_W}${value:,.0f}{_Z}")
+        sell_rows.append(f"{sym}：{_ANSI_W}${value:,.0f}{_ANSI_0}")
     if not sell_rows:
         sell_rows.append("無可賣出部位")
     if plan.shortfall > 0:
-        sell_rows.append(f"{_R}⚠️ 全部可賣部位仍不足，差額 ${plan.shortfall:,.0f}{_Z}")
+        sell_rows.append(
+            f"{_ANSI_R}⚠️ 全部可賣部位仍不足，差額 ${plan.shortfall:,.0f}{_ANSI_0}"
+        )
     _add_ansi_field_safely(
         embed,
         "💵 賣出清單（先用 BOXX，不足者賣超配最多的持股）",

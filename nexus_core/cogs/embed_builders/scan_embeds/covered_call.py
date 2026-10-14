@@ -8,7 +8,7 @@ from cogs.embed_builders._ansi_utils import (
     fmt_or_dash,
 )
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._embed_helpers import _chunk_ansi_table
+from cogs.embed_builders._embed_helpers import _add_chunked_fields, _chunk_ansi_table
 
 _CC_REC_HEADER = ["到期日", "履約價", "預估 Delta", "參考權利金", "年化收益率"]
 _CC_REC_ALIGNS = ["left", "right", "right", "right", "right"]
@@ -41,15 +41,6 @@ def _cc_recommendation_tables(recs: list, *, allow_missing_yield: bool) -> list[
     return _chunk_ansi_table(
         " " + header_line, " " + divider, [" " + ln for ln in data_lines]
     )
-
-
-def _add_cc_table_fields(embed: NexusEmbed, name: str, chunks: list[str]) -> None:
-    for idx, chunk in enumerate(chunks, start=1):
-        embed.add_field(
-            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
-            value=chunk,
-            inline=False,
-        )
 
 
 def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
@@ -124,7 +115,7 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
         )
 
     if recs:
-        _add_cc_table_fields(
+        _add_chunked_fields(
             embed,
             "🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
             _cc_recommendation_tables(recs, allow_missing_yield=True),
@@ -213,7 +204,7 @@ def create_cc_recovery_embed(data: dict) -> discord.Embed:
             rec_notes.append(
                 "🔴 **警示標籤**：此合約橫跨財報日，隱含波動率（IV）可能於選後崩跌（IV Crush），請謹慎開倉。"
             )
-        _add_cc_table_fields(
+        _add_chunked_fields(
             embed,
             "🎯 推薦 Covered Call 備兌合約 (Recommended Contracts)",
             _cc_recommendation_tables(recs, allow_missing_yield=False),

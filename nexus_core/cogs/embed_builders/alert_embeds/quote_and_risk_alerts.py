@@ -7,12 +7,14 @@ from typing import Any, Dict, Optional
 
 from cogs.embed_builders._ansi_utils import _to_float_or_none
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._embed_helpers import _add_ansi_field_safely, _ansi_tree_lines
-
-_W = "\u001b[1;37m"
-_R = "\u001b[1;31m"
-_G = "\u001b[1;32m"
-_Z = "\u001b[0m"
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_G,
+    _ANSI_R,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+)
 
 
 def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
@@ -36,9 +38,9 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     )
     price_txt = f"${data['c']}" if not no_quote else "--"
     if dp is None:
-        dp_txt = f"{_W}--{_Z}"
+        dp_txt = f"{_ANSI_W}--{_ANSI_0}"
     else:
-        dp_txt = f"{_R if dp < 0 else _G}{dp}%{_Z}"
+        dp_txt = f"{_ANSI_R if dp < 0 else _ANSI_G}{dp}%{_ANSI_0}"
     if not no_quote and h is not None and low is not None and h != 0:
         hl_txt = f"H: ${data['h']} / L: ${data['l']}"
     else:
@@ -49,10 +51,10 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         "💹 報價明細",
         _ansi_tree_lines(
             [
-                f"現價 (Current) : {_W}{price_txt}{_Z}",
+                f"現價 (Current) : {_ANSI_W}{price_txt}{_ANSI_0}",
                 f"漲跌幅 (%)     : {dp_txt}",
-                f"今日高/低      : {_W}{hl_txt}{_Z}",
-                f"前收盤 (PC)    : {_W}{pc_txt}{_Z}",
+                f"今日高/低      : {_ANSI_W}{hl_txt}{_ANSI_0}",
+                f"前收盤 (PC)    : {_ANSI_W}{pc_txt}{_ANSI_0}",
             ]
         ),
     )
@@ -79,9 +81,9 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
         "🎯 觸發指標",
         _ansi_tree_lines(
             [
-                f"未實現損益: {_W}{pnl_txt}{_Z}",
-                f"DTE: {_W}{event['dte']}{_Z}",
-                f"執行指令: {_G}獲利鎖定 (Profit Lock){_Z}",
+                f"未實現損益: {_ANSI_W}{pnl_txt}{_ANSI_0}",
+                f"DTE: {_ANSI_W}{event['dte']}{_ANSI_0}",
+                f"執行指令: {_ANSI_G}獲利鎖定 (Profit Lock){_ANSI_0}",
             ]
         ),
     )
@@ -103,8 +105,8 @@ def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
         "🧮 Gamma 水位",
         _ansi_tree_lines(
             [
-                f"目前淨 Gamma : {_R}{event['net_gamma']}{_Z}",
-                f"安全臨界點   : {_W}{event['threshold']}{_Z}",
+                f"目前淨 Gamma : {_ANSI_R}{event['net_gamma']}{_ANSI_0}",
+                f"安全臨界點   : {_ANSI_W}{event['threshold']}{_ANSI_0}",
             ]
         ),
     )
@@ -136,15 +138,15 @@ def create_ditm_transition_alert_embed(
     _add_ansi_field_safely(
         embed, "🎯 觸發指標", [f" {ln}" for ln in str(exit_reason).split("\n")]
     )
-    pnl_color = _G if pnl >= 0 else _R
+    pnl_color = _ANSI_G if pnl >= 0 else _ANSI_R
     _add_ansi_field_safely(
         embed,
         "💰 鎖定結果",
         _ansi_tree_lines(
             [
-                f"執行動作 : {_G}{action_taken}{_Z}",
-                f"鎖定利潤 : {pnl_color}${pnl:.2f}{_Z}",
-                f"帳戶目前總曝險 : {_W}{exposure_pct:.2f}%{_Z} (Beta-Weighted Delta)",
+                f"執行動作 : {_ANSI_G}{action_taken}{_ANSI_0}",
+                f"鎖定利潤 : {pnl_color}${pnl:.2f}{_ANSI_0}",
+                f"帳戶目前總曝險 : {_ANSI_W}{exposure_pct:.2f}%{_ANSI_0} (Beta-Weighted Delta)",
             ]
         ),
     )
@@ -152,7 +154,9 @@ def create_ditm_transition_alert_embed(
         _add_ansi_field_safely(
             embed,
             "🛡️ NRO 對沖建議",
-            _ansi_tree_lines([f"{hedge['action']} (缺口: {_W}{hedge['gap']}{_Z})"]),
+            _ansi_tree_lines(
+                [f"{hedge['action']} (缺口: {_ANSI_W}{hedge['gap']}{_ANSI_0})"]
+            ),
         )
     embed.set_footer(text="Quantitative Defense Pipeline | Risk Optimizer")
     return embed
@@ -175,18 +179,20 @@ def create_vtr_settlement_notice_embed(
         timestamp=datetime.now(timezone.utc),
     )
     vtr_rows = [
-        f"損益 : {_G if pnl >= 0 else _R}${pnl:.2f}{_Z}",
-        f"目前總曝險 : {_W}{exposure_pct:.2f}%{_Z} (Beta-Weighted Delta)",
+        f"損益 : {_ANSI_G if pnl >= 0 else _ANSI_R}${pnl:.2f}{_ANSI_0}",
+        f"目前總曝險 : {_ANSI_W}{exposure_pct:.2f}%{_ANSI_0} (Beta-Weighted Delta)",
     ]
     if regime is not None and target_delta is not None:
-        vtr_rows.append(f"系統自主位階判定 : {_W}{regime}{_Z}")
-        vtr_rows.append(f"理想總曝險目標 : {_W}{target_delta:.1f} Delta{_Z}")
+        vtr_rows.append(f"系統自主位階判定 : {_ANSI_W}{regime}{_ANSI_0}")
+        vtr_rows.append(f"理想總曝險目標 : {_ANSI_W}{target_delta:.1f} Delta{_ANSI_0}")
     _add_ansi_field_safely(embed, "💰 結算摘要", _ansi_tree_lines(vtr_rows))
     if hedge:
         _add_ansi_field_safely(
             embed,
             "🛡️ 自動對沖決策",
-            _ansi_tree_lines([f"{hedge['action']} (缺口: {_W}{hedge['gap']}{_Z})"]),
+            _ansi_tree_lines(
+                [f"{hedge['action']} (缺口: {_ANSI_W}{hedge['gap']}{_ANSI_0})"]
+            ),
         )
     embed.set_footer(text="GhostTrader | Settlement Notice")
     return embed
@@ -203,7 +209,7 @@ def create_margin_api_alert_embed(ratio: float) -> discord.Embed:
     _add_ansi_field_safely(
         embed,
         "📊 目前保證金使用率",
-        _ansi_tree_lines([f"使用率 : {_R}{ratio*100:.2f}%{_Z}"]),
+        _ansi_tree_lines([f"使用率 : {_ANSI_R}{ratio*100:.2f}%{_ANSI_0}"]),
     )
     embed.add_field(
         name="⚡ 優先指令",
@@ -227,23 +233,23 @@ def create_vix_tail_risk_embed(
 
     # VTS 呈現
     if vts_ratio >= 1.10:
-        vts_str = f"{_W}{vts_ratio:.2f}{_Z} (嚴重倒掛 🚨)"
+        vts_str = f"{_ANSI_W}{vts_ratio:.2f}{_ANSI_0} (嚴重倒掛 🚨)"
     elif vts_ratio >= 1.00:
-        vts_str = f"{_W}{vts_ratio:.2f}{_Z} (期限倒掛 ⚠️)"
+        vts_str = f"{_ANSI_W}{vts_ratio:.2f}{_ANSI_0} (期限倒掛 ⚠️)"
     elif vts_ratio > 0.0:
-        vts_str = f"{_W}{vts_ratio:.2f}{_Z} (正價差健康 🟢)"
+        vts_str = f"{_ANSI_W}{vts_ratio:.2f}{_ANSI_0} (正價差健康 🟢)"
     else:
-        vts_str = f"{_W}N/A{_Z} (數據未更新)"
+        vts_str = f"{_ANSI_W}N/A{_ANSI_0} (數據未更新)"
 
     # VIX 呈現
     if vix >= 30.0:
-        vix_str = f"{_W}{vix:.1f}{_Z} (極端恐慌 🚨)"
+        vix_str = f"{_ANSI_W}{vix:.1f}{_ANSI_0} (極端恐慌 🚨)"
     elif vix >= 20.0:
-        vix_str = f"{_W}{vix:.1f}{_Z} (警戒水位 ⚠️)"
+        vix_str = f"{_ANSI_W}{vix:.1f}{_ANSI_0} (警戒水位 ⚠️)"
     elif vix > 0.0:
-        vix_str = f"{_W}{vix:.1f}{_Z} (波動平穩 🟢)"
+        vix_str = f"{_ANSI_W}{vix:.1f}{_ANSI_0} (波動平穩 🟢)"
     else:
-        vix_str = f"{_W}N/A{_Z} (數據異常)"
+        vix_str = f"{_ANSI_W}N/A{_ANSI_0} (數據異常)"
 
     _add_ansi_field_safely(
         embed,
