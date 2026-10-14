@@ -35,7 +35,7 @@ def create_quote_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
         value=f"`${pc}`" if pc is not None else "`--`",
         inline=True,
     )
-    embed.set_footer(text="Nexus Seeker | Market Intelligence Feed")
+    embed.set_footer(text="Market Intelligence Feed")
     return embed
 
 
@@ -67,7 +67,7 @@ def create_profit_lock_alert_embed(event: Dict[str, Any]) -> discord.Embed:
         name="✅ 執行指令", value="✅ **獲利鎖定 (Profit Lock)**", inline=True
     )
     embed.add_field(name="🧠 核心邏輯", value=event["reason"], inline=False)
-    embed.set_footer(text="Mission-Critical Risk Environment | Nexus Seeker")
+    embed.set_footer(text="Mission-Critical Risk Environment")
     return embed
 
 
@@ -88,7 +88,7 @@ def create_gamma_fragility_embed(event: Dict[str, Any]) -> discord.Embed:
         value="🛡️ **注入正 Gamma 緩衝 (買入近月 ATM 期權) 或 立即減倉**",
         inline=False,
     )
-    embed.set_footer(text="Fragility Guard Engine v2.0 | Nexus Seeker")
+    embed.set_footer(text="Fragility Guard Engine v2.0")
     return embed
 
 
@@ -122,7 +122,7 @@ def create_ditm_transition_alert_embed(
             value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
             inline=False,
         )
-    embed.set_footer(text="Quantitative Defense Pipeline | Nexus Risk Optimizer")
+    embed.set_footer(text="Quantitative Defense Pipeline | Risk Optimizer")
     return embed
 
 
@@ -180,7 +180,7 @@ def create_margin_api_alert_embed(ratio: float) -> discord.Embed:
         value="🛡️ **立即降低曝險或補足保證金，避免面臨平倉 (Margin Call)**",
         inline=False,
     )
-    embed.set_footer(text="System & Margin Guard | Nexus Seeker")
+    embed.set_footer(text="System & Margin Guard")
     return embed
 
 
@@ -228,5 +228,5 @@ def create_vix_tail_risk_embed(
         value="🛡️ **全面啟動尾部風險防禦 (Tail Risk Hedging) 並縮減部位規模**",
         inline=False,
     )
-    embed.set_footer(text="Macro Risk Intelligence | Nexus Seeker")
+    embed.set_footer(text="Macro Risk Intelligence")
     return embed

@@ -113,5 +113,5 @@ def create_psq_embed(data: dict) -> discord.Embed:
         if vix_spot_val
         else ""
     )
-    embed.set_footer(text=f"Nexus Seeker • PowerSqueeze 日K量化引擎{vix_footer}")
+    embed.set_footer(text=f"PowerSqueeze 日K量化引擎{vix_footer}")
     return embed

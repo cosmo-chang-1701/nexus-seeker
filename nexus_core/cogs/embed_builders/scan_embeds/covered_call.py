@@ -151,7 +151,7 @@ def create_covered_call_unlock_embed(data: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Risk Engine | 物理死鎖解除策略模組")
+    embed.set_footer(text="Risk Engine | 物理死鎖解除策略模組")
     return embed
 
 

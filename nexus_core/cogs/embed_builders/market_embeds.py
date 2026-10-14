@@ -173,7 +173,7 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
             except ValueError:
                 pass
 
-    embed.set_footer(text="Nexus Seeker | Execution Automation")
+    embed.set_footer(text="Execution Automation")
     return embed
 
 
@@ -399,7 +399,7 @@ def create_market_calendar_embed(
 
         embed.add_field(name=field_name, value=field_value, inline=False)
 
-    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    embed.set_footer(text="Calendar-Aware Guard")
     return embed
 
 
@@ -423,7 +423,7 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
             ),
             inline=False,
         )
-    embed.set_footer(text="IV Rank Scanner | Nexus Seeker")
+    embed.set_footer(text="IV Rank Scanner")
     return embed
 
 
@@ -2208,7 +2208,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Risk Engine | 總經大盤全局防禦系統")
+    embed.set_footer(text="Risk Engine | 總經大盤全局防禦系統")
     return embed
 
 
@@ -2304,5 +2304,5 @@ def build_calendar_embed(
         inline=False,
     )
 
-    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    embed.set_footer(text="Calendar-Aware Guard")
     return embed

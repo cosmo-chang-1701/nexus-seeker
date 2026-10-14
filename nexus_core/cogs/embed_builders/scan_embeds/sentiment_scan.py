@@ -383,5 +383,5 @@ def create_sentiment_scan_embed(
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker | Volatility Strategist")
+    embed.set_footer(text="Volatility Strategist")
     return embed

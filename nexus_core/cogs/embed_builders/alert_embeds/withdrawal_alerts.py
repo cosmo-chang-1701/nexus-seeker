@@ -15,7 +15,7 @@ from market_analysis.withdrawal_runway import (
     WithdrawalPlan,
 )
 
-_FOOTER = "Nexus Seeker | 提領跑道 (歷史壓力重演)"
+_FOOTER = "提領跑道 (歷史壓力重演)"
 
 
 def create_runway_warning_embed(snap: RunwaySnapshot, tier: int) -> discord.Embed:

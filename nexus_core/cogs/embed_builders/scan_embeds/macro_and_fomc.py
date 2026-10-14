@@ -87,7 +87,7 @@ def create_macro_scan_embed(
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker | Global Macro Intelligence")
+    embed.set_footer(text="Global Macro Intelligence")
     return embed
 
 
@@ -223,5 +223,5 @@ def create_fomc_escape_window_embed(
         name="💡 推演邏輯與風控分析", value="\n".join(reason_lines), inline=False
     )
 
-    embed.set_footer(text="Nexus Risk Engine | 宏觀流動性逃頂推演矩陣")
+    embed.set_footer(text="Risk Engine | 宏觀流動性逃頂推演矩陣")
     return embed

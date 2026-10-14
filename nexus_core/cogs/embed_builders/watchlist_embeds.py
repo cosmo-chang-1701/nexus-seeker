@@ -1054,5 +1054,5 @@ def create_watchlist_overview_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text="Nexus Seeker Watchlist Roundup | 每 30 分鐘更新")
+    embed.set_footer(text="Watchlist Roundup | 每 30 分鐘更新")
     return embed

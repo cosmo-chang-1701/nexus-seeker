@@ -68,5 +68,5 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Risk Engine | 流動性水壩壓力測試")
+    embed.set_footer(text="Risk Engine | 流動性水壩壓力測試")
     return embed

@@ -96,7 +96,7 @@ def create_active_order_card_embed(order: Dict[str, Any]) -> discord.Embed:
         value=_safe_embed_field_value(card_content, "暫無詳情"),
         inline=False,
     )
-    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+    embed.set_footer(text="待成交委託單管理系統")
     return embed
 
 
@@ -114,7 +114,7 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
 
     if not orders:
         embed.description = "📭 目前沒有任何活躍的待成交委託單。您可以透過 `/order_panel` 建立新的掛單。"
-        embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+        embed.set_footer(text="待成交委託單管理系統")
         return [embed]
 
     for idx, o in enumerate(orders):
@@ -125,5 +125,5 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+    embed.set_footer(text="待成交委託單管理系統")
     return split_embed_by_fields(embed)

@@ -228,7 +228,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": None,
         "vtr_entry_allowed": False,
         "emoji": "⚪",
-        "color_hex": 0x808080,
+        "color_hex": 0x99AAB5,  # 中性：層級差異由 emoji 承擔，色值僅取色票語意
     },
     {
         "name": "少買 (Caution)",
@@ -241,7 +241,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🟡",
-        "color_hex": 0xFFD700,
+        "color_hex": 0xF39C12,  # 警示：層級差異由 emoji 承擔，色值僅取色票語意
     },
     {
         "name": "摩拳擦掌 (Ready)",
@@ -254,7 +254,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🟠",
-        "color_hex": 0xFF8C00,
+        "color_hex": 0xF39C12,  # 警示：層級差異由 emoji 承擔，色值僅取色票語意
     },
     {
         "name": "大買 (Aggressive)",
@@ -267,7 +267,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🔴",
-        "color_hex": 0xFF0000,
+        "color_hex": 0xE74C3C,  # 危險：層級差異由 emoji 承擔，色值僅取色票語意
     },
     {
         "name": "重砲進場 (Heavy)",
@@ -280,7 +280,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": None,
         "vtr_entry_allowed": True,
         "emoji": "🔴",
-        "color_hex": 0xCC0000,
+        "color_hex": 0xE74C3C,  # 危險：層級差異由 emoji 承擔，色值僅取色票語意
     },
     {
         "name": "All-in (Extreme)",
@@ -293,7 +293,7 @@ VIX_LADDER_CONFIG: List[VixTier] = [
         "kelly_fraction_override": 0.50,
         "vtr_entry_allowed": True,
         "emoji": "🟥",
-        "color_hex": 0x8B0000,
+        "color_hex": 0x8E44AD,  # 罕見事件：層級差異由 emoji 承擔，色值僅取色票語意
     },
 ]
 

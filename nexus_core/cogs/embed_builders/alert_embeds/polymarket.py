@@ -106,9 +106,7 @@ def create_polymarket_list_embed(
         full_desc = _truncate_with_boundary(full_desc, 3900)
 
         embed.description = full_desc
-        embed.set_footer(
-            text=f"Nexus Seeker | Polymarket Monitor • 共 {len(markets)} 個活躍市場"
-        )
+        embed.set_footer(text=f"Polymarket Monitor • 共 {len(markets)} 個活躍市場")
         embeds.append(embed)
 
     return embeds
@@ -135,7 +133,7 @@ def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:
         "---",
     ]
     embed.description = "\n".join(content)
-    embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
+    embed.set_footer(text="Polymarket Monitor")
     return embed
 
 
@@ -163,5 +161,5 @@ def create_polymarket_prob_shift_embed(
         value="📰 **突發新聞、重大事件落地、或大戶倒貨重新定價**",
         inline=False,
     )
-    embed.set_footer(text="Polymarket AI Monitor | Nexus Seeker")
+    embed.set_footer(text="Polymarket AI Monitor")
     return embed

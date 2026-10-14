@@ -63,5 +63,5 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
             name="🏷️ 選擇標籤 (Tag)", value=f"`{selected_tag}`", inline=False
         )
 
-    embed.set_footer(text="Nexus Seeker • 量化雷達面板")
+    embed.set_footer(text="量化雷達面板")
     return embed

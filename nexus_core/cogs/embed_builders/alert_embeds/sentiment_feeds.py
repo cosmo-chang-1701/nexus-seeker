@@ -22,7 +22,7 @@ def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
     """建構新聞掃描結果的 Embed"""
     embed = NexusEmbed(title=f"📰 {symbol} 官方新聞掃描", color=discord.Color.blue())
     add_news_field(embed, news_text)
-    embed.set_footer(text="Nexus Seeker 研報系統 • 資料來源: Yahoo Finance")
+    embed.set_footer(text="研報系統 • 資料來源: Yahoo Finance")
     return embed
 
 
@@ -33,9 +33,7 @@ def create_reddit_scan_embed(symbol: Any, reddit_text: Any):  # type: ignore
     )
     add_reddit_text = reddit_text
     add_reddit_field(embed, add_reddit_text)
-    embed.set_footer(
-        text="Nexus Seeker 研報系統 • 資料來源: Reddit (WSB/Stocks/Options)"
-    )
+    embed.set_footer(text="研報系統 • 資料來源: Reddit (WSB/Stocks/Options)")
     return embed
 
 
@@ -263,6 +261,6 @@ def create_media_sentiment_embed(
                 )
 
     embed.set_footer(
-        text="Nexus Seeker 輿情中心 • 資料來源: Finnhub, Polymarket & Reddit (WSB/Stocks/Options)"
+        text="輿情中心 • 資料來源: Finnhub, Polymarket & Reddit (WSB/Stocks/Options)"
     )
     return embed

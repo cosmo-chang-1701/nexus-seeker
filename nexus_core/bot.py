@@ -160,18 +160,13 @@ class NexusBot(commands.Bot):
 
             split_embeds = split_embed_by_fields(embed)
             if len(split_embeds) > 1:
-                # split_embed_by_fields 內部透過 discord.Embed.from_dict() 重建
-                # 全新的 Embed 物件，而 discord.Embed 本身宣告了 __slots__，無法
-                # 動態附掛 _view 屬性。因此需先將最後一個分段轉為 NexusEmbed
-                # (未重新宣告 __slots__，具備 __dict__)，才能安全搬移 _view，
+                # split_embed_by_fields 重建出的皆為 NexusEmbed（未宣告 __slots__、
+                # 具備 __dict__），可直接把原 embed 的 _view 掛到最後一個分段，
                 # 確保互動按鈕（如 WatchlistHeartbeatView）不會在拆分後靜默遺失。
                 view_info = getattr(embed, "_view", None)
                 last_idx = len(split_embeds) - 1
                 for idx, s_embed in enumerate(split_embeds):
                     if view_info is not None and idx == last_idx:
-                        from cogs.embed_builders._core import NexusEmbed
-
-                        s_embed = NexusEmbed.from_dict(s_embed.to_dict())
                         setattr(s_embed, "_view", view_info)
                     # 只有第一個 Split Embed 帶有原始訊息文字，避免重複發送
                     await self.queue_dm(
@@ -521,7 +516,9 @@ class NexusBot(commands.Bot):
                     break
 
                 view_info = embed_dict.pop("_view", None) if embed_dict else None
-                embed = discord.Embed.from_dict(embed_dict) if embed_dict else None
+                from cogs.embed_builders._core import NexusEmbed
+
+                embed: Any = NexusEmbed.from_dict(embed_dict) if embed_dict else None
                 view: discord.ui.View | None = None
                 if view_info:
                     if view_info.startswith("ApplyTelemetryView:"):
@@ -584,7 +581,7 @@ class NexusBot(commands.Bot):
                         for index, chunk in enumerate(message_chunks):
                             await user.send(
                                 content=chunk or None,
-                                embed=embed if index == 0 else None,  # type: ignore
+                                embed=embed if index == 0 else None,  # type: ignore[arg-type, unused-ignore]
                                 view=view if (index == 0 and view) else None,  # type: ignore
                             )
                         # 發送成功才從資料庫刪除

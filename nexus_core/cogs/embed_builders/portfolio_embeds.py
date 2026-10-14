@@ -446,7 +446,7 @@ def create_holdings_embed(
     )
     embed.add_field(name="🏁 財務摘要", value=summary, inline=False)
 
-    embed.set_footer(text="Nexus Accounting Engine | 專業股權追蹤")
+    embed.set_footer(text="Accounting Engine | 專業股權追蹤")
     return embed
 
 
@@ -535,7 +535,7 @@ def create_trades_embed(
         summary += "\n`*` 零 bid，現價以 ask/2 估算"
     embed.add_field(name="🏁 財務摘要 (Financial Summary)", value=summary, inline=False)
 
-    embed.set_footer(text="Nexus Portfolio Engine | 專業實單與損益監控")
+    embed.set_footer(text="Portfolio Engine | 專業實單與損益監控")
     return embed
 
 
@@ -655,7 +655,7 @@ def create_strategic_dash_embed(
     sys_health = f"RAM {ram_usage}% | BoundedCache 穩定"
     embed.add_field(name="⚙️ 系統健康", value=sys_health, inline=False)
 
-    embed.set_footer(text="Nexus Seeker | 戰術風險管理終端")
+    embed.set_footer(text="戰術風險管理終端")
     return embed
 
 

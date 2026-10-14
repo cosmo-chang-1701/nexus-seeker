@@ -619,7 +619,7 @@ def create_dynamic_rollover_embed(
         embed.add_field(name=field_title, value=trigger_condition_text, inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
+        text="Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
     )
 
     return embed
@@ -706,7 +706,7 @@ def create_covered_call_overlay_embed(
         )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
+        text="Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
     )
 
     return embed
@@ -792,7 +792,7 @@ def create_covered_call_profit_lock_embed(
     )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 權利金衰減停利為建議性回補，非強制轉倉"
+        text="Risk & Rollover Engine • 權利金衰減停利為建議性回補，非強制轉倉"
     )
 
     return embed
@@ -890,9 +890,9 @@ def create_transition_pyramid_embed(
         )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
+        text="Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
         if is_pyramid_add
-        else "Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
+        else "Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
     )
 
     return embed
@@ -995,7 +995,7 @@ def create_short_entry_embed(
     )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 僅為建議不代為下單；成交後請以"
+        text="Risk & Rollover Engine • 僅為建議不代為下單；成交後請以"
         "『負股數／負口數』登錄，出場由做空鏡像出場矩陣接管"
     )
     return embed
@@ -1043,7 +1043,7 @@ def create_transition_ratchet_embed(
     embed.add_field(name="🔀 停損上移", value="\n".join(ratchet_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，需手動調整停損"
+        text="Risk & Rollover Engine • 動態調整狀態切換引擎，需手動調整停損"
     )
 
     return embed
@@ -1092,7 +1092,7 @@ def create_protective_put_embed(
     embed.add_field(name="🛡️ 對沖建議", value="\n".join(put_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 成交後請以 /add_trade 登錄並將 "
+        text="Risk & Rollover Engine • 成交後請以 /add_trade 登錄並將 "
         "trade_category 設為 HEDGE"
     )
 
@@ -1147,7 +1147,7 @@ def create_advisory_levels_embed(
     embed.add_field(name="📍 位階資訊", value="\n".join(level_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
+        text="Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
         "單檔可用 /edit_holding advisory_mode 覆寫)"
     )
     return embed
@@ -1207,7 +1207,7 @@ def build_fundamental_broken_embed(
     embed.description = truncate_with_boundary(
         "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
-    embed.set_footer(text="Nexus Risk & Rollover Engine • 基本面告知（不含交易指令）")
+    embed.set_footer(text="Risk & Rollover Engine • 基本面告知（不含交易指令）")
     return embed
 
 
@@ -1262,7 +1262,7 @@ def create_thesis_passed_embed(
     embed.description = truncate_with_boundary(
         "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
-    embed.set_footer(text="Nexus Risk & Rollover Engine • 護城河驗證完成")
+    embed.set_footer(text="Risk & Rollover Engine • 護城河驗證完成")
     return embed
 
 
@@ -1316,7 +1316,5 @@ def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embe
     table = "```\n" + "\n".join(lines) + "\n```"
     safe_table = truncate_with_boundary(table, _EMBED_FIELD_VALUE_LIMIT)
     embed.add_field(name="🕰️ 近期推送紀錄", value=safe_table, inline=False)
-    embed.set_footer(
-        text="Nexus Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果"
-    )
+    embed.set_footer(text="Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果")
     return embed

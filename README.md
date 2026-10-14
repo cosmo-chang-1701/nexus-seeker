@@ -87,7 +87,6 @@ nexus-seeker/
 │   ├── services/            # 外部 API 封裝 (Calendar, LLM, Polymarket 等)
 │   ├── database/            # SQLite Schema 與 Migrations
 │   ├── risk_engine/         # SDDM 戰術路由與風險控制 (NRO)
-│   ├── formatters/          # Embed 格式化與輸出模組
 │   ├── ui/                  # ANSI 字符格式化與表格渲染
 │   └── tests/               # 單元與整合測試
 ├── nexus_edge_scraper/      # 邊緣爬蟲服務 (Playwright)

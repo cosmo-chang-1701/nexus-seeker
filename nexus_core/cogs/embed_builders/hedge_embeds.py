@@ -63,7 +63,7 @@ def create_event_impact_embed(
 
     risk_status = "🔴 危險" if abs(adjusted_delta) > 100 else "🟢 安全"
     embed.add_field(name="風險狀態判定", value=f"**{risk_status}**", inline=False)
-    embed.set_footer(text="NRO Vanna Simulation | Nexus Seeker")
+    embed.set_footer(text="NRO Vanna Simulation")
     return embed
 
 
@@ -101,7 +101,7 @@ def create_hedge_list_embed(rows: List[Any]) -> discord.Embed:
         )
 
     embed.description = "\n".join(content) if content else "📭 目前無對沖警報紀錄。"
-    embed.set_footer(text="Nexus Seeker | Hedge Ledger")
+    embed.set_footer(text="Hedge Ledger")
     return embed
 
 
@@ -173,7 +173,7 @@ def create_hedge_alert_embed(
         ),
         inline=False,
     )
-    embed.set_footer(text=f"🌌 Nexus Seeker • Battle Station | Alert ID: {alert_id}")
+    embed.set_footer(text=f"Battle Station | Alert ID: {alert_id}")
     return embed
 
 
@@ -191,7 +191,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
 
     if not events:
         embed.description = "📭 目前沒有偵測到即將來臨的重大波動事件。"
-        embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+        embed.set_footer(text="Proactive Event Monitor")
         return [embed]
 
     for event in events:
@@ -244,7 +244,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
 
         embed.add_field(name=name, value=value, inline=False)
 
-    embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+    embed.set_footer(text="Proactive Event Monitor")
     return split_embed_by_fields(embed)
 
 
@@ -375,9 +375,7 @@ def create_polymarket_whale_alert_embed(
     content.append(f"[🔗 前往市場]({market_url})")
 
     embed.description = "\n".join(content)
-    embed.set_footer(
-        text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}"
-    )
+    embed.set_footer(text=f"監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
     return embed
 
 
@@ -440,7 +438,7 @@ def create_option_defense_alert_embed(
             inline=False,
         )
 
-    embed.set_footer(text="🌌 Nexus Seeker • 期權轉倉防禦與結算警報")
+    embed.set_footer(text="期權轉倉防禦與結算警報")
     return embed
 
 
@@ -451,7 +449,7 @@ def create_volatility_risk_alert_embed(
     description_text: str,
     color_hex: int,
     fields_data: List[Dict[str, Any]],
-    footer_text: str = "Nexus Seeker Volatility Risk Alert",
+    footer_text: str = "Volatility Risk Alert",
 ) -> discord.Embed:
     """建立波動率與重大事件對沖警報 Embed (合併主動與被動)"""
     embed = NexusEmbed(

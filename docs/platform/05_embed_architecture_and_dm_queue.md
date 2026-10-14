@@ -22,14 +22,19 @@
 
 ### 2.2 視覺一致性與明確子類化（`NexusEmbed`）
 - 為了在所有模組間維持絕對的視覺一致性與截斷保護，`cogs/embed_builders/` 內的**所有建構函式必須明確 import 並建構 `NexusEmbed`，而非 `discord.Embed`**（例如 `from cogs.embed_builders._core import NexusEmbed`）。Monkey patching 已淘汰。
-- **精選色票**：所有標準顏色皆映射至一致、高質感的色票：
-  - 主要系統／資訊：精選藍 `0x3498DB`
-  - 危險／風險警示：精選紅 `0xE74C3C`
-  - 結算／獲利：精選綠 `0x2ECC71`
-  - 警告／觀察：精選橙 `0xF39C12`
-  - 次要：精選 blurple `0x5865F2`
-- **標準化 Footer 簽名**：每個 embed footer 動態格式化為 `"🌌 Nexus Seeker • [模組描述]"`，無重複前綴，並同步系統時間戳。
-- **分頁相容性（`from_dict`）**：`.from_dict()` 類別方法經過覆寫，可將序列化字典 payload 無縫轉換回完整風格化的 `NexusEmbed` 實例。
+- **精選色票**：所有 embed 顏色皆須屬於 `_core.py` 的 `CURATED_PALETTE`（共 9 色，以程式碼為準）；原生 `discord.Color.*()` 會自動 remap 至對應語意色：
+  - 成功／多頭／安全：`0x2ECC71`
+  - 危險／錯誤／空頭：`0xE74C3C`
+  - 警示／待關注：`0xF39C12`
+  - 一般資訊（預設）：`0x3498DB`
+  - 品牌／系統框架：`0x5865F2`
+  - 對沖／防禦性倉位：`0x1ABC9C`
+  - 設定／管理介面：`0x9B59B6`
+  - 罕見市場事件（擠壓、巨鯨共振、尾部風險）：`0x8E44AD`
+  - 無數據／未定義／中性：`0x99AAB5`
+  - VIX 戰情階梯（`config.VIX_LADDER_CONFIG`）的 `color_hex` 同樣只取上述色票（休兵＝中性、少買／摩拳擦掌＝警示、大買／重砲＝危險、All-in＝罕見事件）；層級之間的差異由 emoji 承擔，而非自訂色值。
+- **標準化 Footer 簽名**：每個 embed footer 動態格式化為 `"🌌 Nexus Seeker • [模組描述]"`，無重複前綴，並同步系統時間戳。`set_footer` 只寫模組描述，**不得自帶品牌字樣**（含 `Nexus Seeker`、`Nexus Risk Engine` 等前後綴，由 G3 強制）；文字為空或僅有品牌時，footer 為 `"🌌 Nexus Seeker"`，經 `from_dict` 往返保持冪等。
+- **分頁相容性（`from_dict`）**：`.from_dict()` 類別方法經過覆寫，可將序列化字典 payload 無縫轉換回完整風格化的 `NexusEmbed` 實例。因此程式碼中**不得**直接呼叫 `discord.Embed(...)` 或 `discord.Embed.from_dict(...)`（`_core.py` 除外，由 G1 強制）：`split_embed_by_fields` 與 DM 佇列 worker 還原 embed 時皆使用 `NexusEmbed.from_dict`。執行決策矩陣等原本在 `embed_builders` 之外自行組 embed 的路徑，已移入 `alert_embeds/execution_decision.py`。
 
 ### 2.3 量化控制台與多模組 Embed 排版原則
 - **控制台美學（ANSI 包裹）**：所有含即時行情、量化數據、持倉或風險精算的內容，必須使用 ` ```ansi ` 程式碼區塊包裹以進行控制台渲染。
@@ -64,6 +69,10 @@
 
 - `nexus_core/cogs/embed_builders/_core.py`：`NexusEmbed` 基底類別
 - `nexus_core/cogs/embed_builder.py`：向後相容 shim
-- `nexus_core/tests/unit/test_output_centralization.py`：Embed 集中化強制檢查
+- `nexus_core/tests/unit/test_output_centralization.py`：Embed 集中化強制檢查，含 NexusEmbed 契約的 AST／原始碼不變式防線（非 slow，隨快速測試集執行）：
+  - G1：`cogs/embed_builders/_core.py` 以外不得呼叫 `discord.Embed(...)`／`discord.Embed.from_dict(...)`
+  - G2：`embed_builders` 以外的 production 程式碼不得呼叫 `NexusEmbed(...)`
+  - G3：`cogs/` 下 `set_footer` 文字、`*FOOTER*` 模組常數與 `footer_text` 預設值不得含 `Nexus` 品牌字
+  - G4：`embed_builders` 內所有 `0xRRGGBB` 字面值必須屬於 `CURATED_PALETTE`
 - `nexus_core/tests/unit/test_embed_builder.py`：Embed 契約測試
 - `nexus_core/bot.py`：持久化 DM 佇列 worker、啟動／關閉復原邏輯

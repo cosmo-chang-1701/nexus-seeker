@@ -236,5 +236,5 @@ def build_pre_market_briefing_embed(
                 inline=False,
             )
 
-    embed.set_footer(text="🌌 Nexus Seeker • 盤前綜合簡報")
+    embed.set_footer(text="盤前綜合簡報")
     return embed

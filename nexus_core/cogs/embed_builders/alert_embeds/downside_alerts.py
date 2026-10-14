@@ -123,7 +123,7 @@ def create_portfolio_downside_alert_embed(
         )
     for name, value, inline in create_downside_snapshot_fields(snapshot):
         embed.add_field(name=name, value=value, inline=inline)
-    embed.set_footer(text="Nexus Seeker | 投組下行風險監控 (Sortino / MDD / CVaR)")
+    embed.set_footer(text="投組下行風險監控 (Sortino / MDD / CVaR)")
     return embed
 
 

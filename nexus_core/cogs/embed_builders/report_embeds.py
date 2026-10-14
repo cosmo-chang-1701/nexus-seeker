@@ -332,7 +332,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
         inline=False,
     )
 
-    embed.set_footer(text="Nexus Position Evolution Engine | 專業投資者建議")
+    embed.set_footer(text="Position Evolution Engine | 專業投資者建議")
     return embed
 
 
@@ -416,7 +416,7 @@ def build_vtr_stats_embed(
     for name, value, inline in downside_fields or []:
         embed.add_field(name=name, value=value, inline=inline)
 
-    embed.set_footer(text="Nexus Sandbox Engine | 數據包含已平倉之虛擬部位")
+    embed.set_footer(text="Sandbox Engine | 數據包含已平倉之虛擬部位")
 
     return embed
 
@@ -643,7 +643,7 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     )
     embed.add_field(name="🧐 量化篩選邏輯", value=logic_text, inline=False)
 
-    embed.set_footer(text="Nexus Quantitative Research | 戴維斯雙擊引擎 v1.0")
+    embed.set_footer(text="Quantitative Research | 戴維斯雙擊引擎 v1.0")
     return embed
 
 
@@ -738,7 +738,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     val3 = "\n".join(val3_lines)
     embed.add_field(name="🛡️ 風險管理 (NRO)", value=val3, inline=False)
 
-    embed.set_footer(text="Nexus Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
+    embed.set_footer(text="Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
     return embed
 
 
@@ -811,7 +811,7 @@ def create_ai_analysis_embed(
     else:
         embed.description = _truncate_with_boundary(ai_report_text, 4000)
 
-    embed.set_footer(text="Nexus Seeker AI Analyst v1.0 | 智慧投研管線")
+    embed.set_footer(text="AI Analyst v1.0 | 智慧投研管線")
     return embed
 
 
@@ -886,5 +886,5 @@ def create_next_day_strategy_embed(strategy_text: str) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker Strategy Engine v1.0 | 戰鬥階級系統")
+    embed.set_footer(text="Strategy Engine v1.0 | 戰鬥階級系統")
     return embed

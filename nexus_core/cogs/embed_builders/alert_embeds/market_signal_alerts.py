@@ -239,7 +239,7 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
     )
     embed.add_field(name="📡 後續操作建議", value=followup_ansi, inline=False)
 
-    embed.set_footer(text="Price-Volume Breakout Alert | Nexus Seeker")
+    embed.set_footer(text="Price-Volume Breakout Alert")
     return embed
 
 
@@ -336,5 +336,5 @@ def create_gamma_squeeze_alert_embed(output: Any) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Gamma Squeeze Engine | 每 30 分鐘評估，每日至多一則")
+    embed.set_footer(text="Gamma Squeeze Engine | 每 30 分鐘評估，每日至多一則")
     return embed

@@ -316,7 +316,7 @@ def create_telemetry_alignment_embeds(
                 inline=False,
             )
 
-        embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+        embed.set_footer(text="待成交委託單管理系統")
         sub_embeds = split_embed_by_fields(embed)
         all_embeds.extend(sub_embeds)
 

@@ -302,7 +302,7 @@ def split_embed_by_fields(
         if index > 1:
             payload.pop("description", None)
 
-        split_embed = discord.Embed.from_dict(payload)
+        split_embed = NexusEmbed.from_dict(payload)
         for field in group:
             split_embed.add_field(
                 name=field.name, value=field.value, inline=field.inline

@@ -508,7 +508,7 @@ def build_post_market_intelligence_embed(
     for name, value, inline in downside_fields or []:
         embed.add_field(name=name, value=value, inline=inline)
 
-    embed.set_footer(text="🌌 Nexus Seeker • 盤後綜合策略簡報")
+    embed.set_footer(text="盤後綜合策略簡報")
     all_embeds = split_embed_by_fields(embed)
 
     if len(all_embeds) > 1:

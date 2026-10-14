@@ -108,5 +108,5 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
     spy_label = f"${float(spy_ref):.1f}" if spy_ref else "--"
     if not vix_spot and ("vix_battle_status" in data or "vix_spot" in data):
         vix_footer = " | VIX: --"
-    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: {spy_label}{vix_footer}")
+    embed.set_footer(text=f"風控引擎 • 基準 SPY: {spy_label}{vix_footer}")
     return embed

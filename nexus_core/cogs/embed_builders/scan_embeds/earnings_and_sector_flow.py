@@ -110,7 +110,7 @@ def create_earnings_report_embed(
         )
 
     _append_ai_report_fields(embed, report_content)
-    embed.set_footer(text="Nexus Seeker AI Analyst | 盤前財報與估值調整")
+    embed.set_footer(text="AI Analyst | 盤前財報與估值調整")
     return embed
 
 
@@ -275,5 +275,5 @@ def create_sector_flow_report_embed(
             value=_safe_embed_codeblock_value(panel, "無詳細資訊", lang="ansi"),
             inline=False,
         )
-    embed.set_footer(text="Nexus Seeker AI Analyst | 收盤資金流向與板塊輪動")
+    embed.set_footer(text="AI Analyst | 收盤資金流向與板塊輪動")
     return embed

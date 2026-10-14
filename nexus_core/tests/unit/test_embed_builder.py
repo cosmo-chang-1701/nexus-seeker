@@ -5887,3 +5887,52 @@ def test_build_radar_scan_embed_filters_outlier_cached_gex_flip() -> None:
         text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
     assert "690.00" in text
     assert "已濾除" not in text
+
+
+def test_nexus_embed_footer_roundtrip_is_idempotent() -> None:
+    """保底 footer 與帶描述的 footer 經 to_dict/from_dict 往返後都不得重複品牌前綴。"""
+    from cogs.embed_builders._core import NexusEmbed
+
+    bare = NexusEmbed(title="t")
+    restored = NexusEmbed.from_dict(bare.to_dict())
+    assert restored.to_dict()["footer"]["text"] == "🌌 Nexus Seeker"
+
+    with_text = NexusEmbed(title="t")
+    with_text.set_footer(text="🌌 Nexus Seeker • X")
+    again = NexusEmbed.from_dict(NexusEmbed.from_dict(with_text.to_dict()).to_dict())
+    assert again.to_dict()["footer"]["text"] == "🌌 Nexus Seeker • X"
+
+
+@pytest.mark.parametrize(
+    "text", ["", "Nexus Seeker", "🌌 Nexus Seeker", "🌌 Nexus Seeker • "]
+)
+def test_nexus_embed_footer_empty_or_brand_only_collapses(text: str) -> None:
+    from cogs.embed_builders._core import NexusEmbed
+
+    embed = NexusEmbed(title="t")
+    embed.set_footer(text=text)
+    assert embed.to_dict()["footer"]["text"] == "🌌 Nexus Seeker"
+
+
+def test_split_embed_by_fields_returns_nexus_embeds() -> None:
+    from cogs.embed_builders._core import NexusEmbed
+    from cogs.embed_builders._embed_helpers import split_embed_by_fields
+
+    embed = NexusEmbed(title="big")
+    embed.set_footer(text="模組")
+    for i in range(20):
+        embed.add_field(name=f"f{i}", value="x" * 900, inline=False)
+    parts = split_embed_by_fields(embed)
+    assert len(parts) > 1
+    for part in parts:
+        assert isinstance(part, NexusEmbed)
+        assert part.to_dict()["footer"]["text"] == "🌌 Nexus Seeker • 模組"
+
+
+def test_vix_tier_colors_belong_to_curated_palette() -> None:
+    from cogs.embed_builders._core import CURATED_PALETTE
+    from config import VIX_LADDER_CONFIG
+
+    assert len(CURATED_PALETTE) == 9
+    for tier in VIX_LADDER_CONFIG:
+        assert tier["color_hex"] in CURATED_PALETTE, tier["name"]
