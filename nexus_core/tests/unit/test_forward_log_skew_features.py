@@ -247,3 +247,81 @@ def test_threshold_studies_without_evaluator_column_does_not_fail() -> None:
     )
     studies = build_threshold_studies(entries)
     assert isinstance(studies["skew_percentile_by_evaluator"], str)
+
+
+# ---------------------------------------------------------------- /x (SYMBOL_VIEW)
+@pytest.mark.asyncio
+async def test_hub_data_skew_source_comes_from_same_result_as_percentile() -> None:
+    from unittest.mock import MagicMock
+
+    from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+
+    class _DD(SymbolDeepDiveMixin):
+        def __init__(self) -> None:
+            self.bot = MagicMock()
+
+    def raw(skew: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "df_spy": pd.DataFrame(), "macro_raw": {"vix": 18.0},
+            "quote": {"c": 115.0, "dp": 0.5}, "skew_data": skew, "pcr_data": {},
+            "uoa_data": [], "sto_physical_cap_strikes": [], "max_pain_data": {},
+            "iv_metrics": {}, "reddit_text": "", "poly_markets": [], "ddp_report": {},
+            "df_hist_1d": pd.DataFrame(), "month_max_pains": [],
+            "gex_profile_data": None, "volume_profile": None, "atr_15m": 0.0,
+            "session_vwap": 0.0, "bar_15m": None, "catalysts": [],
+        }  # fmt: skip
+
+    results: list[dict[str, Any]] = []
+    skews: list[dict[str, Any]] = [
+        {"skew": 0.1, "skew_percentile": 77.0, "skew_percentile_source": "CANONICAL"},
+        {},
+    ]
+    for skew in skews:
+        with (
+            patch("services.asset_manager.AssetManager.get_assets", return_value=[]),
+            patch("market_math.analyze_symbol", new_callable=AsyncMock) as m,
+            patch(
+                "cogs.unified_terminal.utils.find_matching_polymarket_odds",
+                new_callable=AsyncMock, return_value=[],
+            ),
+            patch(
+                "cogs.unified_terminal.utils.calculate_polymarket_weighted_odds",
+                new_callable=AsyncMock, return_value=None,
+            ),
+            patch("database.get_full_user_context", return_value=MagicMock()),
+        ):  # fmt: skip
+            m.return_value = {"symbol": "TEST", "price": 115.0}
+            results.append(await _DD()._process_symbol_hub_data("TEST", 1, raw(skew)))
+    assert results[0]["skew_percentile"] == 77.0
+    assert results[0]["skew_percentile_source"] == "CANONICAL"
+    assert results[1]["skew_percentile"] is None
+    assert results[1]["skew_percentile_source"] is None
+
+
+@pytest.mark.asyncio
+async def test_symbol_view_radar_reaches_recorder() -> None:
+    """SYMBOL_VIEW 路徑：base_data 經 _evaluate_squeeze_long 到達 recorder。"""
+    from market_analysis.intraday_pipeline import entry_advisor
+    from market_analysis.squeeze_entry import SqueezeEvaluation
+    from market_analysis.squeeze_entry.rules import SqueezeEntryResult
+
+    base_data = {"symbol": "AAPL", **_RADAR}
+    result = SqueezeEntryResult("WATCH", None, 0.0, None, "r")
+    with (
+        patch(
+            "market_analysis.squeeze_entry.vetoes.resolve_long_entry_vetoes",
+            AsyncMock(return_value=([], None)),
+        ),
+        patch(
+            "market_analysis.squeeze_entry.evaluate_symbol",
+            AsyncMock(return_value=SqueezeEvaluation(result, {}, None)),
+        ),
+        rec.evaluation_source("SYMBOL_VIEW"),
+    ):
+        await entry_advisor._evaluate_squeeze_long(
+            "RIGHT_SIDE", "AAPL", 10.0, radar=base_data
+        )
+    row = rec._BUFFER[0]
+    assert row["source"] == "SYMBOL_VIEW"
+    assert _features(row)["skew_percentile"] == 91.5
+    assert _features(row)["skew_percentile_source"] == "CANONICAL"

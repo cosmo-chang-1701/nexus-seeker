@@ -396,7 +396,11 @@ class SymbolHubView(discord.ui.View):
                     dynamic_regime_reason,
                     regime_market_data,
                 ) = await classify_dynamic_regime(
-                    self.symbol, target_spot, gex_profile_data, uoa_list
+                    self.symbol,
+                    target_spot,
+                    gex_profile_data,
+                    uoa_list,
+                    candidate_radar=self.base_data,
                 )
                 if dynamic_regime == DynamicRegime.REGIME_I_LEFT_CATCH:
                     (
@@ -431,10 +435,11 @@ class SymbolHubView(discord.ui.View):
                         target_spot,
                         dynamic_regime.value,
                         dynamic_regime_reason,
+                        radar=self.base_data,
                     )
             else:
                 squeeze_advice = await _evaluate_squeeze_long(
-                    trading_strategy, self.symbol, target_spot
+                    trading_strategy, self.symbol, target_spot, radar=self.base_data
                 )
 
             if squeeze_advice is not None:
