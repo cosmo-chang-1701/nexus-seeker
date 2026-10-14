@@ -85,6 +85,8 @@ FV_{\text{DCF}} & \text{若同業不足 3 家 (DCF\_ONLY)} \\
 $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 
 - 深度價值評估：當 $MOS \ge 0.25$（安全邊際達 25% 以上）且標的沒有生效中的 `HIGH`／`CRITICAL` 治理旗標時，正式評估為深度價值標的（`DEEP_VALUE`）；有 `HIGH`／`CRITICAL` 旗標時改記 `DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE`。`REVIEW`／`INFO`（例如預設為 `REVIEW` 的 8-K 5.02）只待人工複核，不壓制。
+- **估值分歧標註（`VALUATION_DIVERGENCE`，純標註）**：方法為 `BLENDED` 且 $\max(FV_{\text{DCF}}, FV_{\text{Comps}}) / \min(\cdot) \ge 3$ 時加註此旗標，`/fa` 顯示「混合中樞可信度低，請人工複核」。門檻 `VALUATION_DIVERGENCE_RATIO = 3.0` 為暫定值、未經校準；**旗標不影響 `DEEP_VALUE`、MOS、`method` 與候選排序**（`DCF_ONLY`／`COMPS_ONLY` 不加）。
+- **同業乘數輸入留存（`comps_detail_json`，v095）**：每次估值把 Comps 的輸入寫入 `fair_value_log.comps_detail_json`（可為 NULL；v095 以前的列為 NULL），供事後稽核：`forward_eps`、`forward_eps_source`（`FORWARD_PE`／`TRAILING_EPS`／null）、`forward_pe`、`peers`（只列取得有效 PE 的同業，依序含 `symbol`、`pe`、`trailing`）、`peers_requested`（實際請求的前 10 檔）、`median_pe`、`liquidity_penalty`、`rejection_reason`。純記錄，不參與任何判定。
 - **無效值存 NULL**：方法為 `NONE` 時 `fair_value` 與 `margin_of_safety` 皆存 NULL；有公允價值但無現價時 `margin_of_safety` 存 NULL 並記 `SPOT_UNAVAILABLE`。不以 0.0 作為哨兵值。下游 `/fa` 與離線報告依 NULL 與 `method = 'NONE'` 排除。
 - **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、$g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
 
@@ -236,6 +238,7 @@ flowchart TD
 ### 5.6 呈現與離線校準
 - `/fa` 的估值區塊顯示估值日、方法、DCF／同業倍數、MOS、資本成本、輸入預設值旗標與修正動能（含降級原因）；`method = NONE` 或公允價值為 NULL 時明示「無有效估值」，不顯示 0。`/fa` 共 6 個區塊，總長超過 NexusEmbed 5800 字元時截短最長的欄位內文，不整欄丟棄。
 - `calibration/fundamental_forward_report.py` 統計時排除 `method = NONE` 與 NULL 的估值、NULL 的修正動能；缺表或查詢失敗不默默略過，於報告開頭列出。
+- 該報告的 MOS 以**中位數與 p25／p75** 為主（MOS 下界無限，平均值受極端值主導，僅供參考），並另列「各估值法單獨計算的 MOS」、「候選名單穩健度」（CANDIDATE 在 `DCF_ONLY` 假設下仍 $\ge$ 25% 的筆數、DCF 與 Comps 相差 3 倍以上的筆數；舊資料無旗標，由比值現算）與 CANDIDATE 的 `comps_detail_json` 摘要（舊資料顯示「—」）。快照缺 `comps_detail_json`（v095 前）或 `method`／`spot_price`（v094 定稿前）時以相容查詢讀取。
 
 ---
 
@@ -252,6 +255,7 @@ flowchart TD
 - 資料庫持久層與遷移腳本：
   - `nexus_core/database/fundamental_pipeline.py`
   - `nexus_core/database/migrations/v094_add_valuation_and_watch.py`
+  - `nexus_core/database/migrations/v095_add_fair_value_comps_detail.py`
 - 排程註冊：
   - `nexus_core/cogs/trading/fundamental_pipeline_monitor.py`
 - 共識快照提供者與財報發布日：
