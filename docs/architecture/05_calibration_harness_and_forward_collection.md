@@ -476,6 +476,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 **`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出三張表：
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
+- 自 PR-2 起 `REGIME_CLASSIFIER` 與 `ENTRY_SQUEEZE` 紀錄也帶 `skew_percentile`／`skew_percentile_source`（純記錄，不參與分類或擠壓判定）；報表另提供「依評估器拆分」子表（`REGIME_CLASSIFIER`／`ENTRY_SQUEEZE`／其他），避免不同母體混在一起。`CANONICAL` 需每標的 ≥ 20 個交易日的日級快照，未滿前一律為 `INTRADAY_FALLBACK`，屬預期。`/x` 手動檢核（`SYMBOL_VIEW`）的 hub 資料不含 `skew_percentile_source`，因此該來源不寫入 skew 欄位。
 - `gamma_flip_materiality`：只取閘門 Flip 存在的紀錄，依重要性比分成「雜訊交叉」（< 5%）與「重要交叉」兩組，比較勝率與逆向先觸及率（依日期叢集 bootstrap 的 95% CI），並附重要性比四分位。判讀規則見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6。
 
 每組 $n < 100$ 時標示「資料累積中」。EXIT_* 紀錄不納入（其勝率語意與進場相反）。

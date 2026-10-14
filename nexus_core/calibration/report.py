@@ -288,6 +288,28 @@ def render_markdown(results: dict[str, Any]) -> str:
                         f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
                     )
                 lines.append("")
+        by_ev = studies.get("skew_percentile_by_evaluator")
+        if isinstance(by_ev, dict):
+            lines += ["**Skew 分位區間（依評估器拆分）**", ""]
+            for ev_name, per_source in by_ev.items():
+                lines.append(f"- 評估器 `{ev_name}`")
+                if isinstance(per_source, str):
+                    lines += [f"  - {per_source}", ""]
+                    continue
+                for src, rows in per_source.items():
+                    lines += [
+                        "",
+                        f"  母體來源 `{src}`",
+                        "",
+                        "| 區間 | n | 勝率 | 逆向先觸及 | 狀態 |",
+                        "|---|---|---|---|---|",
+                    ]
+                    for r in rows:
+                        lines.append(
+                            f"| {r['bucket']} | {r['n']} | {_fmt(r['win_rate'])} "
+                            f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
+                        )
+                lines.append("")
     lines += [
         "",
         "## 限制與警語",
