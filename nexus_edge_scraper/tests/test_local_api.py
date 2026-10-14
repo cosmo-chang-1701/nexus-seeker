@@ -189,6 +189,54 @@ def test_find_gamma_flip_finds_zero_crossing() -> None:
     assert 480.0 < flip < 520.0
 
 
+def test_find_gamma_flip_rejects_tail_noise_crossing() -> None:
+    """尾端雜訊交叉：現價到尾端之間沒有實質交叉時，不得把 BS 尾端的符號變化當翻轉線。
+
+    情境（2026-10-14 SPY 778.01 → 834.48 的縮影）：Put 主導的區間內總 GEX 為負，
+    僅一檔高 IV、低 OI 的深價外 Call 讓 500→530 之間（約 517.6）符號翻正，但該側
+    |G| 不到全區峰值的 1%，屬數值尾端雜訊；修正前會回傳約 517.6，修正後應回傳
+    0.0 交由 core 缺值路徑處理。
+    """
+    from local_api.macro import calculate_total_gex, find_gamma_flip
+
+    t = 2.0 / 365.0
+    chain = [
+        {"strike": 500.0, "oi": 10000, "iv": 0.10, "t": t, "is_call": False},
+        {"strike": 495.0, "oi": 8000, "iv": 0.10, "t": t, "is_call": False},
+        {"strike": 560.0, "oi": 5, "iv": 1.50, "t": t, "is_call": True},
+    ]
+    # 前置斷言：500 與 530 之間確有符號變化，但 530 側量級遠小於現價處
+    assert calculate_total_gex(500.0, chain) < 0 < calculate_total_gex(530.0, chain)
+    assert abs(calculate_total_gex(530.0, chain)) < 0.01 * abs(
+        calculate_total_gex(500.0, chain)
+    )
+    assert find_gamma_flip(500.0, chain) == 0.0
+
+
+def test_find_gamma_flip_keeps_material_crossing_over_tail_noise() -> None:
+    """合法交叉保留：網格下緣另有高 IV 深價外 Call 造成的尾端雜訊交叉時，
+    仍應回傳 480–520 之間的合法翻轉線。"""
+    from local_api.macro import calculate_total_gex, find_gamma_flip
+
+    t = 10.0 / 365.0
+    chain = [
+        {"strike": 480.0, "oi": 5000, "iv": 0.20, "t": t, "is_call": False},
+        {"strike": 490.0, "oi": 3000, "iv": 0.20, "t": t, "is_call": False},
+        {"strike": 510.0, "oi": 3000, "iv": 0.20, "t": t, "is_call": True},
+        {"strike": 520.0, "oi": 5000, "iv": 0.20, "t": t, "is_call": True},
+        {"strike": 400.0, "oi": 5, "iv": 1.50, "t": t, "is_call": True},
+    ]
+    # 前置斷言：410 與 420 之間存在尾端符號變化，且量級遠小於網格峰值
+    g_lo, g_hi = (calculate_total_gex(p, chain) for p in (410.0, 420.0))
+    assert g_lo * g_hi < 0
+    grid_peak = max(
+        abs(calculate_total_gex(400.0 + 2.0 * i, chain)) for i in range(101)
+    )
+    assert max(abs(g_lo), abs(g_hi)) < 0.01 * grid_peak
+    flip = find_gamma_flip(500.0, chain)
+    assert 480.0 < flip < 520.0
+
+
 def test_find_gamma_flip_no_crossing_returns_zero_not_spot() -> None:
     """P1: 找不到零交叉點時，不得退回 spot_price (造成閃爍)，而必須回傳 0.0。"""
     from local_api.macro import find_gamma_flip
