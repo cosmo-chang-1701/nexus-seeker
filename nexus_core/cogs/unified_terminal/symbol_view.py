@@ -68,7 +68,7 @@ def _recommend_hedge_strategy(ivr: Optional[float], negative_gamma: bool) -> str
 
     賣方信用價差（做空波動率）只在 IVR 已知且 > 50% 並且不在負 Gamma 泥淖時
     才推薦；負 Gamma 環境依 docs/valuation_pricing/04 §1.2「無論 IVR 多高一律
-    賣方禁售」，IVR 未知時亦保守地退回買方保護。
+    禁賣 Put」（持股 Covered Call 允許，但不屬於價差推薦），IVR 未知時亦保守地退回買方保護。
     """
     if ivr is not None and ivr > 50.0 and not negative_gamma:
         return _HEDGE_SELL_PUT_SPREAD

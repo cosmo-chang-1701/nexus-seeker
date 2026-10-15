@@ -1,12 +1,27 @@
 """/market 總經面板標示：Flip 三態、TED 改名、RRP 小基數、低波自滿（僅呈現）。"""
 
+from datetime import datetime
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
+import market_time
+import cogs.embed_builders.market_embeds as market_embeds_mod
 from cogs.embed_builders.market_embeds import (
     build_market_macro_overview_embed,
     build_radar_scan_embed,
 )
+
+
+def _et(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
+    return datetime(y, mo, d, h, mi, tzinfo=market_time.ny_tz)
+
+
+@pytest.fixture(autouse=True)
+def _pin_regular_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    """預設釘在 2026-10-15（週四）11:00 ET 常規盤，讓低波自滿測試與牆鐘無關。"""
+    monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 11, 0))
 
 
 def _text(embed: Any) -> str:
@@ -225,3 +240,35 @@ def test_border_warning_for_negative_and_knife_edge_only() -> None:
         _c(spy_spot=99.0, spy_gamma_flip=100.0, short_gamma_critical=True) == 0xE74C3C
     )
     assert _c(spy_spot=99.0, spy_gamma_flip=100.0, gex_is_expired=True) == 0x2ECC71
+
+
+def test_complacency_deferred_before_open_on_trading_day(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 8, 30))
+    text = _render(vix=15.4, us10y=5.23, wti=91.0)
+    assert "⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀" in text
+    assert "⚠ 低波自滿" not in text
+    assert "└─ ⚪ 低波自滿" in text
+
+
+def test_complacency_warns_after_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 10, 0))
+    text = _render(vix=15.4, us10y=5.23, wti=91.0)
+    assert "⚠ 低波自滿（參考）" in text
+    assert "⚪" not in text
+
+
+def test_complacency_warns_on_weekend_morning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 17, 8, 0))
+    text = _render(vix=15.4, us10y=5.23, wti=91.0)
+    assert "⚠ 低波自滿（參考）" in text
+
+
+def test_complacency_premarket_without_trigger_prints_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 8, 30))
+    assert "低波自滿" not in _render(vix=18.0, us10y=5.23, wti=91.0)

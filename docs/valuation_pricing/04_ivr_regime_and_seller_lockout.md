@@ -8,12 +8,12 @@
 因此，量化系統必須將絕對 IV 標準化為 **IV Rank (IVR)** 與 **IV Percentile (IVP)**。這兩個指標定義了當前權利金相對於過去一整年歷史軌跡的相對溢價水準，是決定**「站在買方（買入低估波動率）」**還是**「站在賣方（收割高估波動率）」**的最核心決策基準。
 
 ### 1.2 做市商負 Gamma 泥淖與賣方一票否決制 (Short Gamma Seller Lockout)
-選擇權賣方（如現金擔保賣權 CSP、無掩護賣權 Naked Put 或賣方信用價差 Credit Spread）的勝率優勢，建立在做市商處於正 Gamma（Long Gamma）的「均值回歸自穩定環境」中。在正 Gamma 環境中，做市商「逢低買入、逢高拋售」，有效壓制市場波動，為期權賣方提供穩定的時間價值衰減（Theta Decay）。
+選擇權賣方（如現金擔保賣權 CSP、無掩護賣權 Naked Put 或賣出 Put 的信用價差 Bull Put Spread）的勝率優勢，建立在做市商處於正 Gamma（Long Gamma）的「均值回歸自穩定環境」中。在正 Gamma 環境中，做市商「逢低買入、逢高拋售」，有效壓制市場波動，為期權賣方提供穩定的時間價值衰減（Theta Decay）。
 
 然而，一旦做市商轉入**負 Gamma（Short Gamma）泥淖**（全鏈 $\text{Net GEX} < 0$ 或現貨跌穿 $\text{Put Wall}$）：
 1. 做市商轉變為「順向追殺者」——現貨下跌時做市商被迫砸盤對沖 Delta，下跌引發拋售，拋售進一步引發恐慌暴跌。
 2. 在此環境下，期權賣方收取的微薄權利金根本無法彌補標的跳空穿針造成的非線性巨額損失（Gamma Risk 徹底失控）。
-3. 因此，Nexus Seeker 確立**做市商負 Gamma 一票否決制**：無論當前 IVR 高達多少，只要陷入負 Gamma 泥淖，系統強制啟用 **`🔴賣方禁售`**，絕對禁止任何做空波動率行為。
+3. 因此，Nexus Seeker 確立**做市商負 Gamma 一票否決制**：無論當前 IVR 高達多少，只要陷入負 Gamma 泥淖，系統強制啟用 **`🔴禁賣Put`**，絕對禁止賣出 Put（CSP、裸賣 Put、Put 信用價差）。**對已持有的現股賣出 Covered Call 仍然允許**：它降低 Delta 暴露，是負 Gamma 環境下偏好的防禦動作。
 
 ### 1.3 低 IVR 賣方硬鎖與買方優勢空間
 當標的處於低波動環境時（$\text{IVR} < 10\%$ 底層硬鎖 / $\text{IVR} < 15\%$ 前端警示），期權權利金極度廉價。賣方承擔著完整的尾部風險與方向性風險，但潛在收益極低，風險報酬比嚴重惡化。此時是買方的黃金窗口，系統硬鎖所有賣方策略，引導資金轉向：
@@ -63,7 +63,9 @@ $$\text{Term Ratio} = \frac{\bar{\sigma}_{\text{Near}} (\text{DTE} \le 14)}{\bar
 $$\text{is\_neg\_gamma} \iff (\text{Net GEX} < 0) \lor (\text{Put Wall} > 0 \land P_{\text{spot}} < \text{Put Wall})$$
 
 當 $\text{is\_neg\_gamma} == \text{True}$ 時，觸發風控覆寫：
-$$\text{Strategy Routing} \leftarrow \text{"🔴賣方禁售"}$$
+$$\text{Strategy Routing} \leftarrow \text{"🔴禁賣Put"}$$
+
+此標示僅禁止賣 Put（CSP／裸賣 Put／Put 信用價差）；對已持有現股賣出的 Covered Call 允許。
 
 ---
 
@@ -76,7 +78,7 @@ flowchart TD
     TermCheck -- 是 --> DefenseState["⚠️ 總經事件防禦期<br/>防 IV Crush 暴跌<br/>全面暫停常規開倉"]
     TermCheck -- 否 --> GammaCheck{"is_neg_gamma 是否成立?<br/>Net GEX < 0 或 現價 < PutWall"}
 
-    GammaCheck -- 是 (做市商順向追殺) --> LockoutSeller["🔴 賣方禁售<br/>做市商負 Gamma 泥淖<br/>禁止 CSP / Covered Call / Credit Spread"]
+    GammaCheck -- 是 (做市商順向追殺) --> LockoutSeller["🔴 禁賣 Put<br/>做市商負 Gamma 泥淖<br/>禁止 CSP／裸賣 Put／Put 信用價差<br/>持股 Covered Call 允許"]
     GammaCheck -- 否 (做市商自穩定) --> IVRHardLock{"IV Rank < 10.0%?<br/>底層硬鎖閘門"}
 
     IVRHardLock -- 是 --> HardLockAllowed["🔴 絕對禁止賣方<br/>僅允許: SPOT_BUY / BTO ITM Call (Delta>=0.70) / Debit Spread"]
@@ -127,13 +129,13 @@ return ivr < _IVR_SELLING_LOCKOUT
 if is_iv_backwardation:
     iv_strategy_str = "⚠️總經事件防禦期"
 elif is_neg_gamma:
-    iv_strategy_str = "🔴賣方禁售"
+    iv_strategy_str = "🔴禁賣Put"
 elif iv_rank_val < 15.0:
     iv_strategy_str = "🔴CSP 禁售"
 else:
     iv_strategy_str = "🟢適宜賣方"
 ```
-負 Gamma 狀態的排位優先於 `iv_rank`，徹底杜絕在火山口賣 Put 的毀滅性行為。
+負 Gamma 狀態的排位優先於 `iv_rank`，徹底杜絕在火山口賣 Put 的毀滅性行為；標籤只點名被禁的 Put 賣方動作，持股 Covered Call 不在禁止之列。
 
 ---
 
@@ -141,7 +143,7 @@ else:
 
 migration v088（v1.14.1）清空 `historical_iv` 後，IVR 需累積 `min_history_records`（60）個交易日。`IVMetrics` 新增 `iv_history_count`／`iv_history_required`，/x 在 IVR 缺失時顯示「樣本累積中 N/60 日」。另提供 `hv_20`（20 日已實現波動率）與 IV/HV20 比值作過渡期參考，**僅供呈現，嚴禁混入 IVR 母體，也不接任何閘門**。臨近總經事件的狀態文字只有 `event_loading_applied` 為真才寫「1.4x 事件加載」，LIVE_IV 寫「即時 IV 已含事件定價」。
 
-**IV 標示 tenor 與代理值揭露（僅 /x，不改 `current_iv`／`historical_iv` 定義）**：`IVMetrics` 新增 `current_iv_expiry`／`current_iv_dte`（LIVE_IV 取樣的最近到期）與 `term_near_expiry`／`term_far_expiry`（期限結構比值所用到期日，皆有預設值，舊快取可還原）。LIVE_IV 標為「最近到期 MM-DD (DTE n) ±20% OI 加權」，DTE ≤ 2 附「含結算 Gamma 偏高」；期限結構標示「近 MM-DD／遠 MM-DD 比」。HV_PROXY／STORED_IV 套用 1.4x 時值行寫「原值 ×1.4 事件加載 = 結果」；**HV 代理或套用事件加載時不算 IV/HV20**（值由 HV 推得或被 ×1.4 加載，比值失去意義），改列「跨式 IV/HV20」供參考；STORED_IV 無加載時照常顯示。尺度修正（`iv_scale_corrected`）後 `current_iv_expiry`／`dte` 與跨式同源，值行標「跨式反推 MM-DD (DTE n)」。盤中 HV_PROXY 標「30D 歷史實現波動率代理」，不稱 OI 加權 IV。「極端高波」只認市場隱含 IV：DTE ≥ 5（`_EXTREME_VOL_MIN_DTE`）的跨式 IV，或 DTE ≥ 5 的 LIVE_IV；HV 代理與快取值不構成理由，IVR 未知時文末註明「IVR 累積中，無歷史分位」。
+**IV 標示 tenor 與代理值揭露（僅 /x，不改 `current_iv`／`historical_iv` 定義）**：`IVMetrics` 新增 `current_iv_expiry`／`current_iv_dte`（LIVE_IV 取樣的最近到期）與 `term_near_expiry`／`term_far_expiry`（期限結構比值所用到期日，皆有預設值，舊快取可還原）。LIVE_IV 標為「最近到期 MM-DD (DTE n) ±20% OI 加權」，`current_iv_dte` ≤ 2 附「近到期取樣，可能失真」（近到期 OI 加權 IV 不只可能偏高，也可能遠低於實際，例：GOOGL 8.6% vs 7 日跨式 32.4%）；`current_iv_dte` ≤ 2，或 `current_iv` 與 `straddle_implied_iv` 較大者 ≥ 較小者 2 倍（`_IV_STRADDLE_DIVERGENCE_RATIO = 2.0`，PRE_CALIBRATION／僅呈現）時，值行標「與跨式背離」（DTE > 2 的情形），IVR 累積期參考行改列「跨式 IV/HV20」（以 `straddle_implied_iv` 計算，不用 `current_iv`）。`current_iv`、IVR 與 4 倍尺度修正（`_IV_STRADDLE_SCALE_MISMATCH`）不變；期限結構標示「近 MM-DD／遠 MM-DD 比」。HV_PROXY／STORED_IV 套用 1.4x 時值行寫「原值 ×1.4 事件加載 = 結果」；**HV 代理或套用事件加載時不算 IV/HV20**（值由 HV 推得或被 ×1.4 加載，比值失去意義），改列「跨式 IV/HV20」供參考；STORED_IV 無加載時照常顯示。尺度修正（`iv_scale_corrected`）後 `current_iv_expiry`／`dte` 與跨式同源，值行標「跨式反推 MM-DD (DTE n)」。盤中 HV_PROXY 標「30D 歷史實現波動率代理」，不稱 OI 加權 IV。「極端高波」只認市場隱含 IV：DTE ≥ 5（`_EXTREME_VOL_MIN_DTE`）的跨式 IV，或 DTE ≥ 5 的 LIVE_IV；HV 代理與快取值不構成理由，IVR 未知時文末註明「IVR 累積中，無歷史分位」。
 
 ## 6. 核心程式碼檔案路徑關聯
 

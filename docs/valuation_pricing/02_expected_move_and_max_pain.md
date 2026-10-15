@@ -190,6 +190,10 @@ $$F_{\text{split}} = \prod_{i:\ t_i \ge t_{\text{now}} - 30\text{d}} r_i$$
 
 ---
 
+### 5.x 負 Gamma 否決 Max Pain 磁吸（雷達與即時洞察）
+
+Max Pain 向上磁吸只在做市商處於正 Gamma 時成立。批次雷達（`build_radar_scan_embed`）在 `is_neg_gamma` 為真時不印「多頭磁吸引力／限價捕獵／坑底捕獸夾」；若已有限價買單，改提示「負 Gamma 環境 Max Pain 磁吸不成立，建議重新評估」。`compute_realtime_insights` 的非危機路徑遇 `gex_status` 含 NEG 且現價低於 Max Pain 時，不稱磁吸效應、不推薦 CSP／Long Call／Bull Put Spread／逢低吸納，改為禁賣 Put 與左側接刀、持股可賣 Covered Call 防禦。負 Gamma 否決一律優先於 Max Pain 偏離度。
+
 ### 5.x 顯示標籤與中心（2026-10-07，僅 /x）
 
 欄位標示為「7 日 1σ（到期日 跨式 ×√(7/DTE)）」，到期日與 DTE 由 `_select_straddle_expiry()` 提供（與 EM 計算同一定義）。只要 `reference_spot_price` 與週度 EM 皆有值（與 IV 來源無關），區間即以 `reference_spot_price`（跨式定價當下的現價）為中心：盤中標「現價」，盤後／盤前標「最新收盤」；因盤後 `quote.pc` 是**昨日**收盤，不得再用前收為中心。`reference_spot_price` 不可得時沿用前收並標「前收」。雷達與 Max Pain 路徑不變。

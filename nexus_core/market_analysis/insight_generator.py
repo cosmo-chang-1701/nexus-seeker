@@ -61,8 +61,12 @@ def compute_realtime_insights(data: dict[str, Any]) -> str:
     elif sp_lo:
         chip_status = "🚀 情緒面呈現 Call 偏斜亢奮，散戶搶購看漲"
 
+    neg = "NEG" in str(gex_status).upper()
+
     # 2. 量化偏離事實
-    if dist_pct < -10.0:
+    if neg and dist_pct < -10.0:
+        dev_fact = f"，股價距離 Max Pain 有 {dist_pct:.1f}% 的偏差，但處負 Gamma 環境，磁吸效應不成立"
+    elif dist_pct < -10.0:
         dev_fact = (
             f"，股價距離 Max Pain 有 {dist_pct:.1f}% 的偏差，存在顯著的向上磁吸效應"
         )
@@ -94,6 +98,11 @@ def compute_realtime_insights(data: dict[str, Any]) -> str:
             guidance = "；此時散戶搶購情緒極端，防範主力拉回殺多，嚴禁盲目單腿裸買 Call，建議逢高分批鎖定利潤。"
         elif dist_pct > 10.0:
             guidance = "；操作上建議保持現貨防禦，嚴禁單腿操作。"
+
+    if neg and dist_pct < 0:
+        guidance = (
+            "；負 Gamma 環境禁止賣 Put 與左側接刀，持股可逢反彈賣出 Covered Call 防禦。"
+        )
 
     emoji, text = chip_status.split(" ", 1)
     return f"• {emoji} {sym}: {text}{dev_fact}{guidance}"

@@ -1979,8 +1979,8 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     assert "(-) N/A / $108.0" in desc_a
     # 2. Neg-GEX 欄位為 -1.6%
     assert "-1.6%" in desc_a
-    # 3. 負 Gamma 踩踏區 IV 策略啟動風控熔斷，強制顯示「🔴賣方禁售」
-    assert "🔴賣方禁售" in desc_a
+    # 3. 負 Gamma 踩踏區 IV 策略啟動風控熔斷，強制顯示「🔴禁賣Put」
+    assert "🔴禁賣Put" in desc_a
     # 4. 觸發負 Gamma 踩踏/異常，標的欄位動態渲染為「⚠️ SPCX」
     assert "⚠️ SPCX" in desc_a
 
@@ -2096,7 +2096,7 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     desc_crwv = get_embed_text(embeds_crwv[0])
     assert "⚠️ CRWV" in desc_crwv
     assert "(-) N/A / $108.0" in desc_crwv
-    assert "🔴賣方禁售" in desc_crwv
+    assert "🔴禁賣Put" in desc_crwv
     assert "-1.6%" in desc_crwv
     # 跌破底牆且無正 Gamma 深度、無 DTE≥7 機構買盤：IVR<60 不構成「護航網」，
     # 不得建議續抱。無 ATR 時防守位即 PutWall 本身 (同出場引擎軌道一)，現價已跌破。
@@ -2451,7 +2451,7 @@ def test_build_radar_scan_embed_all_enhanced_fields() -> None:
 
     # 6. IV 策略驗證
     assert "🔴CSP 禁售" in desc
-    assert "🔴賣方禁售" in desc
+    assert "🔴禁賣Put" in desc
     assert "🟢適宜賣方" in desc
 
     # 7. 防洗盤絕對防守位與離場判定鐵律驗證：
