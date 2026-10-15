@@ -222,8 +222,13 @@ async def test_command_event_impact(mock_interaction: Any, db_conn: Any):  # typ
         mock_interaction.followup.send.assert_called_once()
         embed = mock_interaction.followup.send.call_args[1]["embed"]
         assert f"{symbol} 事件風險模擬" in embed.title
-        assert "10.00" in embed.fields[0].value  # Beta-Weighted Delta
-        assert "Hidden Delta" in embed.fields[2].name
+        # Greeks 偏移已合併為單一 ansi 欄位（不再是 inline 網格）
+        greeks_value = next(
+            f.value for f in embed.fields if f.name == "📊 Greeks 偏移模擬"
+        )
+        assert "Beta-Weighted Delta" in greeks_value
+        assert "10.00" in greeks_value
+        assert "Hidden Delta" in greeks_value
 
 
 @pytest.mark.asyncio
