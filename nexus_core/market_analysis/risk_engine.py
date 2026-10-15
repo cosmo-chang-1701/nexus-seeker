@@ -606,11 +606,20 @@ def optimize_position_risk(
         (abs(proj_delta) * spy_price / user_capital * 100) if user_capital > 0 else 0
     )
 
+    # 僅供呈現（0 口原因）：不參與上方任何 sizing 計算。
+    risk_budget_shares: Optional[float] = None
+    if val_adj_unit_delta > 0:
+        risk_budget_shares = round(float(max_safe_shares - current_delta), 2)
+    elif val_adj_unit_delta < 0:
+        risk_budget_shares = round(float(max_safe_shares + current_delta), 2)
+
     return OptimizationResult(
         suggested_contracts=suggested_contracts,
         exposure_pct=round(exposure_pct, 2),
         suggested_hedge_spy=round(float(suggested_hedge_spy), 2),
         warnings=warnings,
+        unit_adj_delta=round(abs(float(val_adj_unit_delta)), 2),
+        risk_budget_shares=risk_budget_shares,
     )
 
 
