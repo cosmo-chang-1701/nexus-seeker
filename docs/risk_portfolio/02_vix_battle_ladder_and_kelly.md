@@ -309,6 +309,8 @@ $$\text{unit\_weighted\_delta} = 0.16 \times \beta \times \frac{S}{S_{SPY}} \tim
 
 β 取 `calculate_beta_strict(日線, SPY)`，重疊資料不足 60 筆時以 1.0 計並列入降級原因「Beta 資料不足」。舊版寫死 0.16，少乘了後三項，在高 β、股價相對 SPY 偏低的標的上口數被高估、曝險 % 被低估。欄位另顯示 β 與單口 SPY 等值股數，0 口時說明原因。現貨建倉部位以擠壓等級（strategies/10）為準，兩者並列。
 
+**0 口原因的呈現欄位（僅呈現，不參與 sizing）**：`OptimizationResult` 新增 `unit_adj_delta`（$|\text{val\_adj\_unit\_delta}|$，單口含 IV 調整的 SPY 等值股數）與 `risk_budget_shares`（$\text{max\_safe\_shares} \mp \text{current\_delta}$：單口 Delta 為正取減、為負取加；單口 Delta 為 0 時為 `None`），皆四捨五入至 2 位、預設 `None`，僅在 `optimize_position_risk` 最後的回傳帶入，提前返回路徑與 `suggested_contracts` 不變。`/x` 在 0 口時：`risk_budget_shares` $\le 0$ 顯示「組合既有 β 加權 Delta 已用盡可用額度」；否則顯示「單口 ≈X 股 SPY 等值（含 IV 調整）> 可用額度 ≈Y 股」；欄位為 `None` 時沿用「單口 β 加權 Delta 已超過可用風險額度」。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **VIX 戰情階梯與分位數配置**:

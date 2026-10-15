@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Literal
+from typing import List, Literal, Optional
 from enum import Enum
 
 
@@ -43,6 +43,9 @@ class OptimizationResult(BaseModel):
     suggested_hedge_spy: float = 0.0
     risk_score: float = 0.0
     warnings: List[str] = Field(default_factory=list)
+    # 僅供呈現（0 口原因說明）：單口 IV 調整後 SPY 等值股數與剩餘風險額度股數。
+    unit_adj_delta: Optional[float] = None
+    risk_budget_shares: Optional[float] = None
 
 
 class MacroRiskMetrics(BaseModel):

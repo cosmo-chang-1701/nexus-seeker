@@ -139,7 +139,7 @@ def test_a2_live_iv_labels_expiry_and_dte() -> None:
         term_far_expiry="2026-11-06",
     )
     text = _text(create_tactical_symbol_embed(_data(iv)))
-    assert "最近到期 10-09 (DTE 2) ±20% OI 加權，含結算 Gamma 偏高" in text
+    assert "最近到期 10-09 (DTE 2) ±20% OI 加權，近到期取樣，可能失真" in text
     assert "30 天平值" not in text
     assert "近 10-16／遠 11-06 比: 1.03" in text
 

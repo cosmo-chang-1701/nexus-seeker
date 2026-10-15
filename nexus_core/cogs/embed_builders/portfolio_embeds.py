@@ -44,6 +44,7 @@ from market_analysis.sentiment.max_pain import (
     find_settlement_gravity,
 )
 from market_analysis.gex_wall_depth import thin_wall_threshold
+from market_analysis.payout_coverage import payout_coverage, short_put_collateral
 from market_analysis.squeeze_entry.intraday_conflict import (
     assess_intraday_conflict,
     negative_momentum_tfs,
@@ -172,6 +173,19 @@ def _sto_best(cands: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
 # 「極端高波」採用的 IV 至少要有的 DTE：太短的到期日含結算 Gamma，IV 被墊高。
 # 跨式反推 IV 與 LIVE_IV 共用同一門檻。
 _EXTREME_VOL_MIN_DTE = 5
+
+# LIVE_IV 與跨式 IV 的倍數差距 >= 此值時，標示「與跨式背離」並改用跨式 IV/HV20。
+_IV_STRADDLE_DIVERGENCE_RATIO: float = 2.0  # PRE_CALIBRATION／僅呈現：未校準
+
+
+def _iv_diverged_from_straddle(
+    live_iv: Optional[float], straddle_iv: Optional[float]
+) -> bool:
+    """LIVE_IV 與跨式 IV 是否相差 >= _IV_STRADDLE_DIVERGENCE_RATIO 倍（僅呈現）。"""
+    if not live_iv or not straddle_iv or live_iv <= 0 or straddle_iv <= 0:
+        return False
+    hi, lo = max(live_iv, straddle_iv), min(live_iv, straddle_iv)
+    return hi / lo >= _IV_STRADDLE_DIVERGENCE_RATIO
 
 
 # ---------------------------------------------------------------------------
@@ -641,9 +655,30 @@ def create_strategic_dash_embed(
         f"收租效率: 每日 Theta {_w}${daily_theta:,.2f}{_z}"
         + (f" (覆蓋期權熔斷月支出 {coverage_pct:.1f}%)" if daily_expense > 0 else "")
     )
-    runway_rows.append(
-        f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z} (流動性防守限制)"
+    _trades_raw = (pnl_data or {}).get("trades") if isinstance(pnl_data, dict) else None
+    _put_collateral = short_put_collateral(
+        _trades_raw if isinstance(_trades_raw, list) else []
     )
+    if cash_reserve <= 0:
+        runway_rows.append(
+            f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z}"
+            "｜可動用現金 --（未設定現金儲備）"
+        )
+    else:
+        _usable_cash, _payout_surplus = payout_coverage(
+            cash_reserve, _put_collateral, payout_threshold
+        )
+        runway_rows.append(
+            f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z}"
+            f"｜可動用現金 {_w}${_usable_cash:,.0f}{_z}"
+            f"（現金儲備 − Short Put 擔保金 ${_put_collateral:,.0f}）"
+        )
+        if _payout_surplus < 0:
+            runway_rows.append(
+                f"{_y}❌ 低於紅線 ${-_payout_surplus:,.0f}：擔保金解鎖前暫停新 CSP{_z}"
+            )
+        else:
+            runway_rows.append(f"✅ 高於紅線 ${_payout_surplus:,.0f}")
 
     _add_ansi_field_safely(
         embed, "🏁 提領跑道 (Withdrawal Runway)", _ansi_tree_lines(runway_rows)
@@ -1511,7 +1546,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     elif _ie and _id is not None:
                         vol_note = f"最近到期 {str(_ie)[5:]} (DTE {_id}) ±20% OI 加權"
                         if int(_id) <= 2:
-                            vol_note += "，含結算 Gamma 偏高"
+                            vol_note += "，近到期取樣，可能失真"
+                        elif _iv_diverged_from_straddle(
+                            current_iv_num,
+                            _to_float_or_none(_iv_attr("straddle_implied_iv")),
+                        ):
+                            vol_note += "，與跨式背離"
                     else:
                         vol_note = "最近到期 ±20% OI 加權"
                     em_note = "基於當前 IV 計算"
@@ -1553,9 +1593,23 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             ]
             _hv20 = _to_float_or_none(_iv_attr("hv_20"))
             _st_iv_hv = _to_float_or_none(_iv_attr("straddle_implied_iv"))
+            _iv_near_exp = (
+                iv_source == "LIVE_IV"
+                and _iv_attr("current_iv_dte") is not None
+                and int(_iv_attr("current_iv_dte")) <= 2
+                and not _iv_attr("iv_scale_corrected", False)
+            )
+            _iv_use_straddle = bool(_st_iv_hv) and (
+                _iv_near_exp or _iv_diverged_from_straddle(current_iv_num, _st_iv_hv)
+            )
             if iv_rank_num is None and _hv20:
-                if iv_source == "HV_PROXY" or _iv_attr("event_loading_applied", False):
-                    # 值由 HV 推得、或被 ×1.4 事件加載，IV/HV20 已失去意義，不輸出。
+                if (
+                    iv_source == "HV_PROXY"
+                    or _iv_attr("event_loading_applied", False)
+                    or _iv_use_straddle
+                ):
+                    # 值由 HV 推得、被 ×1.4 事件加載，或 LIVE_IV 近到期／與跨式背離，
+                    # current_iv 的 IV/HV20 已失去意義，不輸出，改列跨式。
                     if _st_iv_hv:
                         iv_lines.append(
                             f" └─ 跨式 IV/HV20: {_st_iv_hv * 100:.1f}% / "
@@ -2035,7 +2089,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}"
                                 )
                                 sweet_spot_idx = len(put_items)
-                                put_items.append(f"{sweet_spot_prefix} ✅ 進場甜蜜點")
+                                if put_wall_weak:
+                                    put_items.append(
+                                        f"{sweet_spot_prefix} ✅ 停損距離合格"
+                                        f"\n │  ⚠ PutWall 為{put_wall_kind}，支撐性待校準"
+                                    )
+                                else:
+                                    put_items.append(
+                                        f"{sweet_spot_prefix} ✅ 進場甜蜜點"
+                                    )
                             elif put_buffer_eval.state == "TOO_TIGHT":
                                 # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
                                 # 有公式卻無數值的誤導文案——該情境走的是降級的
@@ -3163,7 +3225,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         if contracts == 0 and not any(
             k in warnings for k in ("禁用", "fail-closed", "暫停")
         ):
-            kelly_lines.append(" ├─ 0 口原因: 單口 β 加權 Delta 已超過可用風險額度")
+            _k_unit_adj = getattr(kelly_sizing, "unit_adj_delta", None)
+            _k_budget = getattr(kelly_sizing, "risk_budget_shares", None)
+            if _k_unit_adj is None or _k_budget is None:
+                kelly_lines.append(" ├─ 0 口原因: 單口 β 加權 Delta 已超過可用風險額度")
+            elif _k_budget <= 0:
+                kelly_lines.append(" ├─ 0 口原因: 組合既有 β 加權 Delta 已用盡可用額度")
+            else:
+                kelly_lines.append(
+                    f" ├─ 0 口原因: 單口 ≈{_k_unit_adj:.1f} 股 SPY 等值（含 IV 調整）"
+                    f"> 可用額度 ≈{_k_budget:.1f} 股"
+                )
         if getattr(kelly_sizing, "warnings", None):
             kelly_lines.append(f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m")
         else:
