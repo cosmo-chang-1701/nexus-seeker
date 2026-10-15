@@ -32,10 +32,17 @@ from cogs.embed_builders._ansi_utils import (
     _chunk_text_blocks,
     _truncate_with_boundary,
     _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
     _pad_string,
     _format_macro_report_ansi,
 )
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_G,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
     _safe_embed_field_value,
     _safe_embed_codeblock_value,
     _build_watchlist_style_panel,
@@ -137,10 +144,10 @@ def create_portfolio_report_embed(  # type: ignore
         timestamp=datetime.now(timezone.utc),
     )
 
-    embed.description = "\n".join(
-        ["```ansi", " 🏁 提領跑道 (Withdrawal Runway)"]
-        + [f" • {ln}" for ln in runway_lines]
-        + ["```"]
+    _add_ansi_field_safely(
+        embed,
+        "🏁 提領跑道 (Withdrawal Runway)",
+        _ansi_tree_lines([f"{_ANSI_W}{ln}{_ANSI_0}" for ln in runway_lines]),
     )
 
     # 1. 資金與實質暴露 (Financial Summary) 獨立欄位
@@ -304,21 +311,27 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
     )
 
     # 目前獲利狀況
-    embed.add_field(
-        name="📈 目前獲利狀況",
-        value=f"獲利率: `{pnl_pct:+.1f}%` / `${pnl_usd:,.2f}`\n\u200b",
-        inline=True,
+    _add_ansi_field_safely(
+        embed,
+        "📈 目前獲利狀況",
+        _ansi_tree_lines(
+            [
+                f"獲利率: {_ANSI_W}{pnl_pct:+.1f}%{_ANSI_0} / {_ANSI_W}${pnl_usd:,.2f}{_ANSI_0}"
+            ]
+        ),
     )
 
     # 演進後效益
-    embed.add_field(
-        name="🧬 演進後預期效益",
-        value=(
-            f"調整後持股成本: **`${res.adjusted_cost_basis:.2f}`**\n"
-            f"相對現價折讓: `{res.capital_efficiency_gain:.1f}%` (現價: `${stock_p:.2f}`)\n"
-            f"預期 CC 年化報酬 (AROC): `{res.projected_aroc:.1f}%` (@${res.cc_strike})\n\u200b"
+    _add_ansi_field_safely(
+        embed,
+        "🧬 演進後預期效益",
+        _ansi_tree_lines(
+            [
+                f"調整後持股成本: {_ANSI_W}${res.adjusted_cost_basis:.2f}{_ANSI_0}",
+                f"相對現價折讓: {_ANSI_W}{res.capital_efficiency_gain:.1f}%{_ANSI_0} (現價: {_ANSI_W}${stock_p:.2f}{_ANSI_0})",
+                f"預期 CC 年化報酬 (AROC): {_ANSI_W}{res.projected_aroc:.1f}%{_ANSI_0} (@${res.cc_strike})",
+            ]
         ),
-        inline=False,
     )
 
     # 操作指令建議
@@ -332,7 +345,7 @@ def create_transition_suggestion_embed(data: Dict[str, Any]) -> discord.Embed:
         inline=False,
     )
 
-    embed.set_footer(text="Nexus Position Evolution Engine | 專業投資者建議")
+    embed.set_footer(text="Position Evolution Engine | 專業投資者建議")
     return embed
 
 
@@ -416,7 +429,7 @@ def build_vtr_stats_embed(
     for name, value, inline in downside_fields or []:
         embed.add_field(name=name, value=value, inline=inline)
 
-    embed.set_footer(text="Nexus Sandbox Engine | 數據包含已平倉之虛擬部位")
+    embed.set_footer(text="Sandbox Engine | 數據包含已平倉之虛擬部位")
 
     return embed
 
@@ -439,10 +452,10 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     )
 
     # 1. Greeks 區塊 (從 result 中提取)
-    g_delta = result.get("delta", 0.0)
-    g_theta = result.get("theta", 0.0)
-    g_gamma = result.get("gamma", 0.0)
-    g_iv = result.get("iv", 0.0)
+    g_delta = result.get("delta")
+    g_theta = result.get("theta")
+    g_gamma = result.get("gamma")
+    g_iv = result.get("iv")
 
     greeks_lines = ["```ansi"]
     g_headers = ["希臘字母", "數據值"]
@@ -453,16 +466,16 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
     greeks_lines.append("-" * (sum(g_widths) + 3))
 
     greeks_lines.append(
-        f"{_pad_string('Delta', g_widths[0])} | {_pad_string(f'{g_delta:+.3f}', g_widths[1])}"
+        f"{_pad_string('Delta', g_widths[0])} | {_pad_string(fmt_or_dash(g_delta, '+.3f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('Theta', g_widths[0])} | {_pad_string(f'{g_theta:+.4f}', g_widths[1])}"
+        f"{_pad_string('Theta', g_widths[0])} | {_pad_string(fmt_or_dash(g_theta, '+.4f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('Gamma', g_widths[0])} | {_pad_string(f'{g_gamma:+.6f}', g_widths[1])}"
+        f"{_pad_string('Gamma', g_widths[0])} | {_pad_string(fmt_or_dash(g_gamma, '+.6f'), g_widths[1])}"
     )
     greeks_lines.append(
-        f"{_pad_string('IV (隱含波動率)', g_widths[0])} | {_pad_string(f'{g_iv:.1%}', g_widths[1])}"
+        f"{_pad_string('IV (隱含波動率)', g_widths[0])} | {_pad_string(fmt_or_dash(g_iv, '.1%', placeholder='--%'), g_widths[1])}"
     )
     greeks_lines.append("```")
     greeks_info = "\n".join(greeks_lines)
@@ -470,11 +483,15 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
 
     # 2. NRO 風控區塊
     safe_qty = result.get("safe_qty", 0)
-    projected = result.get("projected_exposure_pct", 0.0)
-    risk_limit = result.get("risk_limit", 15.0)
+    projected = _to_float_or_none(result.get("projected_exposure_pct"))
+    risk_limit = _to_float_or_none(result.get("risk_limit", 15.0))
 
-    proj_color = "\033[0;31m" if projected > risk_limit else "\033[0;32m"
-    proj_str = f"{projected:+.1f}%"
+    # 曝險或紅線缺值時不做超限判定（不上紅／綠）
+    if projected is None or risk_limit is None:
+        proj_color = "\033[1;30m"
+    else:
+        proj_color = "\033[0;31m" if projected > risk_limit else "\033[0;32m"
+    proj_str = fmt_or_dash(projected, "+.1f", suffix="%", placeholder="--%")
 
     nro_lines = ["```ansi"]
     n_headers = ["風控項目", "數據值"]
@@ -489,23 +506,28 @@ def build_scan_report(result: Dict[str, Any]) -> Any:
         f"{_pad_string('預期總曝險', n_widths[0])} | {_pad_string(proj_str, n_widths[1]).replace(proj_str, f'{proj_color}{proj_str}\033[0m')}"
     )
     nro_lines.append(
-        f"{_pad_string('曝險風控紅線', n_widths[0])} | {_pad_string(f'{risk_limit:.1f}%', n_widths[1])}"
+        f"{_pad_string('曝險風控紅線', n_widths[0])} | {_pad_string(fmt_or_dash(risk_limit, '.1f', suffix='%', placeholder='--%'), n_widths[1])}"
     )
     nro_lines.append("```")
     nro_info = "\n".join(nro_lines)
     embed.add_field(name="🛡️ NRO 風控判定", value=nro_info, inline=False)
 
     # 3. 🚀 整合 EMA 訊號區塊
-    ema_ui = get_ema_signal_ui(result.get("ema_signals", []))
-    embed.add_field(name="📈 趨勢與指標動態", value=ema_ui, inline=False)
+    ema_lines = get_ema_signal_ui(result.get("ema_signals", []), ansi=True)
+    _add_ansi_field_safely(embed, "📈 趨勢與指標動態", ema_lines)
 
     # 4. 加上宏觀背景燈號 (VIX/Oil)
-    vix = result.get("macro_vix", result.get("vix", 0))
-    oil = result.get("macro_oil", result.get("oil", 0))
-    vix_status = "🔴" if vix > 25 else "🟢"
+    vix = _to_float_or_none(result.get("macro_vix", result.get("vix")))
+    oil = _to_float_or_none(result.get("macro_oil", result.get("oil")))
+    if vix is None:
+        vix_status = "⚪"
+    else:
+        vix_status = "🔴" if vix > 25 else "🟢"
+    vix_text = "--" if vix is None else f"{vix:g}"
+    oil_text = fmt_or_dash(oil, "g", prefix="$")
 
     embed.set_footer(
-        text=f"環境感知: VIX {vix} {vix_status} | WTI ${oil} | 基準 SPY: ${result.get('spy_price', 0):.1f}"
+        text=f"環境感知: VIX {vix_text} {vix_status} | WTI {oil_text} | 基準 SPY: {fmt_or_dash(result.get('spy_price'), '.1f', prefix='$')}"
     )
 
     return embed
@@ -530,14 +552,16 @@ def create_rehedge_embed(rehedge_info: Dict[str, Any]) -> discord.Embed:
         description=f"標的: **{symbol}**",
     )
 
-    embed.add_field(name="觸發原因", value=f"```\n{reason}\n```", inline=False)
+    _add_ansi_field_safely(
+        embed, "🚨 觸發原因", _ansi_tree_lines([f"{_ANSI_W}{reason}{_ANSI_0}"])
+    )
 
     action_val = (
-        f"賣出 (Short) `{suggested_qty}` 股 SPY"
+        f"賣出 (Short) {_ANSI_W}{suggested_qty}{_ANSI_0} 股 SPY"
         if suggested_qty > 0
-        else f"買入 (Long) `{abs(suggested_qty)}` 股 SPY"
+        else f"買入 (Long) {_ANSI_W}{abs(suggested_qty)}{_ANSI_0} 股 SPY"
     )
-    embed.add_field(name="建議動作", value=action_val, inline=True)
+    _add_ansi_field_safely(embed, "🛠️ 建議動作", _ansi_tree_lines([action_val]))
 
     embed.set_footer(text="提示：當前趨勢已走弱，掛回避險可鎖定現有獲利。")
     embed.timestamp = datetime.now(timezone.utc)
@@ -575,7 +599,9 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     score = report["confidence_score"]
 
     # 計算 P/E 均值回歸空間 (預期漲幅)
-    pe_upside = (pe_mean / curr_pe - 1) * 100 if curr_pe > 0 else 0
+    pe_upside: float | None = (
+        (pe_mean / curr_pe - 1) * 100 if curr_pe and curr_pe > 0 else None
+    )
 
     embed = NexusEmbed(
         title=f"🚨 警報：Nexus 戴維斯雙擊 (DDP) | {sym}",
@@ -597,9 +623,15 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         f"{_pad_string('3 年本益比均值 (3Y Mean)', widths[0])} | {_pad_string(f'{pe_mean:.2f}', widths[1])}"
     )
 
-    upside_str = f"+{pe_upside:.1f}%" if pe_upside >= 0 else f"{pe_upside:.1f}%"
+    if pe_upside is None:
+        # 本益比 <= 0（虧損）時回歸空間無意義，不上色
+        upside_str = "N/A"
+        upside_color = "\033[1;30m"
+    else:
+        upside_str = f"+{pe_upside:.1f}%" if pe_upside >= 0 else f"{pe_upside:.1f}%"
+        upside_color = "\033[0;32m" if pe_upside >= 0 else "\033[0;31m"
     ddp_lines.append(
-        f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'\033[0;32m{upside_str}\033[0m' if pe_upside >= 0 else f'\033[0;31m{upside_str}\033[0m')}"
+        f"{_pad_string('本益比估值回歸空間', widths[0])} | {_pad_string(upside_str, widths[1]).replace(upside_str, f'{upside_color}{upside_str}\033[0m')}"
     )
 
     # ASCII 進度條
@@ -630,20 +662,20 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     # 邏輯解釋
     has_margin = report.get("has_margin_bonus", False)
     rvol = report.get("rvol", 0.0)
-    logic_text = (
-        f"1. **盈餘動能**: 稀釋 EPS YoY 成長 `{eps_growth:.1f}%` > 15%。\n"
-        f"2. **估值壓縮**: 當前 P/E 低於 5 年歷史均值之 80% (或股價相對低位)。\n"
-        f"3. **前瞻預期**: Forward P/E `{report['forward_pe']:.2f}` < TTM P/E (或 OCF>0)。\n"
-        f"4. **動能確認**: 營收成長加速"
-        + (" `(+營業利益率升)`" if has_margin else "")
-        + "。\n"
-        f"5. **市場資金**: RVOL `{rvol:.2f}x`"
-        + (" `(動能點火)`" if rvol > 1.5 else " `(量能平穩)`")
-        + "。"
-    )
-    embed.add_field(name="🧐 量化篩選邏輯", value=logic_text, inline=False)
+    logic_rows = [
+        f"1. 盈餘動能: 稀釋 EPS YoY 成長 {_ANSI_W}{eps_growth:.1f}%{_ANSI_0} > 15%。",
+        "2. 估值壓縮: 當前 P/E 低於 5 年歷史均值之 80% (或股價相對低位)。",
+        f"3. 前瞻預期: Forward P/E {_ANSI_W}{report['forward_pe']:.2f}{_ANSI_0} < TTM P/E (或 OCF>0)。",
+        "4. 動能確認: 營收成長加速"
+        + (f" {_ANSI_G}(+營業利益率升){_ANSI_0}" if has_margin else "")
+        + "。",
+        f"5. 市場資金: RVOL {_ANSI_W}{rvol:.2f}x{_ANSI_0}"
+        + (f" {_ANSI_G}(動能點火){_ANSI_0}" if rvol > 1.5 else " (量能平穩)")
+        + "。",
+    ]
+    _add_ansi_field_safely(embed, "🧐 量化篩選邏輯", _ansi_tree_lines(logic_rows))
 
-    embed.set_footer(text="Nexus Quantitative Research | 戴維斯雙擊引擎 v1.0")
+    embed.set_footer(text="Quantitative Research | 戴維斯雙擊引擎 v1.0")
     return embed
 
 
@@ -738,7 +770,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
     val3 = "\n".join(val3_lines)
     embed.add_field(name="🛡️ 風險管理 (NRO)", value=val3, inline=False)
 
-    embed.set_footer(text="Nexus Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
+    embed.set_footer(text="Volatility Strategist Agent v1.0 | 專注廉價波動率偵測")
     return embed
 
 
@@ -758,33 +790,30 @@ def build_hedge_analysis_field(embed: Any, analysis: Any):  # type: ignore
 
     status = str(analysis.get("status", "UNKNOWN"))
     status_emoji = "✅" if status == "OPTIMAL" else "⚠️"
-    effectiveness = _safe_float(analysis.get("effectiveness", 0.0), 0.0)
-    alpha_contribution = _safe_float(analysis.get("alpha_contribution", 0.0), 0.0)
-    hedge_contribution = _safe_float(analysis.get("hedge_contribution", 0.0), 0.0)
-    hedge_ratio = _safe_float(analysis.get("hedge_ratio", 0.0), 0.0)
-    net_pnl = _safe_float(analysis.get("net_pnl", 0.0), 0.0)
+    effectiveness = _to_float_or_none(analysis.get("effectiveness"))
+    alpha_contribution = analysis.get("alpha_contribution")
+    hedge_contribution = analysis.get("hedge_contribution")
+    hedge_ratio = analysis.get("hedge_ratio")
+    net_pnl = analysis.get("net_pnl")
 
-    # 決定有效性評價
-    if effectiveness >= 0.8:
+    # 決定有效性評價（缺值時跳過判定）
+    if effectiveness is None:
+        eff_text = "⚪ 無法判定"
+    elif effectiveness >= 0.8:
         eff_text = "🎯 精準"
     elif effectiveness >= 0.6:
         eff_text = "⚖️ 適中"
     else:
         eff_text = "🌪️ 偏差"
 
-    content = (
-        f"🔹 **個股 Alpha 損益**: `${alpha_contribution:,.2f}`\n"
-        f"🔸 **對沖 Beta 損益**: `${hedge_contribution:,.2f}`\n"
-        f"📊 **對沖比率 (HR)**: `{hedge_ratio:.2%}` {status_emoji}\n"
-        f"🧩 **對沖有效性 (ES)**: `{effectiveness:.2%}` ({eff_text})\n"
-        f"🏁 **最終淨損益**: **`${net_pnl:,.2f}`**"
-    )
-
-    embed.add_field(
-        name="🛡️ 對沖有效性診斷",
-        value=_safe_embed_field_value(content, "對沖分析資料不足。"),
-        inline=False,
-    )
+    rows = [
+        f"🔹 個股 Alpha 損益 : {_ANSI_W}{fmt_or_dash(alpha_contribution, prefix='$')}{_ANSI_0}",
+        f"🔸 對沖 Beta 損益  : {_ANSI_W}{fmt_or_dash(hedge_contribution, prefix='$')}{_ANSI_0}",
+        f"📊 對沖比率 (HR)   : {_ANSI_W}{fmt_or_dash(hedge_ratio, '.2%', placeholder='--%')}{_ANSI_0} {status_emoji}",
+        f"🧩 對沖有效性 (ES) : {_ANSI_W}{fmt_or_dash(effectiveness, '.2%', placeholder='--%')}{_ANSI_0} ({eff_text})",
+        f"🏁 最終淨損益      : {_ANSI_W}{fmt_or_dash(net_pnl, prefix='$')}{_ANSI_0}",
+    ]
+    _add_ansi_field_safely(embed, "🛡️ 對沖有效性診斷", _ansi_tree_lines(rows))
 
 
 def create_ai_analysis_embed(
@@ -811,7 +840,7 @@ def create_ai_analysis_embed(
     else:
         embed.description = _truncate_with_boundary(ai_report_text, 4000)
 
-    embed.set_footer(text="Nexus Seeker AI Analyst v1.0 | 智慧投研管線")
+    embed.set_footer(text="AI Analyst v1.0 | 智慧投研管線")
     return embed
 
 
@@ -886,5 +915,5 @@ def create_next_day_strategy_embed(strategy_text: str) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker Strategy Engine v1.0 | 戰鬥階級系統")
+    embed.set_footer(text="Strategy Engine v1.0 | 戰鬥階級系統")
     return embed

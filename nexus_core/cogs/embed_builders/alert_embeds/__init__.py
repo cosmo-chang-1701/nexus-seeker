@@ -11,6 +11,7 @@
 - market_signal_alerts.py：WTI 原油與個股價量突破警報
 - downside_alerts.py：投組下行風險警報與 Sortino / MDD / CVaR 快照欄位
 - withdrawal_alerts.py：提領跑道警示與提領提醒（賣出清單）
+- execution_decision.py：NRO 執行決策矩陣（create_execution_decision_embed）
 """
 
 from cogs.embed_builders.alert_embeds.option_scan import (
@@ -52,6 +53,9 @@ from cogs.embed_builders.alert_embeds.market_signal_alerts import (
     create_price_volume_alert_embed,
     create_gamma_squeeze_alert_embed,
 )
+from cogs.embed_builders.alert_embeds.execution_decision import (
+    create_execution_decision_embed,
+)
 
 __all__ = [
     "create_scan_embed",
@@ -77,4 +81,5 @@ __all__ = [
     "create_portfolio_downside_alert_embed",
     "create_runway_warning_embed",
     "create_withdrawal_reminder_embed",
+    "create_execution_decision_embed",
 ]

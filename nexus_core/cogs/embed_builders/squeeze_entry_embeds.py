@@ -9,6 +9,7 @@ from typing import Any, List, Optional
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._ansi_utils import _render_aligned_table
 from cogs.embed_builders._embed_helpers import _add_ansi_field_safely
 
 _TF_ORDER = ("W", "3D", "D", "65m", "15m", "5m")
@@ -37,11 +38,24 @@ _TIER_TEXT = {1: "T1（1%）", 2: "T2（1.5%）", 3: "T3（2.5%）"}
 
 
 def _matrix_lines(matrix: Any) -> List[str]:
-    lines = ["```ansi"]
+    # 先收集有資料的列，統一以 _render_aligned_table 對齊「擠壓強度」欄
+    # （含 ANSI 色碼與中文），再依原順序穿插缺資料列與盤中預覽列。
+    entries: List[dict[str, Any]] = []
+    table_rows: List[List[str]] = []
     for tf in _TF_ORDER:
         st = matrix.get(tf) if matrix else None
         if st is None:
-            lines.append(f" {tf:<4}│ 資料不足")
+            # 缺資料列一併進對齊表，確保 │ 與有資料列同欄
+            table_rows.append([tf, "資料不足", ""])
+            entries.append(
+                {
+                    "tf": tf,
+                    "row": len(table_rows) - 1,
+                    "flags": [],
+                    "preview": None,
+                    "no_data": True,
+                }
+            )
             continue
         flags: List[str] = []
         if st.green_dot:
@@ -54,10 +68,8 @@ def _matrix_lines(matrix: Any) -> List[str]:
             flags.append("\u001b[1;36mTurbo\u001b[0m")
         level = _LEVEL_TEXT.get(st.squeeze_level, st.squeeze_level)
         mom = _MOM_TEXT.get(st.momentum_color, st.momentum_color)
-        line = f" {tf:<4}│ {level} │ 動能 {mom}"
-        if flags:
-            line += " │ " + "、".join(flags)
-        lines.append(line)
+        table_rows.append([tf, level, f"動能 {mom}"])
+        preview = None
         if st.preview_squeeze_level is not None:
             p_level = _LEVEL_TEXT.get(
                 st.preview_squeeze_level, st.preview_squeeze_level
@@ -65,7 +77,31 @@ def _matrix_lines(matrix: Any) -> List[str]:
             p_mom = _MOM_TEXT.get(
                 st.preview_momentum_color or "", st.preview_momentum_color or "N/A"
             )
-            lines.append(f"     └ 盤中未收盤預覽: {p_level} │ {p_mom}")
+            preview = f"     └─ 盤中未收盤預覽: {p_level} │ {p_mom}"
+        entries.append(
+            {
+                "tf": tf,
+                "row": len(table_rows) - 1,
+                "flags": flags,
+                "preview": preview,
+            }
+        )
+
+    rendered = (
+        _render_aligned_table(["週期", "擠壓", "動能"], table_rows, sep=" │ ")[2:]
+        if table_rows
+        else []
+    )
+    lines = ["```ansi"]
+    for e in entries:
+        line = " " + rendered[e["row"]]
+        if e.get("no_data"):
+            line = line.rstrip(" │")
+        if e["flags"]:
+            line += " │ " + "、".join(e["flags"])
+        lines.append(line)
+        if e["preview"]:
+            lines.append(e["preview"])
     lines.append("```")
     return lines
 
@@ -86,8 +122,10 @@ def create_squeeze_entry_embed(
     matrix = getattr(evaluation, "matrix", None) or {}
     resistance = getattr(evaluation, "resistance", None)
 
+    no_data = getattr(result, "status", None) == "NO_DATA"
     embed = NexusEmbed(
-        title=f"🗜️ {symbol} 多時間框架擠壓進場檢核",
+        title=f"🗜️ {symbol} 多時間框架擠壓進場檢核"
+        + (" [資料不足/降級模式]" if no_data else ""),
         color=discord.Color.green() if passed else discord.Color.dark_magenta(),
         timestamp=datetime.now(timezone.utc),
     )

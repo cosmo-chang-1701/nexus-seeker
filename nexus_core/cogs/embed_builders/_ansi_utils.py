@@ -4,7 +4,9 @@
 無 Discord Embed 物件依賴，可獨立測試。
 """
 
+import math
 import re
+import unicodedata
 
 from typing import List, Any
 
@@ -16,6 +18,38 @@ from ui import panel_renderer
 # ============================================================================
 
 
+def _to_float_or_none(value: Any) -> float | None:
+    """安全轉 float；None／NaN／Inf／無法轉換一律回傳 None。"""
+    try:
+        if value is None:
+            return None
+        val = float(value)
+        return None if (math.isnan(val) or math.isinf(val)) else val
+    except (TypeError, ValueError):
+        return None
+
+
+def _positive_float_or_none(value: Any) -> float | None:
+    """指數／殖利率等水位值：缺失或 <= 0（舊上游以 0.0 代表缺值）一律回傳 None。"""
+    v = _to_float_or_none(value)
+    return v if v is not None and v > 0 else None
+
+
+def fmt_or_dash(
+    value: Any,
+    spec: str = ",.2f",
+    *,
+    prefix: str = "",
+    suffix: str = "",
+    placeholder: str = "--",
+) -> str:
+    """缺值（None／NaN／Inf／非數值）回傳 placeholder，否則格式化。"""
+    v = _to_float_or_none(value)
+    if v is None:
+        return placeholder
+    return f"{prefix}{format(v, spec)}{suffix}"
+
+
 def _visual_len(s: str) -> int:
     """計算字串的視覺寬度，中文字元與中文標點視為雙倍寬度。"""
     return sum(
@@ -24,6 +58,26 @@ def _visual_len(s: str) -> int:
         else 1
         for c in s
     )
+
+
+def _display_width(s: str) -> int:
+    """終端機等寬顯示寬度（去除 ANSI 後量測）。
+
+    與 ``_visual_len`` 不同：``_visual_len`` 把所有 ord>127 字元視為雙倍寬（供舊版
+    呼叫端與 /x 面板字數預算使用，不可更動）；本函式依 East Asian Width 判定——
+    W／F 與 U+1F000 以上 emoji 為 2，組合符號與 U+FE0F／U+FE0E／U+200D 為 0，
+    其餘（→、—、Δ、●、±、框線字元等）為 1。
+    """
+    width = 0
+    for c in _clean_ansi(s):
+        cp = ord(c)
+        if cp in (0xFE0F, 0xFE0E, 0x200D) or unicodedata.combining(c):
+            continue
+        if cp >= 0x1F000 or unicodedata.east_asian_width(c) in ("W", "F"):
+            width += 2
+        else:
+            width += 1
+    return width
 
 
 def _pad_string(s: str, width: int, align: str = "left") -> str:
@@ -38,6 +92,54 @@ def _pad_string(s: str, width: int, align: str = "left") -> str:
         return " " * left_pad + s + " " * right_pad
     else:
         return s + " " * pad_len
+
+
+def _render_aligned_table(
+    header: list[str],
+    rows: list[list[str]],
+    aligns: list[str] | None = None,
+    *,
+    sep: str = " ",
+) -> list[str]:
+    """依視覺寬度動態對齊的純文字／ANSI 表格。
+
+    回傳 ``[header_line, divider, *row_lines]``。欄寬以去除 ANSI 色碼後的
+    ``_display_width`` 最大值計算（CJK／emoji 視為雙倍寬，→／—／Δ 等視為單寬），儲存格內的 ANSI 色碼原樣保留。
+    ``aligns`` 每欄 ``left``／``right``／``center``，預設全部 left；
+    最後一欄不補尾端空白；欄間以 ``sep`` 連接（預設單一空白）。divider 為 ``"-" * _display_width(header_line)``。
+    """
+    ncols = len(header)
+    aligns = list(aligns) if aligns else []
+    aligns += ["left"] * (ncols - len(aligns))
+
+    def _norm(row: list[str]) -> list[str]:
+        cells = [str(c) for c in row[:ncols]]
+        return cells + [""] * (ncols - len(cells))
+
+    norm_rows = [_norm(r) for r in rows]
+    widths = [_display_width(h) for h in header]
+    for r in norm_rows:
+        for i, c in enumerate(r):
+            widths[i] = max(widths[i], _display_width(c))
+
+    def _line(cells: list[str]) -> str:
+        parts = []
+        for i, c in enumerate(cells):
+            pad = max(0, widths[i] - _display_width(c))
+            al = aligns[i]
+            if al == "right":
+                parts.append(" " * pad + c)
+            elif al == "center":
+                parts.append(" " * (pad // 2) + c + " " * (pad - pad // 2))
+            elif i == ncols - 1:
+                parts.append(c)
+            else:
+                parts.append(c + " " * pad)
+        return sep.join(parts)
+
+    header_line = _line(list(header))
+    divider = "-" * _display_width(header_line)
+    return [header_line, divider, *[_line(r) for r in norm_rows]]
 
 
 def _visual_truncate(s: str, max_vlen: int) -> str:

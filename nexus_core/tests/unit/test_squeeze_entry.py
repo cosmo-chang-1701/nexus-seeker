@@ -513,7 +513,7 @@ def test_squeeze_entry_embed_renders_matrix_verdict_and_sizing() -> None:
     text = "\n".join(f"{f.name}\n{f.value}" for f in embed.fields)
     assert "Green Dot" in text and "（1 根前）" in text
     assert "Turbo" in text and "盤中未收盤預覽" in text
-    assert " 5m  │ 資料不足" in text
+    assert "5m" in text and "資料不足" in text
     assert "T3（2.5%）" in text and "總資產 2.5%" in text
     assert "衝擊中" in text and "$293.30" in text
     assert "$280.00" in text

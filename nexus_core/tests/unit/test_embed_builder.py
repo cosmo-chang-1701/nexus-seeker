@@ -52,6 +52,12 @@ from cogs.embed_builder import (
 from models.schemas import WatchlistOptionLeg, WatchlistOptionPlan
 
 
+def _strip_ansi(text: str) -> str:
+    import re as _re
+
+    return _re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def _runway_snapshot() -> Any:
     from database.withdrawal_runway import RunwaySnapshot
 
@@ -196,8 +202,8 @@ def test_create_trades_embed() -> None:
     assert desc_field is not None
     assert "數量" in desc_field
     assert "現價" in desc_field
-    assert "  6.50" in desc_field  # Visual formatting check
-    assert "  -1" in desc_field  # Visual formatting check for negative quantity
+    assert " 6.50 " in desc_field  # 動態欄寬：成本欄靠右對齊
+    assert "-1\x1b[0m" in desc_field  # 負數量（含色碼）
 
 
 def test_create_portfolio_report_embed() -> None:
@@ -438,8 +444,10 @@ def test_create_hedge_settlement_embed() -> None:
     embed = create_hedge_settlement_embed(12, "SPY", 8)
     assert embed.title == "✅ 對沖結算完成"
     assert "#12" in get_embed_text(embed)
-    assert embed.fields[0].value == "`SPY`"
-    assert embed.fields[1].value == "`8`"
+    record = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "執行標的: SPY" in record
+    assert "執行數量: 8" in record
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_hedge_list_embed() -> None:
@@ -481,8 +489,11 @@ def test_create_hedge_alert_embed() -> None:
     )
     assert embed.title == "🚨 【戰位報告：自動化對沖警報】"
     assert "Aggressive" in get_embed_text(embed)
-    assert "140.0" in embed.fields[0].value  # type: ignore
-    assert "SPY" in embed.fields[3].value  # type: ignore
+    fields = {str(f.name): _strip_ansi(str(f.value)) for f in embed.fields}
+    assert "140.0" in fields["📊 風險指標"]
+    assert "SPY" in fields["🛡️ 對沖建議指令"]
+    assert "62%" in fields["🌐 [快取快照] Polymarket 即時機率"]
+    assert all(not f.inline for f in embed.fields)
     assert embed.footer.text == "🌌 Nexus Seeker • Battle Station | Alert ID: 7"
 
 
@@ -683,9 +694,11 @@ def test_create_memory_alert_embed() -> None:
     embed = create_memory_alert_embed(91.2, 512.4, 120, 87)
     assert embed.title == "🆘 【系統緊急警報：記憶體不足】 - Droplet (主節點)"
     assert "91.2%" in get_embed_text(embed)
-    assert embed.fields[0].value == "`91.2%`"
-    assert embed.fields[1].value == "`512.4 MB`"
-    assert embed.fields[2].value == "SMA/EMA: `120/87` 筆"
+    mem = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "當前總占用: 91.2%" in mem
+    assert "512.4 MB" in mem
+    assert "SMA/EMA: 120/87 筆" in mem
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_polymarket_whale_alert_embed() -> None:
@@ -796,9 +809,12 @@ def test_create_quote_embed() -> None:
         {"c": 150.0, "dp": 1.3, "h": 155.0, "l": 145.0, "pc": 148.0},
     )
     assert "AAPL" in embed.title  # type: ignore
-    assert embed.fields[0].value == "**$150.0**"
-    assert embed.fields[1].value == "`1.3%`"
-    assert "155.0" in embed.fields[2].value  # type: ignore
+    quote = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "現價 (Current) : $150.0" in quote
+    assert "漲跌幅 (%)     : 1.3%" in quote
+    assert "H: $155.0 / L: $145.0" in quote
+    assert "前收盤 (PC)    : $148.0" in quote
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_max_pain_embed_with_guidance() -> None:
@@ -908,9 +924,12 @@ def test_create_transition_simulation_embed() -> None:
         capital_efficiency_gain=2.7,
     )
     assert "NVDA" in embed.title  # type: ignore
-    assert "$100.00" in embed.fields[0].value  # type: ignore
-    assert "7,500.00" in embed.fields[2].value  # type: ignore
-    assert "符合 15% 門檻" in embed.fields[3].value  # type: ignore
+    fields = {str(f.name): _strip_ansi(str(f.value)) for f in embed.fields}
+    assert "$100.00" in fields["📊 轉軌模擬概覽"]
+    assert "$2,500.00" in fields["📊 轉軌模擬概覽"]
+    assert "7,500.00" in fields["🚀 資本重分配路線圖 (Roadmap)"]
+    assert "符合 15% 門檻" in fields["📊 資本效率評估"]
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_profit_lock_alert_embed() -> None:
@@ -925,8 +944,9 @@ def test_create_profit_lock_alert_embed() -> None:
 def test_create_gamma_fragility_embed() -> None:
     embed = create_gamma_fragility_embed({"net_gamma": -25.5, "threshold": -20})
     assert "🆘 警報：Gamma 脆弱性與斷層" in embed.title  # type: ignore
-    assert "`-25.5`" == embed.fields[0].value
-    assert "`-20`" == embed.fields[1].value
+    gamma = _strip_ansi(embed.fields[0].value)  # type: ignore
+    assert "目前淨 Gamma : -25.5" in gamma
+    assert "安全臨界點   : -20" in gamma
 
 
 def test_create_ditm_transition_alert_embed() -> None:
@@ -940,8 +960,12 @@ def test_create_ditm_transition_alert_embed() -> None:
     )
     assert "🚨 警報：DITM 凸性防護與獲利鎖定 | TSLA" in embed.title  # type: ignore
     assert "TSLA" in get_embed_text(embed)
-    assert "12.50%" in embed.fields[3].value  # type: ignore
-    assert "賣出 10 股 SPY" in embed.fields[4].value  # type: ignore
+    text = _strip_ansi(get_embed_text(embed))
+    assert "Delta 接近 1.0" in text
+    assert "已平倉 (Closed)" in text
+    assert "$1250.00" in text
+    assert "12.50%" in text
+    assert "賣出 10 股 SPY" in text
 
 
 def test_create_vtr_settlement_notice_embed() -> None:
@@ -955,9 +979,13 @@ def test_create_vtr_settlement_notice_embed() -> None:
         hedge={"action": "買入 5 股 SPY", "gap": 5},
     )
     assert "TSLA" in embed.title  # type: ignore
-    assert "`9.50%`" in embed.fields[1].value  # type: ignore
-    assert "`Balanced`" in embed.fields[2].value  # type: ignore
-    assert "買入 5 股 SPY" in embed.fields[4].value  # type: ignore
+    text = _strip_ansi(get_embed_text(embed))
+    assert "$850.00" in text
+    assert "9.50%" in text
+    assert "Balanced" in text
+    assert "12.0 Delta" in text
+    assert "買入 5 股 SPY" in text
+    assert all(not f.inline for f in embed.fields)
 
 
 def test_create_holdings_embed_chunking() -> None:
@@ -1232,7 +1260,9 @@ def test_create_active_orders_embed() -> None:
     embeds_many = create_active_orders_embed(many_orders)
     assert len(embeds_many) > 1
     assert sum(len(e.fields) for e in embeds_many) == 30
-    assert " (1/" in embeds_many[0].title  # type: ignore
+    assert len(embeds_many) == 3
+    assert " (第 1/3 頁)" in embeds_many[0].title  # type: ignore
+    assert all(len(e.fields) <= 10 for e in embeds_many)
 
 
 def test_build_radar_scan_embed() -> None:
@@ -3276,7 +3306,7 @@ def test_create_telemetry_alignment_embeds() -> None:
     # 5. Test pagination (16 items -> should produce at least 2 embeds if split or chunked)
     items_16 = [dict(item, order_id=i) for i in range(16)]
     embeds_16 = create_telemetry_alignment_embeds(items_16)
-    assert len(embeds_16) >= 2
+    assert len(embeds_16) >= 2  # 每頁 10 筆 -> 16 筆至少 2 頁
     assert "(第 1/" in embeds_16[0].title  # type: ignore
     assert "頁)" in embeds_16[0].title  # type: ignore
 
@@ -4245,8 +4275,8 @@ def test_holding_pnl_pct_negative_displayed_correctly() -> None:
     assert "-10.00%" in get_embed_text(embed)
 
 
-def test_holding_pnl_pct_none_shows_zero() -> None:
-    """holding_pnl_pct=None 時，顯示為 0.00%（向後相容的 fallback）。"""
+def test_holding_pnl_pct_none_shows_placeholder() -> None:
+    """holding_pnl_pct=None 時顯示 `--%`，不以 0.00% 冒充損益。"""
     embed = create_watchlist_signal_embed(
         symbol="NVDA",
         has_position=True,
@@ -4259,7 +4289,8 @@ def test_holding_pnl_pct_none_shows_zero() -> None:
     )
     assert embed is not None
     assert get_embed_text(embed)
-    assert "0.00%" in get_embed_text(embed)
+    assert "當前損益: --%" in get_embed_text(embed)
+    assert "當前損益: 0.00%" not in get_embed_text(embed)
 
 
 def test_build_post_market_intelligence_embed_with_stock_holdings() -> None:
@@ -4457,9 +4488,10 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
 
     # 1. Description contains runway (without timestamp or pnl)
-    desc = embed.description or ""
-    assert "🏁 提領跑道" in desc
-    assert "壓力跑道 2.3 年" in desc
+    runway_val = _strip_ansi(field_dict.get("🏁 提領跑道 (Withdrawal Runway)", ""))
+    assert runway_val, "runway must live in a 🏁 field, not the description"
+    assert "🏁 提領跑道" not in (embed.description or "")
+    assert "壓力跑道 2.3 年" in runway_val
 
     fin_val = field_dict.get("💰 資金與實質暴露 (Financial Summary)", "")
     assert "Debit Cost" in fin_val
@@ -4998,11 +5030,12 @@ def test_create_short_entry_embed_renders_short_levels_and_sizing() -> None:
     text = " ".join(f"{f.name} {f.value}" for f in embed.fields)
     assert "SELL SHORT" in text
     assert "$92.00" in text and "$80.00" in text
-    assert "結構停損 `$97.50`／出場引擎停損 `$98.00`" in text
+    text = _strip_ansi(text)
+    assert "結構停損 $97.50／出場引擎停損 $98.00" in text
     assert "收復 Put Wall $95.00 即論點失效" in text
-    assert "`45` 股" in text
-    assert "VIX `未知`" in text
-    assert "做空倉位乘數 `0.50x`" in text
+    assert "45 股" in text
+    assert "VIX 未知" in text
+    assert "做空倉位乘數 0.50x" in text
     assert "BUY" not in text.upper().replace("BUYING", "")
     assert "Buy Shares" not in (embed.description or "")
     assert embed.footer.text is not None and "負股數" in embed.footer.text
@@ -5887,3 +5920,52 @@ def test_build_radar_scan_embed_filters_outlier_cached_gex_flip() -> None:
         text = get_embed_text(build_radar_scan_embed(scan_results, "ALL", 12345)[0])
     assert "690.00" in text
     assert "已濾除" not in text
+
+
+def test_nexus_embed_footer_roundtrip_is_idempotent() -> None:
+    """保底 footer 與帶描述的 footer 經 to_dict/from_dict 往返後都不得重複品牌前綴。"""
+    from cogs.embed_builders._core import NexusEmbed
+
+    bare = NexusEmbed(title="t")
+    restored = NexusEmbed.from_dict(bare.to_dict())
+    assert restored.to_dict()["footer"]["text"] == "🌌 Nexus Seeker"
+
+    with_text = NexusEmbed(title="t")
+    with_text.set_footer(text="🌌 Nexus Seeker • X")
+    again = NexusEmbed.from_dict(NexusEmbed.from_dict(with_text.to_dict()).to_dict())
+    assert again.to_dict()["footer"]["text"] == "🌌 Nexus Seeker • X"
+
+
+@pytest.mark.parametrize(
+    "text", ["", "Nexus Seeker", "🌌 Nexus Seeker", "🌌 Nexus Seeker • "]
+)
+def test_nexus_embed_footer_empty_or_brand_only_collapses(text: str) -> None:
+    from cogs.embed_builders._core import NexusEmbed
+
+    embed = NexusEmbed(title="t")
+    embed.set_footer(text=text)
+    assert embed.to_dict()["footer"]["text"] == "🌌 Nexus Seeker"
+
+
+def test_split_embed_by_fields_returns_nexus_embeds() -> None:
+    from cogs.embed_builders._core import NexusEmbed
+    from cogs.embed_builders._embed_helpers import split_embed_by_fields
+
+    embed = NexusEmbed(title="big")
+    embed.set_footer(text="模組")
+    for i in range(20):
+        embed.add_field(name=f"f{i}", value="x" * 900, inline=False)
+    parts = split_embed_by_fields(embed)
+    assert len(parts) > 1
+    for part in parts:
+        assert isinstance(part, NexusEmbed)
+        assert part.to_dict()["footer"]["text"] == "🌌 Nexus Seeker • 模組"
+
+
+def test_vix_tier_colors_belong_to_curated_palette() -> None:
+    from cogs.embed_builders._core import CURATED_PALETTE
+    from config import VIX_LADDER_CONFIG
+
+    assert len(CURATED_PALETTE) == 9
+    for tier in VIX_LADDER_CONFIG:
+        assert tier["color_hex"] in CURATED_PALETTE, tier["name"]

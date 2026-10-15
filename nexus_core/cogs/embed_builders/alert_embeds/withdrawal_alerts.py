@@ -8,14 +8,32 @@ from typing import Literal
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._embed_helpers import format_runway_lines
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_R,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+    format_runway_lines,
+)
 from database.withdrawal_runway import RunwaySnapshot
 from market_analysis.withdrawal_runway import (
     RUNWAY_REARM_BUFFER_YEARS,
     WithdrawalPlan,
 )
 
-_FOOTER = "Nexus Seeker | 提領跑道 (歷史壓力重演)"
+_FOOTER = "提領跑道 (歷史壓力重演)"
+
+
+def _add_runway_field(embed: NexusEmbed, snap: RunwaySnapshot) -> None:
+    """跑道行為純文字（format_runway_lines 不帶格式），由此處包裝成 ansi 樹狀。"""
+    _add_ansi_field_safely(
+        embed,
+        "📊 目前跑道",
+        _ansi_tree_lines(
+            [f"{_ANSI_W}{ln}{_ANSI_0}" for ln in format_runway_lines(snap)]
+        ),
+    )
 
 
 def create_runway_warning_embed(snap: RunwaySnapshot, tier: int) -> discord.Embed:
@@ -30,9 +48,7 @@ def create_runway_warning_embed(snap: RunwaySnapshot, tier: int) -> discord.Embe
         color=discord.Color.dark_red() if tier <= 1 else discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(
-        name="📊 目前跑道", value="\n".join(format_runway_lines(snap)), inline=False
-    )
+    _add_runway_field(embed, snap)
     embed.add_field(
         name="🔁 重新武裝",
         value=f"壓力跑道回升到 {tier + RUNWAY_REARM_BUFFER_YEARS:.1f} 年以上後，此門檻才會再次提醒。",
@@ -68,20 +84,24 @@ def create_withdrawal_reminder_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    sell_lines = [f"• BOXX：`${plan.from_boxx:,.0f}`"] if plan.from_boxx > 0 else []
+    sell_rows = (
+        [f"BOXX：{_ANSI_W}${plan.from_boxx:,.0f}{_ANSI_0}"]
+        if plan.from_boxx > 0
+        else []
+    )
     for sym, value in sorted(plan.sells.items(), key=lambda kv: kv[1], reverse=True):
-        sell_lines.append(f"• {sym}：`${value:,.0f}`")
-    if not sell_lines:
-        sell_lines.append("• 無可賣出部位")
+        sell_rows.append(f"{sym}：{_ANSI_W}${value:,.0f}{_ANSI_0}")
+    if not sell_rows:
+        sell_rows.append("無可賣出部位")
     if plan.shortfall > 0:
-        sell_lines.append(f"⚠️ 全部可賣部位仍不足，差額 `${plan.shortfall:,.0f}`")
-    embed.add_field(
-        name="💵 賣出清單（先用 BOXX，不足者賣超配最多的持股）",
-        value="\n".join(sell_lines),
-        inline=False,
+        sell_rows.append(
+            f"{_ANSI_R}⚠️ 全部可賣部位仍不足，差額 ${plan.shortfall:,.0f}{_ANSI_0}"
+        )
+    _add_ansi_field_safely(
+        embed,
+        "💵 賣出清單（先用 BOXX，不足者賣超配最多的持股）",
+        _ansi_tree_lines(sell_rows),
     )
-    embed.add_field(
-        name="📊 目前跑道", value="\n".join(format_runway_lines(snap)), inline=False
-    )
+    _add_runway_field(embed, snap)
     embed.set_footer(text=f"{_FOOTER}｜依 {snap.nav_date} 收盤淨值與價格計算，僅供參考")
     return embed

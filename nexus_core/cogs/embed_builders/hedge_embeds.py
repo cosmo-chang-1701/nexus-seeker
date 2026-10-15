@@ -18,8 +18,20 @@ from cogs.embed_builders._core import NexusEmbed
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from cogs.embed_builders._ansi_utils import _truncate_with_boundary
-from cogs.embed_builders._embed_helpers import split_embed_by_fields
+from cogs.embed_builders._ansi_utils import (
+    _to_float_or_none,
+    _truncate_with_boundary,
+    fmt_or_dash,
+)
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_G,
+    _ANSI_R,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+    split_embed_by_fields,
+)
 
 
 def create_event_impact_embed(
@@ -39,31 +51,29 @@ def create_event_impact_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    embed.add_field(
-        name="目前 Beta-Weighted Delta",
-        value=f"`{total_delta:.2f}`",
-        inline=True,
-    )
-    embed.add_field(
-        name="目前 Vanna (曝險變化率)",
-        value=f"`{total_vanna:.2f}`",
-        inline=True,
-    )
-    embed.add_field(
-        name="預期 Hidden Delta",
-        value=f"`{adjusted_delta:.2f}`",
-        inline=False,
-    )
-    embed.add_field(name="Delta 偏移量", value=f"`{delta_shift:+.2f}`", inline=True)
-    embed.add_field(
-        name="等值曝險變動 (USD)",
-        value=f"`${exposure_shift_dollars:,.2f}`",
-        inline=True,
+    _add_ansi_field_safely(
+        embed,
+        "📊 Greeks 偏移模擬",
+        _ansi_tree_lines(
+            [
+                f"目前 Beta-Weighted Delta: {_ANSI_W}{total_delta:.2f}{_ANSI_0}",
+                f"目前 Vanna (曝險變化率) : {_ANSI_W}{total_vanna:.2f}{_ANSI_0}",
+                f"預期 Hidden Delta       : {_ANSI_W}{adjusted_delta:.2f}{_ANSI_0}",
+                f"Delta 偏移量            : {_ANSI_W}{delta_shift:+.2f}{_ANSI_0}",
+                f"等值曝險變動 (USD)      : {_ANSI_W}${exposure_shift_dollars:,.2f}{_ANSI_0}",
+            ]
+        ),
     )
 
-    risk_status = "🔴 危險" if abs(adjusted_delta) > 100 else "🟢 安全"
-    embed.add_field(name="風險狀態判定", value=f"**{risk_status}**", inline=False)
-    embed.set_footer(text="NRO Vanna Simulation | Nexus Seeker")
+    is_danger = abs(adjusted_delta) > 100
+    risk_status = "🔴 危險" if is_danger else "🟢 安全"
+    risk_color = _ANSI_R if is_danger else _ANSI_G
+    _add_ansi_field_safely(
+        embed,
+        "🚦 風險狀態判定",
+        _ansi_tree_lines([f"{risk_color}{risk_status}{_ANSI_0}"]),
+    )
+    embed.set_footer(text="NRO Vanna Simulation")
     return embed
 
 
@@ -77,8 +87,16 @@ def create_hedge_settlement_embed(
         color=discord.Color.green(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="執行標的", value=f"`{hedge_instrument}`", inline=True)
-    embed.add_field(name="執行數量", value=f"`{executed_quantity}`", inline=True)
+    _add_ansi_field_safely(
+        embed,
+        "🧾 執行紀錄",
+        _ansi_tree_lines(
+            [
+                f"執行標的: {_ANSI_W}{hedge_instrument}{_ANSI_0}",
+                f"執行數量: {_ANSI_W}{executed_quantity}{_ANSI_0}",
+            ]
+        ),
+    )
     embed.set_footer(text="數據已同步至 SQLite 持久化層，可用於歸因分析。")
     return embed
 
@@ -101,7 +119,7 @@ def create_hedge_list_embed(rows: List[Any]) -> discord.Embed:
         )
 
     embed.description = "\n".join(content) if content else "📭 目前無對沖警報紀錄。"
-    embed.set_footer(text="Nexus Seeker | Hedge Ledger")
+    embed.set_footer(text="Hedge Ledger")
     return embed
 
 
@@ -129,15 +147,17 @@ def create_hedge_alert_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    embed.add_field(
-        name="📊 風險指標",
-        value=(
-            f"• **即時 VIX:** `{vix:.2f}`\n"
-            f"• **淨 Delta:** `{total_beta_delta:+.1f}`\n"
-            f"• **調整後 Delta:** `{adjusted_delta:+.1f}` (Hidden Delta)\n"
-            f"• **Vega 脆弱性:** `{total_vega:+.2f}`"
+    _add_ansi_field_safely(
+        embed,
+        "📊 風險指標",
+        _ansi_tree_lines(
+            [
+                f"即時 VIX     : {_ANSI_W}{vix:.2f}{_ANSI_0}",
+                f"淨 Delta     : {_ANSI_W}{total_beta_delta:+.1f}{_ANSI_0}",
+                f"調整後 Delta : {_ANSI_W}{adjusted_delta:+.1f}{_ANSI_0} (Hidden Delta)",
+                f"Vega 脆弱性  : {_ANSI_W}{total_vega:+.2f}{_ANSI_0}",
+            ]
         ),
-        inline=False,
     )
 
     if poly_snapshot:
@@ -146,34 +166,48 @@ def create_hedge_alert_embed(
             question = str(event.get("question", "N/A"))
             truncated = _truncate_with_boundary(question, 40)
             odds = event.get("odds_distribution", [])
+
+            def _odds_pct(item: Dict[str, Any]) -> str:
+                o = _to_float_or_none(item.get("odds"))
+                return fmt_or_dash(
+                    o * 100 if o is not None else None,
+                    ".0f",
+                    suffix="%",
+                    placeholder="--%",
+                )
+
             odds_str = " | ".join(
-                f"{item.get('outcome')}: `{item.get('odds', 0.0) * 100:.0f}%`"
+                f"{item.get('outcome')}: {_ANSI_W}{_odds_pct(item)}{_ANSI_0}"
                 for item in odds[:2]
             )
-            snapshot_lines.append(f"• **{truncated}**\n  └ {odds_str}")
+            snapshot_lines.append(f"{truncated}｜{odds_str}")
 
         if snapshot_lines:
-            embed.add_field(
-                name="🌐 [快取快照] Polymarket 即時機率",
-                value="\n".join(snapshot_lines),
-                inline=False,
+            _add_ansi_field_safely(
+                embed,
+                "🌐 [快取快照] Polymarket 即時機率",
+                _ansi_tree_lines(snapshot_lines),
             )
 
     embed.add_field(name="🤖 AI 風險敘述", value=f"*{narration}*", inline=False)
-    embed.add_field(
-        name="🛡️ 對沖建議指令",
-        value=f"```fix\n{instruction_text}\n```",
-        inline=False,
-    )
-    embed.add_field(
-        name="📈 預期效果",
-        value=(
-            f"執行後淨 Delta 將回歸至 `{adjusted_delta + (hedge_quantity * -1.0):+.1f}` 附近，"
-            "顯著降低系統性回撤風險。"
+    _add_ansi_field_safely(
+        embed,
+        "🛡️ 對沖建議指令",
+        _ansi_tree_lines(
+            [f"{_ANSI_W}{ln}{_ANSI_0}" for ln in instruction_text.split("\n")]
         ),
-        inline=False,
     )
-    embed.set_footer(text=f"🌌 Nexus Seeker • Battle Station | Alert ID: {alert_id}")
+    _add_ansi_field_safely(
+        embed,
+        "📈 預期效果",
+        _ansi_tree_lines(
+            [
+                f"執行後淨 Delta 將回歸至 {_ANSI_W}{adjusted_delta + (hedge_quantity * -1.0):+.1f}{_ANSI_0} 附近，"
+                "顯著降低系統性回撤風險。"
+            ]
+        ),
+    )
+    embed.set_footer(text=f"Battle Station | Alert ID: {alert_id}")
     return embed
 
 
@@ -191,13 +225,13 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
 
     if not events:
         embed.description = "📭 目前沒有偵測到即將來臨的重大波動事件。"
-        embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+        embed.set_footer(text="Proactive Event Monitor")
         return [embed]
 
     for event in events:
         if isinstance(event, dict):
             name = str(event.get("name", "⚠️ 重大事件"))
-            tte_hours = float(event.get("tte_hours", 0.0) or 0.0)
+            tte_hours = _to_float_or_none(event.get("tte_hours"))
             risk_status = str(event.get("risk_status", "持倉風險狀態暫不可用"))
             instruction = str(event.get("instruction", "請先降低曝險並觀察事件落地。"))
         else:
@@ -207,11 +241,14 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
             else:
                 name = f"📊 財報預警: {event.symbol}"
                 instruction = "已啟動 IV Crush 防護機制。"
-            tte_hours = float(getattr(event, "tte_hours", 0.0) or 0.0)
+            tte_hours = _to_float_or_none(getattr(event, "tte_hours", None))
             risk_status = "持倉風險狀態未提供，請搭配組合 Greeks 自行覆核。"
 
         # Determine colors for TTE
-        if tte_hours <= 12.0:
+        # TTE 缺值時不判斷緊急度（不上紅），改中性灰
+        if tte_hours is None:
+            tte_color = "\u001b[1;30m"
+        elif tte_hours <= 12.0:
             tte_color = "\u001b[1;31m"  # Urgent Red
         elif tte_hours <= 24.0:
             tte_color = "\u001b[1;33m"  # Warning Yellow
@@ -233,7 +270,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
         event_lines = [
             "```ansi",
             " 距離發布 (Time to Event)",
-            f" └─ 剩餘時間: {tte_color}{tte_hours:.1f} 小時\u001b[0m",
+            f" └─ 剩餘時間: {tte_color}{fmt_or_dash(tte_hours, '.1f')} 小時\u001b[0m",
             " 持倉風險狀態 (Position Risk Status)",
             f" └─ 狀態: {risk_color}{risk_status}\u001b[0m",
             " NRO 指令 (NRO Instruction)",
@@ -244,7 +281,7 @@ def create_proactive_event_alert_embed(events: List[Any]) -> List[discord.Embed]
 
         embed.add_field(name=name, value=value, inline=False)
 
-    embed.set_footer(text="Proactive Event Monitor | Nexus Seeker")
+    embed.set_footer(text="Proactive Event Monitor")
     return split_embed_by_fields(embed)
 
 
@@ -266,20 +303,15 @@ def create_memory_alert_embed(
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="當前總占用", value=f"`{total_usage}%`", inline=True)
+    mem_rows = [f"當前總占用: {_ANSI_W}{total_usage}%{_ANSI_0}"]
     if swap_usage > 0:
-        embed.add_field(name="Swap 占用", value=f"`{swap_usage}%`", inline=True)
-
+        mem_rows.append(f"Swap 占用 : {_ANSI_W}{swap_usage}%{_ANSI_0}")
     if process_memory_mb > 0:
-        embed.add_field(
-            name="程序占用 (RSS)", value=f"`{process_memory_mb:.1f} MB`", inline=True
-        )
-
-    embed.add_field(
-        name="📦 快取消費者",
-        value=f"SMA/EMA: `{sma_cache_size}/{ema_cache_size}` 筆",
-        inline=False,
+        mem_rows.append(f"程序占用 (RSS): {_ANSI_W}{process_memory_mb:.1f} MB{_ANSI_0}")
+    mem_rows.append(
+        f"快取消費者 SMA/EMA: {_ANSI_W}{sma_cache_size}/{ema_cache_size}{_ANSI_0} 筆"
     )
+    _add_ansi_field_safely(embed, "🖥️ 記憶體概況", _ansi_tree_lines(mem_rows))
     embed.set_footer(text="建議重啟服務或增加 Swap 分區。")
     return embed
 
@@ -304,8 +336,16 @@ def create_power_alert_embed(
         color=discord.Color.orange(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="剩餘電量", value=f"`{percent}%`", inline=True)
-    embed.add_field(name="預估剩餘時間", value=f"`{time_left_str}`", inline=True)
+    _add_ansi_field_safely(
+        embed,
+        "🔋 電力狀態",
+        _ansi_tree_lines(
+            [
+                f"剩餘電量    : {_ANSI_W}{percent}%{_ANSI_0}",
+                f"預估剩餘時間: {_ANSI_W}{time_left_str}{_ANSI_0}",
+            ]
+        ),
+    )
 
     return embed
 
@@ -335,49 +375,57 @@ def create_polymarket_whale_alert_embed(
         timestamp=datetime.now(timezone.utc),
     )
 
-    content = [
-        f"## {intent_emoji} {intent_label}",
-        "---",
-        f"**市場問題：** **{market_question}**",
-        f"**交易金額：** `${usd_value:,.2f}`",
-        f"**流動性倍數：** `{usd_value / dynamic_threshold:.2f}x`",
-        f"**當前勝率：** {win_rate:.1f}%",
-        "---",
-    ]
+    _add_ansi_field_safely(
+        embed,
+        "📊 交易概況",
+        _ansi_tree_lines(
+            [
+                f"市場問題  : {_ANSI_W}{market_question}{_ANSI_0}",
+                f"交易金額  : {_ANSI_W}${usd_value:,.2f}{_ANSI_0}",
+                f"流動性倍數: {_ANSI_W}{usd_value / dynamic_threshold:.2f}x{_ANSI_0}",
+                f"當前勝率  : {_ANSI_W}{win_rate:.1f}%{_ANSI_0}",
+            ]
+        ),
+    )
 
     if uoa_correlation:
         uoa = uoa_correlation["uoa"]
         classification = uoa_correlation["classification"]
-        content.append(f"🔍 **UOA 關聯偵測 ({uoa['symbol']})**")
-        content.append(f"- 合約: `{uoa['expiry']}` `${uoa['strike']}` {uoa['type']}")
-        content.append(
-            f"- 性質: **{classification['classification']}** (信心: `{classification['confidence']:.2f}`)"
+        _add_ansi_field_safely(
+            embed,
+            f"🔍 UOA 關聯偵測 ({uoa['symbol']})",
+            _ansi_tree_lines(
+                [
+                    f"合約: {_ANSI_W}{uoa['expiry']}{_ANSI_0} {_ANSI_W}${uoa['strike']}{_ANSI_0} {uoa['type']}",
+                    f"性質: {_ANSI_W}{classification['classification']}{_ANSI_0} (信心: {_ANSI_W}{classification['confidence']:.2f}{_ANSI_0})",
+                    f"理由: {classification['explanation']}",
+                ]
+            ),
         )
-        content.append(f"- 理由: {classification['explanation']}")
-        content.append("---")
 
     if win_rate > 70 or win_rate < 30:
-        content.append("🛡️ **【預測性對沖建議 (Predictive Hedge)】**")
-        content.append(
-            f"偵測到預測市場對 `{market_question}` 的機率激增至 `{win_rate:.1f}%`，建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。"
+        embed.add_field(
+            name="🛡️ 預測性對沖建議 (Predictive Hedge)",
+            value=(
+                f"偵測到預測市場對 `{market_question}` 的機率激增至 `{win_rate:.1f}%`，"
+                "建議提前在 VTR 執行 Delta 對沖，以應對潛在的波動率跳空。"
+            ),
+            inline=False,
         )
-        content.append("---")
-
-    if summary and summary != "（未啟用 AI 分析）":
-        content.append(f"**🤖 AI 總結分析**\n{summary}")
-        content.append("---")
 
     market_url = (
         f"https://polymarket.com/event/{event_slug}"
         if event_slug
         else "https://polymarket.com"
     )
-    content.append(f"[🔗 前往市場]({market_url})")
-
-    embed.description = "\n".join(content)
-    embed.set_footer(
-        text=f"Nexus Seeker 監測系統 | 動態門檻: ${dynamic_threshold:,.0f}"
-    )
+    description = f"## {intent_emoji} {intent_label}\n[🔗 前往市場]({market_url})"
+    if summary and summary != "（未啟用 AI 分析）":
+        # AI 總結放 description（上限 4096），避免被 field 的 1024 上限截斷
+        room = 4096 - len(description) - 2
+        body = summary if len(summary) <= room else summary[: room - 1] + "…"
+        description = f"{description}\n\n{body}"
+    embed.description = description
+    embed.set_footer(text=f"監測系統 | 動態門檻: ${dynamic_threshold:,.0f}")
     return embed
 
 
@@ -412,35 +460,47 @@ def create_option_defense_alert_embed(
         color=color,
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(
-        name="處置狀態", value=f"{status_icon} **{action_taken}**", inline=True
-    )
-    embed.add_field(name="實現損益", value=f"💰 `${pnl:.2f}`", inline=True)
-    embed.add_field(
-        name="目前帳戶總曝險",
-        value=f"`{exposure_pct:.2f}%` (Beta-Weighted Delta)",
-        inline=True,
+    _add_ansi_field_safely(
+        embed,
+        "📋 處置結果",
+        _ansi_tree_lines(
+            [
+                f"處置狀態        : {status_icon} {_ANSI_W}{action_taken}{_ANSI_0}",
+                f"實現損益        : 💰 {_ANSI_W}${pnl:.2f}{_ANSI_0}",
+                f"目前帳戶總曝險  : {_ANSI_W}{exposure_pct:.2f}%{_ANSI_0} (Beta-Weighted Delta)",
+            ]
+        ),
     )
 
     if exit_reason:
-        embed.add_field(
-            name="觸發原因 / 指標", value=f"```\n{exit_reason}\n```", inline=False
+        _add_ansi_field_safely(
+            embed,
+            "🔎 觸發原因 / 指標",
+            _ansi_tree_lines(exit_reason.split("\n")),
         )
 
     if regime is not None and target_delta is not None:
-        embed.add_field(name="🧠 系統自主位階判定", value=f"`{regime}`", inline=False)
-        embed.add_field(
-            name="理想總曝險目標", value=f"`{target_delta:.1f} Delta`", inline=True
+        _add_ansi_field_safely(
+            embed,
+            "🧠 系統自主位階判定",
+            _ansi_tree_lines(
+                [
+                    f"位階判定      : {_ANSI_W}{regime}{_ANSI_0}",
+                    f"理想總曝險目標: {_ANSI_W}{target_delta:.1f} Delta{_ANSI_0}",
+                ]
+            ),
         )
 
     if hedge:
-        embed.add_field(
-            name="🛡️ 自動對沖決策",
-            value=f"{hedge['action']} (缺口: `{hedge['gap']}`)",
-            inline=False,
+        _add_ansi_field_safely(
+            embed,
+            "🛡️ 自動對沖決策",
+            _ansi_tree_lines(
+                [f"{hedge['action']} (缺口: {_ANSI_W}{hedge['gap']}{_ANSI_0})"]
+            ),
         )
 
-    embed.set_footer(text="🌌 Nexus Seeker • 期權轉倉防禦與結算警報")
+    embed.set_footer(text="期權轉倉防禦與結算警報")
     return embed
 
 
@@ -451,7 +511,7 @@ def create_volatility_risk_alert_embed(
     description_text: str,
     color_hex: int,
     fields_data: List[Dict[str, Any]],
-    footer_text: str = "Nexus Seeker Volatility Risk Alert",
+    footer_text: str = "Volatility Risk Alert",
 ) -> discord.Embed:
     """建立波動率與重大事件對沖警報 Embed (合併主動與被動)"""
     embed = NexusEmbed(

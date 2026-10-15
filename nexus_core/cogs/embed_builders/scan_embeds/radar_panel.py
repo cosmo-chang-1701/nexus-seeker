@@ -46,15 +46,22 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
 
     params = state.get("params", {})
     min_dev_pct = float(params.get("min_max_pain_dev", 0.10) or 0.10) * 100
+
+    def _param(key: str, suffix: str) -> str:
+        v = params.get(key)
+        return f"{v}{suffix}" if v is not None else f"--{suffix}"
+
     params_str = (
-        f"• Max Pain 偏離: `{params.get('max_pain_threshold')}%`\n"
-        f"• 絕對支撐容錯: `{params.get('abs_support_tolerance')}%`\n"
-        f"• 靜默期避讓: `{params.get('silent_period_days')} 天`\n"
+        f"• Max Pain 偏離: `{_param('max_pain_threshold', '%')}`\n"
+        f"• 絕對支撐容錯: `{_param('abs_support_tolerance', '%')}`\n"
+        f"• 靜默期避讓: `{_param('silent_period_days', ' 天')}`\n"
         f"• 磁吸門檻: `{min_dev_pct:.0f}%`"
     )
 
-    embed.add_field(name="⚙️ 量化過濾條件 (Filters)", value=filters_display, inline=True)
-    embed.add_field(name="📐 微調參數 (Params)", value=params_str, inline=True)
+    embed.add_field(
+        name="⚙️ 量化過濾條件 (Filters)", value=filters_display, inline=False
+    )
+    embed.add_field(name="📐 微調參數 (Params)", value=params_str, inline=False)
 
     # Render selected tag if any
     selected_tag = state.get("selected_tag")
@@ -63,5 +70,5 @@ def build_unified_radar_panel_embed(state: dict) -> NexusEmbed:
             name="🏷️ 選擇標籤 (Tag)", value=f"`{selected_tag}`", inline=False
         )
 
-    embed.set_footer(text="Nexus Seeker • 量化雷達面板")
+    embed.set_footer(text="量化雷達面板")
     return embed

@@ -8,7 +8,7 @@
   _ansi_utils.py      — ANSI/視覺工具函式
   _embed_helpers.py   — 通用 Embed 工具（欄位 helper、split_embed_by_fields 等）
   scan_embeds.py      — Sentiment Scan、Macro Scan、FOMC、Stress Test、Covered Call、Earnings、Sector Flow
-  alert_embeds.py     — Option Scan、PSQ、News/Reddit、Polymarket、Quote、各類警報
+  alert_embeds.py     — Option Scan、PSQ、News/Reddit、Polymarket、Quote、各類警報、Execution Decision
   portfolio_embeds.py — Holdings、Trades、Strategic Dash、Tactical Symbol/Hedge
   watchlist_embeds.py — Watchlist 清單、心跳 Signal、總覽
   report_embeds.py    — Portfolio Report、Transition、VTR、Scan Report、Rehedge、DDP、Volatility、AI Analysis
@@ -23,7 +23,7 @@
 """
 
 # ── Core ─────────────────────────────────────────────────────────────────────
-from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._core import CURATED_PALETTE, NexusEmbed
 
 # ── ANSI Utilities ────────────────────────────────────────────────────────────
 from cogs.embed_builders._ansi_utils import (
@@ -32,6 +32,9 @@ from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
     _truncate_with_boundary,
     _safe_float,
+    _to_float_or_none,
+    fmt_or_dash,
+    _render_aligned_table,
     _is_macro_report_marker,
     _is_correlation_report_marker,
     _format_macro_report_ansi,
@@ -89,6 +92,7 @@ from cogs.embed_builders.scan_embeds import (
 
 # ── Alert Embeds ──────────────────────────────────────────────────────────────
 from cogs.embed_builders.alert_embeds import (
+    create_execution_decision_embed,
     create_scan_embed,
     create_psq_embed,
     create_news_scan_embed,
@@ -200,12 +204,16 @@ from cogs.embed_builders.order_embeds import (
 __all__ = [
     # Core
     "NexusEmbed",
+    "CURATED_PALETTE",
     # ANSI utils
     "_visual_len",
     "_pad_string",
     "_clean_ansi",
     "_truncate_with_boundary",
     "_safe_float",
+    "_to_float_or_none",
+    "fmt_or_dash",
+    "_render_aligned_table",
     "_is_macro_report_marker",
     "_is_correlation_report_marker",
     "_format_macro_report_ansi",
@@ -266,6 +274,7 @@ __all__ = [
     "create_gamma_fragility_embed",
     "create_ditm_transition_alert_embed",
     "create_vtr_settlement_notice_embed",
+    "create_execution_decision_embed",
     # Portfolio embeds
     "create_holdings_embed",
     "create_trades_embed",

@@ -19,8 +19,21 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import market_time
 
-from cogs.embed_builders._ansi_utils import _safe_float, _truncate_with_boundary
-from cogs.embed_builders._embed_helpers import fedwatch_source_note
+from cogs.embed_builders._ansi_utils import (
+    _safe_float,
+    _to_float_or_none,
+    _truncate_with_boundary,
+    fmt_or_dash,
+)
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_G,
+    _ANSI_R,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+    fedwatch_source_note,
+)
 from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
@@ -124,39 +137,39 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
     )
 
     mp_val = data.get("max_pain")
-    mp_display = f"${mp_val:.2f}" if mp_val is not None else "N/A"
-
-    embed.add_field(name="到期日", value=f"`{data.get('expiry', 'N/A')}`", inline=True)
-    embed.add_field(
-        name="最大痛點 Strike",
-        value=f"**{mp_display}**",
-        inline=True,
-    )
+    mp_display = fmt_or_dash(mp_val, prefix="$", placeholder="N/A")
 
     spot_val = data.get("current_price")
-    spot_display = f"${spot_val:.2f}" if spot_val is not None else "N/A"
-    embed.add_field(
-        name="目前價格",
-        value=f"`{spot_display}`",
-        inline=True,
-    )
+    spot_display = fmt_or_dash(spot_val, prefix="$", placeholder="N/A")
 
     if cb_triggered:
-        embed.add_field(
-            name="偏離度", value="N/A (偏離度過大，已觸發自動斷路)", inline=False
-        )
+        distance_text = "N/A (偏離度過大，已觸發自動斷路)"
         # Suppress converging and execution recommendation
     else:
-        distance_pct = _safe_float(data.get("distance_pct"))
-        distance_text = (
-            f"現價高於痛點 `{distance_pct:.2f}%`"
-            if distance_pct > 0
-            else f"現價低於痛點 `{abs(distance_pct):.2f}%`"
-            if distance_pct < 0
-            else "現價貼近最大痛點 `0.00%`"
-        )
-        embed.add_field(name="偏離度", value=distance_text, inline=False)
+        distance_pct = _to_float_or_none(data.get("distance_pct"))
+        if distance_pct is None:
+            distance_text = f"{_ANSI_W}--%{_ANSI_0}（缺少現價或痛點）"
+        elif distance_pct > 0:
+            distance_text = f"現價高於痛點 {_ANSI_W}{distance_pct:.2f}%{_ANSI_0}"
+        elif distance_pct < 0:
+            distance_text = f"現價低於痛點 {_ANSI_W}{abs(distance_pct):.2f}%{_ANSI_0}"
+        else:
+            distance_text = f"現價貼近最大痛點 {_ANSI_W}0.00%{_ANSI_0}"
 
+    _add_ansi_field_safely(
+        embed,
+        "📍 最大痛點概覽",
+        _ansi_tree_lines(
+            [
+                f"到期日        : {_ANSI_W}{data.get('expiry', 'N/A')}{_ANSI_0}",
+                f"最大痛點 Strike: {_ANSI_W}{mp_display}{_ANSI_0}",
+                f"目前價格      : {_ANSI_W}{spot_display}{_ANSI_0}",
+                f"偏離度        : {distance_text}",
+            ]
+        ),
+    )
+
+    if not cb_triggered:
         if data.get("is_converging"):
             embed.description = "🎯 **價格正向最大痛點收斂中** (預期結算日波動縮小)"
 
@@ -173,7 +186,7 @@ def create_max_pain_embed(symbol: str, data: Dict[str, Any]) -> discord.Embed:
             except ValueError:
                 pass
 
-    embed.set_footer(text="Nexus Seeker | Execution Automation")
+    embed.set_footer(text="Execution Automation")
     return embed
 
 
@@ -333,24 +346,36 @@ def create_transition_simulation_embed(
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.add_field(name="現價 (Price)", value=f"`${current_price:.2f}`", inline=True)
-    embed.add_field(
-        name="期權獲利 (Option PnL)", value=f"`${initial_pnl:,.2f}`", inline=True
+    _add_ansi_field_safely(
+        embed,
+        "📊 轉軌模擬概覽",
+        _ansi_tree_lines(
+            [
+                f"現價 (Price)         : {_ANSI_W}${current_price:.2f}{_ANSI_0}",
+                f"期權獲利 (Option PnL): {_ANSI_W}${initial_pnl:,.2f}{_ANSI_0}",
+            ]
+        ),
     )
-    roadmap = (
-        "1. **執行動作**：平倉現有 DITM 部位，回收收益。\n"
-        f"2. **購入現股**：以 `${current_price:.2f}` 購入 100 股。\n"
-        f"3. **追加資本**：需額外投入 **`${additional_capital_required:,.2f}`**。\n"
-        f"4. **成本調整**：調整後每股成本為 **`${adjusted_cost_basis:.2f}`**。\n"
-        f"5. **建立 CC**：賣出 `${target_cc_strike}` Call，收取 `${target_cc_premium:.2f}` 權利金。"
+    roadmap_rows = [
+        "1. 執行動作：平倉現有 DITM 部位，回收收益。",
+        f"2. 購入現股：以 {_ANSI_W}${current_price:.2f}{_ANSI_0} 購入 100 股。",
+        f"3. 追加資本：需額外投入 {_ANSI_W}${additional_capital_required:,.2f}{_ANSI_0}。",
+        f"4. 成本調整：調整後每股成本為 {_ANSI_W}${adjusted_cost_basis:.2f}{_ANSI_0}。",
+        f"5. 建立 CC：賣出 ${target_cc_strike} Call，收取 {_ANSI_W}${target_cc_premium:.2f}{_ANSI_0} 權利金。",
+    ]
+    _add_ansi_field_safely(
+        embed,
+        "🚀 資本重分配路線圖 (Roadmap)",
+        _ansi_tree_lines(roadmap_rows),
     )
-    embed.add_field(name="🚀 資本重分配路線圖 (Roadmap)", value=roadmap, inline=False)
-    efficiency = (
-        f"• **預期年化回報 (AROC)**：`{projected_aroc:.1f}%` "
-        f"{'✅ 符合 15% 門檻' if projected_aroc >= 15 else '⚠️ 低於效率門檻'}\n"
-        f"• **單次收租殖利率**：`{capital_efficiency_gain:.2f}%`"
-    )
-    embed.add_field(name="📊 資本效率評估", value=efficiency, inline=False)
+    aroc_ok = projected_aroc >= 15
+    aroc_color = _ANSI_G if aroc_ok else _ANSI_R
+    efficiency_rows = [
+        f"預期年化回報 (AROC): {aroc_color}{projected_aroc:.1f}%{_ANSI_0} "
+        f"{'✅ 符合 15% 門檻' if aroc_ok else '⚠️ 低於效率門檻'}",
+        f"單次收租殖利率     : {_ANSI_W}{capital_efficiency_gain:.2f}%{_ANSI_0}",
+    ]
+    _add_ansi_field_safely(embed, "📊 資本效率評估", _ansi_tree_lines(efficiency_rows))
     embed.set_footer(text="戰略轉軌引擎 v1.0 | 專業營運模式")
     return embed
 
@@ -399,7 +424,7 @@ def create_market_calendar_embed(
 
         embed.add_field(name=field_name, value=field_value, inline=False)
 
-    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    embed.set_footer(text="Calendar-Aware Guard")
     return embed
 
 
@@ -413,17 +438,33 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    for res in results[:15]:
+
+    # 高風險 (🚨) 優先，其次 IV Rank 由高到低（缺值排最後），避免截斷時藏起最危險的標的
+    def _sort_key(r: Dict[str, Any]) -> tuple:
+        ivr = _to_float_or_none(r.get("iv_rank"))
+        return (
+            0 if r.get("is_high_risk_vol") else 1,
+            ivr is None,
+            -(ivr if ivr is not None else 0.0),
+        )
+
+    ordered = sorted(results, key=_sort_key)
+    for res in ordered[:10]:
         risk_icon = "🚨" if res.get("is_high_risk_vol") else "⚠️"
         embed.add_field(
-            name=f"{risk_icon} {res.get('symbol', 'N/A')} (IVR: {res.get('iv_rank', 0)}%)",
+            name=f"{risk_icon} {res.get('symbol', 'N/A')} (IVR: {fmt_or_dash(res.get('iv_rank'), 'g', suffix='%', placeholder='--%')})",
             value=(
-                f"TTE: `{_safe_float(res.get('tte_hours')):.1f}`h | "
+                f"TTE: `{fmt_or_dash(res.get('tte_hours'), '.1f')}`h | "
                 f"策略: {res.get('strategy', 'N/A')}"
             ),
             inline=False,
         )
-    embed.set_footer(text="IV Rank Scanner | Nexus Seeker")
+    if len(ordered) > 10:
+        omitted = [str(r.get("symbol", "N/A")) for r in ordered[10:]]
+        shown = omitted[:30]
+        names = ", ".join(shown) + (", …" if len(omitted) > len(shown) else "")
+        embed.description = f"…另有 {len(omitted)} 檔未列出：{names}"
+    embed.set_footer(text="IV Rank Scanner")
     return embed
 
 
@@ -585,6 +626,8 @@ def build_radar_scan_embed(
 
         insights = []
         md_lines = []
+        page_has_degraded_row = False
+        page_has_proxy_put_wall = False
 
         for r in chunk:
             sym = r["symbol"]
@@ -611,6 +654,8 @@ def build_radar_scan_embed(
             price_val = float(price_raw) if price_raw is not None else 0.0
             dp_raw = quote.get("dp")
             dp_val = float(dp_raw) if dp_raw is not None else 0.0
+            # 缺報價（None／<=0）：下游沿用 0.0 讓判斷式自然跳過，但顯示一律 `--`
+            price_missing = _to_float_or_none(price_raw) is None or price_val <= 0
 
             # 2. IV Rank (未知時為 None，不再以 0.0 冒充「低 IVR」)
             iv_rank_val: Optional[float] = None
@@ -720,6 +765,7 @@ def build_radar_scan_embed(
                 val = getattr(r["iv_metrics"], "gex_max_put_wall", 0.0)
                 if val is not None:
                     put_wall = _safe_float(val)
+            put_wall_is_proxy = False
             if put_wall == 0.0:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
                 mp_raw = r.get("max_pain")
@@ -732,6 +778,7 @@ def build_radar_scan_embed(
 
                 mp_flt = _safe_float(mp_val)
                 put_wall = round(mp_flt * 0.9, 2) if mp_flt > 0 else 0.0
+                put_wall_is_proxy = put_wall > 0
 
             # 解析 CallWall
             call_wall = 0.0
@@ -965,6 +1012,7 @@ def build_radar_scan_embed(
 
             # 連動 SQZ MOM 擠壓蓄力 (Squeeze Momentum)
             psq_result = r.get("psq_result") or {}
+            sqz_missing = not psq_result
             if not psq_result:
                 sqz_dir = "⚪"
                 sqz_is_squeezing = False
@@ -986,6 +1034,7 @@ def build_radar_scan_embed(
                 if mom_field is None:
                     mom_field = psq_result.get("momentum_value")
                 sqz_mom = _safe_float(mom_field, 0.0)
+                sqz_missing = _to_float_or_none(mom_field) is None
 
             # --- 新增：UOA Barrier Index (做市商實質封頂/地板) ---
             # 封頂只認現價「上方」的 CALL、地板只認現價「下方」的 PUT，且取最近
@@ -1323,6 +1372,10 @@ def build_radar_scan_embed(
                     p_wall_str = f"${p_wall:.1f}(薄)"
                 else:
                     p_wall_str = f"${p_wall:.1f}"
+                if put_wall_is_proxy:
+                    # R5：Max Pain×0.9 代理值，非 GEX 實測 PutWall
+                    p_wall_str += "*"
+                    page_has_proxy_put_wall = True
             else:
                 p_wall_str = "N/A"
 
@@ -1532,9 +1585,14 @@ def build_radar_scan_embed(
             elif dist_pct >= 10.0:
                 tactical_adv = f"⚠️ 籌碼斷層，防範向 ${max_pain_strike:.1f} 壓回"
 
-            price_str_md = (
-                f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
-            )
+            if price_missing:
+                price_str_md = "--"
+            elif dp_raw is None:
+                price_str_md = f"${price_val:.2f} (--%)"
+            else:
+                price_str_md = (
+                    f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
+                )
             is_below_put_wall = p_wall > 0 and price_val > 0 and price_val < p_wall
             gex_pol = "-" if (net_gex < 0 or is_below_put_wall) else "+"
             g_p_wall_str = (
@@ -1552,7 +1610,11 @@ def build_radar_scan_embed(
             else:
                 skew_pct_str = sp_disp
             # 與上方警示共用同一個 sqz_mom，不再從 psq_result 重新解析
-            sqz_vec_str = f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom:+.1f}"
+            sqz_vec_str = (
+                "--"
+                if sqz_missing
+                else f"{'⏱️' if sqz_is_squeezing else ''}{sqz_dir}{sqz_mom:+.1f}"
+            )
 
             # 標的異常與偏離度視覺強連動標示 (⚠️ 快速識別)
             is_high_risk_or_anomaly = (
@@ -1595,6 +1657,10 @@ def build_radar_scan_embed(
                     insights.append(
                         f"• 🕓 {sym}: 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
                     )
+            if price_missing or (
+                is_data_stale_or_degraded and not is_benign_premarket_staleness
+            ):
+                page_has_degraded_row = True
             risk_prefix = "⚠️" if is_high_risk_or_anomaly else ""
             freshness_prefix = (
                 "🌙"
@@ -1611,6 +1677,9 @@ def build_radar_scan_embed(
             md_line = f"| {sym_cell_md} | {price_str_md} | {g_p_wall_str} | {skew_pct_str} | {sqz_vec_str} | {neg_gex_str} | {sto_cell_md} | {iv_strategy_str} | {em_z_score_str} | {top_uoa_cell_md} | {tactical_cell_md} |"
             md_lines.append(md_line)
             # ---- 產生 Markdown 行結束 ----
+
+        if page_has_degraded_row:
+            embed.title = f"{embed.title} [快取/降級]"
 
         safe_insights: List[str] = []
         cur_insights_len = 0
@@ -1704,6 +1773,10 @@ def build_radar_scan_embed(
             "提示: 🧲 共振磁吸代表現價站穩期權 Put Wall 且 Volume-POC (HVN) 與 Put Wall 差距在 1% 內。\n"
             f"時效: {OPTION_DATA_TIMING_NOTE}。"
         )
+        if page_has_proxy_put_wall:
+            legend_notes += (
+                "\n註: PutWall 後綴 * 為 Max Pain×0.9 代理估算，非 GEX 實測。"
+            )
         embed.add_field(
             name="📋 雷達圖例與風控指引",
             value=f"```ansi\n{legend_notes}\n```",
@@ -1864,7 +1937,14 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         color = discord.Color.gold()
 
     embed = NexusEmbed(
-        title="🌌 全局宏觀風控情報中心 (Macro Risk Control Hub)",
+        title="🌌 全局宏觀風控情報中心 (Macro Risk Control Hub)"
+        + (
+            " [快取/降級]"
+            if is_degraded and served_stale_cache
+            else " [降級模式]"
+            if is_degraded
+            else ""
+        ),
         description="本面板整合全套美股總量指標、薩姆衰退防衛線與系統級流動性壓力測試紅線，為高安全邊際期權賣方提供核心營運決策指引。\n\u200b",
         color=color,
         timestamp=datetime.now(timezone.utc),
@@ -1950,6 +2030,10 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                 p_m = float(prob_m) if prob_m is not None else 0.0
                 p_h = float(prob_h) if prob_h is not None else 0.0
                 p_c = float(prob_c) if prob_c is not None else 0.0
+                # 缺值的機率只用於判斷時視為 0，顯示一律 `--%`，不印 0.0%
+                p_m_s = f"{p_m:.1f}%" if prob_m is not None else "--%"
+                p_h_s = f"{p_h:.1f}%" if prob_h is not None else "--%"
+                p_c_s = f"{p_c:.1f}%" if prob_c is not None else "--%"
 
                 ladder_saturated = bool(fedwatch_details.get("ladder_saturated"))
                 p_h50 = float(fedwatch_details.get("prob_hike_50") or 0.0)
@@ -1966,9 +2050,13 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                         else ""
                     )
                     if p_h >= p_m:
-                        detail_str = f"加息 {p_h:.1f}%{hike_ladder} / 維持 {p_m:.1f}% / 降息 {p_c:.1f}%"
+                        detail_str = (
+                            f"加息 {p_h_s}{hike_ladder} / 維持 {p_m_s} / 降息 {p_c_s}"
+                        )
                     else:
-                        detail_str = f"維持 {p_m:.1f}% / 加息 {p_h:.1f}%{hike_ladder} / 降息 {p_c:.1f}%"
+                        detail_str = (
+                            f"維持 {p_m_s} / 加息 {p_h_s}{hike_ladder} / 降息 {p_c_s}"
+                        )
                 else:
                     cut_ladder = (
                         f" (1碼 {p_c25:.1f}% / 2碼+ {p_c50:.1f}%)"
@@ -1976,9 +2064,9 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
                         else ""
                     )
                     if p_c >= p_m:
-                        detail_str = f"降息 {p_c:.1f}%{cut_ladder} / 維持 {p_m:.1f}%"
+                        detail_str = f"降息 {p_c_s}{cut_ladder} / 維持 {p_m_s}"
                     else:
-                        detail_str = f"維持 {p_m:.1f}% / 降息 {p_c:.1f}%{cut_ladder}"
+                        detail_str = f"維持 {p_m_s} / 降息 {p_c_s}{cut_ladder}"
 
                 if (
                     p_h >= 50.0
@@ -2208,7 +2296,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Risk Engine | 總經大盤全局防禦系統")
+    embed.set_footer(text="Risk Engine | 總經大盤全局防禦系統")
     return embed
 
 
@@ -2283,7 +2371,7 @@ def build_calendar_embed(
     # Format Earnings Events
     earn_text = ""
     if earnings_events:
-        for ev in earnings_events[:15]:
+        for ev in earnings_events[:10]:
             sym = getattr(ev, "symbol", "Unknown")
             tte = getattr(ev, "tte_hours", "N/A")
             date_val = getattr(ev, "date", "N/A")
@@ -2295,6 +2383,8 @@ def build_calendar_embed(
             except Exception:
                 date_str = f"`{date_val}`"
                 earn_text += f"* 🗓️ {date_str} **{sym}** 財報發布 (TTE: {tte}h)\n"
+        if len(earnings_events) > 10:
+            earn_text += f"…另有 {len(earnings_events) - 10} 檔未列出\n"
     else:
         earn_text = "📭 您的自選標的近期無財報。"
 
@@ -2304,5 +2394,5 @@ def build_calendar_embed(
         inline=False,
     )
 
-    embed.set_footer(text="Calendar-Aware Guard | Nexus Seeker")
+    embed.set_footer(text="Calendar-Aware Guard")
     return embed

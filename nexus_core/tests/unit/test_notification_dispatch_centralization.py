@@ -36,7 +36,6 @@ _SCAN_TARGETS = (
     "market_analysis",
     "ui",
     "risk_engine",
-    "formatters",
     "database",
 )
 

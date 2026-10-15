@@ -5,9 +5,11 @@ from typing import Any, Dict, List
 
 import discord
 
+from cogs.embed_builders._ansi_utils import fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
+    no_title_suffix,
     split_embed_by_fields,
 )
 
@@ -36,9 +38,10 @@ def _build_active_order_ansi_card(order: Dict[str, Any]) -> str:
         f" 📂 委託單 ID: \u001b[1;33m{order['id']}\u001b[0m  |  標的: \u001b[1;36m{order['symbol']}\u001b[0m"
     )
     ansi_lines.append(" ----------------------------------")
+    tree_start = len(ansi_lines)
 
     type_str = order_type_zh.get(order["order_type"], order["order_type"])
-    ansi_lines.append(f"  └─ 訂單類型: {type_str}")
+    ansi_lines.append(f" └─ 訂單類型: {type_str}")
 
     side = str(order.get("side") or "BUY").upper()
     side_str = (
@@ -46,36 +49,39 @@ def _build_active_order_ansi_card(order: Dict[str, Any]) -> str:
         if side == "BUY"
         else "\u001b[1;31m賣出 (SELL)\u001b[0m"
     )
-    ansi_lines.append(f"  └─ 委託方向: {side_str}")
-    ansi_lines.append(f"  └─ 委託數量: \u001b[1;37m{order['quantity']}\u001b[0m 股")
+    ansi_lines.append(f" └─ 委託方向: {side_str}")
+    ansi_lines.append(f" └─ 委託數量: \u001b[1;37m{order['quantity']}\u001b[0m 股")
 
     val_str = validity_zh.get(order["validity"], order["validity"])
-    ansi_lines.append(f"  └─ 有效期限: {val_str}")
+    ansi_lines.append(f" └─ 有效期限: {val_str}")
 
     price_conditions = []
     if order.get("order_type") in ("LIMIT", "STOP_LIMIT"):
         price_conditions.append(
-            f"限價: \u001b[1;32m${order.get('limit_price', 0.0):.2f}\u001b[0m"
+            f"限價: \u001b[1;32m{fmt_or_dash(order.get('limit_price'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") in ("STOP", "STOP_LIMIT"):
         price_conditions.append(
-            f"停損價: \u001b[1;31m${order.get('stop_price', 0.0):.2f}\u001b[0m"
+            f"停損價: \u001b[1;31m{fmt_or_dash(order.get('stop_price'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") == "TRAILING_STOP_USD":
         price_conditions.append(
-            f"追蹤值: \u001b[1;35m${order.get('trailing_value', 0.0):.2f}\u001b[0m"
+            f"追蹤值: \u001b[1;35m{fmt_or_dash(order.get('trailing_value'), prefix='$')}\u001b[0m"
         )
     if order.get("order_type") == "TRAILING_STOP_PCT":
         price_conditions.append(
-            f"追蹤值: \u001b[1;35m{order.get('trailing_value', 0.0):.2f}%\u001b[0m"
+            f"追蹤值: \u001b[1;35m{fmt_or_dash(order.get('trailing_value'), suffix='%', placeholder='--%')}\u001b[0m"
         )
 
     if price_conditions:
         conds_str = " | ".join(price_conditions)
-        ansi_lines.append(f"  └─ 委託條件: {conds_str}")
+        ansi_lines.append(f" └─ 委託條件: {conds_str}")
     else:
-        ansi_lines.append("  └─ 委託條件: 預設市價成交")
+        ansi_lines.append(" └─ 委託條件: 預設市價成交")
 
+    # 樹狀符號：除最後一項外使用 ├─
+    for k in range(tree_start, len(ansi_lines) - 1):
+        ansi_lines[k] = ansi_lines[k].replace(" └─ ", " ├─ ", 1)
     ansi_lines.append("```")
     return "\n".join(ansi_lines)
 
@@ -96,7 +102,7 @@ def create_active_order_card_embed(order: Dict[str, Any]) -> discord.Embed:
         value=_safe_embed_field_value(card_content, "暫無詳情"),
         inline=False,
     )
-    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+    embed.set_footer(text="待成交委託單管理系統")
     return embed
 
 
@@ -114,16 +120,32 @@ def create_active_orders_embed(orders: List[Dict[str, Any]]) -> List[discord.Emb
 
     if not orders:
         embed.description = "📭 目前沒有任何活躍的待成交委託單。您可以透過 `/order_panel` 建立新的掛單。"
-        embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
+        embed.set_footer(text="待成交委託單管理系統")
         return [embed]
 
-    for idx, o in enumerate(orders):
-        card_content = _build_active_order_ansi_card(o)
-        embed.add_field(
-            name=f"📦 委託單 #{idx+1} (ID: {o['id']})",
-            value=_safe_embed_field_value(card_content, "暫無詳情"),
-            inline=False,
+    # 實施分頁原則：每個 embed 最多 10 筆委託單
+    page_size = 10
+    all_embeds: List[discord.Embed] = []
+    for start in range(0, len(orders), page_size):
+        page = NexusEmbed(
+            title=embed.title,
+            description=embed.description,
+            color=discord.Color.orange(),
+            timestamp=datetime.now(timezone.utc),
         )
+        for offset, o in enumerate(orders[start : start + page_size]):
+            card_content = _build_active_order_ansi_card(o)
+            page.add_field(
+                name=f"📦 委託單 #{start + offset + 1} (ID: {o['id']})",
+                value=_safe_embed_field_value(card_content, "暫無詳情"),
+                inline=False,
+            )
+        page.set_footer(text="待成交委託單管理系統")
+        all_embeds.extend(split_embed_by_fields(page, title_suffix=no_title_suffix))
 
-    embed.set_footer(text="Nexus Seeker • 待成交委託單管理系統")
-    return split_embed_by_fields(embed)
+    # 動態頁碼標記：分頁數大於 1 時，標題尾部加 ` (第 X/Y 頁)`。
+    if len(all_embeds) > 1:
+        for idx, emb in enumerate(all_embeds, start=1):
+            emb.title = f"{emb.title or ''} (第 {idx}/{len(all_embeds)} 頁)"
+
+    return all_embeds

@@ -77,7 +77,7 @@ def create_info_embed(title: str, message: str) -> discord.Embed:
         color=discord.Color.blue(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="Nexus Seeker | System Notification")
+    embed.set_footer(text="System Notification")
     return embed
 
 
@@ -89,5 +89,5 @@ def create_error_embed(message: str, title: str = "系統錯誤") -> discord.Emb
         color=discord.Color.red(),
         timestamp=datetime.now(timezone.utc),
     )
-    embed.set_footer(text="Nexus Seeker | Error Report")
+    embed.set_footer(text="Error Report")
     return embed

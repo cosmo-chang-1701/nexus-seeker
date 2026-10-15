@@ -364,7 +364,7 @@ async def analyze_symbol(
             if vix_spot is not None
             else "VIX 資料不足",
             "vix_tier_emoji": vix_tier.get("emoji", ""),
-            "vix_tier_color": vix_tier.get("color_hex", 0x808080),
+            "vix_tier_color": vix_tier.get("color_hex", 0x99AAB5),
             "vix_sizing_multiplier": vix_sizing_multiplier,
             "trade_intent": trade_intent,
             "vix_sto_delta_cap": vix_tier.get("sto_delta_cap", 0.0),

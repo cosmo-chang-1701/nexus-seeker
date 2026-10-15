@@ -333,7 +333,7 @@ class HedgeMonitorService:
             stage_move=stage_move,
             tier_name=str(tier["name"]),
             tier_emoji=str(tier["emoji"]),
-            color_hex=int(tier.get("color_hex", 0xFF0000)),
+            color_hex=int(tier.get("color_hex", 0xE74C3C)),
             total_beta_delta=metrics.total_beta_delta,
             adjusted_delta=adj_delta,
             total_vega=metrics.total_vega,

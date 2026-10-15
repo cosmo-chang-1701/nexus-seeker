@@ -251,7 +251,7 @@ class MarketScanMixin:
                         if vix_spot is not None
                         else "VIX 資料不足",
                         "emoji": vix_tier.get("emoji", ""),
-                        "color_hex": vix_tier.get("color_hex", 0x808080),
+                        "color_hex": vix_tier.get("color_hex", 0x99AAB5),
                         "vix_spot": vix_spot,
                         "sto_delta_cap": vix_tier.get("sto_delta_cap", 0.0),
                         "sizing_multiplier": vix_tier.get("sizing_multiplier", 1.0),

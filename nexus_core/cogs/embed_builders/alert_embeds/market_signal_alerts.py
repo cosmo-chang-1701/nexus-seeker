@@ -213,7 +213,9 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
     direction_badge = "🚀 向上突破" if is_above else "📉 向下跌破"
     direction_color = "[1;32m" if is_above else "[1;31m"
     compare_symbol = ">=" if is_above else "<="
-    volume_ratio = bar.volume / bar.avg_volume if bar.avg_volume > 0 else 0.0
+    volume_ratio_str = (
+        f"{bar.volume / bar.avg_volume:.2f}x" if bar.avg_volume > 0 else "--x"
+    )
     vol_threshold_str = (
         "無放量門檻限制"
         if watch.volume_multiplier <= 0
@@ -226,7 +228,7 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
         f" ├─ K棒收盤時間: [1;37m{bar.bar_time.strftime('%Y-%m-%d %H:%M')} ET[0m\n"
         f" ├─ 實際收盤價 : [1;37m${bar.close:.2f}[0m {compare_symbol} 目標價 [1;37m${watch.target_price:.2f}[0m\n"
         f" ├─ 本根成交量 : [1;37m{bar.volume:,.0f}[0m\n"
-        f" └─ 20根均量  : [1;37m{bar.avg_volume:,.0f}[0m (放大 [1;33m{volume_ratio:.2f}x[0m，{vol_threshold_str})\n"
+        f" └─ 20根均量  : [1;37m{bar.avg_volume:,.0f}[0m (放大 [1;33m{volume_ratio_str}[0m，{vol_threshold_str})\n"
         f"```"
     )
     embed.add_field(name="🎯 觸發事件", value=trigger_ansi, inline=False)
@@ -239,7 +241,7 @@ def create_price_volume_alert_embed(watch: Any, bar: Any) -> discord.Embed:
     )
     embed.add_field(name="📡 後續操作建議", value=followup_ansi, inline=False)
 
-    embed.set_footer(text="Price-Volume Breakout Alert | Nexus Seeker")
+    embed.set_footer(text="Price-Volume Breakout Alert")
     return embed
 
 
@@ -336,5 +338,5 @@ def create_gamma_squeeze_alert_embed(output: Any) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Gamma Squeeze Engine | 每 30 分鐘評估，每日至多一則")
+    embed.set_footer(text="Gamma Squeeze Engine | 每 30 分鐘評估，每日至多一則")
     return embed

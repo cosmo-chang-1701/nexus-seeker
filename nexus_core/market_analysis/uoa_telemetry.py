@@ -383,7 +383,10 @@ def generate_uoa_ascii_table(trades: List[UOATradeResult]) -> str:
     rows_cells: List[List[str]] = []
     for trade in trades:
         notional_val = trade.trade_price * trade.volume * 100
-        if notional_val >= 1_000_000:
+        if trade.trade_price <= 0:
+            # 舊版快取無成交價：權利金未知，不可顯示 $0.0k
+            notional_str = "--"
+        elif notional_val >= 1_000_000:
             notional_str = f"${notional_val / 1_000_000:.2f}M"
         else:
             notional_str = f"${notional_val / 1_000:.1f}k"

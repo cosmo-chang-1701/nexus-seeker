@@ -43,6 +43,22 @@ _COLOR_ADMIN = 0x9B59B6  # 設定 / 管理介面
 _COLOR_SPECIAL = 0x8E44AD  # 罕見市場事件 (擠壓、巨鯨共振、尾部風險)
 _COLOR_NEUTRAL = 0x99AAB5  # 無數據 / 未定義 / 中性
 
+# 公開的精選色票集合：所有 embed 顏色（含 config 的 VIX 層級色）都必須屬於此集合，
+# 由 tests/unit/test_output_centralization.py 的 G4 與 VIX 層級測試強制。
+CURATED_PALETTE: frozenset[int] = frozenset(
+    {
+        _COLOR_SUCCESS,
+        _COLOR_ERROR,
+        _COLOR_WARNING,
+        _COLOR_INFO,
+        _COLOR_BRAND,
+        _COLOR_DEFENSE,
+        _COLOR_ADMIN,
+        _COLOR_SPECIAL,
+        _COLOR_NEUTRAL,
+    }
+)
+
 # 原生 discord.Color 工廠函式 → 語意調色盤的映射表。
 # 使用 lambda 延後呼叫，避免模組載入時就建立 discord.Color 實例。
 _COLOR_REMAP: list[tuple[Any, int]] = [
@@ -144,7 +160,12 @@ class NexusEmbed(discord.Embed):
             ):
                 if clean_text.startswith(p):
                     clean_text = clean_text[len(p) :]
-            text = f"{prefix}{clean_text}"
+            clean_text = clean_text.strip()
+            if clean_text in ("", "🌌 Nexus Seeker", "Nexus Seeker"):
+                # 保底 footer：不加 " • "，確保 from_dict 往返冪等
+                text = "🌌 Nexus Seeker"
+            else:
+                text = f"{prefix}{clean_text}"
         super().set_footer(text=text, icon_url=icon_url)
 
     def add_field(self, *, name: Any, value: Any, inline: bool = True) -> "NexusEmbed":

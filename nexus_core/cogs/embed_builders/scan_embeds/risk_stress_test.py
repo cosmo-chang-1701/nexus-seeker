@@ -2,6 +2,7 @@
 
 import discord
 
+from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
 from cogs.embed_builders._core import NexusEmbed
 
 
@@ -10,29 +11,41 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
     is_critical = results.get("is_critical", False)
     color = discord.Color.red() if is_critical else discord.Color.green()
 
+    total_deficit = _to_float_or_none(results.get("total_deficit"))
+    cash_reserve = _to_float_or_none(results.get("cash_reserve"))
+    boxx_shares = _to_float_or_none(results.get("boxx_shares"))
+    boxx_cash = _to_float_or_none(results.get("boxx_cash"))
+    net_deficit = _to_float_or_none(results.get("net_deficit"))
+    order_count = results.get("gtc_buy_orders_count")
+
+    # 關鍵數值缺失時無法判定安全與否：降級顯示，且不得宣稱「充裕」
+    degraded = net_deficit is None or total_deficit is None or cash_reserve is None
+    if degraded and not is_critical:
+        color = discord.Color.default()
+
     embed = NexusEmbed(
-        title="🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)", color=color
+        title="🚨 GTC 掛單現金赤字壓力測試 (Worst-Case Stress Test)"
+        + (" [降級模式]" if degraded else ""),
+        color=color,
     )
 
-    total_deficit = results.get("total_deficit", 0.0)
-    cash_reserve = results.get("cash_reserve", 0.0)
-    boxx_shares = results.get("boxx_shares", 0.0)
-    boxx_cash = results.get("boxx_cash", 0.0)
-    net_deficit = results.get("net_deficit", 0.0)
-    order_count = results.get("gtc_buy_orders_count", 0)
-
-    deficit_color = "\u001b[1;31m" if net_deficit < 0 else "\u001b[1;32m"
-    net_deficit_str = (
-        f"-${abs(net_deficit):,.2f}" if net_deficit < 0 else f"${net_deficit:,.2f}"
-    )
+    if net_deficit is None:
+        deficit_color = "\u001b[1;30m"
+        net_deficit_str = "--"
+    else:
+        deficit_color = "\u001b[1;31m" if net_deficit < 0 else "\u001b[1;32m"
+        net_deficit_str = (
+            f"-${abs(net_deficit):,.2f}" if net_deficit < 0 else f"${net_deficit:,.2f}"
+        )
+    order_count_str = "--" if order_count is None else str(order_count)
 
     summary_lines = [
         "```ansi",
-        f" ├─ 活躍 GTC 網格買單: \u001b[1;36m{order_count} 筆\u001b[0m",
-        f" ├─ 100% 全數成交所需總美金 (Total Cash Deficit): \u001b[1;33m${total_deficit:,.2f}\u001b[0m",
-        f" ├─ 常規可用現金 (cash_reserve): \u001b[1;32m${cash_reserve:,.2f}\u001b[0m",
-        f" ├─ BOXX 持倉股數: \u001b[1;36m{boxx_shares:.1f} 股\u001b[0m (常規清算上限 180 股)",
-        f" ├─ BOXX 最大套現金額: \u001b[1;32m${boxx_cash:,.2f}\u001b[0m",
+        f" ├─ 活躍 GTC 網格買單: \u001b[1;36m{order_count_str} 筆\u001b[0m",
+        f" ├─ 100% 全數成交所需總美金 (Total Cash Deficit): \u001b[1;33m{fmt_or_dash(total_deficit, ',.2f', prefix='$')}\u001b[0m",
+        f" ├─ 常規可用現金 (cash_reserve): \u001b[1;32m{fmt_or_dash(cash_reserve, ',.2f', prefix='$')}\u001b[0m",
+        f" ├─ BOXX 持倉股數: \u001b[1;36m{fmt_or_dash(boxx_shares, '.1f')} 股\u001b[0m (常規清算上限 180 股)",
+        f" ├─ BOXX 最大套現金額: \u001b[1;32m{fmt_or_dash(boxx_cash, ',.2f', prefix='$')}\u001b[0m",
         f" └─ 壓測後淨赤字/淨值: {deficit_color}{net_deficit_str}\u001b[0m",
         "```",
     ]
@@ -47,13 +60,19 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
             "```ansi",
             " ├─ \u001b[1;31m警告：當前 GTC 網格單潛在赤字已大於可用流動性！\u001b[0m",
             " ├─ 在極端無差別踩踏情境下，若所有掛單 100% 全數成交，將會抽乾 BOXX 水壩",
-            f" ├─ 破壞 +${cash_reserve:,.0f} 的安全常規現金水位，且危及 7 月底 $13,000 實體提領紅線！",
+            f" ├─ 破壞 +{fmt_or_dash(cash_reserve, ',.0f', prefix='$')} 的安全常規現金水位，且危及 7 月底 $13,000 實體提領紅線！",
             " └─ 建議立即取消部分 GTC 掛單，或注入額外資金以維持安全邊際。",
             "```",
         ]
         embed.add_field(
             name="🔥 CRITICAL WARNING",
             value="\n".join(warning_lines),
+            inline=False,
+        )
+    elif degraded:
+        embed.add_field(
+            name="⚠️ 資料不足",
+            value="```ansi\n └─ \u001b[1;33m關鍵壓測數值缺失，無法判定是否威脅提領紅線。\u001b[0m\n```",
             inline=False,
         )
     else:
@@ -68,5 +87,5 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Risk Engine | 流動性水壩壓力測試")
+    embed.set_footer(text="Risk Engine | 流動性水壩壓力測試")
     return embed

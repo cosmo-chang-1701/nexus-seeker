@@ -5,6 +5,8 @@ from typing import Any
 import discord
 
 from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
     _build_embed_base,
     _add_vix_battle_status_field,
     _add_market_overview_fields,
@@ -20,6 +22,8 @@ from cogs.embed_builders._embed_helpers import (
     _add_risk_optimization_fields,
     _add_hedge_unlock_fields,
     _add_ai_verification_fields,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
     add_news_field,
     add_reddit_field,
 )
@@ -54,14 +58,18 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
         }.get(gap.current_fill_status, "⚪ N/A")
 
         support_tag = " | 🛡️ 支撐已確認" if gap.is_support_confirmed else ""
-        gap_color = "🟢" if gap.gap_size > 0 else "🔴"
-
-        gap_info = (
-            f"{gap_color} **{'向上跳空 (UP-GAP)' if gap.gap_size > 0 else '向下跳空 (DOWN-GAP)'}**: `{gap.gap_pct:+.2f}%` (${gap.gap_size:+.2f})\n"
-            f"**狀態:** {status_emoji}{support_tag}\n"
-            f"**區間:** `${gap.gap_zone[0]:.2f}` - `${gap.gap_zone[1]:.2f}`\n\u200b"
+        is_up = gap.gap_size > 0
+        gap_c = "\u001b[1;32m" if is_up else "\u001b[1;31m"
+        w, z = _ANSI_W, _ANSI_0
+        gap_rows = [
+            f"{'🟢' if is_up else '🔴'} {'向上跳空 (UP-GAP)' if is_up else '向下跳空 (DOWN-GAP)'}: "
+            f"{gap_c}{gap.gap_pct:+.2f}% (${gap.gap_size:+.2f}){z}",
+            f"狀態: {status_emoji}{support_tag}",
+            f"區間: {w}${gap.gap_zone[0]:.2f} - ${gap.gap_zone[1]:.2f}{z}",
+        ]
+        _add_ansi_field_safely(
+            embed, "📈 Gap & Fill 跳空監控", _ansi_tree_lines(gap_rows)
         )
-        embed.add_field(name="📈 Gap & Fill 跳空監控", value=gap_info, inline=False)
 
     _add_market_overview_fields(embed, data)
     _add_volatility_fields(embed, data, strategy)
@@ -88,10 +96,10 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
     # 🚀 AlertFilter 推播理由 (僅在條件式過濾觸發時顯示)
     alert_reason = data.get("alert_reason")
     if alert_reason:
-        embed.add_field(
-            name="📢 推播觸發條件",
-            value=f"```\n{alert_reason}\n```",
-            inline=False,
+        _add_ansi_field_safely(
+            embed,
+            "📢 推播觸發條件",
+            [f" {ln}" for ln in str(alert_reason).split("\n")],
         )
 
     vix_spot = data.get("vix_spot") or (
@@ -108,5 +116,5 @@ def create_scan_embed(data: Any, user_capital: Any = 100000.0):  # type: ignore
     spy_label = f"${float(spy_ref):.1f}" if spy_ref else "--"
     if not vix_spot and ("vix_battle_status" in data or "vix_spot" in data):
         vix_footer = " | VIX: --"
-    embed.set_footer(text=f"Nexus Seeker 風控引擎 • 基準 SPY: {spy_label}{vix_footer}")
+    embed.set_footer(text=f"風控引擎 • 基準 SPY: {spy_label}{vix_footer}")
     return embed

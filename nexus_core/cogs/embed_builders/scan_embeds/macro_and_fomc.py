@@ -5,7 +5,12 @@ import discord
 from datetime import datetime, timezone
 from typing import Any, List, Optional
 
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import (
+    _pad_string,
+    _positive_float_or_none,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import fedwatch_source_note
 
@@ -15,22 +20,29 @@ def create_macro_scan_embed(
 ) -> discord.Embed:
     """建立巨觀環境與隔夜市場掃描 Embed (繁體中文)"""
     base_color = discord.Color.red() if alerts else discord.Color.blue()
+
+    # 指數／殖利率水位不可能 <= 0；舊上游以 0.0 代表缺值，一併視為缺失
+    dxy = _positive_float_or_none(macro_data.get("dxy"))
+    tnx = _positive_float_or_none(macro_data.get("tnx"))
+    us2y = _positive_float_or_none(macro_data.get("us2y"))
+    vix = _positive_float_or_none(macro_data.get("vix"))
+    tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
+    vix_change = _to_float_or_none(macro_data.get("vix_change"))
+    degraded = dxy is None or tnx is None or us2y is None or vix is None
     embed = NexusEmbed(
-        title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)",
+        title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)"
+        + (" [降級模式]" if degraded else ""),
         color=base_color,
         timestamp=datetime.now(timezone.utc),
     )
 
-    dxy = macro_data.get("dxy", 0.0)
-    tnx = macro_data.get("tnx", 0.0)
-    tnx_change = macro_data.get("tnx_change_bps", 0.0)
-    us2y = macro_data.get("us2y", 0.0)
-    vix = macro_data.get("vix", 0.0)
-    vix_change = macro_data.get("vix_change", 0.0)
-    spread = tnx - us2y
+    spread = tnx - us2y if tnx is not None and us2y is not None else None
 
-    # Consolidate into monospace table
-    vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
+    # Consolidate into monospace table；VIX 缺值時不做燈號判斷
+    if vix is None:
+        vix_emoji = "--"
+    else:
+        vix_emoji = "🔥" if vix > 25 else ("⚠️" if vix > 20 else "🟢")
 
     lines = ["```ansi"]
     headers = ["指標", "數值", "變動 / 備註"]
@@ -45,23 +57,29 @@ def create_macro_scan_embed(
 
     # 1. DXY
     lines.append(
-        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(f'{dxy:.2f}', widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
+        f"{_pad_string('DXY 美元指數', widths[0])} | {_pad_string(fmt_or_dash(dxy), widths[1], 'right')} | {_pad_string('-', widths[2], 'right')}"
     )
     # 2. TNX
     lines.append(
-        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(f'{tnx:.2f}%', widths[1], 'right')} | {_pad_string(f'{tnx_change:+.1f} bps', widths[2], 'right')}"
+        f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(fmt_or_dash(tnx, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(fmt_or_dash(tnx_change, '+.1f', suffix=' bps'), widths[2], 'right')}"
     )
     # 3. US2Y
     lines.append(
-        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(f'{us2y:.2f}%', widths[1], 'right')} | {_pad_string(f'利差 {spread:+.2f}%', widths[2], 'right')}"
+        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string('利差 ' + fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%'), widths[2], 'right')}"
     )
     # 4. VIX
-    vix_color_start = (
-        "\u001b[0;31m" if vix > 25 else ("\u001b[0;33m" if vix > 20 else "\u001b[0;32m")
-    )
-    vix_note = f"{vix_change:+.2f} ({vix_emoji})"
-    vix_note_colored = f"{vix_color_start}{vix_change:+.2f}\u001b[0m ({vix_emoji})"
-    vix_val_str = f"{vix:.2f}"
+    if vix is None:
+        vix_color_start = "\u001b[1;30m"
+    else:
+        vix_color_start = (
+            "\u001b[0;31m"
+            if vix > 25
+            else ("\u001b[0;33m" if vix > 20 else "\u001b[0;32m")
+        )
+    vix_change_str = fmt_or_dash(vix_change, "+.2f")
+    vix_note = f"{vix_change_str} ({vix_emoji})"
+    vix_note_colored = f"{vix_color_start}{vix_change_str}\u001b[0m ({vix_emoji})"
+    vix_val_str = fmt_or_dash(vix)
     lines.append(
         f"{_pad_string('VIX 恐慌指數', widths[0])} | {_pad_string(vix_val_str, widths[1], 'right')} | {_pad_string(vix_note, widths[2], 'right').replace(vix_note, vix_note_colored)}"
     )
@@ -75,6 +93,13 @@ def create_macro_scan_embed(
         embed.add_field(
             name="🚨 風險警示 (Macro Alerts)", value=alert_text, inline=False
         )
+    elif degraded:
+        # 缺值時不得宣稱「全數合規」
+        embed.add_field(
+            name="⚠️ 巨觀狀態",
+            value="部分總經數據缺失（以 `--` 標示），無法判定巨觀狀態，請稍後重試。",
+            inline=False,
+        )
     else:
         from market_analysis.analyst_runners.macro_runner import (
             build_macro_healthy_status,
@@ -87,7 +112,7 @@ def create_macro_scan_embed(
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker | Global Macro Intelligence")
+    embed.set_footer(text="Global Macro Intelligence")
     return embed
 
 
@@ -121,6 +146,8 @@ def create_fomc_escape_window_embed(
     title_text = "📅 宏觀逃頂：總經流動性撤退推演矩陣 (Macro Escape Matrix)"
     if is_fallback:
         title_text += " [歷史快取/備援]"
+    if prob_stale:
+        title_text += " [資料過期]"
     embed = NexusEmbed(title=title_text, color=color)
 
     # 1. 矩陣狀態
@@ -191,14 +218,14 @@ def create_fomc_escape_window_embed(
     embed.add_field(
         name="🔄 逃頂窗口調整方向",
         value=f"調整方向：{shift_label}",
-        inline=True,
+        inline=False,
     )
 
     rollover_note = " *(已自動滾動至下季)*" if was_auto_rolled else ""
     embed.add_field(
         name="📆 調整後逃頂窗口預期",
         value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**{rollover_note}",
-        inline=True,
+        inline=False,
     )
 
     if tactical_directive:
@@ -223,5 +250,5 @@ def create_fomc_escape_window_embed(
         name="💡 推演邏輯與風控分析", value="\n".join(reason_lines), inline=False
     )
 
-    embed.set_footer(text="Nexus Risk Engine | 宏觀流動性逃頂推演矩陣")
+    embed.set_footer(text="Risk Engine | 宏觀流動性逃頂推演矩陣")
     return embed

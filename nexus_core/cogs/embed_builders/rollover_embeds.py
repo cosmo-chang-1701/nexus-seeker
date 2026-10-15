@@ -3,7 +3,14 @@ import logging
 from typing import Optional, Any, Callable, Coroutine, Dict, Mapping
 
 from cogs.embed_builders._core import NexusEmbed
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import _render_aligned_table, fmt_or_dash
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+    _add_ansi_table_fields,
+)
 from ui.panel_renderer import truncate_with_boundary
 
 logger = logging.getLogger(__name__)
@@ -212,7 +219,7 @@ class RolloverActionView(discord.ui.View):
             "```",
         ]
         embed.add_field(
-            name="💵 資金轉換試算", value="\n".join(ansi_sizing), inline=True
+            name="💵 資金轉換試算", value="\n".join(ansi_sizing), inline=False
         )
 
         ansi_margin = [
@@ -224,7 +231,7 @@ class RolloverActionView(discord.ui.View):
             " └─ 建議委託: 限價單 (Limit)",
             "```",
         ]
-        embed.add_field(name="🛡️ 風控與摩擦", value="\n".join(ansi_margin), inline=True)
+        embed.add_field(name="🛡️ 風控與摩擦", value="\n".join(ansi_margin), inline=False)
 
         embed.add_field(
             name="⏱️ 最佳執行時機 (Execution Timing)",
@@ -459,7 +466,7 @@ def create_dynamic_rollover_embed(
             "```",
         ]
         embed.add_field(
-            name="🛡️ 持倉狀態 / 防守", value="\n".join(sell_lines), inline=True
+            name="🛡️ 持倉狀態 / 防守", value="\n".join(sell_lines), inline=False
         )
     else:
         sell_lines = [
@@ -472,7 +479,7 @@ def create_dynamic_rollover_embed(
             "```",
         ]
         embed.add_field(
-            name="📤 撤出資金 / 平倉", value="\n".join(sell_lines), inline=True
+            name="📤 撤出資金 / 平倉", value="\n".join(sell_lines), inline=False
         )
 
     # 3. 買入指令區塊
@@ -486,7 +493,9 @@ def create_dynamic_rollover_embed(
             f" └─ 策略: {suggested_strategy}",
             "```",
         ]
-        embed.add_field(name="📥 當前資產配置", value="\n".join(buy_lines), inline=True)
+        embed.add_field(
+            name="📥 當前資產配置", value="\n".join(buy_lines), inline=False
+        )
     else:
         if buy_action_label:
             buy_action_display = buy_action_label
@@ -519,7 +528,7 @@ def create_dynamic_rollover_embed(
             buy_lines.append(f" └─ 建議結構: {structure_directive}")
         buy_lines.append("```")
         embed.add_field(
-            name="📥 轉入資產 (Buy)", value="\n".join(buy_lines), inline=True
+            name="📥 轉入資產 (Buy)", value="\n".join(buy_lines), inline=False
         )
 
     # 4. 券商執行引導 (無腦執行區) — ANSI 包裹 + 樹狀縮排，符合量化控制台排版原則
@@ -619,7 +628,7 @@ def create_dynamic_rollover_embed(
         embed.add_field(name=field_title, value=trigger_condition_text, inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
+        text="Risk & Rollover Engine • 請點擊下方 [執行試算] 以推估保證金佔用與預期報酬"
     )
 
     return embed
@@ -706,7 +715,7 @@ def create_covered_call_overlay_embed(
         )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
+        text="Risk & Rollover Engine • Covered Call Overlay 為選填加碼收租建議，非強制轉倉"
     )
 
     return embed
@@ -792,7 +801,7 @@ def create_covered_call_profit_lock_embed(
     )
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 權利金衰減停利為建議性回補，非強制轉倉"
+        text="Risk & Rollover Engine • 權利金衰減停利為建議性回補，非強制轉倉"
     )
 
     return embed
@@ -864,35 +873,32 @@ def create_transition_pyramid_embed(
     if is_pyramid_add and pyramid_add_plan:
 
         def _money(key: str) -> str:
-            try:
-                return f"${float(pyramid_add_plan.get(key) or 0.0):,.2f}"
-            except (TypeError, ValueError):
-                return "N/A"
+            # 缺值（None／非數值）顯示 `--`，不以 $0.00 冒充
+            return fmt_or_dash(pyramid_add_plan.get(key), ",.2f", prefix="$")
+
+        def _count(key: str) -> str:
+            return fmt_or_dash(pyramid_add_plan.get(key), ",.0f")
 
         binding = str(pyramid_add_plan.get("binding_constraint") or "")
         vix_spot = pyramid_add_plan.get("vix_spot")
-        vix_text = f"{float(vix_spot):.1f}" if vix_spot is not None else "未知"
-        sizing_lines = [
-            f"建議加碼股數：`{int(pyramid_add_plan.get('share_qty') or 0):,}` 股"
+        vix_text = fmt_or_dash(vix_spot, ".1f", placeholder="未知")
+        sizing_rows = [
+            f"建議加碼股數：{_ANSI_W}{_count('share_qty')}{_ANSI_0} 股"
             f"（名目 {_money('notional_usd')}）",
-            f"風險預算：`{_money('risk_budget_usd')}`",
-            f"停損距離：`{_money('stop_distance_usd')}`"
-            f"（擠壓參考停損 `{_money('stop_price')}`）",
+            f"風險預算：{_ANSI_W}{_money('risk_budget_usd')}{_ANSI_0}",
+            f"停損距離：{_ANSI_W}{_money('stop_distance_usd')}{_ANSI_0}"
+            f"（擠壓參考停損 {_ANSI_W}{_money('stop_price')}{_ANSI_0}）",
             f"約束來源：{_PYRAMID_ADD_BINDING_LABELS.get(binding, binding or 'N/A')}",
-            f"VIX `{vix_text}`｜{pyramid_add_plan.get('vix_tier_name') or 'N/A'}"
+            f"VIX {_ANSI_W}{vix_text}{_ANSI_0}｜{pyramid_add_plan.get('vix_tier_name') or 'N/A'}"
             "（僅供參考，不調整倉位）",
-            f"第 `{int(pyramid_add_plan.get('pyramid_count_after') or 0)}` 次加碼",
+            f"第 {_ANSI_W}{_count('pyramid_count_after')}{_ANSI_0} 次加碼",
         ]
-        embed.add_field(
-            name="⚖️ 倉位",
-            value=truncate_with_boundary("\n".join(sizing_lines), 1000),
-            inline=False,
-        )
+        _add_ansi_field_safely(embed, "⚖️ 倉位", _ansi_tree_lines(sizing_rows))
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
+        text="Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
         if is_pyramid_add
-        else "Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
+        else "Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
     )
 
     return embed
@@ -936,66 +942,59 @@ def create_short_entry_embed(
     )
 
     def _money(key: str) -> str:
-        try:
-            return f"${float(plan.get(key) or 0.0):,.2f}"
-        except (TypeError, ValueError):
-            return "N/A"
+        # 缺值（None／非數值）顯示 `--`，不以 $0.00 冒充
+        return fmt_or_dash(plan.get(key), ",.2f", prefix="$")
 
-    action_lines = [
-        f"動作：**SELL SHORT** `{symbol}`",
+    action_rows = [
+        f"動作：SELL SHORT {_ANSI_W}{symbol}{_ANSI_0}",
         f"子模式：{sub_mode}",
     ]
     if structure_directive:
-        action_lines.append(f"期權表達：{structure_directive}")
+        action_rows.append(f"期權表達：{structure_directive}")
     if entry_regime:
-        action_lines.append(f"Regime：`{entry_regime}`")
-    embed.add_field(name="🎯 動作", value="\n".join(action_lines), inline=False)
+        action_rows.append(f"Regime：{_ANSI_W}{entry_regime}{_ANSI_0}")
+    _add_ansi_field_safely(embed, "🎯 動作", _ansi_tree_lines(action_rows))
 
     stop_structural = float(plan.get("stop_price_structural") or 0.0)
     stop_exit_engine = float(plan.get("stop_price_exit_engine") or 0.0)
-    level_lines = [
-        f"進場 (限價放空)：`{_money('entry_price')}`",
-        f"停損 (倉位依據)：`{_money('stop_price')}`",
+    level_rows = [
+        f"進場 (限價放空)：{_ANSI_W}{_money('entry_price')}{_ANSI_0}",
+        f"停損 (倉位依據)：{_ANSI_W}{_money('stop_price')}{_ANSI_0}",
     ]
     if (
         stop_structural > 0
         and stop_exit_engine > 0
         and abs(stop_structural - stop_exit_engine) >= 0.01
     ):
-        level_lines.append(
-            f"└ 結構停損 `${stop_structural:,.2f}`／出場引擎停損 "
-            f"`${stop_exit_engine:,.2f}` (取較遠者)"
+        level_rows.append(
+            f"結構停損 {_ANSI_W}${stop_structural:,.2f}{_ANSI_0}／出場引擎停損 "
+            f"{_ANSI_W}${stop_exit_engine:,.2f}{_ANSI_0} (取較遠者)"
         )
-    level_lines.append(f"目標：`{_money('target_price')}`")
-    try:
-        level_lines.append(f"R:R：`{float(plan.get('reward_risk_ratio') or 0.0):.2f}`")
-    except (TypeError, ValueError):
-        pass
+    level_rows.append(f"目標：{_ANSI_W}{_money('target_price')}{_ANSI_0}")
+    level_rows.append(
+        f"R:R：{_ANSI_W}{fmt_or_dash(plan.get('reward_risk_ratio'), '.2f', placeholder='N/A')}{_ANSI_0}"
+    )
     if plan.get("invalidation_note"):
-        level_lines.append(f"⚠️ {plan.get('invalidation_note')}")
-    embed.add_field(name="📐 價位", value="\n".join(level_lines), inline=False)
+        level_rows.append(f"⚠️ {plan.get('invalidation_note')}")
+    _add_ansi_field_safely(embed, "📐 價位", _ansi_tree_lines(level_rows))
 
     binding = str(plan.get("binding_constraint") or "")
     vix_spot = plan.get("vix_spot")
-    vix_text = f"{float(vix_spot):.1f}" if vix_spot is not None else "未知"
-    sizing_lines = [
-        f"風險預算：`{_money('risk_budget_usd')}`",
-        f"建議股數：`{int(plan.get('share_qty') or 0):,}` 股"
+    vix_text = fmt_or_dash(vix_spot, ".1f", placeholder="未知")
+    sizing_rows = [
+        f"風險預算：{_ANSI_W}{_money('risk_budget_usd')}{_ANSI_0}",
+        f"建議股數：{_ANSI_W}{fmt_or_dash(plan.get('share_qty'), ',.0f')}{_ANSI_0} 股"
         f"（名目 {_money('notional_usd')}）",
         f"約束來源：{_SHORT_ENTRY_BINDING_LABELS.get(binding, binding or 'N/A')}",
-        f"VIX `{vix_text}`｜{plan.get('vix_tier_name') or 'N/A'}｜"
-        f"做空倉位乘數 `{float(plan.get('short_vix_multiplier') or 0.0):.2f}x`",
+        f"VIX {_ANSI_W}{vix_text}{_ANSI_0}｜{plan.get('vix_tier_name') or 'N/A'}｜"
+        f"做空倉位乘數 {_ANSI_W}{fmt_or_dash(plan.get('short_vix_multiplier'), '.2f', suffix='x', placeholder='N/A')}{_ANSI_0}",
         "以期權表達時：Long Put 權利金總額、或 Bear Call Spread 最大虧損"
         "（價差寬度 − 收入）皆不應超過上方風險預算",
     ]
-    embed.add_field(
-        name="⚖️ 倉位",
-        value=truncate_with_boundary("\n".join(sizing_lines), 1000),
-        inline=False,
-    )
+    _add_ansi_field_safely(embed, "⚖️ 倉位", _ansi_tree_lines(sizing_rows))
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 僅為建議不代為下單；成交後請以"
+        text="Risk & Rollover Engine • 僅為建議不代為下單；成交後請以"
         "『負股數／負口數』登錄，出場由做空鏡像出場矩陣接管"
     )
     return embed
@@ -1043,7 +1042,7 @@ def create_transition_ratchet_embed(
     embed.add_field(name="🔀 停損上移", value="\n".join(ratchet_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 動態調整狀態切換引擎，需手動調整停損"
+        text="Risk & Rollover Engine • 動態調整狀態切換引擎，需手動調整停損"
     )
 
     return embed
@@ -1092,7 +1091,7 @@ def create_protective_put_embed(
     embed.add_field(name="🛡️ 對沖建議", value="\n".join(put_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 成交後請以 /add_trade 登錄並將 "
+        text="Risk & Rollover Engine • 成交後請以 /add_trade 登錄並將 "
         "trade_category 設為 HEDGE"
     )
 
@@ -1147,7 +1146,7 @@ def create_advisory_levels_embed(
     embed.add_field(name="📍 位階資訊", value="\n".join(level_lines), inline=False)
 
     embed.set_footer(
-        text="Nexus Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
+        text="Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
         "單檔可用 /edit_holding advisory_mode 覆寫)"
     )
     return embed
@@ -1207,7 +1206,7 @@ def build_fundamental_broken_embed(
     embed.description = truncate_with_boundary(
         "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
-    embed.set_footer(text="Nexus Risk & Rollover Engine • 基本面告知（不含交易指令）")
+    embed.set_footer(text="Risk & Rollover Engine • 基本面告知（不含交易指令）")
     return embed
 
 
@@ -1262,7 +1261,7 @@ def create_thesis_passed_embed(
     embed.description = truncate_with_boundary(
         "\n".join(desc_lines), _EMBED_DESCRIPTION_SAFE_LIMIT
     )
-    embed.set_footer(text="Nexus Risk & Rollover Engine • 護城河驗證完成")
+    embed.set_footer(text="Risk & Rollover Engine • 護城河驗證完成")
     return embed
 
 
@@ -1275,6 +1274,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "COVERED_CALL_PROFIT_LOCK": "CC停利",
     "TRANSITION_ENGINE": "動態切換",
     "SHORT_ENTRY": "做空進場",
+    "PYRAMID_ADD": "金字塔加碼",
     # 已移除的情境：審計軌跡仍保有舊紀錄，保留短標籤以免撐開固定寬度表格。
     "OPPORTUNITY_COST": "機會成本",
 }
@@ -1297,26 +1297,28 @@ def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embe
         embed.description = "📭 目前尚無轉倉建議推送紀錄。"
         return embed
 
-    header = f"{_pad_string('時間 (UTC)', 16)} | {_pad_string('標的', 6)} | {_pad_string('情境', 8)} | {_pad_string('動作', 9)} | {_pad_string('比例', 6, 'right')}"
-    divider = "-" * 55
-    lines = [header, divider]
+    rows: list[list[str]] = []
     for r in records:
         scenario_label = _SCENARIO_SHORT_LABELS.get(
             str(r.get("scenario", "")), str(r.get("scenario", "N/A"))
         )
-        created_at = str(r.get("created_at", ""))[:16]
-        action = str(r.get("action", "N/A"))
         sell_ratio = float(r.get("sell_ratio", 0.0) or 0.0)
-        lines.append(
-            f"{_pad_string(created_at, 16)} | {_pad_string(r.get('symbol', ''), 6)} "
-            f"| {_pad_string(scenario_label, 8)} | {_pad_string(action, 9)} "
-            f"| {_pad_string(f'{sell_ratio:.0%}', 6, 'right')}"
+        rows.append(
+            [
+                str(r.get("created_at", ""))[:16],
+                str(r.get("symbol", "")),
+                scenario_label,
+                str(r.get("action", "N/A")),
+                f"{sell_ratio:.0%}",
+            ]
         )
-
-    table = "```\n" + "\n".join(lines) + "\n```"
-    safe_table = truncate_with_boundary(table, _EMBED_FIELD_VALUE_LIMIT)
-    embed.add_field(name="🕰️ 近期推送紀錄", value=safe_table, inline=False)
-    embed.set_footer(
-        text="Nexus Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果"
+    header_line, divider, *data_lines = _render_aligned_table(
+        ["時間 (UTC)", "標的", "情境", "動作", "比例"],
+        rows,
+        ["left", "left", "left", "left", "right"],
+        sep=" | ",
     )
+    # 分塊保證每個欄位都有完整的 ```ansi 收尾 fence（不被 1024 截斷切掉）
+    _add_ansi_table_fields(embed, "🕰️ 近期推送紀錄", header_line, divider, data_lines)
+    embed.set_footer(text="Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果")
     return embed

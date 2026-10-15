@@ -222,15 +222,17 @@ class MarketScanCog(commands.Cog):
 
                             exec_decision = data.get("execution_decision")
                             if exec_decision:
-                                from formatters.execution_embeds import (
-                                    build_execution_discord_embed,
+                                from cogs.embed_builders import (
+                                    create_execution_decision_embed,
                                 )
 
                                 await notify(
                                     self.bot,
                                     uid,
                                     "alpha_option_scan",
-                                    embed=build_execution_discord_embed(exec_decision),
+                                    embed=create_execution_decision_embed(
+                                        exec_decision
+                                    ),
                                 )
 
                         if is_auto:

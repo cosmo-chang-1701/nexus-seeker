@@ -7,8 +7,16 @@ from typing import Any, Optional
 
 from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
 
-from cogs.embed_builders._ansi_utils import _pad_string
+from cogs.embed_builders._ansi_utils import (
+    _render_aligned_table,
+    _to_float_or_none,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import (
+    UOA_HEURISTIC_DISCLOSURE,
+    UOA_OI_PREV_DAY_NOTE,
+)
 
 
 def _format_uoa_field(uoa_data: list) -> str:
@@ -110,9 +118,12 @@ def create_sentiment_scan_embed(
             is_premarket = iv_data.get("is_premarket", False)
 
         current_iv_val = (
-            iv_data.current_iv
-            if hasattr(iv_data, "current_iv")
-            else iv_data.get("current_iv", 0.0)
+            _to_float_or_none(
+                iv_data.current_iv
+                if hasattr(iv_data, "current_iv")
+                else iv_data.get("current_iv", 0.0)
+            )
+            or 0.0
         )
 
         iv_source = (
@@ -136,6 +147,8 @@ def create_sentiment_scan_embed(
                 )
             else:
                 title_suffix = " [盤前數據未更新]"
+        elif iv_source == "UNAVAILABLE":
+            title_suffix = " [降級模式]"
 
     embed = NexusEmbed(
         title=f"📊 {symbol} 期權情緒掃描 (Sentiment Scan){title_suffix}",
@@ -212,17 +225,31 @@ def create_sentiment_scan_embed(
 
         iv_status_str = f"狀態: {status_tw}"
 
-        if is_premarket and current_iv == 0.0:
+        current_iv_f = _to_float_or_none(current_iv)
+        iv_unavailable = iv_source == "UNAVAILABLE" or current_iv_f is None
+        if (is_premarket or iv_unavailable) and not current_iv_f:
+            if is_premarket:
+                _iv_note, _rank_note, _em_note = (
+                    "等待開盤 / 盤前未開市",
+                    "狀態: 待開盤",
+                    "開盤後更新",
+                )
+            else:
+                _iv_note, _rank_note, _em_note = (
+                    "IV 數據源不可用",
+                    "狀態: 數據不可用",
+                    "IV 不可用，無法估算",
+                )
             iv_lines = [
                 "```ansi",
                 f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
                 " ----------------------------------",
                 " Implied Volatility (IV)",
-                " └─ 值: \u001b[1;30m--%\u001b[0m (等待開盤 / 盤前未開市)",
+                f" └─ 值: \u001b[1;30m--%\u001b[0m ({_iv_note})",
                 " IV Rank / IV Percentile",
-                " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
+                f" └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m ({_rank_note})",
                 " Expected Move (預期震盪區間)",
-                " └─ 本週預期: \u001b[1;30m--\u001b[0m (開盤後更新)",
+                f" └─ 本週預期: \u001b[1;30m--\u001b[0m ({_em_note})",
                 "```",
             ]
         else:
@@ -253,28 +280,28 @@ def create_sentiment_scan_embed(
                 f" 🌌 {symbol} 期權情緒掃描 (Sentiment Scan)",
                 " ----------------------------------",
                 vol_title,
-                f" └─ 值: {current_iv * 100:.1f}% ({vol_note})",
+                f" └─ 值: {fmt_or_dash(current_iv_f * 100 if current_iv_f is not None else None, '.1f', suffix='%')} ({vol_note})",
                 " IV Rank / IV Percentile",
-                f" └─ IV Rank: {iv_rank:.1f}% | IV Percentile: {iv_percentile:.1f}% ({iv_status_str})",
+                f" └─ IV Rank: {fmt_or_dash(iv_rank, '.1f', suffix='%')} | IV Percentile: {fmt_or_dash(iv_percentile, '.1f', suffix='%')} ({iv_status_str})",
                 " Expected Move (預期震盪區間)",
             ]
             if earnings_loading or macro_loading:
                 iv_lines.extend(
                     [
-                        f" ├─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})",
+                        f" ├─ 本週預期: {fmt_or_dash(expected_move_weekly, '.2f', prefix='±$')} ({em_note})",
                         " └─ 備註: 實盤請預留 1.4x 波動邊界以防範 IV Crush。",
                     ]
                 )
             else:
                 iv_lines.append(
-                    f" └─ 本週預期: ±${expected_move_weekly:.2f} ({em_note})"
+                    f" └─ 本週預期: {fmt_or_dash(expected_move_weekly, '.2f', prefix='±$')} ({em_note})"
                 )
             iv_lines.append("```")
         embed.add_field(
             name="📊 隱含波動率與預期區間", value="\n".join(iv_lines), inline=False
         )
 
-    skew_val = skew_data.get("skew", 0) if skew_data else 0
+    skew_val = skew_data.get("skew") if skew_data else None
     skew_state = skew_data.get("state", "N/A") if skew_data else "N/A"
 
     pcr_dict = pcr_data if isinstance(pcr_data, dict) else {}
@@ -334,36 +361,21 @@ def create_sentiment_scan_embed(
                 "🎯 趨於收斂" if max_pain_data.get("is_converging") else "⏳ 尚有距離"
             )
 
-    metrics_lines = ["```ansi"]
-    m_headers = ["指標項目", "數據值", "狀態 / 備註"]
-    m_widths = [14, 20, 24]
-    metrics_lines.append(
-        " | ".join(
-            _pad_string(h, w, "left" if i == 0 or i == 2 else "right")
-            for i, (h, w) in enumerate(zip(m_headers, m_widths))
-        )
-    )
-    metrics_lines.append("-" * (sum(m_widths) + 3 * (len(m_widths) - 1)))
-
-    # Skew 渲染
-    skew_val_str = (
-        f"{skew_val:.2f}%" if isinstance(skew_val, (int, float)) else f"{skew_val}%"
-    )
-    metrics_lines.append(
-        f"{_pad_string('Option Skew', m_widths[0])} | {_pad_string(skew_val_str, m_widths[1], 'right')} | {_pad_string(skew_state, m_widths[2])}"
-    )
-    # Volume PCR 渲染
-    metrics_lines.append(
-        f"{_pad_string('Volume PCR', m_widths[0])} | {_pad_string(vol_pcr_str, m_widths[1], 'right')} | {_pad_string(vol_pcr_state, m_widths[2])}"
-    )
-    # OI PCR 渲染
-    metrics_lines.append(
-        f"{_pad_string('OI PCR', m_widths[0])} | {_pad_string(oi_pcr_str, m_widths[1], 'right')} | {_pad_string(oi_pcr_state, m_widths[2])}"
-    )
-    # Max Pain 渲染
-    metrics_lines.append(
-        f"{_pad_string('Max Pain', m_widths[0])} | {_pad_string(mp_strike_str, m_widths[1], 'right')} | {_pad_string(is_conv, m_widths[2])}"
-    )
+    skew_val_str = fmt_or_dash(skew_val, ".2f", suffix="%", placeholder="--%")
+    metrics_lines = [
+        "```ansi",
+        *_render_aligned_table(
+            ["指標項目", "數據值", "狀態 / 備註"],
+            [
+                ["Option Skew", skew_val_str, skew_state],
+                ["Volume PCR", vol_pcr_str, vol_pcr_state],
+                ["OI PCR", oi_pcr_str, oi_pcr_state],
+                ["Max Pain", mp_strike_str, is_conv],
+            ],
+            ["left", "right", "left"],
+            sep=" | ",
+        ),
+    ]
     metrics_lines.append("```")
 
     embed.add_field(
@@ -373,9 +385,16 @@ def create_sentiment_scan_embed(
     # UOA 渲染
     if uoa_data:
         table_str = _format_uoa_field(uoa_data)
-        embed.add_field(
-            name="🐋 異常活動 (UOA)", value=f"```ansi\n{table_str}\n```", inline=False
-        )
+        uoa_notes = f"\n{UOA_HEURISTIC_DISCLOSURE}\n{UOA_OI_PREV_DAY_NOTE}"
+        uoa_value = f"```ansi\n{table_str}\n```"
+        if len(uoa_value) + len(uoa_notes) <= 1024:
+            uoa_value += uoa_notes
+            uoa_notes = ""
+        embed.add_field(name="🐋 異常活動 (UOA)", value=uoa_value, inline=False)
+        if uoa_notes:
+            embed.add_field(
+                name="ℹ️ UOA 判定說明", value=uoa_notes.strip(), inline=False
+            )
     else:
         embed.add_field(
             name="🐋 異常活動 (UOA)",
@@ -383,5 +402,5 @@ def create_sentiment_scan_embed(
             inline=False,
         )
 
-    embed.set_footer(text="Nexus Seeker | Volatility Strategist")
+    embed.set_footer(text="Volatility Strategist")
     return embed

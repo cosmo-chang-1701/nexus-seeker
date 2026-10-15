@@ -14,18 +14,27 @@ import re
 import discord
 from cogs.embed_builders._core import NexusEmbed
 
-from typing import List, Dict, Optional
+from typing import Callable, List, Dict, Optional
 
 from ui import panel_renderer
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
+    _to_float_or_none,
     _truncate_with_boundary,
+    fmt_or_dash,
 )
 
 
 # ============================================================================
 # Shared Embed Formatting Helpers
 # ============================================================================
+
+# UOA 異常大單表格的代理判定揭露（watchlist／sentiment_scan 共用）
+UOA_HEURISTIC_DISCLOSURE = (
+    "⚠️ SWEEP/BLOCK 為成交量整數手數啟發式代理判定，非真實 order-type 逐筆 tape 數據。"
+)
+UOA_OI_PREV_DAY_NOTE = "⚠️ OI 為前一交易日收盤未平倉量，非盤中即時數據；比例欄位為當日累積量對此固定值的比值。"
+UOA_DELTA_OI_NOTE = "⚠️ ΔOI* 於上游未提供實際未平倉變動時，以「當日成交量 − 前一日 OI」代理推估，非真實 ΔOI。"
 
 
 def get_sqz_status_display(
@@ -236,10 +245,22 @@ def _append_ai_report_fields(
     )
 
 
+def no_title_suffix(index: int, total: int) -> str:
+    """`split_embed_by_fields(title_suffix=...)` 用：不在標題附加分頁尾碼。"""
+    return ""
+
+
 def split_embed_by_fields(
-    embed: discord.Embed, max_size: int = 5000
+    embed: discord.Embed,
+    max_size: int = 5000,
+    *,
+    title_suffix: Callable[[int, int], str] | None = None,
 ) -> list[discord.Embed]:
-    """將多欄位報告拆成多則 Embed，儘量合併欄位以防訊息過於零碎，且確保單則長度不超過 max_size。"""
+    """將多欄位報告拆成多則 Embed，儘量合併欄位以防訊息過於零碎，且確保單則長度不超過 max_size。
+
+    `title_suffix(index, total)` 回傳要附加在標題後的尾碼；預設為 `" (index/total)"`，
+    傳入 `no_title_suffix` 則不加尾碼（由呼叫端自行標註頁碼）。
+    """
     if len(embed.fields) <= 1:
         return [embed]
 
@@ -298,11 +319,16 @@ def split_embed_by_fields(
         payload = dict(base_payload)
         title = payload.get("title")
         if title:
-            payload["title"] = f"{title} ({index}/{total})"
+            suffix = (
+                title_suffix(index, total)
+                if title_suffix is not None
+                else f" ({index}/{total})"
+            )
+            payload["title"] = f"{title}{suffix}"
         if index > 1:
             payload.pop("description", None)
 
-        split_embed = discord.Embed.from_dict(payload)
+        split_embed = NexusEmbed.from_dict(payload)
         for field in group:
             split_embed.add_field(
                 name=field.name, value=field.value, inline=field.inline
@@ -395,6 +421,46 @@ def _add_ansi_field_safely(embed: Any, name: str, lines: list) -> None:
         )
 
 
+_ANSI_W = "\u001b[1;37m"
+_ANSI_R = "\u001b[1;31m"
+_ANSI_G = "\u001b[1;32m"
+_ANSI_0 = "\u001b[0m"
+_ANSI_Y = "\u001b[1;33m"
+
+
+def _ansi_tree_lines(rows: list, *, indent: str = " ") -> list:
+    """將已著色的資料列加上 ` ├─ ` / ` └─ ` 樹狀前綴（最後一列用 └─）。"""
+    last = len(rows) - 1
+    return [
+        f"{indent}{'└─' if i == last else '├─'} {row}" for i, row in enumerate(rows)
+    ]
+
+
+def _add_chunked_fields(embed: Any, name: str, chunks: List[str]) -> None:
+    """把已切好的 ANSI 表格區塊寫入欄位；多塊時欄名加 ` (i/n)`。"""
+    for idx, chunk in enumerate(chunks, start=1):
+        embed.add_field(
+            name=name if len(chunks) == 1 else f"{name} ({idx}/{len(chunks)})",
+            value=chunk,
+            inline=False,
+        )
+
+
+def _add_ansi_table_fields(
+    embed: Any,
+    name: str,
+    header: str,
+    divider: str,
+    data_lines: List[str],
+    *,
+    max_len: int = 1024,
+) -> None:
+    """切分 ANSI 表格（每塊自帶完整收尾 fence）並寫成欄位，多塊時欄名加 ` (i/n)`。"""
+    _add_chunked_fields(
+        embed, name, _chunk_ansi_table(header, divider, data_lines, max_len)
+    )
+
+
 def _fmt_gex_notional(raw: float) -> str:
     """GEX 原始值（OI×100×Γ×S²，每 100% 變動）→ 每 1% 變動避險名目，自動 $B/$M/$K。
 
@@ -484,6 +550,8 @@ def _parse_and_format_positions_table(
     total_debit_cost = 0.0
     total_credit_cash = 0.0
     total_unrealized_pnl = 0.0
+    missing_price_count = 0
+    has_estimate = False
 
     for pos_item in positions_list:
         # Regex parsing
@@ -491,8 +559,9 @@ def _parse_and_format_positions_table(
         exp_match = re.search(r"`(\d{4}-\d{2}-\d{2}|PERPETUAL|現貨|N/A)`", pos_item)
         strike_type_match = re.search(r"`?\$([\d\.,]+)`?\s*\*\*(.*?)\*\*", pos_item)
 
-        cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)`", pos_item)
-        price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)`", pos_item)
+        cost_match = re.search(r"成本:\s*`\$?([\d\.,\-]+)[^`]*`", pos_item)
+        # 現價可帶尾註（如 ASK_HALF 的「 (ask/2 估)」），尾註保留在 group(2)
+        price_match = re.search(r"現價:\s*`\$?([\d\.,\-]+)([^`]*)`", pos_item)
         dte_match = re.search(r"DTE:\s*`(.*?)`", pos_item)
         status_match = re.search(r"動作:\s*(.*)", pos_item)
 
@@ -520,8 +589,11 @@ def _parse_and_format_positions_table(
         cost_val = (
             float(cost_match.group(1).strip().replace(",", "")) if cost_match else 0.0
         )
-        price_val = (
-            float(price_match.group(1).strip().replace(",", "")) if price_match else 0.0
+        # 缺現價時不得以 0 計算損益（會把部位顯示成 -100%）：price_val 為 None
+        price_val: Optional[float] = (
+            _to_float_or_none(price_match.group(1).strip().replace(",", ""))
+            if price_match
+            else None
         )
 
         is_stock = "STOCK" in opt_type.upper() or type_letter.upper() == "STOCK"
@@ -530,13 +602,24 @@ def _parse_and_format_positions_table(
         if direction == "BTO":
             debit_cost = cost_val * multiplier * qty
             total_debit_cost += debit_cost
-            pnl_val = (price_val - cost_val) * multiplier * qty
+            pnl_val = (
+                (price_val - cost_val) * multiplier * qty
+                if price_val is not None
+                else None
+            )
         else:
             credit_cash = cost_val * multiplier * qty
             total_credit_cash += credit_cash
-            pnl_val = (cost_val - price_val) * multiplier * qty
+            pnl_val = (
+                (cost_val - price_val) * multiplier * qty
+                if price_val is not None
+                else None
+            )
 
-        total_unrealized_pnl += pnl_val
+        if pnl_val is not None:
+            total_unrealized_pnl += pnl_val
+        else:
+            missing_price_count += 1
 
         dte_val = dte_match.group(1).strip() if dte_match else "0"
         if "天" in dte_val:
@@ -545,7 +628,7 @@ def _parse_and_format_positions_table(
         qty_str = f"{int(qty)}" if qty.is_integer() else f"{qty}"
 
         pnl_pct = 0.0
-        if cost_val > 0.0:
+        if cost_val > 0.0 and price_val is not None:
             if direction == "BTO":
                 pnl_pct = (price_val - cost_val) / cost_val
             else:
@@ -555,25 +638,32 @@ def _parse_and_format_positions_table(
         status = status_match.group(1).strip() if status_match else "HOLD"
         status = _clean_ansi(status)
 
-        pnl_sign = "+" if pnl_val > 0 else "-" if pnl_val < 0 else ""
-        pnl_abs_usd = abs(pnl_val)
-        pnl_emoji = "🟢" if pnl_val > 0 else "🚨" if pnl_val < 0 else "⚖️"
-        pnl_formatted = (
-            f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
-        )
+        if pnl_val is None:
+            pnl_formatted = "**-- (--%)** ⚪"
+        else:
+            pnl_sign = "+" if pnl_val > 0 else "-" if pnl_val < 0 else ""
+            pnl_abs_usd = abs(pnl_val)
+            pnl_emoji = "🟢" if pnl_val > 0 else "🚨" if pnl_val < 0 else "⚖️"
+            pnl_formatted = (
+                f"**{pnl_sign}${pnl_abs_usd:,.2f} ({pnl_pct*100:+.2f}%)** {pnl_emoji}"
+            )
+        price_txt = fmt_or_dash(price_val, ".2f", prefix="$")
+        if price_val is not None and price_match and "ask/2" in price_match.group(2):
+            price_txt += "*"
+            has_estimate = True
 
         if is_stock:
             pos_block = (
                 f"**當前持倉明細 (標的: {symbol})**\n"
                 f"* 部位：`現貨 (HOLDING)` | 數量：`{qty_str} 股` | 永久持有 (PERPETUAL)\n"
-                f"* 價格：買入成本 `${cost_val:.2f}` | 現價 `${price_val:.2f}` | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 價格：買入成本 `${cost_val:.2f}` | 現價 `{price_txt}` | IV/IVR: `{iv_ivr_str}`\n"
                 f"* 損益：{pnl_formatted} *{status}*"
             )
         else:
             pos_block = (
                 f"**當前持倉明細 (標的: {symbol})**\n"
                 f"* 部位：`{direction} {type_letter}` | 數量：`{qty_str}` | {expiry} (**{dte_val}d DTE**)\n"
-                f"* 價格：履約價 `${strike_val}` | 現價 `${price_val:.2f}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
+                f"* 價格：履約價 `${strike_val}` | 現價 `{price_txt}` *(成本 ${cost_val:.2f})* | IV/IVR: `{iv_ivr_str}`\n"
                 f"* 損益：{pnl_formatted} *{status}*"
             )
         parsed_blocks.append(pos_block)
@@ -594,6 +684,10 @@ def _parse_and_format_positions_table(
     summary_lines.append(
         f"* 盤中實時未實現損益 (Unrealized PnL): **{pnl_sign}${abs(total_unrealized_pnl):,.2f}** USD {pnl_emoji}"
     )
+    if missing_price_count:
+        summary_lines.append(f"* ⚠️ {missing_price_count} 筆缺現價，未計入上述損益")
+    if has_estimate:
+        summary_lines.append("* `*` 零 bid，現價以 ask/2 估算")
 
     if runway_lines:
         summary_lines.append("* 🏁 提領跑道 (Withdrawal Runway):")
@@ -681,78 +775,72 @@ def _add_market_overview_fields(embed: Any, data: Any):  # type: ignore
     beta_status = "🚀" if beta > 1.3 else ("⚖️" if beta >= 0.8 else "🧊")
     if data.get("beta_estimated"):
         beta_status = "⚠️ 資料不足，暫以 1.0 估算"
-    embed.add_field(
-        name="🏷️ 標價 / Beta\u2800\u2800",
-        value=f"${data['price']:.2f} / `{beta:.2f}` {beta_status}\n\u200b",
-        inline=True,
-    )
-    embed.add_field(
-        name="📈 RSI / 20MA\u2800\u2800\u2800",
-        value=f"{data['rsi']:.2f} / ${data['sma20']:.2f}\n\u200b",
-        inline=True,
-    )
     hvr_status = (
         "🔥 高"
         if data["hv_rank"] >= 50
         else ("⚡ 中" if data["hv_rank"] >= 30 else "🧊 低")
     )
-    embed.add_field(
-        name="🔥 HV Rank\u2800\u2800\u2800\u2800",
-        value=f"`{data['hv_rank']:.1f}%` {hvr_status}\n\u200b",
-        inline=True,
-    )
+    rows = [
+        f"標價 / Beta   : {_ANSI_W}${data['price']:.2f} / {beta:.2f}{_ANSI_0} {beta_status}",
+        f"RSI / 20MA    : {_ANSI_W}{data['rsi']:.2f} / ${data['sma20']:.2f}{_ANSI_0}",
+        f"HV Rank       : {_ANSI_W}{data['hv_rank']:.1f}%{_ANSI_0} {hvr_status}",
+    ]
+    _add_ansi_field_safely(embed, "📊 市場概覽", _ansi_tree_lines(rows))
 
 
 def _add_volatility_fields(embed: Any, data: Any, strategy: Any):  # type: ignore
-    vrp_pct = data.get("vrp", 0.0) * 100
-    vrp_icon = (
-        "✅"
-        if (("STO" in strategy and vrp_pct > 0) or ("BTO" in strategy and vrp_pct < 0))
-        else "⚠️"
-    )
-    embed.add_field(
-        name="⚖️ VRP 溢酬\u2800\u2800\u2800\u2800",
-        value=f"`{vrp_pct:+.2f}%` {vrp_icon}\n\u200b",
-        inline=True,
-    )
-    ts_ratio_str = f"`{data['ts_ratio']:.2f}` {data['ts_state']}"
-    embed.add_field(
-        name="⏳ 個股 IV 期限結構\u2800\u2800",
-        value=f"{ts_ratio_str}\n\u200b",
-        inline=True,
-    )
-    v_skew_str = f"`{data['v_skew']:.2f}` {data.get('v_skew_state', '')}"
-    embed.add_field(
-        name="📉 垂直偏態\u2800\u2800\u2800\u2800",
-        value=f"{v_skew_str}\n\u200b",
-        inline=True,
+    vrp_raw = _to_float_or_none(data.get("vrp"))
+    if vrp_raw is None:
+        # 缺值不做優劣判定（不以 0 冒充中性）
+        vrp_text = f"{_ANSI_W}--%{_ANSI_0}"
+    else:
+        vrp_pct = vrp_raw * 100
+        vrp_icon = (
+            "✅"
+            if (
+                ("STO" in strategy and vrp_pct > 0)
+                or ("BTO" in strategy and vrp_pct < 0)
+            )
+            else "⚠️"
+        )
+        vrp_text = f"{_ANSI_W}{vrp_pct:+.2f}%{_ANSI_0} {vrp_icon}"
+    ts_ratio_str = f"{_ANSI_W}{data['ts_ratio']:.2f}{_ANSI_0} {data['ts_state']}"
+    v_skew_str = (
+        f"{_ANSI_W}{data['v_skew']:.2f}{_ANSI_0} {data.get('v_skew_state', '')}"
     )
 
     # ---------------- VIX 306 Volatility Metrics ----------------
-    vts_str = f"`{data.get('vix_vts_ratio', 1.0):.2f}` {data.get('vix_regime', '')}"
-    embed.add_field(
-        name="🌐 大盤 VIX 期限結構\u2800", value=f"{vts_str}\n\u200b", inline=True
-    )
+    vts_ratio = _to_float_or_none(data.get("vix_vts_ratio"))
+    if vts_ratio is None:
+        vts_str = f"{_ANSI_W}--{_ANSI_0}"
+    else:
+        vts_str = f"{_ANSI_W}{vts_ratio:.2f}{_ANSI_0} {data.get('vix_regime', '')}"
 
-    z30 = data.get("vix_z30", 0.0)
-    z60 = data.get("vix_z60", 0.0)
-    z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
-    embed.add_field(
-        name="🔥 VIX 30/60 Z-Score",
-        value=f"Z30:`{z30:.1f}` Z60:`{z60:.1f}` {z_icon}\n\u200b",
-        inline=True,
-    )
+    z30 = _to_float_or_none(data.get("vix_z30"))
+    z60 = _to_float_or_none(data.get("vix_z60"))
+    if z30 is None or z60 is None:
+        z_icon = ""
+    else:
+        z_icon = "📈 擴張" if z30 > 0.5 and z60 > 0 else "📉 收斂"
+    z_str = (
+        f"Z30:{_ANSI_W}{fmt_or_dash(z30, '.1f')}{_ANSI_0} "
+        f"Z60:{_ANSI_W}{fmt_or_dash(z60, '.1f')}{_ANSI_0} {z_icon}"
+    ).rstrip()
 
     tail_risk = (
-        "🚨 觸發降規 (1/4 Kelly)"
+        f"{_ANSI_R}🚨 觸發降規 (1/4 Kelly){_ANSI_0}"
         if data.get("is_high_tail_risk", False)
-        else "✅ 正常 (1/2 Kelly)"
+        else f"{_ANSI_G}✅ 正常 (1/2 Kelly){_ANSI_0}"
     )
-    embed.add_field(
-        name="🛡️ 尾部風險管理\u2800\u2800\u2800",
-        value=f"{tail_risk}\n\u200b",
-        inline=True,
-    )
+    rows = [
+        f"VRP 溢酬         : {vrp_text}",
+        f"個股 IV 期限結構 : {ts_ratio_str}",
+        f"垂直偏態         : {v_skew_str}",
+        f"大盤 VIX 期限結構: {vts_str}",
+        f"VIX 30/60 Z-Score: {z_str}",
+        f"尾部風險管理     : {tail_risk}",
+    ]
+    _add_ansi_field_safely(embed, "🌪️ 波動率結構", _ansi_tree_lines(rows))
 
 
 def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):  # type: ignore
@@ -771,35 +859,26 @@ def _add_performance_and_kelly_fields(embed: Any, data: Any, user_capital: Any):
     pos_multiplier = position_delta_sign(strategy)
     pos_weighted_shares = weighted_delta * pos_multiplier
 
-    embed.add_field(
-        name="🧩 Delta (部位加權)\u2800\u2800",
-        value=f"{raw_delta:.3f} (`{pos_weighted_shares:+.1f}`股)\n\u200b",
-        inline=True,
-    )
-
-    embed.add_field(
-        name="💰 AROC / IV\u2800\u2800\u2800\u2800",
-        value=f"`{data['aroc']:.1f}%` / {data['iv']:.1%}\n\u200b",
-        inline=True,
-    )
-
     alloc_pct = data.get("alloc_pct", 0.0)
     suggested = data.get("suggested_contracts", 0)
 
     if alloc_pct <= 0:
-        kelly_value = "`不建議建倉`"
+        kelly_value = "不建議建倉"
     elif not user_capital or user_capital <= 0:
-        kelly_value = f"`未設資金` ({alloc_pct*100:.1f}%)"
+        kelly_value = f"未設資金 ({alloc_pct*100:.1f}%)"
     else:
         kelly_value = (
-            f"`{suggested} 口` ({min(alloc_pct, 0.25)*100:.1f}%)"
+            f"{suggested} 口 ({min(alloc_pct, 0.25)*100:.1f}%)"
             if suggested > 0
-            else "`本金不足`"
+            else "本金不足"
         )
 
-    embed.add_field(
-        name="🧮 凱利原始建議\u2800\u2800", value=f"{kelly_value}\n\u200b", inline=True
-    )
+    rows = [
+        f"Delta (部位加權): {_ANSI_W}{raw_delta:.3f}{_ANSI_0} ({_ANSI_W}{pos_weighted_shares:+.1f}{_ANSI_0}股)",
+        f"AROC / IV       : {_ANSI_W}{data['aroc']:.1f}%{_ANSI_0} / {data['iv']:.1%}",
+        f"凱利原始建議    : {_ANSI_W}{kelly_value}{_ANSI_0}",
+    ]
+    _add_ansi_field_safely(embed, "🧩 部位與凱利", _ansi_tree_lines(rows))
 
 
 def _add_earnings_fields(embed: Any, data: Any, strategy: Any):  # type: ignore
@@ -843,57 +922,76 @@ def _add_covered_call_fields(embed: Any, data: Any, stock_cost: Any):  # type: i
 
 def _add_expected_move_fields(embed: Any, data: Any, strategy: Any, is_covered: Any):  # type: ignore
     """添加預期波動區間與損益兩平防線欄位"""
-    em = data.get("expected_move", 0.0)
-    em_lower = data.get("em_lower", 0.0)
-    em_upper = data.get("em_upper", 0.0)
+    em = _to_float_or_none(data.get("expected_move"))
+    em_lower = _to_float_or_none(data.get("em_lower"))
+    em_upper = _to_float_or_none(data.get("em_upper"))
+    # 預期波動缺失或為 0 時，區間無意義：顯示 `--` 並跳過防線判定
+    # （過去以 0 區間得出「防線已建構於區間外」的錯誤結論）。
+    em_ok = em is not None and em > 0
+    em_dn = fmt_or_dash(em, ",.2f", prefix="-$") if em_ok else "--"
+    em_up = fmt_or_dash(em, ",.2f", prefix="+$") if em_ok else "--"
+    no_judge = "⚪ 預期波動資料不足，無法判定防線"
 
     if "STO_PUT" in strategy:
         breakeven = data["strike"] - data.get("bid", 0)
-        safe = breakeven < em_lower
-        safety_text = (
-            "✅ 防線已建構於預期暴跌區間外"
-            if safe
-            else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
-        )
-        em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
+        if em_ok and em_lower is not None:
+            safe = breakeven < em_lower
+            safety_text = (
+                "✅ 防線已建構於預期暴跌區間外"
+                if safe
+                else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
+            )
+        else:
+            safety_text = no_judge
+        lower_txt = fmt_or_dash(em_lower if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期下緣: `{lower_txt}` (預期最大跌幅 {em_dn})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "STO_CALL" in strategy:
         breakeven = data["strike"] + data.get("bid", 0)
-        safe = breakeven > em_upper
         if is_covered:
             safety_text = "✅ 若漲破此價位，將以最高獲利出場 (股票被 Call 走)"
-        else:
+        elif em_ok and em_upper is not None:
+            safe = breakeven > em_upper
             safety_text = (
                 "✅ 防線已建構於預期暴漲區聯外"
                 if safe
                 else "⚠️ 損益兩平點位於預期波動區間內，風險較高"
             )
+        else:
+            safety_text = no_judge
 
-        em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
+        upper_txt = fmt_or_dash(em_upper if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期上緣: `{upper_txt}` (預期最大漲幅 {em_up})\n🛡️ 合約兩平點: **`${breakeven:.2f}`**\n{safety_text}\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "BTO_PUT" in strategy:
         breakeven = data["strike"] - data.get("ask", 0)
-        em_info = f"1σ 預期下緣: `${em_lower:.2f}` (預期最大跌幅 -${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標跌破此防線即開始獲利\n\u200b"
+        lower_txt = fmt_or_dash(em_lower if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期下緣: `{lower_txt}` (預期最大跌幅 {em_dn})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標跌破此防線即開始獲利\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
     elif "BTO_CALL" in strategy:
         breakeven = data["strike"] + data.get("ask", 0)
-        em_info = f"1σ 預期上緣: `${em_upper:.2f}` (預期最大漲幅 +${em:.2f})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標突破此防線即開始獲利\n\u200b"
+        upper_txt = fmt_or_dash(em_upper if em_ok else None, ".2f", prefix="$")
+        em_info = f"1σ 預期上緣: `{upper_txt}` (預期最大漲幅 {em_up})\n🛡️ 損益兩平點: **`${breakeven:.2f}`**\n✅ 目標突破此防線即開始獲利\n\u200b"
         embed.add_field(name="🎯 機率圓錐 (1σ 預期波動)", value=em_info, inline=False)
 
 
 def _add_liquidity_fields(embed: Any, data: Any):  # type: ignore
     """添加報價與流動性分析欄位"""
-    mid_price = data.get("mid_price", (data.get("bid", 0) + data.get("ask", 0)) / 2)
+    bid_v = _to_float_or_none(data.get("bid"))
+    ask_v = _to_float_or_none(data.get("ask"))
+    mid_v = _to_float_or_none(data.get("mid_price"))
+    if mid_v is None and bid_v is not None and ask_v is not None:
+        mid_v = (bid_v + ask_v) / 2
     liq_status = data.get("liq_status", "N/A")
     liq_msg = data.get("liq_msg", "")
 
     spread_info = (
-        f"**Bid:** `{data.get('bid', 0):.2f}` ｜ **Ask:** `{data.get('ask', 0):.2f}` (價差 `{data.get('spread_ratio', 0):.1f}%`)\n"
+        f"**Bid:** `{fmt_or_dash(bid_v, '.2f')}` ｜ **Ask:** `{fmt_or_dash(ask_v, '.2f')}` (價差 `{fmt_or_dash(data.get('spread_ratio'), '.1f', suffix='%')}`)\n"
         f"**狀態:** {liq_status} {liq_msg}\n"
-        f"🎯 **Limit (中價掛單建議):** `{mid_price:.2f}`\n\u200b"
+        f"🎯 **Limit (中價掛單建議):** `{fmt_or_dash(mid_v, '.2f')}`\n\u200b"
     )
     embed.add_field(name="💱 報價與流動性分析", value=spread_info, inline=False)
 
@@ -941,25 +1039,21 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
 
     if is_overloaded:
         sim_status = "🚨 警告：曝險過載"
-        sim_block = (
-            f"```diff\n"
-            f"- 成交後預期總曝險: {projected_pct:+.1f}%\n"
-            f"- 超過 {RISK_THRESHOLD}% 宏觀紅線\n"
-            f"```"
-        )
+        sim_lines = [
+            f"{_ANSI_R}成交後預期總曝險: {projected_pct:+.1f}%{_ANSI_0}",
+            f"{_ANSI_R}超過 {RISK_THRESHOLD}% 宏觀紅線{_ANSI_0}",
+        ]
     else:
         sim_status = "✅ 狀態：風險受控"
-        sim_block = (
-            f"```yaml\n"
-            f"成交後的預期總曝險: {projected_pct:+.1f}%\n"
-            f"符合資產組合平衡標準\n"
-            f"```"
-        )
+        sim_lines = [
+            f"{_ANSI_G}成交後的預期總曝險: {projected_pct:+.1f}%{_ANSI_0}",
+            f"{_ANSI_G}符合資產組合平衡標準{_ANSI_0}",
+        ]
 
-    embed.add_field(
-        name=f"🛡️ What-if 曝險模擬 | {sim_status}",
-        value=f"{sim_block}\n\u200b",
-        inline=False,
+    _add_ansi_field_safely(
+        embed,
+        f"🛡️ What-if 曝險模擬 | {sim_status}",
+        _ansi_tree_lines(sim_lines),
     )
 
     # NRO 風控警示 (含 VIX/SPY 資料不足的 fail-closed 說明)
@@ -977,20 +1071,21 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
 
         spy_p = data.get("spy_price")
 
-        actions = ["--- 偵測到風險超標，執行自動降規 ---"]
-        actions.append(f"❌ 原始建議: {suggested} 口")
-        actions.append(f"✅ 安全成交: {safe_qty} 口 (符合風控)")
+        actions = [
+            f"{_ANSI_R}❌ 原始建議: {suggested} 口{_ANSI_0}",
+            f"{_ANSI_G}✅ 安全成交: {safe_qty} 口 (符合風控){_ANSI_0}",
+        ]
 
         if safe_qty == 0 and hedge_spy != 0:
-            actions.append("\n⚠️ 警告: 即使下 1 口也過載")
+            actions.append(f"{_ANSI_R}⚠️ 警告: 即使下 1 口也過載{_ANSI_0}")
             direction = "賣出" if hedge_spy > 0 else "買入"
             spy_label = f"@${float(spy_p):.1f}" if spy_p else "SPY 現價 --"
             actions.append(
                 f"🛡️ 建議對沖: {direction} {abs(hedge_spy):.1f} 股 SPY ({spy_label})"
             )
 
-        opt_block = "```diff\n" + "\n".join(actions) + "\n```"
-        embed.add_field(name=opt_title, value=f"{opt_block}\n\u200b", inline=False)
+        opt_lines = [" 偵測到風險超標，執行自動降規"] + _ansi_tree_lines(actions)
+        _add_ansi_field_safely(embed, opt_title, opt_lines)
 
 
 def _add_hedge_unlock_fields(embed: Any, data: Any):  # type: ignore
@@ -1035,9 +1130,15 @@ def _add_ai_verification_fields(embed: Any, data: Any):  # type: ignore
         embed.add_field(name=ai_title, value=ai_value, inline=False)
 
 
-def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
-    """將 EMA 訊號清單轉化為 Discord 友善的文字流。"""
+def get_ema_signal_ui(ema_signals: List[Dict[str, Any]], *, ansi: bool = False) -> Any:
+    """將 EMA 訊號清單轉化為 Discord 友善的文字流。
+
+    預設回傳 markdown 字串（/x 面板沿用）；`ansi=True` 回傳 ansi 樹狀行清單
+    （交給 `_add_ansi_field_safely`），空清單時回傳單行提示。
+    """
     if not ema_signals:
+        if ansi:
+            return _ansi_tree_lines(["⚪ 暫無關鍵 EMA 觸碰訊號"])
         return "⚪ *暫無關鍵 EMA 觸碰訊號*"
 
     ui_lines = []
@@ -1054,9 +1155,15 @@ def get_ema_signal_ui(ema_signals: List[Dict[str, Any]]) -> str:
             icon = "🛡️" if direction == "SUPPORT" else "🛑"
             action = "回測支撐" if direction == "SUPPORT" else "觸碰壓力"
 
-        line = f"{icon} **EMA {window} {action}** (偏離: `{dist}%`)"
-        ui_lines.append(line)
+        if ansi:
+            ui_lines.append(
+                f"{icon} {_ANSI_W}EMA {window} {action}{_ANSI_0} (偏離: {_ANSI_W}{dist}%{_ANSI_0})"
+            )
+        else:
+            ui_lines.append(f"{icon} **EMA {window} {action}** (偏離: `{dist}%`)")
 
+    if ansi:
+        return _ansi_tree_lines(ui_lines)
     return "\n".join(ui_lines)
 
 
@@ -1097,25 +1204,20 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
     pcr = data.get("pcr")
     if pcr is None:
         # PCR 缺值：顯示 `--`，不以 0.8/0.0 冒充
-        pcr_value = "`--` 資料不足"
+        pcr_value = f"{_ANSI_W}--{_ANSI_0} 資料不足"
     else:
         pcr_label = "🐂 偏多" if pcr < 0.7 else ("🐻 偏空" if pcr > 1.0 else "⚖️ 中性")
-        pcr_value = f"`{pcr:.2f}` {pcr_label}"
-    embed.add_field(
-        name="📊 P/C Ratio\u2800\u2800\u2800",
-        value=f"{pcr_value}\n\u200b",
-        inline=True,
-    )
+        pcr_value = f"{_ANSI_W}{pcr:.2f}{_ANSI_0} {pcr_label}"
 
-    skew = data.get("skew") or 0.0
-    skew_label = (
-        "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
-    )
-    embed.add_field(
-        name="📐 Skew\u2800\u2800\u2800\u2800\u2800\u2800",
-        value=f"`{skew:.2f}` {skew_label}\n\u200b",
-        inline=True,
-    )
+    skew = _to_float_or_none(data.get("skew"))
+    if skew is None:
+        # Skew 缺值：顯示 `--`，不以 0 冒充「平衡」
+        skew_value = f"{_ANSI_W}--{_ANSI_0} 資料不足"
+    else:
+        skew_label = (
+            "🌪️ 下行恐懼" if skew > 5 else ("💫 上行熱情" if skew < -5 else "⚖️ 平衡")
+        )
+        skew_value = f"{_ANSI_W}{skew:.2f}{_ANSI_0} {skew_label}"
 
     iv_rank_raw = data.get("iv_rank")
     # 歷史 IV 樣本不足時 iv_rank 為 None：顯示「未知」，不可當成 0% 低 IVR
@@ -1126,14 +1228,15 @@ def _add_sentiment_fields(embed: Any, data: Any):  # type: ignore
             if iv_rank >= 50
             else ("⚡ 中 IVR" if iv_rank >= 30 else "🧊 低 IVR")
         )
-        ivr_value = f"`{iv_rank:.1f}%` {ivr_label}"
+        ivr_value = f"{_ANSI_W}{iv_rank:.1f}%{_ANSI_0} {ivr_label}"
     else:
-        ivr_value = "`--%` ⏳ 樣本積累中"
-    embed.add_field(
-        name="📉 IV Rank\u2800\u2800\u2800\u2800",
-        value=f"{ivr_value}\n\u200b",
-        inline=True,
-    )
+        ivr_value = f"{_ANSI_W}--%{_ANSI_0} ⏳ 樣本積累中"
+    rows = [
+        f"P/C Ratio : {pcr_value}",
+        f"Skew      : {skew_value}",
+        f"IV Rank   : {ivr_value}",
+    ]
+    _add_ansi_field_safely(embed, "🧭 情緒指標", _ansi_tree_lines(rows))
 
 
 def get_embed_length(embed: discord.Embed) -> int:

@@ -8,6 +8,12 @@ from typing import Literal, Optional, Sequence
 import discord
 
 from cogs.embed_builders._core import NexusEmbed
+from cogs.embed_builders._embed_helpers import (
+    _ANSI_0,
+    _ANSI_W,
+    _add_ansi_field_safely,
+    _ansi_tree_lines,
+)
 from market_analysis.downside_monitor import (
     CVAR_EXPANSION_RATIO,
     DRAWDOWN_REARM_BUFFER,
@@ -47,13 +53,15 @@ def create_downside_snapshot_fields(
         ]
 
     def _block(snap: DownsideSnapshot) -> str:
-        return "\n".join(
+        w, z = _ANSI_W, _ANSI_0
+        rows = _ansi_tree_lines(
             [
-                f"• **Sortino（主）**：一季 `{_ratio(snap.sortino_63)}`｜一年 `{_ratio(snap.sortino_252)}`",
-                f"• 最大回撤 (MDD)：`{_pct(snap.max_drawdown)}`｜距高點 `{_pct(snap.current_drawdown)}`",
-                f"• 1 日 VaR95：`{_pct(snap.var_95)}`｜CVaR95：`{_pct(snap.cvar_95)}`",
+                f"Sortino（主）：一季 {w}{_ratio(snap.sortino_63)}{z}｜一年 {w}{_ratio(snap.sortino_252)}{z}",
+                f"最大回撤 (MDD)：{w}{_pct(snap.max_drawdown)}{z}｜距高點 {w}{_pct(snap.current_drawdown)}{z}",
+                f"1 日 VaR95：{w}{_pct(snap.var_95)}{z}｜CVaR95：{w}{_pct(snap.cvar_95)}{z}",
             ]
         )
+        return "```ansi\n" + "\n".join(rows) + "\n```"
 
     fields = [
         (
@@ -111,19 +119,20 @@ def create_portfolio_downside_alert_embed(
             color=discord.Color.orange(),
             timestamp=datetime.now(timezone.utc),
         )
-        embed.add_field(
-            name="📏 1 日 CVaR95 / 預算",
-            value=f"`{_pct(snapshot.cvar_95)}` / `{_pct(budget)}`",
-            inline=True,
-        )
-        embed.add_field(
-            name="🌡️ 近一季 CVaR95 / 60 日基準",
-            value=f"`{_pct(snapshot.cvar_short)}` / `{_pct(snapshot.cvar_short_baseline)}`",
-            inline=True,
+        w, z = _ANSI_W, _ANSI_0
+        _add_ansi_field_safely(
+            embed,
+            "📏 CVaR95 水位",
+            _ansi_tree_lines(
+                [
+                    f"1 日 CVaR95 / 預算 : {w}{_pct(snapshot.cvar_95)}{z} / {w}{_pct(budget)}{z}",
+                    f"近一季 CVaR95 / 60 日基準 : {w}{_pct(snapshot.cvar_short)}{z} / {w}{_pct(snapshot.cvar_short_baseline)}{z}",
+                ]
+            ),
         )
     for name, value, inline in create_downside_snapshot_fields(snapshot):
         embed.add_field(name=name, value=value, inline=inline)
-    embed.set_footer(text="Nexus Seeker | 投組下行風險監控 (Sortino / MDD / CVaR)")
+    embed.set_footer(text="投組下行風險監控 (Sortino / MDD / CVaR)")
     return embed
 
 
@@ -138,7 +147,7 @@ def create_downside_snapshot_embed(
     `unavailable_reason` 有值時（例如記憶體水位過高、計算失敗）只顯示原因。
     """
     embed = NexusEmbed(
-        title="📉 投組下行風險快照",
+        title="📉 投組下行風險快照" + (" [降級模式]" if unavailable_reason else ""),
         description=(
             "以 **Sortino 為主**、最大回撤與 VaR / CVaR 為輔。"
             "「現部位回推一年」是以目前持倉套用過去一年的價格，回答的是這組部位的下行風險，"

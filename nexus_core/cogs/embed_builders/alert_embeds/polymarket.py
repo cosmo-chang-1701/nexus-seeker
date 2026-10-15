@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import _truncate_with_boundary
+from cogs.embed_builders._embed_helpers import _add_ansi_field_safely, _ansi_tree_lines
 
 
 def create_polymarket_list_embed(
@@ -68,10 +69,14 @@ def create_polymarket_list_embed(
             if tokens:
                 for t in tokens[:2]:
                     outcome = str(t.get("outcome", "")).strip()
-                    price = t.get("price", 0)
+                    price = t.get("price")
 
                     # 排除單字元的雜訊 (例如 [ or " )
                     if len(outcome) <= 1 and outcome not in ["?", "是", "否"]:
+                        continue
+
+                    if price is None:
+                        price_info_parts.append(f"**{outcome}**: `--%`")
                         continue
 
                     try:
@@ -106,9 +111,7 @@ def create_polymarket_list_embed(
         full_desc = _truncate_with_boundary(full_desc, 3900)
 
         embed.description = full_desc
-        embed.set_footer(
-            text=f"Nexus Seeker | Polymarket Monitor • 共 {len(markets)} 個活躍市場"
-        )
+        embed.set_footer(text=f"Polymarket Monitor • 共 {len(markets)} 個活躍市場")
         embeds.append(embed)
 
     return embeds
@@ -135,7 +138,7 @@ def create_polymarket_status_embed(status: Dict[str, Any]) -> discord.Embed:
         "---",
     ]
     embed.description = "\n".join(content)
-    embed.set_footer(text="Nexus Seeker | Polymarket Monitor")
+    embed.set_footer(text="Polymarket Monitor")
     return embed
 
 
@@ -152,16 +155,21 @@ def create_polymarket_prob_shift_embed(
         timestamp=datetime.now(timezone.utc),
     )
     embed.add_field(name="🐋 市場名稱", value=f"**{market}**", inline=False)
-    embed.add_field(
-        name="📊 機率變化",
-        value=f"`{old_prob*100:.1f}%` ➔ `{new_prob*100:.1f}%`",
-        inline=True,
+    delta_color = "\u001b[1;32m" if delta > 0 else "\u001b[1;31m"
+    _add_ansi_field_safely(
+        embed,
+        "📊 機率變化",
+        _ansi_tree_lines(
+            [
+                f"機率: \u001b[1;37m{old_prob*100:.1f}%\u001b[0m ➔ \u001b[1;37m{new_prob*100:.1f}%\u001b[0m",
+                f"Delta: {delta_color}{delta:+.1f}%\u001b[0m",
+            ]
+        ),
     )
-    embed.add_field(name="📐 Delta", value=f"`{delta:+.1f}%`", inline=True)
     embed.add_field(
         name="🔍 可能原因",
         value="📰 **突發新聞、重大事件落地、或大戶倒貨重新定價**",
         inline=False,
     )
-    embed.set_footer(text="Polymarket AI Monitor | Nexus Seeker")
+    embed.set_footer(text="Polymarket AI Monitor")
     return embed
