@@ -196,6 +196,8 @@ flowchart TD
 - 擠壓欄位的「⚠ 日內轉弱」與本檢核共用 `negative_momentum_tfs()` 原語：轉弱提示只要求動能為負，日內衝突另要求 Red（負且增強），因此 65m 為 Golden 時擠壓欄位有「日內轉弱」而 Target Lock 無「日內衝突」，屬強度分級而非矛盾。
 - 15m 陽線量比 $<$ `_LOW_VOLUME_BOUNCE_RVOL`（$0.7$，PRE_CALIBRATION／僅呈現）且 15m 動能為負增強（Red）→ 即時量比狀態改印「無量反彈＋15m 空方動能加速（疑似熊旗）」。
 
+**15m 新鮮度與開盤窗口**（`market_analysis/intraday_consistency.py::assess_15m_bar`，僅呈現）：盤中最新已收盤 15m K 棒若屬於前一交易日（09:30–09:45 首根尚未收盤，或之後尚未更新），延遲改從今日首根應收盤時刻 09:45 起算，不以跨夜時間差誤報「資料源未更新」；超過 `BAR_STALE_AFTER`（30 分鐘）才標「今日 K 棒未更新」。此情況下 `rvol_15m`／`rvol_15m_tod` 一律不顯示（前日收盤競價量比不是即時量比）。今日 K 棒的延遲判定不變。
+
 `evaluate_squeeze_entry()` 的判定、參考停損與推播閘門**不變**。「日內衝突要不要否決 T3」改由 `record_squeeze_entry` 新增的 `65m_mv`／`15m_mv`／`intraday_conflict` 前向樣本決定（見 architecture/05 §5.17）。
 
 ## 6. 核心程式碼檔案路徑關聯

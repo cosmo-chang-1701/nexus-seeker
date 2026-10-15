@@ -101,6 +101,9 @@ class BarAssessment:
 
     is_stale: bool = False
     is_anomalous: bool = False
+    # 盤中最近已收盤的 K 棒屬於前一交易日（開盤首根尚未收盤／尚未更新）：
+    # 該根量比不是「即時」量比，呈現層必須停用。
+    is_prior_session: bool = False
     notes: list[str] = field(default_factory=list)
 
 
@@ -131,12 +134,30 @@ def assess_15m_bar(
     now_naive = now_ny.replace(tzinfo=None)
 
     if market_open:
-        lag = now_naive - (bar_naive + timedelta(minutes=15))
-        if lag > BAR_STALE_AFTER:
-            result.is_stale = True
-            result.notes.append(
-                f"K 棒資料延遲 {int(lag.total_seconds() // 60)} 分鐘（資料源未更新）"
+        if bar_naive.date() < now_naive.date():
+            # 最近已收盤的是更早交易日的最後一根：不是資料源停擺，而是今日首根
+            # 15m 還沒收盤。延遲改從「今日首根應收盤時刻」(09:45) 起算。
+            result.is_prior_session = True
+            expected_close = now_naive.replace(
+                hour=9, minute=45, second=0, microsecond=0
             )
+            lag = now_naive - expected_close
+            if lag > BAR_STALE_AFTER:
+                result.is_stale = True
+                result.notes.append(
+                    f"K 棒資料延遲 {int(lag.total_seconds() // 60)} 分鐘（今日 K 棒未更新）"
+                )
+            elif now_naive < expected_close:
+                result.notes.append("開盤首根 15m K 棒尚未收盤，量比待更新")
+            else:
+                result.notes.append("今日首根 15m K 棒尚未更新，量比暫停")
+        else:
+            lag = now_naive - (bar_naive + timedelta(minutes=15))
+            if lag > BAR_STALE_AFTER:
+                result.is_stale = True
+                result.notes.append(
+                    f"K 棒資料延遲 {int(lag.total_seconds() // 60)} 分鐘（資料源未更新）"
+                )
 
     if session_date is None or bar_naive.date() != session_date:
         return result

@@ -710,6 +710,10 @@ class SymbolDeepDiveMixin:
                 if (v_15m is not None and tod_base is not None and tod_base > 0)
                 else None
             )
+            if assessment.is_prior_session:
+                # 前一交易日的最後一根（收盤競價）量比不是今日即時量比
+                rvol = None
+                rvol_tod = None
             if assessment.is_stale or assessment.is_anomalous:
                 # 凍結或合併的 K 棒量比沒有意義，不得當成「放量」呈現
                 rvol = None
