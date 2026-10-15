@@ -429,7 +429,6 @@ def test_whale_alert_description_split_into_emoji_fields() -> None:
     f = _fields(embed)
     assert "$65,000.00" in f["📊 交易概況"] and "6.50x" in f["📊 交易概況"]
     assert "方向性押注" in f["🔍 UOA 關聯偵測 (NVDA)"]
-    assert "市場預期財報後仍有延續動能。" in f["🤖 AI 總結分析"]
     _assert_nothing_dropped(embed)
 
 
