@@ -15,7 +15,7 @@
 import discord
 import math
 
-from datetime import datetime, timezone
+from datetime import datetime, time as dt_time, timezone
 from typing import Any, Dict, List, Optional
 import market_time
 
@@ -980,7 +980,13 @@ def build_radar_scan_embed(
                         ),
                         None,
                     )
-                    if matched_order:
+                    if is_neg_gamma:
+                        # 負 Gamma 下 Max Pain 磁吸不成立：否決多頭磁吸／限價捕獵建議
+                        if matched_order:
+                            insights.append(
+                                f"• ⚠️ {sym}: 負 Gamma 環境 Max Pain 磁吸不成立，既有限價買單 ID: {matched_order['id']} (${matched_order['limit_price']:.2f}) 建議重新評估。"
+                            )
+                    elif matched_order:
                         insights.append(
                             f"• 🚀 {sym}: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
                         )
@@ -1456,7 +1462,7 @@ def build_radar_scan_embed(
             if is_iv_backwardation:
                 iv_strategy_str = "⚠️總經事件防禦期"
             elif is_neg_gamma:
-                iv_strategy_str = "🔴賣方禁售"
+                iv_strategy_str = "🔴禁賣Put"
             elif iv_rank_val is not None and iv_rank_val < 15.0:
                 iv_strategy_str = "🔴CSP 禁售"
             elif iv_rank_val is None:
@@ -1881,6 +1887,11 @@ def _format_rrp_change(rrp: Any, rrp_change_30d: Any) -> str:
     return f" (30天變動: \u001b[1;35m{chg:+.1f}%\u001b[0m)"
 
 
+def _now_et() -> datetime:
+    """目前美東時間（獨立函式，供測試 monkeypatch）。"""
+    return datetime.now(market_time.ny_tz)
+
+
 def _complacency_note(
     macro_data: Dict[str, Any], vix: Any, us10y: Any, wti: Any
 ) -> str:
@@ -1905,6 +1916,13 @@ def _complacency_note(
             parts.append(f"升息機率 {hike:.0f}%")
     if not parts:
         return ""
+    # 美股交易日開盤前 ^VIX 仍是前日收盤，而 10Y／WTI／FedWatch 已重新定價，
+    # 此時的「低波自滿」是開盤時間差造成的假象，延後到開盤後判讀。
+    now_et = _now_et()
+    if market_time.is_nyse_trading_day(now_et.date()) and now_et.time() < dt_time(
+        9, 30
+    ):
+        return " └─ ⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀"
     return f" └─ ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
 
 
