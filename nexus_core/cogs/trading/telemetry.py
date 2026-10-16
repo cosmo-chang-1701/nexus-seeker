@@ -51,9 +51,9 @@ class TelemetryMonitorCog(commands.Cog):
 async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
     """獨立的委託單 Telemetry 對齊警報發送邏輯，可供其他模組呼叫。"""
     from database.orders import get_all_active_orders
-    from services.calendar_service import calendar_service
     from services.order_telemetry_service import (
         build_telemetry_alignment_items,
+        collect_macro_event_dates,
         resolve_holding_type_and_rows,
     )
 
@@ -61,16 +61,7 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
     if not all_orders:
         return
 
-    macro_events = await calendar_service.get_high_impact_events(days=14)
-    macro_event_dates: set[str] = set()
-    for event in macro_events:
-        try:
-            event_date = datetime.fromisoformat(
-                str(event.time).replace("Z", "+00:00")
-            ).date()
-            macro_event_dates.add(event_date.isoformat())
-        except ValueError:
-            continue
+    macro_event_dates = await collect_macro_event_dates()
 
     orders_by_uid: dict[int, list[dict[str, Any]]] = {}
     for o in all_orders:
@@ -99,15 +90,14 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
 
         filtered_items = []
         for item in alignment_items:
-            suggested_price = float(item["suggested_price"])
-            suggested_qty = int(item["suggested_qty"])
-            current_price = float(item["current_price"])
-            original_qty = int(item["original_qty"])
-
-            if (
-                abs(suggested_price - current_price) >= 0.01
-                or suggested_qty != original_qty
-            ):
+            if item.get("alignment_available") is False:
+                continue
+            changed = item.get("suggestion_changed")
+            if changed is None:
+                changed = abs(
+                    float(item["suggested_price"]) - float(item["current_price"])
+                ) >= 0.01 or int(item["suggested_qty"]) != int(item["original_qty"])
+            if changed:
                 filtered_items.append(item)
 
         if not filtered_items:

@@ -5,6 +5,7 @@
   create_active_orders_embed
 - telemetry_alignment.py：_build_telemetry_alignment_ansi_card、
   create_telemetry_alignment_embeds、create_telemetry_alignment_embed
+- telemetry_apply_result.py：create_telemetry_apply_result_embed
 - pre_market_briefing.py：build_pre_market_briefing_embed
 - post_market_intelligence.py：_parse_post_market_ai_commentary、
   _format_to_target_center_style、_format_to_target_center_style_with_title、
@@ -20,6 +21,9 @@ from cogs.embed_builders.order_embeds.telemetry_alignment import (
     _build_telemetry_alignment_ansi_card,
     create_telemetry_alignment_embeds,
     create_telemetry_alignment_embed,
+)
+from cogs.embed_builders.order_embeds.telemetry_apply_result import (
+    create_telemetry_apply_result_embed,
 )
 from cogs.embed_builders.order_embeds.pre_market_briefing import (
     build_pre_market_briefing_embed,
@@ -38,6 +42,7 @@ __all__ = [
     "_build_telemetry_alignment_ansi_card",
     "create_telemetry_alignment_embeds",
     "create_telemetry_alignment_embed",
+    "create_telemetry_apply_result_embed",
     "build_pre_market_briefing_embed",
     "_parse_post_market_ai_commentary",
     "_format_to_target_center_style",

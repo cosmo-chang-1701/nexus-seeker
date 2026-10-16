@@ -206,12 +206,11 @@ class OrderUICog(commands.Cog):
             return
 
         from cogs.embed_builder import create_telemetry_alignment_embeds
-        from services.calendar_service import calendar_service
         from services.order_telemetry_service import (
             build_telemetry_alignment_items,
+            collect_macro_event_dates,
             resolve_holding_type_and_rows,
         )
-        from datetime import datetime
         import database
 
         user_holdings = await asyncio.to_thread(
@@ -224,16 +223,7 @@ class OrderUICog(commands.Cog):
             holdings=user_holdings, trades=user_trades
         )
 
-        macro_events = await calendar_service.get_high_impact_events(days=14)
-        macro_event_dates: set[str] = set()
-        for event in macro_events:
-            try:
-                event_date = datetime.fromisoformat(
-                    str(event.time).replace("Z", "+00:00")
-                ).date()
-                macro_event_dates.add(event_date.isoformat())
-            except ValueError:
-                continue
+        macro_event_dates = await collect_macro_event_dates()
 
         alignment_items, truncated = await build_telemetry_alignment_items(
             user_id=interaction.user.id,
@@ -249,14 +239,28 @@ class OrderUICog(commands.Cog):
             include_apply_button_hint=True,
             scheduled_mode=False,
         )
+        if not embeds:
+            await interaction.followup.send(
+                embed=create_info_embed(
+                    "無可對齊的委託單",
+                    "沒有可進行對齊分析的委託單（移動停損單不適用）。",
+                ),
+                ephemeral=True,
+            )
+            return
+
+        # 無即時現價的項目沒有執行決策，不得納入一鍵套用
         suggestions = {
             item["order_id"]: (item["suggested_price"], item["suggested_qty"])
             for item in alignment_items
+            if item.get("alignment_available") is not False
         }
-        for embed in embeds:
-            await interaction.followup.send(
-                embed=embed, view=ApplyTelemetryView(suggestions), ephemeral=True
-            )
+        # 單一 ephemeral 訊息就地換頁，避免多則 followup 撞上 Discord 40094
+        await interaction.followup.send(
+            embed=embeds[0],
+            view=ApplyTelemetryView(suggestions, embeds),
+            ephemeral=True,
+        )
 
     @app_commands.command(
         name="add_order",

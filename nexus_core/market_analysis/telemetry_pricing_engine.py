@@ -147,6 +147,10 @@ def _build_alert_text(
     if sizing_multiplier < 0.999:
         final_action += " (打折控倉 75%)"
 
+    # 沒有任何風控理由時不得宣稱「截斷/修正」：此時只是對齊現價的單純提價建議。
+    if not reason_text.strip():
+        return f"🛡️ 標的: {symbol.upper()} | 偵測到現價與掛單偏離。 {final_action}"
+
     return (
         f"🛡️ 標的: {symbol.upper()} | 偵測到現價與掛單偏離，但因 [{reason_text}], "
         f"系統已自動截斷/修正提價建議。 {final_action}"
@@ -348,6 +352,34 @@ async def generate_alignment_decision(
             )
 
     side = str(order_side or "BUY").upper()
+    if side == "SELL":
+        # 對齊引擎的定價邏輯 (左側捕獸夾) 只為買單設計；賣單若套用會建議更低的賣價，
+        # 因此一律維持原價原量。
+        await _log_decision_to_sqlite(
+            user_id,
+            symbol,
+            order_id,
+            {
+                "ts": _now_utc().isoformat(),
+                "action": "SUPPRESSED",
+                "reason": "SELL_NOT_SUPPORTED",
+            },
+        )
+        if emit_suppressed_decision:
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=["SELL_NOT_SUPPORTED"],
+                system_status_flag="BUY-ONLY ENGINE",
+                system_instruction_directive="對齊引擎僅支援買入委託，賣出委託維持原價原量。",
+                cache_price=cache_price if cache_price > 0 else None,
+                live_price=effective_live_price if effective_live_price > 0 else None,
+            )
+        return None
+
     if side == "BUY" and current_order_price > 0 and effective_live_price > 0:
         deep_sea_gap_pct = (
             (effective_live_price - current_order_price) / effective_live_price * 100.0
@@ -460,6 +492,24 @@ async def generate_alignment_decision(
                 "iv_rank": effective_iv_rank,
             },
         )
+        if emit_suppressed_decision:
+            iv_rank_directive = (
+                "IV Rank 樣本累積中，暫不允許追價改單。"
+                if iv_rank is None
+                else f"IV Rank {effective_iv_rank * 100.0:.1f}% 高於 70%，禁止追價改單。"
+            )
+            return _build_suppressed_decision(
+                symbol=symbol,
+                order_id=order_id,
+                current_order_price=current_order_price,
+                spot_price=spot_price,
+                original_qty=original_qty,
+                reasons=["IV_TOO_HIGH"],
+                system_status_flag="FORTRESS RE-LOCKED",
+                system_instruction_directive=iv_rank_directive,
+                cache_price=cache_price if cache_price > 0 else None,
+                live_price=effective_live_price if effective_live_price > 0 else None,
+            )
         return None
 
     # Pillar 3: Skew & PCR inverse sentiment correction (only meaningful for PRICE_UP)
@@ -515,6 +565,26 @@ async def generate_alignment_decision(
                     "suggested_price": suggested_price,
                 },
             )
+            if emit_suppressed_decision:
+                return AlignmentDecision(
+                    symbol=symbol,
+                    order_id=order_id,
+                    action="NO_ALIGNMENT_NEEDED",
+                    current_order_price=current_order_price,
+                    spot_price=spot_price,
+                    suggested_price=current_order_price,
+                    original_qty=original_qty,
+                    suggested_qty=original_qty,
+                    is_size_down=False,
+                    reasons=reasons,
+                    alert_text=None,
+                    system_status_flag="TELEMETRY ACTIVE",
+                    system_instruction_directive="提價建議被 Max Pain／預期波動邊界截斷，維持原價原量。",
+                    cache_price=cache_price if cache_price > 0 else None,
+                    live_price=effective_live_price
+                    if effective_live_price > 0
+                    else None,
+                )
             return None
 
     # If baseline suggested price isn't moving up, keep prior UX and do not force suppression.
@@ -522,7 +592,7 @@ async def generate_alignment_decision(
 
     alert_text: str | None = None
     if is_price_up:
-        reason_text = " / ".join(reasons) if reasons else "衍生品結構風控模組"
+        reason_text = " / ".join(reasons)
         alert_text = _build_alert_text(
             symbol=symbol,
             reason_text=reason_text,

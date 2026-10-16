@@ -27,7 +27,7 @@
   - `❌ 取消委託 (Cancel Order)` 按鈕：觸發 `CancelOrderModal` 進行低延遲取消。
   - `✏️ 編輯委託單 (Edit Order)` 按鈕：觸發 `EditOrderModal` 編輯標的、數量、方向、價格等欄位。（注意：直接使用 `/edit_order` slash command 額外支援更新 `order_type` 與 `validity`。）
 - **遙測價格與規模對齊（`/telemetry_alert`）**：實作動態遙測價格與規模對齊警示，提供：
-  - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` 按鈕：依遙測定價引擎最新計算結果，**同時**更新 SQLite 中委託單的價格與數量／股數至更安全的對齊值。若觸發規模下修，會內建 `[⚠️ Tail Risk Mitigation]` 提示。
+  - `⚡ 一鍵套用遙測建議價 (Apply Telemetry Price)` 按鈕：**只**套用使用者在快照中看到的建議（不會改動快照以外的委託單，也不再有快取或即時重算的後備），**同時**更新 SQLite 中委託單的價格與數量／股數至更安全的對齊值；STOP_LIMIT 的停損價會平移與限價相同的差額，保留原本的停損／限價價差。結果以 `create_telemetry_apply_result_embed()` 分頁呈現。若觸發規模下修，會內建 `[⚠️ Tail Risk Mitigation]` 提示。
 
 ## 4. 遙測定價引擎（`services/telemetry_pricing_engine.py`）
 
@@ -40,7 +40,7 @@
 3. **技術面與流動性錨點**：支撐區偏移對齊前收盤跳空回補位與心理整數關卡（例如以 `Round Level - 0.75` 偏移避開整數關卡）。
 
 ### 4.1 Skew 輸入：真實分位優先
-新增委託的遙測定價、`/telemetry_alert` 對齊警報、一鍵套用的後備重算，三條路徑一律經 `services/order_telemetry_service.py::resolve_skew_percentile_pct()` 取得 Skew 百分位：
+新增委託的遙測定價與 `/telemetry_alert` 對齊警報，兩條路徑一律經 `services/order_telemetry_service.py::resolve_skew_percentile_pct()` 取得 Skew 百分位：
 
 1. **真實分位** `calculate_skew()["skew_percentile"]`：標的相對於自己歷史的位置（日級規範母體，樣本不足時為高頻回退池，見 [`../valuation_pricing/03_skew_pcr_divergence_confluence.md`](../valuation_pricing/03_skew_pcr_divergence_confluence.md) §5.4）。
 2. **分位缺失時退回絕對值換算**：原始 Skew $> 5$ 個百分點視為 98、$< -2$ 視為 2。這是改版前的判定方式，只作為後備，確保資料缺失時不會比改版前更寬鬆。
@@ -50,12 +50,13 @@
 
 **後續觀察**：改用真實分位後，尾端防禦的觸發頻率會重新分布（高波動小型股大幅減少、大型股偶爾觸發）。上線後留意 `[⚠️ 尾端風險防禦]` 日誌的標的分布；若某些標的長期停在高頻回退池（`skew_percentile_source = INTRADAY_FALLBACK`），其分位語意與日級母體不同，觸發頻率會偏高。
 
-### 4.2 對齊決策的市場輸入：兩條路徑共用
-`/telemetry_alert` 與一鍵套用的後備重算（記憶體與 10 分鐘快取中都沒有建議時），都經 `_fetch_alignment_market_inputs()` 並行抓取同一份即時資料再呼叫 `generate_alignment_decision()`：
+### 4.2 對齊決策的市場輸入與快照欄位來源
+`/telemetry_alert`（與盤中推播）經 `_fetch_alignment_market_inputs()` 並行抓取下列資料再呼叫 `generate_alignment_decision()`。`asyncio.gather` 使用 `return_exceptions=True`：任何單一輸入失敗只視為該項缺值，不會讓整個指令失敗。
 
 | 參數 | 來源 | 缺值時 |
 |---|---|---|
-| `iv` / `hist_iv` | `fetch_and_calculate_iv_metrics().current_iv`，`hist_iv = iv / 1.1` | 0.35 |
+| `iv` | `fetch_and_calculate_iv_metrics().current_iv` | 0.35 |
+| `hist_iv` | 見下方「歷史 IV 基準」 | 等於 `iv`（中性） |
 | `iv_rank` | `iv_rank / 100`（0~1） | `None`（引擎視為 1.0，保守抑制上調） |
 | `max_pain_price` / `prev_max_pain` | `calculate_max_pain()`；過期、斷路或缺值時歸零 | 0（不參與定價） |
 | `skew_percentile_pct` | `resolve_skew_percentile_pct()`（§4.1） | 50 |
@@ -63,11 +64,24 @@
 | `uoa_array` | `detect_uoa()` | 空清單 |
 | `macro_event_dates` | 14 天內高影響宏觀事件 + 該標的財報日 | 空集合 |
 
-後備路徑跳過移動停損單（`TRAILING_STOP_USD`／`TRAILING_STOP_PCT`）：`trailing_value` 不是掛單價格，與 `/telemetry_alert` 的排除規則一致。
+**歷史 IV 基準（`hist_iv`）**：僅在 `iv_source == "LIVE_IV"`、未套用事件加載（`event_loading_applied` 不為 True）且 `IVMetrics.iv_hist_mean_20d`（近 20 筆已儲存日 IV 的均值）為正數時採用該均值；其餘情況一律 `hist_iv = iv`，讓 vol-spike／vol-crush 都不觸發。原因：`HV_PROXY` 的「IV」其實是已實現波動率（禁止與 IV 混比，見 `iv_metrics.py` ISS-06），`STORED_IV`／`HV_PROXY` 遇事件時 `current_iv` 會被乘以 1.4，拿來和基準比較都會誤觸發假訊號。新增委託路徑（`resolve_telemetry_pricing`）套用相同規則，IV 取不到時沿用 `iv = 0.35`、`hist_iv = iv`。
 
-改版前的後備路徑使用固定假值（IV 0.55、IV Rank 0.50、Max Pain 100、Skew 98、PCR 1.0，且沒有宏觀事件日期），並會對移動停損單的 `trailing_value` 做價格重算；兩條路徑的 PCR 也都寫死為 1.0。
+**快照欄位的資料來源**：
 
-**後續觀察**：PCR 改為真實值後，`/telemetry_alert` 的 Pillar 3（Skew $> 90$ 且 PCR $> 1.5$ 時建議價打 9 折）開始可能觸發，改版前 PCR 恆為 1.0、這條分支從未觸發過。上線後留意 `Skew/PCR 極端恐慌` 理由出現的頻率與標的。
+- **現價與前收盤**：`fetch_cache_and_live_price()` 先讀快取報價，只作廢「該標的」的報價快取後重新呼叫 `get_quote()`（沿用 Alpaca 串流分鐘價 → Finnhub → yfinance 後備的優先序）；不再用日線收盤覆蓋、也不再清空全站報價快取。`prev_close` 取報價的 `pc`（前一個正規盤收盤）。
+- **沒有即時現價**：該委託單仍會出現在快照中，標示為 `NO_LIVE_PRICE`／`DATA DEGRADED`，維持原價原量，不執行決策；`live_price`、距離成交差、損益與牆距離一律為缺值（`--`），絕不以委託價冒充現價。
+- **GEX Put Wall 與 Max Pain 是不同的量**：卡片上的「GEX PutWall／距離硬支撐」取自 `fetch_symbol_gex_metrics(symbol)["put_wall"]`（預設 `force_live=False`，走快取 → edge 快照；服務過期快取時 `put_wall_is_stale=True`）；Max Pain 只作為定價輸入（`max_pain_price`）。GEX 取不到時 `put_wall=None`、牆狀態「待確認」。
+- **損益**：`gain_loss_pct` 對多頭為 `(現價 − 均價) / 均價`，空頭持倉（數量為負）為 `(均價 − 現價) / 均價`；沒有均價或持股為 0 時為缺值而非 `+0.00%`。持倉狀態分為「持倉中／空頭持倉／空倉待命」；持倉型態標籤區分純現貨、現貨＋選擇權、保證金槓桿（推定）與無持倉紀錄。
+- **IV 狀態**：IV 不可用顯示 `UNAVAILABLE`；有 IV 但 IV Rank 尚無（樣本累積中）顯示 `樣本累積 n/m`，不再沿用模型預設的 `Normal`。`is_premarket` 在正規盤以外（含盤後）皆為 True。
+- **同一標的**在一次快照中只抓一次報價與市場輸入；快照上限為 `MAX_ALIGNMENT_ITEMS = 20` 筆，且在抓取下一筆資料「之前」就檢查，超過時 `truncated=True`（Embed 會自行分頁）。
+
+**快照不丟單**：快照以 `emit_suppressed_decision=True` 呼叫引擎，IV Rank 保險絲與「提價被 Max Pain／預期波動邊界截斷後不高於原價」兩條路徑也會回傳決策（`SUPPRESSED`／`NO_ALIGNMENT_NEEDED`，建議價量等於原價原量），委託單不會從快照中消失；非 emit 模式仍回傳 `None`。
+
+**賣出委託不調整**：對齊引擎的定價（左側捕獸夾）只為買單設計，`SELL` 委託一律回傳 `SUPPRESSED`／`BUY-ONLY ENGINE`，維持原價原量。
+
+一鍵套用只處理快照（`suggestions`）內的委託單，移動停損單（`TRAILING_STOP_USD`／`TRAILING_STOP_PCT`）不適用價格對齊，與 `/telemetry_alert` 的排除規則一致。STOP_LIMIT 套用時，停損價平移與限價相同的差額（例：限價 100／停損 98 → 建議價 101，則停損變 99）。
+
+**後續觀察**：PCR 為真實值後，Pillar 3（Skew $> 90$ 且 PCR $> 1.5$ 時建議價打 9 折）開始可能觸發。上線後留意 `Skew/PCR 極端恐慌` 理由出現的頻率與標的；`iv_hist_mean_20d` 在樣本不足 10 筆時為 None，期間 `hist_iv` 維持中性。
 
 ## 5. 核心程式碼檔案路徑關聯
 

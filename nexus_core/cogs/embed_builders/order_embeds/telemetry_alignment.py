@@ -5,7 +5,12 @@ from typing import Any, Dict, List, Tuple
 
 import discord
 
-from cogs.embed_builders._ansi_utils import _to_float_or_none, fmt_or_dash
+from cogs.embed_builders._ansi_utils import (
+    _clean_ansi,
+    _to_float_or_none,
+    _visual_len,
+    fmt_or_dash,
+)
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._embed_helpers import (
     _safe_embed_field_value,
@@ -14,240 +19,366 @@ from cogs.embed_builders._embed_helpers import (
 )
 
 
-def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str]:
-    """建構 Telemetry 實時對齊快照卡片。回傳 (卡片內容, 數據降級狀態後綴)。"""
+# Discord 欄位值上限 1024；扣除 `_safe_embed_field_value` 附加的尾端間距後，卡片須 <= 1020
+_CARD_CHAR_BUDGET = 1020
+
+# 調色盤語意色（皆屬 CURATED_PALETTE）
+_COLOR_SPECIAL = 0x8E44AD  # 尾端風險控倉 (size-down)
+_COLOR_WARNING = 0xF39C12  # 有調整建議
+_COLOR_INFO = 0x3498DB  # 無須調整
+_COLOR_NEUTRAL = 0x99AAB5  # 無即時數據
+
+_RESET = "\u001b[0m"
+
+
+def _c(code: str, text: Any) -> str:
+    """以 ANSI 粗體色碼包裹文字。"""
+    return f"\u001b[1;{code}m{text}{_RESET}"
+
+
+def _suggestion_changed(item: Dict[str, Any]) -> bool:
+    """該筆是否有調整建議；缺 `suggestion_changed` 時退回比較價量。"""
+    if item.get("alignment_available") is False:
+        return False
+    flag = item.get("suggestion_changed")
+    if flag is not None:
+        return bool(flag)
+    sug_price = _to_float_or_none(item.get("suggested_price"))
+    sug_qty = _to_float_or_none(item.get("suggested_qty"))
+    order_price = _to_float_or_none(item.get("current_price"))
+    order_qty = _to_float_or_none(item.get("original_qty"))
+    if sug_price is not None and order_price is not None:
+        if abs(sug_price - order_price) >= 0.01:
+            return True
+    if sug_qty is not None and order_qty is not None:
+        if int(round(sug_qty)) != int(round(order_qty)):
+            return True
+    return False
+
+
+def _order_type_zh(order_type: str) -> str:
+    if order_type == "STOP_LIMIT":
+        return "停損限價"
+    if "LIMIT" in order_type:
+        return "限價"
+    if "STOP" in order_type:
+        return "停損"
+    return order_type
+
+
+def _truncate_text(text: str, max_len: int) -> str:
+    """截斷文字並以 `…` 收尾；max_len 內不動。"""
+    if len(text) <= max_len:
+        return text
+    if max_len <= 1:
+        return "…"[:max_len]
+    return text[: max_len - 1].rstrip() + "…"
+
+
+def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
+    """建構 Telemetry 實時對齊快照卡片。回傳 (卡片內容, 狀態／來源標籤清單)。"""
     sym = str(item.get("symbol") or "").upper()
     # 注意：item["current_price"] 是委託單限價，不是現價；缺 live_price 時不得以限價冒充
     live_price_val = _to_float_or_none(item.get("live_price"))
-    current_price = live_price_val if live_price_val and live_price_val > 0 else None
+    live_price = live_price_val if live_price_val and live_price_val > 0 else None
 
-    avg_cost_val = item.get("avg_cost")
-    avg_cost = float(avg_cost_val) if avg_cost_val is not None else None
+    avg_cost_val = _to_float_or_none(item.get("avg_cost"))
+    avg_cost = avg_cost_val if avg_cost_val is not None and avg_cost_val > 0 else None
+    gain_loss_pct = _to_float_or_none(item.get("gain_loss_pct"))
 
-    gain_loss_pct_val = item.get("gain_loss_pct")
-    gain_loss_pct = float(gain_loss_pct_val) if gain_loss_pct_val is not None else None
-
-    put_wall_val = item.get("put_wall")
-    put_wall = (
-        float(put_wall_val)
-        if put_wall_val is not None and float(put_wall_val) > 0.0
-        else None
-    )
-
-    wall_dist_pct_val = item.get("wall_dist_pct")
-    wall_dist_pct = float(wall_dist_pct_val) if wall_dist_pct_val is not None else None
+    put_wall_val = _to_float_or_none(item.get("put_wall"))
+    put_wall = put_wall_val if put_wall_val is not None and put_wall_val > 0 else None
+    wall_dist_pct = _to_float_or_none(item.get("wall_dist_pct"))
+    max_pain = _to_float_or_none(item.get("max_pain_price"))
+    if max_pain is not None and max_pain <= 0:
+        max_pain = None
 
     order_id = int(item.get("order_id") or 0)
-    limit_price = _to_float_or_none(item.get("current_price"))
-    shares = int(round(float(item.get("original_qty") or 0.0)))
+    order_price = _to_float_or_none(item.get("current_price"))
+    shares = int(round(float(_to_float_or_none(item.get("original_qty")) or 0.0)))
     proximity_pct = _to_float_or_none(item.get("proximity_pct"))
 
-    skew_val_val = item.get("skew_val")
-    skew_val = float(skew_val_val) if skew_val_val is not None else None
+    skew_val = _to_float_or_none(item.get("skew_val"))
+    skew_pct = _to_float_or_none(item.get("skew_pct"))
+    iv_val = _to_float_or_none(item.get("iv_val"))
+    iv_rank = _to_float_or_none(item.get("iv_rank"))
 
-    skew_pct_val = item.get("skew_pct")
-    skew_pct = float(skew_pct_val) if skew_pct_val is not None else None
-
-    iv_val_val = item.get("iv_val")
-    iv_val = float(iv_val_val) if iv_val_val is not None else None
-
-    iv_rank_val = item.get("iv_rank")
-    iv_rank = float(iv_rank_val) if iv_rank_val is not None else None
-
-    # Format output strings
-    avg_cost_str = f"${avg_cost:.2f}" if avg_cost is not None else "N/A"
-    gain_loss_pct_str = f"{gain_loss_pct:+.2f}%" if gain_loss_pct is not None else "--%"
-    put_wall_str = f"${put_wall:.2f}" if put_wall is not None else "N/A"
-    wall_dist_pct_str = (
+    skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
+    skew_pct_str = f"{skew_pct:.2f}%" if skew_pct is not None else "--%"
+    wall_dist_str = (
         f"{wall_dist_pct:+.2f}%"
         if wall_dist_pct is not None and put_wall is not None
         else "--%"
     )
 
-    skew_val_str = f"{skew_val:+.2f}%" if skew_val is not None else "--%"
-    skew_pct_str = f"{skew_pct:.2f}%" if skew_pct is not None else "--%"
+    is_premarket = bool(item.get("is_premarket", False))
+    iv_source = item.get("iv_source")
+    raw_iv_status = str(item.get("iv_status") or "Normal")
 
-    # Fallback/Degradation metrics check
-    is_premarket = item.get("is_premarket", False)
-    iv_source = item.get("iv_source", "UNAVAILABLE")
-
-    is_degraded = (
-        current_price is None
-        or put_wall is None
-        or skew_val is None
-        or iv_val is None
-        or item.get("iv_status") == "UNAVAILABLE"
-        or item.get("skew_status") == "ERROR"
-        or item.get("skew_status") == "N/A"
+    iv_unavailable = (
+        iv_val is None
+        or iv_source == "UNAVAILABLE"
+        or raw_iv_status == "UNAVAILABLE"
+        or (is_premarket and iv_val == 0.0)
     )
 
-    if is_premarket:
-        if iv_val is None or iv_val == 0.0 or iv_source == "UNAVAILABLE":
-            degraded_suffix = " [盤前數據未更新]"
-            iv_val_str = "--%"
-            iv_rank_str = "--%"
+    is_degraded = (
+        live_price is None
+        or put_wall is None
+        or skew_val is None
+        or iv_unavailable
+        or item.get("skew_status") in ("ERROR", "N/A")
+    )
+
+    # 狀態／來源標籤：§2.3 用語；盤前（非正常盤）加「盤前/」前綴
+    tags: List[str] = []
+    prefix = "盤前/" if is_premarket else ""
+    iv_tail = ""  # IV 值的來源標註
+    if iv_unavailable:
+        iv_val_str = "--%"
+        iv_rank_str = "--%"
+        if is_premarket:
+            tags.append("盤前數據未更新")
             iv_status = "等待開盤"
-        elif iv_source == "STORED_IV":
-            degraded_suffix = " [盤前/前日收盤]"
-            iv_val_str = f"{iv_val:.2f}% (前日收盤)" if iv_val is not None else "--%"
-            iv_rank_str = f"{iv_rank:.2f}% (前日收盤)" if iv_rank is not None else "--%"
-            iv_status = item.get("iv_status", "Normal")
-        elif iv_source == "HV_PROXY":
-            degraded_suffix = " [盤前/HV代理]"
-            iv_val_str = (
-                f"{iv_val:.2f}% (歷史波動率代理)" if iv_val is not None else "--%"
-            )
-            iv_rank_str = (
-                f"{iv_rank:.2f}% (歷史波動率代理)" if iv_rank is not None else "--%"
-            )
-            iv_status = item.get("iv_status", "Normal")
         else:
-            degraded_suffix = " [盤前數據降級]"
-            iv_val_str = f"{iv_val:.2f}%" if iv_val is not None else "--%"
-            iv_rank_str = f"{iv_rank:.2f}%" if iv_rank is not None else "--%"
-            iv_status = item.get("iv_status", "Normal")
+            tags.append("數據未更新/降級模式")
+            iv_status = "UNAVAILABLE"
     else:
-        degraded_suffix = " [數據未更新/降級模式]" if is_degraded else ""
+        if iv_source == "STORED_IV":
+            tags.append(f"{prefix}前日收盤")
+            iv_tail = " (前日收盤)"
+        elif iv_source == "HV_PROXY":
+            tags.append(f"{prefix}HV代理")
+            iv_tail = " (歷史波動率代理)"
+        if item.get("iv_event_loading_applied"):
+            iv_tail += " (含事件加載)"
         iv_val_str = f"{iv_val:.2f}%" if iv_val is not None else "--%"
         iv_rank_str = f"{iv_rank:.2f}%" if iv_rank is not None else "--%"
-        iv_status = item.get("iv_status", "Normal")
+        iv_status = raw_iv_status
+        if is_degraded:
+            tags.append("數據未更新/降級模式")
 
-    if current_price is None and not degraded_suffix:
-        degraded_suffix = " [數據未更新/降級模式]"
+    if is_degraded and not tags:
+        tags.append("數據未更新/降級模式")
 
-    # ANSI Coloring values
-    holding_shares = int(item.get("holding_shares", 0))
-    holding_status = item.get("holding_status", "待確認")
-    if "持倉" in holding_status or "ACTIVE" in holding_status:
-        holding_status_color = f"\u001b[1;32m{holding_status}\u001b[0m"
+    # ---- ANSI 著色 ----
+    holding_shares = int(_to_float_or_none(item.get("holding_shares")) or 0)
+    holding_status = str(item.get("holding_status") or "待確認")
+    if "空頭" in holding_status:
+        holding_status_color = _c("31", holding_status)
     elif "空倉" in holding_status:
-        holding_status_color = f"\u001b[1;30m{holding_status}\u001b[0m"
+        holding_status_color = _c("30", holding_status)
+    elif "持倉" in holding_status or "ACTIVE" in holding_status:
+        holding_status_color = _c("32", holding_status)
     else:
-        holding_status_color = f"\u001b[1;33m{holding_status}\u001b[0m"
+        holding_status_color = _c("33", holding_status)
+    holding_type_color = _c("36", item.get("holding_type_label") or "--")
 
-    holding_type_label = item.get("holding_type_label", "LEVERAGED")
-    holding_type_color = f"\u001b[1;36m{holding_type_label}\u001b[0m"
-
-    if gain_loss_pct is not None:
+    if gain_loss_pct is None:
+        pnl_color = _c("30", "--%")
+    else:
+        pnl_text = f"{gain_loss_pct:+.2f}%"
         if gain_loss_pct > 0.0:
-            pnl_color = f"\u001b[1;32m{gain_loss_pct_str}\u001b[0m"
+            pnl_color = _c("32", pnl_text)
         elif gain_loss_pct < 0.0:
-            pnl_color = f"\u001b[1;31m{gain_loss_pct_str}\u001b[0m"
+            pnl_color = _c("31", pnl_text)
         else:
-            pnl_color = f"\u001b[1;30m{gain_loss_pct_str}\u001b[0m"
-    else:
-        pnl_color = "\u001b[1;30m--%\u001b[0m"
+            pnl_color = _c("30", pnl_text)
 
-    wall_status = item.get("wall_status", "待確認")
+    wall_status = str(item.get("wall_status") or "待確認")
     if "跌破" in wall_status or "BREAK" in wall_status or "CRITICAL" in wall_status:
-        wall_status_color = f"\u001b[1;31m{wall_status}\u001b[0m"
+        wall_status_color = _c("31", wall_status)
     elif "上方" in wall_status or "SAFE" in wall_status or "BUFFER" in wall_status:
-        wall_status_color = f"\u001b[1;32m{wall_status}\u001b[0m"
+        wall_status_color = _c("32", wall_status)
     else:
-        wall_status_color = f"\u001b[1;33m{wall_status}\u001b[0m"
+        wall_status_color = _c("33", wall_status)
 
-    skew_status = item.get("skew_status", "平穩")
-    if (
-        "極端" in skew_status
-        or "警告" in skew_status
-        or "ERROR" in skew_status
-        or "下行" in skew_status
-    ):
-        skew_status_color = f"\u001b[1;31m{skew_status}\u001b[0m"
+    skew_status = str(item.get("skew_status") or "平穩")
+    if any(k in skew_status for k in ("極端", "警告", "ERROR", "下行")):
+        skew_status_color = _c("31", skew_status)
     elif "平穩" in skew_status or "Normal" in skew_status:
-        skew_status_color = f"\u001b[1;32m{skew_status}\u001b[0m"
+        skew_status_color = _c("32", skew_status)
     else:
-        skew_status_color = f"\u001b[1;33m{skew_status}\u001b[0m"
+        skew_status_color = _c("33", skew_status)
 
-    if "等待開盤" in iv_status:
-        iv_status_color = f"\u001b[1;33m{iv_status}\u001b[0m"
-    elif "UNAVAILABLE" in iv_status or "ERROR" in iv_status:
-        iv_status_color = f"\u001b[1;31m{iv_status}\u001b[0m"
+    iv_status_up = iv_status.upper()
+    if "等待開盤" in iv_status or "樣本累積" in iv_status:
+        iv_status_color = _c("33", iv_status)
     elif (
-        "HIGH" in iv_status.upper()
-        or "OVERHEATED" in iv_status.upper()
+        "UNAVAILABLE" in iv_status_up
+        or "ERROR" in iv_status_up
+        or "HIGH" in iv_status_up
+        or "EXTREME" in iv_status_up
+        or "OVERHEATED" in iv_status_up
         or "泡沫" in iv_status
     ):
-        iv_status_color = f"\u001b[1;31m{iv_status}\u001b[0m"
+        iv_status_color = _c("31", iv_status)
     else:
-        iv_status_color = f"\u001b[1;32m{iv_status}\u001b[0m"
+        iv_status_color = _c("32", iv_status)
 
-    if iv_rank is not None:
+    if iv_rank is not None and not iv_unavailable:
         if iv_rank >= 80.0:
-            iv_rank_str_color = f"\u001b[1;31m{iv_rank_str}\u001b[0m"
+            iv_rank_color = _c("31", iv_rank_str)
         elif iv_rank >= 50.0:
-            iv_rank_str_color = f"\u001b[1;33m{iv_rank_str}\u001b[0m"
+            iv_rank_color = _c("33", iv_rank_str)
         else:
-            iv_rank_str_color = f"\u001b[1;32m{iv_rank_str}\u001b[0m"
+            iv_rank_color = _c("32", iv_rank_str)
     else:
-        iv_rank_str_color = f"\u001b[1;30m{iv_rank_str}\u001b[0m"
+        iv_rank_color = _c("30", iv_rank_str)
 
     side = str(item.get("side") or "BUY").upper()
     side_zh = "買入" if side == "BUY" else "賣出"
-    side_color = "\u001b[1;32m" if side == "BUY" else "\u001b[1;31m"
+    side_code = "32" if side == "BUY" else "31"
     order_type = str(item.get("order_type") or "LIMIT").upper()
-    type_zh = "限價" if "LIMIT" in order_type else "停損"
+    type_zh = _order_type_zh(order_type)
 
-    radar_status = item.get("radar_status", "監控中")
-    if "鎖定" in radar_status or "LOCKED" in radar_status:
-        radar_status_color = f"\u001b[1;32m{radar_status}\u001b[0m"
-    elif "偏離" in radar_status or "SUPPRESSED" in radar_status:
-        radar_status_color = f"\u001b[1;31m{radar_status}\u001b[0m"
+    radar_status = str(item.get("radar_status") or "監控中")
+    if any(k in radar_status for k in ("FORTRESS", "SUPPRESSED", "偏離", "缺失")):
+        radar_status_color = _c("31", radar_status)
+    elif "鎖定" in radar_status or "LOCKED" in radar_status:
+        radar_status_color = _c("32", radar_status)
     else:
-        radar_status_color = f"\u001b[1;33m{radar_status}\u001b[0m"
+        radar_status_color = _c("33", radar_status)
 
-    system_status_flag = item.get("system_status_flag", "TELEMETRY ACTIVE")
-    if "ACTIVE" in system_status_flag or "RUNNING" in system_status_flag:
-        sys_flag_color = f"\u001b[1;32m{system_status_flag}\u001b[0m"
-    elif "LOCKED" in system_status_flag or "SUPPRESSED" in system_status_flag:
-        sys_flag_color = f"\u001b[1;31m{system_status_flag}\u001b[0m"
+    # ---- 對齊建議 ----
+    if item.get("alignment_available") is False:
+        suggestion = _c("33", "暫停（現價缺失）")
+    elif _suggestion_changed(item):
+        sug_price = _to_float_or_none(item.get("suggested_price"))
+        sug_qty_val = _to_float_or_none(item.get("suggested_qty"))
+        sug_qty = int(round(sug_qty_val)) if sug_qty_val is not None else shares
+        is_size_down = item.get("is_size_down")
+        if is_size_down is None:
+            is_size_down = sug_qty < shares
+        qty_code = "35" if is_size_down else "37"
+        delta_str = "--%"
+        if sug_price is not None and order_price is not None and order_price > 0:
+            delta_str = f"{(sug_price - order_price) / order_price * 100:+.2f}%"
+        suggestion = (
+            f"{_c('33', fmt_or_dash(sug_price, prefix='$'))} / "
+            f"{_c(qty_code, sug_qty)}股 (Δ{delta_str})"
+        )
     else:
-        sys_flag_color = f"\u001b[1;33m{system_status_flag}\u001b[0m"
+        suggestion = _c("30", "維持原價原量")
 
-    system_instruction_directive = item.get(
-        "system_instruction_directive", "通過實時防線，維持紀律掛單。"
-    )
-    sys_dir_color = f"\u001b[1;33m{system_instruction_directive}\u001b[0m"
+    sys_flag = str(item.get("system_status_flag") or "TELEMETRY ACTIVE")
+    if "ACTIVE" in sys_flag or "RUNNING" in sys_flag:
+        sys_flag_color = _c("32", sys_flag)
+    elif "LOCKED" in sys_flag or "SUPPRESSED" in sys_flag or "DEGRADED" in sys_flag:
+        sys_flag_color = _c("31", sys_flag)
+    else:
+        sys_flag_color = _c("33", sys_flag)
 
-    lines = ["```ansi"]
-    lines.append("🛡️ \u001b[1;36m【物理防線 (The Shield)】\u001b[0m")
-    lines.append(
-        " ├─ 持倉型態: "
-        f"{holding_type_color} ｜ 持股: \u001b[1;37m{holding_shares}\u001b[0m 股 "
-        f"[{holding_status_color}]"
+    directive = " ".join(
+        str(
+            item.get("system_instruction_directive") or "通過實時防線，維持紀律掛單。"
+        ).split()
     )
-    lines.append(
-        " ├─ 成本對齊: "
-        f"平均成本 \u001b[1;33m{avg_cost_str}\u001b[0m ｜ 當前現價: \u001b[1;37m{fmt_or_dash(current_price, prefix='$')}\u001b[0m (損益: {pnl_color})"
-    )
-    lines.append(
+
+    wall_tail = " [快取]" if item.get("put_wall_is_stale") else ""
+    wall_line = (
         " └─ 做市商牆: "
-        f"GEX PutWall \u001b[1;33m{put_wall_str}\u001b[0m ｜ 距離硬支撐: \u001b[1;37m{wall_dist_pct_str}\u001b[0m "
-        f"({wall_status_color})"
+        f"GEX PutWall {_c('33', fmt_or_dash(put_wall, prefix='$'))}{wall_tail} ｜ "
+        f"距離硬支撐: {_c('37', wall_dist_str)} ({wall_status_color}) ｜ "
+        f"最大痛點 {_c('33', fmt_or_dash(max_pain, prefix='$'))}"
     )
-    lines.append("")
-    lines.append("📐 \u001b[1;36m【籌碼偏斜 (Market Intention)】\u001b[0m")
-    lines.append(
-        " ├─ 選擇權偏斜 (Option Skew): "
-        f"\u001b[1;37m{skew_val_str}\u001b[0m (分位點 \u001b[1;37m{skew_pct_str}\u001b[0m) ── [狀態: {skew_status_color}]"
-    )
-    lines.append(
-        " └─ 隱含波動率 (IV): "
-        f"\u001b[1;37m{iv_val_str}\u001b[0m (IV Rank: {iv_rank_str_color}) ── [狀態: {iv_status_color}]"
-    )
-    lines.append("")
-    lines.append("⚔️ \u001b[1;36m【捕獸夾雷達 (Order Radar)】\u001b[0m")
-    lines.append(
-        f" └─ ID \u001b[1;33m{order_id}\u001b[0m ({sym} {side_color}{side_zh}{type_zh}\u001b[0m {fmt_or_dash(limit_price, prefix='$')} / \u001b[1;37m{shares}\u001b[0m股) ── 距離成交差: "
-        f"\u001b[1;37m{fmt_or_dash(proximity_pct, '.2f', suffix='%', placeholder='--%')}\u001b[0m [{radar_status_color}]"
-    )
-    lines.append("")
-    lines.append("⚙️ \u001b[1;36m【最高主權指令 (Sovereign Command)】\u001b[0m")
-    lines.append(f" ├─ 狀態: {sys_flag_color}")
-    lines.append(f" └─ 指引: {sys_dir_color}")
-    lines.append(" -----------------------------------------------------------------")
-    lines.append("```")
-    return "\n".join(lines), degraded_suffix
+
+    def _assemble(directive_text: str, *, compact: bool) -> List[str]:
+        sep: List[str] = [] if compact else [""]
+        lines = ["```ansi"]
+        lines.append("🛡️ \u001b[1;36m【物理防線 (The Shield)】\u001b[0m")
+        lines.append(
+            " ├─ 持倉型態: "
+            f"{holding_type_color} ｜ 持股: {_c('37', holding_shares)} 股 "
+            f"[{holding_status_color}]"
+        )
+        lines.append(
+            " ├─ 成本對齊: "
+            f"平均成本 {_c('33', fmt_or_dash(avg_cost, prefix='$'))} ｜ "
+            f"當前現價: {_c('37', fmt_or_dash(live_price, prefix='$'))} "
+            f"(損益: {pnl_color})"
+        )
+        lines.append(wall_line)
+        lines.extend(sep)
+        lines.append("📐 \u001b[1;36m【籌碼偏斜 (Market Intention)】\u001b[0m")
+        lines.append(
+            " ├─ 選擇權偏斜 (Option Skew): "
+            f"{_c('37', skew_val_str)} (分位點 {_c('37', skew_pct_str)}) "
+            f"── [狀態: {skew_status_color}]"
+        )
+        lines.append(
+            " └─ 隱含波動率 (IV): "
+            f"{_c('37', iv_val_str)}{iv_tail} (IV Rank: {iv_rank_color}) "
+            f"── [狀態: {iv_status_color}]"
+        )
+        lines.extend(sep)
+        lines.append("⚔️ \u001b[1;36m【捕獸夾雷達 (Order Radar)】\u001b[0m")
+        lines.append(
+            f" ├─ ID {_c('33', order_id)} ({sym} "
+            f"\u001b[1;{side_code}m{side_zh}{type_zh}{_RESET} "
+            f"{fmt_or_dash(order_price, prefix='$')} / {_c('37', shares)}股) ── "
+            f"距離成交差: {_c('37', fmt_or_dash(proximity_pct, '.2f', suffix='%', placeholder='--%'))} "
+            f"[{radar_status_color}]"
+        )
+        lines.append(f" └─ 對齊建議: {suggestion}")
+        lines.extend(sep)
+        lines.append("⚙️ \u001b[1;36m【最高主權指令 (Sovereign Command)】\u001b[0m")
+        lines.append(f" ├─ 狀態: {sys_flag_color}")
+        lines.append(f" └─ 指引: {_c('33', directive_text)}")
+        lines.append("```")
+        return lines
+
+    def _longest_visual(lines: List[str]) -> int:
+        return max(
+            (_visual_len(_clean_ansi(ln)) for ln in lines[1:-1]),
+            default=0,
+        )
+
+    compact = False
+    lines = _assemble(directive, compact=compact)
+    card = "\n".join(lines)
+    if len(card) > _CARD_CHAR_BUDGET:
+        over = len(card) - _CARD_CHAR_BUDGET
+        directive = _truncate_text(directive, max(8, len(directive) - over))
+        lines = _assemble(directive, compact=compact)
+        card = "\n".join(lines)
+    if len(card) > _CARD_CHAR_BUDGET:
+        # 固定區塊仍過長：移除區塊間空行，再縮短指引
+        compact = True
+        lines = _assemble(directive, compact=compact)
+        card = "\n".join(lines)
+        if len(card) > _CARD_CHAR_BUDGET:
+            over = len(card) - _CARD_CHAR_BUDGET
+            directive = _truncate_text(directive, max(1, len(directive) - over))
+            lines = _assemble(directive, compact=compact)
+            card = "\n".join(lines)
+
+    # 分隔線：依卡片最長內容行的視覺寬度決定，並受字數預算限制（放不下就省略）
+    width = _longest_visual(lines)
+    room = _CARD_CHAR_BUDGET - len(card) - 2  # 前導空白與換行
+    divider_len = min(width, room)
+    if divider_len >= 10:
+        lines.insert(-1, " " + "-" * divider_len)
+        card = "\n".join(lines)
+
+    return card, tags
+
+
+def _build_telemetry_alignment_ansi_card(item: Dict[str, Any]) -> Tuple[str, str]:
+    """建構 Telemetry 實時對齊快照卡片。回傳 (卡片內容, 數據降級／來源狀態後綴)。"""
+    card, tags = _build_card_and_tags(item)
+    return card, "".join(f" [{t}]" for t in tags)
+
+
+def _title_tags(all_tags: List[List[str]]) -> str:
+    """彙整所有委託單的狀態／來源標籤（去重、保序）為標題後綴。"""
+    seen: List[str] = []
+    for tags in all_tags:
+        for tag in tags:
+            norm = "降級模式" if "降級" in tag else tag
+            if norm not in seen:
+                seen.append(norm)
+    return "".join(f" [{t}]" for t in seen)
 
 
 def create_telemetry_alignment_embeds(
@@ -260,23 +391,42 @@ def create_telemetry_alignment_embeds(
 
     - 版面參照 `create_active_orders_embed()`（清單欄位式）
     - scheduled_mode=True: 盤中每半小時自動推播版本（不含按鈕）
+    - 標題彙整所有委託單的來源／狀態標籤；顏色依語意：尾端縮量 > 有調整建議 >
+      無須調整 > 全數無即時數據
     """
 
     title = "🌌 快照：待成交委託單實時對齊"
     if scheduled_mode:
         title += " (盤中每半小時)"
 
-    color = (
-        discord.Color.red()
-        if any(i.get("is_size_down") for i in alignment_items)
-        else discord.Color.orange()
-    )
+    built = [_build_card_and_tags(i) for i in alignment_items]
+    all_cards = [card for card, _ in built]
+    all_tags = [tags for _, tags in built]
+    title += _title_tags(all_tags)
 
-    all_cards = [_build_telemetry_alignment_ansi_card(i) for i in alignment_items]
-    if any("降級" in sfx or "未更新" in sfx for _, sfx in all_cards):
-        title += " [降級模式]"
+    changed_count = sum(1 for i in alignment_items if _suggestion_changed(i))
+    has_live = [
+        i
+        for i in alignment_items
+        if i.get("alignment_available") is not False
+        and _to_float_or_none(i.get("live_price")) is not None
+    ]
+    if alignment_items and not has_live:
+        color_value = _COLOR_NEUTRAL
+    elif any(
+        i.get("is_size_down") and i.get("alignment_available") is not False
+        for i in alignment_items
+    ):
+        color_value = _COLOR_SPECIAL
+    elif changed_count > 0:
+        color_value = _COLOR_WARNING
+    else:
+        color_value = _COLOR_INFO
+    color = discord.Color(color_value)
 
-    description_lines = [f"共 `{len(alignment_items)}` 筆委託單需要進行遙測對齊。"]
+    description_lines = [
+        f"共 `{len(alignment_items)}` 筆委託單，其中 `{changed_count}` 筆有調整建議。"
+    ]
 
     if truncated:
         description_lines.append(
@@ -301,7 +451,7 @@ def create_telemetry_alignment_embeds(
     for chunk_idx, chunk in enumerate(chunked_groups):
         embed = NexusEmbed(
             title=title,
-            description="\n".join(description_lines) + "\n\u200b",
+            description="\n".join(description_lines) + "\n​",
             color=color,
             timestamp=datetime.now(timezone.utc),
         )
@@ -310,7 +460,8 @@ def create_telemetry_alignment_embeds(
             global_idx = chunk_idx * 10 + idx + 1
             sym = str(item.get("symbol") or "").upper()
             order_id = item.get("order_id")
-            card_content, degraded_suffix = all_cards[global_idx - 1]
+            card_content = all_cards[global_idx - 1]
+            degraded_suffix = "".join(f" [{t}]" for t in all_tags[global_idx - 1])
 
             name_prefix = f"📦 委託單 #{global_idx}"
             if order_id is not None:

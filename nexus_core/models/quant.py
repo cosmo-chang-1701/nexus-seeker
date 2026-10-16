@@ -125,6 +125,9 @@ class IVMetrics(BaseModel):
     # 週預期 EM 所用跨式的到期日與 DTE（呈現標籤用）。
     straddle_expiry: str | None = None
     straddle_dte: int | None = None
+    # 近 20 個交易日（不含今日）DB 歷史 IV 的平均；樣本 < 10 筆為 None；僅供委託遙測
+    # 定價的 IV 暴噴／崩塌比較，嚴禁混入 HV。
+    iv_hist_mean_20d: float | None = None
     # LIVE_IV 所取樣的到期日與 DTE，以及期限結構比值所用的近月／遠月到期日（呈現標籤用）。
     current_iv_expiry: str | None = None
     current_iv_dte: int | None = None
