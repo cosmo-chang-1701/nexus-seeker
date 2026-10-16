@@ -10,18 +10,16 @@ from unittest.mock import MagicMock
 import pytest
 
 
-@pytest.mark.parametrize(
-    "module_name",
-    [
-        "market_analysis.gamma_squeeze_engine",
-        "market_analysis.models.trader_models",
-    ],
-)
-def test_spear_modules_are_gone(module_name: str) -> None:
-    # 不用 find_spec("market_analysis.models") is None：殘留的 __pycache__/ 會讓
-    # 空目錄變成 namespace package，判斷會假失敗。
+# 不用 find_spec("market_analysis.models") is None：殘留的 __pycache__/ 會讓
+# 空目錄變成 namespace package，判斷會假失敗。
+def test_gamma_squeeze_engine_module_is_gone() -> None:
     with pytest.raises(ModuleNotFoundError):
-        importlib.import_module(module_name)
+        importlib.import_module("market_analysis.gamma_squeeze_engine")
+
+
+def test_trader_models_module_is_gone() -> None:
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("market_analysis.models.trader_models")
 
 
 def test_pipeline_constructs_without_engine() -> None:
