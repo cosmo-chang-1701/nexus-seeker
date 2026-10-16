@@ -70,11 +70,52 @@ class OrderItemView(discord.ui.View):
 
 
 class ApplyTelemetryView(discord.ui.View):
-    def __init__(self, suggestions: dict[int, tuple[float, int]] | None = None) -> Any:  # type: ignore
+    """遙測對齊面板：就地換頁（單一 ephemeral 訊息）＋ 一鍵套用全部建議。"""
+
+    def __init__(
+        self,
+        suggestions: dict[int, tuple[float, int]] | None = None,
+        embeds: list[discord.Embed] | None = None,
+    ) -> None:
         super().__init__(timeout=180)
         self.suggestions = suggestions or {}
+        self.embeds: list[discord.Embed] = list(embeds or [])
+        self.current_page = 0
+        if len(self.embeds) <= 1:
+            # 單頁無須換頁按鈕
+            self.remove_item(self.btn_prev)
+            self.remove_item(self.btn_next)
+        else:
+            self._update_button_states()
 
-    @discord.ui.button(label="⚡ 一鍵套用遙測建議價", style=discord.ButtonStyle.success)
+    def _update_button_states(self) -> None:
+        """依當前頁碼切換換頁按鈕 disabled 狀態。"""
+        self.btn_prev.disabled = self.current_page <= 0
+        self.btn_next.disabled = self.current_page >= len(self.embeds) - 1
+
+    @discord.ui.button(label="◀ 上一頁", style=discord.ButtonStyle.primary, row=0)
+    async def btn_prev(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
+        self.current_page = max(0, self.current_page - 1)
+        self._update_button_states()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.current_page], view=self
+        )
+
+    @discord.ui.button(label="下一頁 ▶", style=discord.ButtonStyle.primary, row=0)
+    async def btn_next(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> Any:
+        self.current_page = min(len(self.embeds) - 1, self.current_page + 1)
+        self._update_button_states()
+        await interaction.response.edit_message(
+            embed=self.embeds[self.current_page], view=self
+        )
+
+    @discord.ui.button(
+        label="⚡ 一鍵套用遙測建議價", style=discord.ButtonStyle.success, row=1
+    )
     async def apply_telemetry_button(
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
@@ -136,6 +177,8 @@ class ApplyTelemetryView(discord.ui.View):
             for child in self.children:
                 if isinstance(child, discord.ui.Button):
                     child.disabled = False
+            if len(self.embeds) > 1:
+                self._update_button_states()
             try:
                 await interaction.edit_original_response(view=self)
             except Exception:
