@@ -27,26 +27,26 @@ async def test_iv_rank_fuse_suppresses_price_up(caplog: Any, db_conn: Any):  # t
         quantity=10,
         order_type="LIMIT",
         validity="GTC_90",
-        limit_price=400.0,
+        limit_price=470.0,
     )
 
-    # Create a PRICE_UP scenario via skew-tail baseline logic.
+    # Create a PRICE_UP scenario via skew-tail baseline logic (BUY, 落在 5% 深海閘門內).
     with caplog.at_level("WARNING"):
         decision = await generate_alignment_decision(
             user_id=user_id,
             order_id=order_id,
             symbol=symbol,
-            current_order_price=400.0,
+            current_order_price=470.0,
             spot_price=486.51,
             original_qty=10,
-            iv=0.55,
-            hist_iv=0.35,
+            iv=0.10,
+            hist_iv=0.10,
             iv_rank=1.0,  # 100%
-            max_pain_price=437.50,
-            prev_max_pain=437.50,
+            max_pain_price=475.0,
+            prev_max_pain=475.0,
             skew_percentile_pct=98.0,
             put_call_ratio=1.0,
-            order_side="SELL",
+            order_side="BUY",
         )
 
     assert decision is None
@@ -65,29 +65,29 @@ async def test_max_pain_expected_move_clamp(db_conn: Any):  # type: ignore
         quantity=100,
         order_type="LIMIT",
         validity="GTC_90",
-        limit_price=400.0,
+        limit_price=470.0,
     )
 
     decision = await generate_alignment_decision(
         user_id=user_id,
         order_id=order_id,
         symbol=symbol,
-        current_order_price=400.0,
+        current_order_price=470.0,
         spot_price=486.51,
         original_qty=100,
-        iv=0.55,
-        hist_iv=0.35,
+        iv=0.10,
+        hist_iv=0.10,
         iv_rank=0.50,
-        max_pain_price=437.50,
-        prev_max_pain=437.50,
+        max_pain_price=475.0,
+        prev_max_pain=475.0,
         skew_percentile_pct=98.0,
         put_call_ratio=1.0,
-        order_side="SELL",
+        order_side="BUY",
     )
 
     assert decision is not None
     assert decision.action == "PRICE_UP"
-    assert decision.suggested_price == 437.50
+    assert decision.suggested_price == 475.0
     assert decision.suggested_price > decision.current_order_price
 
 
@@ -103,24 +103,24 @@ async def test_no_alignment_needed_when_clamp_not_above_current(db_conn: Any):  
         quantity=10,
         order_type="LIMIT",
         validity="GTC_90",
-        limit_price=440.0,
+        limit_price=470.0,
     )
 
     decision = await generate_alignment_decision(
         user_id=user_id,
         order_id=order_id,
         symbol=symbol,
-        current_order_price=440.0,
+        current_order_price=470.0,
         spot_price=486.51,
         original_qty=10,
-        iv=0.55,
-        hist_iv=0.35,
+        iv=0.10,
+        hist_iv=0.10,
         iv_rank=0.50,
-        max_pain_price=437.50,
-        prev_max_pain=437.50,
+        max_pain_price=465.0,
+        prev_max_pain=465.0,
         skew_percentile_pct=98.0,
         put_call_ratio=1.0,
-        order_side="SELL",
+        order_side="BUY",
     )
 
     assert decision is None
@@ -345,13 +345,13 @@ def test_resolve_skew_percentile_pct_prefers_real_percentile() -> None:
 
 
 @pytest.mark.asyncio
-async def test_apply_fallback_uses_live_market_inputs(db_conn: Any) -> None:
-    """一鍵套用在沒有記憶體／快取建議時，以即時資料重算，不再使用固定假值。
+async def test_apply_ignores_orders_not_in_snapshot(db_conn: Any) -> None:
+    """一鍵套用只動快照內 (suggestions) 的委託單，不再有 kv_cache／即時重算後備。
 
-    舊版後備路徑寫死 IV 0.55、IV Rank 0.50、Max Pain 100、Skew 98、PCR 1.0；
-    現在必須與 /telemetry_alert 共用同一份輸入。移動停損單不做價格對齊。
+    舊版對不在 suggestions 內的委託單會以 kv_cache 或即時資料重算並改單，
+    使用者可能因此改到從未在快照上看過的委託。
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, patch
 
     from services.order_telemetry_service import apply_telemetry_to_orders
 
@@ -377,43 +377,13 @@ async def test_apply_fallback_uses_live_market_inputs(db_conn: Any) -> None:
             "side": "SELL",
         },
     ]
-    iv_metrics = MagicMock(current_iv=0.22, iv_rank=35.0)
-    decision = MagicMock(suggested_price=99.0, suggested_qty=10)
-    mock_decision = AsyncMock(return_value=decision)
+    mock_fetch = AsyncMock(return_value=(100.5, 101.0, 100.0))
+    mock_decision = AsyncMock()
 
     with (
-        patch("database.cache.get_kv_cache", return_value=None),
         patch(
             "services.order_telemetry_service.fetch_cache_and_live_price",
-            new=AsyncMock(return_value=(100.5, 101.0)),
-        ),
-        patch(
-            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
-            new=AsyncMock(return_value=iv_metrics),
-        ),
-        patch(
-            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
-            new=AsyncMock(return_value={"skew": 6.0, "skew_percentile": 40.0}),
-        ),
-        patch(
-            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
-            new=AsyncMock(return_value={"max_pain": 97.0}),
-        ),
-        patch(
-            "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
-            new=AsyncMock(return_value=[]),
-        ),
-        patch(
-            "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-            new=AsyncMock(return_value={"volume_pcr": 1.8}),
-        ),
-        patch(
-            "services.calendar_service.calendar_service.get_symbol_earnings",
-            new=AsyncMock(return_value=None),
-        ),
-        patch(
-            "services.calendar_service.calendar_service.get_high_impact_events",
-            new=AsyncMock(return_value=[]),
+            new=mock_fetch,
         ),
         patch(
             "market_analysis.telemetry_pricing_engine.generate_alignment_decision",
@@ -421,7 +391,7 @@ async def test_apply_fallback_uses_live_market_inputs(db_conn: Any) -> None:
         ),
         patch("database.orders.update_active_order_price") as mock_update,
     ):
-        updated, _ = await apply_telemetry_to_orders(
+        updated, details = await apply_telemetry_to_orders(
             user_id=7,
             orders=orders,
             suggestions={},
@@ -429,16 +399,8 @@ async def test_apply_fallback_uses_live_market_inputs(db_conn: Any) -> None:
             holding_map={},
         )
 
-    # 只有限價單被重算與更新；移動停損單略過
-    assert mock_decision.await_count == 1
-    assert updated == 1
-    mock_update.assert_called_once_with(1, 99.0, 10)
-
-    call = mock_decision.await_args
-    assert call is not None
-    kwargs = call.kwargs
-    assert kwargs["iv"] == pytest.approx(0.22)
-    assert kwargs["iv_rank"] == pytest.approx(0.35)
-    assert kwargs["max_pain_price"] == 97.0
-    assert kwargs["skew_percentile_pct"] == 40.0
-    assert kwargs["put_call_ratio"] == 1.8
+    assert updated == 0
+    assert details == []
+    mock_fetch.assert_not_awaited()
+    mock_decision.assert_not_awaited()
+    mock_update.assert_not_called()

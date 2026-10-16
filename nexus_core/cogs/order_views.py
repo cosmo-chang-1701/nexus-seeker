@@ -120,22 +120,18 @@ class ApplyTelemetryView(discord.ui.View):
             )
 
             if updated_count > 0:
-                msg = (
-                    f"✅ **成功套用動態遙測建議價！**\n\n"
-                    f"已成功為您自動安全防禦更新 `{updated_count}` 筆待成交委託防線：\n\n"
-                    + "\n".join(details)
-                )
-                embed = create_info_embed(
-                    title="動態遙測對齊完成",
-                    message=msg,
-                )
+                from cogs.embed_builder import create_telemetry_apply_result_embed
+
+                for result_embed in create_telemetry_apply_result_embed(
+                    updated_count, details
+                ):
+                    await interaction.followup.send(embed=result_embed, ephemeral=True)
             else:
                 embed = create_info_embed(
                     title="遙測狀態同步完成",
                     message="✅ 您的所有待成交委託單皆處於絕對安全的遙測震盪疆界內，暫無須微調。",
                 )
-
-            await interaction.followup.send(embed=embed, ephemeral=True)
+                await interaction.followup.send(embed=embed, ephemeral=True)
         finally:
             for child in self.children:
                 if isinstance(child, discord.ui.Button):
