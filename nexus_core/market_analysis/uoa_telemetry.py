@@ -197,70 +197,84 @@ def classify_uoa_trade(
         )
     delta_tag = f", Δ={delta:+.2f}" if delta is not None and delta != 0.0 else ""
 
+    # 0DTE 就地改寫標示（少 1 字，不追加文字以免拉寬 UOA 表）
+    dte_tag = "0DTE" if dte == 0 else f"DTE={dte}"
+
     if action == "🟢 買入開倉 (BTO - Ask)":
         if is_call:
             if use_moneyness and moneyness == "OTM_Speculation":
                 intent = (
                     f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口價外 CALL "
-                    f"(DTE={dte}, OI={oi_str})，屬 OTM 投機性看漲買盤 (OTM_Speculation)"
+                    f"({dte_tag}, OI={oi_str})，屬 OTM 投機性看漲買盤 (OTM_Speculation)"
+                )
+            elif use_moneyness and moneyness == "ITM_Whale_Accumulation" and dte <= 1:
+                # 當日／次日到期的深價內買單多為短線方向性或對沖，不視為吸籌
+                intent = (
+                    f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口深價內 CALL "
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬方向性看漲買盤（臨近到期）"
                 )
             elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
                 intent = (
                     f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 CALL "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ITM 機構主力吸籌建倉 (ITM_Whale_Accumulation)"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬 ITM 機構主力吸籌建倉 (ITM_Whale_Accumulation)"
                 )
             elif use_moneyness and moneyness == "ATM":
                 intent = (
                     f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口平價 CALL "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看漲博弈"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看漲博弈"
                 )
             elif use_moneyness and moneyness == "ITM_Directional":
                 intent = (
                     f"🔥 {ticker_tag}在 {strike_str} 買入 {volume_str} 口淺價內 CALL "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬方向性看漲買盤（Delta 未達深價內吸籌門檻）"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬方向性看漲買盤（Delta 未達深價內吸籌門檻）"
                 )
             else:
                 if dte <= 3:
                     intent = (
-                        f"🔥 {ticker_tag}機構在 {strike_str} 主動買入 {volume_str} 口"
-                        f" 末日 CALL (DTE={dte}, OI={oi_str})，Gamma 逼空火力集中"
+                        f"🔥 {ticker_tag}在 {strike_str} 主動買入 {volume_str} 口"
+                        f" 末日 CALL ({dte_tag}, OI={oi_str})，Gamma 逼空火力集中"
                     )
                 else:
                     intent = (
                         f"🚀 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口"
-                        f" 跨週 CALL (DTE={dte}, OI={oi_str})，機構主力吸籌建倉"
+                        f" 跨週 CALL ({dte_tag}, OI={oi_str})，機構主力吸籌建倉"
                     )
         else:  # PUT
             if use_moneyness and moneyness == "OTM_Speculation":
                 intent = (
                     f"⚠️ {ticker_tag}在 {strike_str} 買入 {volume_str} 口價外 PUT "
-                    f"(DTE={dte}, OI={oi_str})，屬 OTM 投機避險買盤 (OTM_Speculation)"
+                    f"({dte_tag}, OI={oi_str})，屬 OTM 投機避險買盤 (OTM_Speculation)"
+                )
+            elif use_moneyness and moneyness == "ITM_Whale_Accumulation" and dte <= 1:
+                intent = (
+                    f"📉 {ticker_tag}在 {strike_str} 買入 {volume_str} 口深價內 PUT "
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬方向性看跌買盤（臨近到期）"
                 )
             elif use_moneyness and moneyness == "ITM_Whale_Accumulation":
                 intent = (
                     f"📉 {ticker_tag}大額資金在 {strike_str} 買入 {volume_str} 口深價內 PUT "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ITM 機構主力避險建倉 (ITM_Whale_Accumulation)"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬 ITM 機構主力避險建倉 (ITM_Whale_Accumulation)"
                 )
             elif use_moneyness and moneyness == "ATM":
                 intent = (
                     f"⚠️ {ticker_tag}在 {strike_str} 買入 {volume_str} 口平價 PUT "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看跌博弈"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬 ATM 高槓桿方向性看跌博弈"
                 )
             elif use_moneyness and moneyness == "ITM_Directional":
                 intent = (
                     f"📉 {ticker_tag}在 {strike_str} 買入 {volume_str} 口淺價內 PUT "
-                    f"(DTE={dte}, OI={oi_str}{delta_tag})，屬方向性看跌買盤（Delta 未達深價內門檻）"
+                    f"({dte_tag}, OI={oi_str}{delta_tag})，屬方向性看跌買盤（Delta 未達深價內門檻）"
                 )
             else:
                 if dte <= 3:
                     intent = (
-                        f"⚠️ {ticker_tag}機構在 {strike_str} 急買 {volume_str} 口"
-                        f" 末日 PUT (DTE={dte}, OI={oi_str})，恐慌性避險避雷"
+                        f"⚠️ {ticker_tag}在 {strike_str} 急買 {volume_str} 口"
+                        f" 末日 PUT ({dte_tag}, OI={oi_str})，恐慌性避險避雷"
                     )
                 else:
                     intent = (
                         f"📉 {ticker_tag}空頭在 {strike_str} 主動買入 {volume_str} 口"
-                        f" PUT (DTE={dte}, OI={oi_str})，加碼下行防護"
+                        f" PUT ({dte_tag}, OI={oi_str})，加碼下行防護"
                     )
 
     elif action == "🔴 賣出開倉 (STO - Bid)":

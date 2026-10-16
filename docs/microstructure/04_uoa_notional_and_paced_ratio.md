@@ -76,6 +76,14 @@ $$
 
 ---
 
+### 2.6 意圖文案的到期日防線（0DTE 標示）
+
+`classify_uoa_trade` 的 `intent` 只改文案，不改方向、`action` 與門檻：
+
+- **0DTE 標示**：BTO 分支中 `dte == 0` 時，`DTE=0` 就地改寫為 `0DTE`（少 1 字）；不在 `intent` 尾端追加文字，避免拉寬 /x UOA 表整列。`dte >= 1` 維持 `DTE=N`。
+- **DTE≤1 的深價內買單不視為吸籌**：`ITM_Whale_Accumulation` 且 `dte <= 1` 時，改用「深價內方向性看漲（看跌）買盤（臨近到期）」文案，不出現「吸籌」「建倉」；`dte >= 2` 維持原文案。
+- **fallback 不宣稱機構**：無現價（無 moneyness）且 `dte <= 3` 的 CALL／PUT 末日文案由「機構在」改為「在」；`dte > 3` 的 fallback 不變。
+
 ## 3. 決策邏輯與狀態機 / 流程圖
 
 ```mermaid
