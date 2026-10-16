@@ -88,7 +88,7 @@ sequenceDiagram
 自選標的的主動推播只剩一條管線，詳見 [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)：
 
 - **15 分鐘盤中巡邏**（`dynamic_market_scanner`）：原本的自選雷達推播（`heartbeat_watchlist`）與市場情境事件（`intel_market_scenario`）已移除；現在只做總經快取、VIX 黑天鵝警報、edge 自選同步與 NRO／DDP／IV 期權掃描。雷達面板改為 `/x` 手動查詢。
-- **30 分鐘標的分析中心 2.0 深度心跳**（`IntradayScanPipeline`）：專注於 Gamma 擠壓、量價分佈（Volume Profile / DP-POC）與做市商拓撲深潛；推播至 `heartbeat_symbol_deep`，另含進場顧問（`advisory_entry_signal`）與 SPEAR（`alpha_market_signals`）。獨立 `asyncio.Task`，每輪開頭檢查 Leader 身分與 `is_memory_safe()`。
+- **30 分鐘標的分析中心 2.0 深度心跳**（`IntradayScanPipeline`）：專注於 Gamma 擠壓、量價分佈（Volume Profile / DP-POC）與做市商拓撲深潛；推播至 `heartbeat_symbol_deep`，另含進場顧問（`advisory_entry_signal`）；SPEAR 已於 2026-10-17 退役。獨立 `asyncio.Task`，每輪開頭檢查 Leader 身分與 `is_memory_safe()`。
 
 ---
 
@@ -197,7 +197,7 @@ FedWatch 資料源說明依明細的 `source` 欄位產生（`cogs/embed_builder
 | 手動強制刷新大盤總經數據（共用流程） | `nexus_core/services/macro_refresh_service.py` | [`04_calendar_translation_engine.md`](04_calendar_translation_engine.md) |
 | 投組下行風險評估與收盤結算 | `nexus_core/services/downside_risk_service.py` | [`07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md) |
 | 總經訊號乾跑記錄（只記錄、不推播） | `nexus_core/services/macro_signal_service.py` | [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) |
-| 盤中 30 分鐘深度掃描管線 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` | [`06_gamma_squeeze_engine_and_spear.md`](../microstructure/06_gamma_squeeze_engine_and_spear.md) |
+| 盤中 30 分鐘深度掃描管線 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` | [`01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md) |
 | Alpaca 即時 1 分 K 串流服務 | `nexus_core/services/alpaca_stream_service.py` | [`07_alpaca_realtime_stream.md`](07_alpaca_realtime_stream.md) |
 | Bot 生命週期與常駐 Worker 管理 | `nexus_core/bot.py` | [`05_embed_architecture_and_dm_queue.md`](05_embed_architecture_and_dm_queue.md) |
 | 資料庫單一寫入者與維護入口 | `nexus_core/database/connection.py` | [`04_engineering_standards.md`](../architecture/04_engineering_standards.md) |

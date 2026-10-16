@@ -240,7 +240,7 @@ VIX 一律取即時報價（`get_vix_spot_strict()`），抓不到時回傳 `Non
 - **方向性做空**：套用 `SHORT_VIX_UNKNOWN_MULTIPLIER`（$0.5$，見 §2.6）。
 - **做多買方**：風險額度維持 `risk_limit` 基準，不套用任何 $> 1$ 的 VIX 放大乘數。
 
-embed 一律標示「VIX 資料不足」（倉位不放大、賣方新倉暫停），Gamma Squeeze 引擎與大盤 Regime 判定同樣無法確認波動環境時暫停進攻（見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)）。
+embed 一律標示「VIX 資料不足」（倉位不放大、賣方新倉暫停），大盤 Regime 判定同樣無法確認波動環境時暫停進攻（見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)）。
 
 ### 5.1b 期權決策數據降級時的倉位縮減 (Options Data Degradation Guard)
 `/x` 的 Kelly 建倉額度原本在個股 IV 缺失時靜默以 $0.40$ 佔位值代入，IV Rank／PCR 缺失與 GEX 快取降級也完全不影響口數。`optimize_position_risk()` 新增兩個參數（預設值維持舊行為，其他呼叫端逐位元不變）：

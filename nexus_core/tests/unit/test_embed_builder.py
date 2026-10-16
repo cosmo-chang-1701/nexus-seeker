@@ -4957,47 +4957,6 @@ def test_create_transition_ratchet_embed_does_not_say_no_action_needed() -> None
     assert "$180.00" in blob
 
 
-def test_create_gamma_squeeze_alert_embed() -> None:
-    """Gamma Squeeze SPEAR 警報：欄位齊備、代理數據揭露不可省略。"""
-    from datetime import datetime as _dt
-
-    from cogs.embed_builders.alert_embeds import create_gamma_squeeze_alert_embed
-    from market_analysis.models.trader_models import AdvancedTraderOutput
-
-    output = AdvancedTraderOutput(
-        ticker="NVDA",
-        timestamp=_dt.now(),
-        market_phase="Phase B",
-        is_applicable=True,
-        failed_gates=[],
-        sddm_route="SPEAR",
-        financial_runway_days=210,
-        theta_coverage_pct=45.0,
-        runway_status_msg="🟢 財務跑道極其安全 (生存跑道: 210 天)",
-        magnet_target=185.0,
-        recommended_actions=[
-            "🏹 當前進入 SPEAR 進攻模組",
-            "🎯 預估上行磁吸目標價為 $185.00",
-        ],
-        vanna_hedging_instruction="組合 Delta 處於中性區間，目前無需進行 Vanna 對沖調整。",
-        kelly_position_scaling=0.25,
-        risk_mitigation_notes="當前波動率環境相對溫和。",
-    )
-
-    embed = create_gamma_squeeze_alert_embed(output)
-    text = get_embed_text(embed)
-
-    assert embed.title == "🏹 Gamma 擠壓 SPEAR 進攻訊號 | NVDA"
-    assert "$185.00" in text
-    assert "凱利倉位上限: 25.0%" in text
-    assert "210 天" in text
-    assert "Vanna" in text
-    # Gate 1 / Gate 3 的輸入是代理指標，依 AGENTS.md 慣例必須揭露
-    assert "代理數據揭露" in text
-    assert "RVOL_15m" in text
-    assert "DTE >= 7" in text
-
-
 def test_create_short_entry_embed_renders_short_levels_and_sizing() -> None:
     from cogs.embed_builders.rollover_embeds import create_short_entry_embed
 

@@ -3,18 +3,12 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
 from market_time import ny_tz, is_market_open
 from models.schemas import WatchlistEvaluation
 
-from market_analysis.models.trader_models import (
-    TraderAccountState,
-    OptionHolding,
-    TickerMarketData,
-)
-from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.signal_calculator import (
     calculate_dynamic_trading_signals,
     compute_deployed_tactical_value,
@@ -24,7 +18,6 @@ from market_analysis.option_guidance import (
     build_watchlist_option_plan,
 )
 
-from market_analysis.intraday_pipeline.metrics import _WATCHLIST_METRICS_CACHE
 from market_analysis.intraday_pipeline.evaluation import evaluate_watchlist_symbol
 
 
@@ -72,17 +65,15 @@ def _seconds_until_next_slot(
 class IntradayScanPipeline:
     """
     盤中量化掃描與對沖背景處理管道。
-    每 30 分鐘執行一次，驅動 Squeeze 決策引擎並發送通知。
+    每 30 分鐘執行一次，產出自選標的深度心跳與進場顧問通知。
     """
 
-    def __init__(self, bot: Any, engine: NexusGammaSqueezeEngine):
+    def __init__(self, bot: Any):
         self.bot = bot
-        self.engine = engine
         self.is_running = False
         self._task: Optional[asyncio.Task] = None
         # 上一輪掃描開始時間，供 _seconds_until_next_slot 計算最小間隔。
         self._last_scan_started: Optional[datetime] = None
-        self._cached_spy_spot: float = 500.0
         # 進場顧問 radar 補抓的併發上限 (比照 portfolio_monitor.py 的 Semaphore(3))。
         self._radar_fetch_sem = asyncio.Semaphore(3)
 
@@ -429,61 +420,6 @@ class IntradayScanPipeline:
             setattr(embed, "_view", f"WatchlistHeartbeatView:{hb_symbol}")
         return embed
 
-    async def _dispatch_gamma_squeeze_alert(
-        self,
-        user_id: int,
-        ticker: str,
-        output: Any,
-        now_ny: datetime,
-    ) -> None:
-        """把 NexusGammaSqueezeEngine 的輸出實際推播出去。
-
-        過去 `analyze_ticker()` 的回傳值被 `_ =` 直接丟棄，整段引擎等於白跑。
-
-        派發策略刻意保守：
-          - **只在 SPEAR 時推播**。SHIELD / WAIT 是「不要動」的結論，每 30 分鐘
-            對每檔標的重述一次只會製造噪音；SPEAR 才是需要使用者採取行動的訊號。
-          - 走既有的 `alpha_market_signals` 通知通道（🎯 Alpha 策略與情報）。
-          - 每位使用者、每檔標的、每日至多一則，沿用其他警報相同的 kv_cache
-            去重鍵模式，避免同一輪行情在盤中被重複觸發 13 次。
-
-        任何一步失敗都只記錄警告，不影響同一輪其他標的的處理。
-        """
-        try:
-            if getattr(output, "sddm_route", None) != "SPEAR":
-                return
-
-            import database
-
-            if not database.is_notification_enabled(user_id, "alpha_market_signals"):
-                return
-
-            cache_key = (
-                f"gamma_squeeze_alert_{user_id}_{ticker.upper()}_"
-                f"{now_ny.strftime('%Y%m%d')}"
-            )
-            if database.get_kv_cache(cache_key):
-                return
-
-            from cogs.embed_builders.alert_embeds import (
-                create_gamma_squeeze_alert_embed,
-            )
-
-            from services.notification_dispatcher import notify
-
-            embed = create_gamma_squeeze_alert_embed(output)
-            await notify(
-                self.bot,
-                user_id,
-                "alpha_market_signals",
-                embed=embed,
-                dedup_key=cache_key,
-            )
-        except Exception as e:
-            logger.warning(
-                f"[{ticker}] Gamma Squeeze SPEAR 警報派發失敗 (uid={user_id}): {e}"
-            )
-
     async def _resolve_candidate_radar(self, symbol: str) -> Optional[Dict[str, Any]]:
         """取得進場確認所需的 radar dict（quote / gex_profile_data / uoa / psq_result）。
 
@@ -532,7 +468,7 @@ class IntradayScanPipeline:
         """自選標的進場顧問：六重鐵律通過時，獨立推播一則進場 DM（含價位建議）。
 
         與 30 分鐘心跳本體**完全獨立**：不新增 `scenario`、不覆寫 `tactical`、
-        不受 `engine_enabled` 約束，只受 `/notif_settings` 的
+        不受其他訊號約束，只受 `/notif_settings` 的
         `advisory_entry_signal` 控制。策略分派與 `/x` 進場鐵律頁籤一致
         (見 entry_advisor.py)。
 
@@ -761,16 +697,6 @@ class IntradayScanPipeline:
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
 
-                # 預先抓取 SPY 現價供跨資產對沖價格比率計算
-                try:
-                    from services.market_data_service import get_quote
-
-                    spy_q = await get_quote("SPY")
-                    if spy_q and spy_q.get("c"):
-                        self._cached_spy_spot = float(spy_q["c"])
-                except Exception:
-                    pass
-
                 # 2. 獲取所有使用者資訊，執行量化分析
                 import database
 
@@ -780,33 +706,6 @@ class IntradayScanPipeline:
 
                 for uid in user_ids:
                     ctx = database.get_full_user_context(uid)
-                    # `enable_analyst_agent` 只管 NexusGammaSqueezeEngine 那段，
-                    # 不再連帶擋掉 watchlist 心跳。該欄位 DB 預設為 0 且沒有任何
-                    # 指令可開啟，過去整個迴圈掛在它底下，等於這則心跳從未送出，
-                    # 也與 AGENTS.md「Analyst Agent 不是 watchlist 心跳的前提」矛盾。
-                    # 心跳現在只由 /notif_settings 的 heartbeat_symbol_deep 通道控制。
-                    engine_enabled = bool(getattr(ctx, "enable_analyst_agent", False))
-
-                    # 3. 取得帳戶狀態、持倉期權、Greeks 等（僅量化引擎需要，
-                    # 含 VIX 報價與持倉查詢成本，關閉時不應付出）
-                    account_state = None
-                    holdings: List[OptionHolding] = []
-                    portfolio_greeks: Dict[str, float] = {}
-                    if engine_enabled:
-                        # UserContext 的欄位是 capital / cash_reserve /
-                        # monthly_expense；過去讀不存在的 total_capital /
-                        # monthly_burn_rate，資金與月支出恆為 100000 / 5000。
-                        account_state = TraderAccountState(
-                            capital=float(ctx.capital),
-                            cash_reserve=float(ctx.cash_reserve),
-                            monthly_burn_rate=float(ctx.monthly_expense),
-                            current_vix=await self._fetch_current_vix(),
-                        )
-                        holdings = self._build_options_holdings(
-                            trades_by_user.get(uid, [])
-                        )
-                        portfolio_greeks = await self._fetch_portfolio_greeks(uid)
-
                     # 掃描 watchlist 中的標的
                     # 戰術曝險每位使用者每輪只算一次（含一次全站 TRADE 讀取），
                     # 不在每檔標的的迴圈裡重複查詢。
@@ -857,38 +756,10 @@ class IntradayScanPipeline:
                                     logger.info(
                                         f"使用者 {uid} 已關閉所有心跳模組訂閱，略過心跳推送。"
                                     )
-                            # 進場顧問獨立於心跳本體與 Gamma Squeeze 引擎，因此必須放在
-                            # 下方 `engine_enabled` 的 continue 之前，否則預設
-                            # (enable_analyst_agent=0) 下永遠執行不到。
+                            # 進場顧問獨立於心跳本體：心跳是否推播（通道關閉、綠燈）
+                            # 都不影響這裡，每檔標的每輪一律評估一次。
                             await self._dispatch_entry_advisor_alert(
                                 uid, ticker, watchlist_eval, ctx, now_ny
-                            )
-                            if not engine_enabled or account_state is None:
-                                continue
-
-                            market_data = await self._fetch_ticker_market_data(ticker)
-                            if not market_data:
-                                continue
-
-                            # 執行核心量化引擎 (注入標的特定動態 Beta 與 SPY 現價)
-                            ticker_greeks = dict(portfolio_greeks)
-                            cached_entry = _WATCHLIST_METRICS_CACHE.get(ticker.upper())
-                            if cached_entry is not None:
-                                cached_m, _ = cached_entry
-                                if getattr(cached_m, "beta", None) is not None:
-                                    ticker_greeks["beta"] = float(cached_m.beta)
-                            ticker_greeks["spy_price"] = self._cached_spy_spot
-
-                            engine_output = self.engine.analyze_ticker(
-                                data=market_data,
-                                account_state=account_state,
-                                options_holdings=holdings,
-                                portfolio_greeks=ticker_greeks,
-                                market_phase=phase,
-                                current_time=now_ny,
-                            )
-                            await self._dispatch_gamma_squeeze_alert(
-                                uid, ticker, engine_output, now_ny
                             )
 
                         except Exception as ticker_err:
@@ -919,307 +790,3 @@ class IntradayScanPipeline:
             except Exception as e:
                 logger.error(f"❌ IntradayScanPipeline 發生錯誤: {e}", exc_info=True)
                 await asyncio.sleep(60)
-
-    # 模擬/輔助獲取資料方法
-    async def _fetch_current_vix(self) -> Optional[float]:
-        """獲取 VIX 即時數據；未知時回傳 None (不再補 18.0，由引擎 fail-closed)。"""
-        try:
-            from services.market_data_service import get_vix_spot_strict
-
-            return await get_vix_spot_strict()
-        except Exception:
-            return None
-
-    @staticmethod
-    def _build_options_holdings(option_positions: Any) -> List[OptionHolding]:
-        """把使用者的 TRADE 期權部位轉成引擎用的 OptionHolding。
-
-        過去從 HOLDING (現貨) 讀期權，結果恆為空、Theta 覆蓋恆為 0，且缺值時
-        補 −0.05。現在讀 TRADE 部位：metadata.theta 是部位層級每日 Theta 美元值
-        (單口 × 口數 × 100)，換回單口值；Theta 未知 (尚未刷新) 的部位直接略過，
-        不補值。
-        """
-        holdings: List[OptionHolding] = []
-        for pos in option_positions or []:
-            try:
-                qty = float(pos.get("quantity") or 0.0)
-                position_theta = pos.get("theta")
-                if qty == 0.0 or position_theta is None:
-                    continue
-                holdings.append(
-                    OptionHolding(
-                        symbol=str(pos.get("symbol", "")),
-                        quantity=qty,
-                        theta=float(position_theta) / (qty * 100.0),
-                    )
-                )
-            except (TypeError, ValueError):
-                continue
-        return holdings
-
-    async def _fetch_portfolio_greeks(self, user_id: int) -> Dict[str, float]:
-        """獲取使用者投資組合 Greeks"""
-        greeks = {"vanna": 0.0, "beta": 1.0}
-        try:
-            import database
-
-            user_ctx = database.get_full_user_context(user_id)
-            greeks["vanna"] = float(getattr(user_ctx, "total_vanna", 0.0))
-        except Exception:
-            pass
-        return greeks
-
-    async def _fetch_market_cap_billion(self, ticker: str) -> float:
-        """公司市值（十億美元），供引擎 Gate 1 流動性門檻使用。
-
-        Finnhub `company_profile2` 的 `marketCapitalization` 單位是**百萬美元**。
-        取不到時回傳 0.0 —— Gate 1 會因此判定不通過（fail-closed）。這是刻意的：
-        這條路徑會產出「建議分批建立 OTM Call」的進攻訊號，資料缺失時寧可不發，
-        也不能像過去那樣用一個剛好高於門檻的假值讓閘門自動放行。
-        """
-        try:
-            from services.market_data_service import get_company_profile
-
-            profile = await get_company_profile(ticker)
-            market_cap_musd = float((profile or {}).get("marketCapitalization") or 0.0)
-            return market_cap_musd / 1000.0 if market_cap_musd > 0.0 else 0.0
-        except Exception as e:
-            logger.warning(f"[{ticker}] 取得市值失敗，Gate 1 將判定不通過: {e}")
-            return 0.0
-
-    async def _fetch_projected_option_volume(self, ticker: str) -> int:
-        """全鏈當日期權成交量，取消跨時段線性外推。
-
-        已取消「當日成交量 ÷ 交易時段已過比例」的線性外推機制，徹底避免開盤時段因
-        成交量 U 型分佈導致的 3~5 倍虛假放大。Gate 1 已全面改用微觀結構指標
-        「15m 即時成交量比 (RVOL_15m = Volume_15m / SMA20)」進行放量驗證。
-
-        取不到時回傳 0（Gate 1 fail-closed）。
-        """
-        try:
-            from market_analysis.sentiment_engine import SentimentEngine
-
-            pcr_data = await SentimentEngine.calculate_pcr(ticker)
-            if not isinstance(pcr_data, dict):
-                return 0
-            total_volume = float(pcr_data.get("put_vol") or 0.0) + float(
-                pcr_data.get("call_vol") or 0.0
-            )
-            if total_volume <= 0.0:
-                return 0
-            return int(total_volume)
-        except Exception as e:
-            logger.warning(f"[{ticker}] 取得期權成交量失敗，Gate 1 將判定不通過: {e}")
-            return 0
-
-    async def _fetch_front_expiry_otm_call_premium(
-        self, ticker: str, spot_price: float
-    ) -> float:
-        """統計 DTE >= 7 且 Vol/OI >= 0.8x 之價外 Call 主力成交權利金 (Σ volume × lastPrice × 100)，供 Gate 3。
-
-        強制過濾 DTE 0~4 之末日輪流動性雜訊（做市商結算日尾盤對倒與 Gamma 軋平），
-        僅採樣 DTE >= 7 且單筆/累積成交佔該合約 OI >= 0.8x 的跨週期主力訂單流。
-        取不到或無符合主力單時回傳 0.0（Gate 3 fail-closed）。
-        """
-        try:
-            from services import market_data_service
-            import market_time
-            import pandas as pd
-
-            expiries = await market_data_service.get_all_option_expiries(ticker)
-            if not expiries:
-                return 0.0
-
-            today = datetime.now(market_time.ny_tz).date()
-            qualifying_expiries = []
-            for exp_str in expiries:
-                try:
-                    exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
-                    dte = (exp_date - today).days
-                    # 強制過濾 DTE 0~4 之合約，僅採樣 DTE >= 7
-                    if dte >= 7:
-                        qualifying_expiries.append(exp_str)
-                except ValueError:
-                    continue
-
-            if not qualifying_expiries:
-                return 0.0
-
-            total_institutional_premium = 0.0
-            # 採樣前 3 個符合 DTE >= 7 的到期日
-            for exp in qualifying_expiries[:3]:
-                chain = await market_data_service.get_option_chain(ticker, exp)
-                if chain is None or chain.calls.empty:
-                    continue
-
-                calls = chain.calls
-                otm = calls[calls["strike"] > spot_price]
-                if otm.empty:
-                    continue
-
-                vols = otm["volume"].fillna(0.0).astype(float)
-                ois = (
-                    otm["openInterest"].fillna(0.0).astype(float)
-                    if "openInterest" in otm.columns
-                    else pd.Series(0.0, index=otm.index)
-                )
-
-                # 篩選成交量佔該合約 OI >= 0.8x 的跨週期主力訂單流
-                has_oi = (ois > 0).any()
-                if has_oi:
-                    mask = (ois > 0) & (vols >= 0.8 * ois) & (vols > 0)
-                    target_otm = otm[mask]
-                else:
-                    target_otm = otm.iloc[0:0]
-
-                if not target_otm.empty:
-                    t_vols = target_otm["volume"].fillna(0.0).astype(float)
-                    t_prices = target_otm["lastPrice"].fillna(0.0).astype(float)
-                    total_institutional_premium += float(
-                        (t_vols * t_prices * 100.0).sum()
-                    )
-
-            return total_institutional_premium
-        except Exception as e:
-            logger.warning(
-                f"[{ticker}] 取得 DTE>=7 主力 OTM Call 權利金失敗，Gate 3 將判定不通過: {e}"
-            )
-            return 0.0
-
-    async def _fetch_ticker_market_data(
-        self, ticker: str
-    ) -> Optional[TickerMarketData]:
-        """獲取標的即時數據並拼裝為 TickerMarketData。
-
-        包含即時微觀結構、15m RVOL、即時 IV 與 GEX Profile。
-        任一核心項取得失敗一律安全降級並促使相應 Gate fail-closed。
-        """
-        try:
-            from services.calendar_service import calendar_service
-            from services.market_data_service import get_quote
-            from market_analysis.price_volume_alert import get_confirmed_15m_bar
-            from market_analysis.index_microstructure import fetch_symbol_gex_metrics
-            from market_analysis.sentiment_engine import SentimentEngine
-
-            quote = await get_quote(ticker)
-            price_raw = quote.get("c", 0) if quote else 0
-            if not quote or float(price_raw) <= 0:
-                return None
-
-            price = float(price_raw)
-
-            # 獲取財報日期
-            days_earnings = 30
-            try:
-                earnings_info = await calendar_service.get_symbol_earnings(ticker)
-                if earnings_info is not None:
-                    dt_earn = datetime.strptime(earnings_info.date, "%Y-%m-%d").date()
-                    days_earnings = max(0, (dt_earn - datetime.now(ny_tz).date()).days)
-            except Exception:
-                pass
-
-            # 接入即時波動率強制刷新數據源（Realtime_IV）
-            real_iv_rank = 0.0
-            realtime_iv = None
-            try:
-                iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(
-                    ticker, force_refresh=True
-                )
-                if iv_metrics:
-                    if iv_metrics.iv_rank is not None:
-                        real_iv_rank = float(iv_metrics.iv_rank)
-                    if iv_metrics.current_iv is not None:
-                        realtime_iv = float(iv_metrics.current_iv)
-            except Exception as e:
-                logger.debug(f"[{ticker}] 抓取即時 IV 失敗: {e}")
-
-            # Skew 取得
-            real_option_skew = 0.0
-            cached_entry = _WATCHLIST_METRICS_CACHE.get(ticker.upper())
-            if cached_entry is not None:
-                cached_m, _ = cached_entry
-                if real_iv_rank == 0.0 and cached_m.iv_rank is not None:
-                    real_iv_rank = float(cached_m.iv_rank)
-                if cached_m.option_skew is not None:
-                    real_option_skew = float(cached_m.option_skew) / 100.0
-
-            # 微觀結構 15m K 棒 (RVOL_15m)
-            rvol_15m = None
-            try:
-                bar_15m = await get_confirmed_15m_bar(ticker)
-                if bar_15m and bar_15m.avg_volume > 0:
-                    rvol_15m = round(bar_15m.volume / bar_15m.avg_volume, 4)
-            except Exception as e:
-                logger.debug(f"[{ticker}] 抓取 15m K 棒失敗: {e}")
-
-            # GEX 結構與 Call Wall
-            call_wall = None
-            put_wall = None
-            net_gex = None
-            gex_profile = None
-            try:
-                gex_data = await fetch_symbol_gex_metrics(ticker)
-                if gex_data:
-                    call_wall = gex_data.get("call_wall")
-                    put_wall = gex_data.get("put_wall")
-                    net_gex = gex_data.get("net_gex")
-                    gex_profile = gex_data.get("gex_profile")
-            except Exception as e:
-                logger.debug(f"[{ticker}] 抓取 GEX 數據失敗: {e}")
-
-            # 動態自適應波動率空間門檻 (room_threshold.py 公式 A) 所需的兩項 ATR。
-            # 磁吸目標價的向上空間要求已自硬編碼 5% 改為依此推導，缺失時
-            # room_threshold 會降級至 3.5% 絕對底線並在 veto 文案中揭露。
-            atr_15m_val: float | None = None
-            atr_1d_val: float | None = None
-            try:
-                from market_analysis.atr_utils import fetch_atr_15m, fetch_atr_1d
-
-                atr_15m_val, atr_1d_val = await asyncio.gather(
-                    fetch_atr_15m(ticker), fetch_atr_1d(ticker)
-                )
-            except Exception as e:
-                logger.debug(f"[{ticker}] 抓取動態空間門檻 ATR 失敗: {e}")
-
-            # 全鏈 STO 物理封頂
-            physical_cap_strikes = None
-            try:
-                (
-                    _,
-                    physical_cap_strikes,
-                ) = await SentimentEngine.detect_uoa_with_physical_caps(ticker)
-            except Exception as e:
-                logger.debug(f"[{ticker}] 抓取 STO 物理封頂失敗: {e}")
-
-            (
-                market_cap_billion,
-                avg_option_volume,
-                otm_call_premium,
-            ) = await asyncio.gather(
-                self._fetch_market_cap_billion(ticker),
-                self._fetch_projected_option_volume(ticker),
-                self._fetch_front_expiry_otm_call_premium(ticker, price),
-            )
-
-            return TickerMarketData(
-                ticker=ticker,
-                spot_price=price,
-                market_cap_billion=market_cap_billion,
-                avg_option_volume=avg_option_volume,
-                days_until_earnings=days_earnings,
-                tomorrow_expiring_otm_calls_premium=otm_call_premium,
-                iv_rank=real_iv_rank,
-                option_skew=real_option_skew,
-                rvol_15m=rvol_15m,
-                realtime_iv=realtime_iv,
-                call_wall=call_wall,
-                net_gex=net_gex,
-                gex_profile=gex_profile,
-                physical_cap_strikes=physical_cap_strikes,
-                put_wall=put_wall,
-                atr_15m=atr_15m_val,
-                atr_1d=atr_1d_val,
-            )
-        except Exception as e:
-            logger.error(f"Failed to fetch market data for {ticker}: {e}")
-            return None

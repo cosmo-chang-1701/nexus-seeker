@@ -9,7 +9,7 @@
 ### 1.1 核心哲學
 在多租戶的即時金融量化監控系統中，交易員對自選標的的資訊需求可分為兩大維度：
 1. **高頻率的廣度快照（Breadth Snapshot）**：全體自選股之 Greeks 牆體、最大痛點、Skew 偏斜與主力 UOA 的批次面板。**現已改為按需查詢**：由 `/x` 經 `RadarDataMixin._fetch_sym_radar_data_slow()` 抓取、`build_radar_scan_embed()` 分頁渲染，不再每 15 分鐘主動推播。
-2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合以及 Gamma Squeeze SPEAR 攻擊訊號。由 30 分鐘深度心跳管線主動推播。
+2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合（Gamma Squeeze SPEAR 攻擊訊號已於 2026-10-17 退役）。由 30 分鐘深度心跳管線主動推播。
 
 重度量化計算與定時迴圈必須物理隔離，否則會阻塞其他盤中任務並因 API 併發過載觸發外部數據源（Finnhub, yfinance）之限流封鎖。因此 30 分鐘管線是獨立的 `asyncio.Task`，不掛在 15 分鐘 `tasks.loop` 之下，並受 `is_memory_safe()`（85% RAM+Swap）閘門約束。
 
@@ -23,7 +23,7 @@
 | **自選標的相關工作** | edge 自選同步 `_sync_edge_watchlist()`（未設 `TUNNEL_URL` 不做任何事）；NRO／DDP／IV 期權掃描（`MarketScanCog`） | `evaluate_watchlist_symbol()` $\to$ `create_watchlist_signal_embed()` |
 | **主動推送過濾門檻** | 自選雷達面板不推播 | **僅當 `tactical.alert_level != "green"` 時發送**<br/>（非綠色警報才推送，杜絕無效打擾） |
 | **通知控制頻道** | （`heartbeat_watchlist`、`intel_market_scenario` 已移除） | `/notif_settings` $\to$ `heartbeat_symbol_deep`<br/>（migration `v070` 獨立分離） |
-| **進階進攻模組** | 無 | `NexusGammaSqueezeEngine`（受 `enable_analyst_agent` 閘門控制） |
+| **進階進攻模組** | 無 | 無（Gamma Squeeze 進階進攻引擎已於 2026-10-17 退役） |
 | **進場顧問獨立推播** | 無 | `_dispatch_entry_advisor_alert()`：**僅在心跳為 green 時**評估，六重鐵律通過才推播（含進場／停損／目標／盈虧比）。獨立通知頻道 `advisory_entry_signal`、**不受 `enable_analyst_agent` 約束**，不新增 `scenario`、不覆寫 `tactical`。預設乾跑（`WATCHLIST_ADVISOR_DRY_RUN`） |
 
 ---
@@ -94,17 +94,14 @@ flowchart TD
 
         SkipPush --> AdvisorGate{"alert_level == 'green'<br/>且開啟 advisory_entry_signal?"}
         P2_Queue --> AdvisorGate
-        AdvisorGate -- 否 --> CheckSPEAR
+        AdvisorGate -- 否 --> LoopSleep
         AdvisorGate -- 是 --> AdvisorRadar["_resolve_candidate_radar()<br/>共享雷達快取(目前無寫入端) → Semaphore(3) 補抓"]
         AdvisorRadar --> AdvisorEval["evaluate_entry_advice()<br/>策略分派 + 六重鐵律 + 價位<br/>(記憶化於 strategy:symbol:15m bar)"]
         AdvisorEval --> AdvisorDry{"通過且三個乾跑旗標皆已關閉<br/>且當日 Regime 去重未命中?"}
         AdvisorDry -- 是 --> AdvisorQueue["create_entry_rules_embed → queue_dm<br/>寫入 advisory_entry_ 去重旗標"]
-        AdvisorDry -- 否 --> CheckSPEAR
-        AdvisorQueue --> CheckSPEAR
-        CheckSPEAR{開啟 enable_analyst_agent?}
-        CheckSPEAR -- 是 --> SqueezeEngine["NexusGammaSqueezeEngine.analyze_ticker()<br/>發送 SPEAR 進攻訊號"]
-        CheckSPEAR -- 否 --> LoopSleep["await asyncio.sleep(1800)"]
-        SqueezeEngine --> LoopSleep
+        AdvisorDry -- 否 --> LoopSleep
+        AdvisorQueue --> LoopSleep
+        LoopSleep["await asyncio.sleep(1800)"]
         LoopSleep --> LoopTrigger
     end
 ```
@@ -150,15 +147,15 @@ flowchart TD
 
 ### 5.2 Analyst Agent 開關隔離原則
 - 舊架構曾錯誤將整條 30 分鐘心跳嵌套在 `if not ctx.enable_analyst_agent: continue` 條件下，由於該欄位資料庫預設為 0 且無前端指令可配置，導致深度心跳長期遭全域靜默。
-- 現行架構徹底解耦：`enable_analyst_agent` 僅作為 `NexusGammaSqueezeEngine`（SPEAR 訊號）的選配閘門；深度戰術心跳本體一律只受 `/notif_settings` 中的 `heartbeat_symbol_deep` 通道控制。
+- 現行架構徹底解耦：Gamma Squeeze SPEAR 已於 2026-10-17 退役（見 [`../microstructure/06_gamma_squeeze_engine_and_spear.md`](../microstructure/06_gamma_squeeze_engine_and_spear.md)），`enable_analyst_agent` 僅控制 AI 評論；深度戰術心跳本體一律只受 `/notif_settings` 中的 `heartbeat_symbol_deep` 通道控制。
 
 ### 5.3 綠色常態過濾（Alert Level Gating）
 - 為防止交易員在行情平淡時遭受資訊疲勞，30 分鐘深度心跳設有嚴格過濾：當且僅當 `tactical.alert_level != "green"`（例如出現超跌磁吸、需防壓回、突破阻力或負 Gamma 警戒）時，才啟動 Embed 建構與 DM 發送。
 - 心跳本體的三個出口（SHIELD／premium-harvest／WAIT）**沒有「進場」路由**，標的正常上漲時一律是 green、永不推播。進場買點改由**獨立的進場顧問派發**送達（見下 §5.4），兩者互斥：心跳非 green 時（防禦或收租訊號）進場顧問**不評估**，避免進場訊號蓋過防禦訊號。
 
 ### 5.4 進場顧問（`_dispatch_entry_advisor_alert`）的邊界條件
-- **不動心跳契約**：`WatchlistTacticalPlan.scenario` Literal（`premium-harvest` / `hard-hedge` / `wait`）與 `nro.py` 零改動；進場顧問是與 `_dispatch_gamma_squeeze_alert` 並列的獨立派發。
-- **位置**：呼叫點在使用者／標的迴圈內、`if not engine_enabled ... continue` **之前**；放在其後則預設 `enable_analyst_agent=0` 下永遠執行不到。
+- **不動心跳契約**：`WatchlistTacticalPlan.scenario` Literal（`premium-harvest` / `hard-hedge` / `wait`）與 `nro.py` 零改動；進場顧問原與已退役（2026-10-17）的 SPEAR 並列，現為迴圈內唯一的獨立派發。
+- **位置**：呼叫點在使用者／標的迴圈內、心跳推播之後；SPEAR 已於 2026-10-17 退役，前方不再有 `enable_analyst_agent` 閘門。
 - **策略分派與 `/x` 一致**：沿用 `/settings` 的 `trading_strategy`（`RIGHT_SIDE`／`LEFT_SIDE`／`SHORT_SIDE`／`DYNAMIC`），`DYNAMIC` 依 Regime 路由（III／III-B → 右側、I → 左側、V → 做空、II／IV → 不進場）。要收到左側接刀買點須先把 `/settings` 切成 `DYNAMIC`。
 - **價位沿用單一定義**：停損 `compute_reference_stop()`（牆 ∓ 0.5×ATR₁₅ₘ，**不是**心跳的 `ANTI_WASHOUT_ATR_MULT=1.5`，見 §5 ATR 消歧義）、目標 `resolve_effective_target()`（公式 D）、做空價位 `build_short_entry_levels()`；缺資料時該欄位顯示 N/A，做空價位不合法則 fail-closed 不推播。
 - **去重與乾跑**：去重鍵 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`，Regime III-B 升級為 III 是新訊號、會再發一次；任何擋下（非 green、頻道關閉、鐵律未過、乾跑）**都不寫旗標**，否則正式開啟當天所有標的都被當日旗標鎖住。

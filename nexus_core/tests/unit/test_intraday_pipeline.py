@@ -8,260 +8,12 @@ from market_analysis.intraday_pipeline import (
     IntradayScanPipeline,
     build_watchlist_skew_rule_commentary,
 )
-from market_analysis.models import (
-    TraderAccountState,
-    OptionHolding,
-    TickerMarketData,
-    AdvancedTraderOutput,
-)
-from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from cogs.embed_builders.portfolio_embeds import get_scenario_guidance
 
 
 @pytest.fixture
-def squeeze_engine() -> Any:
-    return NexusGammaSqueezeEngine(base_gate_3_threshold=1000000.0)
-
-
-@pytest.fixture
-def intraday_pipeline(squeeze_engine: Any) -> Any:
-    return IntradayScanPipeline(MagicMock(), squeeze_engine)
-
-
-@pytest.fixture
-def default_account_state() -> Any:
-    return TraderAccountState(
-        capital=100000.0,
-        cash_reserve=25000.0,
-        monthly_burn_rate=6000.0,
-        current_vix=14.0,
-    )
-
-
-@pytest.fixture
-def default_market_data() -> Any:
-    return TickerMarketData(
-        ticker="AAPL",
-        spot_price=173.5,
-        market_cap_billion=250.0,
-        avg_option_volume=80000,
-        days_until_earnings=10,
-        tomorrow_expiring_otm_calls_premium=1200000.0,
-        iv_rank=60.0,
-        option_skew=0.08,
-    )
-
-
-@pytest.fixture
-def default_holdings() -> Any:
-    return [
-        OptionHolding(symbol="AAPL", quantity=2.0, theta=-0.12),
-        OptionHolding(symbol="MSFT", quantity=-1.0, theta=0.08),
-    ]
-
-
-@pytest.fixture
-def default_greeks() -> Any:
-    return {"vanna": 1.5, "beta": 1.2}
-
-
-def test_validate_gates_all_pass(squeeze_engine: Any, default_market_data: Any) -> Any:
-    passed, failed = squeeze_engine.validate_gates(default_market_data, "Phase B")
-    assert passed is True
-    assert len(failed) == 0
-
-
-def test_validate_gates_failures(squeeze_engine: Any):  # type: ignore
-    bad_data = TickerMarketData(
-        ticker="LOW_LIQ",
-        spot_price=50.0,
-        market_cap_billion=10.0,  # Fail (< 20B)
-        avg_option_volume=10000,  # Fail (< 50,000)
-        days_until_earnings=2,  # Fail (<= 3)
-        tomorrow_expiring_otm_calls_premium=500000.0,  # Fail (< 1M)
-        iv_rank=30.0,  # Fail (< 50)
-        option_skew=0.02,  # Fail (< 0.05 skew absolute)
-    )
-    passed, failed = squeeze_engine.validate_gates(bad_data, "Phase B")
-    assert passed is False
-    assert len(failed) == 4  # Liquidity, Event, Efficiency, Cross-Market
-
-
-def test_validate_gates_phase_a_threshold_increase(squeeze_engine: Any):  # type: ignore
-    # 開盤衝擊期 (Phase A) 為防範滑價與脆弱報價，門檻調高 30% 至 $1,300,000 (嚴禁逆向放寬)
-    # 若權利金為 $1,100,000，在 Phase B 通過 ($1M 門檻)，但在 Phase A 應判定不通過
-    borderline_data = TickerMarketData(
-        ticker="BORDER",
-        spot_price=100.0,
-        market_cap_billion=50.0,
-        avg_option_volume=70000,
-        days_until_earnings=15,
-        tomorrow_expiring_otm_calls_premium=1100000.0,
-        iv_rank=70.0,
-        option_skew=0.06,
-    )
-
-    passed_a, failed_a = squeeze_engine.validate_gates(borderline_data, "Phase A")
-    assert passed_a is False
-    assert len(failed_a) == 1
-    assert "資金效率不足" in failed_a[0]
-
-    passed_b, failed_b = squeeze_engine.validate_gates(borderline_data, "Phase B")
-    assert passed_b is True
-    assert len(failed_b) == 0
-
-
-def test_analyze_ticker_spear_route(  # type: ignore
-    squeeze_engine: Any,
-    default_market_data: Any,
-    default_account_state: Any,
-    default_holdings: Any,
-    default_greeks: Any,
-):
-    output = squeeze_engine.analyze_ticker(
-        data=default_market_data,
-        account_state=default_account_state,
-        options_holdings=default_holdings,
-        portfolio_greeks=default_greeks,
-        market_phase="Phase B",
-    )
-
-    assert isinstance(output, AdvancedTraderOutput)
-    assert output.sddm_route == "SPEAR"
-    assert output.is_applicable is True
-    assert len(output.failed_gates) == 0
-    # 分數凱利硬上限 5.0% (VIX < 15)
-    assert output.kelly_position_scaling == 0.05
-    assert "SPEAR" in output.recommended_actions[0]
-    # default_market_data 刻意不帶 put_wall/atr（向後相容的既有 fixture），
-    # 動態門檻降級至 3.5% 絕對底線：現價 173.5 -> 最低目標 179.57，
-    # 向上取 5 的倍數得 180.0。門檻確實生效於動態推導的案例見下方
-    # test_analyze_ticker_magnet_target_uses_dynamic_threshold。
-    assert output.magnet_target == 180.0
-
-
-def test_analyze_ticker_magnet_target_uses_dynamic_threshold(  # type: ignore
-    squeeze_engine: Any,
-    default_market_data: Any,
-    default_account_state: Any,
-    default_holdings: Any,
-    default_greeks: Any,
-):
-    """帶齊 put_wall/ATR 時，磁吸目標價須依動態門檻推導，而非固定 5%。
-
-    現價 173.5、PutWall 165、ATR₁₅ₘ 1.5 -> Stop = 164.25、Risk = 5.33%，
-    門檻 = max(2.2×5.33%, 1.5×(7/173.5), 3.5%) = 11.73%
-    -> 最低目標 193.85 -> 向上取 5 的倍數得 195.0。
-    固定 5% 門檻下只會要求 182.18（取整 185），兩者明顯可區分。
-    """
-    default_market_data.put_wall = 165.0
-    default_market_data.atr_15m = 1.5
-    default_market_data.atr_1d = 7.0
-
-    output = squeeze_engine.analyze_ticker(
-        data=default_market_data,
-        account_state=default_account_state,
-        options_holdings=default_holdings,
-        portfolio_greeks=default_greeks,
-        market_phase="Phase B",
-    )
-    assert output.magnet_target == 195.0
-
-
-def test_analyze_ticker_shield_vix_gated(  # type: ignore
-    squeeze_engine: Any,
-    default_market_data: Any,
-    default_account_state: Any,
-    default_holdings: Any,
-    default_greeks: Any,
-):
-    # 若 VIX 偏高 (>= 25.0)，強制 SHIELD 避險，且買方凱利倉位歸零
-    default_account_state.current_vix = 28.0
-    output = squeeze_engine.analyze_ticker(
-        data=default_market_data,
-        account_state=default_account_state,
-        options_holdings=default_holdings,
-        portfolio_greeks=default_greeks,
-        market_phase="Phase B",
-    )
-
-    assert output.sddm_route == "SHIELD"
-    assert output.kelly_position_scaling == 0.0  # 避險模式下買方倉位硬性歸零
-    assert "SHIELD" in output.recommended_actions[0]
-    assert "高波動警戒區" in output.recommended_actions[1]
-
-
-def test_financial_runway_calculation(  # type: ignore
-    squeeze_engine: Any,
-    default_market_data: Any,
-    default_account_state: Any,
-    default_holdings: Any,
-    default_greeks: Any,
-):
-    # Monthly burn rate = 6000 -> Daily burn rate = 200
-    # Holdings theta yield = 2 * (-0.12) * 100 + (-1) * 0.08 * 100 = -24 - 8 = -32
-    # Cash reserve = 25000
-    # Runway = (25000 - 32) / 200 = 24968 / 200 = 124 days
-    output = squeeze_engine.analyze_ticker(
-        data=default_market_data,
-        account_state=default_account_state,
-        options_holdings=default_holdings,
-        portfolio_greeks=default_greeks,
-        market_phase="Phase B",
-    )
-
-    assert output.financial_runway_days == 124
-    assert output.theta_coverage_pct == -16.0  # -32 / 200 * 100
-    assert "🟢" not in output.runway_status_msg  # 124 is yellow (🟡)
-    assert "🟡" in output.runway_status_msg
-
-
-def test_vanna_hedging_instruction(  # type: ignore
-    squeeze_engine: Any,
-    default_market_data: Any,
-    default_account_state: Any,
-    default_holdings: Any,
-    default_greeks: Any,
-):
-    # Vanna = 1.5, Beta = 1.2, spot = 173.5, spy = 500.0 (default)
-    # d_vol = 0.10
-    # hidden_delta_shares = 1.5 * 0.10 * 100 = 15
-    # 首選標的內部對沖: SELL 15 股 AAPL
-    # 次選 SPY 對沖: 15 * 1.2 * (173.5 / 500.0) = 6.246 -> SELL 6 單位 SPY
-    output = squeeze_engine.analyze_ticker(
-        data=default_market_data,
-        account_state=default_account_state,
-        options_holdings=default_holdings,
-        portfolio_greeks=default_greeks,
-        market_phase="Phase B",
-    )
-
-    assert "SELL 賣出 15 股 AAPL" in output.vanna_hedging_instruction
-    assert "SELL 賣出 6 單位 SPY" in output.vanna_hedging_instruction
-
-
-def test_post_market_attribution_evolution(squeeze_engine: Any):  # type: ignore
-    # Case 1: High protection score (portfolio suffered loss, hedge avoided it)
-    # Portfolio PnL = -1000, Hedge PnL = +800 -> Score = 80% (>= 70)
-    # Gate 3 threshold should be reduced by 10%
-    res = squeeze_engine.run_post_market_attribution(
-        portfolio_pnl=-1000.0, hedge_pnl=800.0
-    )
-    assert res["protection_score"] == 80.0
-    assert res["old_threshold"] == 1000000.0
-    assert res["new_threshold"] == 900000.0
-    assert "調降明日 Gate 3" in res["evolution_msg"]
-
-    # Case 2: Low protection score
-    # Portfolio PnL = -1000, Hedge PnL = +200 -> Score = 20% (< 40)
-    # Threshold should increase by 15% from 900000 to 1035000
-    res2 = squeeze_engine.run_post_market_attribution(
-        portfolio_pnl=-1000.0, hedge_pnl=200.0
-    )
-    assert res2["protection_score"] == 20.0
-    assert res2["old_threshold"] == 900000.0
-    assert res2["new_threshold"] == 1035000.0
-    assert "調升明日 Gate 3" in res2["evolution_msg"]
+def intraday_pipeline() -> Any:
+    return IntradayScanPipeline(MagicMock())
 
 
 @pytest.mark.asyncio
@@ -1559,225 +1311,6 @@ def test_compute_daily_trend_levels_fails_safe_on_short_frame() -> None:
     assert _compute_daily_trend_levels(df) == (0.0, 0.0, 0.0)
 
 
-# ---------------------------------------------------------------------------
-# NexusGammaSqueezeEngine 輸出接線
-# ---------------------------------------------------------------------------
-
-
-def _gamma_engine_output(**overrides: Any) -> Any:
-    from datetime import datetime as _dt
-    from market_analysis.models.trader_models import AdvancedTraderOutput
-
-    payload: dict[str, Any] = dict(
-        ticker="NVDA",
-        timestamp=_dt.now(),
-        market_phase="Phase B",
-        is_applicable=True,
-        failed_gates=[],
-        sddm_route="SPEAR",
-        financial_runway_days=210,
-        theta_coverage_pct=45.0,
-        runway_status_msg="🟢 財務跑道極其安全",
-        magnet_target=185.0,
-        recommended_actions=["🏹 進攻", "🎯 磁吸目標"],
-        vanna_hedging_instruction="組合 Delta 處於中性區間。",
-        kelly_position_scaling=0.25,
-        risk_mitigation_notes="波動率環境溫和。",
-    )
-    payload.update(overrides)
-    return AdvancedTraderOutput(**payload)
-
-
-@pytest.mark.asyncio
-async def test_gamma_squeeze_alert_dispatched_on_spear() -> None:
-    """SPEAR 路由應實際推播 DM 並寫入每日去重旗標。
-
-    `analyze_ticker()` 的輸出過去被 `_ =` 丟棄，整段引擎白跑。
-    """
-    from datetime import datetime as _dt
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
-
-    with patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock) as mock_save:
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-
-    bot.queue_dm.assert_awaited_once()
-    dm_call = bot.queue_dm.await_args
-    assert dm_call is not None
-    assert dm_call[0][0] == 42
-    mock_save.assert_awaited_once()
-    save_call = mock_save.await_args
-    assert save_call is not None
-    assert str(save_call[0][0]).startswith("gamma_squeeze_alert_42_NVDA_")
-
-
-@pytest.mark.asyncio
-async def test_gamma_squeeze_alert_suppressed_when_not_spear_or_deduped() -> None:
-    """SHIELD/WAIT、通知關閉、以及當日已發過，三種情況都不得再推播。"""
-    from datetime import datetime as _dt
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    bot = MagicMock()
-    bot.queue_dm = AsyncMock()
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
-
-    # 1. 非 SPEAR：SHIELD/WAIT 是「不要動」的結論，重複推播只是噪音
-    for route in ("SHIELD", "WAIT"):
-        with patch("database.is_notification_enabled", return_value=True), patch(
-            "database.get_kv_cache", return_value=None
-        ), patch("database.save_kv_cache", new_callable=AsyncMock):
-            await pipeline._dispatch_gamma_squeeze_alert(
-                42, "NVDA", _gamma_engine_output(sddm_route=route), _dt.now()
-            )
-    bot.queue_dm.assert_not_awaited()
-
-    # 2. 使用者已關閉 alpha_market_signals 通道
-    with patch("database.is_notification_enabled", return_value=False), patch(
-        "database.get_kv_cache", return_value=None
-    ), patch("database.save_kv_cache", new_callable=AsyncMock):
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-    bot.queue_dm.assert_not_awaited()
-
-    # 3. 當日已推播過
-    with patch("database.is_notification_enabled", return_value=True), patch(
-        "database.get_kv_cache", return_value=True
-    ), patch("database.save_kv_cache", new_callable=AsyncMock):
-        await pipeline._dispatch_gamma_squeeze_alert(
-            42, "NVDA", _gamma_engine_output(), _dt.now()
-        )
-    bot.queue_dm.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_ticker_market_data_fails_closed_without_real_inputs() -> None:
-    """三個門檻輸入取不到時必須 fail-closed，不得沿用會自動放行的假值。
-
-    過去 market_cap_billion / avg_option_volume /
-    tomorrow_expiring_otm_calls_premium 分別寫死為 250.5 / 65000 / 1_200_000，
-    剛好都高於 Gate 1 (20B / 50k) 與 Gate 3 ($1M) 的門檻，等於兩道閘門對所有標的
-    無條件放行。
-    """
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 150.0},
-    ), patch(
-        "services.market_data_service.get_company_profile",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("profile api down"),
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("chain api down"),
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        side_effect=RuntimeError("expiry api down"),
-    ):
-        data = await pipeline._fetch_ticker_market_data("NVDA")
-
-    assert data is not None
-    assert data.market_cap_billion == 0.0
-    assert data.avg_option_volume == 0
-    assert data.tomorrow_expiring_otm_calls_premium == 0.0
-
-    # 這些值必須讓 Gate 1 與 Gate 3 判定不通過
-    passed, failed = NexusGammaSqueezeEngine().validate_gates(data, "Phase B")
-    assert passed is False
-    assert any("流動性不足" in reason for reason in failed)
-    assert any("資金效率不足" in reason for reason in failed)
-
-
-@pytest.mark.asyncio
-async def test_ticker_market_data_uses_real_inputs() -> None:
-    """市值換算 (百萬→十億)、成交量時段正規化、OTM Call 權利金加總皆須正確。"""
-    import pandas as pd
-
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
-    from market_analysis.intraday_pipeline import IntradayScanPipeline
-
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
-
-    from datetime import datetime as _dt, timedelta as _td
-
-    future_exp1 = (_dt.now().date() + _td(days=14)).strftime("%Y-%m-%d")
-
-    chain = SimpleNamespace(
-        calls=pd.DataFrame(
-            [
-                # 價內：不計入
-                {
-                    "strike": 140.0,
-                    "volume": 100.0,
-                    "lastPrice": 12.0,
-                    "openInterest": 100.0,
-                },
-                # 價外：2 筆計入 (DTE >= 7 且 Vol/OI >= 0.8x)
-                {
-                    "strike": 160.0,
-                    "volume": 500.0,
-                    "lastPrice": 3.0,
-                    "openInterest": 100.0,
-                },
-                {
-                    "strike": 170.0,
-                    "volume": 200.0,
-                    "lastPrice": 1.5,
-                    "openInterest": 100.0,
-                },
-            ]
-        ),
-        puts=pd.DataFrame([]),
-    )
-
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 150.0},
-    ), patch(
-        "services.market_data_service.get_company_profile",
-        new_callable=AsyncMock,
-        return_value={"marketCapitalization": 3_400_000.0},  # 百萬美元
-    ), patch(
-        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
-        new_callable=AsyncMock,
-        return_value={"put_vol": 30000.0, "call_vol": 50000.0},
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=[future_exp1],
-    ), patch(
-        "services.market_data_service.get_option_chain",
-        new_callable=AsyncMock,
-        return_value=chain,
-    ), patch("market_time.get_trading_day_elapsed_fraction", return_value=0.5):
-        data = await pipeline._fetch_ticker_market_data("NVDA")
-
-    assert data is not None
-    # 3,400,000 百萬美元 → 3,400 十億美元
-    assert data.market_cap_billion == pytest.approx(3400.0)
-    # 當日 80,000 口，取消跨時段線性外推，真實量為 80,000 口
-    assert data.avg_option_volume == 80000
-    # 只計價外：500*3*100 + 200*1.5*100 = 150,000 + 30,000
-    assert data.tomorrow_expiring_otm_calls_premium == pytest.approx(180_000.0)
-
-
 def test_tactical_exposure_uses_readonly_query_and_skips_expired() -> None:
     """曝險統計不得觸發歸檔寫入，且應濾掉已到期合約。
 
@@ -1786,11 +1319,10 @@ def test_tactical_exposure_uses_readonly_query_and_skips_expired() -> None:
     """
     from datetime import datetime as _dt, timedelta as _td
 
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
     from market_time import ny_tz
 
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(MagicMock())
 
     today = _dt.now(ny_tz).date()
     future = (today + _td(days=30)).strftime("%Y-%m-%d")
@@ -1849,10 +1381,9 @@ def test_tactical_exposure_uses_readonly_query_and_skips_expired() -> None:
 
 def test_tactical_exposure_fails_safe_on_query_error() -> None:
     """期權查詢失敗時仍回傳現貨部分，不整個中斷。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
 
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(MagicMock())
     spot = [
         {
             "symbol": "NVDA",
@@ -1895,12 +1426,11 @@ async def test_scheduler_starts_pipeline_even_when_not_yet_leader() -> None:
 @pytest.mark.asyncio
 async def test_pipeline_run_loop_skips_when_not_leader() -> None:
     """非 leader 實例的每輪迴圈必須直接跳過，不執行任何掃描或推播。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
 
     bot = MagicMock()
     bot._is_leader_instance = False
-    pipeline = IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(bot)
     pipeline.is_running = True
 
     async def _stop_after_first(_seconds: float) -> None:
@@ -1920,11 +1450,10 @@ async def test_tactical_option_positions_loaded_once_and_grouped() -> None:
     """全站 TRADE 每輪只讀一次、依 user_id 分組，且不阻塞 event loop。"""
     from datetime import datetime as _dt, timedelta as _td
 
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
     from market_time import ny_tz
 
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(MagicMock())
     today = _dt.now(ny_tz).date()
     future = (today + _td(days=30)).strftime("%Y-%m-%d")
     past = (today - _td(days=5)).strftime("%Y-%m-%d")
@@ -1946,10 +1475,9 @@ async def test_tactical_option_positions_loaded_once_and_grouped() -> None:
 @pytest.mark.asyncio
 async def test_tactical_option_positions_fail_safe() -> None:
     """全站讀取失敗回傳空 dict，不中斷整輪掃描。"""
-    from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
     from market_analysis.intraday_pipeline import IntradayScanPipeline
 
-    pipeline = IntradayScanPipeline(MagicMock(), NexusGammaSqueezeEngine())
+    pipeline = IntradayScanPipeline(MagicMock())
     with patch("database.get_all_trade_positions", side_effect=RuntimeError("db down")):
         assert await pipeline._load_tactical_option_positions_by_user() == {}
 

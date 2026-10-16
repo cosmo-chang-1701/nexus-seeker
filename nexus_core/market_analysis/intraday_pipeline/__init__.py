@@ -67,12 +67,6 @@ from models.schemas import (
 )
 from risk_engine.nro import WatchlistRiskController
 from services.market_data_service import BoundedCache
-from market_analysis.models.trader_models import (
-    TraderAccountState,
-    OptionHolding,
-    TickerMarketData,
-)
-from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.signal_calculator import (
     _derive_buy_levels,
     _derive_sell_levels,
@@ -131,10 +125,6 @@ __all__ = [
     "ScanParams",
     "WatchlistRiskController",
     "BoundedCache",
-    "TraderAccountState",
-    "OptionHolding",
-    "TickerMarketData",
-    "NexusGammaSqueezeEngine",
     "_derive_buy_levels",
     "_derive_sell_levels",
     "_buy_zone_status",

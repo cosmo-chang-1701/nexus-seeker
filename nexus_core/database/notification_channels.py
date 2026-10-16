@@ -149,7 +149,7 @@ MODULES: tuple[NotificationModule, ...] = (
     NotificationModule(
         "intel_intraday",
         "📡 盤中情報",
-        "盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權／Gamma Squeeze、"
+        "盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、"
         "NRO 期權掃描與價量突破警報。",
     ),
     NotificationModule(
@@ -323,7 +323,7 @@ CHANNELS: tuple[NotificationChannel, ...] = (
     NotificationChannel(
         "alpha_market_signals",
         "intel_intraday",
-        "✨ 戴維斯雙擊 (DDP)、廉價期權與 Gamma Squeeze",
+        "✨ 戴維斯雙擊 (DDP) 與廉價期權",
         "INTEL",
         "INTRADAY",
         noise=True,

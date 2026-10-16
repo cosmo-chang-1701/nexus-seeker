@@ -381,30 +381,6 @@ def test_l8_recent_split_factor_only_counts_lookback_window() -> None:
 
 
 # ===========================================================================
-# L9：Gamma Squeeze 引擎的期權持倉讀 TRADE，Theta 未知不補值
-# ===========================================================================
-def test_l9_options_holdings_built_from_trade_positions() -> None:
-    from market_analysis.intraday_pipeline.pipeline import IntradayScanPipeline
-
-    positions = [
-        # 賣 2 口 Put，部位 Theta +$30/日 → 單口 30 / (−2 × 100) = −0.15
-        # (引擎再乘回 quantity × 100 = +30，方向與部位一致)
-        {"symbol": "NVDA", "quantity": -2, "theta": 30.0},
-        # 買 3 口 Call，部位 Theta −$45/日 → 單口 −0.15
-        {"symbol": "AAPL", "quantity": 3, "theta": -45.0},
-        # Theta 尚未刷新 (None) → 略過，不補 −0.05
-        {"symbol": "MSFT", "quantity": 1, "theta": None},
-    ]
-    holdings = IntradayScanPipeline._build_options_holdings(positions)
-    assert [(h.symbol, h.quantity, round(h.theta, 4)) for h in holdings] == [
-        ("NVDA", -2.0, -0.15),
-        ("AAPL", 3.0, -0.15),
-    ]
-    # 引擎的 Theta 覆蓋：Σ theta × qty × 100 = +30 − 45 = −15
-    assert sum(h.theta * h.quantity * 100 for h in holdings) == pytest.approx(-15.0)
-
-
-# ===========================================================================
 # L10：yfinance 備援報價用未調整收盤價，時間戳不是午夜
 # ===========================================================================
 @pytest.mark.asyncio

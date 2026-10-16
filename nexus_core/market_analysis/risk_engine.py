@@ -399,9 +399,8 @@ def kelly_position_fraction(
     - optimize_position_risk() 下方的「動態 Kelly 縮放」是以 VIX 分位數對
       risk_limit 做的啟發式倍率調整，並非基於勝率/賠率的凱利公式計算，概念上
       是完全不同的倉位模型，僅共用「Kelly」一詞作為保守倉位哲學的命名慣例。
-    - gamma_squeeze_engine.py 的 base_kelly 分層倍率同理，是訊號強度分級的
-      固定基礎倉位比例，非公式計算。
-    兩者均刻意不與此函式合併，比照本專案對三種刻意分歧的 gamma_cliff_level
+    - 其他以訊號強度分級的固定基礎倉位比例同理，非公式計算。
+    這些模型均刻意不與此函式合併，比照本專案對三種刻意分歧的 gamma_cliff_level
     公式的既有處理原則：概念不同的模型不應為了「去重」而強行統一。
     """
     if odds <= 0:
