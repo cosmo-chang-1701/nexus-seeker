@@ -235,6 +235,12 @@ fallback 路徑（即時資料缺失時回頭讀 SQLite 舊值）一律套用年
 | `macro_vix` 回退（`cogs/trading/scheduler.py` 15 分鐘巡邏） | `_VIX_FALLBACK_MAX_AGE_SECONDS` = 40 分鐘（兩個 15 分鐘週期＋餘裕）。僅即時報價才寫入 `macro_vix`，回退值不存回 | 不採用，維持 `is_vix_valid=False` |
 | `macro_fedwatch_probability`（`vetoes.py`、`macro_top_escape_defense.py`、`services/calendar_service.py` 的 `get_latest_fedwatch_probability` / `get_latest_fedwatch_info`、`strategy_runner.py`） | `FEDWATCH_PROB_MAX_AGE_SECONDS` = 12 小時（寫入端 4 小時週期 × 3），各處共用同一上限 | **進場閘門**（`vetoes.py`、PYRAMID_ADD）與**簡報**：`prob=None, prob_stale=True`，因子顯示「FedWatch 資料過期（逾 12 小時），不計分」，已知分數為 NORMAL 時 `UNKNOWN`（fail-closed），門檻不變；簡報端 `get_latest_fedwatch_probability` 回傳 `(None, is_fallback, True)`（`get_latest_fedwatch_info` 回傳 4 元組，末項 `is_stale`），**不得**改用 `economic_calendar_events` 備援（同一次寫入的同一個值）或寫死 0.50，過期不顯示舊數字。**避險端**（保護性 Put 逃頂防禦）：沿用最後一筆已知值計分（fail-safe for hedging），因子文字附註「FedWatch 資料過期（逾 12 小時），沿用最後值」；查無任何資料才是 None |
 
+**`macro_spx_spy_ratio`（SPX/SPY 換算比值，`get_macro_overview_data`）**：SPX 與 SPY 其中一方即時報價缺失時，以另一方換算補上；比值不再固定 10.0，因實際約 10.03，固定值會讓 /market 的 SPY 緩衝偏差約 0.3%（臨界帶僅 0.5%）。
+- 寫入條件：僅當本次 `^SPX` 與 `SPY` **兩個即時報價皆有效**（非 KV 回退）且比值落在 [9.8, 10.3] 時，才以 `save_kv_cache` 寫入；沒有其他寫入路徑。
+- 讀取：衍生時取 `get_kv_cache("macro_spx_spy_ratio")`（須有限且落在 [9.8, 10.3]），否則退回 10.0；主路徑與例外路徑皆適用。
+- 衍生值**只在記憶體使用，不寫回** `macro_spx`／`macro_spy_spot`，避免汙染離群閘門與下一次回退讀取。
+- 回傳資料旗標：`spx_is_derived`／`spy_spot_is_derived` 表示該現價是否由另一方換算而來；自癒路徑（edge 實算 SPY 現價）不算衍生，旗標為 False。
+
 ### 7.2 Finnhub 免費方案：呼叫效率
 
 Finnhub 免費方案有 60 次/分的全域上限，且部分端點為付費（`etfs_profile`、`company_eps_estimates` 實測 403）。下列資料皆為靜態或日更，採「記憶體 → SQLite kv → API」分層，避免重啟／藍綠部署與同日重複查詢白燒配額。實測：`symbol_lookup('SPY')` 的 `type` 為 `"ETP"`，`AAPL` 為 `"Common Stock"`。

@@ -2,6 +2,7 @@ from typing import Any, cast
 import asyncio
 import inspect
 import logging
+import math
 import re
 import time
 from market_analysis.sentiment.skew_taxonomy import (
@@ -42,6 +43,27 @@ def _cache_clock() -> float:
     return time.monotonic()
 
 
+# SPX/SPY 比值合理區間；區間外視為報價時點不一致，不採用
+_SPX_SPY_RATIO_MIN = 9.8
+_SPX_SPY_RATIO_MAX = 10.3
+
+
+def _resolve_spx_spy_ratio(kv_getter: Any) -> float:
+    """衍生缺失的 SPX/SPY 時使用的換算比值：最近一次實測值，無效則退回 10.0。"""
+    try:
+        cached = kv_getter("macro_spx_spy_ratio")
+        if cached is not None:
+            ratio = float(cached)
+            if (
+                math.isfinite(ratio)
+                and _SPX_SPY_RATIO_MIN <= ratio <= _SPX_SPY_RATIO_MAX
+            ):
+                return ratio
+    except (TypeError, ValueError):
+        pass
+    return 10.0
+
+
 async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     is_degraded = not is_memory_safe()
     cache_key = f"overview_{user_id}"
@@ -63,6 +85,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     from market_analysis.trading_orchestration import get_safety_payout_threshold
     from services.market_data_service import get_quote
 
+    spx_is_derived = False
+    spy_spot_is_derived = False
     try:
         results = await asyncio.gather(
             get_quote("^SPX"),
@@ -90,13 +114,25 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         spy_spot = _parse(results[4], "macro_spy_spot")
 
         # 數值 cross-check 與衍生：
-        # 若 SPX 抓取失敗但 SPY 現貨即時取得，使用 SPY * 10 衍生 SPX；反之亦然
+        # 一方缺失時以另一方換算；換算比值用最近一次實測值而非固定 10.0
+        # （實際約 10.03，固定 ×10 會讓 /market 的 SPY 緩衝偏差約 0.3%）。
+        # 衍生值只留在記憶體，不寫回 KV，避免汙染之後讀 macro_spx / macro_spy_spot 的地方。
+        def _live_ok(res: Any) -> bool:
+            return isinstance(res, dict) and res.get("c", 0) > 0
+
+        if _live_ok(results[0]) and _live_ok(results[4]):
+            live_ratio = float(cast(Any, results[0])["c"]) / float(
+                cast(Any, results[4])["c"]
+            )
+            if _SPX_SPY_RATIO_MIN <= live_ratio <= _SPX_SPY_RATIO_MAX:
+                asyncio.create_task(save_kv_cache("macro_spx_spy_ratio", live_ratio))
+
         if spx is None and spy_spot is not None and float(spy_spot) > 0:
-            spx = round(float(spy_spot) * 10.0, 2)
-            asyncio.create_task(save_kv_cache("macro_spx", spx))
+            spx = round(float(spy_spot) * _resolve_spx_spy_ratio(get_kv_cache), 2)
+            spx_is_derived = True
         elif spy_spot is None and spx is not None and float(spx) > 0:
-            spy_spot = round(float(spx) / 10.0, 2)
-            asyncio.create_task(save_kv_cache("macro_spy_spot", spy_spot))
+            spy_spot = round(float(spx) / _resolve_spx_spy_ratio(get_kv_cache), 2)
+            spy_spot_is_derived = True
 
     except Exception:
         spx = get_kv_cache("macro_spx")
@@ -104,10 +140,14 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         us10y = get_kv_cache("macro_us10y")
         wti = get_kv_cache("macro_wti")
         spy_spot = get_kv_cache("macro_spy_spot")
+        spx_is_derived = False
+        spy_spot_is_derived = False
         if spx is None and spy_spot is not None and float(spy_spot) > 0:
-            spx = round(float(spy_spot) * 10.0, 2)
+            spx = round(float(spy_spot) * _resolve_spx_spy_ratio(get_kv_cache), 2)
+            spx_is_derived = True
         elif spy_spot is None and spx is not None and float(spx) > 0:
-            spy_spot = round(float(spx) / 10.0, 2)
+            spy_spot = round(float(spx) / _resolve_spx_spy_ratio(get_kv_cache), 2)
+            spy_spot_is_derived = True
 
     # Normalize US10Y if needed
     if us10y is not None and float(us10y) > 10.0:
@@ -269,6 +309,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
                             raw_flip_val = calc_flip
                             if not spy_spot:
                                 spy_spot = spot_calc
+                                # edge 實算現價，不算由 SPX 換算的衍生值
+                                spy_spot_is_derived = False
                 except Exception:
                     pass
 
@@ -308,7 +350,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         and float(spy_spot) > 0
     ):
         spx_spy_ratio = float(spx) / float(spy_spot)
-        if 9.8 <= spx_spy_ratio <= 10.3:
+        if _SPX_SPY_RATIO_MIN <= spx_spy_ratio <= _SPX_SPY_RATIO_MAX:
             gamma_flip_line = round(float(spy_gamma_flip) * spx_spy_ratio, 2)
 
     # ── 大盤 Gamma Flip 合理性閘門（最終把關）──────────────────────────
@@ -436,6 +478,8 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     result_data: dict[str, Any] = {
         "spx": spx,
         "spy_spot": spy_spot,
+        "spx_is_derived": spx_is_derived,
+        "spy_spot_is_derived": spy_spot_is_derived,
         "spy_gamma_flip": spy_gamma_flip,
         "vix": vix,
         "us10y": us10y,
