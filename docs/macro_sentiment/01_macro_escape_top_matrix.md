@@ -35,7 +35,9 @@ $R_1$／$R_2$ 的錨定依 CME 慣例分兩種：
 - **(a) 前一月份無會議**：前月合約均價即進入會議月時的利率，$R_1 = 100.0 - P_{prior}$，再以下式反推 $R_2$。
 - **(b) 前一月份本身有會議、且次月無會議**：前月均價混合了會前與會後利率，不能當 $R_1$；改以次月合約均價作為會後利率 $R_2 = 100.0 - P_{post}$，反推 $R_1 = (N \cdot \bar{R} - d_{post} \cdot R_2) / d_{prior}$。例：2026-10-28 會議的前月 9 月有 9/16 會議，必須走 (b)；誤用 9 月合約會算出 +570% 加息。
 
-兩者皆無報價時，以 13 週美國國庫券利率（`^IRX`）動態推導之利率區間中位數作為 $R_1$ 錨點。注意 $R_1$ 取自期貨隱含均價而非 EFFR 實際值，與 CME 官網 FedWatch 可能有約 10pp 的落差。
+相鄰合約報價皆缺時，$R_1$ 預設錨為 NY Fed 公布的實際 EFFR（`markets.newyorkfed.org/api/rates/unsecured/effr/last/1.json`，`httpx` 逾時 10 秒）；`current_target` 同樣取自該回應的 `targetRateFrom`／`targetRateTo`（格式 `3.75%-4.00%`），抓不到則為空字串。不再以 13 週國庫券（`^IRX`）推算——其殖利率會偏離目標區間約 20bp，曾使 $R_1$ 高估一檔、誤判降息 2 碼+。相鄰合約與 EFFR **皆缺**時直接拋錯、不輸出 ZQ 結果，轉入備援路徑，不以任何常數猜 $R_1$。
+
+回傳另含 `effr`（可為 null）；當 EFFR 與合約反推的 $R_1$ 相差超過 10bp 時，記 warning 並附 `anchor_gap_bp`（$R_1 - \text{EFFR}$，bp，四捨五入到 0.1），機率算法不變。
 
 根據日曆加權平均等式：
 $$N \cdot \bar{R} = d_{prior} \cdot R_1 + d_{post} \cdot R_2$$

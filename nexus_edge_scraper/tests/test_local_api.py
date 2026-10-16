@@ -454,6 +454,7 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
         patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
         # 固定今天日期，避免真實日期越過會議日後測試失效。
         patch("local_api.macro._fedwatch_today", return_value=date(2026, 9, 16)),
@@ -515,6 +516,7 @@ def test_scrape_fedwatch_zq_anchors_on_post_month_when_prior_month_has_meeting()
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
         patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         patch("local_api.macro._fedwatch_today", return_value=date(2026, 10, 2)),
     ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
@@ -571,6 +573,7 @@ def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> Non
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
         patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
+        patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
         # 固定今天日期，避免真實日期越過會議日後測試失效。
         patch("local_api.macro._fedwatch_today", return_value=date(2026, 9, 16)),
