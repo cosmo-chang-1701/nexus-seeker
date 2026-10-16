@@ -336,6 +336,20 @@ async def _calculate_iv_term_structure(
         return None, None
 
 
+def _recent_iv_mean(
+    db_ivs: dict[str, float], window: int = 20, min_samples: int = 10
+) -> float | None:
+    """取最近 `window` 個日期的 DB 歷史 IV 算術平均；樣本不足 `min_samples` 回傳 None。
+
+    只吃 DB 歷史 IV（與 current_iv 同單位），嚴禁混入 HV。
+    """
+    recent_keys = sorted(db_ivs, key=lambda k: str(k), reverse=True)[:window]
+    values = [float(db_ivs[k]) for k in recent_keys if db_ivs[k] is not None]
+    if len(values) < min_samples:
+        return None
+    return sum(values) / len(values)
+
+
 async def fetch_and_calculate_iv_metrics(
     symbol: str,
     force_refresh: bool = False,
@@ -683,6 +697,12 @@ async def fetch_and_calculate_iv_metrics(
         except Exception as e:
             logger.error(f"讀取資料庫歷史 IV 失敗: {e}")
 
+        iv_hist_mean_20d: float | None = None
+        try:
+            iv_hist_mean_20d = _recent_iv_mean(db_ivs)
+        except Exception as e:
+            logger.debug(f"[{symbol}] 近 20 日歷史 IV 均值計算失敗: {e}")
+
         # 5. 取得 1y K-line history 做 HV 代理 (僅供 Expected Move fallback 使用，嚴禁混入 IV Rank)
         df_hist = await market_data_service.get_history_df(symbol, period="1y")
         if not df_hist.empty:
@@ -828,6 +848,7 @@ async def fetch_and_calculate_iv_metrics(
             hv_20=hv_20_val,
             straddle_expiry=straddle_expiry,
             straddle_dte=straddle_dte,
+            iv_hist_mean_20d=iv_hist_mean_20d,
             current_iv_expiry=current_iv_expiry,
             current_iv_dte=current_iv_dte,
             term_near_expiry=term_near_expiry,
