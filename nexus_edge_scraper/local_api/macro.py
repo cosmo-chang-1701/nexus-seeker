@@ -3,7 +3,9 @@
 from datetime import date
 from typing import Any, Optional
 import logging
+import math
 
+import httpx
 from bs4 import BeautifulSoup
 from fastapi import APIRouter
 from playwright.async_api import (
@@ -68,6 +70,29 @@ def _latest_common_observation(
         if obs_date in sub_by_date:
             return obs_date, value, sub_by_date[obs_date]
     return None
+
+
+_NYFED_EFFR_URL = "https://markets.newyorkfed.org/api/rates/unsecured/effr/last/1.json"
+
+
+def _fetch_effr() -> tuple[float, float, float] | None:
+    """抓 NY Fed 公布的 EFFR 與聯邦基金目標區間，回傳 (EFFR, 下限, 上限)，單位 %。
+
+    ZQ 備援路徑的會前利率 r1 需要一個可靠的錨；13 週國庫券殖利率會偏離目標區間
+    約 20bp，不能拿來推區間。任何錯誤、欄位缺漏或非有限值一律回 None，不拋例外。
+    """
+    try:
+        resp = httpx.get(_NYFED_EFFR_URL, timeout=10.0)
+        resp.raise_for_status()
+        row = resp.json()["refRates"][0]
+        effr = float(row["percentRate"])
+        low = float(row["targetRateFrom"])
+        high = float(row["targetRateTo"])
+    except Exception:
+        return None
+    if not all(math.isfinite(v) for v in (effr, low, high)):
+        return None
+    return effr, low, high
 
 
 def _fedwatch_today() -> date:
@@ -631,9 +656,16 @@ async def scrape_fedwatch() -> dict[str, Any]:
 
         latest_price = float(hist["Close"].iloc[-1])
 
-        # 動態獲取當前基準目標利率區間與中位數
-        r1 = 3.625
-        current_target = "3.50%-3.75%"
+        # 會前利率 r1 的預設錨 = NY Fed 實際 EFFR（相鄰合約可用時會被覆蓋）；
+        # 目標區間同樣取自 NY Fed，抓不到就留空，不以國庫券推算。
+        effr_info = _fetch_effr()
+        effr: float | None = None
+        r1: float | None = None
+        current_target = ""
+        if effr_info is not None:
+            effr, low_t, high_t = effr_info
+            r1 = effr
+            current_target = f"{low_t:.2f}%-{high_t:.2f}%"
 
         _, days_in_month = calendar.monthrange(next_meeting.year, next_meeting.month)
         d_prior = next_meeting.day
@@ -653,25 +685,17 @@ async def scrape_fedwatch() -> dict[str, Any]:
         elif (post_year, post_month) not in meeting_months:
             post_price = _latest_close(_zq_symbol(post_year, post_month))
 
-        try:
-            irx_hist = yf.Ticker("^IRX").history(period="5d")
-            if not irx_hist.empty:
-                irx_val = float(irx_hist["Close"].iloc[-1])
-                if irx_val > 0.0:
-                    b_idx = round((irx_val - 0.125) / 0.25)
-                    low_r = b_idx * 0.25
-                    high_r = low_r + 0.25
-                    r1 = (low_r + high_r) / 2.0
-                    current_target = f"{low_r:.2f}%-{high_r:.2f}%"
-        except Exception:
-            pass
-
         if post_price is not None:
             r2 = 100.0 - post_price
             r1 = (days_in_month * implied_avg - d_post * r2) / d_prior
         else:
             if prior_price is not None:
                 r1 = 100.0 - prior_price
+            if r1 is None:
+                # 相鄰合約與 EFFR 皆缺：寧可整段失敗轉備援，也不用常數猜 r1。
+                raise ValueError(
+                    "No r1 anchor: adjacent ZQ contracts and EFFR unavailable"
+                )
             # 以會議月均價依天數權重反推會後利率 R2
             r2 = (days_in_month * implied_avg - d_prior * r1) / d_post
         delta_r = r2 - r1
@@ -680,6 +704,14 @@ async def scrape_fedwatch() -> dict[str, Any]:
         # 與「下一階的部分機率」。舊版單一步階 clamp 只要 |delta_r| 跨過一整碼
         # 就會把維持機率硬壓成失真的 0.0（例如市場真實分佈是 20% 維持 / 50% 降1碼 /
         # 30% 降2碼，加權平均仍會超過一整碼，但維持機率明明不是 0%）。
+        anchor_gap_bp: float | None = None
+        if effr is not None and abs(r1 - effr) > 0.10:
+            anchor_gap_bp = round((r1 - effr) * 100.0, 1)
+            logger.warning(
+                f"FedWatch r1 from ZQ contracts ({r1:.3f}) deviates from EFFR "
+                f"({effr:.3f}) by {anchor_gap_bp}bp"
+            )
+
         steps = abs(delta_r) / 0.25
         floor_steps = int(steps)
         frac_pct = round((steps - floor_steps) * 100.0, 1)
@@ -742,7 +774,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
                 4,
             )
 
-        return {
+        result: dict[str, Any] = {
             "probability": prob,
             "meeting_date": next_meeting.strftime("%m/%d"),
             "current_target": current_target,
@@ -756,8 +788,12 @@ async def scrape_fedwatch() -> dict[str, Any]:
             "ladder_saturated": ladder_saturated,
             "decision": decision,
             "futures_price": latest_price,
+            "effr": effr,
             "source": "CME 30-Day Fed Funds Futures (ZQ)",
         }
+        if anchor_gap_bp is not None:
+            result["anchor_gap_bp"] = anchor_gap_bp
+        return result
 
     def _fetch_and_parse_excel() -> dict[str, Any]:
         url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
