@@ -99,7 +99,7 @@ def test_fetch_effr_parses_nyfed_payload() -> None:
 
 
 def test_fetch_effr_malformed_returns_none() -> None:
-    for payload in (
+    payloads: list[dict[str, Any]] = [
         {},
         {"refRates": []},
         {"refRates": [{"percentRate": 3.88}]},
@@ -113,7 +113,8 @@ def test_fetch_effr_malformed_returns_none() -> None:
                 }
             ]
         },
-    ):
+    ]
+    for payload in payloads:
         with patch("httpx.get", return_value=_mock_response(payload)):
             assert _fetch_effr() is None
 
