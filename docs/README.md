@@ -64,7 +64,7 @@ flowchart TB
         U03["個股與大盤 Gamma Flip 翻轉線估算<br/>(03_gamma_flip_estimation.md)"]
         U04["異常期權活動 (UOA) 權利金排序與進度正規化<br/>(04_uoa_notional_and_paced_ratio.md)"]
         U05["成交量分佈 (VP) 與 Volume-POC 磁吸模型<br/>(05_volume_profile_and_dp_poc.md)"]
-        U06["Gamma Squeeze 引擎與 SPEAR 進攻訊號<br/>(06_gamma_squeeze_engine_and_spear.md)"]
+        U06["已退役：Gamma Squeeze 引擎與 SPEAR 進攻訊號<br/>(06_gamma_squeeze_engine_and_spear.md)"]
     end
 
     subgraph Strategies_Layer["1. 交易策略與進出場體系 (strategies/)"]
@@ -150,7 +150,7 @@ flowchart TB
 | 08 | [`03_gamma_flip_estimation.md`](microstructure/03_gamma_flip_estimation.md) | 個股與大盤 Gamma Flip 翻轉線估算模型 | 六步零交叉點演算法, $\pm 30\%$ Bracket 雜訊過濾, Regime 方向一致性校驗 | `market_analysis/index_microstructure.py` |
 | 09 | [`04_uoa_notional_and_paced_ratio.md`](microstructure/04_uoa_notional_and_paced_ratio.md) | 異常期權活動 (UOA) 權利金排序與時段正規化 | 名目價值排序 (`trade_price * vol * 100`), 時段進度正規化 `paced_ratio`, SWEEP/BLOCK/CROSS | `market_analysis/uoa_detector.py` |
 | 10 | [`05_volume_profile_and_dp_poc.md`](microstructure/05_volume_profile_and_dp_poc.md) | 成交量分佈 (VP) 與 Volume-POC 磁吸模型 | 20 日 50-Bin 等寬分箱演算法, HVN/LVN 識別, 1% 共振磁吸底牆 | `market_analysis/volume_profile.py` |
-| 11 | [`06_gamma_squeeze_engine_and_spear.md`](microstructure/06_gamma_squeeze_engine_and_spear.md) | Gamma Squeeze 引擎與 SPEAR 進攻訊號體系 | 四階段硬性戰術門檻 (流動性/財報/OTM 權利金/IVR), SDDM 狀態機, Vanna 隱含對沖 | `market_analysis/gamma_squeeze_engine.py` |
+| 11 | [`06_gamma_squeeze_engine_and_spear.md`](microstructure/06_gamma_squeeze_engine_and_spear.md) | 已退役（2026-10-17）：Gamma Squeeze 引擎與 SPEAR 進攻訊號體系 | 退役紀錄：四項退役原因、取代方案（擠壓進場規格 10）、已移除檔案清單 | 已退役，無現行程式碼 |
 
 ---
 
