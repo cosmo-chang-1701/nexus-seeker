@@ -12,7 +12,7 @@
 
 * **只依賴 stdlib**。比照 ``market_analysis/sentiment/skew_taxonomy.py`` 的葉
   模組設計，本檔案不得 import ``dynamic_rollover`` / ``cogs`` / ``services``
-  任一者，才能同時被 ``dynamic_rollover/``、``gamma_squeeze_engine.py`` 與
+  任一者，才能同時被 ``dynamic_rollover/`` 與
   ``cogs/embed_builders/`` 匯入而不產生循環相依。
 * **共用的是演算法，不是常數值**。各呼叫站點仍各自獨立呼叫、各自持有自己的
   資料來源與降級行為，``dynamic_rollover/constants.py`` 明訂的「路由層

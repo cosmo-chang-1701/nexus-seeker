@@ -4,7 +4,6 @@
 進場顧問是獨立派發路徑，任何擋下都不得燒去重旗標。
 """
 
-import inspect
 import time
 import typing
 from datetime import datetime
@@ -17,7 +16,6 @@ import pytest
 import config
 from market_analysis import evaluation_recorder
 from market_analysis.dynamic_rollover.models import DynamicRegime
-from market_analysis.gamma_squeeze_engine import NexusGammaSqueezeEngine
 from market_analysis.intraday_pipeline import IntradayScanPipeline, entry_advisor
 from market_analysis.intraday_pipeline.entry_advisor import (
     EntryAdvice,
@@ -69,7 +67,7 @@ def _make_pipeline(radar: Optional[Dict[str, Any]] = None) -> Any:
     bot.queue_dm = AsyncMock()
     bot._latest_radar_data_cache = {"NVDA": radar or _RADAR}
     bot._latest_radar_cache_time = time.time()
-    return IntradayScanPipeline(bot, NexusGammaSqueezeEngine())
+    return IntradayScanPipeline(bot)
 
 
 class _Kv:
@@ -131,12 +129,89 @@ def test_scenario_literal_unchanged() -> None:
     assert set(args) == {"premium-harvest", "hard-hedge", "wait"}
 
 
-def test_advisor_dispatched_before_engine_enabled_continue() -> None:
-    """進場顧問不得掛在 engine_enabled 之後（預設 enable_analyst_agent=0 會到不了）。"""
-    src = inspect.getsource(IntradayScanPipeline._run_loop)
-    assert src.index("_dispatch_entry_advisor_alert") < src.index(
-        "if not engine_enabled or account_state is None"
-    )
+@pytest.mark.asyncio
+async def test_run_loop_heartbeat_then_advisor_per_ticker_without_quote_fetch() -> None:
+    """_run_loop 每檔標的先送心跳、再跑進場顧問；不依賴 enable_analyst_agent。
+
+    以行為取代原本的原始碼字串索引：驅動一輪迴圈，兩檔非 green 標的各自
+    先 `notify` 心跳、後 `_dispatch_entry_advisor_alert`，整輪結束只各 flush 一次，
+    且不再抓 VIX／SPY 報價。
+    """
+    from zoneinfo import ZoneInfo
+
+    pipeline = _make_pipeline()
+    pipeline.is_running = True
+    mock_now = datetime(2026, 6, 5, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    events: list[tuple[str, str]] = []
+
+    async def fake_evaluate(ticker: str) -> Any:
+        return _eval(alert_level="red", scenario="hard-hedge")
+
+    async def fake_notify(bot: Any, uid: int, channel: str, **kw: Any) -> None:
+        events.append(("heartbeat", str(kw["embed"].ticker)))
+
+    async def fake_advisor(uid: int, ticker: str, *a: Any, **k: Any) -> None:
+        events.append(("advisor", ticker))
+
+    async def fake_build_embed(watchlist_eval: Any, *a: Any, **k: Any) -> Any:
+        # 以「最近一次 evaluate 的標的」無法對應，改由 side-effect 計數推導標的
+        return SimpleNamespace(ticker=("AAPL", "MSFT")[len(events) // 2])
+
+    async def stop_sleep(secs: Any) -> None:
+        pipeline.is_running = False
+
+    user_ctx = SimpleNamespace(user_id=42, enable_analyst_agent=True)
+    flush_eval = AsyncMock()
+    flush_dispatch = AsyncMock()
+    quote = AsyncMock()
+    vix = AsyncMock()
+
+    with (
+        patch(
+            "market_analysis.intraday_pipeline.pipeline.is_market_open",
+            return_value=True,
+        ),
+        patch(
+            "market_analysis.intraday_pipeline.pipeline.datetime"
+        ) as mock_datetime_class,
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.get_all_user_ids", return_value=[42]),
+        patch("database.get_full_user_context", return_value=user_ctx),
+        patch("database.get_user_watchlist", return_value=[("AAPL", 1), ("MSFT", 1)]),
+        patch("database.get_user_notification_settings", return_value={}),
+        patch.object(pipeline, "evaluate_watchlist_symbol", fake_evaluate),
+        patch.object(pipeline, "_build_watchlist_heartbeat_embed", fake_build_embed),
+        patch.object(pipeline, "_dispatch_entry_advisor_alert", fake_advisor),
+        patch.object(
+            pipeline,
+            "_load_tactical_option_positions_by_user",
+            AsyncMock(return_value={}),
+        ),
+        patch.object(pipeline, "_compute_user_tactical_exposure", return_value=0.0),
+        patch("services.notification_dispatcher.notify", fake_notify),
+        patch("market_analysis.evaluation_recorder.flush_evaluations", flush_eval),
+        patch(
+            "services.notification_dispatch_recorder.flush_dispatch_records",
+            flush_dispatch,
+        ),
+        patch("services.market_data_service.get_quote", quote),
+        patch("services.market_data_service.get_vix_spot_strict", vix),
+        patch("asyncio.sleep", side_effect=stop_sleep),
+    ):
+        mock_datetime_class.now.return_value = mock_now
+        await pipeline._run_loop()
+
+    assert events == [
+        ("heartbeat", "AAPL"),
+        ("advisor", "AAPL"),
+        ("heartbeat", "MSFT"),
+        ("advisor", "MSFT"),
+    ]
+    flush_eval.assert_awaited_once()
+    flush_dispatch.assert_awaited_once()
+    quote.assert_not_awaited()
+    vix.assert_not_awaited()
 
 
 # ── 派發閘門 ─────────────────────────────────────────────────────
