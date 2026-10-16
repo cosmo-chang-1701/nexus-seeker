@@ -500,6 +500,26 @@ def _strikes_label(legs: list[dict]) -> str:
     return "+".join(f"${k:g}" for k in strikes)
 
 
+def apply_breached_level(
+    intent: str, option_type: str, action: str, strike: float, spot: float
+) -> tuple[str, bool]:
+    """STO 於錨點價被標為地板／天花板，但現價已穿越履約價 → 改寫為「失效」（純函式）。
+
+    錨點分類刻意不動（防止事後改寫價內外），這裡只依「當下」現價修正結論；
+    替換文字長度不超過原子句，避免擠爆 Discord embed 字數預算。
+    """
+    if "STO" not in action or spot <= 0:
+        return intent, False
+    if option_type.upper() == "PUT" and spot < strike:
+        if "強力構築下行支撐地板" in intent:
+            return intent.replace("強力構築下行支撐地板", "現價已跌破、地板失效"), True
+    elif option_type.upper() == "CALL" and spot > strike:
+        for claim in ("物理封頂鎖死上方天花板", "物理鎖死上方天花板"):
+            if claim in intent:
+                return intent.replace(claim, "現價已破、封頂失效"), True
+    return intent, False
+
+
 def annotate_spread_structures(entries: list[dict]) -> None:
     """把同到期日、同類型、成交量 1:1 對應的 BTO／STO 腿標記為價差組合（就地修改）。
 
@@ -583,10 +603,19 @@ def annotate_spread_structures(entries: list[dict]) -> None:
                 not is_call and bool(below) and not above
             )
             short_leg["spread_credit"] = credit
+            breached = bool(short_leg.get("level_breached"))
             if credit and is_call:
-                role_note = "賣方看跌上限（貸方價差，定義風險封頂）"
+                role_note = (
+                    "賣方上限已破（貸方價差，定義風險封頂）"
+                    if breached
+                    else "賣方看跌上限（貸方價差，定義風險封頂）"
+                )
             elif credit:
-                role_note = "賣方看守地板（貸方價差，定義風險承接）"
+                role_note = (
+                    "賣方地板已破（貸方價差，定義風險承接）"
+                    if breached
+                    else "賣方看守地板（貸方價差，定義風險承接）"
+                )
             elif is_call:
                 role_note = "代表價差獲利上限而非機構獨立封頂"
             elif above and not below:

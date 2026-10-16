@@ -12,6 +12,7 @@ from market_analysis.uoa_telemetry import (
     UOATradeInput,
     annotate_spread_structures,
     annotate_straddle_structures,
+    apply_breached_level,
     classify_uoa_trade,
 )
 from services.bounded_cache import BoundedCache
@@ -324,7 +325,14 @@ def _process_uoa_candidate_rows(
         result = classify_uoa_trade(
             trade_input, current_price=anchor_spot, delta=class_delta
         )
-        intent_text = result.intent
+        # 錨點價判為地板／天花板，但現價已穿越履約價 → 改寫為失效（錨點本身不動）
+        intent_text, level_breached = apply_breached_level(
+            result.intent,
+            result.option_type,
+            result.action,
+            result.strike_price,
+            spot_price,
+        )
         basis_note = ""
         if spot_price > 0 and abs(anchor_spot - spot_price) / spot_price > 0.001:
             basis_note = (
@@ -358,6 +366,7 @@ def _process_uoa_candidate_rows(
                 "action": result.action,
                 "intent": intent_text,
                 "classified_spot": anchor_spot,
+                "level_breached": level_breached,
                 # 價差標註改寫 intent 時據此保留判定基準註記
                 "moneyness_basis_note": basis_note,
                 "iv": round(iv_val, 4),
