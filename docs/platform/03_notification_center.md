@@ -45,7 +45,7 @@
 | | | `advisory_core_levels` | 顧問模式目標區位階告知（去重鍵 `advisory_exit_{uid}_{SYMBOL}_{EXIT_TIER}_{YYYYMMDD}`） |
 | 📡 盤中情報 | `INTEL` | `heartbeat_symbol_deep` | 30 分鐘個股深度戰場心跳（`IntradayScanPipeline`，含期權合約規劃） |
 | | | `telemetry_orders` | 待成交掛單遙測對齊 |
-| | | `alpha_market_signals` | DDP、廉價期權、Gamma Squeeze SPEAR |
+| | | `alpha_market_signals` | DDP、廉價期權（Gamma Squeeze SPEAR 已於 2026-10-17 退役） |
 | | | `alpha_option_scan` | NRO 期權掃描執行決策、PowerSqueeze、期權掃描卡 |
 | | | `alpha_price_volume_watch` | 個股 15 分鐘價量突破（自訂門檻） |
 | 🌐 全天候情報 | `INTEL` | `alpha_polymarket`、`alpha_wti_oil` | Polymarket 巨鯨與機率突變；WTI 原油（自訂門檻） |
@@ -53,7 +53,7 @@
 | | | `vtr_virtual_trades` | 虛擬交易室自動轉倉／平倉（紙上交易，不涉及真實部位） |
 | | | `system_lifecycle` | 機器人啟動／關閉廣播（**預設關閉**） |
 
-`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權／Gamma Squeeze、NRO 期權掃描與價量突破警報」），不再提自選雷達。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
+`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、NRO 期權掃描與價量突破警報」），不再提自選雷達。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
 
 #### 2.2.2 動態轉倉指令的頻道對照
 `database/notification_channels.py::resolve_rollover_channel()` 取代 `portfolio_monitor.py` 過去的 if/elif 鏈，優先序：

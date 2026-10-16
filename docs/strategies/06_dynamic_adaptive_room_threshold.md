@@ -10,7 +10,7 @@
 
 本模型改以「該標的實際要冒的下行風險」與「該標的單日波幅」共同推導門檻，讓 2.2:1 的盈虧比成為結構性保證，而非在特定價位上的巧合。
 
-**適用市場環境**：全域。三套進場鐵律（右側動能、左側均值回歸、做空破位）、六態 Regime 路由分類器、Gamma Squeeze SPEAR 磁吸目標價，以及分析中心的 GEX 空間欄位，全部共用同一條演算法。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫、各自持有輸入，路由層與進場確認層的職責邊界不因此被破壞。
+**適用市場環境**：全域。三套進場鐵律（右側動能、左側均值回歸、做空破位）、六態 Regime 路由分類器，以及分析中心的 GEX 空間欄位，全部共用同一條演算法。共用的是**演算法**而非常數值——各站點仍各自獨立呼叫、各自持有輸入，路由層與進場確認層的職責邊界不因此被破壞。
 
 ---
 
@@ -238,7 +238,6 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/left_side_entry.py`：左側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `stop_wall=` 餵入條件三；條件二刻意仍用 raw Put Wall——它量的是「距原始底牆多遠」的密著帶，餵重錨值會讓該語意失效）
 - `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：做空條件二／條件三（**刻意不**套用——做空的停損牆是現價上方的 Call Wall，由條件二的 `_scan_resistance_wall_above_spot()` 自行解析並以 `resistance_wall` 傳給條件三）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime III / IV / V 的空間與緩衝判定
-- `nexus_core/market_analysis/gamma_squeeze_engine.py`：SPEAR 磁吸目標價的向上空間要求
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：分析中心 GEX 上檔壓力／下檔支撐欄位的旗標渲染
 - `nexus_core/tests/unit/test_room_threshold.py`：三組公式與降級階梯的單元測試
 - `nexus_core/tests/unit/test_blue_sky_ceiling.py`：公式 D 的降級路徑、貼近前高判定、fail-open 例外與一致性測試

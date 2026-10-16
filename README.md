@@ -83,7 +83,7 @@ nexus-seeker/
 ├── nexus_core/              # 核心 Discord Bot 服務
 │   ├── bot.py               # Bot 進入點與健康監控
 │   ├── cogs/                # Discord 交互指令、背景排程與 UI 元件
-│   ├── market_analysis/     # 核心量化引擎 (Scan Pipeline, Gamma Squeeze, Translator)
+│   ├── market_analysis/     # 核心量化引擎 (Scan Pipeline, Translator)
 │   ├── services/            # 外部 API 封裝 (Calendar, LLM, Polymarket 等)
 │   ├── database/            # SQLite Schema 與 Migrations
 │   ├── risk_engine/         # SDDM 戰術路由與風險控制 (NRO)
