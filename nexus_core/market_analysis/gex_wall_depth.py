@@ -34,3 +34,31 @@ def thin_wall_threshold(adv_dollar_20d: Optional[float] = None) -> float:
     if math.isfinite(adv) and adv > 0:
         return max(GEX_THIN_WALL_THRESHOLD, GEX_WALL_MIN_DEPTH_RATIO * adv * 100.0)
     return GEX_THIN_WALL_THRESHOLD
+
+
+# CallWall 呈現層相對深度門檻：牆深度須 ≥ 此比例 × 整個 profile 最大正淨 GEX。
+# ADV 未注入時（日線取不到）絕對下限 500K 擋不住遠端薄牆（VOO 2026-10-16：
+# 790 深度 2.04e6 vs 710 的 3.04e8），故補一條與標的量級無關的相對規則。
+# 比照 edge `_GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO` 的相對門檻思路；僅用於 /x 呈現，
+# 不影響任何進場／出場閘門。PRE_CALIBRATION：1% 待前向資料驗證。
+CALLWALL_MIN_PEAK_RATIO: float = 0.01
+
+
+def is_wall_depth_sufficient(
+    depth: Optional[float],
+    profile_max_positive: Optional[float],
+    adv_dollar_20d: Optional[float] = None,
+) -> Optional[bool]:
+    """牆深度是否足以構成壓力；深度未知（履約價不在 profile）回 None＝不判定。"""
+    if depth is None:
+        return None
+    try:
+        d = float(depth)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(d):
+        return None
+    floor = thin_wall_threshold(adv_dollar_20d)
+    if profile_max_positive is not None and math.isfinite(profile_max_positive):
+        floor = max(floor, CALLWALL_MIN_PEAK_RATIO * profile_max_positive)
+    return d >= floor

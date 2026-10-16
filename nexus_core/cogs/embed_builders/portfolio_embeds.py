@@ -43,7 +43,10 @@ from market_analysis.sentiment.max_pain import (
     SETTLEMENT_GRAVITY_MAX_DTE,
     find_settlement_gravity,
 )
-from market_analysis.gex_wall_depth import thin_wall_threshold
+from market_analysis.gex_wall_depth import (
+    is_wall_depth_sufficient,
+    thin_wall_threshold,
+)
 from market_analysis.payout_coverage import payout_coverage, short_put_collateral
 from market_analysis.squeeze_entry.intraday_conflict import (
     assess_intraday_conflict,
@@ -318,12 +321,12 @@ def _format_uoa_field(uoa_data: list) -> str:
             if trade_type == "SWEEP":
                 if opt_type.upper() == "CALL":
                     intent = (
-                        f"🔥 {symbol_tag}機構在 {strike_tag} 主動買入 {vol_tag} 口"
+                        f"🔥 {symbol_tag}在 {strike_tag} 主動買入 {vol_tag} 口"
                         f" CALL (OI={oi_tag})，Gamma 逼空火力集中"
                     )
                 else:
                     intent = (
-                        f"⚠️ {symbol_tag}機構在 {strike_tag} 急買 {vol_tag} 口"
+                        f"⚠️ {symbol_tag}在 {strike_tag} 急買 {vol_tag} 口"
                         f" PUT (OI={oi_tag})，恐慌性避險避雷"
                     )
             else:
@@ -1951,6 +1954,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     put_too_tight = False
                     # PutWall 為助跌區或紙牆（淨 GEX 不構成支撐）。
                     put_wall_weak = False
+                    _put_kind_outer = ""
                     alt_stop_for_rr = 0.0
                     alt_anchor_for_rr = 0.0
                     upside_room_pct: Optional[float] = None
@@ -2009,6 +2013,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         else:
                             put_wall_kind = ""
                         put_wall_weak = bool(put_wall_kind)
+                        _put_kind_outer = put_wall_kind
                         if _pw_net_known is not None:
                             _put_wall_weak_outer = put_wall_weak
                         # PutWall 落在淨 GEX 助跌區時，供下方結構停損並列「以淨
@@ -2315,27 +2320,70 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         _to_float(gex_callwall, 0.0) if has_callwall else 0.0
                     )
 
+                    # 面板採用的 CallWall（edge 給的或重錨得到的）都須通過深度驗證：
+                    # 遠端極薄的正 GEX 履約價（VOO 790）不是壓力。履約價不在 profile
+                    # 時深度未知，不判無效。僅呈現層，不動 _scan_resistance_wall_above_spot。
+                    _cw_peak_pos = max(
+                        (v for v in _prof_by_strike.values() if v > 0), default=None
+                    )
+                    _cw_adv = gex_data.get("adv_dollar_20d")
+
+                    def _cw_depth_ok(_k: float) -> bool:
+                        _d = _prof_by_strike.get(float(_k))
+                        # 淨 GEX ≤ 0 的 edge 牆是另一類問題（edge 以 Call 端 Gamma
+                        # 選牆、非「薄正牆」），維持既有呈現，本驗證只攔薄正牆。
+                        if _d is not None and _d <= 0:
+                            return True
+                        return (
+                            is_wall_depth_sufficient(_d, _cw_peak_pos, _cw_adv)
+                            is not False
+                        )
+
+                    _cw_edge_thin = False  # edge 牆在現價之上卻深度不足
+                    _cw_all_invalid = False
+                    _cw_rejected = 0.0
                     if (
                         effective_c_val > 0
                         and isinstance(gex_data, dict)
                         and isinstance(gex_data.get("gex_profile"), dict)
                     ):
+                        _cw_edge_above = (
+                            has_callwall
+                            and call_wall_float > effective_c_val
+                            and not math.isclose(
+                                call_wall_float, effective_c_val, abs_tol=1e-4
+                            )
+                        )
+                        _cw_edge_thin = _cw_edge_above and not _cw_depth_ok(
+                            call_wall_float
+                        )
                         if (
                             not has_callwall
                             or call_wall_float <= effective_c_val
                             or math.isclose(
                                 call_wall_float, effective_c_val, abs_tol=1e-4
                             )
+                            or _cw_edge_thin
                         ):
                             dyn_res, _ = _scan_resistance_wall_above_spot(
                                 symbol, gex_data, effective_c_val
                             )
-                            if dyn_res > 0:
+                            if dyn_res > 0 and _cw_depth_ok(dyn_res):
                                 call_wall_float = dyn_res
                                 has_callwall = True
                                 call_reanchored = True
+                                _cw_edge_thin = False
+                            else:
+                                if dyn_res > 0:
+                                    _cw_rejected = dyn_res
+                                _cw_all_invalid = _cw_edge_thin or _cw_rejected > 0
+                                if not has_callwall and _cw_rejected > 0:
+                                    # edge 無牆、重錨結果被拒：仍走真空區塊
+                                    has_callwall = True
+                                    call_wall_float = _cw_rejected
+                                    _cw_all_invalid = True
 
-                    call_vacuum = (
+                    call_vacuum = _cw_all_invalid or (
                         has_callwall
                         and effective_c_val > 0
                         and call_wall_float < effective_c_val
@@ -2348,7 +2396,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         # 已被突破，不再是壓力；照印舊牆加「數據異常」只會誤導。
                         call_block_items = [
                             "CallWall: -- 上方無正 Gamma 牆（負 Gamma 真空，助漲助跌）",
-                            f"原 CallWall ${call_wall_float:.2f} 已被突破，不再構成壓力",
+                            (
+                                f"原 CallWall ${call_wall_float:.2f} 深度不足，不構成壓力"
+                                if _cw_edge_thin
+                                else f"原 CallWall ${call_wall_float:.2f} 已被突破，不再構成壓力"
+                            )
+                            + (
+                                f"（${_cw_rejected:g} 深度不足已略過）"
+                                if _cw_rejected > 0 and not _cw_edge_thin
+                                else ""
+                            ),
                         ]
                     elif has_callwall and effective_c_val > 0:
                         call_wall_depth = _safe_gex(call_wall_float)
@@ -2563,7 +2620,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                     + "｜".join(rr_parts)
                                     + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
                                 )
-                        _append_tree_block(gex_lines, "🛡️ 下檔支撐", put_block_items)
+                        _append_tree_block(
+                            gex_lines,
+                            "⚠️ 下檔助跌"
+                            if _put_kind_outer == "助跌區"
+                            else "🛡️ 下檔支撐",
+                            put_block_items,
+                        )
                     if call_block_items is not None:
                         _append_tree_block(gex_lines, "🚧 上檔壓力", call_block_items)
 
