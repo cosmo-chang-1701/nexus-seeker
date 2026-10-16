@@ -823,15 +823,29 @@ def build_radar_scan_embed(
                 ):
                     is_magnetic = True
 
+            # 負 Gamma 時做市商順勢追殺，Max Pain 磁吸不成立；須在標籤前判定
+            net_gex = 0.0
+            if "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
+                net_gex = _safe_float(r["gex_profile_data"].get("net_gex"))
+            elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
+                net_gex = _safe_float(r["gex_metrics"].get("net_gex"))
+            is_neg_gamma = net_gex < 0 or (
+                put_wall > 0 and price_val > 0 and price_val < put_wall
+            )
+
             # 判定狀態標籤 (透過 InsightsEngine 核心風控鐵律)
             status_label = ""
             if is_magnetic:
                 status_label = "[🧲 共振磁吸]"
             elif max_pain_strike > 0:
-                if dist_pct < -10.0:
+                if is_neg_gamma and dist_pct <= -5.0:
+                    status_label = "負Gamma超跌 ⚠️"
+                elif is_neg_gamma and dist_pct < 0.0:
+                    status_label = "負Gamma ⚠️"
+                elif dist_pct < -10.0:
                     status_label = "超跌磁吸 🚀"
                 elif -10.0 <= dist_pct <= -5.0:
-                    status_label = "超跌磁吸 🚀" if sym == "AMD" else "磁吸回升"
+                    status_label = "磁吸回升"
                 elif -5.0 < dist_pct < 0.0:
                     status_label = "磁吸回升"
                 elif 0.0 <= dist_pct <= 15.0:
@@ -871,16 +885,8 @@ def build_radar_scan_embed(
                 term_structure = float(val) if val is not None else 1.0
 
             # 判斷 has_positive_gamma_support:
-            net_gex = 0.0
-            if "gex_profile_data" in r and isinstance(r["gex_profile_data"], dict):
-                net_gex = _safe_float(r["gex_profile_data"].get("net_gex"))
-            elif "gex_metrics" in r and isinstance(r["gex_metrics"], dict):
-                net_gex = _safe_float(r["gex_metrics"].get("net_gex"))
             has_positive_gamma_support = net_gex > 10_000_000
             sqz_mom_val = _safe_float((r.get("psq_result") or {}).get("momentum", 0.0))
-            is_neg_gamma = net_gex < 0 or (
-                put_wall > 0 and price_val > 0 and price_val < put_wall
-            )
 
             vol_pcr = (
                 _safe_float(r.get("volume_pcr"))
@@ -1586,6 +1592,8 @@ def build_radar_scan_embed(
                     tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，負 Gamma Delta 拋售風險，嚴守 ${anti_washout_stop:.2f} (15分K收盤)"
                 else:
                     tactical_adv = f"🔴 跌破底牆 ${put_wall:.1f}，已破防守位，負 Gamma Delta 拋售風險"
+            elif dist_pct <= -5.0 and is_neg_gamma:
+                tactical_adv = "🔴 負 Gamma，痛點磁吸不成立，勿抄底"
             elif dist_pct <= -5.0:
                 tactical_adv = f"🟢 超跌磁吸，預期向 ${max_pain_strike:.1f} 收斂"
             elif dist_pct >= 10.0:
@@ -1995,6 +2003,9 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         gex_suffix = ""
 
     flip_buf = _spy_flip_buffer_pct(macro_data, gex_is_expired)
+    # SPY 現價由 SPX÷10 換算時為估算值，百分比前加 ≈（缺鍵視為 False）
+    approx = "≈" if macro_data.get("spy_spot_is_derived") is True else ""
+    spy_flip_px = _opt_float(macro_data.get("spy_gamma_flip")) or 0.0
     gamma_state: str  # CRITICAL／NEGATIVE／KNIFE_EDGE／NORMAL
     if macro_data.get("short_gamma_critical", False):
         gamma_state = "CRITICAL"
@@ -2003,12 +2014,12 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         gamma_state = "NEGATIVE"
         unmet = _gamma_unmet_reasons(macro_data)
         short_gamma_desc = (
-            f"🟡 負 Gamma 區（低於 Flip {flip_buf:+.2f}%），"
+            f"🟡 負 Gamma 區（低於 Flip {approx}{flip_buf:+.2f}%），"
             f"踩踏條件未全成立（{unmet or '未達危機門檻'}），網格維持"
         )
     elif flip_buf is not None and flip_buf < _FLIP_KNIFE_EDGE_PCT:
         gamma_state = "KNIFE_EDGE"
-        short_gamma_desc = f"🟡 臨界（緩衝 {flip_buf:+.2f}%），盤中轉負即踩踏"
+        short_gamma_desc = f"🟡 臨界（緩衝 {approx}{flip_buf:+.2f}%），盤中轉負即踩踏"
     else:
         gamma_state = "NORMAL"
         short_gamma_desc = "🟢 NORMAL (網格步長正常)"
@@ -2185,7 +2196,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     flip_val_str = (
         f"\u001b[1;35m{float(gamma_flip_line):,.2f}\u001b[0m{gex_suffix}"
         + (
-            f" (SPY 緩衝 {flip_buf:+.2f}%)"
+            f" (SPY Flip ${spy_flip_px:,.2f}，緩衝 {approx}{flip_buf:+.2f}%)"
             if flip_buf is not None and not _spy_ratio_suspect(macro_data)
             else ""
         )

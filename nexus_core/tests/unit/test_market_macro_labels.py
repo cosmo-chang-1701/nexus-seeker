@@ -70,7 +70,7 @@ def test_flip_buffer_negative_shows_negative_gamma_zone() -> None:
     text = _render(spy_spot=99.7, spy_gamma_flip=100.0)
     assert "負 Gamma 區（低於 Flip -0.30%）" in text
     assert "NORMAL (網格步長正常)" not in text
-    assert "(SPY 緩衝 -0.30%)" in text
+    assert "(SPY Flip $100.00，緩衝 -0.30%)" in text
 
 
 def test_flip_buffer_knife_edge() -> None:
@@ -83,15 +83,15 @@ def test_flip_buffer_comfortable_stays_normal() -> None:
     text = _render(spy_spot=102.0, spy_gamma_flip=100.0)
     assert "NORMAL (網格步長正常)" in text
     assert "臨界" not in text
-    assert "(SPY 緩衝 +2.00%)" in text
+    assert "(SPY Flip $100.00，緩衝 +2.00%)" in text
 
 
 def test_flip_buffer_hidden_when_expired_or_missing() -> None:
     expired = _render(spy_spot=99.0, spy_gamma_flip=100.0, gex_is_expired=True)
-    assert "SPY 緩衝" not in expired
+    assert "SPY Flip" not in expired
     assert "負 Gamma 區" not in expired
     missing = _render(spy_spot=None, spy_gamma_flip=100.0)
-    assert "SPY 緩衝" not in missing
+    assert "SPY Flip" not in missing
 
 
 def test_critical_keeps_existing_label() -> None:
@@ -222,9 +222,9 @@ def test_complacency_line_is_last_tree_node() -> None:
 def test_spy_buffer_suffix_hidden_when_ratio_out_of_range() -> None:
     # SPX 5150 / SPY 100 = 51.5：SPY 報價不可信
     text = _render(spx=5150.0, spy_spot=100.07, spy_gamma_flip=100.0)
-    assert "SPY 緩衝" not in text
+    assert "SPY Flip" not in text
     ok = _render(spx=1001.0, spy_spot=100.07, spy_gamma_flip=100.0)
-    assert "(SPY 緩衝 +0.07%)" in ok
+    assert "(SPY Flip $100.00，緩衝 +0.07%)" in ok
 
 
 def test_border_warning_for_negative_and_knife_edge_only() -> None:
