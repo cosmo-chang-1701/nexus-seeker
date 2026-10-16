@@ -265,6 +265,13 @@ def clear_quote_cache() -> None:
     logger.info("Clarified quote cache")
 
 
+def invalidate_quote_cache(symbol: str) -> None:
+    """只移除單一標的的報價快取 (與 get_quote 相同的 ticker 清洗)，不影響全站其他標的。"""
+    from services.market_data_service._core import _sanitize_ticker
+
+    _quote_cache.pop(_sanitize_ticker(symbol), None)
+
+
 def clear_profile_cache() -> None:
     _profile_cache.clear()
     logger.info("Clarified profile cache")

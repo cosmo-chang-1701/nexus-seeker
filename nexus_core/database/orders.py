@@ -86,8 +86,13 @@ def update_active_order_price(
     new_price: float | None,
     new_quantity: float | None = None,
     new_side: str | None = None,
+    new_stop_price: float | None = None,
 ) -> bool:
-    """更新委託單價格 (包含 limit_price, stop_price, trailing_value 等) 與可選的數量/方向"""
+    """更新委託單價格 (包含 limit_price, stop_price, trailing_value 等) 與可選的數量/方向
+
+    `new_stop_price` 僅對 STOP_LIMIT 生效：停損腿改寫為此值，保留與限價腿的價差；
+    未提供時 STOP_LIMIT 的兩腿都寫入 `new_price` (舊行為)。STOP 單仍使用 `new_price`。
+    """
     side = new_side.upper() if new_side is not None else None
 
     # 先組出單一語句與參數，再走寫入佇列。改寫前每個分支各自 cursor.execute +
@@ -96,14 +101,24 @@ def update_active_order_price(
     values: list[Any] = []
 
     if new_price is not None:
-        set_clauses.extend(
-            [
-                "limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END",
-                "stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END",
-                "trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END",
-            ]
-        )
-        values.extend([new_price, new_price, new_price])
+        if new_stop_price is None:
+            set_clauses.extend(
+                [
+                    "limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END",
+                    "stop_price = CASE WHEN order_type IN ('STOP', 'STOP_LIMIT') THEN ? ELSE stop_price END",
+                    "trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END",
+                ]
+            )
+            values.extend([new_price, new_price, new_price])
+        else:
+            set_clauses.extend(
+                [
+                    "limit_price = CASE WHEN order_type IN ('LIMIT', 'STOP_LIMIT') THEN ? ELSE limit_price END",
+                    "stop_price = CASE WHEN order_type = 'STOP_LIMIT' THEN ? WHEN order_type = 'STOP' THEN ? ELSE stop_price END",
+                    "trailing_value = CASE WHEN order_type IN ('TRAILING_STOP_USD', 'TRAILING_STOP_PCT') THEN ? ELSE trailing_value END",
+                ]
+            )
+            values.extend([new_price, new_stop_price, new_price, new_price])
 
     if new_quantity is not None:
         set_clauses.append("quantity = ?")

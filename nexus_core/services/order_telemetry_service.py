@@ -8,43 +8,81 @@ between DynamicOrderModal.on_submit() and OrderUICog.add_order().
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, TypeGuard
 
 from market_analysis.sentiment.skew_taxonomy import (
     SKEW_NEUTRAL_PERCENTILE,
     ensure_percentile_pct,
 )
+from market_time import is_market_open
 
 logger = logging.getLogger(__name__)
 
+# 單次快照最多容納的委託單數 (Embed 已會分頁，此上限只為保護外部 API 配額與回應時間)。
+MAX_ALIGNMENT_ITEMS = 20
 
-async def fetch_cache_and_live_price(symbol: str) -> tuple[float, float]:
-    """Fetch one cached snapshot and one forced-refresh live snapshot for drift checking."""
+
+def _is_number(value: Any) -> TypeGuard[float]:
+    """數值判斷 (排除 bool)；對 MagicMock 等非數值物件回傳 False。"""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+async def fetch_cache_and_live_price(
+    symbol: str,
+) -> tuple[float, float, float | None]:
+    """回傳 `(cache_price, live_price, prev_close)`。
+
+    - cache_price：目前快取中的報價 (供「快取 vs 即時」漂移檢查)。
+    - live_price：只作廢該標的的快取後重新呼叫 `get_quote`，沿用其優先序
+      (Alpaca 串流分鐘價 → Finnhub → yfinance 後備)；不再以日線收盤覆蓋，
+      也不再清空全站報價快取。
+    - prev_close：報價的 `pc` (前一個正規盤收盤)，缺值時為 None。
+    """
     from services import market_data_service
 
     cache_price = 0.0
     live_price = 0.0
+    prev_close: float | None = None
 
     cached_quote = await market_data_service.get_quote(symbol)
     if cached_quote:
         cache_price = float(cached_quote.get("c") or 0.0)
 
-    market_data_service.clear_quote_cache()
+    market_data_service.invalidate_quote_cache(symbol)
     fresh_quote = await market_data_service.get_quote(symbol)
     if fresh_quote:
         live_price = float(fresh_quote.get("c") or 0.0)
-
-    yfinance_quote = await market_data_service.get_yfinance_quote(symbol)
-    yfinance_price = float(yfinance_quote.get("c") or 0.0) if yfinance_quote else 0.0
-    if yfinance_price > 0.0:
-        live_price = yfinance_price
+        pc_raw = fresh_quote.get("pc")
+        if _is_number(pc_raw) and float(pc_raw) > 0.0:
+            prev_close = float(pc_raw)
 
     if live_price <= 0.0:
         hist_df = await market_data_service.get_history_df(symbol, period="2d")
         if not hist_df.empty:
             live_price = float(hist_df["Close"].iloc[-1])
 
-    return cache_price, live_price
+    return cache_price, live_price, prev_close
+
+
+def _resolve_hist_iv(iv_metrics: Any, iv: float) -> float:
+    """歷史 IV 基準：僅在 LIVE_IV 且未套用事件加載、且 20 日均值為正數時採用。
+
+    HV_PROXY 的「IV」其實是已實現波動率 (禁止與 IV 混比)，STORED_IV／HV_PROXY 遇事件時
+    current_iv 會被乘 1.4；兩者拿來和基準比較都會誤觸發 vol-spike／vol-crush，
+    故其餘情況一律回傳 `iv` 本身 (中性)。
+    """
+    if iv_metrics is not None:
+        source = getattr(iv_metrics, "iv_source", None)
+        loaded = getattr(iv_metrics, "event_loading_applied", None)
+        baseline = getattr(iv_metrics, "iv_hist_mean_20d", None)
+        if (
+            source == "LIVE_IV"
+            and loaded is not True
+            and _is_number(baseline)
+            and float(baseline) > 0.0
+        ):
+            return float(baseline)
+    return iv
 
 
 def resolve_holding_type_and_rows(
@@ -134,7 +172,7 @@ async def resolve_telemetry_pricing(
 
     # 2. Resolve IV metrics
     iv = 0.35
-    hist_iv = 0.30
+    hist_iv = iv
     try:
         iv_metrics = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
         if (
@@ -143,7 +181,7 @@ async def resolve_telemetry_pricing(
             and iv_metrics.current_iv > 0
         ):
             iv = iv_metrics.current_iv
-            hist_iv = iv / 1.1
+            hist_iv = _resolve_hist_iv(iv_metrics, iv)
     except Exception as e:
         logger.warning(f"Error fetching IV metrics for {symbol}: {e}")
 
@@ -217,140 +255,92 @@ async def apply_telemetry_to_orders(
     suggestions: dict[int, tuple[float, int]],
     holding_type: str,
     holding_map: dict[str, dict],
-) -> tuple[int, list[str]]:
+) -> tuple[int, list[dict[str, Any]]]:
     """Core loop for the one-click telemetry apply button.
 
-    Extracted from ApplyTelemetryView.apply_telemetry_button().
+    只處理 `suggestions` 內的委託單 (即使用者在快照中看到的那些)；不在其中的委託單
+    一律不動，也不會重新抓取任何市場資料。移動停損不適用價格對齊；STOP_LIMIT 的
+    停損腿平移與限價腿相同的差額，保留原本的停損／限價價差。
 
     Returns:
-        (updated_count, detail_lines)
+        (updated_count, details)：details 為每筆實際更新的委託單一個 dict
+        (order_id, symbol, order_type, old_price, new_price, old_qty, new_qty,
+        old_stop, new_stop, is_size_down)，呈現交由 embed builder。
     """
-    from market_analysis.telemetry_pricing_engine import (
-        DataContaminationException,
-        generate_alignment_decision,
-    )
-    from database.cache import get_kv_cache
     from database.orders import update_active_order_price
 
     updated_count = 0
-    details: list[str] = []
-    # 只有在需要後備重算時才抓取 (大多數情況使用記憶體或快取中的建議)
-    macro_event_dates: set[str] | None = None
+    details: list[dict[str, Any]] = []
 
     for order in orders:
         order_id = int(order["id"])
-        symbol = order["symbol"]
-        current_price = (
-            order["limit_price"]
-            if order["limit_price"] > 0
-            else (
-                order["stop_price"]
-                if order["stop_price"] > 0
-                else order["trailing_value"]
-            )
-        )
+        if order_id not in suggestions:
+            continue
+
+        order_type = str(order.get("order_type") or "").upper()
+        # 移動停損的 trailing_value 不是掛單價格，不適用價格對齊
+        if order_type in ("TRAILING_STOP_USD", "TRAILING_STOP_PCT"):
+            continue
+
+        symbol = str(order["symbol"]).upper()
+        limit_p = float(order.get("limit_price") or 0.0)
+        stop_p = float(order.get("stop_price") or 0.0)
+        current_price = limit_p if limit_p > 0.0 else stop_p
+        if current_price <= 0.0:
+            continue
+
         original_qty = max(1, int(round(float(order.get("quantity") or 1.0))))
 
-        optimal_price = None
-        optimal_qty = None
+        optimal_price, optimal_qty_raw = suggestions[order_id]
+        optimal_price = float(optimal_price)
+        optimal_qty = int(optimal_qty_raw)
+        if optimal_price <= 0.0 or optimal_qty <= 0:
+            continue
+        logger.info(
+            f"一鍵套用：使用快照遙測建議 (order_id={order_id}, symbol={symbol}): "
+            f"price={optimal_price}, qty={optimal_qty}"
+        )
 
-        # 1. 優先使用 View 記憶體中攜帶的即時對齊建議價格
-        if order_id in suggestions:
-            optimal_price, optimal_qty = suggestions[order_id]
-            logger.info(
-                f"一鍵套用：使用內存遙測建議 (order_id={order_id}, symbol={symbol}): "
-                f"price={optimal_price}, qty={optimal_qty}"
+        if abs(optimal_price - current_price) < 0.01 and optimal_qty == original_qty:
+            continue
+
+        new_stop: float | None = None
+        old_stop: float | None = None
+        if order_type == "STOP_LIMIT":
+            old_stop = stop_p if stop_p > 0.0 else None
+            if limit_p > 0.0 and stop_p > 0.0:
+                new_stop = round(stop_p + (optimal_price - limit_p), 2)
+            elif old_stop is not None:
+                # 只有停損腿有價：資料庫仍會把新價同時寫入兩腿 (舊行為)
+                new_stop = optimal_price
+
+        if order_type == "STOP_LIMIT" and limit_p > 0.0 and stop_p > 0.0:
+            await asyncio.to_thread(
+                update_active_order_price,
+                order["id"],
+                optimal_price,
+                optimal_qty,
+                new_stop_price=new_stop,
             )
         else:
-            # 2. 次之使用資料庫 kv_cache 中快取的對齊建議 (10 分鐘內有效)
-            key = f"telemetry:alignment_decision:{user_id}:{symbol.upper()}:{order_id}"
-            cached_data = get_kv_cache(key)
-            if cached_data and isinstance(cached_data, dict):
-                ts_str = cached_data.get("ts")
-                is_fresh = False
-                if ts_str:
-                    try:
-                        ts_dt = datetime.fromisoformat(ts_str)
-                        if (datetime.utcnow() - ts_dt).total_seconds() < 600:
-                            is_fresh = True
-                    except Exception:
-                        pass
-                if is_fresh:
-                    optimal_price = cached_data.get("suggested_price")
-                    optimal_qty = cached_data.get("suggested_qty")
-                    logger.info(
-                        f"一鍵套用：使用快取遙測建議 (order_id={order_id}, symbol={symbol}): "
-                        f"price={optimal_price}, qty={optimal_qty}"
-                    )
-
-        # 3. 若以上皆無，以即時市場資料重新計算 (與 /telemetry_alert 同一份輸入)
-        if optimal_price is None or optimal_qty is None:
-            # 移動停損的 trailing_value 不是掛單價格，不適用價格對齊
-            # (/telemetry_alert 同樣排除)；沒有建議就不動它。
-            if str(order.get("order_type") or "").upper() in (
-                "TRAILING_STOP_USD",
-                "TRAILING_STOP_PCT",
-            ):
-                continue
-
-            cache_price, live_price = await fetch_cache_and_live_price(symbol)
-            if live_price <= 0.0:
-                continue
-
-            holding_row = holding_map.get(symbol.upper(), {})
-            holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
-
-            if macro_event_dates is None:
-                macro_event_dates = await collect_macro_event_dates()
-            inputs = await _fetch_alignment_market_inputs(
-                symbol.upper(), macro_event_dates
-            )
-
-            try:
-                decision = await generate_alignment_decision(
-                    user_id=user_id,
-                    order_id=order_id,
-                    symbol=symbol,
-                    current_order_price=float(current_price),
-                    spot_price=float(live_price),
-                    original_qty=original_qty,
-                    prev_close=float(
-                        cache_price if cache_price > 0.0 else current_price
-                    ),
-                    cache_price=cache_price,
-                    live_price=live_price,
-                    order_side=str(order.get("side") or "BUY"),
-                    holding_type=holding_type,
-                    holding_shares=holding_shares,
-                    macro_event_dates=set(macro_event_dates),
-                    **inputs["decision_kwargs"],
-                )
-            except DataContaminationException:
-                continue
-
-            if decision is None:
-                continue
-
-            optimal_price = float(decision.suggested_price)
-            optimal_qty = int(decision.suggested_qty)
-            logger.info(
-                f"一鍵套用：以即時資料重新計算建議 (order_id={order_id}, symbol={symbol}): "
-                f"price={optimal_price}, qty={optimal_qty}"
-            )
-
-        if abs(optimal_price - current_price) >= 0.01 or optimal_qty != original_qty:
             await asyncio.to_thread(
-                update_active_order_price, order["id"], optimal_price, int(optimal_qty)
+                update_active_order_price, order["id"], optimal_price, optimal_qty
             )
-            updated_count += 1
-            qty_change_msg = ""
-            if optimal_qty < original_qty:
-                qty_change_msg = f" (數量自 {original_qty} 調降至 {int(optimal_qty)} 股 [⚠️ 尾端風險防禦])"
-            details.append(
-                f"• **委託單 ID `{order['id']}` ({symbol})**:\n"
-                f"  - 原有價格: `${current_price:.2f}`\n"
-                f"  - 調整後安全建議價: `${optimal_price:.2f}`{qty_change_msg}\n"
-            )
+        updated_count += 1
+        details.append(
+            {
+                "order_id": order_id,
+                "symbol": symbol,
+                "order_type": order_type,
+                "old_price": float(current_price),
+                "new_price": optimal_price,
+                "old_qty": original_qty,
+                "new_qty": optimal_qty,
+                "old_stop": old_stop,
+                "new_stop": new_stop,
+                "is_size_down": optimal_qty < original_qty,
+            }
+        )
 
     return updated_count, details
 
@@ -376,37 +366,49 @@ async def collect_macro_event_dates(days: int = 14) -> set[str]:
     return dates
 
 
+def _gather_value(result: Any, label: str, symbol: str) -> Any:
+    """`gather(return_exceptions=True)` 的結果：例外視為該項資料缺失 (None)。"""
+    if isinstance(result, BaseException):
+        logger.warning(f"[{symbol}] 對齊輸入 {label} 取得失敗，視為缺值: {result}")
+        return None
+    return result
+
+
 async def _fetch_alignment_market_inputs(
     symbol: str, macro_event_dates: set[str]
 ) -> dict[str, Any]:
     """抓齊一檔標的的即時市場資料，組成 `generate_alignment_decision` 的參數。
 
-    `/telemetry_alert` 與一鍵套用的後備重算共用，確保兩者用同一份真實資料
-    計算 (舊版後備路徑使用固定假值：IV 0.55、IV Rank 0.50、Max Pain 100、
-    Skew 98)。財報日會被加入 `macro_event_dates` (就地修改)。
+    任何單一輸入拋出例外都只視為該項缺值，不會讓整個指令失敗。財報日會被加入
+    `macro_event_dates` (就地修改)。
 
     回傳 `{"decision_kwargs": {...}, "iv_metrics", "skew_metrics",
-    "max_pain_price"}`；原始物件供呼叫端渲染 embed 使用。
+    "max_pain_price", "put_wall", "put_wall_is_stale"}`；原始物件供呼叫端渲染
+    embed 使用。`put_wall` 是真實 GEX Put Wall (未知為 None)，與 Max Pain 是不同的量。
     """
+    from market_analysis import index_microstructure
     from market_analysis.sentiment_engine import SentimentEngine
     from services.calendar_service import calendar_service
 
-    (
-        iv_metrics,
-        skew_metrics,
-        max_pain_metrics,
-        uoa_list,
-        pcr_metrics,
-        earnings_event,
-    ) = await asyncio.gather(
+    results = await asyncio.gather(
         SentimentEngine.fetch_and_calculate_iv_metrics(symbol),
         SentimentEngine.calculate_skew(symbol),
         SentimentEngine.calculate_max_pain(symbol),
         SentimentEngine.detect_uoa(symbol),
         SentimentEngine.calculate_pcr(symbol),
         calendar_service.get_symbol_earnings(symbol),
+        index_microstructure.fetch_symbol_gex_metrics(symbol),
+        return_exceptions=True,
     )
-    if earnings_event is not None and earnings_event.date:
+    iv_metrics = _gather_value(results[0], "IV", symbol)
+    skew_metrics = _gather_value(results[1], "Skew", symbol)
+    max_pain_metrics = _gather_value(results[2], "Max Pain", symbol)
+    uoa_list = _gather_value(results[3], "UOA", symbol)
+    pcr_metrics = _gather_value(results[4], "PCR", symbol)
+    earnings_event = _gather_value(results[5], "財報日", symbol)
+    gex_metrics = _gather_value(results[6], "GEX", symbol)
+
+    if earnings_event is not None and getattr(earnings_event, "date", None):
         macro_event_dates.add(earnings_event.date)
 
     # Safeguard: If Max Pain is marked as stale, avoid using it in critical pricing calculations
@@ -425,6 +427,18 @@ async def _fetch_alignment_market_inputs(
     else:
         max_pain_price = float(max_pain_metrics.get("max_pain", 0.0) or 0.0)
 
+    # 真實 GEX Put Wall (0.0 = 未知)；`_is_stale_cache` 表示服務的是過期快取
+    put_wall: float | None = None
+    put_wall_is_stale = False
+    if isinstance(gex_metrics, dict):
+        try:
+            raw_wall = float(gex_metrics.get("put_wall") or 0.0)
+        except (TypeError, ValueError):
+            raw_wall = 0.0
+        if raw_wall > 0.0:
+            put_wall = raw_wall
+        put_wall_is_stale = gex_metrics.get("_is_stale_cache") is True
+
     uoa_payload = [
         {
             "expiration_date": str(item.get("expiry", "")),
@@ -432,20 +446,14 @@ async def _fetch_alignment_market_inputs(
             "option_type": str(item.get("type", "")),
             "volume_to_oi_ratio": float(item.get("ratio", 0.0) or 0.0),
         }
-        for item in (uoa_list or [])
+        for item in (uoa_list if isinstance(uoa_list, list) else [])
         if isinstance(item, dict)
     ]
 
-    iv_val = (
-        float(iv_metrics.current_iv or 0.0)
-        if iv_metrics and iv_metrics.current_iv is not None
-        else 0.35
-    )
-    iv_rank = (
-        float(iv_metrics.iv_rank / 100.0)
-        if iv_metrics and iv_metrics.iv_rank is not None
-        else None
-    )
+    current_iv = getattr(iv_metrics, "current_iv", None) if iv_metrics else None
+    iv_val = float(current_iv) if _is_number(current_iv) else 0.35
+    raw_iv_rank = getattr(iv_metrics, "iv_rank", None) if iv_metrics else None
+    iv_rank = float(raw_iv_rank / 100.0) if _is_number(raw_iv_rank) else None
     # 成交量 PCR；缺值時以中性 1.0 代替 (不觸發 Skew/PCR 恐慌折價)
     put_call_ratio = 1.0
     if isinstance(pcr_metrics, dict):
@@ -459,7 +467,7 @@ async def _fetch_alignment_market_inputs(
     return {
         "decision_kwargs": {
             "iv": iv_val,
-            "hist_iv": max(iv_val / 1.1, 0.0001),
+            "hist_iv": max(_resolve_hist_iv(iv_metrics, iv_val), 0.0001),
             "iv_rank": iv_rank,
             "max_pain_price": max_pain_price if max_pain_price > 0.0 else None,
             "prev_max_pain": max_pain_price if max_pain_price > 0.0 else 0.0,
@@ -470,7 +478,59 @@ async def _fetch_alignment_market_inputs(
         "iv_metrics": iv_metrics,
         "skew_metrics": skew_metrics,
         "max_pain_price": max_pain_price,
+        "put_wall": put_wall,
+        "put_wall_is_stale": put_wall_is_stale,
     }
+
+
+def _resolve_iv_fields(iv_metrics: Any) -> dict[str, Any]:
+    """把 IVMetrics 轉成快照欄位；以防禦式讀取避免 MagicMock 等物件的假屬性。"""
+    if iv_metrics is None:
+        return {
+            "iv_val": None,
+            "iv_rank": None,
+            "iv_status": "UNAVAILABLE",
+            "iv_source": "UNAVAILABLE",
+            "iv_event_loading_applied": False,
+            "iv_premarket_flag": False,
+        }
+
+    raw_source = getattr(iv_metrics, "iv_source", None)
+    iv_source = raw_source if isinstance(raw_source, str) else "LIVE_IV"
+    current_iv = getattr(iv_metrics, "current_iv", None)
+    raw_rank = getattr(iv_metrics, "iv_rank", None)
+    iv_val = float(current_iv) * 100.0 if _is_number(current_iv) else None
+    iv_rank = float(raw_rank) if _is_number(raw_rank) else None
+
+    if iv_source == "UNAVAILABLE" or iv_val is None:
+        iv_status = "UNAVAILABLE"
+    elif iv_rank is None:
+        count = getattr(iv_metrics, "iv_history_count", 0)
+        required = getattr(iv_metrics, "iv_history_required", 60)
+        count_i = int(count) if _is_number(count) else 0
+        required_i = int(required) if _is_number(required) else 60
+        iv_status = f"樣本累積 {count_i}/{required_i}"
+    else:
+        raw_status = getattr(iv_metrics, "iv_status", None)
+        iv_status = "UNAVAILABLE" if raw_status is None else str(raw_status)
+
+    return {
+        "iv_val": iv_val,
+        "iv_rank": iv_rank,
+        "iv_status": iv_status,
+        "iv_source": iv_source,
+        "iv_event_loading_applied": getattr(iv_metrics, "event_loading_applied", None)
+        is True,
+        "iv_premarket_flag": getattr(iv_metrics, "is_premarket", None) is True,
+    }
+
+
+def _resolve_holding_type_label(holding_type: str, holding_map: dict[str, dict]) -> str:
+    if holding_type == "PURE_STOCK_100X":
+        return "1.00x 純現貨 (0 槓桿)"
+    if holding_type == "COMPLEX_OPTIONS":
+        return "現貨＋選擇權"
+    return "保證金槓桿 (推定)" if holding_map else "無持倉紀錄"
 
 
 async def build_telemetry_alignment_items(
@@ -482,7 +542,9 @@ async def build_telemetry_alignment_items(
 ) -> tuple[list[dict], bool]:
     """Core loop for building telemetry alignment items for /telemetry_alert.
 
-    Extracted from OrderUICog.telemetry_alert().
+    每筆符合條件的委託單都會產生一個 item (不會因決策被抑制而消失)；沒有即時現價時
+    產生降級 item (不執行決策、維持原價原量)。同一標的在一次呼叫內只抓一次報價與
+    市場輸入；item 數達 `MAX_ALIGNMENT_ITEMS` 時，在抓取下一筆資料之前就截斷。
 
     Returns:
         (alignment_items, truncated)
@@ -494,6 +556,9 @@ async def build_telemetry_alignment_items(
 
     alignment_items: list[dict] = []
     truncated = False
+    quote_memo: dict[str, tuple[float, float, float | None]] = {}
+    inputs_memo: dict[str, dict[str, Any]] = {}
+    market_open = bool(is_market_open())
 
     for o in orders:
         order_type = str(o.get("order_type") or "").upper()
@@ -518,128 +583,155 @@ async def build_telemetry_alignment_items(
         if current_price <= 0:
             continue
 
+        # 上限檢查必須在抓取下一筆市場資料「之前」，避免白抓用不到的資料與決策副作用
+        if len(alignment_items) >= MAX_ALIGNMENT_ITEMS:
+            truncated = True
+            break
+
         original_qty = max(1, int(round(float(o.get("quantity") or 1.0))))
+        side = str(o.get("side") or "BUY").upper()
 
         symbol = str(o["symbol"]).upper()
-        cache_price, live_price = await fetch_cache_and_live_price(symbol)
-        if live_price <= 0.0:
-            live_price = float(current_price)
+        if symbol not in quote_memo:
+            try:
+                quote_memo[symbol] = await fetch_cache_and_live_price(symbol)
+            except Exception as e:
+                logger.warning(f"[{symbol}] 對齊快照取得即時報價失敗: {e}")
+                quote_memo[symbol] = (0.0, 0.0, None)
+        cache_price, live_raw, prev_close = quote_memo[symbol]
+        live_price: float | None = live_raw if live_raw > 0.0 else None
 
-        inputs = await _fetch_alignment_market_inputs(symbol, macro_event_dates)
+        if symbol not in inputs_memo:
+            inputs_memo[symbol] = await _fetch_alignment_market_inputs(
+                symbol, macro_event_dates
+            )
+        inputs = inputs_memo[symbol]
         iv_metrics = inputs["iv_metrics"]
         skew_metrics = inputs["skew_metrics"]
-        max_pain_price = inputs["max_pain_price"]
+        max_pain_price = float(inputs["max_pain_price"] or 0.0)
+        put_wall = inputs["put_wall"]
 
         holding_row = holding_map.get(symbol, {})
         holding_shares = float(holding_row.get("quantity", 0.0) or 0.0)
 
-        try:
-            decision = await generate_alignment_decision(
-                user_id=user_id,
-                order_id=int(o["id"]),
-                symbol=symbol,
-                current_order_price=float(current_price),
-                spot_price=float(live_price),
-                original_qty=original_qty,
-                prev_close=float(cache_price if cache_price > 0.0 else current_price),
-                cache_price=cache_price,
-                live_price=live_price,
-                order_side=str(o.get("side") or "BUY"),
-                holding_type=holding_type,
-                holding_shares=holding_shares,
-                macro_event_dates=set(macro_event_dates),
-                emit_suppressed_decision=True,
-                **inputs["decision_kwargs"],
-            )
-        except DataContaminationException:
+        # 決策欄位預設 = 維持原價原量
+        action = "NO_LIVE_PRICE"
+        suggested_price = float(current_price)
+        suggested_qty = original_qty
+        alert_text: str | None = None
+        system_status_flag = "DATA DEGRADED"
+        directive = "無法取得即時現價，暫停對齊建議（維持原價原量）。"
+
+        if live_price is not None:
             decision = None
+            try:
+                decision = await generate_alignment_decision(
+                    user_id=user_id,
+                    order_id=int(o["id"]),
+                    symbol=symbol,
+                    current_order_price=float(current_price),
+                    spot_price=float(live_price),
+                    original_qty=original_qty,
+                    prev_close=float(prev_close) if prev_close is not None else 0.0,
+                    cache_price=cache_price,
+                    live_price=live_price,
+                    order_side=side,
+                    holding_type=holding_type,
+                    holding_shares=holding_shares,
+                    macro_event_dates=set(macro_event_dates),
+                    emit_suppressed_decision=True,
+                    **inputs["decision_kwargs"],
+                )
+            except DataContaminationException:
+                decision = None
+            except Exception as e:
+                logger.warning(f"[{symbol}] 對齊決策失敗，維持原價原量: {e}")
+                decision = None
 
-        if decision is None:
-            continue
+            if decision is None:
+                # 不得靜默丟掉委託單：以抑制狀態保留在快照中
+                action = "SUPPRESSED"
+                system_status_flag = "FORTRESS RE-LOCKED"
+                directive = "對齊決策無法產生，維持原價原量。"
+            else:
+                action = str(decision.action)
+                suggested_price = float(decision.suggested_price)
+                suggested_qty = int(decision.suggested_qty)
+                alert_text = getattr(decision, "alert_text", None)
+                system_status_flag = (
+                    decision.system_status_flag
+                    if decision.system_status_flag
+                    else (
+                        "FORTRESS RE-LOCKED"
+                        if action == "SUPPRESSED"
+                        else "TELEMETRY ACTIVE"
+                    )
+                )
+                directive = (
+                    decision.system_instruction_directive
+                    if decision.system_instruction_directive
+                    else (alert_text or "通過實時對齊檢查，僅在防線內調整掛單。")
+                )
 
-        suggested_price = float(decision.suggested_price)
-        suggested_qty = int(decision.suggested_qty)
-
+        suggestion_changed = (
+            abs(suggested_price - current_price) >= 0.01
+            or suggested_qty != original_qty
+        )
         is_size_down = suggested_qty < original_qty
 
-        avg_cost = float(holding_row.get("avg_cost", 0.0) or 0.0)
-        gain_loss_pct = (
-            (live_price - avg_cost) / avg_cost * 100.0 if avg_cost > 0.0 else 0.0
-        )
-        put_wall = max_pain_price if max_pain_price > 0.0 else None
+        # 持倉與損益 (負數量 = 空頭持倉)
+        raw_avg_cost = float(holding_row.get("avg_cost", 0.0) or 0.0)
+        avg_cost: float | None = raw_avg_cost if raw_avg_cost > 0.0 else None
+        gain_loss_pct: float | None = None
+        if avg_cost is not None and live_price is not None and holding_shares != 0:
+            if holding_shares > 0:
+                gain_loss_pct = (live_price - avg_cost) / avg_cost * 100.0
+            else:
+                gain_loss_pct = (avg_cost - live_price) / avg_cost * 100.0
+
+        if holding_shares > 0:
+            holding_status = "持倉中"
+        elif holding_shares < 0:
+            holding_status = "空頭持倉"
+        else:
+            holding_status = "空倉待命"
+
         wall_dist_pct = (
             (live_price - put_wall) / live_price * 100.0
-            if put_wall is not None and live_price > 0.0
+            if put_wall is not None and live_price is not None
             else None
         )
-
-        skew_val = (
-            float(skew_val)
-            if skew_metrics and (skew_val := skew_metrics.get("skew")) is not None
-            else None
-        )
-        skew_pct = (
-            float(skew_per)
-            if skew_metrics
-            and (skew_per := skew_metrics.get("skew_percentile")) is not None
-            else None
-        )
-        skew_status = str(skew_metrics.get("state", "N/A")) if skew_metrics else "N/A"
-        iv_val = (
-            float(iv_metrics.current_iv * 100.0)
-            if iv_metrics and iv_metrics.current_iv is not None
-            else None
-        )
-        iv_rank = (
-            float(iv_metrics.iv_rank)
-            if iv_metrics and iv_metrics.iv_rank is not None
-            else None
-        )
-        iv_status = str(iv_metrics.iv_status) if iv_metrics else "UNAVAILABLE"
-
-        proximity = (
-            abs(live_price - current_price) / live_price * 100.0
-            if live_price > 0.0
-            else 999.0
-        )
-        radar_status = (
-            "FORTRESS RE-LOCKED"
-            if decision.action == "SUPPRESSED"
-            else ("雷達鎖定中" if proximity <= 2.0 else "偏離擴大")
-        )
-
-        if holding_type == "PURE_STOCK_100X":
-            holding_type_label = "1.00x 純現貨 (0 槓桿)"
-        else:
-            holding_type_label = "LEVERAGED"
-
-        holding_status = "空倉待命" if holding_shares <= 0 else "持倉中"
         wall_status = (
-            "上方緩衝"
-            if wall_dist_pct is not None and wall_dist_pct >= 0
-            else "跌破支撐"
-            if wall_dist_pct is not None
-            else "待確認"
-        )
-        system_status_flag = (
-            decision.system_status_flag
-            if decision.system_status_flag
-            else (
-                "FORTRESS RE-LOCKED"
-                if decision.action == "SUPPRESSED"
-                else "TELEMETRY ACTIVE"
-            )
-        )
-        directive = (
-            decision.system_instruction_directive
-            if decision.system_instruction_directive
-            else (decision.alert_text or "通過實時對齊檢查，僅在防線內調整掛單。")
+            "待確認"
+            if wall_dist_pct is None
+            else ("上方緩衝" if wall_dist_pct >= 0 else "跌破支撐")
         )
 
-        # 限制每個 Embed 擁有的標的數量以防字元數超限 (預估每個標的卡片佔用約 500 字元)
-        if len(alignment_items) * 500 > 3500:
-            truncated = True
-            break
+        skew_val = None
+        skew_pct = None
+        skew_status = "N/A"
+        if isinstance(skew_metrics, dict):
+            raw_skew = skew_metrics.get("skew")
+            raw_skew_pct = skew_metrics.get("skew_percentile")
+            skew_val = float(raw_skew) if _is_number(raw_skew) else None
+            skew_pct = float(raw_skew_pct) if _is_number(raw_skew_pct) else None
+            skew_status = str(skew_metrics.get("state", "N/A"))
+
+        iv_fields = _resolve_iv_fields(iv_metrics)
+
+        proximity_pct = (
+            abs(live_price - current_price) / live_price * 100.0
+            if live_price is not None
+            else None
+        )
+        if action == "SUPPRESSED":
+            radar_status = "FORTRESS RE-LOCKED"
+        elif proximity_pct is None:
+            radar_status = "現價缺失"
+        elif proximity_pct <= 2.0:
+            radar_status = "雷達鎖定中"
+        else:
+            radar_status = "偏離擴大"
 
         alignment_items.append(
             {
@@ -651,34 +743,39 @@ async def build_telemetry_alignment_items(
                 "original_qty": original_qty,
                 "suggested_price": suggested_price,
                 "suggested_qty": suggested_qty,
+                "suggestion_changed": suggestion_changed,
                 "is_size_down": is_size_down,
-                "alert_text": getattr(decision, "alert_text", None),
-                "holding_type_label": holding_type_label,
+                "action": action,
+                "alignment_available": live_price is not None,
+                "alert_text": alert_text,
+                "holding_type_label": _resolve_holding_type_label(
+                    holding_type, holding_map
+                ),
                 "holding_shares": int(round(holding_shares)),
                 "holding_status": holding_status,
                 "avg_cost": avg_cost,
                 "live_price": live_price,
+                "prev_close": prev_close,
                 "gain_loss_pct": gain_loss_pct,
                 "put_wall": put_wall,
+                "put_wall_is_stale": bool(inputs["put_wall_is_stale"]),
+                "max_pain_price": max_pain_price if max_pain_price > 0.0 else None,
                 "wall_dist_pct": wall_dist_pct,
                 "wall_status": wall_status,
                 "skew_val": skew_val,
                 "skew_pct": skew_pct,
                 "skew_status": skew_status,
-                "iv_val": iv_val,
-                "iv_rank": iv_rank,
-                "iv_status": iv_status,
-                "proximity_pct": proximity,
+                "iv_val": iv_fields["iv_val"],
+                "iv_rank": iv_fields["iv_rank"],
+                "iv_status": iv_fields["iv_status"],
+                "iv_source": iv_fields["iv_source"],
+                "iv_event_loading_applied": iv_fields["iv_event_loading_applied"],
+                "proximity_pct": proximity_pct,
                 "radar_status": radar_status,
                 "system_status_flag": system_status_flag,
                 "system_instruction_directive": directive,
-                "is_premarket": iv_metrics.is_premarket
-                if (iv_metrics and hasattr(iv_metrics, "is_premarket"))
-                else False,
-                "iv_source": iv_metrics.iv_source
-                if (iv_metrics and hasattr(iv_metrics, "iv_source"))
-                else "UNAVAILABLE",
-                "side": o.get("side", "BUY"),
+                "is_premarket": (not market_open) or iv_fields["iv_premarket_flag"],
+                "side": side,
             }
         )
 

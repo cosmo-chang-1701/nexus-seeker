@@ -487,7 +487,7 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
     )
     with patch(
         "services.order_telemetry_service.fetch_cache_and_live_price",
-        new=AsyncMock(return_value=(101.0, 102.0)),
+        new=AsyncMock(return_value=(101.0, 102.0, 100.5)),
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new=AsyncMock(return_value=mock_iv),
@@ -505,6 +505,9 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
         new=AsyncMock(return_value={"volume_pcr": 1.0}),
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new=AsyncMock(return_value={"put_wall": 95.0}),
     ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),
@@ -527,11 +530,8 @@ async def test_telemetry_alert_and_alignment(mock_interaction: Any, db_conn: Any
     mock_btn_interaction.response = AsyncMock()
     mock_btn_interaction.followup = AsyncMock()
 
-    with patch(
-        "services.order_telemetry_service.fetch_cache_and_live_price",
-        new=AsyncMock(return_value=(101.0, 102.0)),
-    ):
-        await view.apply_telemetry_button.callback(mock_btn_interaction)
+    # 一鍵套用只使用快照內的建議，不再抓取任何市場資料
+    await view.apply_telemetry_button.callback(mock_btn_interaction)
     assert mock_btn_interaction.response.edit_message.called
     assert mock_btn_interaction.followup.send.called
 
@@ -939,7 +939,7 @@ async def test_telemetry_alert_ignores_stale_max_pain(
 
     with patch(
         "services.order_telemetry_service.fetch_cache_and_live_price",
-        new=AsyncMock(return_value=(101.0, 102.0)),
+        new=AsyncMock(return_value=(101.0, 102.0, 100.5)),
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
         new=AsyncMock(return_value=mock_iv),
@@ -957,6 +957,9 @@ async def test_telemetry_alert_ignores_stale_max_pain(
     ), patch(
         "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
         new=AsyncMock(return_value={"volume_pcr": 1.0}),
+    ), patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new=AsyncMock(return_value={"put_wall": 95.0}),
     ), patch(
         "services.calendar_service.calendar_service.get_high_impact_events",
         new=AsyncMock(return_value=[]),
