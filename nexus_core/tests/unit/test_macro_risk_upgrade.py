@@ -2453,6 +2453,8 @@ async def test_macro_overview_data_cross_derivation_spx_spy() -> None:
             data = await get_macro_overview_data(12345)
             # SPX 應由 SPY * 10 衍生為 7625.0，而非預設值 5150.0
             assert data["spx"] == 7625.0
+            assert data["spx_is_derived"] is True
+            assert data["spy_spot_is_derived"] is False
             assert data["spy_spot"] == 762.50
             assert data["spy_gamma_flip"] == 765.0
             assert data["gamma_flip_line"] == 7650.0
