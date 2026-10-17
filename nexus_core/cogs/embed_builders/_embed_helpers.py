@@ -1288,14 +1288,9 @@ def chunk_embeds(
 
 
 def fedwatch_source_note(source: Any) -> str:
-    """依 FedWatch 明細的 `source` 欄位產生資料源說明（edge 端 Primary 為 Atlanta
-    Fed MPT，失敗時改用 CBOT ZQ 期貨反推；兩者皆失敗為備援估算）。"""
+    """依 FedWatch 明細的 `source` 欄位產生資料源說明（edge 端 Primary 為 CBOT ZQ
+    期貨反推，失敗時為靜態備援估算）。"""
     src = str(source or "")
-    if "Atlanta Fed" in src:
-        return (
-            "⚠️ FedWatch 資料源: Atlanta Fed 市場機率追蹤 (MPT)，"
-            "方法論與 CME 官網 FedWatch 工具不同，數字可能存在落差。"
-        )
     if "ZQ" in src:
         return (
             "⚠️ FedWatch 資料源: CBOT 30 天期聯邦基金期貨 (ZQ) 反推，"

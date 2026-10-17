@@ -39,7 +39,6 @@ def _get_fedwatch(
 ) -> dict[str, Any]:
     with (
         patch("yfinance.Ticker", side_effect=_ticker_factory(prices)),
-        patch("requests.get", side_effect=Exception("Mock Atlanta Fed failure")),
         patch("local_api.macro._fetch_effr", return_value=effr),
         patch("local_api.macro._fedwatch_today", return_value=today),
     ):

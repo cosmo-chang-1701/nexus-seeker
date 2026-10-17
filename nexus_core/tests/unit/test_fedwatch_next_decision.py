@@ -146,7 +146,6 @@ def test_fallback_details_are_internally_consistent(
 @pytest.mark.parametrize(
     ("source", "expected", "unexpected"),
     [
-        ("Atlanta Fed Market Probability Tracker (MPT)", "Atlanta Fed", "ZQ"),
         ("CME 30-Day Fed Funds Futures (ZQ)", "(ZQ) 反推", "Atlanta Fed"),
         ("fallback", "備援估算", "Atlanta Fed"),
         (None, "備援估算", "Atlanta Fed"),

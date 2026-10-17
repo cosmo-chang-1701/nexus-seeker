@@ -662,14 +662,11 @@ class CalendarService:
                         # (見 macro.py 的 `prob = max(0.05, (50.0 - prob_cut/2.0)/100.0)`)，
                         # 即使 prob_cut 已飽和到 100.0 也不會觸發 `prob <= 0.01`，因此需要
                         # 額外對 prob_cut/prob_hike 做對稱檢查。但飽和到接近 100% 本身不一定是
-                        # bug——Atlanta Fed Excel 是直接加總已公布多桶機率的真實數據，而 ZQ
-                        # 期貨階梯算式在 `ladder_saturated=True` 時已附帶 prob_cut_25/50（或
-                        # prob_hike_25/50）拆解說明其幅度分佈，兩者都是合理的高信心定價。
-                        # 只有「既非多桶來源、也沒有拆解中繼資料」卻仍飽和時，才是舊版單一
+                        # bug——ZQ 期貨階梯算式在 `ladder_saturated=True` 時已附帶
+                        # prob_cut_25/50（或 prob_hike_25/50）拆解說明其幅度分佈，是合理的
+                        # 高信心定價。只有「沒有拆解中繼資料」卻仍飽和時，才是舊版單一
                         # 步階 clamp 那種失真的假精確度徵兆，需要攔截轉為備援模式。
-                        is_explained_saturation = (
-                            ladder_saturated or "Atlanta Fed" in source
-                        )
+                        is_explained_saturation = ladder_saturated
                         suspicious_saturation = (
                             prob_cut >= 99.0 or prob_hike >= 99.0
                         ) and not is_explained_saturation
