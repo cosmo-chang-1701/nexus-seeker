@@ -242,8 +242,14 @@ def get_scenario_guidance(
     *,
     sigma_to_expiry: float | None = None,
     pin_strike: float | None = None,
+    expiry: str | None = None,
+    negative_gamma: bool = False,
 ) -> str:
-    """Generate Max Pain settlement guidance from the spot/Max Pain spread."""
+    """Generate Max Pain settlement guidance from the spot/Max Pain spread.
+
+    expiry（ISO YYYY-MM-DD）供方向性文案標明痛點所屬到期日；negative_gamma 為 True 時
+    「價低於痛點」不再宣稱向上磁吸（負 Gamma 下做市商順勢賣壓，磁吸不成立）。
+    """
     if max_pain <= 0.0:
         return "期權未平倉量數據不足，無法評估結算磁吸效應。"
     if pin_strike is not None:
@@ -258,9 +264,25 @@ def get_scenario_guidance(
 
     spread_pct = (current_price - max_pain) / max_pain
 
+    mp_label = ""
+    if expiry:
+        try:
+            _ed = datetime.strptime(str(expiry), "%Y-%m-%d")
+            mp_label = f"{_ed.month:02d}/{_ed.day:02d}"
+        except ValueError:
+            mp_label = ""
+
     if spread_pct > threshold:
+        if mp_label:
+            return f"高於 {mp_label} 痛點，結算前防向痛點拉回。"
         return "價格高於最大痛點，結算日前需防範向痛點震盪拉回的壓制力。"
     if spread_pct < -threshold:
+        if negative_gamma:
+            if mp_label:
+                return f"負Gamma，{mp_label} 痛點磁吸不成立。"
+            return "負Gamma，痛點磁吸不成立。"
+        if mp_label:
+            return f"低於 {mp_label} 痛點，具磁吸回升動能。"
         return "價格遠低於最大痛點，具備磁吸效應回升動能。"
     return "目前價差適中，依技術指標操作為主。"
 
@@ -1807,6 +1829,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _call_wall_hug_outer: Optional[float] = None  # 貼牆時的距離 %
     _call_wall_band_outer: float = 0.0  # 貼牆判定帶（%）
     _local_short_gamma_outer: Optional[bool] = None
+    # 負 Gamma 線索（局部體制短 Gamma／全鏈淨 GEX<0／現價低於 PutWall）；未取得視為 False。
+    _neg_gamma_hint_outer = False
     _gamma_flip_outer: Optional[float] = None
     _gex_price_outer: Optional[float] = None  # GEX 區塊採用的現價（與 Flip 同價）
 
@@ -1979,6 +2003,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 put_wall_float = dyn_supp
                                 has_putwall = True
                                 put_reanchored = True
+
+                    if has_putwall and 0 < effective_c_val < put_wall_float:
+                        _neg_gamma_hint_outer = True
 
                     if has_putwall:
                         put_reanchor_note = " (動態重錨)" if put_reanchored else ""
@@ -2638,6 +2665,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         )
                     except (ValueError, TypeError):
                         net_gex_float = None
+                    if net_gex_float is not None and net_gex_float < 0:
+                        _neg_gamma_hint_outer = True
                     if net_gex_float is not None:
                         # ISSUE-4.4: 增設 [-50k, +50k] 中性死區 (Neutral Deadband)，防範 0 軸微幅跳動引發頻繁閃爍
                         if abs(net_gex_float) <= 50000.0:
@@ -2720,6 +2749,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     local_regime = analyze_local_gamma_regime(gex_prof, effective_c_val)
                     if local_regime is not None:
                         _local_short_gamma_outer = bool(local_regime.is_short_gamma)
+                        if local_regime.is_short_gamma:
+                            _neg_gamma_hint_outer = True
                         total_long = (
                             net_gex_float is not None and net_gex_float > 50000.0
                         )
@@ -2772,6 +2803,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _put_wall_weak_outer = None
             _call_wall_hug_outer = None
             _local_short_gamma_outer = None
+            _neg_gamma_hint_outer = False
             _gamma_flip_outer = None
             _gex_price_outer = None
             _pin_strike = None
@@ -3087,11 +3119,21 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         scenario = "⚠️ 最大痛點偏離度過高 (>30%) 已啟動斷路器，暫停輸出結算操作指引，請以技術指標為準。"
         scen_color = "\u001b[1;31m"
     elif _mp_val is None or max_pain == 0.0:
-        scenario = get_scenario_guidance(price, max_pain)
+        scenario = get_scenario_guidance(
+            price,
+            max_pain,
+            expiry=data.get("max_pain_expiry"),
+            negative_gamma=_neg_gamma_hint_outer,
+        )
         scen_color = "\u001b[1;30m"
     else:
         scenario = get_scenario_guidance(
-            price, max_pain, sigma_to_expiry=_sigma_guard, pin_strike=_pin_strike
+            price,
+            max_pain,
+            sigma_to_expiry=_sigma_guard,
+            pin_strike=_pin_strike,
+            expiry=_mp_exp,
+            negative_gamma=_neg_gamma_hint_outer,
         )
         spread_pct = ((price - max_pain) / max_pain) if max_pain > 0 else 0.0
         if "釘住" in scenario:
@@ -3101,7 +3143,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         elif spread_pct > 0.03:
             scen_color = "\u001b[1;31m"
         elif spread_pct < -0.03:
-            scen_color = "\u001b[1;32m"
+            scen_color = "\u001b[1;31m" if _neg_gamma_hint_outer else "\u001b[1;32m"
         elif abs(spread_pct) < 0.02:
             scen_color = "\u001b[1;33m"
         else:

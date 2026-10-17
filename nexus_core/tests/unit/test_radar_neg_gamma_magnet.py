@@ -136,3 +136,57 @@ def test_flip_line_marks_derived_spot_as_estimate() -> None:
 def test_flip_line_hidden_when_missing() -> None:
     text = _macro_text(spy_spot=None)
     assert "SPY Flip $" not in text
+
+
+def _scan_dte0(price: float, net_gex: float) -> List[Dict[str, Any]]:
+    from datetime import date
+
+    rows = _scan(price, net_gex)
+    # 到期日為今日（DTE 0），痛點高於現價 10% 以上
+    rows[0]["month_max_pains"] = [
+        {"expiry": date.today().isoformat(), "max_pain": price * 1.12}
+    ]
+    return rows
+
+
+def _render_rows(rows: List[Dict[str, Any]]) -> str:
+    with (
+        patch(
+            "database.notifications.get_user_notification_settings",
+            return_value={
+                "radar_macro_edge": False,
+                "radar_alpha_signals": True,
+                "radar_risk_defenses": True,
+            },
+        ),
+        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.get_full_user_context",
+            return_value=SimpleNamespace(
+                can_trade_spreads=True, cash_reserve_protection=True
+            ),
+        ),
+        patch(
+            "market_analysis.insights_engine.InsightsEngine.generate_cro_insight",
+            return_value=(None, None, None),
+        ),
+        patch("market_time.days_to_expiry_et", return_value=0),
+    ):
+        embeds = build_radar_scan_embed(rows, "ALL", 12345)
+    parts: List[str] = []
+    for e in embeds:
+        parts.append(str(e.description or ""))
+        for f in e.fields:
+            parts.append(str(f.value))
+    return "\n".join(parts)
+
+
+def test_neg_gamma_dte0_no_upward_expiry_magnet() -> None:
+    text = _render_rows(_scan_dte0(100.0, -5e8))
+    assert "向上末日磁吸" not in text
+    assert "向上磁吸力" not in text
+
+
+def test_pos_gamma_dte0_keeps_upward_expiry_magnet() -> None:
+    text = _render_rows(_scan_dte0(100.0, 5e8))
+    assert "向上磁吸力" in text
