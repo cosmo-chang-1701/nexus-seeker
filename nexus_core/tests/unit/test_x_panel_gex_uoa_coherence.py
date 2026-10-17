@@ -97,7 +97,7 @@ def test_kelly_header_and_seller_prerequisites() -> None:
     assert _gex_present(names)
     assert "賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)" in text
     # MRVL：IVR 未知⚠、最近到期 DTE2 不在引力窗口✅、PutWall 270 淨 GEX 正✅、事件⚠
-    assert "賣方前提: IVR⚠ 引力✅ 牆淨GEX✅ 局部Γ" in text
+    assert "賣方前提: IVR⚠ 結算窗✅ 牆淨GEX✅ 局部Γ" in text
     assert "事件⚠" in text
 
 
@@ -111,7 +111,7 @@ def test_seller_prerequisites_negative_wall_and_low_ivr() -> None:
     d["iv_data"] = d["iv_data"].model_copy(update={"has_macro_event": False})
     text, names = _render(d)
     assert _gex_present(names)
-    assert "IVR❌ 引力❌ 牆淨GEX❌" in text
+    assert "IVR❌ 結算窗❌ 牆淨GEX❌" in text
     assert "事件✅" in text
 
 
@@ -353,7 +353,7 @@ def test_kelly_gravity_dash_when_circuit_breaker_triggered() -> None:
     d = _mrvl_data()
     d["circuit_breaker_triggered"] = True
     text, _ = _render(d)
-    assert "引力—" in text
+    assert "結算窗—" in text
 
 
 def test_kelly_ivr_unknown_negative_is_warning() -> None:

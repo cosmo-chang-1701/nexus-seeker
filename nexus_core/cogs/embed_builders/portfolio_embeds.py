@@ -11,10 +11,14 @@ import math
 import psutil
 
 import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any, Literal, Optional
 
-from market_analysis.uoa_telemetry import UOATradeResult, generate_uoa_ascii_table
+from market_analysis.uoa_telemetry import (
+    UOATradeResult,
+    generate_uoa_ascii_table,
+    reconcile_breached_levels,
+)
 from market_analysis.index_microstructure import (
     GAMMA_FLIP_MATERIALITY_DISPLAY,
     analyze_local_gamma_regime,
@@ -285,6 +289,29 @@ def get_scenario_guidance(
             return f"低於 {mp_label} 痛點，具磁吸回升動能。"
         return "價格遠低於最大痛點，具備磁吸效應回升動能。"
     return "目前價差適中，依技術指標操作為主。"
+
+
+# IVR 母體重建日：migration v088（v1.14.1）一次性清空 historical_iv，
+# 見 docs/valuation_pricing/04_ivr_regime_and_seller_lockout.md。
+_IVR_POPULATION_REBUILD_DATE = date(2026, 10, 1)
+# 重建後交易日數 − 已累積筆數 ≥ 此值，才註記「非每日取樣」
+_IVR_SPARSE_SAMPLING_GAP = 3
+
+
+def _ivr_sparse_sampling_note(hist_cnt: int) -> str:
+    """historical_iv 僅在盤中算出 LIVE_IV 時寫入；筆數明顯落後交易日數則註記。"""
+    try:
+        import market_time as _mt_ivr
+
+        today_ny = datetime.now(_mt_ivr.ny_tz).date()
+        sessions = _mt_ivr.count_nyse_sessions_after(
+            _IVR_POPULATION_REBUILD_DATE - timedelta(days=1), today_ny
+        )
+    except Exception:
+        return ""
+    if sessions - hist_cnt >= _IVR_SPARSE_SAMPLING_GAP:
+        return "，非每日取樣"
+    return ""
 
 
 def _format_uoa_field(uoa_data: list) -> str:
@@ -1202,9 +1229,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     )
                 elif is_auction_bar:
                     tod_str = "｜⚠ 開盤／收盤競價時段，量比天然偏高"
+                _status_prefix = "同時段" if rvol_tod_val is not None else "狀態"
                 rvol_line = (
                     f" ├─ 即時量比 (RVOL_15m): {rvol_val:.2f}x{tod_str}"
-                    f" (狀態: {status_str})"
+                    f" ({_status_prefix}: {status_str})"
                 )
             else:
                 rvol_line = " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ 數據源缺失)"
@@ -1604,7 +1632,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _hist_cnt = int(_to_float(_iv_attr("iv_history_count", 0), 0.0))
             _hist_req = int(_to_float(_iv_attr("iv_history_required", 60), 60.0))
             if iv_rank_num is None and _hist_cnt > 0:
-                iv_status_str = f"樣本累積中 {_hist_cnt}/{_hist_req} 日，10/01 母體重置；{status_tw}"
+                _sparse_note = _ivr_sparse_sampling_note(_hist_cnt)
+                iv_status_str = (
+                    f"樣本累積中 {_hist_cnt}/{_hist_req} 日，"
+                    f"{_IVR_POPULATION_REBUILD_DATE:%m/%d} 母體重建{_sparse_note}；{status_tw}"
+                )
             if _iv_attr("event_loading_applied", False) and current_iv_num:
                 iv_val_str = (
                     f"{current_iv_num / 1.4 * 100:.1f}% ×1.4 事件加載 = {iv_val_str}"
@@ -3310,7 +3342,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _pre_ivr_mark = "⚠"
         else:
             _pre_ivr_mark = "❌" if is_selling_locked_by_ivr(_pre_ivr) else "✅"
-        # 引力：沿用上方結算指引已算好的 gravity；斷路器觸發時不評估
+        # 結算窗（DTE≤1 結算釘住）：沿用上方結算指引已算好的 gravity；斷路器觸發時不評估
         _pre_grav = "—" if cb_triggered else ("❌" if gravity is not None else "✅")
         _pre_wall = (
             "—"
@@ -3324,7 +3356,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
         _pre_event = "⚠" if _event_loading_outer else "✅"
         kelly_lines.append(
-            f" ├─ 賣方前提: IVR{_pre_ivr_mark} 引力{_pre_grav} 牆淨GEX{_pre_wall}"
+            f" ├─ 賣方前提: IVR{_pre_ivr_mark} 結算窗{_pre_grav} 牆淨GEX{_pre_wall}"
             f" 局部Γ{_pre_local} 事件{_pre_event}"
         )
         if contracts == 0 and not any(
@@ -3430,6 +3462,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     )
     if uoa_data:
         try:
+            # 以與「跌破」警示相同的現價重新核對地板／上限（不修改共享快取）
+            _uoa_spot = c_val
+            if _uoa_spot <= 0.0:
+                _uoa_gex = data.get("gex_profile_data")
+                _uoa_spot = (
+                    _to_float(_uoa_gex.get("spot"), 0.0)
+                    if isinstance(_uoa_gex, dict)
+                    else 0.0
+                )
+            if _uoa_spot > 0.0:
+                uoa_data = reconcile_breached_levels(uoa_data, _uoa_spot)
             table_str = _format_uoa_field(uoa_data)
             table_lines = table_str.split("\n")
             table_lines.append("")
