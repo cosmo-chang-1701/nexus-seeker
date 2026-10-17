@@ -520,6 +520,50 @@ def apply_breached_level(
     return intent, False
 
 
+# 貸方價差賣出腿角色註記（有效／已破兩態）；annotate_spread_structures 與
+# reconcile_breached_levels 共用，避免兩處文案漂移。
+_ROLE_CALL_CREDIT_OK = "賣方看跌上限（貸方價差，定義風險封頂）"
+_ROLE_CALL_CREDIT_BREACHED = "賣方上限已破（貸方價差，定義風險封頂）"
+_ROLE_PUT_CREDIT_OK = "賣方看守地板（貸方價差，定義風險承接）"
+_ROLE_PUT_CREDIT_BREACHED = "賣方地板已破（貸方價差，定義風險承接）"
+
+
+def reconcile_breached_levels(entries: list[dict], spot: float) -> list[dict]:
+    """渲染時以「面板現價」重新核對 STO 的地板／上限是否已被穿越（純函式）。
+
+    回傳淺拷貝，不修改輸入（data["uoa"] 可能是共享快取）。涵蓋兩種偵測器漏網：
+    錨點時為平價（未標地板）、以及偵測器現價與面板現價不一致。
+    """
+    out: list[dict] = []
+    for e in entries:
+        c = dict(e)
+        out.append(c)
+        action = str(c.get("action", ""))
+        if spot <= 0 or "STO" not in action:
+            continue
+        try:
+            strike = float(c.get("strike", 0.0))
+        except (TypeError, ValueError):
+            continue
+        opt = str(c.get("type", "")).upper()
+        intent = str(c.get("intent", ""))
+        changed = False
+        if opt == "PUT" and spot < strike:
+            old, new = _ROLE_PUT_CREDIT_OK, _ROLE_PUT_CREDIT_BREACHED
+        elif opt == "CALL" and spot > strike:
+            old, new = _ROLE_CALL_CREDIT_OK, _ROLE_CALL_CREDIT_BREACHED
+        else:
+            continue
+        if old in intent:
+            intent = intent.replace(old, new)
+            changed = True
+        intent, hit = apply_breached_level(intent, opt, action, strike, spot)
+        if changed or hit:
+            c["intent"] = intent
+            c["level_breached"] = True
+    return out
+
+
 def annotate_spread_structures(entries: list[dict]) -> None:
     """把同到期日、同類型、成交量 1:1 對應的 BTO／STO 腿標記為價差組合（就地修改）。
 
@@ -606,15 +650,11 @@ def annotate_spread_structures(entries: list[dict]) -> None:
             breached = bool(short_leg.get("level_breached"))
             if credit and is_call:
                 role_note = (
-                    "賣方上限已破（貸方價差，定義風險封頂）"
-                    if breached
-                    else "賣方看跌上限（貸方價差，定義風險封頂）"
+                    _ROLE_CALL_CREDIT_BREACHED if breached else _ROLE_CALL_CREDIT_OK
                 )
             elif credit:
                 role_note = (
-                    "賣方地板已破（貸方價差，定義風險承接）"
-                    if breached
-                    else "賣方看守地板（貸方價差，定義風險承接）"
+                    _ROLE_PUT_CREDIT_BREACHED if breached else _ROLE_PUT_CREDIT_OK
                 )
             elif is_call:
                 role_note = "代表價差獲利上限而非機構獨立封頂"
