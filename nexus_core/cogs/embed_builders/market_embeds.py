@@ -1098,6 +1098,14 @@ def build_radar_scan_embed(
                             mp_val = float(mp_entry.get("max_pain", 0.0) or 0.0)
                             if mp_val > 0:
                                 dev = (price_val - mp_val) / mp_val * 100
+                                if (
+                                    0 <= dte <= 1
+                                    and abs(dev) > 8.0
+                                    and dev < 0
+                                    and is_neg_gamma
+                                ):
+                                    # 負 Gamma 下向上磁吸不成立（標籤已為「負Gamma」），略過此檔
+                                    continue
                                 if 0 <= dte <= 1 and abs(dev) > 8.0:
                                     dir_text = "向下" if dev > 0 else "向上"
                                     insights.append(
@@ -1870,12 +1878,12 @@ def _gamma_unmet_reasons(macro_data: Dict[str, Any]) -> str:
     if not vix_ok:
         reasons.append("VIX 缺值")
     elif vix is not None and vix <= 20.0:
-        reasons.append(f"VIX {vix:.1f} ≤ 20")
+        reasons.append(f"VIX {vix:.2f} ≤ 20")
     if vts_ok and vts is not None:
         if vts < 1.0:
             reasons.append(f"VTS {vts:.2f} 未倒掛")
     elif vix_ok and vix is not None and vix <= 25.0:
-        reasons.append(f"VTS 缺值且 VIX {vix:.1f} ≤ 25")
+        reasons.append(f"VTS 缺值且 VIX {vix:.2f} ≤ 25")
     elif not vix_ok:
         reasons.append("VTS 缺值")
     return "、".join(reasons)

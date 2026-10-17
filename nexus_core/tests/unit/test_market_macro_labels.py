@@ -172,17 +172,24 @@ def test_negative_gamma_reason_vix_missing() -> None:
 def test_negative_gamma_reason_vix_high_vts_not_inverted() -> None:
     text = _neg(vix=30.0, vts_ratio=0.95)
     assert "VTS 0.95 未倒掛" in text
-    assert "VIX 30.0 ≤ 20" not in text
+    assert "VIX 30.00 ≤ 20" not in text
 
 
 def test_negative_gamma_reason_vts_stale_uses_vix_25() -> None:
     text = _neg(vix=22.0, vts_ratio=None)
-    assert "VTS 缺值且 VIX 22.0 ≤ 25" in text
-    assert "VIX 22.0 ≤ 20" not in text
+    assert "VTS 缺值且 VIX 22.00 ≤ 25" in text
+    assert "VIX 22.00 ≤ 20" not in text
 
 
 def test_negative_gamma_reason_vix_low() -> None:
-    assert "VIX 18.0 ≤ 20" in _neg(vix=18.0, vts_ratio=0.9)
+    assert "VIX 18.00 ≤ 20" in _neg(vix=18.0, vts_ratio=0.9)
+
+
+def test_negative_gamma_reason_vix_two_decimals() -> None:
+    # 19.99 不得被 .1f 四捨五入成「20.0 ≤ 20」
+    text = _neg(vix=19.99, vts_ratio=0.9)
+    assert "VIX 19.99 ≤ 20" in text
+    assert "VIX 20.0 ≤ 20" not in text
 
 
 def test_rrp_near_total_drain_past_large_prints_percentage() -> None:
