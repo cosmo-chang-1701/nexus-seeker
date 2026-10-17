@@ -195,6 +195,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     spy_gamma_flip = get_kv_cache("macro_spy_gamma_flip")
     uer = get_kv_cache("macro_uer")
     sahm_rule = get_kv_cache("macro_sahm_rule")
+    sahm_rule_date = get_kv_cache("macro_sahm_rule_date")
     rrp_change_30d = get_kv_cache("macro_rrp_change_30d")
 
     # 各 kv 快取的年齡（秒）：快取值本身不帶時效，edge 或排程停擺時舊值會被
@@ -234,7 +235,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
                 fed_balance = _pick("fed_balance", fed_balance)
                 fear_greed = _pick("fear_greed", fear_greed)
                 uer = _pick("uer", uer)
-                sahm_rule = _pick("sahm_rule", sahm_rule)
+                # 薩姆規則值與觀測月份成對更新：有新值就連月份一併採用 (可為 None)
+                if core_data.get("sahm_rule") is not None:
+                    sahm_rule = core_data["sahm_rule"]
+                    sahm_rule_date = core_data.get("sahm_rule_date")
                 rrp_change_30d = _pick("rrp_change_30d", rrp_change_30d)
                 if any(
                     core_data.get(f) is not None
@@ -491,6 +495,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "gamma_flip_line": gamma_flip_line,
         "uer": uer,
         "sahm_rule": sahm_rule,
+        "sahm_rule_date": sahm_rule_date,
         "rrp_change_30d": rrp_change_30d,
         "short_gamma_critical": short_gamma_critical,
         "recession_warning": recession_warning,

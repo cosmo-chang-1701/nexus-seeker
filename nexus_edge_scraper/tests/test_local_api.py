@@ -351,10 +351,45 @@ def test_scrape_core_macro_metrics_closes_browser_on_exception() -> None:
         # 整批失敗：各欄位未知 (None)，並標示 is_fallback，不以常數冒充
         assert data["data"]["rrp"] is None
         assert data["data"]["sahm_rule"] is None
+        assert data["data"]["sahm_rule_date"] is None
         assert data["data"]["fear_greed"] is None
         assert data["data"]["is_fallback"] is True
     assert mock_cm.mock_browser is not None
     mock_cm.mock_browser.close.assert_called_once()
+
+
+def test_scrape_core_macro_metrics_returns_sahm_rule_date() -> None:
+    """成功路徑：sahm_rule_date 取最新一列日期的 YYYY-MM。"""
+
+    class _CM:
+        async def __aenter__(self) -> Any:
+            mock_p = MagicMock()
+            mock_browser = AsyncMock()
+            mock_p.chromium.launch = AsyncMock(return_value=mock_browser)
+            return mock_p
+
+        async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+            pass
+
+    async def fake_series(series_id: str, context: Any) -> list[tuple[str, float]]:
+        if series_id == "SAHMREALTIME":
+            return [("2026-09-01", 0.0), ("2026-08-01", 0.03)]
+        return [("2026-10-01", 4.3)]
+
+    async def fake_stealth(self: Any, context: Any) -> None:
+        return None
+
+    with (
+        patch("playwright.async_api.async_playwright", return_value=_CM()),
+        patch("playwright_stealth.Stealth.apply_stealth_async", fake_stealth),
+        patch("local_api.macro._fetch_fred_series", side_effect=fake_series),
+        patch("httpx.AsyncClient.get", side_effect=Exception("no network")),
+    ):
+        response = client.get("/api/v1/scrape/macro/core_metrics")
+    data = response.json()["data"]
+    assert data["sahm_rule"] == 0.0
+    assert data["sahm_rule_date"] == "2026-09"
+    assert data["is_fallback"] is False
 
 
 def test_scrape_liquidity_closes_browser_on_exception() -> None:

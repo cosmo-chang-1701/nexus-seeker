@@ -247,6 +247,7 @@ flowchart TD
 ### 5.2 零除與邊界防護
 - **除數保護**：在計算 $\Delta R$ 權重時，會議後天數嚴格約束為 $d_{post} = \max(1, N - d_{prior})$，杜絕月底最後一日開會導致除以零崩潰。
 - **種子預設值清除**：`v050` 曾以 `INSERT OR IGNORE` 為總經快取種下常數（sahm $0.35$、US10Y $4.25$、VIX $18$、Fear & Greed $48$ 等），未設定 `TUNNEL_URL` 時部分鍵永遠不會被覆寫而被當成真實讀值。`v089` 刪除仍與種子逐字相同的列，之後缺值由讀取端走未知路徑。
+- **薩姆規則面板顯示**：全局宏觀風控面板的薩姆規則值依水位上色（$<0.30$ 綠、$0.30\sim0.50$ 黃、$\ge 0.50$ 紅），並附觸發門檻 `0.50` 與 FRED 觀測月份（如 `0.00 / 0.50・2026-09`）。觀測月份由 edge 的 `sahm_rule_date` 提供，core 以 `save_kv_cache_many` 將 `macro_sahm_rule` 與 `macro_sahm_rule_date` 成對原子寫入；edge 未帶月份時寫入 `None`，面板不顯示月份，避免舊月份殘留在新值旁。
 - **衛星持倉空集合**：當使用者投資組合中無任何 `SATELLITE` 資產時，`satellite_euphoria_ratio` 返回 `None`，五因子模型自動無縫退化為四因子模型，門檻常數保持一致。
 
 ### 5.3 減碼執行衝突隔離（Conflict Isolation）

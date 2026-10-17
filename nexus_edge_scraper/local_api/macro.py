@@ -401,6 +401,7 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
         "fed_balance": None,
         "uer": None,
         "sahm_rule": None,
+        "sahm_rule_date": None,
         "fear_greed": None,
         "is_fallback": True,
     }
@@ -439,16 +440,19 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
                 )
                 await Stealth().apply_stealth_async(context)
 
-                rrp_data, walcl, unrate, sahm, fgi = await asyncio.gather(
+                rrp_data, walcl, unrate, sahm_data, fgi = await asyncio.gather(
                     _fetch_fred_series("RRPONTSYD", context),
                     fetch_fred_csv("WALCL", context),
                     fetch_fred_csv("UNRATE", context),
-                    fetch_fred_csv("SAHMREALTIME", context),
+                    _fetch_fred_series("SAHMREALTIME", context),
                     fetch_cnn_fgi(),
                 )
             finally:
                 await browser.close()
 
+        # 薩姆規則為月頻序列：同時回傳最新觀測值與其所屬月份 (YYYY-MM)
+        sahm = sahm_data[0][1] if sahm_data else None
+        sahm_date = sahm_data[0][0][:7] if sahm_data else None
         rrp = rrp_data[0][1] if rrp_data else None
         rrp_change: float | None = None
         if rrp_data and len(rrp_data) > 30:
@@ -468,6 +472,7 @@ async def scrape_core_macro_metrics() -> dict[str, Any]:
                 else None,
                 "uer": round(unrate, 1) if unrate is not None else None,
                 "sahm_rule": round(sahm, 2) if sahm is not None else None,
+                "sahm_rule_date": sahm_date,
                 "fear_greed": round(fgi, 1) if fgi is not None else None,
                 "is_fallback": all(v is None for v in values),
             },
