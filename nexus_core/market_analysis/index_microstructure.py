@@ -562,14 +562,15 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
     sahm 0.35、fear_greed 48 等靜態常數**——那些值會讓下游把「未知」判成
     NORMAL，使 PYRAMID_ADD 等 fail-closed 閘門失效)，並附帶 `_is_fallback: True`
     標記供手動刷新流程如實回報資料來源。"""
-    fallback: Dict[str, Optional[float]] = {
+    fallback: Dict[str, Optional[Any]] = {
         "rrp": None,
         "fed_balance": None,
         "uer": None,
         "sahm_rule": None,
+        "sahm_rule_date": None,
         "fear_greed": None,
     }
-    from database.cache import save_kv_cache
+    from database.cache import save_kv_cache, save_kv_cache_many
 
     if not getattr(config, "TUNNEL_URL", ""):
         await save_kv_cache("macro_core_is_fallback", 1)
@@ -595,11 +596,19 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
                         ("macro_rrp_change_30d", "rrp_change_30d"),
                         ("macro_fed_balance", "fed_balance"),
                         ("macro_uer", "uer"),
-                        ("macro_sahm_rule", "sahm_rule"),
                         ("macro_fear_greed", "fear_greed"),
                     ):
                         if core_data.get(field) is not None:
                             await save_kv_cache(kv_key, core_data.get(field))
+                    # 薩姆規則值與其觀測月份成對原子寫入；edge 未帶月份 (尚未重新
+                    # 部署) 時月份寫入 None，避免舊月份殘留在新值旁邊。
+                    if core_data.get("sahm_rule") is not None:
+                        await save_kv_cache_many(
+                            {
+                                "macro_sahm_rule": core_data["sahm_rule"],
+                                "macro_sahm_rule_date": core_data.get("sahm_rule_date"),
+                            }
+                        )
                     await save_kv_cache("macro_core_is_fallback", 0)
                     return core_data
     except Exception as e:

@@ -40,6 +40,7 @@ from cogs.embed_builders._core import (
     NexusEmbed,
     format_cache_age_suffix,
 )
+from market_analysis.macro_signals import SAHM_THRESHOLD
 from market_analysis.macro_calendar_translator import translate_macro_event
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.insight_generator import compute_realtime_insights
@@ -75,6 +76,35 @@ _UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 # field，否則 _safe_clamp_field_value 會在 code block 內硬切，表格失去閉合 `|`。
 _RADAR_STO_CELL_MAX_CHARS = 24
 _RADAR_FREE_TEXT_CELL_MAX_CHARS = 72
+
+
+# 薩姆規則早期預警水位 (低於觸發門檻 SAHM_THRESHOLD 的黃色警戒起點)
+_SAHM_EARLY_WARNING = 0.30
+
+
+def _format_sahm_rule(value: Any, obs_month: Any) -> str:
+    """薩姆規則值的面板片段：依門檻上色並附觸發門檻與 FRED 觀測月份。
+
+    無值或無法解析 (含非有限值) 時回傳空字串。"""
+    if value is None:
+        return ""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if not math.isfinite(v):
+        return ""
+    if v >= SAHM_THRESHOLD:
+        color = "\u001b[1;31m"
+    elif v >= _SAHM_EARLY_WARNING:
+        color = "\u001b[1;33m"
+    else:
+        color = "\u001b[1;32m"
+    text = f"{v:.2f}"
+    if text == "-0.00":
+        text = "0.00"
+    month = f"・{obs_month}" if isinstance(obs_month, str) and obs_month else ""
+    return f" (薩姆規則值: {color}{text}\u001b[0m / {SAHM_THRESHOLD:.2f}{month})"
 
 
 def _clip_cell(text: str, max_chars: int) -> str:
@@ -2254,11 +2284,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         if (fear_greed is not None and float(fear_greed) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
-    sahm_str = (
-        f" (薩姆規則值: \u001b[1;31m{float(sahm_rule):.2f}\u001b[0m)"
-        if sahm_rule is not None
-        else ""
-    )
+    sahm_str = _format_sahm_rule(sahm_rule, macro_data.get("sahm_rule_date"))
     uer_val_str = (
         f"\u001b[1;33m{float(uer):.1f}%\u001b[0m{sahm_str}"
         if (uer is not None and float(uer) > 0)
