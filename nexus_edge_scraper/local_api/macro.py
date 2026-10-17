@@ -549,18 +549,15 @@ async def scrape_liquidity() -> dict[str, Any]:
 
 @router.get("/api/v1/scrape/macro/fedwatch")
 async def scrape_fedwatch() -> dict[str, Any]:
-    import re
     import calendar
-    import requests
     import asyncio
-    from datetime import datetime, date
-    import openpyxl
+    from datetime import date
     import yfinance as yf
 
     fallback: dict[str, Any] = {
         "probability": 0.50,
         "meeting_date": "",
-        "current_target": "3.50%-3.75%",
+        "current_target": "",
         "prob_maintain": 50.0,
         "prob_hike": 0.0,
         "prob_cut": 50.0,
@@ -795,212 +792,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
             result["anchor_gap_bp"] = anchor_gap_bp
         return result
 
-    def _fetch_and_parse_excel() -> dict[str, Any]:
-        url = "https://www.atlantafed.org/-/media/Project/Atlanta/FRBA/Documents/cenfis/market-probability-tracker/mpt_histdata.xlsx"
-        local_path = "/tmp/mpt_histdata.xlsx"
-
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        with open(local_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-
-        wb = openpyxl.load_workbook(local_path, data_only=True, read_only=True)
-        ws = wb["DATA"]
-
-        # 1. Group rows by date
-        data_by_date: dict[str, list[Any]] = {}
-        for row in ws.iter_rows(max_row=1000000, max_col=5, values_only=True):
-            if not row or row[0] == "date" or row[0] is None:
-                continue
-            dt_str = str(row[0]).strip()
-            if dt_str not in data_by_date:
-                data_by_date[dt_str] = []
-            data_by_date[dt_str].append(row)
-
-        if not data_by_date:
-            raise ValueError("No data found in the Excel sheet")
-
-        # Get the latest date
-        sorted_dates = sorted(data_by_date.keys())
-        latest_date_str = sorted_dates[-1]
-
-        latest_rows = data_by_date[latest_date_str]
-
-        # 2. Group latest rows by meeting date (reference_start)
-        by_meeting: dict[date, list[Any]] = {}
-        for r in latest_rows:
-            meeting_dt = r[1]
-            if not isinstance(meeting_dt, (datetime, date)):
-                if isinstance(meeting_dt, str):
-                    try:
-                        meeting_dt = datetime.fromisoformat(meeting_dt)
-                    except ValueError:
-                        continue
-                else:
-                    continue
-            meeting_date = (
-                meeting_dt.date() if isinstance(meeting_dt, datetime) else meeting_dt
-            )
-            if meeting_date not in by_meeting:
-                by_meeting[meeting_date] = []
-            by_meeting[meeting_date].append(r)
-
-        # Find the next meeting date >= today
-        today = _fedwatch_today()
-        future_meetings = [m for m in by_meeting.keys() if m >= today]
-        if not future_meetings:
-            latest_available_meeting = sorted(by_meeting.keys())[-1]
-            if (today - latest_available_meeting).days > 45:
-                logger.warning(
-                    f"FedWatch Excel data is outdated (latest meeting {latest_available_meeting} is > 45 days old). Using fallbacks."
-                )
-                raise ValueError(
-                    f"Stale meeting data: latest meeting {latest_available_meeting}"
-                )
-            next_meeting = latest_available_meeting
-        else:
-            next_meeting = min(future_meetings)
-
-        meeting_rows = by_meeting[next_meeting]
-
-        # 3. Parse target range and calculate maintain / hike / cut probabilities
-        first_row = meeting_rows[0]
-        target_range_str = str(first_row[2] or "350bps - 375bps").strip()
-
-        m = re.search(r"(\d+)bps\s*-\s*(\d+)bps", target_range_str)
-        if m:
-            low_bps = int(m.group(1))
-            high_bps = int(m.group(2))
-            current_target = f"{low_bps / 100:.2f}%-{high_bps / 100:.2f}%"
-            current_range_low_bps = low_bps
-            current_range_high_bps = high_bps
-        else:
-            current_target = target_range_str
-            current_range_low_bps = 350
-            current_range_high_bps = 375
-
-        direct_cut: float | None = None
-        direct_hike: float | None = None
-        maintain_bucket_val: float | None = None
-        bucket_cut_sum = 0.0
-        bucket_hike_sum = 0.0
-
-        for r in meeting_rows:
-            field = str(r[3] or "").strip()
-            val_str = r[4]
-            if not field or val_str is None:
-                continue
-
-            try:
-                val = float(str(val_str).strip())
-            except ValueError:
-                continue
-
-            field_lower = field.lower()
-            if (
-                "prob: cut" in field_lower
-                or "prob: <" in field_lower
-                or "probability of cut" in field_lower
-            ):
-                direct_cut = val
-            elif (
-                "prob: hike" in field_lower
-                or "prob: >" in field_lower
-                or "probability of hike" in field_lower
-            ):
-                direct_hike = val
-            else:
-                match_prob = re.search(r"(\d+)bps\s*-\s*(\d+)bps", field)
-                if match_prob:
-                    bucket_low = int(match_prob.group(1))
-                    bucket_high = int(match_prob.group(2))
-                    if (
-                        bucket_low == current_range_low_bps
-                        and bucket_high == current_range_high_bps
-                    ):
-                        maintain_bucket_val = val
-                    elif bucket_high <= current_range_low_bps:
-                        bucket_cut_sum += val
-                    elif bucket_low >= current_range_high_bps:
-                        bucket_hike_sum += val
-
-        # 優先使用直接匯總欄位；若無則使用離散區間累加，嚴格杜絕重複累加
-        prob_cut = direct_cut if direct_cut is not None else bucket_cut_sum
-        prob_hike = direct_hike if direct_hike is not None else bucket_hike_sum
-
-        if maintain_bucket_val is not None:
-            prob_maintain = maintain_bucket_val
-        elif prob_cut > 0 or prob_hike > 0:
-            prob_maintain = max(0.0, round(100.0 - prob_cut - prob_hike, 2))
-        else:
-            prob_maintain = 50.0
-            prob_cut = 50.0
-            prob_hike = 0.0
-
-        total_p = prob_cut + prob_hike + prob_maintain
-        if total_p > 0 and abs(total_p - 100.0) > 0.01:
-            prob_cut = round((prob_cut / total_p) * 100.0, 1)
-            prob_hike = round((prob_hike / total_p) * 100.0, 1)
-            prob_maintain = round(max(0.0, 100.0 - prob_cut - prob_hike), 1)
-
-        # 精確分類與宏觀緊縮純量計算
-        if prob_hike >= 50.0 or (
-            prob_hike >= 30.0 and prob_hike > prob_cut and prob_hike > prob_maintain
-        ):
-            decision = "hike"
-            prob = round(min(0.95, (50.0 + prob_hike / 2.0) / 100.0), 4)
-        elif prob_cut >= 50.0 or (
-            prob_cut >= 30.0 and prob_cut > prob_hike and prob_cut > prob_maintain
-        ):
-            decision = "cut"
-            prob = round(max(0.05, (50.0 - prob_cut / 2.0) / 100.0), 4)
-        elif prob_maintain >= 50.0:
-            decision = "maintain"
-            prob = round(
-                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
-                4,
-            )
-        else:
-            decision = "split"
-            prob = round(
-                max(0.05, min(0.95, (50.0 + (prob_hike - prob_cut) / 2.0) / 100.0)),
-                4,
-            )
-
-        return {
-            "probability": prob,
-            "meeting_date": next_meeting.strftime("%m/%d"),
-            "current_target": current_target,
-            "prob_maintain": round(prob_maintain, 1),
-            "prob_hike": round(prob_hike, 1),
-            "prob_cut": round(prob_cut, 1),
-            # Excel 路徑直接加總已公布的多桶機率，結構上不會有單點期貨線性內插
-            # 跨整碼邊界失真飽和的問題，因此不需要 ladder 拆解欄位。
-            "prob_hike_25": 0.0,
-            "prob_hike_50": 0.0,
-            "prob_cut_25": 0.0,
-            "prob_cut_50": 0.0,
-            "ladder_saturated": False,
-            "decision": decision,
-            "source": "Atlanta Fed Market Probability Tracker (MPT)",
-        }
-
-    # 1. Primary: Atlanta Fed MPT Excel 解析。直接加總 CME 已公布的多桶機率，
-    #    不依賴單點期貨價格反推，結構上不會有 ZQ 階梯算式那種跨整碼邊界
-    #    失真飽和成 100%/0% 的問題。
-    try:
-        parsed_data = await asyncio.to_thread(_fetch_and_parse_excel)
-        return {
-            "status": "success",
-            "data": parsed_data,
-        }
-    except Exception as e:
-        logger.warning(
-            f"Primary Atlanta Fed MPT parse failed: {e}, falling back to CBOT ZQ Fed Funds Futures calc."
-        )
-
-    # 2. Secondary: CBOT 30-Day Fed Funds Futures (ZQ) 即時階梯算式
+    # 1. Primary: CBOT 30-Day Fed Funds Futures (ZQ) 即時階梯算式；失敗則用靜態備援
     try:
         zq_data = await asyncio.to_thread(_fetch_and_calculate_zq_futures)
         return {
@@ -1009,7 +801,7 @@ async def scrape_fedwatch() -> dict[str, Any]:
         }
     except Exception as e:
         logger.warning(
-            f"Secondary CBOT ZQ Fed Funds Futures calc failed with exception: {e}, using static fallbacks."
+            f"Primary CBOT ZQ Fed Funds Futures calc failed with exception: {e}, using static fallbacks."
         )
         return {"status": "success", "data": fallback}
 

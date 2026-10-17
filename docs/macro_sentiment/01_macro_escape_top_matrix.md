@@ -168,7 +168,7 @@ flowchart TD
     Start([排程觸發: 04:00/08:45/15m 心跳]) --> FetchMacro[抓取 CME ZQ 期貨, CPI, WTI, VTS, Net GEX]
     FetchMacro --> SanityCheck{"數值合理性閘門<br/>Sanity Gating"}
 
-    SanityCheck -- 異常/未解釋飽和 --> FallbackState["啟動 Atlanta Fed Excel 或 0.50 備援<br/>macro_fedwatch_is_fallback=1"]
+    SanityCheck -- 異常/未解釋飽和 --> FallbackState["啟動 0.50 靜態備援<br/>macro_fedwatch_is_fallback=1"]
     SanityCheck -- 數值正常 --> CalculateProb[反推 R2 並計算緊縮分數 prob]
 
     FallbackState --> EscapeRegime["評估四因子流動性矩陣<br/>evaluate_escape_window_regime"]
@@ -235,12 +235,12 @@ flowchart TD
 ## 5. 邊界條件、風控熔斷與例外處理
 
 ### 5.1 CME 期貨休市與數據源異常阻斷（Sanity Gating）
-- **假日與休市保護**：當交易所週末或國定假日休市時，`ZQ` 期貨報價為空，系統自動 fallback 讀取次選 `ZQ=F`，若仍為空則呼叫 Atlanta Fed Excel 檔案（`mpt_histdata.xlsx`）進行歷史分佈解析；若均不可用，回傳預設中性 50% 基準值，並標記 `macro_fedwatch_is_fallback = 1`。
+- **假日與休市保護**：當交易所週末或國定假日休市時，`ZQ` 期貨報價為空，系統自動 fallback 讀取次選 `ZQ=F`，若均不可用，回傳靜態預設中性 50% 基準值，並標記 `macro_fedwatch_is_fallback = 1`。
 - **異常數值攔截（Sanity Gating）**：
   在 `services/calendar_service.py` 寫入 SQLite 快取前，強制執行合理性檢查：
   若滿足下列任一條件：
   1. $prob \ge 0.99$ 或 $prob \le 0.01$
-  2. $(P_{\text{cut}} \ge 99.0 \lor P_{\text{hike}} \ge 99.0) \land \neg (\text{ladder\_saturated} \lor \text{"Atlanta Fed"} \in source)$
+  2. $(P_{\text{cut}} \ge 99.0 \lor P_{\text{hike}} \ge 99.0) \land \neg \text{ladder\_saturated}$
 
   系統判定為歷史污染或失真數值，立即觸發防禦阻斷，中止資料庫寫入並在快取記錄 `macro_fedwatch_is_fallback = 1`。
 

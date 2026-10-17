@@ -433,8 +433,6 @@ def test_scrape_liquidity_no_common_date_is_fallback() -> None:
 
 
 def test_scrape_fedwatch_realtime_zq_calculation() -> None:
-    # Atlanta Fed Excel 現為 Primary 來源，需讓 requests.get 失敗才會真正落到
-    # ZQ 期貨階梯算式（Secondary）這條路徑，維持本測試原本的測試意圖。
     import pandas as pd
 
     mock_df_meeting = pd.DataFrame({"Close": [96.33]}, index=[pd.Timestamp.now()])
@@ -453,7 +451,6 @@ def test_scrape_fedwatch_realtime_zq_calculation() -> None:
 
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
-        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
         patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
         # 固定今天日期，避免真實日期越過會議日後測試失效。
@@ -515,7 +512,6 @@ def test_scrape_fedwatch_zq_anchors_on_post_month_when_prior_month_has_meeting()
 
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
-        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
         patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         patch("local_api.macro._fedwatch_today", return_value=date(2026, 10, 2)),
     ):
@@ -572,7 +568,6 @@ def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> Non
 
     with (
         patch("yfinance.Ticker", side_effect=mock_ticker),
-        patch("requests.get", side_effect=Exception("Mock Atlanta Fed fetch failure")),
         patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
         # 斷言數值以下一次會議 = 2026-09-16 推導 (days_in_month=30、d_prior=16)，
         # 固定今天日期，避免真實日期越過會議日後測試失效。
@@ -611,10 +606,9 @@ def test_scrape_fedwatch_zq_ladder_saturation_decomposes_across_buckets() -> Non
 
 
 def test_scrape_fedwatch_fallback() -> None:
-    # Mock yfinance and requests.get to fail
+    # Mock yfinance to fail
     with (
         patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
-        patch("requests.get", side_effect=Exception("Mock requests failure")),
     ):
         response = client.get("/api/v1/scrape/macro/fedwatch")
         assert response.status_code == 200
@@ -625,175 +619,39 @@ def test_scrape_fedwatch_fallback() -> None:
         assert data["data"]["prob_cut"] == 50.0
         assert data["data"]["decision"] == "maintain"
         assert data["data"]["source"] == "fallback"
+        assert data["data"]["current_target"] == ""
         assert data["data"]["ladder_saturated"] is False
 
 
-def test_scrape_fedwatch_excel_parsing_and_buckets() -> None:
-    from datetime import date, timedelta
+def test_scrape_fedwatch_zq_success_never_calls_requests_get() -> None:
+    # ZQ 為 Primary：成功時不得再碰 requests.get（已移除外部 xlsx 來源）
+    import pandas as pd
 
-    meeting_date = date.today() + timedelta(days=15)
-    mock_rows = [
-        ("date", "meeting_date", "target", "field", "val"),
-        (
-            "2026-08-15",
-            meeting_date,
-            "525bps - 550bps",
-            "Prob: 500bps - 525bps",
-            "15.0",
-        ),
-        (
-            "2026-08-15",
-            meeting_date,
-            "525bps - 550bps",
-            "Prob: 525bps - 550bps",
-            "80.0",
-        ),
-        (
-            "2026-08-15",
-            meeting_date,
-            "525bps - 550bps",
-            "Prob: 550bps - 575bps",
-            "5.0",
-        ),
-    ]
+    mock_df_meeting = pd.DataFrame({"Close": [96.33]}, index=[pd.Timestamp.now()])
+    mock_df_prior = pd.DataFrame({"Close": [96.3675]}, index=[pd.Timestamp.now()])
+    mock_df_irx = pd.DataFrame({"Close": [3.70]}, index=[pd.Timestamp.now()])
 
-    mock_ws = MagicMock()
-    mock_ws.iter_rows.return_value = mock_rows
-    mock_wb = MagicMock()
-    mock_wb.__getitem__.return_value = mock_ws
+    def mock_ticker(sym: str) -> MagicMock:
+        t = MagicMock()
+        if sym == "^IRX":
+            t.history.return_value = mock_df_irx
+        elif "ZQQ" in sym:
+            t.history.return_value = mock_df_prior
+        else:
+            t.history.return_value = mock_df_meeting
+        return t
 
     with (
-        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
-        patch("requests.get") as mock_req,
-        patch("openpyxl.load_workbook", return_value=mock_wb),
+        patch("yfinance.Ticker", side_effect=mock_ticker),
+        patch("requests.get") as mock_get,
+        patch("local_api.macro._fetch_effr", return_value=(3.88, 3.75, 4.00)),
+        patch("local_api.macro._fedwatch_today", return_value=date(2026, 9, 16)),
     ):
-        mock_req.return_value.status_code = 200
-        mock_req.return_value.iter_content.return_value = [b"mock"]
         response = client.get("/api/v1/scrape/macro/fedwatch")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "success"
-        assert data["data"]["decision"] == "maintain"
-        assert data["data"]["prob_maintain"] == 80.0
-        assert data["data"]["prob_cut"] == 15.0
-        assert data["data"]["prob_hike"] == 5.0
-        assert data["data"]["meeting_date"] == meeting_date.strftime("%m/%d")
-        assert data["data"]["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
-        # Excel 路徑直接加總已公布多桶機率，結構上不會有 ladder 飽和問題
-        assert data["data"]["ladder_saturated"] is False
-
-
-def test_scrape_fedwatch_stale_data_fallback() -> None:
-    from datetime import date, timedelta
-
-    # Meeting date from 100 days ago (stale)
-    old_meeting_date = date.today() - timedelta(days=100)
-    mock_rows = [
-        ("date", "meeting_date", "target", "field", "val"),
-        (
-            "2026-01-01",
-            old_meeting_date,
-            "525bps - 550bps",
-            "Prob: hike",
-            "100.0",
-        ),
-    ]
-
-    mock_ws = MagicMock()
-    mock_ws.iter_rows.return_value = mock_rows
-    mock_wb = MagicMock()
-    mock_wb.__getitem__.return_value = mock_ws
-
-    with (
-        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
-        patch("requests.get") as mock_req,
-        patch("openpyxl.load_workbook", return_value=mock_wb),
-    ):
-        mock_req.return_value.status_code = 200
-        mock_req.return_value.iter_content.return_value = [b"mock"]
-        response = client.get("/api/v1/scrape/macro/fedwatch")
-        assert response.status_code == 200
-        data = response.json()
-        # Stale data should trigger fallback instead of reporting 100% hike
-        assert data["status"] == "success"
-        assert data["data"]["probability"] == 0.50
-        assert data["data"]["decision"] == "maintain"
-
-
-def test_scrape_fedwatch_direct_summary_and_buckets_no_double_count() -> None:
-    from datetime import date, timedelta
-
-    meeting_date = date.today() + timedelta(days=30)
-    mock_rows = [
-        ("date", "meeting_date", "target", "field", "val"),
-        (
-            "2026-08-13",
-            meeting_date,
-            "350bps - 375bps",
-            "Rate: 25th percentile",
-            "371.90",
-        ),
-        ("2026-08-13", meeting_date, "350bps - 375bps", "Rate: mean", "378.52"),
-        ("2026-08-13", meeting_date, "350bps - 375bps", "Prob: cut", "1.36"),
-        ("2026-08-13", meeting_date, "350bps - 375bps", "Prob: hike", "59.06"),
-        (
-            "2026-08-13",
-            meeting_date,
-            "350bps - 375bps",
-            "Prob: 350bps - 375bps",
-            "40.42",
-        ),
-        (
-            "2026-08-13",
-            meeting_date,
-            "350bps - 375bps",
-            "Prob: 375bps - 400bps",
-            "54.67",
-        ),
-        (
-            "2026-08-13",
-            meeting_date,
-            "350bps - 375bps",
-            "Prob: 400bps - 425bps",
-            "4.91",
-        ),
-    ]
-
-    mock_ws = MagicMock()
-    mock_ws.iter_rows.return_value = mock_rows
-    mock_wb = MagicMock()
-    mock_wb.__getitem__.return_value = mock_ws
-
-    with (
-        patch("yfinance.Ticker", side_effect=Exception("Mock yfinance failure")),
-        patch("requests.get") as mock_req,
-        patch("openpyxl.load_workbook", return_value=mock_wb),
-    ):
-        mock_req.return_value.status_code = 200
-        mock_req.return_value.iter_content.return_value = [b"mock"]
-        response = client.get("/api/v1/scrape/macro/fedwatch")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "success"
-        res_data = data["data"]
-        assert res_data["meeting_date"] == meeting_date.strftime("%m/%d")
-        assert res_data["current_target"] == "3.50%-3.75%"
-        assert res_data["decision"] == "hike"
-        # 1.36 / 100.84 -> 1.3%, 59.06 / 100.84 -> 58.6%, 40.1% maintain
-        assert res_data["prob_cut"] == 1.3
-        assert res_data["prob_hike"] == 58.6
-        assert res_data["prob_maintain"] == 40.1
-        assert (
-            round(
-                res_data["prob_cut"]
-                + res_data["prob_hike"]
-                + res_data["prob_maintain"],
-                1,
-            )
-            == 100.0
-        )
-        assert res_data["source"] == "Atlanta Fed Market Probability Tracker (MPT)"
-        assert res_data["ladder_saturated"] is False
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["source"] == "CME 30-Day Fed Funds Futures (ZQ)"
+    assert not mock_get.called
 
 
 # NOTE: this mocked HTML contains no "Item 7"/"Item 2"/"Item 1A" anchor text

@@ -1388,10 +1388,10 @@ async def test_calendar_service_fedwatch_sanity_rejection() -> None:
 async def test_calendar_service_fedwatch_cut_saturation_without_explanation_rejected() -> (
     None
 ):
-    """測試 prob_cut 飽和至 100% 但缺乏 ladder 拆解說明（既非 Atlanta Fed 多桶來源，
-    也沒有 ladder_saturated 旗標）時，比照既有的 prob_hike 對稱防禦邏輯，視為疑似
-    異常/污染數據並觸發防禦阻斷。對應使用者回報的「(09/16) 降息確立 (降息 100.0% /
-    維持 0.0%)」bug 修正前的資料形狀（見 macro.py 修正前的單一步階 clamp）。"""
+    """測試 prob_cut 飽和至 100% 但缺乏 ladder 拆解說明（沒有 ladder_saturated
+    旗標）時，比照既有的 prob_hike 對稱防禦邏輯，視為疑似異常/污染數據並觸發
+    防禦阻斷。對應使用者回報的「(09/16) 降息確立 (降息 100.0% / 維持 0.0%)」bug
+    修正前的資料形狀（見 macro.py 修正前的單一步階 clamp）。"""
     from services.calendar_service import calendar_service
     import config
 
@@ -1406,6 +1406,41 @@ async def test_calendar_service_fedwatch_cut_saturation_without_explanation_reje
             "prob_cut": 100.0,
             "meeting_date": "09/16",
             "source": "unexplained-source",
+        },
+    }
+
+    with (
+        patch.object(config, "TUNNEL_URL", "http://mock-tunnel"),
+        patch("httpx.AsyncClient.get", return_value=mock_resp),
+        patch("database.cache.save_kv_cache") as mock_save,
+    ):
+        await calendar_service.update_fedwatch_probability()
+        saved_keys = [call.args[0] for call in mock_save.call_args_list]
+        assert "macro_fedwatch_is_fallback" in saved_keys
+        assert "macro_fedwatch_probability" not in saved_keys
+
+
+@pytest.mark.asyncio
+async def test_calendar_service_fedwatch_legacy_mpt_source_saturation_rejected() -> (
+    None
+):
+    """Atlanta Fed MPT 來源已移除：即使 source 仍帶舊 MPT 名稱，只要飽和 99%
+    以上且沒有 ladder_saturated，一律視為異常並轉為備援。"""
+    from services.calendar_service import calendar_service
+    import config
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "success",
+        "data": {
+            "probability": 0.95,
+            "prob_hike": 100.0,
+            "prob_maintain": 0.0,
+            "prob_cut": 0.0,
+            "meeting_date": "10/28",
+            "ladder_saturated": False,
+            "source": "Atlanta Fed Market Probability Tracker (MPT)",
         },
     }
 
