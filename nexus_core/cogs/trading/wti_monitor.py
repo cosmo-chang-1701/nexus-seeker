@@ -8,7 +8,7 @@
 import asyncio
 import logging
 from datetime import time, datetime
-from typing import Any
+from typing import Any, Optional
 
 from discord.ext import commands, tasks
 
@@ -76,19 +76,19 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
 
         now_et = datetime.now(market_time.ny_tz)
 
-        # 靜默時段保護 (00:00 – 06:00 ET)
-        if QUIET_HOUR_START <= now_et.hour < QUIET_HOUR_END:
-            logger.debug(
-                f"🛢️ [WTI Monitor] 處於靜默時段 ({now_et.hour:02d}:{now_et.minute:02d} ET)，跳過掃描"
-            )
-            return
-
         # CL=F 休市保護（週末＋平日 17:00–18:00 ET 維護）：休市期間不抓取
         if _is_cl_weekend_closed(now_et):
             logger.debug("🛢️ [WTI Monitor] CL=F 休市中，跳過掃描")
             return
 
         try:
+            # 靜默時段 (00:00 – 06:00 ET)：仍更新報價與 30 分鐘基準，但不評估、不推播
+            if QUIET_HOUR_START <= now_et.hour < QUIET_HOUR_END:
+                logger.debug(
+                    f"🛢️ [WTI Monitor] 靜默時段 ({now_et.hour:02d}:{now_et.minute:02d} ET)，僅更新快取不推播"
+                )
+                await self._refresh_wti_price()
+                return
             await self._evaluate_wti_alerts()
         except Exception as e:
             logger.error(f"🛢️ [WTI Monitor] 執行失敗: {e}", exc_info=True)
@@ -100,44 +100,51 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
             "🛢️ WTI 油價監控器已啟動，每 30 分鐘執行一次 (全天候，00:00-06:00 ET 靜默)。"
         )
 
-    async def _evaluate_wti_alerts(self) -> None:
-        """評估所有用戶的 WTI 閾值並觸發警報。"""
+    async def _refresh_wti_price(
+        self,
+    ) -> Optional[tuple[float, Optional[float], Optional[float]]]:
+        """抓取 CL=F 報價並更新 macro_wti / macro_wti_prev_30m 快取。
+
+        Returns:
+            (現價, 新鮮的 30 分鐘前基準價或 None, 30 分鐘波動% 或 None)；報價無效回傳 None。
+        """
         from services.market_data_service import get_quote
 
-        # 1. 抓取 CL=F 即時報價
         wti_quote = await get_quote("CL=F")
         if not isinstance(wti_quote, dict) or wti_quote.get("c", 0.0) <= 0.0:
             logger.warning("🛢️ [WTI Monitor] CL=F 報價抓取失敗或無效")
-            return
+            return None
 
         current_price = float(wti_quote["c"])
         logger.info(f"🛢️ [WTI Monitor] CL=F 現價: ${current_price:.2f}")
 
-        # 2. 計算 30 分鐘波動百分比
         # 同步 SQLite 讀取不得在 event loop 執行，改走 to_thread。
         prev_price_raw, prev_age = await asyncio.to_thread(
             database.get_kv_cache_with_age, "macro_wti_prev_30m"
         )
-        # 基準缺失、年齡未知或過舊（跨休市）視為無基準：本輪只更新基準，不評估波動。
-        has_baseline = (
+        # 基準缺失、年齡未知或過舊（跨休市）視為無基準 (None)，絕不以 0.0 代替。
+        fresh_prev: Optional[float] = None
+        if (
             prev_price_raw is not None
             and prev_age is not None
             and prev_age <= _PREV_PRICE_MAX_AGE_SECONDS
-        )
-        prev_price = (
-            float(prev_price_raw)
-            if has_baseline and prev_price_raw is not None
-            else current_price
-        )
-        pct_change = (
-            ((current_price - prev_price) / prev_price * 100.0)
-            if prev_price > 0.0
-            else 0.0
-        )
+        ):
+            fresh_prev = float(prev_price_raw)
+        pct_change: Optional[float] = None
+        if fresh_prev is not None and fresh_prev > 0.0:
+            pct_change = (current_price - fresh_prev) / fresh_prev * 100.0
 
         # 更新前次價格快取與宏觀快取
         await database.save_kv_cache("macro_wti_prev_30m", current_price)
         await database.save_kv_cache("macro_wti", current_price)
+        return current_price, fresh_prev, pct_change
+
+    async def _evaluate_wti_alerts(self) -> None:
+        """評估所有用戶的 WTI 閾值並觸發警報。"""
+        refreshed = await self._refresh_wti_price()
+        if refreshed is None:
+            return
+        current_price, fresh_prev, pct_change = refreshed
 
         # 3. 遍歷所有用戶，評估觸發條件
         today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
@@ -159,7 +166,10 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
                 alerts_to_send.append((WtiAlertType.LOWER_BREACH, config.lower_price))
 
             # 百分比波動檢查 (30 分鐘)
-            if has_baseline and abs(pct_change) >= config.pct_change_threshold:
+            if (
+                pct_change is not None
+                and abs(pct_change) >= config.pct_change_threshold
+            ):
                 alert_type = (
                     WtiAlertType.PCT_SURGE
                     if pct_change > 0
@@ -193,6 +203,7 @@ class WtiMonitorCog(commands.Cog, name="WtiMonitorCog"):
                         alert_type=alert_type,
                         threshold_value=threshold,
                         pct_change_30min=pct_change,
+                        prev_price_30m=fresh_prev,
                         user_watchlist=user_watchlist,
                         user_holdings=user_holdings,
                     )

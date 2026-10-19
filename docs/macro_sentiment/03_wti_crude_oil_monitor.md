@@ -19,21 +19,22 @@
 ## 2. 數學模型與量化推導
 
 ### 2.1 30 分鐘價格突波與相對波動率推導
-監控器每 30 分鐘抓取一次紐約商業交易所（NYMEX）近月原油期貨連續報價（`CL=F`），現價記為 $P_{now}$，前次 30 分鐘存檔價格為 $P_{prev}$（由 SQLite `kv_cache` 的 `macro_wti_prev_30m` 讀取）。
+監控器每 30 分鐘抓取一次紐約商業交易所（NYMEX）近月原油期貨連續報價（`CL=F`），現價記為 $P_{now}$，前次 30 分鐘存檔價格為 $P_{prev}$（由 SQLite `kv_cache` 的 `macro_wti_prev_30m` 讀取）。基準年齡超過 45 分鐘（跨休市、缺失或年齡未知）視為「無基準」，$\Delta P_{30m}\%$ 為 `None`，卡片顯示灰色 `--` 並標註「（無 30 分鐘基準）」，絕不以 $0.0\%$ 取代。
 
 相對波動百分比 $\Delta P_{30m}\%$ 計算公式為：
 $$\Delta P_{30m}\% = \begin{cases}
-\frac{P_{now} - P_{prev}}{P_{prev}} \times 100\% & \text{若 } P_{prev} > 0 \\
-0.0 & \text{若 } P_{prev} \le 0
+\frac{P_{now} - P_{prev}}{P_{prev}} \times 100\% & \text{若有新鮮基準且 } P_{prev} > 0 \\
+\text{None（顯示 --）} & \text{其他（無基準）}
 \end{cases}$$
 
 警報類型 $\text{AlertType}$ 的判定邏輯如下：
 $$\text{AlertType} = \begin{cases}
 \text{UPPER\_BREACH} & \text{若 } P_{upper} \text{ 已配置且 } P_{now} \ge P_{upper} \\
 \text{LOWER\_BREACH} & \text{若 } P_{lower} \text{ 已配置且 } P_{now} \le P_{lower} \\
-\text{PCT\_SURGE} & \text{若 } \Delta P_{30m}\% \ge Threshold_{pct} \\
-\text{PCT\_PLUNGE} & \text{若 } \Delta P_{30m}\% \le -Threshold_{pct}
+\text{PCT\_SURGE} & \text{若有基準且 } \Delta P_{30m}\% \ge Threshold_{pct} \\
+\text{PCT\_PLUNGE} & \text{若有基準且 } \Delta P_{30m}\% \le -Threshold_{pct}
 \end{cases}$$
+無基準時不進行 PCT 類評估。UPPER／LOWER 為水位觸發，每使用者每類型每個 ET 日僅發送一次；若上一輪（30 分鐘前）基準價已越過同一閾值，標題改為「持續高於上限／持續低於下限」，否則為「突破上限／跌破下限」。
 
 ### 2.2 五階技術趨勢狀態機量化推導
 技術指標引擎 `market_analysis/wti_analysis.py` 整合 RSI(14)、MA20、MA50、MA200 與 ATR(14)。看多信號強度分數 $S_{bull} \in \{0, 1, 2, 3, 4\}$ 計算如下：
@@ -76,7 +77,7 @@ flowchart TD
     LeaderCheck -- 否 --> Standby[略過本次監控]
     LeaderCheck -- 是 --> QuietCheck{處於 ET 00:00 ~ 06:00?}
 
-    QuietCheck -- 是 --> QuietLog[記錄 Debug 靜默模式，不發送警報]
+    QuietCheck -- 是 --> QuietRefresh["仍抓取 CL=F 報價並更新<br/>macro_wti 與 macro_wti_prev_30m<br/>不評估使用者、不發送 DM"]
     QuietCheck -- 否 --> FetchQuote[抓取 CL=F 即時報價]
 
     FetchQuote --> ValidQuote{報價有效 c > 0?}
@@ -118,16 +119,23 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-### 5.1 週末休市與期貨結算價平移
-- **週末期貨休盤保護**：週五美東收盤至週日傍晚，期貨市場無成交價。`get_quote("CL=F")` 返回最後收盤價，$\Delta P_{30m}\%$ 自然維持 $0.0\%$，不觸發暴漲暴跌假警報。
-- **合約換月價差（Roll Spread）校正**：當近月期貨合約到期交割換月時，報價可能出現跳空缺口。系統對比成交量加權平均以防止跳空雜訊造成瞬間 `PCT_SURGE` 誤報。
+### 5.1 週末休市與合約換月
+- **休市保護**：CL=F 週五 17:00 ET 收盤至週日 18:00 ET 重開，另週一至週四 17:00–18:00 ET 為維護休市；休市期間不抓取。重開後 30 分鐘基準已逾 45 分鐘，視為無基準（`None`），不評估 PCT 類警報。
+- **合約換月（Roll）處理**：日線連續序列（`period=1y, interval=1d`）在換月時會混用不同合約。日漲跌幅改以盤中序列（`period=5d, interval=30m`，已是當前合約）取得的「前一交易日收盤」（最後一根其後有 ≥ 60 分鐘缺口、且缺口後下一根 K 棒於 18:00 ET 開盤的 K 棒 Close；盤中單根缺漏不算分界）為基準；若取不到才退回日線 `close.iloc[-2]`。當盤中前收與日線 `iloc[-2]` 相對差異超過 1.0% 時判定為換月：週漲跌幅不顯示（`--`），並在漲跌幅行加上 `[換月]` 標記。未換月時週漲跌幅以 `close.iloc[-6]` 為基準。
+- RSI／MA／ATR 使用未調整的連續日線序列，換月時可能出現跳空缺口，僅供參考。
+- 取不到任何基準時，日／週漲跌幅顯示灰色 `--`，不以 `+0.00%` 代替。
 
 ### 5.2 深夜靜默時段（Quiet Hours）例外
-- 00:00 至 06:00 ET 期間，後台計算引擎持續計算價格變化與技術指標，並更新 SQLite 快取（`macro_wti` 與 `macro_wti_prev_30m`），維持數據連續性；但抑制所有主動 Discord DM 派發，確保使用者作息不被打擾。
+- 00:00 至 06:00 ET 期間，監控器仍抓取 CL=F 報價並更新 SQLite 快取（`macro_wti` 與 `macro_wti_prev_30m`），維持 30 分鐘基準的連續性；但完全略過使用者評估與 Discord DM 派發，確保使用者作息不被打擾。CL=F 休市時段則整輪略過。
 
 ### 5.3 能源關聯持倉自動標記
 - 當某用戶觸發警報時，系統自動交叉比對該用戶當前的自選清單（`get_user_watchlist`）與持倉（`get_user_holding_symbols`）。
-- 若用戶持有受衝擊之能源股（如持有 XOM 或 CVX），Embed 會在 ANSI 欄位中亮起 🎯 標記，並提示該標的相對於油價波動的敏感度。
+- 若用戶持有受衝擊之能源股（如持有 XOM 或 CVX），Embed 會在該標的列加上 `[HOLDING]` 標記；僅在自選清單者標示 `[WATCH]`。
+
+### 5.4 警報卡片欄位語意
+- 能源標的表在美股收盤時，標題改為「最近收盤 ─ 該日漲跌」（Finnhub 盤外回傳最近收盤與該日漲跌）；盤中維持「現價 ─ 日漲跌」。
+- 總經事件欄位僅比對高影響總經日曆（不含 EIA 庫存與 OPEC 會議），無相符項目時如實說明；有相符項目時時間以 `MM/DD HH:MM ET` 顯示。
+- 風險指令的文字以「全組合風險限額」描述，因 $w_{oil}$ 乘入所有交易意圖的風險限額，非僅賣方。
 
 ---
 

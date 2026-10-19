@@ -30,6 +30,11 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
         analysis.alert_type,
         ("🛢️ WTI 原油價格警報", discord.Color.orange()),
     )
+    continuing = bool(getattr(analysis, "breach_is_continuing", False))
+    if continuing and analysis.alert_type == WtiAlertType.UPPER_BREACH:
+        title = "🛢️ WTI 原油持續高於上限"
+    elif continuing and analysis.alert_type == WtiAlertType.LOWER_BREACH:
+        title = "🛢️ WTI 原油持續低於下限"
 
     embed = NexusEmbed(
         title=title,
@@ -44,11 +49,18 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
     # Field 1: 🚨 觸發事件與即時遙測 (Trigger Telemetry)
     # =========================================================================
     if analysis.alert_type in (WtiAlertType.UPPER_BREACH, WtiAlertType.LOWER_BREACH):
-        direction_verb = (
-            "突破上限"
-            if analysis.alert_type == WtiAlertType.UPPER_BREACH
-            else "跌破下限"
-        )
+        is_upper = analysis.alert_type == WtiAlertType.UPPER_BREACH
+        if continuing:
+            direction_verb = "持續高於上限" if is_upper else "持續低於下限"
+        else:
+            direction_verb = "突破上限" if is_upper else "跌破下限"
+        pct30 = analysis.pct_change_30min
+        if pct30 is None:
+            pct30_str = "\u001b[1;30m--\u001b[0m （無 30 分鐘基準）"
+        else:
+            pct30_str = (
+                f"\u001b[1;{'32' if pct30 >= 0 else '31'}m{pct30:+.2f}%\u001b[0m"
+            )
         status_color = (
             "\u001b[1;33m"
             if analysis.alert_type == WtiAlertType.UPPER_BREACH
@@ -59,19 +71,18 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
             f" ┌─ 觸發情境 ─ [{status_color}{direction_verb}\u001b[0m]\n"
             f" ├─ 即時現價: \u001b[1;37m${tech.price:.2f}\u001b[0m\n"
             f" ├─ 設定閾值: \u001b[1;37m${analysis.threshold_value:.2f}\u001b[0m\n"
-            f" └─ 30分波動: \u001b[1;{'32' if analysis.pct_change_30min >= 0 else '31'}m{analysis.pct_change_30min:+.2f}%\u001b[0m\n"
+            f" └─ 30分波動: {pct30_str}\n"
             f"```"
         )
     else:
-        direction_verb = "劇烈飆漲" if analysis.pct_change_30min > 0 else "劇烈暴跌"
-        status_color = (
-            "\u001b[1;32m" if analysis.pct_change_30min > 0 else "\u001b[1;31m"
-        )
+        pct_val = analysis.pct_change_30min or 0.0
+        direction_verb = "劇烈飆漲" if pct_val > 0 else "劇烈暴跌"
+        status_color = "\u001b[1;32m" if pct_val > 0 else "\u001b[1;31m"
         trigger_ansi = (
             f"```ansi\n"
             f" ┌─ 觸發情境 ─ [{status_color}{direction_verb}\u001b[0m]\n"
             f" ├─ 即時現價: \u001b[1;37m${tech.price:.2f}\u001b[0m\n"
-            f" ├─ 30分波動: {status_color}{analysis.pct_change_30min:+.2f}%\u001b[0m\n"
+            f" ├─ 30分波動: {status_color}{pct_val:+.2f}%\u001b[0m\n"
             f" └─ 波動閾值: \u001b[1;37m±{analysis.threshold_value:.1f}%\u001b[0m\n"
             f"```"
         )
@@ -94,8 +105,18 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
         if tech.rsi_14 >= 70
         else ("\u001b[1;32m" if tech.rsi_14 <= 30 else "\u001b[1;37m")
     )
-    daily_color = "\u001b[1;32m" if tech.daily_change_pct >= 0 else "\u001b[1;31m"
-    weekly_color = "\u001b[1;32m" if tech.weekly_change_pct >= 0 else "\u001b[1;31m"
+
+    def _chg_cell(val: Any) -> str:
+        if val is None:
+            return "\u001b[1;30m--\u001b[0m"
+        color_code = "\u001b[1;32m" if val >= 0 else "\u001b[1;31m"
+        return f"{color_code}{val:+.2f}%\u001b[0m"
+
+    roll_mark = (
+        " \u001b[1;33m[換月]\u001b[0m"
+        if getattr(tech, "is_contract_roll", False)
+        else ""
+    )
 
     tech_panel = (
         f"```ansi\n"
@@ -103,7 +124,7 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
         f" ├─ RSI(14) : {rsi_color}{tech.rsi_14:.1f}\u001b[0m\n"
         f" ├─ MA 均線 : \u001b[1;37m20D ${tech.ma_20:.2f} │ 50D ${tech.ma_50:.2f} │ 200D ${tech.ma_200:.2f}\u001b[0m\n"
         f" ├─ ATR(14) : \u001b[1;37m${tech.atr_14:.2f}\u001b[0m\n"
-        f" ├─ 漲跌幅  : 日 {daily_color}{tech.daily_change_pct:+.2f}%\u001b[0m │ 週 {weekly_color}{tech.weekly_change_pct:+.2f}%\u001b[0m\n"
+        f" ├─ 漲跌幅  : 日 {_chg_cell(tech.daily_change_pct)} │ 週 {_chg_cell(tech.weekly_change_pct)}{roll_mark}\n"
         f" └─ 趨勢判定: {trend_color}{trend_text}\u001b[0m\n"
         f"```"
     )
@@ -113,7 +134,11 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
     # Field 3: ⛽ 能源板塊關聯股衝擊 (Correlated Assets)
     # =========================================================================
     if analysis.correlated_impacts:
-        lines: list[str] = [" ┌─ 能源標的 ─ 現價 ─ 日漲跌 ─ [關聯標記]"]
+        if getattr(analysis, "equity_session_open", True):
+            sector_header = " ┌─ 能源標的 ─ 現價 ─ 日漲跌 ─ [關聯標記]"
+        else:
+            sector_header = " ┌─ 能源標的 ─ 最近收盤 ─ 該日漲跌 ─ [關聯標記]"
+        lines: list[str] = [sector_header]
         total_items = len(analysis.correlated_impacts)
         for i, imp in enumerate(analysis.correlated_impacts):
             prefix = " └─" if i == total_items - 1 else " ├─"
@@ -145,16 +170,16 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
     weight = analysis.oil_risk_weight
     if weight >= 1.0:
         weight_status = "\u001b[1;32m無壓縮 (1.00x)\u001b[0m"
-        directive = "油價處於安全區間 (<$75)，維持正常賣方限額與風險預算。"
+        directive = "油價處於安全區間 (<$75)，維持正常的全組合風險限額。"
     elif weight >= 0.9:
         weight_status = "\u001b[1;33m輕度壓縮 (0.90x)\u001b[0m"
-        directive = "油價進入 $75-$85 警戒區，賣方曝險限額微幅收緊 10%。"
+        directive = "油價進入 $75-$85 警戒區，全組合風險限額微幅收緊 10%。"
     elif weight >= 0.7:
         weight_status = "\u001b[1;33m中度壓縮 (0.70x)\u001b[0m"
-        directive = "油價突破 $85 通膨警戒線，賣方曝險限額壓縮 30%，謹防成本端傳導。"
+        directive = "油價突破 $85 通膨警戒線，全組合風險限額壓縮 30%，謹防成本端傳導。"
     else:
         weight_status = "\u001b[1;31m嚴重壓縮 (0.50x 🚨)\u001b[0m"
-        directive = "油價突破 $95 極端衝擊線，全面強制減半賣方限額，啟動防禦模式。"
+        directive = "油價突破 $95 極端衝擊線，全組合風險限額強制減半，啟動防禦模式。"
 
     risk_lines: list[str] = [
         f" ┌─ 風險權重: {weight_status}",
@@ -169,7 +194,9 @@ def create_wti_alert_embed(analysis: Any) -> discord.Embed:
             )
             risk_lines.append(f"{sub_prefix}  • \u001b[1;37m{ev}\u001b[0m")
     else:
-        risk_lines.append(" └─ 近期無高影響力 OPEC/原油地緣事件排程。")
+        risk_lines.append(
+            " └─ 總經日曆未收錄 EIA 庫存／OPEC 會議；本欄僅比對高影響總經事件，目前無相符項目。"
+        )
 
     embed.add_field(
         name="🛡️ 投資組合風險與總經事件",
