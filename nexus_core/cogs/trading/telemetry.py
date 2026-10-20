@@ -38,6 +38,14 @@ class TelemetryMonitorCog(commands.Cog):
         if not market_time.is_market_open():
             return
 
+        from services.llm_service import is_memory_safe
+
+        if not is_memory_safe():
+            logger.warning(
+                "🌌 [委託單 Telemetry 對齊] 記憶體水位過高 (RAM > 85%)，跳過本次排程。"
+            )
+            return
+
         try:
             await _dispatch_order_telemetry_alignment_alert(self.bot)
         except Exception as e:
@@ -65,10 +73,15 @@ async def _dispatch_order_telemetry_alignment_alert(bot: Any) -> None:
 
     orders_by_uid: dict[int, list[dict[str, Any]]] = {}
     for o in all_orders:
+        if str(o.get("side") or "BUY").upper() == "SELL":
+            continue
         uid = int(o.get("user_id") or 0)
         if uid <= 0:
             continue
         orders_by_uid.setdefault(uid, []).append(o)
+
+    if not orders_by_uid:
+        return
 
     for uid, orders in orders_by_uid.items():
         if not database.is_notification_enabled(uid, "telemetry_orders"):

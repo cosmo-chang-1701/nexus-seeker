@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from cogs.embed_builders._ansi_utils import _clean_ansi, _visual_len
+from cogs.embed_builders._ansi_utils import (
+    _clean_ansi,
+    _display_width,
+    _visual_len,
+)
 from cogs.embed_builders._core import CURATED_PALETTE
 from cogs.embed_builders.order_embeds.telemetry_alignment import (
     _build_telemetry_alignment_ansi_card,
@@ -79,8 +83,8 @@ def test_changed_suggestion_shows_price_qty_and_delta() -> None:
         suggested_qty=20,
         suggestion_changed=True,
     )
-    line = _clean_ansi(_line(card, "對齊建議"))
-    assert "$99.00" in line and "20股" in line and "Δ-1.00%" in line
+    clean = _clean_ansi(card)
+    assert "$99.00" in clean and "20 股" in clean and "Δ-1.00%" in clean
 
 
 def test_unchanged_suggestion_and_missing_live_price() -> None:
@@ -92,15 +96,15 @@ def test_unchanged_suggestion_and_missing_live_price() -> None:
         radar_status="現價缺失",
     )
     assert "暫停（現價缺失）" in card
-    assert "當前現價: \u001b[1;37m--" in card
+    assert "現價: \u001b[1;37m--" in card
 
 
 def test_radar_status_colours() -> None:
-    locked = _line(_card(radar_status="FORTRESS RE-LOCKED"), "ID ")
-    assert f"{RED}FORTRESS RE-LOCKED" in locked
-    ok = _line(_card(radar_status="雷達鎖定中"), "ID ")
+    locked = _line(_card(radar_status="FORTRESS RE-LOCKED"), "防線鎖定")
+    assert f"{RED}防線鎖定（暫停追價）" in locked
+    ok = _line(_card(radar_status="雷達鎖定中"), "距成交: ")
     assert f"{GREEN}雷達鎖定中" in ok
-    off = _line(_card(radar_status="偏離擴大"), "ID ")
+    off = _line(_card(radar_status="偏離擴大"), "距成交: ")
     assert f"{RED}偏離擴大" in off
 
 
@@ -116,10 +120,10 @@ def test_intraday_stored_iv_discloses_source_and_status_colours() -> None:
     assert "(歷史波動率代理)" in hv and hv_suffix == " [HV代理]"
 
     unavailable = _card(iv_status="UNAVAILABLE", iv_source="UNAVAILABLE", iv_val=None)
-    assert f"{RED}UNAVAILABLE" in unavailable
+    assert f"{RED}不可用" in unavailable
     accumulating = _card(iv_status="樣本累積 3/60", iv_rank=None)
     assert f"{YELLOW}樣本累積 3/60" in accumulating
-    assert f"{GREEN}Normal" in _card()
+    assert f"{GREEN}正常" in _card()
 
 
 def test_premarket_suffixes_follow_section_2_3() -> None:
@@ -143,26 +147,31 @@ def test_event_loading_tag() -> None:
 
 def test_stale_wall_max_pain_and_missing_pnl() -> None:
     card = _card(put_wall_is_stale=True, gain_loss_pct=None)
-    wall = _clean_ansi(_line(card, "做市商牆"))
-    assert "GEX PutWall $95.00 [快取]" in wall
-    assert "最大痛點 $101.00" in wall
+    clean = _clean_ansi(card)
+    assert "GEX PutWall: $95.00 [快取]" in clean
+    assert "最大痛點: $101.00" in clean
     assert "[快取]" not in _card()
-    assert "(損益: \u001b[1;30m--%" in card
+    assert "損益: \u001b[1;30m--%" in card
 
 
 def test_missing_values_render_dash_never_na() -> None:
     card = _card(avg_cost=None, put_wall=None, wall_dist_pct=None, max_pain_price=None)
     assert "N/A" not in card
-    assert "平均成本 \u001b[1;33m--" in card
-    assert "GEX PutWall \u001b[1;33m--" in card
-    assert "最大痛點 \u001b[1;33m--" in card
+    assert "均價: \u001b[1;33m--" in card
+    assert "GEX PutWall: \u001b[1;33m--" in card
+    assert "最大痛點: \u001b[1;33m--" in card
 
 
 def test_order_type_labels_and_short_holding() -> None:
-    assert "停損限價" in _card(order_type="STOP_LIMIT")
-    stop = _clean_ansi(_card(order_type="STOP"))
-    assert "買入停損 " in stop and "停損限價" not in stop
-    assert "買入限價" in _clean_ansi(_card(order_type="LIMIT"))
+    [embed_stop_limit] = create_telemetry_alignment_embeds(
+        [_item(order_type="STOP_LIMIT")]
+    )
+    assert "停損限價" in (embed_stop_limit.fields[0].name or "")
+    [embed_stop] = create_telemetry_alignment_embeds([_item(order_type="STOP")])
+    stop_name = embed_stop.fields[0].name or ""
+    assert "買入停損" in stop_name and "停損限價" not in stop_name
+    [embed_limit] = create_telemetry_alignment_embeds([_item(order_type="LIMIT")])
+    assert "買入限價" in (embed_limit.fields[0].name or "")
     short = _card(holding_status="空頭持倉", holding_shares=-100)
     assert f"{RED}空頭持倉" in short and "-100" in short
 
@@ -461,3 +470,161 @@ async def test_scheduled_push_skips_unavailable_and_unchanged() -> None:
 
     sent = builder.call_args.args[0]
     assert [i["order_id"] for i in sent] == [1]
+
+
+def test_card_lines_fit_mobile_width() -> None:
+    worst_item = _item(
+        symbol="GOOGL",
+        order_id=1234567,
+        order_type="STOP_LIMIT",
+        current_price=1234.56,
+        original_qty=99999,
+        suggested_price=1200.12,
+        suggested_qty=88888,
+        suggestion_changed=True,
+        is_size_down=True,
+        live_price=1250.0,
+        avg_cost=1111.11,
+        gain_loss_pct=-123.45,
+        holding_shares=-123456,
+        holding_status="空頭持倉",
+        holding_type_label="1.00x 純現貨 (0 槓桿)",
+        put_wall=1100.0,
+        put_wall_is_stale=True,
+        max_pain_price=1300.0,
+        wall_dist_pct=-12.34,
+        wall_status="跌破支撐",
+        skew_val=-12.34,
+        skew_pct=99.99,
+        skew_status="下行避險升溫且偏斜急遽擴大警告",
+        iv_val=123.45,
+        iv_rank=99.99,
+        iv_status="樣本累積 59/60",
+        iv_source="STORED_IV",
+        iv_event_loading_applied=True,
+        proximity_pct=12.34,
+        radar_status="FORTRESS RE-LOCKED",
+        system_status_flag="FORTRESS RE-LOCKED",
+        system_instruction_directive=(
+            "🛡️ 標的: GOOGL | 理由：當前現價強勁突破關鍵均線且上檔波動率擴張，"
+            "委託價對齊至上方做市商防線與期望值甜蜜點。"
+        ),
+    )
+    degraded_item = _item(
+        live_price=None,
+        alignment_available=False,
+        proximity_pct=None,
+        radar_status="現價缺失",
+    )
+    for item in (worst_item, degraded_item):
+        card, _ = _build_telemetry_alignment_ansi_card(item)
+        assert len(card) <= 1020
+        assert card.endswith("```")
+        lines = card.split("\n")
+        assert lines[0] == "```ansi"
+        assert lines[-1] == "```"
+        for line in lines[1:-1]:
+            clean_line = _clean_ansi(line)
+            assert (
+                _display_width(clean_line) <= 40
+            ), f"Line exceeds 40 cols: {clean_line!r}"
+
+
+def test_suggestion_block_leads_card() -> None:
+    item = _item(
+        order_id=98765,
+        current_price=168.50,
+        original_qty=20,
+        suggested_price=171.25,
+        suggested_qty=15,
+        suggestion_changed=True,
+        is_size_down=True,
+    )
+    card, _ = _build_telemetry_alignment_ansi_card(item)
+    lines = [_clean_ansi(ln) for ln in card.split("\n")]
+    assert lines[0] == "```ansi"
+    assert "對齊建議" in lines[1]
+    suggestion_block = "\n".join(lines[1:6])
+    assert "$168.50" in suggestion_block and "20 股" in suggestion_block
+    assert "$171.25" in suggestion_block and "15 股" in suggestion_block
+
+    divider_indices = [i for i, ln in enumerate(lines) if re.fullmatch(r" -+", ln)]
+    assert len(divider_indices) == 1
+    div_idx = divider_indices[0]
+
+    preceding = "\n".join(lines[:div_idx])
+    assert "指引" in preceding
+    assert "現價與持倉" in lines[div_idx + 1]
+
+    assert "98765" not in card
+
+
+def test_user_facing_labels_are_traditional_chinese() -> None:
+    normal_card, _ = _build_telemetry_alignment_ansi_card(_item())
+    clean_normal = _clean_ansi(normal_card)
+    for forbidden in (
+        "Shield",
+        "Market Intention",
+        "Order Radar",
+        "Sovereign Command",
+        "TELEMETRY ACTIVE",
+        "FORTRESS RE-LOCKED",
+        "BUY-ONLY ENGINE",
+        "DATA DEGRADED",
+        "Normal",
+        "UNAVAILABLE",
+    ):
+        assert forbidden not in clean_normal
+
+    assert "遙測運作中" in clean_normal
+    assert "正常" in clean_normal
+
+    suppressed_item = _item(
+        radar_status="FORTRESS RE-LOCKED",
+        system_status_flag="FORTRESS RE-LOCKED",
+    )
+    suppressed_card, _ = _build_telemetry_alignment_ansi_card(suppressed_item)
+    clean_suppressed = _clean_ansi(suppressed_card)
+    for forbidden in (
+        "Shield",
+        "Market Intention",
+        "Order Radar",
+        "Sovereign Command",
+        "TELEMETRY ACTIVE",
+        "FORTRESS RE-LOCKED",
+        "BUY-ONLY ENGINE",
+        "DATA DEGRADED",
+    ):
+        assert forbidden not in clean_suppressed
+
+    assert "防線鎖定" in clean_suppressed
+    assert f"{RED}防線鎖定（暫停追價）" in suppressed_card
+
+
+def test_scheduled_description_and_field_name() -> None:
+    item1 = _item(
+        symbol="GOOGL",
+        order_id=128,
+        side="BUY",
+        order_type="LIMIT",
+        system_instruction_directive="🛡️ 標的: GOOGL | 價格偏離擴大，維持掛單。",
+    )
+    item2 = _item(
+        symbol="AAPL",
+        order_id=129,
+        side="BUY",
+        order_type="LIMIT",
+    )
+    embeds_sched = create_telemetry_alignment_embeds(
+        [item1, item2], scheduled_mode=True
+    )
+    desc_sched = embeds_sched[0].description or ""
+    assert desc_sched.startswith("`2` 筆委託單出現新的對齊建議")
+    assert "GOOGL 買入限價 (ID: 128)" in (embeds_sched[0].fields[0].name or "")
+    assert "標的: GOOGL |" not in (embeds_sched[0].fields[0].value or "")
+
+    embeds_inter = create_telemetry_alignment_embeds(
+        [item1, item2], scheduled_mode=False
+    )
+    desc_inter = embeds_inter[0].description or ""
+    assert "共 `2` 筆委託單，其中 `0` 筆有調整建議" in desc_inter

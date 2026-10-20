@@ -6,7 +6,7 @@
 
 1. **資料庫層**（`database/orders.py`）：`active_orders` 表儲存所有待成交委託。
 2. **互動層**（`cogs/order_ui.py`）：委託設定、調整、取消的 Discord UI 入口。
-3. **遙測定價引擎**（`services/telemetry_pricing_engine.py`）：依市場微觀結構動態計算委託價格與部位規模的對齊建議。
+3. **遙測定價對齊決策引擎**（`market_analysis/telemetry_pricing_engine.py`）：門控、保險絲與實時對齊決策運算；底層三向量基準定價則由 `services/telemetry_pricing_engine.py` 支援。
 
 ## 2. 資料庫結構（`database/orders.py`）
 
@@ -70,7 +70,8 @@
 
 - **現價與前收盤**：`fetch_cache_and_live_price()` 先讀快取報價，只作廢「該標的」的報價快取後重新呼叫 `get_quote()`（沿用 Alpaca 串流分鐘價 → Finnhub → yfinance 後備的優先序）；不再用日線收盤覆蓋、也不再清空全站報價快取。`prev_close` 取報價的 `pc`（前一個正規盤收盤）。
 - **沒有即時現價**：該委託單仍會出現在快照中，標示為 `NO_LIVE_PRICE`／`DATA DEGRADED`，維持原價原量，不執行決策；`live_price`、距離成交差、損益與牆距離一律為缺值（`--`），絕不以委託價冒充現價。
-- **GEX Put Wall 與 Max Pain 是不同的量**：卡片上的「GEX PutWall／距離硬支撐」取自 `fetch_symbol_gex_metrics(symbol)["put_wall"]`（預設 `force_live=False`，走快取 → edge 快照；服務過期快取時 `put_wall_is_stale=True`）；Max Pain 只作為定價輸入（`max_pain_price`）。GEX 取不到時 `put_wall=None`、牆狀態「待確認」。
+- **GEX Put Wall 與 Max Pain 是不同的量**：卡片上的「GEX PutWall: 」與「距硬支撐: 」取自 `fetch_symbol_gex_metrics(symbol)["put_wall"]`（預設 `force_live=False`，走快取 → edge 快照；服務過期快取時 `put_wall_is_stale=True`）；Max Pain 只作為定價輸入（`max_pain_price`）。GEX 取不到時 `put_wall=None`、牆狀態「待確認」。
+- **結論優先與行動端適配卡片**：卡片採用結論優先（Conclusion-First）排版架構，依序分為「🎯 對齊建議」、「💬 指引」、單一分隔線、「🛡️ 現價與持倉」、「🧱 做市商防線」與「📐 波動與偏斜」區塊。委託單 ID 與方向類型整合於欄位標題，卡片內每行嚴格以 `_MOBILE_LINE_WIDTH = 40` 限制顯示寬度，避免 Discord 行動端程式碼區塊折行破壞樹狀圖示；所有面向使用者的系統狀態、IV 水位與雷達標籤全數中文化。
 - **損益**：`gain_loss_pct` 對多頭為 `(現價 − 均價) / 均價`，空頭持倉（數量為負）為 `(均價 − 現價) / 均價`；沒有均價或持股為 0 時為缺值而非 `+0.00%`。持倉狀態分為「持倉中／空頭持倉／空倉待命」；持倉型態標籤區分純現貨、現貨＋選擇權、保證金槓桿（推定）與無持倉紀錄。
 - **IV 狀態**：IV 不可用顯示 `UNAVAILABLE`；有 IV 但 IV Rank 尚無（樣本累積中）顯示 `樣本累積 n/m`，不再沿用模型預設的 `Normal`。`is_premarket` 在正規盤以外（含盤後）皆為 True。
 - **同一標的**在一次快照中只抓一次報價與市場輸入；快照上限為 `MAX_ALIGNMENT_ITEMS = 20` 筆，且在抓取下一筆資料「之前」就檢查，超過時 `truncated=True`（Embed 會自行分頁）。
@@ -89,7 +90,8 @@
 - `nexus_core/cogs/order_ui.py`：`/order_panel`、`/list_orders`、`/telemetry_alert` 入口
 - `nexus_core/cogs/order_views.py`：互動式清單視圖與遙測對齊按鈕
 - `nexus_core/cogs/order_modals.py`：取消／調整 Modal
-- `nexus_core/services/telemetry_pricing_engine.py`：三向量定價對齊與門控邏輯（stale-lock、深海跳空限制、純現貨閘門、UOA 軋空分類）
+- `nexus_core/market_analysis/telemetry_pricing_engine.py`：遙測對齊決策與門控邏輯（IV Rank 保險絲、BUY-only、Max Pain/EM 截斷）
+- `nexus_core/services/telemetry_pricing_engine.py`：三向量基準定價運算（期權流重力、統計波動率邊界、技術流動性錨點）
 - `nexus_core/services/order_telemetry_service.py`：委託遙測掃描服務
 - `nexus_core/database/migrations/v038_add_active_orders.py`：`active_orders` 表註冊遷移
 - `nexus_core/tests/unit/test_order_ui.py`：委託 UI、資料庫、遙測定價對齊的單元測試
