@@ -894,3 +894,115 @@ def test_apply_result_embed_success_colour_pages_and_missing_values() -> None:
     for e in embeds:
         for f in e.fields:
             assert len(f.value or "") <= 1024
+
+
+# ---------------------------------------------------------------------------
+# 下修／縮量指引必須說明原因
+# ---------------------------------------------------------------------------
+async def _decide_buy(**over: Any) -> AlignmentDecision:
+    kwargs: dict[str, Any] = {
+        "user_id": 77,
+        "order_id": 1,
+        "symbol": "SPY",
+        "current_order_price": 100.0,
+        "spot_price": 98.5,
+        "original_qty": 20,
+        "iv": 0.30,
+        "hist_iv": 0.30,
+        "iv_rank": 0.4,
+        "max_pain_price": 0.0,
+        "prev_max_pain": 0.0,
+        "skew_percentile_pct": 50.0,
+        "put_call_ratio": 1.0,
+        "order_side": "BUY",
+        "emit_suppressed_decision": True,
+    }
+    kwargs.update(over)
+    with (
+        patch(
+            "market_analysis.telemetry_pricing_engine._is_active_order_in_db",
+            return_value=True,
+        ),
+        patch(
+            "market_analysis.telemetry_pricing_engine._recent_clear_position_suppression",
+            return_value=False,
+        ),
+        patch(
+            "market_analysis.telemetry_pricing_engine._log_decision_to_sqlite",
+            new=AsyncMock(),
+        ),
+    ):
+        decision = await generate_alignment_decision(**kwargs)
+    assert decision is not None
+    return decision
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_round_level_price_down() -> None:
+    d = await _decide_buy()
+    assert d.action == "PRICE_DOWN"
+    assert d.suggested_price == 99.25 and d.suggested_qty == 20
+    assert d.system_instruction_directive.startswith("下修原因：")
+    assert "整數關卡 $100" in d.system_instruction_directive
+    assert d.alert_text is None
+    assert d.baseline_reasons and d.baseline_logs
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_iv_spike_price_down() -> None:
+    d = await _decide_buy(current_order_price=98.0, iv=0.6, hist_iv=0.3)
+    assert d.action == "PRICE_DOWN"
+    assert d.suggested_price < 98.0
+    assert "IV 暴噴" in d.system_instruction_directive
+    assert "撤單重掛更深" in d.system_instruction_directive
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_skew_size_down_only() -> None:
+    d = await _decide_buy(
+        current_order_price=121.8,
+        spot_price=120.0,
+        skew_percentile_pct=3.0,
+        prev_close=0.0,
+    )
+    assert d.action == "SIZE_DOWN"
+    assert d.suggested_price == 121.8 and d.suggested_qty == 15
+    assert d.system_instruction_directive.startswith("縮量原因：")
+    assert "控倉 75%" in d.system_instruction_directive
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_price_up_alert_has_triggers() -> None:
+    d = await _decide_buy(
+        current_order_price=470.0,
+        spot_price=486.51,
+        max_pain_price=500.0,
+        prev_max_pain=500.0,
+        iv=0.10,
+        hist_iv=0.10,
+        skew_percentile_pct=98.0,
+        iv_rank=0.5,
+    )
+    assert d.action == "PRICE_UP"
+    assert d.alert_text is not None
+    assert "提價依據：" in d.alert_text
+    assert "Skew 極端" in d.alert_text
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_reach_alignment_item() -> None:
+    down = await _decide_buy()
+    items, _, _ = await _build([_order()], decision=down)
+    assert items[0]["system_instruction_directive"].startswith("下修原因：")
+    assert "整數關卡 $100" in items[0]["system_instruction_directive"]
+    assert items[0]["engine_reasons"] == list(down.baseline_reasons)
+    assert items[0]["engine_reasons"]
+
+    same = _decision(
+        action="NO_ALIGNMENT_NEEDED", suggested_price=100.0, suggested_qty=10
+    )
+    items, _, _ = await _build([_order()], decision=same)
+    assert (
+        items[0]["system_instruction_directive"] == "通過實時對齊檢查，維持原價原量。"
+    )
+    assert items[0]["engine_reasons"] == []

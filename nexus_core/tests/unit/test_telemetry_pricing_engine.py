@@ -404,3 +404,31 @@ async def test_apply_ignores_orders_not_in_snapshot(db_conn: Any) -> None:
     mock_fetch.assert_not_awaited()
     mock_decision.assert_not_awaited()
     mock_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_directive_reasons_lower_layer_parallel_to_logs() -> None:
+    from services.telemetry_pricing_engine import (
+        calculate_telemetry_price,
+        calculate_telemetry_pricing,
+    )
+
+    kwargs: dict[str, Any] = {
+        "symbol": "spy",
+        "base_price": 98.0,
+        "spot_price": 98.5,
+        "iv": 0.6,
+        "hist_iv": 0.3,
+        "max_pain": 0.0,
+        "prev_max_pain": 0.0,
+        "skew_percentile_pct": 3.0,
+        "base_quantity": 20,
+    }
+    r = await calculate_telemetry_pricing(**kwargs)
+
+    assert len(r.reasons) == len(r.logs) == 2
+    assert r.reasons[0] == "Skew 極端 3.0%：貼近現價 1.5%、控倉 75%"
+    assert r.reasons[1] == "IV 暴噴 60% vs 30%：下修 3%（撤單重掛更深）"
+    assert r.quantity == 15
+
+    assert await calculate_telemetry_price(**kwargs) == (r.price, r.quantity, r.logs)

@@ -619,6 +619,7 @@ async def build_telemetry_alignment_items(
         suggested_price = float(current_price)
         suggested_qty = original_qty
         alert_text: str | None = None
+        engine_reasons: list[str] = []
         system_status_flag = "DATA DEGRADED"
         directive = "無法取得即時現價，暫停對齊建議（維持原價原量）。"
 
@@ -658,6 +659,7 @@ async def build_telemetry_alignment_items(
                 suggested_price = float(decision.suggested_price)
                 suggested_qty = int(decision.suggested_qty)
                 alert_text = getattr(decision, "alert_text", None)
+                engine_reasons = list(decision.baseline_reasons)
                 system_status_flag = (
                     decision.system_status_flag
                     if decision.system_status_flag
@@ -670,7 +672,7 @@ async def build_telemetry_alignment_items(
                 directive = (
                     decision.system_instruction_directive
                     if decision.system_instruction_directive
-                    else (alert_text or "通過實時對齊檢查，僅在防線內調整掛單。")
+                    else (alert_text or "通過實時對齊檢查，維持原價原量。")
                 )
 
         suggestion_changed = (
@@ -748,6 +750,7 @@ async def build_telemetry_alignment_items(
                 "action": action,
                 "alignment_available": live_price is not None,
                 "alert_text": alert_text,
+                "engine_reasons": engine_reasons,
                 "holding_type_label": _resolve_holding_type_label(
                     holding_type, holding_map
                 ),

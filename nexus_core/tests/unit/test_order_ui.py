@@ -13,7 +13,10 @@ from database.orders import (
     delete_active_order,
     update_active_order_price,
 )
-from services.telemetry_pricing_engine import calculate_telemetry_price
+from services.telemetry_pricing_engine import (
+    TelemetryPricing,
+    calculate_telemetry_price,
+)
 from cogs.order_modals import (
     DynamicOrderModal,
     CancelOrderModal,
@@ -935,7 +938,11 @@ async def test_telemetry_alert_ignores_stale_max_pain(
         "data_status": "Stale",
     }
 
-    mock_telemetry_spy = AsyncMock(return_value=(100.0, 20, ["Telemetry Mock"]))
+    mock_telemetry_spy = AsyncMock(
+        return_value=TelemetryPricing(
+            price=100.0, quantity=20, logs=["Telemetry Mock"], reasons=["Mock"]
+        )
+    )
 
     with patch(
         "services.order_telemetry_service.fetch_cache_and_live_price",
@@ -967,7 +974,7 @@ async def test_telemetry_alert_ignores_stale_max_pain(
         "services.calendar_service.calendar_service.get_symbol_earnings",
         new=AsyncMock(return_value=None),
     ), patch(
-        "services.telemetry_pricing_engine.calculate_telemetry_price",
+        "services.telemetry_pricing_engine.calculate_telemetry_pricing",
         new=mock_telemetry_spy,
     ):
         await cog.telemetry_alert.callback(cog, mock_interaction)  # type: ignore
