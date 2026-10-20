@@ -13,6 +13,7 @@ from cogs.embed_builders._ansi_utils import (
     _visual_len,
 )
 from cogs.embed_builders._core import CURATED_PALETTE
+from market_analysis.telemetry_pricing_engine import _build_adjust_directive
 from cogs.embed_builders.order_embeds.telemetry_alignment import (
     _build_telemetry_alignment_ansi_card,
     create_telemetry_alignment_embeds,
@@ -628,3 +629,37 @@ def test_scheduled_description_and_field_name() -> None:
     )
     desc_inter = embeds_inter[0].description or ""
     assert "共 `2` 筆委託單，其中 `0` 筆有調整建議" in desc_inter
+
+
+def test_directive_reasons_fit_card_without_truncation() -> None:
+    directive = _build_adjust_directive(
+        price_down=True,
+        size_down=True,
+        baseline_reasons=[
+            "Skew 極端 3.0%：貼近現價 1.5%、控倉 75%",
+            "IV 暴噴 60% vs 30%：下修 3%（撤單重掛更深）",
+            "整數關卡 $100：下移至 $99.25",
+        ],
+    )
+    card = _card(
+        suggested_price=99.25,
+        suggestion_changed=True,
+        is_size_down=True,
+        suggested_qty=15,
+        system_instruction_directive=directive,
+    )
+    assert len(card) <= 1020
+    assert "…" not in card
+    clean = _clean_ansi(card)
+    for line in clean.split("\n"):
+        assert _display_width(line) <= 40, f"Line exceeds 40 cols: {line!r}"
+    flat = clean.replace("\n", "").replace(" ", "")
+    for key in (
+        "下修並縮量原因",
+        "Skew極端3.0%",
+        "控倉75%",
+        "IV暴噴",
+        "撤單重掛更深",
+        "整數關卡$100",
+    ):
+        assert key in flat, key

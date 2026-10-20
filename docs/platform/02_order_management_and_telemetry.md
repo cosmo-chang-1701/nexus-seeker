@@ -78,6 +78,8 @@
 
 **快照不丟單**：快照以 `emit_suppressed_decision=True` 呼叫引擎，IV Rank 保險絲與「提價被 Max Pain／預期波動邊界截斷後不高於原價」兩條路徑也會回傳決策（`SUPPRESSED`／`NO_ALIGNMENT_NEEDED`，建議價量等於原價原量），委託單不會從快照中消失；非 emit 模式仍回傳 `None`。
 
+**下修／縮量必須說明原因**：基準定價引擎（`calculate_telemetry_pricing`）的每個觸發（痛點上移、Skew 極端、IV 暴噴／崩塌、跳空、整數關卡）除了詳細日誌，另回報一條簡短原因。決策新增 `PRICE_DOWN`（建議價較原價低至少 0.01）與 `SIZE_DOWN`（價格不變但股數縮減）兩種 action，卡片 💬 指引會列出這些簡短原因：「下修原因：…」、「縮量原因：…」、「下修並縮量原因：…」；`PRICE_UP` 則在提價建議文字中以「提價依據：…」呈現。詳細日誌不進卡片，仍保留在 kv_cache 稽核紀錄（`baseline_logs`）與建單時的「遙測決策軌跡」。快照項目另有 `engine_reasons` 欄位；只有價量皆未變動的決策才會顯示預設句「通過實時對齊檢查，維持原價原量。」
+
 **賣出委託不調整**：對齊引擎的定價（左側捕獸夾）只為買單設計，`SELL` 委託一律回傳 `SUPPRESSED`／`BUY-ONLY ENGINE`，維持原價原量。
 
 一鍵套用只處理快照（`suggestions`）內的委託單，移動停損單（`TRAILING_STOP_USD`／`TRAILING_STOP_PCT`）不適用價格對齊，與 `/telemetry_alert` 的排除規則一致。STOP_LIMIT 套用時，停損價平移與限價相同的差額（例：限價 100／停損 98 → 建議價 101，則停損變 99）。

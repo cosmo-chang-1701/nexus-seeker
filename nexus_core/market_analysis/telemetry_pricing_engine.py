@@ -3,7 +3,7 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from database.cache import save_kv_cache
 from market_analysis.sentiment.skew_taxonomy import ensure_percentile_pct
@@ -19,7 +19,7 @@ class DataContaminationException(RuntimeError):
 class AlignmentDecision:
     symbol: str
     order_id: int
-    action: str  # 'PRICE_UP', 'NO_ALIGNMENT_NEEDED', 'SUPPRESSED'
+    action: str  # 'PRICE_UP', 'PRICE_DOWN', 'SIZE_DOWN', 'NO_ALIGNMENT_NEEDED', 'SUPPRESSED'
     current_order_price: float
     spot_price: float
     suggested_price: float
@@ -33,6 +33,8 @@ class AlignmentDecision:
     drift_pct: float | None = None
     cache_price: float | None = None
     live_price: float | None = None
+    baseline_reasons: tuple[str, ...] = ()
+    baseline_logs: tuple[str, ...] = ()
 
 
 def _now_utc() -> datetime:
@@ -142,19 +144,47 @@ def _build_alert_text(
     reason_text: str,
     suggested_price: float,
     sizing_multiplier: float,
+    trigger_text: str = "",
 ) -> str:
     final_action = f"建議對齊修正至 ${suggested_price:.2f}"
     if sizing_multiplier < 0.999:
         final_action += " (打折控倉 75%)"
 
-    # 沒有任何風控理由時不得宣稱「截斷/修正」：此時只是對齊現價的單純提價建議。
+    trigger_text = trigger_text.strip()
     if not reason_text.strip():
+        if trigger_text:
+            # 基準定價引擎的觸發原因：說明「為何提價」，但沒有任何截斷。
+            return (
+                f"🛡️ 標的: {symbol.upper()} | 提價依據：{trigger_text}。 {final_action}"
+            )
+        # 沒有任何風控理由時不得宣稱「截斷/修正」：此時只是對齊現價的單純提價建議。
         return f"🛡️ 標的: {symbol.upper()} | 偵測到現價與掛單偏離。 {final_action}"
+
+    if trigger_text:
+        return (
+            f"🛡️ 標的: {symbol.upper()} | 提價依據：{trigger_text}；"
+            f"但因 [{reason_text}], 系統已自動截斷/修正提價建議。 {final_action}"
+        )
 
     return (
         f"🛡️ 標的: {symbol.upper()} | 偵測到現價與掛單偏離，但因 [{reason_text}], "
         f"系統已自動截斷/修正提價建議。 {final_action}"
     )
+
+
+def _build_adjust_directive(
+    *, price_down: bool, size_down: bool, baseline_reasons: Sequence[str]
+) -> str:
+    """下修／縮量建議的指引文字：列出基準定價引擎回報的簡短觸發原因。"""
+    if price_down and size_down:
+        head, what = "下修並縮量原因：", "下修並縮量"
+    elif price_down:
+        head, what = "下修原因：", "下修"
+    else:
+        head, what = "縮量原因：", "縮量"
+    if baseline_reasons:
+        return head + "；".join(baseline_reasons)
+    return f"基準定價引擎建議{what}，未回報觸發原因。"
 
 
 def _build_suppressed_decision(
@@ -454,10 +484,10 @@ async def generate_alignment_decision(
             )
         return None
 
-    from services.telemetry_pricing_engine import calculate_telemetry_price
+    from services.telemetry_pricing_engine import calculate_telemetry_pricing
 
     # Baseline engine suggestion (may be aggressive; we will gate PRICE_UP).
-    suggested_price, suggested_qty, logs = await calculate_telemetry_price(
+    baseline = await calculate_telemetry_pricing(
         symbol=symbol,
         base_price=current_order_price,
         spot_price=spot_price,
@@ -470,6 +500,9 @@ async def generate_alignment_decision(
         prev_close=prev_close,
         base_quantity=original_qty,
     )
+    suggested_price, suggested_qty = baseline.price, baseline.quantity
+    baseline_reasons = tuple(baseline.reasons)
+    baseline_logs = tuple(baseline.logs)
 
     is_price_up = suggested_price > current_order_price + 1e-9
     reasons: list[str] = []
@@ -584,11 +617,23 @@ async def generate_alignment_decision(
                     live_price=effective_live_price
                     if effective_live_price > 0
                     else None,
+                    baseline_reasons=baseline_reasons,
+                    baseline_logs=baseline_logs,
                 )
             return None
 
-    # If baseline suggested price isn't moving up, keep prior UX and do not force suppression.
-    action = "PRICE_UP" if is_price_up else "NO_ALIGNMENT_NEEDED"
+    # 基準價未上移時不強制抑制；但下修／縮量必須附上原因，不得靜默。
+    price_down = False
+    if is_price_up:
+        action = "PRICE_UP"
+    elif round(current_order_price - float(suggested_price), 2) >= 0.01:
+        action = "PRICE_DOWN"
+        price_down = True
+    elif int(suggested_qty) < original_qty:
+        action = "SIZE_DOWN"
+    else:
+        action = "NO_ALIGNMENT_NEEDED"
+    size_down = int(suggested_qty) < original_qty
 
     alert_text: str | None = None
     if is_price_up:
@@ -598,6 +643,15 @@ async def generate_alignment_decision(
             reason_text=reason_text,
             suggested_price=float(suggested_price),
             sizing_multiplier=sizing_multiplier,
+            trigger_text="；".join(baseline_reasons),
+        )
+
+    directive = ""
+    if action in ("PRICE_DOWN", "SIZE_DOWN"):
+        directive = _build_adjust_directive(
+            price_down=price_down,
+            size_down=size_down,
+            baseline_reasons=baseline_reasons,
         )
 
     decision = AlignmentDecision(
@@ -612,8 +666,11 @@ async def generate_alignment_decision(
         is_size_down=int(suggested_qty) < original_qty,
         reasons=reasons,
         alert_text=alert_text,
+        system_instruction_directive=directive,
         cache_price=cache_price if cache_price > 0 else None,
         live_price=effective_live_price if effective_live_price > 0 else None,
+        baseline_reasons=baseline_reasons,
+        baseline_logs=baseline_logs,
     )
 
     await _log_decision_to_sqlite(
@@ -633,13 +690,15 @@ async def generate_alignment_decision(
             "max_pain_price": max_pain_price,
             "skew_percentile": skew_percentile_pct,
             "put_call_ratio": put_call_ratio,
+            "baseline_reasons": list(decision.baseline_reasons),
+            "baseline_logs": list(decision.baseline_logs),
         },
     )
 
     # Also echo detailed baseline logs for console traceability if anything constrained/suppressed.
-    if reasons:
+    if reasons or baseline_reasons:
         logger.info(
-            f"SYSTEM_DEFENSE: {symbol} order_id={order_id} reasons={reasons} baseline_logs={logs[:2]}"
+            f"SYSTEM_DEFENSE: {symbol} order_id={order_id} reasons={reasons} baseline_reasons={list(baseline_reasons)}"
         )
 
     return decision
