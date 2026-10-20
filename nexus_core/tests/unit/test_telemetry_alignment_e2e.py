@@ -150,8 +150,8 @@ async def test_real_items_render_suggestion_wall_and_max_pain() -> None:
     [embed] = create_telemetry_alignment_embeds(items)
     text = _clean_ansi(embed.fields[0].value or "")
     assert "對齊建議" in text
-    assert "GEX PutWall $95.00" in text
-    assert "最大痛點 $101.00" in text
+    assert "GEX PutWall: $95.00" in text
+    assert "最大痛點: $101.00" in text
 
 
 @pytest.mark.asyncio

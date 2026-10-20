@@ -7,8 +7,9 @@ import discord
 
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
+    _display_width,
     _to_float_or_none,
-    _visual_len,
+    _wrap_visual,
     fmt_or_dash,
 )
 from cogs.embed_builders._core import NexusEmbed
@@ -21,6 +22,7 @@ from cogs.embed_builders._embed_helpers import (
 
 # Discord 欄位值上限 1024；扣除 `_safe_embed_field_value` 附加的尾端間距後，卡片須 <= 1020
 _CARD_CHAR_BUDGET = 1020
+_MOBILE_LINE_WIDTH = 40
 
 # 調色盤語意色（皆屬 CURATED_PALETTE）
 _COLOR_SPECIAL = 0x8E44AD  # 尾端風險控倉 (size-down)
@@ -29,6 +31,25 @@ _COLOR_INFO = 0x3498DB  # 無須調整
 _COLOR_NEUTRAL = 0x99AAB5  # 無即時數據
 
 _RESET = "\u001b[0m"
+
+_SYSTEM_FLAG_TRANSLATIONS: dict[str, str] = {
+    "TELEMETRY ACTIVE": "遙測運作中",
+    "FORTRESS RE-LOCKED": "防線鎖定（暫停追價）",
+    "BUY-ONLY ENGINE": "僅支援買單",
+    "DATA DEGRADED": "數據降級",
+}
+
+_IV_STATUS_TRANSLATIONS: dict[str, str] = {
+    "Low": "偏低",
+    "Normal": "正常",
+    "High": "偏高",
+    "Extreme": "極高",
+    "UNAVAILABLE": "不可用",
+}
+
+_RADAR_STATUS_TRANSLATIONS: dict[str, str] = {
+    "FORTRESS RE-LOCKED": "防線鎖定（暫停追價）",
+}
 
 
 def _c(code: str, text: Any) -> str:
@@ -93,7 +114,6 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     if max_pain is not None and max_pain <= 0:
         max_pain = None
 
-    order_id = int(item.get("order_id") or 0)
     order_price = _to_float_or_none(item.get("current_price"))
     shares = int(round(float(_to_float_or_none(item.get("original_qty")) or 0.0)))
     proximity_pct = _to_float_or_none(item.get("proximity_pct"))
@@ -110,6 +130,7 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         if wall_dist_pct is not None and put_wall is not None
         else "--%"
     )
+    proximity_str = fmt_or_dash(proximity_pct, ".2f", suffix="%", placeholder="--%")
 
     is_premarket = bool(item.get("is_premarket", False))
     iv_source = item.get("iv_source")
@@ -161,7 +182,7 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     if is_degraded and not tags:
         tags.append("數據未更新/降級模式")
 
-    # ---- ANSI 著色 ----
+    # ---- ANSI 著色與文字轉換 ----
     holding_shares = int(_to_float_or_none(item.get("holding_shares")) or 0)
     holding_status = str(item.get("holding_status") or "待確認")
     if "空頭" in holding_status:
@@ -172,7 +193,7 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         holding_status_color = _c("32", holding_status)
     else:
         holding_status_color = _c("33", holding_status)
-    holding_type_color = _c("36", item.get("holding_type_label") or "--")
+    holding_type_label = str(item.get("holding_type_label") or "--")
 
     if gain_loss_pct is None:
         pnl_color = _c("30", "--%")
@@ -195,15 +216,16 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
 
     skew_status = str(item.get("skew_status") or "平穩")
     if any(k in skew_status for k in ("極端", "警告", "ERROR", "下行")):
-        skew_status_color = _c("31", skew_status)
+        skew_status_color_code = "31"
     elif "平穩" in skew_status or "Normal" in skew_status:
-        skew_status_color = _c("32", skew_status)
+        skew_status_color_code = "32"
     else:
-        skew_status_color = _c("33", skew_status)
+        skew_status_color_code = "33"
+    skew_status_color = _c(skew_status_color_code, skew_status)
 
     iv_status_up = iv_status.upper()
     if "等待開盤" in iv_status or "樣本累積" in iv_status:
-        iv_status_color = _c("33", iv_status)
+        iv_status_color_code = "33"
     elif (
         "UNAVAILABLE" in iv_status_up
         or "ERROR" in iv_status_up
@@ -212,9 +234,11 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         or "OVERHEATED" in iv_status_up
         or "泡沫" in iv_status
     ):
-        iv_status_color = _c("31", iv_status)
+        iv_status_color_code = "31"
     else:
-        iv_status_color = _c("32", iv_status)
+        iv_status_color_code = "32"
+    iv_status_zh = _IV_STATUS_TRANSLATIONS.get(iv_status, iv_status)
+    iv_status_color = _c(iv_status_color_code, iv_status_zh)
 
     if iv_rank is not None and not iv_unavailable:
         if iv_rank >= 80.0:
@@ -226,24 +250,32 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
     else:
         iv_rank_color = _c("30", iv_rank_str)
 
-    side = str(item.get("side") or "BUY").upper()
-    side_zh = "買入" if side == "BUY" else "賣出"
-    side_code = "32" if side == "BUY" else "31"
-    order_type = str(item.get("order_type") or "LIMIT").upper()
-    type_zh = _order_type_zh(order_type)
-
     radar_status = str(item.get("radar_status") or "監控中")
     if any(k in radar_status for k in ("FORTRESS", "SUPPRESSED", "偏離", "缺失")):
-        radar_status_color = _c("31", radar_status)
+        radar_status_color_code = "31"
     elif "鎖定" in radar_status or "LOCKED" in radar_status:
-        radar_status_color = _c("32", radar_status)
+        radar_status_color_code = "32"
     else:
-        radar_status_color = _c("33", radar_status)
+        radar_status_color_code = "33"
+    radar_status_zh = _RADAR_STATUS_TRANSLATIONS.get(radar_status, radar_status)
+    radar_status_color = _c(radar_status_color_code, radar_status_zh)
+
+    sys_flag = str(item.get("system_status_flag") or "TELEMETRY ACTIVE")
+    if "ACTIVE" in sys_flag or "RUNNING" in sys_flag:
+        sys_flag_color_code = "32"
+    elif "LOCKED" in sys_flag or "SUPPRESSED" in sys_flag or "DEGRADED" in sys_flag:
+        sys_flag_color_code = "31"
+    else:
+        sys_flag_color_code = "33"
+    sys_flag_zh = _SYSTEM_FLAG_TRANSLATIONS.get(sys_flag, sys_flag)
+    sys_flag_color = _c(sys_flag_color_code, sys_flag_zh)
 
     # ---- 對齊建議 ----
+    is_changed = _suggestion_changed(item)
     if item.get("alignment_available") is False:
-        suggestion = _c("33", "暫停（現價缺失）")
-    elif _suggestion_changed(item):
+        suggestion_val_str = _c("33", "暫停（現價缺失）")
+        suggestion_adj_line = None
+    elif is_changed:
         sug_price = _to_float_or_none(item.get("suggested_price"))
         sug_qty_val = _to_float_or_none(item.get("suggested_qty"))
         sug_qty = int(round(sug_qty_val)) if sug_qty_val is not None else shares
@@ -251,114 +283,174 @@ def _build_card_and_tags(item: Dict[str, Any]) -> Tuple[str, List[str]]:
         if is_size_down is None:
             is_size_down = sug_qty < shares
         qty_code = "35" if is_size_down else "37"
+
         delta_str = "--%"
         if sug_price is not None and order_price is not None and order_price > 0:
             delta_str = f"{(sug_price - order_price) / order_price * 100:+.2f}%"
-        suggestion = (
-            f"{_c('33', fmt_or_dash(sug_price, prefix='$'))} / "
-            f"{_c(qty_code, sug_qty)}股 (Δ{delta_str})"
+
+        suggestion_val_str = (
+            f"{_c('33', fmt_or_dash(sug_price, prefix='$'))} × "
+            f"{_c(qty_code, sug_qty)} 股"
         )
-    else:
-        suggestion = _c("30", "維持原價原量")
 
-    sys_flag = str(item.get("system_status_flag") or "TELEMETRY ACTIVE")
-    if "ACTIVE" in sys_flag or "RUNNING" in sys_flag:
-        sys_flag_color = _c("32", sys_flag)
-    elif "LOCKED" in sys_flag or "SUPPRESSED" in sys_flag or "DEGRADED" in sys_flag:
-        sys_flag_color = _c("31", sys_flag)
+        adj_parts = [f"Δ{delta_str}"]
+        if is_size_down and shares > 0:
+            qty_pct = (sug_qty - shares) / shares * 100
+            qty_pct_str = (
+                f"{qty_pct:.0f}%"
+                if abs(qty_pct - round(qty_pct)) < 1e-6
+                else f"{qty_pct:.2f}%"
+            )
+            adj_parts.append(_c("35", f"縮量 {qty_pct_str}"))
+        suggestion_adj_line = f" ├─ 調整: {' ｜ '.join(adj_parts)}"
     else:
-        sys_flag_color = _c("33", sys_flag)
+        suggestion_val_str = _c("30", "維持原價原量")
+        suggestion_adj_line = None
 
-    directive = " ".join(
+    # ---- 指引清洗 ----
+    raw_dir = " ".join(
         str(
             item.get("system_instruction_directive") or "通過實時防線，維持紀律掛單。"
         ).split()
     )
+    if sym:
+        exact_prefix = f"🛡️ 標的: {sym} | "
+        if raw_dir.startswith(exact_prefix):
+            raw_dir = raw_dir[len(exact_prefix) :]
 
     wall_tail = " [快取]" if item.get("put_wall_is_stale") else ""
-    wall_line = (
-        " └─ 做市商牆: "
-        f"GEX PutWall {_c('33', fmt_or_dash(put_wall, prefix='$'))}{wall_tail} ｜ "
-        f"距離硬支撐: {_c('37', wall_dist_str)} ({wall_status_color}) ｜ "
-        f"最大痛點 {_c('33', fmt_or_dash(max_pain, prefix='$'))}"
-    )
 
-    def _assemble(directive_text: str, *, compact: bool) -> List[str]:
-        sep: List[str] = [] if compact else [""]
+    def _assemble(directive_text: str, include_divider: bool = True) -> List[str]:
         lines = ["```ansi"]
-        lines.append("🛡️ \u001b[1;36m【物理防線 (The Shield)】\u001b[0m")
+        lines.append("🎯 \u001b[1;36m對齊建議\u001b[0m")
         lines.append(
-            " ├─ 持倉型態: "
-            f"{holding_type_color} ｜ 持股: {_c('37', holding_shares)} 股 "
-            f"[{holding_status_color}]"
+            f" ├─ 原掛單: {_c('33', fmt_or_dash(order_price, prefix='$'))} × "
+            f"{_c('37', shares)} 股"
         )
+        if suggestion_adj_line is not None:
+            lines.append(f" ├─ 建議值: {suggestion_val_str}")
+            lines.append(suggestion_adj_line)
+        else:
+            lines.append(f" ├─ 建議值: {suggestion_val_str}")
+        lines.append(f" └─ 引擎: {sys_flag_color}")
+
+        lines.append("💬 \u001b[1;36m指引\u001b[0m")
+        dir_wrapped = _wrap_visual(directive_text, _MOBILE_LINE_WIDTH - 4)
+        if not dir_wrapped:
+            dir_wrapped = [""]
+        lines.append(f" └─ {_c('33', dir_wrapped[0])}")
+        for dw in dir_wrapped[1:]:
+            lines.append(f"    {_c('33', dw)}")
+
+        divider_idx = len(lines)
+
+        lines.append("🛡️ \u001b[1;36m現價與持倉\u001b[0m")
         lines.append(
-            " ├─ 成本對齊: "
-            f"平均成本 {_c('33', fmt_or_dash(avg_cost, prefix='$'))} ｜ "
-            f"當前現價: {_c('37', fmt_or_dash(live_price, prefix='$'))} "
-            f"(損益: {pnl_color})"
+            f" ├─ 現價: {_c('37', fmt_or_dash(live_price, prefix='$'))} ｜ "
+            f"損益: {pnl_color}"
         )
-        lines.append(wall_line)
-        lines.extend(sep)
-        lines.append("📐 \u001b[1;36m【籌碼偏斜 (Market Intention)】\u001b[0m")
+
+        prox_line = f" ├─ 距成交: {_c('37', proximity_str)} [{radar_status_color}]"
+        if _display_width(_clean_ansi(prox_line)) <= _MOBILE_LINE_WIDTH:
+            lines.append(prox_line)
+        else:
+            lines.append(f" ├─ 距成交: {_c('37', proximity_str)}")
+            lines.append(f"    [{radar_status_color}]")
+
+        holding_prefix = " ├─ 持倉: "
+        if _display_width(holding_prefix + holding_type_label) <= _MOBILE_LINE_WIDTH:
+            lines.append(f"{holding_prefix}{_c('36', holding_type_label)}")
+        else:
+            avail = _MOBILE_LINE_WIDTH - _display_width(holding_prefix)
+            ht_wrapped = _wrap_visual(holding_type_label, avail)
+            if ht_wrapped:
+                lines.append(f"{holding_prefix}{_c('36', ht_wrapped[0])}")
+                for hw in ht_wrapped[1:]:
+                    lines.append(f"    {_c('36', hw)}")
+            else:
+                lines.append(f"{holding_prefix}{_c('36', holding_type_label)}")
+
         lines.append(
-            " ├─ 選擇權偏斜 (Option Skew): "
-            f"{_c('37', skew_val_str)} (分位點 {_c('37', skew_pct_str)}) "
-            f"── [狀態: {skew_status_color}]"
+            f" ├─ 持股: {_c('37', f'{holding_shares} 股')} [{holding_status_color}]"
         )
+        lines.append(f" └─ 均價: {_c('33', fmt_or_dash(avg_cost, prefix='$'))}")
+
+        lines.append("🧱 \u001b[1;36m做市商防線\u001b[0m")
         lines.append(
-            " └─ 隱含波動率 (IV): "
-            f"{_c('37', iv_val_str)}{iv_tail} (IV Rank: {iv_rank_color}) "
-            f"── [狀態: {iv_status_color}]"
+            f" ├─ GEX PutWall: {_c('33', fmt_or_dash(put_wall, prefix='$'))}{wall_tail}"
         )
-        lines.extend(sep)
-        lines.append("⚔️ \u001b[1;36m【捕獸夾雷達 (Order Radar)】\u001b[0m")
+        wall_dist_line = (
+            f" ├─ 距硬支撐: {_c('37', wall_dist_str)} [{wall_status_color}]"
+        )
+        if _display_width(_clean_ansi(wall_dist_line)) <= _MOBILE_LINE_WIDTH:
+            lines.append(wall_dist_line)
+        else:
+            lines.append(f" ├─ 距硬支撐: {_c('37', wall_dist_str)}")
+            lines.append(f"    [{wall_status_color}]")
+        lines.append(f" └─ 最大痛點: {_c('33', fmt_or_dash(max_pain, prefix='$'))}")
+
+        lines.append("📐 \u001b[1;36m波動與偏斜\u001b[0m")
         lines.append(
-            f" ├─ ID {_c('33', order_id)} ({sym} "
-            f"\u001b[1;{side_code}m{side_zh}{type_zh}{_RESET} "
-            f"{fmt_or_dash(order_price, prefix='$')} / {_c('37', shares)}股) ── "
-            f"距離成交差: {_c('37', fmt_or_dash(proximity_pct, '.2f', suffix='%', placeholder='--%'))} "
-            f"[{radar_status_color}]"
+            f" ├─ Skew: {_c('37', skew_val_str)} ｜ " f"分位: {_c('37', skew_pct_str)}"
         )
-        lines.append(f" └─ 對齊建議: {suggestion}")
-        lines.extend(sep)
-        lines.append("⚙️ \u001b[1;36m【最高主權指令 (Sovereign Command)】\u001b[0m")
-        lines.append(f" ├─ 狀態: {sys_flag_color}")
-        lines.append(f" └─ 指引: {_c('33', directive_text)}")
+        skew_prefix = " ├─ Skew 狀態: "
+        if _display_width(skew_prefix + skew_status) <= _MOBILE_LINE_WIDTH:
+            lines.append(f"{skew_prefix}{skew_status_color}")
+        else:
+            avail = _MOBILE_LINE_WIDTH - _display_width(skew_prefix)
+            ss_wrapped = _wrap_visual(skew_status, avail)
+            if ss_wrapped:
+                lines.append(
+                    f"{skew_prefix}{_c(skew_status_color_code, ss_wrapped[0])}"
+                )
+                for sw in ss_wrapped[1:]:
+                    lines.append(f"    {_c(skew_status_color_code, sw)}")
+            else:
+                lines.append(f"{skew_prefix}{skew_status_color}")
+
+        iv_line = f" ├─ IV: {_c('37', iv_val_str)}{iv_tail}"
+        if _display_width(_clean_ansi(iv_line)) <= _MOBILE_LINE_WIDTH:
+            lines.append(iv_line)
+        else:
+            tail_wrapped = _wrap_visual(iv_tail.strip(), _MOBILE_LINE_WIDTH - 4)
+            lines.append(f" ├─ IV: {_c('37', iv_val_str)}")
+            for tw in tail_wrapped:
+                lines.append(f"    {tw}")
+
+        iv_rank_line = f" └─ IV Rank: {iv_rank_color} ｜ 狀態: {iv_status_color}"
+        if _display_width(_clean_ansi(iv_rank_line)) <= _MOBILE_LINE_WIDTH:
+            lines.append(iv_rank_line)
+        else:
+            lines.append(f" ├─ IV Rank: {iv_rank_color}")
+            lines.append(f" └─ 狀態: {iv_status_color}")
+
+        if include_divider:
+            content_max = max(
+                (_display_width(_clean_ansi(ln)) for ln in lines[1:]),
+                default=0,
+            )
+            div_len = min(content_max, _MOBILE_LINE_WIDTH) - 1
+            if div_len >= 10:
+                lines.insert(divider_idx, " " + "-" * div_len)
+
         lines.append("```")
         return lines
 
-    def _longest_visual(lines: List[str]) -> int:
-        return max(
-            (_visual_len(_clean_ansi(ln)) for ln in lines[1:-1]),
-            default=0,
-        )
-
-    compact = False
-    lines = _assemble(directive, compact=compact)
+    directive = raw_dir
+    lines = _assemble(directive, include_divider=True)
     card = "\n".join(lines)
     if len(card) > _CARD_CHAR_BUDGET:
         over = len(card) - _CARD_CHAR_BUDGET
         directive = _truncate_text(directive, max(8, len(directive) - over))
-        lines = _assemble(directive, compact=compact)
+        lines = _assemble(directive, include_divider=True)
         card = "\n".join(lines)
     if len(card) > _CARD_CHAR_BUDGET:
-        # 固定區塊仍過長：移除區塊間空行，再縮短指引
-        compact = True
-        lines = _assemble(directive, compact=compact)
+        lines = _assemble(directive, include_divider=False)
         card = "\n".join(lines)
-        if len(card) > _CARD_CHAR_BUDGET:
-            over = len(card) - _CARD_CHAR_BUDGET
-            directive = _truncate_text(directive, max(1, len(directive) - over))
-            lines = _assemble(directive, compact=compact)
-            card = "\n".join(lines)
-
-    # 分隔線：依卡片最長內容行的視覺寬度決定，並受字數預算限制（放不下就省略）
-    width = _longest_visual(lines)
-    room = _CARD_CHAR_BUDGET - len(card) - 2  # 前導空白與換行
-    divider_len = min(width, room)
-    if divider_len >= 10:
-        lines.insert(-1, " " + "-" * divider_len)
+    if len(card) > _CARD_CHAR_BUDGET:
+        over = len(card) - _CARD_CHAR_BUDGET
+        directive = _truncate_text(directive, max(1, len(directive) - over))
+        lines = _assemble(directive, include_divider=False)
         card = "\n".join(lines)
 
     return card, tags
@@ -424,9 +516,14 @@ def create_telemetry_alignment_embeds(
         color_value = _COLOR_INFO
     color = discord.Color(color_value)
 
-    description_lines = [
-        f"共 `{len(alignment_items)}` 筆委託單，其中 `{changed_count}` 筆有調整建議。"
-    ]
+    if scheduled_mode:
+        description_lines = [
+            f"`{len(alignment_items)}` 筆委託單出現新的對齊建議（同一組建議當日只推播一次）。"
+        ]
+    else:
+        description_lines = [
+            f"共 `{len(alignment_items)}` 筆委託單，其中 `{changed_count}` 筆有調整建議。"
+        ]
 
     if truncated:
         description_lines.append(
@@ -463,14 +560,25 @@ def create_telemetry_alignment_embeds(
             card_content = all_cards[global_idx - 1]
             degraded_suffix = "".join(f" [{t}]" for t in all_tags[global_idx - 1])
 
-            name_prefix = f"📦 委託單 #{global_idx}"
-            if order_id is not None:
-                name_prefix += f" (ID: {order_id})"
+            side = str(item.get("side") or "BUY").upper()
+            side_zh = "買入" if side == "BUY" else "賣出"
+            order_type = str(item.get("order_type") or "LIMIT").upper()
+            type_zh = _order_type_zh(order_type)
 
+            desc_parts = []
             if sym:
-                field_name = f"{name_prefix} ｜ {sym}{degraded_suffix}"
+                desc_parts.append(sym)
+            desc_parts.append(f"{side_zh}{type_zh}")
+            order_desc = " ".join(desc_parts)
+
+            id_part = f" (ID: {order_id})" if order_id is not None else ""
+
+            if order_desc:
+                field_name = (
+                    f"📦 #{global_idx} ｜ {order_desc}{id_part}{degraded_suffix}"
+                )
             else:
-                field_name = f"{name_prefix}{degraded_suffix}"
+                field_name = f"📦 #{global_idx}{id_part}{degraded_suffix}"
 
             embed.add_field(
                 name=field_name,

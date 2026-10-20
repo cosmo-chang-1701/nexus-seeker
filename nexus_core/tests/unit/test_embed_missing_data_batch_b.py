@@ -307,16 +307,16 @@ def _tele_item(**kw: Any) -> dict[str, Any]:
 def test_telemetry_missing_live_price_does_not_show_limit_as_spot() -> None:
     [embed] = create_telemetry_alignment_embeds([_tele_item(live_price=None)])
     text = _text(embed)
-    assert "當前現價: \u001b[1;37m--" in text
-    assert "當前現價: \u001b[1;37m$145.00" not in text
-    assert "$145.00" in text  # 限價仍在委託雷達顯示
+    assert "現價: \u001b[1;37m--" in text
+    assert "現價: \u001b[1;37m$145.00" not in text
+    assert "$145.00" in text  # 限價仍在原掛單顯示
     assert "[降級模式]" in (embed.title or "")
     assert "[數據未更新/降級模式]" in (embed.fields[0].name or "")
 
 
 def test_telemetry_live_price_present_shows_spot_no_suffix() -> None:
     [embed] = create_telemetry_alignment_embeds([_tele_item()])
-    assert "當前現價: \u001b[1;37m$146.50" in _text(embed)
+    assert "現價: \u001b[1;37m$146.50" in _text(embed)
     assert "降級" not in (embed.title or "")
 
 

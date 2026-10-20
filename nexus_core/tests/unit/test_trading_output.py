@@ -693,7 +693,93 @@ async def test_dispatch_order_telemetry_alignment_alert_success() -> None:
         scheduled_mode=True,
     )
     bot.queue_dm.assert_awaited_once_with(1, embed=mock_embed)
+
+
+@pytest.mark.asyncio
+async def test_telemetry_alignment_skips_when_memory_unsafe() -> None:
+    from cogs.trading.telemetry import TelemetryMonitorCog
+
     bot = MagicMock()
+    bot._is_leader_instance = True
+    cog = TelemetryMonitorCog(bot)
+    with (
+        patch("market_time.is_market_open", return_value=True),
+        patch("services.llm_service.is_memory_safe", return_value=False),
+        patch(
+            "cogs.trading.telemetry._dispatch_order_telemetry_alignment_alert",
+            new=AsyncMock(),
+        ) as mock_dispatch,
+    ):
+        await cog.monitor_order_telemetry_alignment_task.coro(cog)
+    mock_dispatch.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_telemetry_alignment_skips_sell_orders() -> None:
+    bot = MagicMock()
+    buy_order = {
+        "id": 1,
+        "user_id": 42,
+        "symbol": "AAPL",
+        "quantity": 10.0,
+        "order_type": "LIMIT",
+        "limit_price": 100.0,
+        "side": "BUY",
+    }
+    sell_order = {
+        "id": 2,
+        "user_id": 42,
+        "symbol": "AAPL",
+        "quantity": 5.0,
+        "order_type": "LIMIT",
+        "limit_price": 105.0,
+        "side": "SELL",
+    }
+    with (
+        patch(
+            "database.orders.get_all_active_orders",
+            return_value=[buy_order, sell_order],
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_user_holdings", return_value=[]),
+        patch("database.get_user_portfolio", return_value=[]),
+        patch(
+            "services.order_telemetry_service.collect_macro_event_dates",
+            new=AsyncMock(return_value=set()),
+        ),
+        patch(
+            "services.order_telemetry_service.resolve_holding_type_and_rows",
+            return_value=("SPOT", {}),
+        ),
+        patch(
+            "services.order_telemetry_service.build_telemetry_alignment_items",
+            new=AsyncMock(return_value=([], False)),
+        ) as mock_build,
+    ):
+        from cogs.trading.telemetry import (
+            _dispatch_order_telemetry_alignment_alert,
+        )
+
+        await _dispatch_order_telemetry_alignment_alert(bot)
+    mock_build.assert_awaited_once()
+    assert mock_build.await_args is not None
+    passed_orders = mock_build.await_args.kwargs["orders"]
+    assert len(passed_orders) == 1
+    assert passed_orders[0]["id"] == 1
+
+    # When only SELL orders exist, build_telemetry_alignment_items is NOT called
+    with (
+        patch(
+            "database.orders.get_all_active_orders",
+            return_value=[sell_order],
+        ),
+        patch(
+            "services.order_telemetry_service.build_telemetry_alignment_items",
+            new=AsyncMock(return_value=([], False)),
+        ) as mock_build_sell,
+    ):
+        await _dispatch_order_telemetry_alignment_alert(bot)
+    mock_build_sell.assert_not_called()
 
 
 @pytest.mark.asyncio

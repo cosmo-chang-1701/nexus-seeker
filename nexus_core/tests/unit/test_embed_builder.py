@@ -3269,9 +3269,9 @@ def test_create_telemetry_alignment_embeds() -> None:
     assert len(embeds) == 1
     val = embeds[0].fields[0].value
     assert "```ansi" in val  # type: ignore
-    assert "\u001b[1;36m【物理防線 (The Shield)】\u001b[0m" in val  # type: ignore
-    assert "選擇權偏斜 (Option Skew)" in val  # type: ignore
-    assert "隱含波動率 (IV)" in val  # type: ignore
+    assert "\u001b[1;36m現價與持倉\u001b[0m" in val  # type: ignore
+    assert "Skew:" in val  # type: ignore
+    assert "IV:" in val  # type: ignore
 
     # 2. Test pre-market degraded (no IV/Option data)
     pm_degraded_item = dict(
