@@ -164,9 +164,12 @@ async def test_execute_unified_scan_filters(mock_bot: Any, mock_interaction: Any
         # Mock active orders, holdings, portfolio
         # Active orders uses dict access (o["symbol"]), portfolio uses tuple index (row[1])
         def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
-            if "get_user_portfolio" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_portfolio" in name:
                 return [(123, "AAPL"), (123, "TSLA")]
-            return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+            if "get_user_active_orders" in name:
+                return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
@@ -241,9 +244,12 @@ async def test_execute_unified_scan_squeeze_mode_filter(
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
 
         def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
-            if "get_user_portfolio" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_portfolio" in name:
                 return [(123, "AAPL"), (123, "TSLA")]
-            return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+            if "get_user_active_orders" in name:
+                return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
@@ -310,14 +316,18 @@ async def test_execute_unified_scan_magnetic_filters(
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
 
         def mock_to_thread_side_effect(func: Any, *args, **kwargs):  # type: ignore
-            if "get_user_portfolio" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_portfolio" in name:
                 return [(123, "AAPL"), (123, "NVDA")]
-            return [
-                {"symbol": "AAPL"},
-                {"symbol": "NVDA"},
-                {"symbol": "TSLA"},
-                {"symbol": "AMD"},
-            ]
+            if "get_user_active_orders" in name:
+                return [
+                    {"symbol": "AAPL"},
+                    {"symbol": "NVDA"},
+                    {"symbol": "TSLA"},
+                    {"symbol": "AMD"},
+                ]
+
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
@@ -402,9 +412,12 @@ async def test_batch_scan_magnetic_filters_backward_compatible_with_dp_poc(
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
 
         def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any) -> Any:
-            if "get_user_portfolio" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_portfolio" in name:
                 return [(123, "AAPL")]
-            return [{"symbol": "AAPL"}]
+            if "get_user_active_orders" in name:
+                return [{"symbol": "AAPL"}]
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
         with patch("services.asset_manager.AssetManager.get_assets", return_value=[]):
@@ -476,9 +489,12 @@ async def test_batch_scan_alpha_filters_and_pagination(
         # 模擬 WATCHLIST 有 15 檔
 
         def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any):  # type: ignore
-            if "get_user_watchlist" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_watchlist" in name:
                 return [[f"SYM_{i}"] for i in range(1, 16)]
-            return []
+            if "get_watchlist_tags" in name:
+                return []
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
@@ -540,9 +556,12 @@ async def test_batch_scan_reports_error_when_send_fails(
     with patch("cogs.unified_terminal.cog.asyncio.to_thread") as mock_thread:
 
         def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any):  # type: ignore
-            if "get_user_watchlist" in func.__name__:
+            name = getattr(func, "__name__", "")
+            if "get_user_watchlist" in name:
                 return [[f"SYM_{i}"] for i in range(1, 4)]
-            return []
+            if "get_watchlist_tags" in name:
+                return []
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 
@@ -886,9 +905,12 @@ async def test_exclude_martial_law_putwall_breach_and_neg_gex(
     ):
 
         def mock_to_thread_side_effect(func: Any, *args: Any, **kwargs: Any) -> Any:
-            if "get_user_portfolio" in getattr(func, "__name__", ""):
+            name = getattr(func, "__name__", "")
+            if "get_user_portfolio" in name:
                 return [(123, "NVDA"), (123, "TSLA"), (123, "AAPL")]
-            return [{"symbol": "NVDA"}, {"symbol": "TSLA"}, {"symbol": "AAPL"}]
+            if "get_user_active_orders" in name:
+                return [{"symbol": "NVDA"}, {"symbol": "TSLA"}, {"symbol": "AAPL"}]
+            return func(*args, **kwargs)
 
         mock_thread.side_effect = mock_to_thread_side_effect
 

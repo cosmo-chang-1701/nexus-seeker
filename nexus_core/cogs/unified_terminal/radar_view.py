@@ -50,7 +50,7 @@ class FilterParamsModal(discord.ui.Modal, title="微調進階量化參數"):
 
 
 class UnifiedRadarView(discord.ui.View):
-    def __init__(self, cog: Any, user_id: int):
+    def __init__(self, cog: Any, user_id: int, initial_state: Optional[dict] = None):
         super().__init__(timeout=300)
         self.cog = cog
         self.user_id = user_id
@@ -65,6 +65,14 @@ class UnifiedRadarView(discord.ui.View):
             "min_max_pain_dev": 0.10,
         }
         self.selected_tag: Optional[str] = None
+
+        # 自批次掃描結果「返回控制面板」時還原上次設定（複製一份，避免面板改動回寫呼叫端 state）
+        if initial_state:
+            self.scope = initial_state.get("scope") or self.scope
+            self.quant_filters = set(initial_state.get("quant_filters") or [])
+            self.params = dict(initial_state.get("params") or self.params)
+            self.selected_tag = initial_state.get("selected_tag")
+
         self.tag_selector_added = False
         self.tag_select: Optional[discord.ui.Select] = None
 
@@ -100,6 +108,8 @@ class UnifiedRadarView(discord.ui.View):
             options=scope_options,
             row=0,
         )
+        for opt in scope_options:
+            opt.default = opt.value == self.scope
         self.scope_select.callback = self.on_scope_change  # type: ignore
         self.add_item(self.scope_select)
 
@@ -143,6 +153,8 @@ class UnifiedRadarView(discord.ui.View):
             options=filter_options,
             row=1,
         )
+        for opt in filter_options:
+            opt.default = opt.value in self.quant_filters
         self.filter_select.callback = self.on_filter_change  # type: ignore
         self.add_item(self.filter_select)
 
