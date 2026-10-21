@@ -204,8 +204,26 @@ def _features(df: pd.DataFrame) -> pd.DataFrame:
 
 def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    has_dates = "date" in frame.columns and bool(
+        (frame["date"].astype(str) != "").any()
+    )
     for label, g in frame.groupby(key, observed=True, sort=True):
         n = int(len(g))
+        win_ci: Optional[list[float]] = None
+        adverse_ci: Optional[list[float]] = None
+        if has_dates and n:
+            # 日期叢集 bootstrap：同日樣本高度相關，逐筆重抽會低估區間
+            dates = list(g["date"])
+            _, wlo, whi = clustered_bootstrap_mean(
+                [float(v) for v in g["win"]], dates, _FLIP_BOOT_N, _FLIP_BOOT_SEED
+            )
+            _, alo, ahi = clustered_bootstrap_mean(
+                [1.0 if o == -1 else 0.0 for o in g["outcome"]],
+                dates,
+                _FLIP_BOOT_N,
+                _FLIP_BOOT_SEED,
+            )
+            win_ci, adverse_ci = [wlo, whi], [alo, ahi]
         out.append(
             {
                 "bucket": str(label),
@@ -213,6 +231,8 @@ def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
                 "n_dates": int(g["date"].nunique()) if "date" in g.columns else None,
                 "win_rate": float(g["win"].mean()),
                 "adverse_rate": float((g["outcome"] == -1).mean()),
+                "win_ci95": win_ci,
+                "adverse_ci95": adverse_ci,
                 "status": "OK"
                 if n >= FORWARD_MIN_ROWS
                 else f"資料累積中 ({n}/{FORWARD_MIN_ROWS})",
@@ -507,6 +527,8 @@ SQUEEZE_MIN_PER_TIER = 5
 SQUEEZE_HORIZON_DAYS = 20
 SQUEEZE_TIERS = (1, 2, 3)
 SQUEEZE_T_THRESHOLD = 2.0
+SQUEEZE_BENCHMARK = "VOO"
+SQUEEZE_MARKET_BAND = 0.02
 SQUEEZE_G3_NOTE = "無顯著擇時優勢，翻轉僅為自動化使用者規則，不得宣稱 alpha（§5.8 G-3）"
 SQUEEZE_G4_REMINDER = (
     "G.4 人工抽查：至少 3 檔標的的 W／3D／65m K 棒須與 TradingView 一致（本報表不計算）"
@@ -591,6 +613,106 @@ def _ret20(closes: Sequence[tuple[date, float]], d: date) -> Optional[float]:
     if not base or not math.isfinite(base):
         return None
     return float(closes[t + SQUEEZE_HORIZON_DAYS][1] / base - 1.0)
+
+
+def _finite_ci(lo: float, hi: float) -> Optional[list[float]]:
+    return [lo, hi] if math.isfinite(lo) and math.isfinite(hi) else None
+
+
+def _squeeze_strata(
+    treat_v: list[float],
+    treat_c: list[str],
+    control_v: list[float],
+    control_c: list[str],
+    benchmark: Optional[Sequence[tuple[date, float]]],
+    cfg: CalibrationConfig,
+) -> dict[str, Any]:
+    """G.2 的同日匹配與市況分層（僅供參考，不影響 g2_passed）。
+
+    單一週、高 beta 標的與大盤方向會讓處理組／對照組的差混入 beta 與日期組成，
+    故另列：(1) 同事件日對照組均值相減；(2) 依基準 (SQUEEZE_BENCHMARK) 同日起
+    20 日報酬分「下跌／盤整／上漲」後各自比較。
+    """
+    ctrl_by_date: dict[str, list[float]] = {}
+    for v, c in zip(control_v, control_c):
+        ctrl_by_date.setdefault(c, []).append(v)
+    diffs: list[float] = []
+    diff_c: list[str] = []
+    skipped = 0
+    for v, c in zip(treat_v, treat_c):
+        peers = ctrl_by_date.get(c)
+        if not peers:
+            skipped += 1
+            continue
+        diffs.append(v - sum(peers) / len(peers))
+        diff_c.append(c)
+    matched: dict[str, Any] = {
+        "n": len(diffs),
+        "n_dates": len(set(diff_c)),
+        "excess": None,
+        "excess_ci": None,
+        "no_same_day_control": skipped,
+    }
+    if diffs:
+        mean, lo, hi = clustered_bootstrap_mean(diffs, diff_c, cfg.n_boot, cfg.seed)
+        matched["excess"] = mean
+        matched["excess_ci"] = _finite_ci(lo, hi)
+
+    out: dict[str, Any] = {"日期匹配": matched}
+    if not benchmark:
+        out["市況分層"] = "基準價格不可得"
+        return out
+    state_cache: dict[str, Optional[str]] = {}
+
+    def _state(iso: str) -> Optional[str]:
+        if iso not in state_cache:
+            r = _ret20(benchmark, date.fromisoformat(iso))
+            state_cache[iso] = (
+                None
+                if r is None
+                else "下跌"
+                if r < -SQUEEZE_MARKET_BAND
+                else "上漲"
+                if r > SQUEEZE_MARKET_BAND
+                else "盤整"
+            )
+        return state_cache[iso]
+
+    buckets: dict[str, dict[str, list[Any]]] = {
+        k: {"tv": [], "tc": [], "cv": [], "cc": []} for k in ("下跌", "盤整", "上漲")
+    }
+    pending_bm = 0
+    for side_v, side_c, vk, ck in (
+        (treat_v, treat_c, "tv", "tc"),
+        (control_v, control_c, "cv", "cc"),
+    ):
+        for v, c in zip(side_v, side_c):
+            st = _state(c)
+            if st is None:
+                pending_bm += 1
+                continue
+            buckets[st][vk].append(v)
+            buckets[st][ck].append(c)
+    layered: dict[str, Any] = {}
+    for st, b in buckets.items():
+        entry: dict[str, Any] = {
+            "n_treat": len(b["tv"]),
+            "n_control": len(b["cv"]),
+            "excess": None,
+            "excess_ci": None,
+        }
+        if b["tv"] and b["cv"]:
+            diff, lo, hi, _se = clustered_bootstrap_diff(
+                b["tv"], b["tc"], b["cv"], b["cc"], cfg.n_boot, cfg.seed
+            )
+            entry["excess"] = diff
+            entry["excess_ci"] = _finite_ci(lo, hi)
+        else:
+            entry["status"] = "樣本不足"
+        layered[st] = entry
+    layered["pending_benchmark"] = pending_bm
+    out["市況分層"] = layered
+    return out
 
 
 def _squeeze_analysis(
@@ -688,6 +810,9 @@ def _squeeze_analysis(
             g2["t_stat"] = diff / se
     else:
         g2["status"] = "樣本不足"
+    g2["strata"] = _squeeze_strata(
+        treat_v, treat_c, control_v, control_c, closes.get(SQUEEZE_BENCHMARK), cfg
+    )
     result["g2"] = g2
     t_stat = g2["t_stat"]
     if t_stat is None:

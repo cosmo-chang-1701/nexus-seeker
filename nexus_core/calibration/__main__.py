@@ -235,7 +235,11 @@ async def _squeeze_flip_check(
         return {"status": f"無法讀取擠壓判定紀錄: {e}"}
     closes: dict[str, Any] = {}
     if not cfg.offline:
-        symbols = sorted({str(s) for s in rows["symbol"].dropna()})
+        from calibration.forward_log import SQUEEZE_BENCHMARK
+
+        symbols = sorted(
+            {str(s) for s in rows["symbol"].dropna()} | {SQUEEZE_BENCHMARK}
+        )
         try:
             from calibration.macro_forward_report import load_prices
 

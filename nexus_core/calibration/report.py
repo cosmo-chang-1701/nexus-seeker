@@ -96,6 +96,11 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _fmt_ci(value: Any, ci: Any) -> str:
+    """`0.156 [0.100, 0.220]`；無 CI 時 CI 欄顯示 `—`。"""
+    return f"{_fmt(value)} {_fmt(ci)}"
+
+
 def _render_regime_breakdown(forward: dict[str, Any]) -> list[str]:
     rows = forward.get("regime_breakdown") or []
     if not rows:
@@ -144,9 +149,41 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
             f"{_fmt(g2.get('excess_ci'))}、t={_fmt(g2.get('t_stat'))}；"
             f"達標：{_flag(g2.get('g2_passed'))}{extra}"
         )
+    strata = g2.get("strata")
+    if strata:
+        lines += _render_squeeze_strata(strata)
     if data.get("g3"):
         lines.append(f"- G.3 判讀：{data['g3']}")
     lines.append("")
+    return lines
+
+
+def _render_squeeze_strata(strata: dict[str, Any]) -> list[str]:
+    tag = "（參考，不影響達標判定）"
+    m = strata.get("日期匹配") or {}
+    lines = [
+        f"  - G.2 日期匹配{tag}：超額 {_fmt(m.get('excess'))} {_fmt(m.get('excess_ci'))}、"
+        f"n={m.get('n', 0)}、交易日數 {m.get('n_dates', 0)}、"
+        f"無同日對照 {m.get('no_same_day_control', 0)}"
+    ]
+    layered = strata.get("市況分層")
+    if not isinstance(layered, dict):
+        lines.append(f"  - G.2 市況分層{tag}：{layered or '基準價格不可得'}")
+        return lines
+    for st in ("下跌", "盤整", "上漲"):
+        e = layered.get(st)
+        if not e:
+            continue
+        extra = f"；{e['status']}" if e.get("status") else ""
+        lines.append(
+            f"  - G.2 市況分層「{st}」{tag}：處理組 n={e.get('n_treat', 0)}、"
+            f"對照組 n={e.get('n_control', 0)}；超額 {_fmt(e.get('excess'))} "
+            f"{_fmt(e.get('excess_ci'))}{extra}"
+        )
+    if layered.get("pending_benchmark"):
+        lines.append(
+            f"  - G.2 市況分層：基準報酬未滿 20 日而排除 {layered['pending_benchmark']} 筆"
+        )
     return lines
 
 
@@ -278,14 +315,14 @@ def render_markdown(results: dict[str, Any]) -> str:
                     lines.append(f"- 母體來源 `{group}`")
                 lines += [
                     "",
-                    "| 區間 | n | 交易日數 | 勝率 | 逆向先觸及 | 狀態 |",
+                    "| 區間 | n | 交易日數 | 勝率 [95% CI] | 逆向先觸及 [95% CI] | 狀態 |",
                     "|---|---|---|---|---|---|",
                 ]
                 for r in rows:
                     lines.append(
                         f"| {r['bucket']} | {r['n']} | {_fmt(r.get('n_dates'))} "
-                        f"| {_fmt(r['win_rate'])} "
-                        f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
+                        f"| {_fmt_ci(r['win_rate'], r.get('win_ci95'))} "
+                        f"| {_fmt_ci(r['adverse_rate'], r.get('adverse_ci95'))} | {r['status']} |"
                     )
                 lines.append("")
         by_ev = studies.get("skew_percentile_by_evaluator")
@@ -301,14 +338,14 @@ def render_markdown(results: dict[str, Any]) -> str:
                         "",
                         f"  母體來源 `{src}`",
                         "",
-                        "| 區間 | n | 交易日數 | 勝率 | 逆向先觸及 | 狀態 |",
+                        "| 區間 | n | 交易日數 | 勝率 [95% CI] | 逆向先觸及 [95% CI] | 狀態 |",
                         "|---|---|---|---|---|---|",
                     ]
                     for r in rows:
                         lines.append(
                             f"| {r['bucket']} | {r['n']} | {_fmt(r.get('n_dates'))} "
-                            f"| {_fmt(r['win_rate'])} "
-                            f"| {_fmt(r['adverse_rate'])} | {r['status']} |"
+                            f"| {_fmt_ci(r['win_rate'], r.get('win_ci95'))} "
+                            f"| {_fmt_ci(r['adverse_rate'], r.get('adverse_ci95'))} | {r['status']} |"
                         )
                 lines.append("")
     lines += [

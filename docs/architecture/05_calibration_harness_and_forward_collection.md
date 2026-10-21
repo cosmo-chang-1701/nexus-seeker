@@ -273,6 +273,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 
+G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超額與 t 值**）：(1) **日期匹配**——每個處理組事件減去同事件日對照組的平均 20 日報酬（無同日對照者略過並計數），以事件日叢集 bootstrap 給出超額與 95% CI；(2) **市況分層**——以基準 `SQUEEZE_BENCHMARK`（VOO）自該日起的 20 日報酬分「下跌（< −2%）／盤整／上漲（> +2%，`SQUEEZE_MARKET_BAND`）」，各狀態內重做處理組對照組比較；基準報酬未滿 20 日者排除並計數，基準無價格時顯示「基準價格不可得」。原因：目前已標註的事件集中在單一週，標的池含高 beta 與槓桿／反向 ETF，混合比較的差值主要反映 beta 與日期組成，而非擠壓進場本身的擇時價值。
+
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
 ### 5.9 基準：2026-09-16 試跑結果
@@ -475,6 +477,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出三張表：
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
+- 以上各分桶表（D-04、Skew、依評估器拆分）的勝率與逆向先觸及率皆附日期叢集 bootstrap 95% CI（`win_ci95`／`adverse_ci95`；無日期欄時為空）。同一交易日的樣本高度相關，n 很大但交易日數很少時 CI 會很寬，方向翻轉不代表訊號；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
 - 自 PR-2 起 `REGIME_CLASSIFIER` 與 `ENTRY_SQUEEZE` 紀錄也帶 `skew_percentile`／`skew_percentile_source`（純記錄，不參與分類或擠壓判定）；報表另提供「依評估器拆分」子表（`REGIME_CLASSIFIER`／`ENTRY_SQUEEZE`／其他），避免不同母體混在一起。`CANONICAL` 需每標的 ≥ 20 個交易日的日級快照，未滿前一律為 `INTRADAY_FALLBACK`，屬預期。`/x` 手動檢核（`SYMBOL_VIEW`）同樣帶 skew：hub 資料的 `skew_percentile_source` 取自計算分位的同一次 `calculate_skew` 結果（取不到則為空），不顯示於 embed。
 - `gamma_flip_materiality`：只取閘門 Flip 存在的紀錄，依重要性比分成「雜訊交叉」（< 5%）與「重要交叉」兩組，比較勝率與逆向先觸及率（依日期叢集 bootstrap 的 95% CI），並附重要性比四分位。判讀規則見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6。
@@ -487,10 +490,10 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 3. 次一交易日確認 16:15 ET 的 `📸 [Canonical 日級快照]` 與 08:45 ET 的補寫日誌都有出現。
 4. 部署新版 edge 後，第一個交易日收盤後確認 edge 日誌出現 `[em_snapshot] … 寫入 N 筆到期日跨式`。edge 離線的日子不會有 EM 與 GEX 歷史，只會少樣本，不影響其他日的標註。
 
-**停損墊片比較（`micro-report` 的「停損墊片比較」段落）**：母體為 `edge_PutWall` 且 `tested` 的事件（與「支撐定義比較」同一個 tested 定義；`atr_1d` 缺失而排除的件數另列於報表「atr_1d缺失排除」與備註，與「支撐定義比較」的 edge_PutWall tested 件數差即為此數），對 `0.5×ATR15m(現行)`、`0.25×ATR1D`、`0.5×ATR1D` 三種墊片（倍數取自 `room_threshold._ROOM_STOP_ATR_15M_MULTIPLIER`／`_DAILY_NOISE_STOP_ATR_1D_MULT`，標籤動態組成），以 $\text{stop} = \text{wall} - \text{buffer}$ 計算：觸發率（觀察期最低價 $\le$ stop）、掃損收回率（觸發且最後收盤 $\ge$ wall）、真破率（觸發且最後收盤 $<$ stop），CI 同樣依日期叢集 bootstrap。**條件率的分母是該墊片的觸發數**，另輸出「掃損無條件率」「真破無條件率」（分母皆為全部 tested 事件，三種墊片共用，才能互比）。統計鍵為中性的 `{n, hits, n_dates, rate, ci}`（支撐守住率沿用既有鍵）。snapshot 沒有 15m ATR，ATR₁₅ₘ 以 ATR₁D/$\sqrt{26}$ 折算（沿用 `room_threshold._BARS_PER_SESSION`）。樣本門檻沿用可標註日期 $\ge 20$、tested $\ge 30$，不足時輸出「樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ」；**每種墊片的觸發數也須 $\ge 30$**，未達者標「觸發樣本不足」，其條件率不可判讀（可先比較無條件率）。標註事件上的 `_path` 僅供計算，輸出報表前剔除。`/x` 目前只並列日線噪音帶參考停損，閘門不動。
+**停損墊片比較（`micro-report` 的「停損墊片比較」段落）**：母體為 `edge_PutWall` 且 `tested` 的事件（與「支撐定義比較」同一個 tested 定義；`atr_1d` 缺失而排除的件數另列於報表「atr_1d缺失排除」與備註，與「支撐定義比較」的 edge_PutWall tested 件數差即為此數），對 `0.5×ATR15m(現行)`、`0.25×ATR1D`、`0.5×ATR1D` 三種墊片（倍數取自 `room_threshold._ROOM_STOP_ATR_15M_MULTIPLIER`／`_DAILY_NOISE_STOP_ATR_1D_MULT`，標籤動態組成），以 $\text{stop} = \text{wall} - \text{buffer}$ 計算：觸發率（觀察期最低價 $\le$ stop）、掃損收回率（觸發且最後收盤 $\ge$ wall）、真破率（觸發且最後收盤 $<$ stop），CI 同樣依日期叢集 bootstrap。**條件率的分母是該墊片的觸發數**，另輸出「掃損無條件率」「真破無條件率」（分母皆為全部 tested 事件，三種墊片共用，才能互比）。統計鍵為中性的 `{n, hits, n_dates, rate, ci}`（支撐守住率沿用既有鍵）。snapshot 沒有 15m ATR，ATR₁₅ₘ 以 ATR₁D/$\sqrt{26}$ 折算（沿用 `room_threshold._BARS_PER_SESSION`）。樣本門檻沿用可標註日期 $\ge 20$、tested $\ge 30$，不足時輸出「樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ」；**每種墊片的觸發數也須 $\ge 30$**，未達者標「觸發樣本不足」，其條件率不可判讀（可先比較無條件率）。每種墊片另列成本面：`停損距離%`（墊片 ÷ 牆價，平均與中位數）、`停損距離ATR1D`，以及 `每事件模擬報酬`（左側於牆價進場；觀察期最低價 $\le$ stop 則以 stop 成交、報酬 $\text{stop}/\text{wall}-1$，未計跳空與滑價，否則以觀察期最後收盤平倉；平均與日期叢集 95% CI，單位 %）與 `每事件模擬報酬_觸牆子集`（僅最低價 $\le$ wall、進場確實會成交的事件）。寬墊片掃損較少，但每次停損虧損較大，樣本充足時須併看各墊片 `每事件模擬報酬` 的 CI 再決定。標註事件上的 `_path` 僅供計算，輸出報表前剔除。`/x` 目前只並列日線噪音帶參考停損，閘門不動。
 
 **判讀準則**：
-- `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。
+- `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。`micro-report` 的深度四分位表每組附日期叢集 95% CI 與自動「判讀」：可標註日期 < 20 或任一組 tested < 30 輸出「樣本不足」；Q2 的 CI 上界低於 Q3 與 Q4 的 CI 下界才提示可提案上調，否則維持現行門檻（閘門仍不得先改）。
 - Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
 
 ### 5.14 通知成效前向評估 (`notification_dispatch_log` / `notif-report`)

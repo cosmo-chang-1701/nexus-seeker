@@ -584,6 +584,26 @@ def _rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
     }
 
 
+def _mean_stats(events: list[tuple[str, float]]) -> dict[str, Any]:
+    """每事件報酬（小數）的平均與日期叢集 CI，輸出為百分比（2 位小數）。"""
+    from calibration.stats import clustered_bootstrap_mean
+
+    if not events:
+        return {"n": 0, "n_dates": 0, "mean_pct": None, "ci_pct": None}
+    mean, lo, hi = clustered_bootstrap_mean(
+        [v for _, v in events],
+        [d for d, _ in events],
+        _BOOTSTRAP_N,
+        _BOOTSTRAP_SEED,
+    )
+    return {
+        "n": len(events),
+        "n_dates": len({d for d, _ in events}),
+        "mean_pct": round(mean * 100, 2),
+        "ci_pct": [round(lo * 100, 2), round(hi * 100, 2)],
+    }
+
+
 def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
     """支撐守住率的既有輸出鍵（tested／held／hold_rate／ci95），內部走 `_rate_stats`。"""
     st = _rate_stats(events)
@@ -594,6 +614,50 @@ def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
         "hold_rate": st["rate"],
         "ci95": st["ci"],
     }
+
+
+def depth_quartile_hold_rates(labeled: list[dict[str, Any]]) -> dict[str, Any]:
+    """支撐牆守住率依深度比四分位（含日期叢集 CI 與自動判讀）。純函式、無 I/O。
+
+    有效深度比不足 4 筆時回傳空 dict（呼叫端沿用「無表」的退路）。判讀規則見
+    docs/architecture/05 §5.13：樣本不足不判讀；Q2 的 CI 上界低於 Q3／Q4 的 CI 下界
+    才提示可提案調高 GEX_WALL_MIN_DEPTH_RATIO（閘門不得先改）。
+    """
+    valid = sorted(
+        x["depth_ratio"] for x in labeled if x.get("depth_ratio") is not None
+    )
+    if len(valid) < 4:
+        return {}
+    cuts = [valid[len(valid) * i // 4] for i in (1, 2, 3)]
+    by_q: dict[str, list[tuple[str, bool]]] = {f"Q{i}": [] for i in range(1, 5)}
+    for x in labeled:
+        if x.get("depth_ratio") is None or not x["tested"]:
+            continue
+        qi = sum(1 for c in cuts if x["depth_ratio"] >= c)
+        by_q[f"Q{qi + 1}"].append((x["date"], bool(x["held"])))
+    table: dict[str, Any] = {k: _hold_rate_stats(v) for k, v in by_q.items()}
+    table["quartile_cuts"] = cuts
+
+    n_dates = len({x["date"] for x in labeled})
+    short = [k for k in by_q if table[k]["tested"] < _MIN_TESTED_PER_DEFINITION]
+    if n_dates < _MIN_LABELED_DATES or short:
+        table["判讀"] = (
+            f"樣本不足（可標註日期 {n_dates}/{_MIN_LABELED_DATES}；"
+            f"tested < {_MIN_TESTED_PER_DEFINITION} 的分組：{', '.join(short) or '無'}），"
+            "不判讀，維持 GEX_WALL_MIN_DEPTH_RATIO"
+        )
+    else:
+        q2_hi = table["Q2"]["ci95"][1]
+        rival_lo = min(table["Q3"]["ci95"][0], table["Q4"]["ci95"][0])
+        if q2_hi < rival_lo:
+            table["判讀"] = (
+                "Q2 守住率 CI 上界低於 Q3／Q4 的 CI 下界，Q2 明顯低於 Q3／Q4；"
+                f"可提案將 GEX_WALL_MIN_DEPTH_RATIO 調高至 Q2／Q3 分界 {cuts[1]:.4g}"
+                "（僅提案，閘門不得先改）"
+            )
+        else:
+            table["判讀"] = "未見 Q2 明顯低於 Q3／Q4，維持 GEX_WALL_MIN_DEPTH_RATIO"
+    return table
 
 
 def compare_support_definitions(labeled: list[dict[str, Any]]) -> dict[str, Any]:
@@ -685,8 +749,15 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
         broken: list[tuple[str, bool]] = []
         whipsaw_all: list[tuple[str, bool]] = []
         broken_all: list[tuple[str, bool]] = []
+        dist_pct: list[float] = []
+        dist_atr: list[float] = []
+        sim_all: list[tuple[str, float]] = []
+        sim_touch: list[tuple[str, float]] = []
         for d, e in events:
-            stop = e["wall"] - buf_fn(e["atr_1d"])
+            buf = buf_fn(e["atr_1d"])
+            stop = e["wall"] - buf
+            dist_pct.append(buf / e["wall"] * 100)
+            dist_atr.append(buf / e["atr_1d"])
             hit = min(e["lows"]) <= stop
             last = e["closes"][-1]
             stopped.append((d, hit))
@@ -695,6 +766,11 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
             if hit:
                 whipsaw.append((d, last >= e["wall"]))
                 broken.append((d, last < stop))
+            # 左側進場於牆價；跌破停損以停損價成交（未計跳空），否則觀察期末收盤平倉
+            sim = (stop if hit else last) / e["wall"] - 1.0
+            sim_all.append((d, sim))
+            if min(e["lows"]) <= e["wall"]:
+                sim_touch.append((d, sim))
         n_trig = len(whipsaw)
         table[name] = {
             "n_tested": len(events),
@@ -705,6 +781,13 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
             "掃損無條件率": _rate_stats(whipsaw_all),
             "真破無條件率": _rate_stats(broken_all),
             "條件率可判讀": n_trig >= _MIN_TESTED_PER_DEFINITION,
+            "停損距離%": {
+                "mean": round(statistics.fmean(dist_pct), 2) if dist_pct else None,
+                "median": round(statistics.median(dist_pct), 2) if dist_pct else None,
+            },
+            "停損距離ATR1D": round(statistics.fmean(dist_atr), 3) if dist_atr else None,
+            "每事件模擬報酬": _mean_stats(sim_all),
+            "每事件模擬報酬_觸牆子集": _mean_stats(sim_touch),
         }
         if n_trig < _MIN_TESTED_PER_DEFINITION:
             table[name]["註"] = (
@@ -726,14 +809,16 @@ def stop_buffer_outcomes(labeled: list[dict[str, Any]]) -> dict[str, Any]:
         )
     else:
         verdict = (
-            "樣本已達門檻；比較掃損收回率與真破率的 CI 後，"
-            "再決定是否調整墊片（閘門不得先改）"
+            "樣本已達門檻；比較掃損收回率與真破率的 CI，並對照各墊片「每事件模擬報酬」的 CI"
+            "（寬墊片掃損少，但每次停損虧損較大）後，再決定是否調整墊片（閘門不得先改）"
         )
     return {
         "備註": (
             "ATR₁₅ₘ 以 ATR₁D/√26 折算（snapshot 無 15m ATR）；"
             f"atr_1d 缺失排除 {excluded_atr} 件，母體 {len(events)} 件，"
-            "與「支撐定義比較」的 edge_PutWall tested 件數差即為此排除數"
+            "與「支撐定義比較」的 edge_PutWall tested 件數差即為此排除數；"
+            "每事件模擬報酬假設進場在牆價、跌破停損以停損價成交（未計跳空與滑價）、"
+            "觀察期末以收盤平倉；觸牆子集＝觀察期最低價 <= 牆價的事件（進場確實會成交）"
         ),
         "atr_1d缺失排除": excluded_atr,
         "定義比較": table,
@@ -910,24 +995,7 @@ def build_micro_report(
     labeled = label_wall_holds(snaps, horizon_days)
     hold_table: dict[str, Any] = {}
     if labeled:
-        valid = sorted(
-            x["depth_ratio"] for x in labeled if x.get("depth_ratio") is not None
-        )
-        if len(valid) >= 4:
-            cuts = [valid[len(valid) * i // 4] for i in (1, 2, 3)]
-            for x in labeled:
-                if x.get("depth_ratio") is None or not x["tested"]:
-                    continue
-                qi = sum(1 for c in cuts if x["depth_ratio"] >= c)
-                h = hold_table.setdefault(f"Q{qi + 1}", {"tested": 0, "held": 0})
-                h["tested"] += 1
-                h["held"] += int(x["held"])
-            for h in hold_table.values():
-                h["hold_rate"] = (
-                    round(h["held"] / h["tested"], 3) if h["tested"] else None
-                )
-            hold_table["quartile_cuts"] = cuts
-
+        hold_table = depth_quartile_hold_rates(labeled)
     return {
         "n_snapshots": len(snaps),
         "snapshot_dates": sorted({s["date"] for s in snaps}),
