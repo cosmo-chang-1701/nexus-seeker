@@ -46,7 +46,7 @@ def test_migrations_from_v090_are_contiguous() -> None:
     versions = [m["version"] for m in get_migrations() if m["version"] >= 90]
     assert versions == list(range(90, max(versions) + 1))
     assert len(versions) == len(set(versions))
-    assert max(versions) == 95
+    assert max(versions) == 96
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> dict[str, int]:

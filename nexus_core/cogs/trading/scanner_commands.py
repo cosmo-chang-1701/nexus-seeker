@@ -57,7 +57,6 @@ class ScannerCommandsCog(commands.Cog):
 
             embed = create_ddp_embed(report)
             await interaction.followup.send(embed=embed)
-            await self.trading_service.ddp_inspector.record_signal(report)
 
     @app_commands.command(
         name="iv_scan", description="立即對觀察清單執行波動率優勢 (Cheap IV) 偵測"

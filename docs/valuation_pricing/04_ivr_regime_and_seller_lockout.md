@@ -145,6 +145,15 @@ migration v088（v1.14.1）清空 `historical_iv` 後，IVR 需累積 `min_histo
 
 **IV 標示 tenor 與代理值揭露（僅 /x，不改 `current_iv`／`historical_iv` 定義）**：`IVMetrics` 新增 `current_iv_expiry`／`current_iv_dte`（LIVE_IV 取樣的最近到期）與 `term_near_expiry`／`term_far_expiry`（期限結構比值所用到期日，皆有預設值，舊快取可還原）。LIVE_IV 標為「最近到期 MM-DD (DTE n) ±20% OI 加權」，`current_iv_dte` ≤ 2 附「近到期取樣，可能失真」（近到期 OI 加權 IV 不只可能偏高，也可能遠低於實際，例：GOOGL 8.6% vs 7 日跨式 32.4%）；`current_iv_dte` ≤ 2，或 `current_iv` 與 `straddle_implied_iv` 較大者 ≥ 較小者 2 倍（`_IV_STRADDLE_DIVERGENCE_RATIO = 2.0`，PRE_CALIBRATION／僅呈現）時，值行標「與跨式背離」（DTE > 2 的情形），IVR 累積期參考行改列「跨式 IV/HV20」（以 `straddle_implied_iv` 計算，不用 `current_iv`）。`current_iv`、IVR 與 4 倍尺度修正（`_IV_STRADDLE_SCALE_MISMATCH`）不變；期限結構標示「近 MM-DD／遠 MM-DD 比」。HV_PROXY／STORED_IV 套用 1.4x 時值行寫「原值 ×1.4 事件加載 = 結果」；**HV 代理或套用事件加載時不算 IV/HV20**（值由 HV 推得或被 ×1.4 加載，比值失去意義），改列「跨式 IV/HV20」供參考；STORED_IV 無加載時照常顯示。尺度修正（`iv_scale_corrected`）後 `current_iv_expiry`／`dte` 與跨式同源，值行標「跨式反推 MM-DD (DTE n)」。盤中 HV_PROXY 標「30D 歷史實現波動率代理」，不稱 OI 加權 IV。「極端高波」只認市場隱含 IV：DTE ≥ 5（`_EXTREME_VOL_MIN_DTE`）的跨式 IV，或 DTE ≥ 5 的 LIVE_IV；HV 代理與快取值不構成理由，IVR 未知時文末註明「IVR 累積中，無歷史分位」。
 
+### 5.3 廉價選擇權（波動率優勢）偵測器的 IV 來源與 fail-closed（2026-10-21）
+
+`nexus_core/market_analysis/volatility_inspector.py` 的 `inspect_symbol` 一律使用正典 `SentimentEngine.fetch_and_calculate_iv_metrics()`（`IVMetrics`），不再讀 Yahoo `info["impliedVolatility"]`，也不再以最近到期 ATM 期權鏈 fallback，更不再用 HV20 區間自算「IV Rank」（IV Rank 母體嚴禁混入已實現波動率）。
+
+- **IVR 未知／非 LIVE_IV 即 fail-closed**：`iv_rank is None`、`current_iv` 為 `None` 或 $\le 0$、或 `iv_source != "LIVE_IV"` 時直接回傳 `None`，且在 EMA／GEX／到期日等昂貴呼叫之前返回；母體重建期（見 5.1）偵測器保持沉默而不是猜測。
+- **機會定義**：$\text{IVR} < 25\%$、$\text{IV} < \text{HV}_{20}$（`hv_20`）且具備動能；`iv_rank` 與 `iv_p` 皆為正典 IV Rank，另回報 `iv_source`、`iv_history_count`。
+- **IV Crush 警示**：僅在 $\text{IVR} > 80\%$ 且財報「尚未公布且 24 小時內」（`is_imminent and not is_released`）時成立；已公布（`tte_hours` 為負）不警示。策略文字順序：高風險事件（防禦）優先，其次財報 7 天內的牛市價差，其餘為單邊 Call。
+- **Theta**：以 30DTE、ATM（履約價等於現價）Call 的 Black-Scholes Theta（`calculate_greeks`，$q=0$）乘以 100 為每口每日損耗，取正值幅度；基準 $S=K=100$、$T=30/365$、$\sigma=0.30$ 約為 \$6.27。DTE 以美東日期計算。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **IV Rank / Percentile 計算與期限結構分析**:
