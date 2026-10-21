@@ -96,6 +96,50 @@ def _radar_kv_keys(sym: str, today_str: str) -> list[str]:
     ]
 
 
+def _parse_iso_date(value: Any) -> Optional[str]:
+    """僅當 value 為可用 %Y-%m-%d 解析的字串時原樣回傳，否則 None（如 "WEEKLY"）。"""
+    if not isinstance(value, str):
+        return None
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return value
+
+
+def _positive_number(value: Any) -> Optional[float]:
+    """value 為大於 0 的數值時回傳 float，否則 None（bool 不算數值）。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
+
+
+def _load_history_reads(
+    sym: str, need_last_iv: bool
+) -> tuple[Optional[float], Optional[float], Any, Optional[float]]:
+    """在 worker 執行緒內一次讀齊 history_storage 的同步 SQLite 查詢。
+
+    回傳 (last_iv, stored_skew, stored_skew_pct_detail, stored_volume_pcr)。
+    維持以模組屬性路徑呼叫，測試對 history_storage 的 patch 才會生效。
+    """
+    from market_analysis.sentiment.history_storage import (
+        get_last_stored_sentiment,
+        get_indicator_percentile_detail,
+        get_last_stored_iv,
+    )
+    from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
+
+    last_iv = get_last_stored_iv(sym) if need_last_iv else None
+    stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
+    stored_pct = (
+        get_indicator_percentile_detail(sym, SKEW_INDICATOR, stored_skew)
+        if stored_skew is not None
+        else None
+    )
+    volume_pcr = get_last_stored_sentiment(sym, "PCR")
+    return last_iv, stored_skew, stored_pct, volume_pcr
+
+
 def _load_symbol_caches(sym: str, today_str: str) -> tuple[_KvSnapshot, Any, Any]:
     """在單一 worker 執行緒內一次取齊 kv_cache / market_cache / squeeze_cache。"""
     from database.cache import get_kv_cache_many_with_updated_at
@@ -125,9 +169,19 @@ class RadarDataMixin:
             f"analyze_{sym}_fast", self._fetch_sym_radar_data_fast_raw, sym
         )
 
-    async def _fetch_sym_radar_data_slow(self, sym: str) -> Any:
+    async def _fetch_sym_radar_data_slow(
+        self, sym: str, force_refresh: bool = False
+    ) -> Any:
         from services.single_flight import SingleFlightManager
 
+        if force_refresh:
+            # 強制重算使用獨立的 single-flight key，避免併入一般呼叫的快取結果。
+            return await SingleFlightManager.run(
+                f"analyze_{sym}_slow_force",
+                self._fetch_sym_radar_data_slow_raw,
+                sym,
+                force_refresh=True,
+            )
         return await SingleFlightManager.run(
             f"analyze_{sym}_slow", self._fetch_sym_radar_data_slow_raw, sym
         )
@@ -150,7 +204,14 @@ class RadarDataMixin:
         kv, market_cache_row, squeeze_cache = await asyncio.to_thread(
             _load_symbol_caches, sym, today_str
         )
-        radar_cache = kv.get(f"radar_terminal_{sym.upper()}") or {}
+        radar_key = f"radar_terminal_{sym.upper()}"
+        radar_raw, radar_age_seconds = kv.get_with_age(radar_key)
+        radar_cache = radar_raw or {}
+        # 快照過舊（或不明年齡）時，由快照回退的牆位／UOA 不得顯示為新鮮。
+        radar_is_stale = (
+            radar_age_seconds is None
+            or radar_age_seconds >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+        )
         market_cache = market_cache_row or {}
 
         # Market Cache（Max Pain / 預期區間）SWR 自癒檢查：快取缺失、標記
@@ -210,6 +271,7 @@ class RadarDataMixin:
         )
 
         uoa_data: list[Any] = []
+        uoa_from_radar = False
         uoa_cached, uoa_age_seconds = kv.get_with_age(f"uoa_{sym.upper()}")
         if uoa_cached is not None and isinstance(uoa_cached, list):
             uoa_data = list(uoa_cached)
@@ -217,6 +279,9 @@ class RadarDataMixin:
             radar_cache.get("uoa"), list
         ):
             uoa_data = list(radar_cache["uoa"])
+            uoa_from_radar = True
+            # 回退值的真實年齡就是快照年齡；None 會被嵌入層視為新鮮。
+            uoa_age_seconds = radar_age_seconds
         else:
             # UOA 快取未命中：不阻塞主流程，啟動非同步 SWR 自癒任務寫回快取（去重與節流）
             uoa_key = f"uoa_{sym.upper()}"
@@ -298,22 +363,28 @@ class RadarDataMixin:
         if not squeeze_cache:
             squeeze_cache = {}
 
-        vpoc_val = radar_cache.get("hvn_price") or kv.get_session_fresh(
-            f"volume_poc_{sym.upper()}"
+        # 快照的 hvn_price 僅在快照屬最近已收盤交易日內才採用，否則退回 volume_poc 鍵。
+        radar_hvn = (
+            radar_cache.get("hvn_price")
+            if kv.get_session_fresh(radar_key) is not None
+            else None
         )
+        vpoc_val = radar_hvn or kv.get_session_fresh(f"volume_poc_{sym.upper()}")
         volume_poc = float(vpoc_val) if vpoc_val is not None else 0.0
 
         iv_metrics = kv.get(f"iv_metrics_{sym.upper()}_{today_str}") or {}
 
-        from market_analysis.sentiment.history_storage import (
-            get_last_stored_sentiment,
-            get_indicator_percentile_detail,
-            get_last_stored_iv,
+        # history_storage 的四次同步 SQLite 讀取集中在一次 to_thread，不佔用 event loop。
+        (
+            last_iv,
+            stored_skew,
+            stored_pct,
+            stored_volume_pcr,
+        ) = await asyncio.to_thread(
+            _load_history_reads, sym, not iv_metrics or "iv_rank" not in iv_metrics
         )
-        from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
         if not iv_metrics or "iv_rank" not in iv_metrics:
-            last_iv = get_last_stored_iv(sym)
             if last_iv is not None and not iv_metrics:
                 iv_metrics = {
                     "current_iv": last_iv,
@@ -347,17 +418,21 @@ class RadarDataMixin:
             float(avg_vol_20d) * float(price) if avg_vol_20d > 0 and price > 0 else None
         )
 
-        mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
+        # Max Pain：market_cache 受 SWR 重算（≤ 6 h）且 is_stale/updated_at 描述的就是它，
+        # 故優先採用；快照 mp_near 僅作回退。到期日只在確實已知時才配對。
+        mc_mp = _positive_number(market_cache.get("max_pain"))
+        if mc_mp is not None:
+            mp_near: Any = mc_mp
+            mp_near_expiry = _parse_iso_date(market_cache.get("expiry"))
+            if mp_near_expiry is None and radar_cache.get("mp_near") == mc_mp:
+                mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
+        else:
+            mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
+            mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
 
         # 讀取真實 Skew 與分位點
         # 分位需要足夠樣本，樣本不足時百分位為 None；
         # 此時視同「沒有可用的真實 Skew」，往下走既有的快取/中性回退路徑。
-        stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
-        stored_pct = (
-            get_indicator_percentile_detail(sym, SKEW_INDICATOR, stored_skew)
-            if stored_skew is not None
-            else None
-        )
         stored_percentile = stored_pct.percentile if stored_pct else None
         skew_val: Optional[float] = None
         skew_percentile: Optional[float] = None
@@ -390,6 +465,16 @@ class RadarDataMixin:
             if gex_data.get("net_gex") is not None
             else radar_cache.get("net_gex")
         )
+        # 牆位／淨 GEX 由快照回退（無 gex_metrics 或其無牆位）時，沿用快照年齡判斷新鮮度。
+        if (
+            (not gex_data.get("put_wall") and radar_cache.get("put_wall_strike"))
+            or (not gex_data.get("call_wall") and radar_cache.get("call_wall_strike"))
+            or (
+                gex_data.get("net_gex") is None
+                and radar_cache.get("net_gex") is not None
+            )
+        ) and radar_is_stale:
+            gex_is_stale = True
 
         atr_14 = float(radar_cache.get("atr_14", 0.0) or 0.0)
 
@@ -405,7 +490,7 @@ class RadarDataMixin:
         )
 
         # 讀取 PCR (買賣權成交量比 / 未平倉比)
-        volume_pcr = get_last_stored_sentiment(sym, "PCR")
+        volume_pcr = stored_volume_pcr
         if volume_pcr is None:
             volume_pcr = radar_cache.get("volume_pcr")
         oi_pcr = radar_cache.get("oi_pcr")
@@ -449,16 +534,9 @@ class RadarDataMixin:
             or kv.get(f"month_max_pains_{sym.upper()}")
             or []
         )
-        if not month_max_pains and (mp_near or radar_cache.get("mp_far")):
-            today_date_str = datetime.now().strftime("%Y-%m-%d")
-            synth_mps: list[dict[str, Any]] = []
-            if mp_near:
-                synth_mps.append({"expiry": today_date_str, "max_pain": float(mp_near)})
-            if radar_cache.get("mp_far"):
-                synth_mps.append(
-                    {"expiry": "far", "max_pain": float(radar_cache["mp_far"])}
-                )
-            month_max_pains = synth_mps
+        if not month_max_pains and mp_near and mp_near_expiry:
+            # 只在到期日確實已知時合成單一筆；不再以今日冒充到期日，也不產生 "far" 筆。
+            month_max_pains = [{"expiry": mp_near_expiry, "max_pain": float(mp_near)}]
 
         ma20_val = radar_cache.get("ma20") or kv.get(f"ma20_{sym.upper()}")
 
@@ -476,16 +554,22 @@ class RadarDataMixin:
                 ).total_seconds()
             except Exception:
                 pass
-        _f_ages = [a for a in [_mc_age, uoa_age_seconds] if a is not None]
-        uoa_is_stale = uoa_cached is None or (
-            uoa_age_seconds is not None
-            and uoa_age_seconds >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
-        )
+        _f_ages = [
+            a for a in [_mc_age, uoa_age_seconds, radar_age_seconds] if a is not None
+        ]
+        if uoa_from_radar:
+            uoa_is_stale = radar_is_stale
+        else:
+            uoa_is_stale = uoa_cached is None or (
+                uoa_age_seconds is not None
+                and uoa_age_seconds >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+            )
 
         return {
             "_freshness": {
                 "mp_age_seconds": _mc_age,
                 "uoa_age_seconds": uoa_age_seconds,
+                "radar_age_seconds": radar_age_seconds,
                 "oldest_age_seconds": max(_f_ages) if _f_ages else None,
                 "is_any_stale": bool(market_cache.get("is_stale", 0))
                 or gex_is_stale
@@ -505,6 +589,7 @@ class RadarDataMixin:
             "put_wall_gex": put_wall_gex,
             "max_pain": {
                 "max_pain": mp_near,
+                "expiry": mp_near_expiry,
                 # 與 sentiment/max_pain.py 的 distance_pct 同一守衛：報價失敗
                 # (price=0) 時不得算出 -100% 的假偏離（會被 exclude_martial_law
                 # 誤剔除，並在雷達上顯示極端偏離）。
@@ -575,7 +660,7 @@ class RadarDataMixin:
             },
             "vp_data": {
                 "hvn": float(
-                    radar_cache.get("hvn_price")
+                    radar_hvn
                     or kv.get_session_fresh(f"volume_poc_{sym.upper()}")
                     or 0.0
                 ),
@@ -585,7 +670,9 @@ class RadarDataMixin:
             "dp_poc": volume_poc,
         }
 
-    async def _fetch_sym_radar_data_slow_raw(self, sym: str) -> Any:
+    async def _fetch_sym_radar_data_slow_raw(
+        self, sym: str, force_refresh: bool = False
+    ) -> Any:
         """
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
@@ -597,6 +684,10 @@ class RadarDataMixin:
         每個使用者、每個標的重複發動即時網路請求。互動指令（`/x symbol:`、
         批次掃描的「⚡ 批次分析警示標的」按鈕）走的是完全獨立的
         `_fetch_single_symbol_data_raw`，那裡才是保證即時性的地方。
+
+        例外：`force_refresh=True`（僅供「更新逾 1 小時標的」按鈕等明確要求重算的
+        呼叫端 opt-in）會強制重算 Max Pain、IV 指標與 PSQ（不沿用 squeeze 快取並
+        重新寫回）；GEX 仍走 Edge Snapshot。預設 False 行為與上述完全一致。
         """
         from market_analysis.sentiment_engine import SentimentEngine
         from services import market_data_service
@@ -661,8 +752,14 @@ class RadarDataMixin:
         # 政策無關，背景排程任務一樣受益）。
         skew_task = SentimentEngine.calculate_skew(sym)
         uoa_task = _get_uoa_with_physical_caps(sym)
-        iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
-        mp_task = SentimentEngine.get_unified_max_pain(sym)
+        if force_refresh:
+            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(
+                sym, force_refresh=True
+            )
+            mp_task = SentimentEngine.get_unified_max_pain(sym, force_refresh=True)
+        else:
+            iv_task = SentimentEngine.fetch_and_calculate_iv_metrics(sym)
+            mp_task = SentimentEngine.get_unified_max_pain(sym)
         gex_task = fetch_symbol_gex_metrics(sym)
         pcr_task = SentimentEngine.calculate_pcr(sym)
         far_mp_task = _get_far_mp_and_dte(sym)
@@ -737,6 +834,18 @@ class RadarDataMixin:
             try:
                 from database.market_cache import save_market_cache, get_market_cache
 
+                # 轉傳 Max Pain 的過期／降級旗標，避免此處以預設值洗掉 🕓 標記；
+                # 刻意不傳 expiry（"WEEKLY" 列承載跨週期牆體遷移追蹤）。
+                mp_flag_kwargs: dict[str, Any] = {}
+                if isinstance(mp_data, dict):
+                    mp_flag_kwargs = {
+                        "is_stale": int(bool(mp_data.get("is_stale"))),
+                        "calculation_mode": mp_data.get("calculation_mode") or "OI",
+                        "is_degraded": int(bool(mp_data.get("is_degraded"))),
+                        "circuit_breaker_triggered": int(
+                            bool(mp_data.get("circuit_breaker_triggered"))
+                        ),
+                    }
                 await save_market_cache(
                     symbol=sym,
                     max_pain=float((mp_data or {}).get("max_pain") or 0.0)
@@ -755,6 +864,7 @@ class RadarDataMixin:
                     reference_spot_price=price,
                     call_wall=c_wall_val or None,
                     put_wall=p_wall_val or None,
+                    **mp_flag_kwargs,
                 )
                 cached_mc = await asyncio.to_thread(get_market_cache, sym)
                 if cached_mc:
@@ -844,7 +954,7 @@ class RadarDataMixin:
             from market_analysis.psq_engine import analyze_psq
 
             sc = await asyncio.to_thread(get_squeeze_cache, sym)
-            if sc:
+            if sc and not force_refresh:
                 psq_res = {
                     "is_squeezing": sc.get("is_squeezing", False),
                     "momentum_value": sc.get("momentum", 0.0),
@@ -1036,6 +1146,10 @@ class RadarDataMixin:
                 if isinstance(mp_data, dict)
                 else 0.0,
                 "mp_far": far_mp_val,
+                # 僅在到期日為真實日期時記錄；快取命中常回傳 "WEEKLY"，一律存 None。
+                "mp_near_expiry": _parse_iso_date(
+                    mp_data.get("expiry") if isinstance(mp_data, dict) else None
+                ),
                 # skew_percentile 可能為 None（樣本不足/期權鏈抓取失敗）；
                 # 分位缺失時這兩個極端旗標一律 False（fail-safe，不憑空觸發）。
                 "is_divergence": skew_percentile is not None
