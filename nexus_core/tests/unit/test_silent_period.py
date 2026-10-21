@@ -240,9 +240,12 @@ async def _run_scan(state: dict[str, Any], ctx: SilentPeriodContext) -> tuple[An
     cog._fetch_sym_radar_data_fast = fake_fetch  # type: ignore[method-assign]
 
     def to_thread_side_effect(func: Any, *args: Any, **kwargs: Any) -> Any:
-        if "get_user_portfolio" in func.__name__:
+        name = getattr(func, "__name__", "")
+        if "get_user_portfolio" in name:
             return [(123, "AAPL"), (123, "TSLA")]
-        return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+        if "get_user_active_orders" in name:
+            return [{"symbol": "AAPL"}, {"symbol": "TSLA"}]
+        return func(*args, **kwargs)
 
     with (
         patch(

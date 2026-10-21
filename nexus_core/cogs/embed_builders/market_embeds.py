@@ -530,6 +530,9 @@ def build_radar_scan_embed(
     except Exception:
         pass
 
+    # 使用者設定與投組 Greeks 對所有列相同，整個 Embed 建構只查一次
+    ctx_db = database.get_full_user_context(user_id)
+
     # 將 scan_results 分組，每組最多 10 個標的
     chunk_size = 10
     chunks = [
@@ -886,8 +889,6 @@ def build_radar_scan_embed(
                 status_label = "正常運行"
 
             # -- D-MP 動態阻斷機制與 InsightsEngine --
-            ctx_db = database.get_full_user_context(user_id)
-
             # 解析 UOA
             uoa_list = r.get("uoa") or []
             uoa_calls_vol = sum(

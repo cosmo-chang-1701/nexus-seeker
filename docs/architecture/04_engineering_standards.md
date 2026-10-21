@@ -125,7 +125,18 @@ sequenceDiagram
 
     User->>Discord: 點擊 "🔄 返回控制面板"
     Discord->>View: 觸發 btn_return_panel 回調
-    View->>Discord: interaction.response.edit_message(view=UnifiedRadarView)
+    View->>Discord: interaction.response.edit_message(view=UnifiedRadarView，還原本次掃描的範圍／過濾條件／參數／標籤)
+
+    User->>Discord: 點擊 "🔄 更新逾 1 小時標的 (N)"
+    Discord->>View: 觸發 BatchScanRefreshButton 回調
+    View->>View: 記憶體閘門 is_memory_safe()（不足則回覆 ephemeral 錯誤並結束）
+    View->>Discord: 停用所有元件並就地編輯（⏳ 更新中）
+    Note over View: 以下整段於互動請求（interactive）情境內執行
+    View->>View: 僅對雷達資料 >1 小時或從未計算的標的，以 Semaphore(3)、總預算 540 秒呼叫 _fetch_sym_radar_data_slow(force_refresh=True)
+    Note over View: GEX 仍跟隨 edge 快照（約 30 分鐘），不會被重算；失敗或逾時的標的僅記錄警告，保留舊資料年齡
+    View->>View: _run_unified_scan() 以同一 state 重跑掃描（Embed 於背景執行緒建構）
+    View->>Discord: interaction.edit_original_response(新 Embeds + 新 BatchScanPaginatedView)
+    Note over Discord: 成功時不發送任何 followup／摘要訊息；僅未預期錯誤才補發一則 ephemeral 錯誤
 ```
 
 ### 3.3 SQLite 單一寫入者執行緒（nexus-db-writer）狀態與交易佇列
