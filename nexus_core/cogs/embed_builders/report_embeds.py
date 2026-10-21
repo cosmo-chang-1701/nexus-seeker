@@ -620,7 +620,7 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
         f"{_pad_string('目前本益比 (TTM P/E)', widths[0])} | {_pad_string(f'{curr_pe:.2f}', widths[1])}"
     )
     ddp_lines.append(
-        f"{_pad_string('3 年本益比均值 (3Y Mean)', widths[0])} | {_pad_string(f'{pe_mean:.2f}', widths[1])}"
+        f"{_pad_string('3 年 P/E 中位數 (3Y)', widths[0])} | {_pad_string(f'{pe_mean:.2f}', widths[1])}"
     )
 
     if pe_upside is None:
@@ -664,8 +664,8 @@ def create_ddp_embed(report: Dict[str, Any]) -> discord.Embed:
     rvol = report.get("rvol", 0.0)
     logic_rows = [
         f"1. 盈餘動能: 稀釋 EPS YoY 成長 {_ANSI_W}{eps_growth:.1f}%{_ANSI_0} > 15%。",
-        "2. 估值壓縮: 當前 P/E 低於 5 年歷史均值之 80% (或股價相對低位)。",
-        f"3. 前瞻預期: Forward P/E {_ANSI_W}{report['forward_pe']:.2f}{_ANSI_0} < TTM P/E (或 OCF>0)。",
+        "2. 估值壓縮: 當前 TTM P/E ≤ 近 12 季 TTM P/E 的 25 分位。",
+        f"3. 前瞻預期: Forward P/E {_ANSI_W}{report['forward_pe']:.2f}{_ANSI_0} > 0 且 < TTM P/E (或 OCF>0)。",
         "4. 動能確認: 營收成長加速"
         + (f" {_ANSI_G}(+營業利益率升){_ANSI_0}" if has_margin else "")
         + "。",

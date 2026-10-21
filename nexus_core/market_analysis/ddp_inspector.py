@@ -1,11 +1,21 @@
 from typing import Any
 import logging
 import asyncio
+import math
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import numpy as np
+import pandas as pd
 import yfinance as yf
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 from services import market_data_service
+from services.market_data_service import fundamentals as _fundamentals
+
+_NY_TZ = ZoneInfo("America/New_York")
+_TRANSIENT_PREFIX = "資料暫不可用"
+_PE_HISTORY_QUARTERS = 12
+_PE_HISTORY_MIN_QUARTERS = 8
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +26,8 @@ class DDPInspector:
     Formula: Price = EPS * P/E
     Criteria:
     1. EPS Momentum: Quarterly EPS Growth (YoY) > 15%
-    2. P/E Compression: Current Trailing P/E < 25th percentile of 3Y range
+    2. P/E Compression: Current TTM P/E <= 25th percentile of the last 12
+       quarterly TTM P/E values (Finnhub)
     3. Forward Alignment: Forward P/E < Trailing P/E
     4. Confirmation: Revenue growth acceleration (last 2 periods)
     """
@@ -26,6 +37,9 @@ class DDPInspector:
         # 最近一次 inspect_symbol 未通過的原因（symbol → 繁中原因），供 /x 揭露；
         # inspect_symbol 的回傳型別不變，避免動到 run_scan 與其他呼叫端。
         self.last_fail_reason: Dict[str, str] = {}
+        # run_scan 專用的美東日期記憶：symbol → (YYYYMMDD, 結果, 失敗原因)。
+        # 季報一季才變一次，排程每 15 分鐘重抓 Yahoo 沒有意義；inspect_symbol 不使用。
+        self._daily_memo: Dict[str, Tuple[str, Optional[Dict[str, Any]], str]] = {}
 
     def _fail(self, symbol: str, reason: str) -> None:
         self.last_fail_reason[symbol] = reason
@@ -33,9 +47,21 @@ class DDPInspector:
     async def run_scan(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """執行 DDP 掃描並回傳符合條件的標的"""
         results = []
+        today = datetime.now(_NY_TZ).strftime("%Y%m%d")
         for sym in symbols:
+            memo = self._daily_memo.get(sym)
+            if memo and memo[0] == today:
+                if memo[1] and memo[1].get("is_ddp"):
+                    results.append(memo[1])
+                elif memo[2]:
+                    self._fail(sym, memo[2])
+                continue
             try:
                 report = await self.inspect_symbol(sym)
+                reason = self.last_fail_reason.get(sym, "")
+                if not reason.startswith(_TRANSIENT_PREFIX):
+                    # 暫時性失敗不記憶；較早日期的項目被覆蓋，不會無限成長
+                    self._daily_memo[sym] = (today, report, reason)
                 if report and report.get("is_ddp"):
                     results.append(report)
             except Exception as e:
@@ -104,6 +130,13 @@ class DDPInspector:
 
             curr_eps_val = float(eps_series.iloc[0])
             prev_y_eps_val = float(eps_series.iloc[4])
+            rev_vals = [float(rev.iloc[i]) for i in (0, 1, 4)]
+            if not all(
+                math.isfinite(v) for v in (curr_eps_val, prev_y_eps_val, *rev_vals)
+            ):
+                logger.info(f"[{symbol}] DDP Fail: NaN in EPS/revenue columns")
+                self._fail(symbol, "資料不足（季報缺值）")
+                return None
 
             # EPS 基期防護與 ZeroDivisionError 防護
             if prev_y_eps_val <= 0:
@@ -119,16 +152,19 @@ class DDPInspector:
                 return None
 
             # Revenue Acceleration Check & ZeroDivision 防護
-            rev_curr = float(rev.iloc[0])
-            rev_1 = float(rev.iloc[1])
-            rev_4 = float(rev.iloc[4])
+            rev_curr, rev_1, rev_4 = rev_vals
 
             curr_rev_growth = (rev_curr - rev_4) / rev_4 if rev_4 > 0 else 0
 
             if q_inc.shape[1] >= 6:
                 rev_5 = float(rev.iloc[5])
-                prev_rev_growth = (rev_1 - rev_5) / rev_5 if rev_5 > 0 else 0
-                rev_accel = curr_rev_growth > prev_rev_growth
+                if math.isfinite(rev_5) and rev_5 > 0:
+                    prev_rev_growth = (rev_1 - rev_5) / rev_5
+                    rev_accel = curr_rev_growth > prev_rev_growth
+                else:
+                    # 第 6 欄缺值／非正：改走 5 季備案，不可退化成「成長 > 0」
+                    prev_rev_growth = 0
+                    rev_accel = curr_rev_growth > 0.10
             else:
                 prev_rev_growth = 0
                 rev_accel = curr_rev_growth > 0.10
@@ -148,8 +184,15 @@ class DDPInspector:
                     if curr_margin >= prev_margin:
                         op_margin_bonus = 5
 
-            # 3. P/E Analysis
-            curr_pe = info.get("trailingPE")
+            # 3. P/E Analysis（目前 P/E 與歷史同源：Finnhub peTTM，缺值才用 Yahoo）
+            profile = await _fundamentals.get_pe_ttm_profile(symbol)
+            if profile is None:
+                self._fail(symbol, "資料暫不可用（Finnhub 本益比歷史）")
+                return None
+            fh_pe, pe_hist_all = profile
+            curr_pe = (
+                fh_pe if fh_pe is not None and fh_pe > 0 else info.get("trailingPE")
+            )
             if curr_pe is not None and float(curr_pe) > 500.0:
                 self._fail(symbol, "不適用（P/E 無效）")
                 return None
@@ -159,6 +202,10 @@ class DDPInspector:
 
             # Forward Alignment
             fwd_pe = info.get("forwardPE")
+            if fwd_pe is not None and fwd_pe <= 0:
+                logger.info(f"[{symbol}] DDP Fail: Forward P/E <= 0 ({fwd_pe})")
+                self._fail(symbol, "未達門檻（Forward P/E ≤ 0，預期虧損）")
+                return None
             if not fwd_pe:
                 q_cash = await market_data_service.call_yf(
                     lambda sym: yf.Ticker(sym).quarterly_cashflow,
@@ -183,38 +230,21 @@ class DDPInspector:
                 self._fail(symbol, "未達門檻（Forward P/E ≥ Trailing P/E）")
                 return None
 
-            # 估值壓縮 (P/E 算法修正)
-            five_yr_pe = info.get("fiveYearAvgPE")
-            pe_25th = 0.0
-            pe_mean = 0.0
+            # 估值壓縮：目前 TTM P/E <= 近 12 季 TTM P/E 的 25 分位
+            pe_hist = pe_hist_all[:_PE_HISTORY_QUARTERS]
+            if len(pe_hist) < _PE_HISTORY_MIN_QUARTERS:
+                self._fail(symbol, "資料不足（歷史本益比不足 3 年）")
+                return None
+            pe_25th = float(np.percentile(pe_hist, 25))
+            pe_mean = float(
+                np.median(pe_hist)
+            )  # 中位數：抗離群值（鍵名沿用 pe_mean_3y）
+            if curr_pe > pe_25th:
+                logger.info(f"[{symbol}] DDP Fail: P/E not below 25th percentile")
+                self._fail(symbol, "未達門檻（估值未壓縮）")
+                return None
 
-            if five_yr_pe and five_yr_pe > 0:
-                pe_mean = five_yr_pe
-                pe_25th = five_yr_pe * 0.8
-                if curr_pe > pe_25th:
-                    logger.info(f"[{symbol}] DDP Fail: Current P/E > 80% of 5Y Avg")
-                    self._fail(symbol, "未達門檻（估值未壓縮）")
-                    return None
-            else:
-                # 降級方案：比對股價
-                hist = await market_data_service.get_history_df(
-                    symbol, period="3y", interval="1wk"
-                )
-                if hist.empty:
-                    self._fail(symbol, "資料不足（無歷史股價）")
-                    return None
-                price_25th = np.percentile(hist["Close"].dropna(), 25)
-                price_mean = hist["Close"].dropna().mean()
-                curr_price = info.get("currentPrice", hist["Close"].iloc[-1])
-                if curr_price > price_25th:
-                    logger.info(f"[{symbol}] DDP Fail: Price not compressed")
-                    self._fail(symbol, "未達門檻（估值未壓縮）")
-                    return None
-                # 用股價相對位置推算假的 PE 供 UI 顯示
-                pe_25th = curr_pe
-                pe_mean = (
-                    curr_pe * (price_mean / price_25th) if price_25th > 0 else curr_pe
-                )
+            fiscal_period = pd.Timestamp(q_inc.columns[0]).strftime("%Y-%m-%d")
 
             # 4. RVOL 催化劑
             df_1d = await market_data_service.get_history_df(
@@ -253,6 +283,8 @@ class DDPInspector:
                 "confidence_score": min(100, score),
                 "rvol": rvol,
                 "has_margin_bonus": op_margin_bonus > 0,
+                "fiscal_period": fiscal_period,
+                "pe_history_quarters": len(pe_hist),
             }
 
         except Exception as e:
@@ -260,15 +292,17 @@ class DDPInspector:
             self._fail(symbol, "資料不足（計算失敗）")
             return None
 
-    async def record_signal(self, report: Dict[str, Any]) -> Any:
-        """將信號存入資料庫"""
+    async def record_signal(self, report: Dict[str, Any]) -> bool:
+        """將信號存入資料庫；僅在新的 (symbol, 財季) 才寫入並回傳 True。"""
         try:
-            from database.connection import execute_write_async
+            from database.connection import execute_write_rowcount_async
 
-            await execute_write_async(
+            rowcount = await execute_write_rowcount_async(
                 """
-                INSERT INTO ddp_signals (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status, confidence_score)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT OR IGNORE INTO ddp_signals
+                    (symbol, current_pe, pe_mean_3y, eps_growth, rev_accel_status,
+                     confidence_score, fiscal_period)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     report["symbol"],
@@ -277,7 +311,10 @@ class DDPInspector:
                     report["eps_growth"],
                     "加速 (Accelerating)" if report["rev_accel"] else "穩定 (Stable)",
                     report["confidence_score"],
+                    report.get("fiscal_period"),
                 ),
             )
+            return bool(rowcount and rowcount > 0)
         except Exception as e:
             logger.error(f"記錄 DDP 信號失敗: {e}")
+            return False

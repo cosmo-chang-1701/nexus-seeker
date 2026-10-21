@@ -95,7 +95,7 @@
   - 關閉的頻道不做任何 I/O、**不寫去重旗標**，使用者重新開啟後當日尚未送達的事件仍能送出；入列失敗不會燒掉旗標。
   - 昂貴工作之前先以 `is_channel_enabled()` 判斷：Polymarket 巨鯨摘要的 LLM 呼叫、對沖警報的 LLM 敘述、Covered Call 解套推薦、IV 優勢掃描。對沖警報的 VTR 紀錄與 `hedge_alerts` 仍照常寫入（餵給 Brinson 歸因）。
   - 事件預警（`services/event_monitor.py`）改為先查開關、實際入列後才標記已提醒；過去先標記後查開關，靜音期間的事件永久遺失。
-  - 補上每日去重：DDP（`ddp_alert_`）、IV 優勢（`iv_alert_`）、DITM 獲利鎖定（`profit_lock_alert_`）、負 Gamma 斷層（`gamma_fragility_alert_`）、模擬保證金（`margin_api_alert_`）、掛單遙測（`telemetry_align_`，以建議價／量簽章區分，建議變動即視為新事件）、Polymarket 機率突變（`poly_prob_shift_`）。自動掃描才去重，管理員強制掃描不去重。
+  - 補上每日去重：DDP（`ddp_alert_`）、IV 優勢（`iv_alert_`）、DITM 獲利鎖定（`profit_lock_alert_`）、負 Gamma 斷層（`gamma_fragility_alert_`）、模擬保證金（`margin_api_alert_`）、掛單遙測（`telemetry_align_`，以建議價／量簽章區分，建議變動即視為新事件）、Polymarket 機率突變（`poly_prob_shift_`）。自動掃描才去重；DDP 另以財季去重（`ddp_signals` 的 symbol × fiscal_period 唯一索引，每標的每財季只推一次）。管理員強制掃描的 DDP／廉價期權只回覆管理員本人（IV 只掃管理員自己的自選），不私訊其他使用者、不寫入 `ddp_signals`。
   - `/iv_scan` 只掃描、只回覆呼叫者自己的觀察清單（過去會私訊所有其他使用者）。
   - 頻道開關只決定「推不推」，不再決定雷達 embed「顯示什麼」：`build_radar_scan_embed` 過去依三個頻道開關以 emoji 子字串刪減洞察行，已移除。
   - `tests/unit/test_notification_dispatch_centralization.py` 以 AST 強制：`queue_dm(` 只能出現在 `bot.py`、dispatcher 與管理員專用的 `services/memory_manager.py`；傳入頻道參數的字串字面值必須是註冊表 key（拼錯的 key 會被 `is_notification_enabled` 當成未知 key 回傳 True，等於無聲繞過開關）。`test_kv_cache_dedup_whitelist.py` 亦掃描 `dedup_key=` 引數。

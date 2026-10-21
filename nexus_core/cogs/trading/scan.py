@@ -75,7 +75,8 @@ class MarketScanCog(commands.Cog):
                 await triggered_by.send("🔍 **開始掃描標的...**")
 
             # 自動掃描每日每標的只推一次：DDP 由季度財報驅動、IV 優勢在盤中也鮮少
-            # 翻轉，過去條件成立期間每 15 分鐘重發同一則 embed。管理員強制掃描不去重。
+            # 翻轉，過去條件成立期間每 15 分鐘重發同一則 embed。DDP 另以財季
+            # 去重（ddp_signals）；管理員強制掃描的 DDP／IV 只回覆管理員本人。
             today_str = datetime.now(ny_tz).strftime("%Y%m%d")
 
             # 🚀 1. 執行 DDP 掃描 (Davis Double Play)
@@ -88,6 +89,18 @@ class MarketScanCog(commands.Cog):
 
                     embed = create_ddp_embed(report)
                     sym = report["symbol"]
+
+                    if not is_auto:
+                        # 強制掃描：只回覆觸發的管理員，不寫 ddp_signals（不消耗財季推播名額）
+                        if triggered_by:
+                            await triggered_by.send(embed=embed)
+                        continue
+
+                    # 自動掃描：同一標的同一財季只推一次（record_signal 回 True 才推）
+                    if not await self.trading_service.ddp_inspector.record_signal(
+                        report
+                    ):
+                        continue
 
                     for uid, watch_sym, _ in all_watchlists:
                         if watch_sym == sym:
@@ -104,27 +117,27 @@ class MarketScanCog(commands.Cog):
                                     uid,
                                     "alpha_market_signals",
                                     embed=embed,
-                                    dedup_key=(
-                                        f"ddp_alert_{uid}_{sym}_{today_str}"
-                                        if is_auto
-                                        else None
-                                    ),
+                                    dedup_key=f"ddp_alert_{uid}_{sym}_{today_str}",
                                 )
-
-                    await self.trading_service.ddp_inspector.record_signal(report)
 
             # 🚀 2. 執行 IV 優勢掃描 (Volatility Strategist)
             uids = sorted(list(set(row[0] for row in all_watchlists)))
+            if not is_auto:
+                # 強制掃描只掃管理員自己的自選，結果只回覆管理員本人
+                uids = [triggered_by.id] if triggered_by else []
             for uid in uids:
                 # 先查開關再掃描：IV 掃描本身要抓期權鏈，兩個頻道都關閉的使用者
                 # 不必付這個成本。IV 優勢（廉價期權）屬情報；高 IV 事件風險警告
                 # （IV crush）屬左尾防護，兩者分流。
-                iv_opportunity_on = await is_channel_enabled(
-                    uid, "alpha_market_signals"
-                )
-                iv_risk_on = await is_channel_enabled(uid, "defense_gamma_fragility")
-                if not (iv_opportunity_on or iv_risk_on):
-                    continue
+                if is_auto:
+                    iv_opportunity_on = await is_channel_enabled(
+                        uid, "alpha_market_signals"
+                    )
+                    iv_risk_on = await is_channel_enabled(
+                        uid, "defense_gamma_fragility"
+                    )
+                    if not (iv_opportunity_on or iv_risk_on):
+                        continue
                 user_context = database.get_full_user_context(uid)
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
                 vol_results = await self.trading_service.run_iv_opportunity_scan(
@@ -143,16 +156,15 @@ class MarketScanCog(commands.Cog):
                             if report.get("is_high_risk_vol")
                             else "alpha_market_signals"
                         )
+                        if not is_auto:
+                            await triggered_by.send(embed=embed)
+                            continue
                         await notify(
                             self.bot,
                             uid,
                             iv_channel,
                             embed=embed,
-                            dedup_key=(
-                                f"iv_alert_{uid}_{report['symbol']}_{strategy}_{today_str}"
-                                if is_auto
-                                else None
-                            ),
+                            dedup_key=f"iv_alert_{uid}_{report['symbol']}_{strategy}_{today_str}",
                         )
 
             # 🚀 3. 執行標準 NRO 掃描

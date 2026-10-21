@@ -136,6 +136,65 @@ async def get_dividend_yield_strict(symbol: str) -> Optional[float]:
     return result
 
 
+_PE_PROFILE_CACHE_TTL: float = 24 * 3600.0
+_PE_PROFILE_NEGATIVE_CACHE_TTL: float = 30 * 60.0
+_pe_profile_cache: Any = BoundedCache(max_size=500)
+
+
+async def get_pe_ttm_profile(
+    symbol: str,
+) -> Optional[tuple[Optional[float], List[float]]]:
+    """取得 Finnhub 的 (目前 peTTM, 季度 peTTM 歷史 [新→舊])。
+
+    只保留有限且 > 0 的數值。Finnhub 呼叫失敗回傳 None（暫時性失敗）；
+    呼叫成功但沒有資料回傳 (None, [])。成功快取 24 小時，空值／失敗 30 分鐘。
+    不改動 get_basic_financials（該函式只保留 metric）。
+    """
+    symbol = _sanitize_ticker(symbol)
+    now = time.time()
+    if symbol in _pe_profile_cache:
+        val, expiry = _pe_profile_cache[symbol]
+        if now < expiry:
+            return cast(Optional[tuple[Optional[float], List[float]]], val)
+
+    result: Optional[tuple[Optional[float], List[float]]] = None
+    try:
+        client = _get_client()
+        data = await _execute_api_call(client.company_basic_financials, symbol, "all")
+        metric = data.get("metric") if isinstance(data, dict) else None
+        raw_now = metric.get("peTTM") if isinstance(metric, dict) else None
+        current: Optional[float] = None
+        try:
+            if raw_now is not None:
+                cand = float(raw_now)
+                if math.isfinite(cand) and cand > 0:
+                    current = cand
+        except (TypeError, ValueError):
+            current = None
+
+        series = data.get("series") if isinstance(data, dict) else None
+        quarterly = series.get("quarterly") if isinstance(series, dict) else None
+        rows = quarterly.get("peTTM") if isinstance(quarterly, dict) else None
+        history: List[float] = []
+        if isinstance(rows, list):
+            for row in rows:
+                try:
+                    v = float(row["v"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if math.isfinite(v) and v > 0:
+                    history.append(v)
+        result = (current, history)
+    except Exception as e:
+        logger.warning(f"[{symbol}] Finnhub 本益比歷史失敗: {e}")
+        result = None
+
+    ok = result is not None and len(result[1]) > 0
+    ttl = _PE_PROFILE_CACHE_TTL if ok else _PE_PROFILE_NEGATIVE_CACHE_TTL
+    _pe_profile_cache[symbol] = (result, now + ttl)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Company Profile & ETF
 # ---------------------------------------------------------------------------

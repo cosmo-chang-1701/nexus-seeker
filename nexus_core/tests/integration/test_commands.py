@@ -443,7 +443,10 @@ async def test_command_ddp_scan(
 
     with patch(
         "market_analysis.ddp_inspector.DDPInspector.run_scan", new_callable=AsyncMock
-    ) as mock_scan:
+    ) as mock_scan, patch(
+        "market_analysis.ddp_inspector.DDPInspector.record_signal",
+        new_callable=AsyncMock,
+    ) as m_record:
         mock_scan.return_value = [
             {
                 "symbol": "TSLA",
@@ -462,6 +465,7 @@ async def test_command_ddp_scan(
             mock_interaction.response.send_message.called
             or mock_interaction.followup.send.called
         )
+        m_record.assert_not_awaited()  # 手動指令不得消耗財季推播名額
 
 
 @pytest.mark.asyncio
@@ -730,10 +734,14 @@ async def test_all_commands_structure(
     # --- Trading Commands ---
     with patch(
         "market_analysis.ddp_inspector.DDPInspector.run_scan", new_callable=AsyncMock
-    ) as m_ddp:
+    ) as m_ddp, patch(
+        "market_analysis.ddp_inspector.DDPInspector.record_signal",
+        new_callable=AsyncMock,
+    ) as m_record:
         m_ddp.return_value = []
         await scanner.ddp_scan.callback(scanner, mock_interaction)  # type: ignore
         assert mock_interaction.followup.send.called
+        m_record.assert_not_awaited()
     mock_interaction.followup.send.reset_mock()
 
     # Test force_macro_update admin check failure
