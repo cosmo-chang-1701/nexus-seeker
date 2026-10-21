@@ -715,10 +715,10 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
         f"{_pad_string('當前價格 (Price)', v1_widths[0])} | {_pad_string(f'${price:.2f}', v1_widths[1])}"
     )
     val1_lines.append(
-        f"{_pad_string('IV / IV Percentile', v1_widths[0])} | {_pad_string(f'{iv}% ({iv_p}%)', v1_widths[1])}"
+        f"{_pad_string('IV / IV Rank', v1_widths[0])} | {_pad_string(f'{iv}% ({iv_p}%)', v1_widths[1])}"
     )
     val1_lines.append(
-        f"{_pad_string('HV (252-day)', v1_widths[0])} | {_pad_string(f'{hv}%', v1_widths[1])}"
+        f"{_pad_string('HV20 (20 日)', v1_widths[0])} | {_pad_string(f'{hv}%', v1_widths[1])}"
     )
     status_colored = (
         f"\033[0;32m{status}\033[0m"
@@ -759,7 +759,7 @@ def create_volatility_embed(report: Dict[str, Any]) -> discord.Embed:
 
     theta_str = f"-${daily_theta:.2f}/day"
     val3_lines.append(
-        f"{_pad_string('Theta 每日損耗', v3_widths[0])} | {_pad_string(theta_str, v3_widths[1]).replace(theta_str, f'\033[0;31m{theta_str}\033[0m')}"
+        f"{_pad_string('Theta/日(30DTE每口)', v3_widths[0])} | {_pad_string(theta_str, v3_widths[1]).replace(theta_str, f'\033[0;31m{theta_str}\033[0m')}"
     )
 
     runway_str = f"{runway_impact} 天"

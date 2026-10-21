@@ -3,12 +3,15 @@ import logging
 import asyncio
 import pandas as pd
 import numpy as np
-import yfinance as yf
+from datetime import datetime
 from typing import Dict, Optional, List
 
 from services import market_data_service
 from .psq_engine import analyze_psq
 from .strategy import evaluate_ema_trend
+from market_analysis.greeks import calculate_greeks
+from market_analysis.sentiment import SentimentEngine
+from market_time import ny_tz
 from database.user_settings import get_full_user_context
 
 logger = logging.getLogger(__name__)
@@ -51,7 +54,7 @@ class VolatilityInspector:
         if df.empty or len(df) < 252:
             return None
 
-        # 2. 計算 20天 HV 序列
+        # 2. 計算 20天 HV 序列（僅供 HV20 呈現與 IV < HV 比較，不參與 IV Rank）
         df["Log_Ret"] = np.log(df["Close"] / df["Close"].shift(1))
         # 滾動 HV (20天窗口)
         df["HV_20"] = df["Log_Ret"].rolling(window=20).std() * np.sqrt(252)
@@ -60,51 +63,27 @@ class VolatilityInspector:
         if pd.isna(hv_current):
             return None
 
-        # 3. 獲取當前 IV (Implied Volatility)
-        try:
-            info = await market_data_service.call_yf(
-                lambda sym: yf.Ticker(sym).info, symbol, _endpoint="info"
-            )
-        except (
-            market_data_service.YahooRateLimitedError,
-            market_data_service.YahooEdgeBusyError,
+        # 3. 正典 IV / IV Rank（SentimentEngine，30 分鐘快取）。
+        #    IV Rank 未知（樣本 < 60／盤前／退化）或非 LIVE_IV 來源時 fail-closed，
+        #    在昂貴的 EMA / GEX / 到期日呼叫之前提早返回。
+        m = await SentimentEngine.fetch_and_calculate_iv_metrics(symbol)
+        if (
+            m is None
+            or m.iv_rank is None
+            or m.current_iv is None
+            or m.current_iv <= 0
+            or m.iv_source != "LIVE_IV"
         ):
-            # Yahoo 429 冷卻中或閘門排隊逾時／佇列已滿：fail-safe 略過此標的
             return None
-        iv_current = info.get("impliedVolatility")
-        if not iv_current or iv_current <= 0:
-            # Fallback: 嘗試從 ATM 期權鏈獲取 (透過集中快取路徑，享有 edge
-            # tunnel 降級保護；不裁減履約價範圍，純粹取第一個到期日以定位 ATM)
-            try:
-                expirations = await market_data_service.get_all_option_expiries(symbol)
-                chain = (
-                    await market_data_service.get_option_chain(
-                        symbol, expirations[0], prune_pct=None
-                    )
-                    if expirations
-                    else None
-                )
-                if chain is not None:
-                    price = info.get("currentPrice") or df["Close"].iloc[-1]
-                    atm_call_idx = (chain.calls["strike"] - price).abs().idxmin()
-                    iv_current = chain.calls.loc[atm_call_idx].get(
-                        "impliedVolatility", 0.0
-                    )
-            except Exception:
-                return None
+        ivr = float(m.iv_rank)
+        iv_current = float(m.current_iv)
+        if m.hv_20 is not None:
+            hv_current = float(m.hv_20)
 
-        if not iv_current or iv_current <= 0:
-            return None
-
-        # 4. IV Rank (IVR) 計算 (基於 252 天 HV 區間)
-        hv_range = df["HV_20"].dropna()
-        hv_min = hv_range.min()
-        hv_max = hv_range.max()
-
-        ivr = (
-            ((iv_current - hv_min) / (hv_max - hv_min)) * 100
-            if hv_max > hv_min
-            else 0.0
+        price = (
+            float(m.reference_spot_price)
+            if m.reference_spot_price and m.reference_spot_price > 0
+            else float(df["Close"].iloc[-1])
         )
 
         # 5. 財報事件與 IV Crush 偵測
@@ -113,12 +92,15 @@ class VolatilityInspector:
         earnings_info = await calendar_service.get_symbol_earnings(symbol)
         tte_hours = earnings_info.tte_hours if earnings_info else 9999.0
 
-        is_high_risk_vol = False
-        if ivr > 80.0 and tte_hours < 24.0:
-            is_high_risk_vol = True
+        # IV Crush 警示僅限「尚未公布且 24 小時內」的財報（已公布者 tte 為負值）
+        is_high_risk_vol = bool(
+            ivr > 80.0
+            and earnings_info is not None
+            and earnings_info.is_imminent
+            and not earnings_info.is_released
+        )
 
         # 6. Momentum Alignment (EMA / PSQ)
-        price = info.get("currentPrice") or df["Close"].iloc[-1]
         ema_eval = await evaluate_ema_trend(symbol, price)
         psq_res = analyze_psq(df)
 
@@ -134,20 +116,24 @@ class VolatilityInspector:
         if not is_opportunity and not is_high_risk_vol:
             return None
 
-        # 建議策略
+        # 建議策略（高風險事件優先，其次財報在即的價差，最後單邊 Call）
         days_to_earnings = tte_hours / 24.0
-        if 0 <= days_to_earnings <= 7:
-            strategy = "牛市價差 (Bull Call Spread)"
-            trigger_logic = f"IV 處於歷史極低位且具備看漲動能，但因財報在即 ({days_to_earnings:.1f}天內)，建議使用價差以規避潛在的 IV Crush 並降低成本。"
-        elif is_high_risk_vol:
+        if is_high_risk_vol:
             strategy = "風險中性 (Risk Neutral / Defensive)"
             trigger_logic = f"⚠️ **高風險波動率事件**：IV Rank ({ivr:.1f}%) 極高且財報將於 {tte_hours:.1f} 小時內發布。建議進入防禦模式，嚴防 IV Crush 導致的權利金暴跌。"
+        elif 0 <= days_to_earnings <= 7:
+            strategy = "牛市價差 (Bull Call Spread)"
+            trigger_logic = f"IV 處於歷史極低位且具備看漲動能，但因財報在即 ({days_to_earnings:.1f}天內)，建議使用價差以規避潛在的 IV Crush 並降低成本。"
         else:
             strategy = "單邊 Call (BTO)"
             trigger_logic = "IV 處於歷史極低位且低於歷史波動率 (IV < HV)，同時價格呈現看漲突破，適合利用廉價權利金建立槓桿部位。"
 
         # 8. Runway Impact (NRO)
-        daily_theta = price * iv_current * 0.01
+        # 30DTE ATM Call 每口（100 股）每日 Theta 損耗（正值幅度）
+        theta_per_share = calculate_greeks(
+            "call", price, price, 30 / 365, iv_current, 0.0
+        )["theta"]
+        daily_theta = abs(theta_per_share) * 100.0
         runway_impact_days = 0
         if user_ctx.cash_reserve > 0 and user_ctx.monthly_expense > 0:
             daily_burn = user_ctx.monthly_expense / 30.0
@@ -181,9 +167,7 @@ class VolatilityInspector:
         try:
             exp = await market_data_service.get_all_option_expiries(symbol)
             if exp:
-                from datetime import datetime
-
-                today_dt = datetime.now().date()
+                today_dt = datetime.now(ny_tz).date()
                 for e in exp:
                     try:
                         diff = (datetime.strptime(e, "%Y-%m-%d").date() - today_dt).days
@@ -214,6 +198,8 @@ class VolatilityInspector:
             "iv_current": round(iv_current * 100, 1),
             "hv_current": round(hv_current * 100, 1),
             "iv_rank": round(ivr, 1),
+            "iv_source": m.iv_source,
+            "iv_history_count": m.iv_history_count,
             "is_opportunity": is_opportunity,
             "is_high_risk_vol": is_high_risk_vol,
             "tte_hours": tte_hours,
