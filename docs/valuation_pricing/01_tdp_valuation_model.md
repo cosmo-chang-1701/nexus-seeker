@@ -50,14 +50,14 @@ $$\text{Acceleration} = g_{\text{rev}, t} > g_{\text{rev}, t-1}$$
 $$\text{Acceleration} = g_{\text{rev}, t} > 10.0\%$$
 
 #### 3. 本益比估值壓縮 (P/E Compression)
-以 5 年平均本益比 $\text{PE}_{\text{5Y Avg}}$ 為基準錨點，要求當前滾動本益比 $\text{PE}_{\text{trailing}}$ 顯著折價至 25 百分位以下（約等於 80% 均值）：
-$$\text{PE}_{\text{compressed}} = \text{PE}_{\text{trailing}} < 0.80 \times \text{PE}_{\text{5Y Avg}}$$
-若市場無 5 年平均 P/E 資料，降級採樣過去 3 年（156 週）週 K 棒收盤價序列 $\mathcal{P}_{\text{3Y}}$：
-$$P_{\text{current}} < \operatorname{Percentile}_{25}(\mathcal{P}_{\text{3Y}})$$
+以 Finnhub 近 12 季（3 年）的季度 TTM 本益比序列 $\mathcal{E}_{\text{12Q}}$ 為基準，要求當前 TTM 本益比（同源取 Finnhub `peTTM`，缺值才用 Yahoo `trailingPE`）不高於其 25 分位：
+$$\text{PE}_{\text{TTM}} \le \operatorname{Percentile}_{25}(\mathcal{E}_{\text{12Q}})$$
+序列只保留有限且大於 0 的數值；有效季數不足 8 季判「資料不足（歷史本益比不足 3 年）」，不再以股價分位數推算或捏造 P/E。報表中的 `pe_mean_3y` 欄位存放該序列的**中位數**（抗離群值）。
 
 #### 4. 前瞻預期對齊 (Forward Alignment)
 前瞻本益比 $\text{PE}_{\text{forward}}$ 必須低於當前滾動本益比，確認華爾街分析師共識預期未來盈利持續擴張：
-$$\text{PE}_{\text{forward}} < \text{PE}_{\text{trailing}}$$
+$$0 < \text{PE}_{\text{forward}} < \text{PE}_{\text{trailing}}$$
+Forward P/E 小於等於 0（預期虧損）直接判未達門檻。
 若缺乏前瞻本益比預估，系統自動穿透至最新季度現金流量表，要求其營運現金流必須實質為正：
 $$\text{Operating Cash Flow} > 0$$
 
@@ -127,7 +127,7 @@ flowchart TD
 |---|---|---|---|
 | `eps_growth_threshold` | $\ge 15.0\%$ | 季度 EPS 同比增長硬門檻，基期 $\le 0$ 時自動拒絕 | `nexus_core/market_analysis/ddp_inspector.py` |
 | `rev_accel_threshold` | $> 10.0\%$ | 當財報僅有 5 季資料時的營收同比增長備用底線 | `nexus_core/market_analysis/ddp_inspector.py` |
-| `pe_compression_factor` | $0.80$ ($80\%$) | 當前 P/E 必須小於 5 年均值之 80%（25 分位） | `nexus_core/market_analysis/ddp_inspector.py` |
+| `pe_compression_factor` | $0.80$ ($80\%$) | 當前 TTM P/E 必須不高於近 12 季季度 TTM P/E 的 25 分位（Finnhub） | `nexus_core/market_analysis/ddp_inspector.py` |
 | `pe_upper_safety_cap` | $500.0$ | Trailing P/E 超過 500 倍視為極端泡沫直接剔除 | `nexus_core/market_analysis/ddp_inspector.py` |
 | `rvol_bonus_threshold` | $> 1.50$ | 20 日相對量能超越 1.5 倍給予 5 分加分 | `nexus_core/market_analysis/ddp_inspector.py` |
 | `confidence_base_score` | $60.0$ | 通過基礎四項審計的基準起步分數 | `nexus_core/market_analysis/ddp_inspector.py` |
@@ -148,7 +148,11 @@ if prev_y_eps_val <= 0:
 此舉直接阻斷所有由虧轉盈但盈利基底尚不穩固的高投機標的。
 
 ### 5.2 估值極值與本益比缺失降級 (Valuation Degradation)
-若企業無 5 年平均 P/E 資料（常見於掛牌 2 至 4 年的次新成長股），引擎不直接棄審，而是自動平滑降級至過去 3 年（156 週）週線收盤價分佈。若當前股價低於該 3 年週線之第 25 百分位，則認定估值壓縮成立，並自動以股價百分位估算出等效 P/E 供終端介面顯示。
+Finnhub 季度 TTM P/E 有效季數不足 8 季（約不足 3 年）時，引擎判「資料不足（歷史本益比不足 3 年）」並不產出訊號；Finnhub 呼叫失敗判「資料暫不可用」（暫時性，不寫入當日記憶）。不再降級為股價分位數，也不再推算等效 P/E。
+
+EPS（當季、去年同期）與營收（當季、前一季、去年同期）任一欄位為 NaN 或非有限值，判「資料不足（季報缺值）」；第 6 欄營收缺值或非正時，營收加速改採 5 季備案（年增率 > 10%）。
+
+**推播去重**：排程路徑每標的每個美東交易日只評估一次（記憶體日記憶，暫時性失敗不記憶）；DDP 以 `ddp_signals(symbol, fiscal_period)` 唯一索引（v096）限制每標的每財季只推播一次，`fiscal_period` 為最新已公布季報日期。`/ddp_scan` 與管理員強制掃描只回覆呼叫者，不寫入 `ddp_signals`、不消耗該財季的推播名額。
 
 ### 5.3 TDP 缺失指標防誤判 (Incomplete Metrics Guard)
 在盤中即時雷達掃描中，若因期權鏈流動性不足或行情源中斷導致 `ma20`、`max_pain` 與 `volume_poc` 均為 `None`，若機械式比對 `current_price < metric` 會導致條件被繞過而誤判為折價成立。`skew_commentary.py:336` 設立安全閥：
