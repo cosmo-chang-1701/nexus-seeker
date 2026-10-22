@@ -4,6 +4,19 @@ from typing import Tuple, Optional
 from market_analysis.gex_wall_depth import thin_wall_threshold
 
 
+def classify_putwall_gex(
+    put_wall_gex: Optional[float], adv_dollar_20d: Optional[float]
+) -> Optional[str]:
+    """PutWall 真偽三分類（鏡像 /x）：淨 GEX < 0 助跌、< 薄牆門檻 紙牆、其餘 實牆；未知回傳 None。"""
+    if put_wall_gex is None:
+        return None
+    if put_wall_gex < 0:
+        return "助跌"
+    if put_wall_gex < thin_wall_threshold(adv_dollar_20d):
+        return "紙牆"
+    return "實牆"
+
+
 @dataclass
 class RiskInsightsContext:
     symbol: str
@@ -49,12 +62,12 @@ class InsightsEngine:
         if context.symbol.upper() in FIXED_INCOME_WHITE_LIST:
             return "(避險資產)", "現金避險部位，風控豁免 🛡️", None
 
-        # 案例 3：RCAT 薄弱紙牆判定 (無做市商深度)
-        if (
-            context.put_wall_gex is not None
-            and abs(context.put_wall_gex) < thin_wall_threshold(context.adv_dollar_20d)
-            and context.put_wall > 0
-        ):
+        # 案例 3：PutWall 真偽三分類（助跌區／薄弱紙牆）
+        _pw_class = classify_putwall_gex(context.put_wall_gex, context.adv_dollar_20d)
+        if _pw_class == "助跌" and context.put_wall > 0:
+            dmp_label = "[⚠️ 助跌區]"
+            status_label = "⚠️ PutWall 助跌區(淨GEX為負)"
+        elif _pw_class == "紙牆" and context.put_wall > 0:
             dmp_label = "[⚠️ 薄弱紙牆]"
             status_label = "⚠️ 薄弱紙牆(無做市商深度)"
 

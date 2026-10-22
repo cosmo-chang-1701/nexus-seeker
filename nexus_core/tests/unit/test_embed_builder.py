@@ -2039,7 +2039,7 @@ def test_build_radar_scan_embed_gp_wall_polarity_dynamics() -> None:
     desc_b = get_embed_text(embeds_b[0])
     assert "(+) $120.0 / $108.0" in desc_b
     assert "+1.9%" in desc_b
-    assert "🟢適宜賣方" in desc_b
+    assert "⚠️財報事件期" in desc_b  # dte_er=5 ≤ 14 天
 
     # 案例 C: CRWV 實盤極端偏離與跌破底牆場景驗證
     scan_results_crwv = [

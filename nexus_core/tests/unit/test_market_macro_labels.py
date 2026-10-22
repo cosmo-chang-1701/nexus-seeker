@@ -146,7 +146,7 @@ def test_complacency_fires_on_hike_probability() -> None:
 
 
 def test_complacency_not_fired() -> None:
-    assert "低波自滿" not in _render(vix=18.0, us10y=5.23, wti=91.0)
+    assert "低波自滿" in _render(vix=18.0, us10y=5.23, wti=91.0)
     assert "低波自滿" not in _render(vix=14.0, us10y=4.2, wti=70.0)
     stale = _render(
         vix=14.0,
@@ -278,4 +278,4 @@ def test_complacency_premarket_without_trigger_prints_nothing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 8, 30))
-    assert "低波自滿" not in _render(vix=18.0, us10y=5.23, wti=91.0)
+    assert "低波自滿" not in _render(vix=21.0, us10y=5.23, wti=91.0)

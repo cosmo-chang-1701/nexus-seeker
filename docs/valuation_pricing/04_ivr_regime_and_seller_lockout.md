@@ -54,7 +54,7 @@ $$\text{IV Status} = \begin{cases} \text{Low (低波動)}, & \text{若 } \text{I
 $$\text{Term Ratio} = \frac{\bar{\sigma}_{\text{Near}} (\text{DTE} \le 14)}{\bar{\sigma}_{\text{Far}} (\text{DTE} \in [15, 60])}$$
 
 - **倒掛狀態 ($\text{Term Ratio} > 1.05$)**：
-  近端波動率顯著高於遠端，表明市場在定價即將到來的重大突發事件（如財報開牌、FDA 審批、總經會議）。此時事件後將遭遇毀滅性的「隱含波動率暴跌（IV Crush）」，系統標記 **`⚠️總經事件防禦期`**，全面封鎖單腿買方與左側賣方。
+  近端波動率顯著高於遠端，表明市場在定價即將到來的重大突發事件（如財報開牌、FDA 審批、總經會議）。此時事件後將遭遇毀滅性的「隱含波動率暴跌（IV Crush）」，系統標記 **`⚠️總經事件防禦期`**，全面封鎖單腿買方與左側賣方。若財報落在 14 個日曆天內（雷達列的 `dte_er`，缺值時退回 `IVMetrics.has_earnings_event`），倒掛多半由財報驅動，雷達改標 **`⚠️財報事件期`**。
 - **正價差狀態 ($\text{Term Ratio} < 0.95$)**：
   遠端波動率高於近端，為正常期權期限結構（Contango）。
 
@@ -67,6 +67,8 @@ $$\text{Strategy Routing} \leftarrow \text{"🔴禁賣Put"}$$
 
 此標示僅禁止賣 Put（CSP／裸賣 Put／Put 信用價差）；對已持有現股賣出的 Covered Call 允許。
 
+**雷達賣方標籤的完整順序（呈現層，第一個符合者勝出）**：① 倒掛（財報 $\le$ 14 天 → `⚠️財報事件期`，否則 `⚠️總經事件防禦期`）；② `is_neg_gamma` → `🔴禁賣Put`；③ IVR $< 15\%$ → `🔴CSP 禁售`；④ IVR 缺值 → `⚪IVR 資料不足`；⑤ 財報 $\le$ 14 天 → `⚠️財報事件期`；⑥ PutWall 淨 GEX $< 0$（助跌區）→ `⚠️牆助跌`；⑦ 其餘 → `🟢適宜賣方`。⑤⑥ 兩個標籤只改呈現，不接任何閘門：賣 Put 在財報前是對跳空的押注，PutWall 在助跌區時並非承接。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -75,7 +77,7 @@ $$\text{Strategy Routing} \leftarrow \text{"🔴禁賣Put"}$$
 flowchart TD
     Start([啟動期權策略匹配與 IVR 審計]) --> TermCheck{"Term Ratio > 1.05?<br/>期限結構倒掛"}
 
-    TermCheck -- 是 --> DefenseState["⚠️ 總經事件防禦期<br/>防 IV Crush 暴跌<br/>全面暫停常規開倉"]
+    TermCheck -- 是 --> DefenseState["⚠️ 總經事件防禦期（財報 14 天內改標 ⚠️財報事件期）<br/>防 IV Crush 暴跌<br/>全面暫停常規開倉"]
     TermCheck -- 否 --> GammaCheck{"is_neg_gamma 是否成立?<br/>Net GEX < 0 或 現價 < PutWall"}
 
     GammaCheck -- 是 (做市商順向追殺) --> LockoutSeller["🔴 禁賣 Put<br/>做市商負 Gamma 泥淖<br/>禁止 CSP／裸賣 Put／Put 信用價差<br/>持股 Covered Call 允許"]
@@ -85,7 +87,10 @@ flowchart TD
     IVRHardLock -- 否 --> IVRCSPGate{"IV Rank < 15.0%?<br/>前端雷達閘門"}
 
     IVRCSPGate -- 是 --> LockCSP["🔴 CSP 禁售<br/>權利金價值過低，不符風險報酬比"]
-    IVRCSPGate -- 否 --> IVRRangeCheck{IV Rank 區間劃分}
+    IVRCSPGate -- 否 --> EarnWallCheck{"財報 14 天內?<br/>PutWall 淨 GEX < 0?<br/>（任何 IVR >= 15% 皆適用）"}
+    EarnWallCheck -- 財報 --> EarnLabel["⚠️ 財報事件期"]
+    EarnWallCheck -- 牆助跌 --> WallLabel["⚠️ 牆助跌"]
+    EarnWallCheck -- 皆否 --> IVRRangeCheck{IV Rank 區間劃分}
 
     IVRRangeCheck -->|15% <= IVR <= 80%| NormalSeller["🟢 適宜賣方<br/>推薦: CSP / Covered Call / Iron Condor"]
     IVRRangeCheck -->|80% < IVR <= 90%| BubbleDefense["⚠️ 高 IV 泡沫防禦<br/>嚴禁單腿買方 / 僅限寬幅 Credit Spread 或 Collar"]
@@ -127,11 +132,17 @@ return ivr < _IVR_SELLING_LOCKOUT
 在市場崩盤期間，隱含波動率往往暴增至 90% 以上（極高 IVR）。傳統教科書常盲目建議此時「大舉賣出 Put 收取天價權利金」。然而，如果做市商全鏈處於負 Gamma 泥淖，現貨隨時可能引發無量跌停或流動性斷裂。因此在 `market_embeds.py:1140` 中：
 ```python
 if is_iv_backwardation:
-    iv_strategy_str = "⚠️總經事件防禦期"
+    iv_strategy_str = "⚠️財報事件期" if earnings_soon else "⚠️總經事件防禦期"
 elif is_neg_gamma:
     iv_strategy_str = "🔴禁賣Put"
-elif iv_rank_val < 15.0:
+elif iv_rank_val is not None and iv_rank_val < 15.0:
     iv_strategy_str = "🔴CSP 禁售"
+elif iv_rank_val is None:
+    iv_strategy_str = "⚪IVR 資料不足"
+elif earnings_soon:
+    iv_strategy_str = "⚠️財報事件期"
+elif pw_class == "助跌":
+    iv_strategy_str = "⚠️牆助跌"
 else:
     iv_strategy_str = "🟢適宜賣方"
 ```

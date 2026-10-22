@@ -337,7 +337,7 @@ def test_watchlist_heartbeat_embed_renders_callwall_lvn_and_thickness_tags() -> 
         "call_wall": 130.0,
         "put_wall": 110.0,
         "call_wall_gex": 850_000.0,  # 厚牆 (>=500k)
-        "put_wall_gex": -120_000.0,  # 薄牆 (<500k)
+        "put_wall_gex": -120_000.0,  # 淨 GEX 為負 → 助跌區
         "net_gex": 730_000.0,
     }
 
@@ -356,7 +356,7 @@ def test_watchlist_heartbeat_embed_renders_callwall_lvn_and_thickness_tags() -> 
         ]
     )
     assert "GEX CallWall (做市商頂牆): $130.00 [厚]" in field_text
-    assert "GEX PutWall (做市商底牆): $110.00 [薄]" in field_text
+    assert "GEX PutWall (做市商底牆): $110.00 [助跌]" in field_text
     assert "LVN (真空區): $112.50" in field_text
 
 
