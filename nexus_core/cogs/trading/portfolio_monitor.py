@@ -256,9 +256,12 @@ class PortfolioMonitorCog(commands.Cog):
             )
             if prev_call_wall_val <= 0 or prev_put_wall_val <= 0:
                 try:
-                    from database.market_cache import get_market_cache
+                    from database.market_cache import (
+                        WALL_TRACKING_EXPIRY,
+                        get_market_cache,
+                    )
 
-                    mc = get_market_cache(sym)
+                    mc = get_market_cache(sym, WALL_TRACKING_EXPIRY)
                     if mc:
                         if (
                             prev_call_wall_val <= 0

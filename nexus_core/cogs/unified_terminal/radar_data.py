@@ -832,41 +832,21 @@ class RadarDataMixin:
         prev_put_wall_val = 0.0
         if c_wall_val > 0 or p_wall_val > 0:
             try:
-                from database.market_cache import save_market_cache, get_market_cache
-
-                # 轉傳 Max Pain 的過期／降級旗標，避免此處以預設值洗掉 🕓 標記；
-                # 刻意不傳 expiry（"WEEKLY" 列承載跨週期牆體遷移追蹤）。
-                mp_flag_kwargs: dict[str, Any] = {}
-                if isinstance(mp_data, dict):
-                    mp_flag_kwargs = {
-                        "is_stale": int(bool(mp_data.get("is_stale"))),
-                        "calculation_mode": mp_data.get("calculation_mode") or "OI",
-                        "is_degraded": int(bool(mp_data.get("is_degraded"))),
-                        "circuit_breaker_triggered": int(
-                            bool(mp_data.get("circuit_breaker_triggered"))
-                        ),
-                    }
-                await save_market_cache(
-                    symbol=sym,
-                    max_pain=float((mp_data or {}).get("max_pain") or 0.0)
-                    if isinstance(mp_data, dict)
-                    else 0.0,
-                    expected_move_lower=float(
-                        (mp_data or {}).get("expected_move_lower") or 0.0
-                    )
-                    if isinstance(mp_data, dict)
-                    else 0.0,
-                    expected_move_upper=float(
-                        (mp_data or {}).get("expected_move_upper") or 0.0
-                    )
-                    if isinstance(mp_data, dict)
-                    else 0.0,
-                    reference_spot_price=price,
-                    call_wall=c_wall_val or None,
-                    put_wall=p_wall_val or None,
-                    **mp_flag_kwargs,
+                from database.market_cache import (
+                    WALL_TRACKING_EXPIRY,
+                    get_market_cache,
+                    save_wall_levels,
                 )
-                cached_mc = await asyncio.to_thread(get_market_cache, sym)
+
+                # 只更新牆位專用列（WALL_TRACKING_EXPIRY）的牆位欄位：不得動 updated_at／
+                # reference_spot_price，否則會讓 Max Pain 的 6h TTL 與 2% 偏離基準失效
+                # （get_market_cache(sym) 取 updated_at 最新列，見 save_wall_levels）。
+                await save_wall_levels(
+                    sym, call_wall=c_wall_val or None, put_wall=p_wall_val or None
+                )
+                cached_mc = await asyncio.to_thread(
+                    get_market_cache, sym, WALL_TRACKING_EXPIRY
+                )
                 if cached_mc:
                     if cached_mc.get("previous_call_wall") is not None:
                         prev_call_wall_val = float(

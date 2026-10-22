@@ -5,6 +5,14 @@ from database.connection import get_read_connection, execute_write_async
 
 logger = logging.getLogger(__name__)
 
+# 牆體遷移追蹤專用列的 expiry 鍵。此列只承載 call_wall／put_wall 與其 previous_*，
+# 不是 Max Pain 的資料來源；真實到期日列才是（見 save_wall_levels）。
+WALL_TRACKING_EXPIRY = "WEEKLY"
+
+# 牆體追蹤列「新建」時的 updated_at：刻意落在紀元，讓它永遠不會成為
+# get_market_cache(symbol) 依 updated_at 取到的「最新列」，也不會被誤判為新鮮。
+_WALL_ROW_EPOCH = "1970-01-01 00:00:00"
+
 
 async def save_market_cache(
     symbol: str,
@@ -138,6 +146,79 @@ async def mark_market_cache_stale(symbol: str, expiry: Optional[str] = None) -> 
         return True
     except Exception as e:
         logger.error(f"[{symbol}] mark_market_cache_stale 寫入失敗: {e}")
+        return False
+
+
+async def save_wall_levels(
+    symbol: str,
+    call_wall: Optional[float] = None,
+    put_wall: Optional[float] = None,
+) -> bool:
+    """只更新 ``WALL_TRACKING_EXPIRY`` 列的牆位與其跨週期遷移（previous_*）。
+
+    與 ``save_market_cache`` 的牆位 UPSERT 語意相同（新舊皆有效且確實不同才把舊值
+    搬進 previous_*；None／<= 0 保留既有值），但**不碰** ``updated_at``、
+    ``reference_spot_price``、max_pain、預期區間與各旗標。
+
+    為何獨立：雷達慢速路徑每次掃描都要記錄牆位，過去經由 ``save_market_cache``
+    寫入，連帶刷新該列的 ``updated_at`` 與 ``reference_spot_price``；而
+    ``get_market_cache(symbol)`` 取 ``updated_at`` 最新的一列，於是 Max Pain 的
+    6 小時絕對 TTL 永遠無法觸發、2% 偏離度基準也被逐次重設（慢速漂移永遠不超標）。
+    """
+    call_wall_val = (
+        float(call_wall) if (call_wall is not None and float(call_wall) > 0) else None
+    )
+    put_wall_val = (
+        float(put_wall) if (put_wall is not None and float(put_wall) > 0) else None
+    )
+    if call_wall_val is None and put_wall_val is None:
+        return False
+    try:
+        await execute_write_async(
+            """
+            INSERT INTO market_cache (
+                symbol, expiry, call_wall, put_wall, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(symbol, expiry) DO UPDATE SET
+            previous_call_wall = CASE
+                WHEN excluded.call_wall IS NOT NULL
+                     AND excluded.call_wall > 0
+                     AND market_cache.call_wall IS NOT NULL
+                     AND market_cache.call_wall > 0
+                     AND excluded.call_wall != market_cache.call_wall
+                THEN market_cache.call_wall
+                ELSE market_cache.previous_call_wall
+            END,
+            call_wall = CASE
+                WHEN excluded.call_wall IS NOT NULL AND excluded.call_wall > 0 THEN excluded.call_wall
+                ELSE market_cache.call_wall
+            END,
+            previous_put_wall = CASE
+                WHEN excluded.put_wall IS NOT NULL
+                     AND excluded.put_wall > 0
+                     AND market_cache.put_wall IS NOT NULL
+                     AND market_cache.put_wall > 0
+                     AND excluded.put_wall != market_cache.put_wall
+                THEN market_cache.put_wall
+                ELSE market_cache.previous_put_wall
+            END,
+            put_wall = CASE
+                WHEN excluded.put_wall IS NOT NULL AND excluded.put_wall > 0 THEN excluded.put_wall
+                ELSE market_cache.put_wall
+            END
+            """,
+            (
+                symbol.upper(),
+                WALL_TRACKING_EXPIRY,
+                call_wall_val,
+                put_wall_val,
+                _WALL_ROW_EPOCH,
+            ),
+        )
+        return True
+    except Exception as e:
+        logger.error(f"[{symbol}] save_wall_levels 寫入失敗: {e}")
         return False
 
 
