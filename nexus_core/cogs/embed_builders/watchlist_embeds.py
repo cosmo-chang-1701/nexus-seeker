@@ -619,12 +619,14 @@ def create_watchlist_signal_embed(
         f"${gex_putwall:.2f}" if gex_putwall is not None and gex_putwall > 0 else "N/A"
     )
     gex_dist_str = f"{gex_dist:+.2f}%" if gex_dist is not None else "--%"
-    abs_pw_gex = abs(float(put_wall_gex)) if put_wall_gex is not None else None
-    pw_tag = (
-        f" [{'厚' if abs_pw_gex >= thin_wall_limit else '薄'}]"
-        if abs_pw_gex is not None
-        else ""
-    )
+    if put_wall_gex is None:
+        pw_tag = ""
+    elif float(put_wall_gex) < 0:
+        pw_tag = " [助跌]"
+    elif float(put_wall_gex) < thin_wall_limit:
+        pw_tag = " [薄]"
+    else:
+        pw_tag = " [厚]"
 
     vol_poc_str = f"${vol_poc:.2f}" if vol_poc is not None else "N/A"
     vol_lvn_str = f"${vol_lvn:.2f}" if vol_lvn is not None and vol_lvn > 0 else "N/A"

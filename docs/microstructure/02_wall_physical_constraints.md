@@ -167,6 +167,8 @@ flowchart TD
 
    **PutWall 真偽三分類（呈現層，PR fix/x-panel-wall-integrity）**：以 PutWall 履約價的淨 GEX（`gex_profile` 以 float 正規化查表，`"370"` 與 `"370.0"` 等價；PutWall 履約價不在 profile 時淨 GEX 視為**未知**，不分類、Kelly「牆淨GEX」顯示 `—`，不讀成 $0$；同一履約價有多個鍵時依 `str(float)` 鍵 > float 物件鍵 > 其他鍵取值並去重）分為：助跌區（淨值 $< 0$）、紙牆（$0 \le$ 淨值 $<$ `thin_wall_threshold(adv_dollar_20d)`）、實牆（其餘）。助跌區與紙牆都視為 `put_wall_weak`：PutWall 行內嵌〔淨GEX …，實為助跌區〕或〔紙牆：淨GEX … < 門檻 …〕，並列「淨 GEX 最大支撐」與參考停損，Kelly 賣方前提的「牆淨GEX」亦改為 `put_wall_weak` 時 ❌。薄牆門檻的 ADV 由 `/x`（`symbol_deep_dive.py`）以 `avg_vol_20d × 現價` 淺拷貝注入 `gex_profile_data["adv_dollar_20d"]`，與雷達（`radar_data.py`）同源；因此 `/x` 的「進場檢核」按鈕（`classify_dynamic_regime`）也改吃帶 ADV 的 profile，與正式引擎 `entry_advisor` 對齊，閘門定義未變。**閘門、`compute_reference_stop()`、edge PutWall 一律不動**；前向重建公式見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md)（`put_wall_gex < thin_wall_threshold(adv_dollar_20d)` 為紙牆，`< 0` 為助跌）。
 
+   **同一三分類在雷達、心跳與 CRO 洞察的套用（呈現層）**：自選雷達的「逼近 PutWall」洞察、30 分鐘心跳 embed 的 PutWall 厚薄標籤（`[助跌]`／`[薄]`／`[厚]`）、`InsightsEngine.generate_cro_insight()` 的薄牆判定，以及雷達表格的 `tactical_adv`，一律依 `classify_putwall_gex()` 分類：淨 GEX $< 0$ 為助跌區（洞察改述「淨 GEX 為負，屬助跌區而非承接支撐」，CRO 標籤為「⚠️ PutWall 助跌區(淨GEX為負)」），只有 $0 \le$ 淨值 $<$ 門檻才稱紙牆，不再以 `abs()` 把負值誤讀成紙牆或漏標。2026-10-21 校準顯示淨 GEX $< 0$ 與 $\ge 0$ 的 5 日守住率無差異，因此文字**不宣稱會破位**，只是不再稱其為強支撐。閘門、部位與引擎決策不動。
+
    停損墊片（0.5×ATR₁₅ₘ 是否被日線牆掃穿）另有校準，見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13「停損墊片比較」。
 
    **後續觀察事項（PutWall 定義是否統一為淨 GEX，決定前不得改動閘門）**：

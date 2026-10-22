@@ -44,7 +44,11 @@ from market_analysis.macro_signals import SAHM_THRESHOLD
 from market_analysis.macro_calendar_translator import translate_macro_event
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
 from market_analysis.insight_generator import compute_realtime_insights
-from market_analysis.insights_engine import InsightsEngine, RiskInsightsContext
+from market_analysis.insights_engine import (
+    InsightsEngine,
+    RiskInsightsContext,
+    classify_putwall_gex,
+)
 from market_analysis.room_threshold import resolve_atr_15m
 from market_analysis.trading_orchestration import RRP_MATERIAL_BALANCE_BILLIONS
 
@@ -60,7 +64,6 @@ from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 # 完全失效。同一理由在 `services/market_data_service/quote.py` 也有記載；省下的
 # 只是一次 sys.modules 字典查詢，不值得換掉一個全套件共用的 patch 介面。
 import database
-from market_analysis.gex_wall_depth import thin_wall_threshold
 from market_analysis.dynamic_rollover.constants import (
     _MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT,
 )
@@ -939,7 +942,7 @@ def build_radar_scan_embed(
             adv_dollar_20d = (
                 _gpd.get("adv_dollar_20d") if isinstance(_gpd, dict) else None
             )
-            thin_wall_limit = thin_wall_threshold(adv_dollar_20d)
+            pw_class = classify_putwall_gex(pw_gex_val, adv_dollar_20d)
             vp_dict = r.get("vp_data")
             lvn_p = (
                 _safe_float(vp_dict.get("lvn")) if isinstance(vp_dict, dict) else 0.0
@@ -1282,7 +1285,11 @@ def build_radar_scan_embed(
                 else:
                     cw_bullish = cw_capped = False
 
-            if pw_near:
+            if pw_near and pw_class == "助跌":
+                insights.append(
+                    f"• 🛡️ {sym}: 價格已逼近 GEX PutWall (${put_wall:.2f}{wall_pos_note})，但該履約價淨 GEX 為負，屬助跌區而非承接支撐，跌破後做市商避險將加劇賣壓。"
+                )
+            elif pw_near:
                 insights.append(
                     f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f}{wall_pos_note})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
                 )
@@ -1366,13 +1373,9 @@ def build_radar_scan_embed(
                 )
 
             # 案例 3：RCAT 薄弱紙牆 (無做市商深度)
-            if (
-                pw_gex_val is not None
-                and abs(pw_gex_val) < thin_wall_limit
-                and put_wall > 0
-            ):
+            if pw_gex_val is not None and pw_class == "紙牆" and put_wall > 0:
                 insights.append(
-                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{abs(pw_gex_val) / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
+                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
@@ -1419,7 +1422,9 @@ def build_radar_scan_embed(
             # 4. G-Wall / P-Wall & Neg-GEX Distance
             p_wall = float(put_wall)
             if p_wall > 0:
-                if pw_gex_val is not None and abs(pw_gex_val) < thin_wall_limit:
+                if pw_class == "助跌":
+                    p_wall_str = f"${p_wall:.1f}(助)"
+                elif pw_class == "紙牆":
                     p_wall_str = f"${p_wall:.1f}(薄)"
                 else:
                     p_wall_str = f"${p_wall:.1f}"
@@ -1504,14 +1509,19 @@ def build_radar_scan_embed(
 
             # 4.2 IV 階級、期限結構與策略匹配 (具備負 Gamma 踩踏區風控熔斷)
             is_iv_backwardation = term_structure > 1.05
+            earnings_soon = _radar_earnings_within_window(r, iv_metrics)
             if is_iv_backwardation:
-                iv_strategy_str = "⚠️總經事件防禦期"
+                iv_strategy_str = "⚠️財報事件期" if earnings_soon else "⚠️總經事件防禦期"
             elif is_neg_gamma:
                 iv_strategy_str = "🔴禁賣Put"
             elif iv_rank_val is not None and iv_rank_val < 15.0:
                 iv_strategy_str = "🔴CSP 禁售"
             elif iv_rank_val is None:
                 iv_strategy_str = "⚪IVR 資料不足"
+            elif earnings_soon:
+                iv_strategy_str = "⚠️財報事件期"
+            elif pw_class == "助跌":
+                iv_strategy_str = "⚠️牆助跌"
             else:
                 iv_strategy_str = "🟢適宜賣方"
 
@@ -1579,10 +1589,7 @@ def build_radar_scan_embed(
             ):
                 tactical_adv = f"🛑 跌穿LVN真空區(${lvn_p:.1f})，防無量滑步"
             elif "薄弱紙牆" in status_label or (
-                pw_gex_val is not None
-                and abs(pw_gex_val) < 500_000.0
-                and put_wall > 0
-                and price_val >= put_wall
+                pw_class == "紙牆" and put_wall > 0 and price_val >= put_wall
             ):
                 tactical_adv = f"⚠️ ${put_wall:.1f} 僅單薄紙牆，無做市商深度"
             elif (
@@ -1852,10 +1859,31 @@ def _format_cache_age(age_seconds: Any) -> str:
 
 # PRE_CALIBRATION／僅呈現：/market 面板的標示門檻，不接任何閘門。
 _FLIP_KNIFE_EDGE_PCT = 0.5  # SPY 距 Gamma Flip 的臨界緩衝（%）
-_COMPLACENCY_VIX_MAX = 16.0  # 低波自滿：VIX 上限
+_COMPLACENCY_VIX_MAX = (
+    20.0  # 低波自滿：VIX 上限（與 short_gamma_critical VIX>20 閘門對齊）
+)
 _COMPLACENCY_US10Y = 5.0  # 低波自滿：10Y 殖利率下限（%）
 _COMPLACENCY_WTI = 90.0  # 低波自滿：WTI 下限（美元）
 _COMPLACENCY_HIKE_PROB_PCT = 15.0  # 低波自滿：FedWatch 升息機率下限（%）
+
+
+# PRE_CALIBRATION／僅呈現：雷達賣方標籤的財報事件窗（日曆天），與 IVMetrics.has_earnings_event 一致。
+_RADAR_EARNINGS_WINDOW_DAYS = 14
+
+
+def _radar_earnings_within_window(r: Dict[str, Any], iv_metrics: Any) -> bool:
+    """雷達列是否落在財報事件窗：優先 dte_er，缺值時退回 iv_metrics.has_earnings_event。"""
+    dte_er = r.get("dte_er")
+    if dte_er is not None:
+        try:
+            return 0 <= float(dte_er) <= _RADAR_EARNINGS_WINDOW_DAYS
+        except (TypeError, ValueError):
+            pass
+    if iv_metrics is None:
+        return False
+    if isinstance(iv_metrics, dict):
+        return bool(iv_metrics.get("has_earnings_event", False))
+    return bool(getattr(iv_metrics, "has_earnings_event", False))
 
 
 def _opt_float(value: Any) -> Optional[float]:
