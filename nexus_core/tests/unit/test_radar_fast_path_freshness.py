@@ -286,7 +286,7 @@ async def _run_slow(
             patch(se + "get_unified_max_pain", return_value=mp_data)
         )
         mocks["save_mc"] = st.enter_context(
-            patch("database.market_cache.save_market_cache", new=AsyncMock())
+            patch("database.market_cache.save_wall_levels", new=AsyncMock())
         )
         st.enter_context(
             patch("database.market_cache.get_market_cache", return_value={})
@@ -303,7 +303,9 @@ async def _run_slow(
 
 
 @pytest.mark.asyncio
-async def test_h_slow_path_forwards_max_pain_flags_and_expiry_in_snapshot() -> None:
+async def test_h_slow_path_writes_walls_only_not_max_pain_row() -> None:
+    """D3：慢速路徑只經 save_wall_levels 寫牆位，不得再以 save_market_cache 刷新
+    updated_at／reference_spot_price（否則 Max Pain 6h TTL 與 2% 基準失效）。"""
     r = await _run_slow(
         {
             "max_pain": 100.0,
@@ -313,12 +315,9 @@ async def test_h_slow_path_forwards_max_pain_flags_and_expiry_in_snapshot() -> N
             "calculation_mode": "Volume",
         }
     )
+    r["save_mc"].assert_awaited_once()
     kwargs = r["save_mc"].call_args.kwargs
-    assert kwargs["is_stale"] == 1
-    assert kwargs["is_degraded"] == 1
-    assert kwargs["calculation_mode"] == "Volume"
-    assert kwargs["circuit_breaker_triggered"] == 0
-    assert "expiry" not in kwargs
+    assert set(kwargs) <= {"call_wall", "put_wall"}
     assert r["saved"]["radar_terminal_NVDA"]["mp_near_expiry"] == "2026-10-23"
 
 
@@ -326,9 +325,6 @@ async def test_h_slow_path_forwards_max_pain_flags_and_expiry_in_snapshot() -> N
 async def test_i_slow_path_weekly_expiry_stored_as_none() -> None:
     r = await _run_slow({"max_pain": 100.0, "expiry": "WEEKLY"})
     assert r["saved"]["radar_terminal_NVDA"]["mp_near_expiry"] is None
-    kwargs = r["save_mc"].call_args.kwargs
-    assert kwargs["is_stale"] == 0
-    assert kwargs["calculation_mode"] == "OI"
 
 
 @pytest.mark.asyncio

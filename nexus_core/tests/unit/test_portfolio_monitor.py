@@ -306,7 +306,7 @@ async def test_price_15m_close_survives_session_vwap_failure(
 
 
 @pytest.mark.asyncio
-@patch("database.market_cache.save_market_cache", new_callable=AsyncMock)
+@patch("database.market_cache.save_wall_levels", new_callable=AsyncMock)
 @patch("database.market_cache.get_market_cache", return_value=None)
 @patch("database.cache.save_kv_cache", new_callable=AsyncMock)
 @patch("database.cache.get_kv_cache", return_value=None)

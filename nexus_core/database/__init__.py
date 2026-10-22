@@ -65,6 +65,7 @@ from .market_cache import (
     get_market_cache,
     mark_market_cache_stale,
     save_market_cache,
+    save_wall_levels,
 )
 from .notifications import (
     apply_preset_settings,
@@ -244,6 +245,7 @@ __all__ = [
     "save_revision_scores",
     "save_sec_filing_event",
     "save_sec_filing_events",
+    "save_wall_levels",
     "save_watch_candidates",
     "set_all_user_notification_settings",
     "set_user_notification_setting",
