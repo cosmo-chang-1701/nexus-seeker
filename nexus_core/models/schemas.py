@@ -220,7 +220,8 @@ class ScanParams(BaseModel):
         default=False, description="僅允許擠壓蓄力期末端且動能為正"
     )
     momentum_decay_rejection: bool = Field(
-        default=True, description="動能衰竭保護，剔除高檔死叉"
+        default=False,
+        description="動能衰竭剔除（squeeze_momentum < -5）；與其他條件一致，需明確啟用",
     )
 
     # 2. 造市商微觀結構 (Gamma Exposure)
