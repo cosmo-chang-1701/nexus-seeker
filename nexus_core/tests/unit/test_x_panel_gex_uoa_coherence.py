@@ -95,7 +95,7 @@ def test_gex_stale_cache_hides_expiry_label() -> None:
 def test_kelly_header_and_seller_prerequisites() -> None:
     text, names = _render(_mrvl_data())
     assert _gex_present(names)
-    assert "賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)" in text
+    assert "賣 Put 曝險上限 (Kelly·16Δ) ⚠前提待確認" in text
     # MRVL：IVR 未知⚠、最近到期 DTE2 不在引力窗口✅、PutWall 270 淨 GEX 正✅、事件⚠
     assert "賣方前提: IVR⚠ 結算窗✅ 牆淨GEX✅ 局部Γ" in text
     assert "事件⚠" in text

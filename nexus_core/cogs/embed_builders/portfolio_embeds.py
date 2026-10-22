@@ -184,6 +184,52 @@ _EXTREME_VOL_MIN_DTE = 5
 # LIVE_IV 與跨式 IV 的倍數差距 >= 此值時，標示「與跨式背離」並改用跨式 IV/HV20。
 _IV_STRADDLE_DIVERGENCE_RATIO: float = 2.0  # PRE_CALIBRATION／僅呈現：未校準
 
+# 擠壓 ENTRY 至 CallWall 的報酬（CallWall−現價）／至擠壓停損的風險（現價−停損）低於
+# 此值時，判定行加註 ⚠封頂R{x}。
+_SQUEEZE_CAP_RR_MIN: float = 1.0  # PRE_CALIBRATION／僅呈現
+
+
+def _compact_notional(value: float) -> str:
+    """名目金額緊湊顯示（最長 6 字元）：$8,400／$327K／$1.2M／$12M／$1.2B／$9999B／$>10T／—。
+
+    檔位以四捨五入後的值判斷，避免 9999.6 → `$10,000`、999_600 → `$1000K`。
+    """
+    if not math.isfinite(value):
+        return "—"
+    if round(value) < 10_000:
+        return f"${value:,.0f}"
+    if round(value / 1_000) < 1_000:
+        return f"${value / 1_000:.0f}K"
+    if round(value / 1_000_000, 1) < 10:
+        return f"${value / 1_000_000:.1f}M"
+    if round(value / 1_000_000) < 1_000:
+        return f"${value / 1_000_000:.0f}M"
+    if round(value / 1_000_000_000, 1) < 10:
+        return f"${value / 1_000_000_000:.1f}B"
+    if round(value / 1_000_000_000) < 10_000:
+        return f"${value / 1_000_000_000:.0f}B"
+    return "$>10T"
+
+
+def _kelly_verdict_header(marks: List[str]) -> str:
+    """Kelly 區塊標題：前提有 ❌ 標未過、有 ⚠ 標待確認，否則維持原標題。"""
+    if "❌" in marks:
+        return " 賣 Put 曝險上限 (Kelly·16Δ) ⛔前提未過"
+    if "⚠" in marks:
+        return " 賣 Put 曝險上限 (Kelly·16Δ) ⚠前提待確認"
+    return " 賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)"
+
+
+def _squeeze_cap_rr(
+    call_wall: Optional[float], price: float, stop: Optional[float]
+) -> Optional[float]:
+    """擠壓進場至 CallWall 的報酬／至停損的風險；資料不全或方向不合回 None。"""
+    if call_wall is None or stop is None:
+        return None
+    if not (stop > 0 and stop < price < call_wall):
+        return None
+    return (call_wall - price) / (price - stop)
+
 
 def _iv_diverged_from_straddle(
     live_iv: Optional[float], straddle_iv: Optional[float]
@@ -913,6 +959,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _phase: str = "盤前"
     # IV 區塊判定的事件加載（財報／總經）；供 Kelly 賣方前提共用，False＝無事件或無 IV 區塊
     _event_loading_outer = False
+    # 財報事件加載（14 日內）；供高波提示判斷是否為財報驅動的 IV
+    _earnings_loading_outer = False
 
     def _iv_attr(name: str, default: Any = None) -> Any:
         if iv_data is None:
@@ -1521,6 +1569,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 pass
 
         _event_loading_outer = bool(earnings_loading or macro_loading)
+        _earnings_loading_outer = bool(earnings_loading)
 
         earnings_date_val = _iv_attr("earnings_date")
         earnings_tag = f" {str(earnings_date_val)[5:10]}" if earnings_date_val else ""
@@ -1860,6 +1909,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _put_wall_weak_outer: Optional[bool] = None  # 助跌或紙牆（None=未取得）
     _call_wall_hug_outer: Optional[float] = None  # 貼牆時的距離 %
     _call_wall_band_outer: float = 0.0  # 貼牆判定帶（%）
+    _call_wall_px_outer: Optional[float] = None  # 面板採用的 CallWall 價（None=未取得）
     _local_short_gamma_outer: Optional[bool] = None
     # 負 Gamma 線索（局部體制短 Gamma／全鏈淨 GEX<0／現價低於 PutWall）；未取得視為 False。
     _neg_gamma_hint_outer = False
@@ -2471,6 +2521,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
                         )
+                        _call_wall_px_outer = call_wall_float
                         # 上檔空間門檻自固定 5% 升級為動態自適應波動率門檻
                         # (room_threshold.py 公式 A)：由該標的「下方實際要冒多少
                         # 風險」反推「上方要留多少空間」，使 2.2:1 盈虧比成為
@@ -2834,6 +2885,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             # 避免 Kelly／日內轉折讀到半成品。
             _put_wall_weak_outer = None
             _call_wall_hug_outer = None
+            _call_wall_px_outer = None
             _local_short_gamma_outer = None
             _neg_gamma_hint_outer = False
             _gamma_flip_outer = None
@@ -2967,11 +3019,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 str(w) for w in (getattr(_kelly, "warnings", None) or [])
             ]
             sto_locked = any("STO 禁用" in w for w in _kelly_warnings)
-            hedge_advice = (
-                "建議縮小部位（賣方策略目前受風控禁用）"
-                if sto_locked
-                else "建議縮小部位或使用期權賣方策略保護"
-            )
+            if sto_locked:
+                hedge_advice = "建議縮小部位（賣方策略目前受風控禁用）"
+            elif _earnings_loading_outer:
+                # 財報前高 IV 是跳空風險而非可收租的權利金
+                hedge_advice = "財報跳空風險，縮小部位勿賣方收租"
+            else:
+                hedge_advice = "建議縮小部位或使用期權賣方策略保護"
             _ivr_unknown = "（IVR 累積中，無歷史分位）" if iv_rank_known is None else ""
             sqz_vix_note = (
                 f"極端高波環境 ({' / '.join(high_vol_reasons)})，提防劇烈洗盤，"
@@ -3328,9 +3382,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _k_beta = data.get("kelly_beta")
         _k_unit = _to_float_or_none(data.get("kelly_unit_weighted_delta"))
         _beta_str = f"{_k_beta:.2f}" if _k_beta is not None else "—"
+        _k_px = _to_float(data.get("price"), 0.0)
+        _k_limit_txt = (
+            f"名目≈{_compact_notional(contracts * _k_px * 100)}，βΔ佔資金 {exposure}%"
+            if contracts > 0 and _k_px > 0
+            else f"β 加權 Delta 佔總資金 {exposure}%"
+        )
         kelly_lines = [
             " 賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)",
-            f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m (β 加權 Delta 佔總資金 {exposure}%)",
+            f" ├─ 建議上限: \u001b[1;36m{contracts} 口\u001b[0m ({_k_limit_txt})",
         ]
         if _k_unit:
             kelly_lines.append(
@@ -3355,6 +3415,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else ("❌" if _local_short_gamma_outer else "✅")
         )
         _pre_event = "⚠" if _event_loading_outer else "✅"
+        kelly_lines[0] = _kelly_verdict_header(
+            [_pre_ivr_mark, _pre_grav, _pre_wall, _pre_local, _pre_event]
+        )
         kelly_lines.append(
             f" ├─ 賣方前提: IVR{_pre_ivr_mark} 結算窗{_pre_grav} 牆淨GEX{_pre_wall}"
             f" 局部Γ{_pre_local} 事件{_pre_event}"
@@ -3395,15 +3458,22 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _tier = getattr(_sq_res, "tier", None)
         _size = getattr(_sq_res, "size_pct", None)
         _tier_txt = f" T{_tier} → 建議部位 {_size}%" if _tier else ""
-        target_lines.append(" 現貨擠壓進場 (Squeeze Entry · strategies/10)")
+        target_lines.append(" 現貨擠壓進場 (strategies/10)")
+        _sq_cap_tag = ""
+        if str(_sq_res.status) == _sq_rules.STATUS_ENTRY:
+            if _call_wall_hug_outer is not None:
+                _sq_cap_tag = " ⚠封頂"
+            else:
+                _sq_rr = _squeeze_cap_rr(
+                    _call_wall_px_outer,
+                    _to_float(data.get("price"), 0.0),
+                    _to_float_or_none(getattr(_sq_res, "stop", None)),
+                )
+                if _sq_rr is not None and _sq_rr < _SQUEEZE_CAP_RR_MIN:
+                    _sq_cap_tag = f" ⚠封頂R{_sq_rr:.1f}"
         target_lines.append(
             f" ├─ 判定: {_status_map.get(str(_sq_res.status), str(_sq_res.status))}{_tier_txt}"
-            + (
-                " ⚠封頂"
-                if str(_sq_res.status) == _sq_rules.STATUS_ENTRY
-                and _call_wall_hug_outer is not None
-                else ""
-            )
+            + _sq_cap_tag
         )
         _sq_stop: Optional[float] = getattr(_sq_res, "stop", None)
         _px_now = _to_float(data.get("price"), 0.0)
