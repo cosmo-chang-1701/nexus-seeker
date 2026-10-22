@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import database
-from services import news_service, reddit_service
+from services import market_data_service, news_service, reddit_service
 from cogs.embed_builder import (
     create_error_embed,
     create_media_sentiment_embed,
@@ -230,28 +230,32 @@ class SymbolHubView(discord.ui.View):
 
             await mark_market_cache_stale(self.symbol)
 
-            cog = self.bot.get_cog("UnifiedTerminalCog") if self.bot else None
-            if (
-                cog
-                and hasattr(cog, "_fetch_single_symbol_data_raw")
-                and hasattr(cog, "_process_symbol_hub_data")
-            ):
-                raw_data = await cog._fetch_single_symbol_data_raw(self.symbol)
-                result = await cog._process_symbol_hub_data(
-                    self.symbol, self.user_id, raw_data
-                )
-            else:
-                from cogs.unified_terminal.symbol_deep_dive import SymbolDeepDiveMixin
+            # 使用者按鈕觸發的重抓屬互動來源，走互動通道而非背景額度
+            with market_data_service.mark_interactive_request():
+                cog = self.bot.get_cog("UnifiedTerminalCog") if self.bot else None
+                if (
+                    cog
+                    and hasattr(cog, "_fetch_single_symbol_data_raw")
+                    and hasattr(cog, "_process_symbol_hub_data")
+                ):
+                    raw_data = await cog._fetch_single_symbol_data_raw(self.symbol)
+                    result = await cog._process_symbol_hub_data(
+                        self.symbol, self.user_id, raw_data
+                    )
+                else:
+                    from cogs.unified_terminal.symbol_deep_dive import (
+                        SymbolDeepDiveMixin,
+                    )
 
-                class _HelperDeepDive(SymbolDeepDiveMixin):
-                    def __init__(self, bot: Any) -> None:
-                        self.bot = bot
+                    class _HelperDeepDive(SymbolDeepDiveMixin):
+                        def __init__(self, bot: Any) -> None:
+                            self.bot = bot
 
-                helper = _HelperDeepDive(self.bot)
-                raw_data = await helper._fetch_single_symbol_data_raw(self.symbol)
-                result = await helper._process_symbol_hub_data(
-                    self.symbol, self.user_id, raw_data
-                )
+                    helper = _HelperDeepDive(self.bot)
+                    raw_data = await helper._fetch_single_symbol_data_raw(self.symbol)
+                    result = await helper._process_symbol_hub_data(
+                        self.symbol, self.user_id, raw_data
+                    )
 
             self.base_data = result
             embed = create_tactical_symbol_embed(self.base_data)

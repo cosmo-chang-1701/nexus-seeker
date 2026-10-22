@@ -581,6 +581,42 @@ async def test_view_function_button_sets_and_clears_busy(interaction: Any) -> No
 
 
 @pytest.mark.asyncio
+async def test_view_refresh_fetches_as_interactive(interaction: Any) -> None:
+    """即時整理重抓資料時須標記互動來源，不得落到背景額度。"""
+    from services.rate_gate import _is_interactive_request
+
+    seen: list[bool] = []
+
+    async def _fetch(symbol: str) -> dict:
+        seen.append(_is_interactive_request.get())
+        return {}
+
+    async def _process(symbol: str, user_id: int, raw: dict) -> dict:
+        seen.append(_is_interactive_request.get())
+        return {"symbol": symbol, "marker": "refreshed"}
+
+    ucog = MagicMock()
+    ucog._fetch_single_symbol_data_raw = _fetch
+    ucog._process_symbol_hub_data = _process
+    view = _view(["NVDA"])
+    view.bot = MagicMock()
+    view.bot.get_cog.return_value = ucog
+
+    with (
+        patch("database.mark_market_cache_stale", new=AsyncMock()),
+        patch(
+            "cogs.unified_terminal.symbol_view.create_tactical_symbol_embed",
+            return_value=discord.Embed(title="x"),
+        ),
+    ):
+        await view.btn_refresh.callback(interaction)
+
+    assert seen == [True, True]
+    assert view.base_data["marker"] == "refreshed"
+    assert _is_interactive_request.get() is False
+
+
+@pytest.mark.asyncio
 async def test_view_button_failure_keeps_embed(interaction: Any) -> None:
     """按鈕失敗（embed=None）時不得清空原畫面。"""
     view = _view(["NVDA"])
