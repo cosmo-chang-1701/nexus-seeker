@@ -1,6 +1,6 @@
 from typing import Any
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock, ANY
+from unittest.mock import AsyncMock, patch, MagicMock
 import sys
 import os
 import pandas as pd
@@ -798,7 +798,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     from cogs.unified_terminal import BatchScanWarningButton
 
     cog = UnifiedTerminalCog(mock_bot)
-    cog._run_single_symbol_hub = AsyncMock()
+    cog._run_warning_symbols_hub = AsyncMock()
 
     # Case 1: No message or embeds
     btn = BatchScanWarningButton(cog, mock_bot)
@@ -837,19 +837,14 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     assert mock_interaction.response.edit_message.called
     assert mock_interaction.edit_original_response.called
 
-    mock_interaction.followup.send.assert_any_call(
-        "🔄 正在批次分析以下 2 個警示標的: AAPL, TSLA...", ephemeral=True
+    # 所有警示標的交給單一 hub（單一 followup 訊息逐檔換頁），按鈕本身不送 followup
+    cog._run_warning_symbols_hub.assert_awaited_once_with(
+        mock_interaction, ["AAPL", "TSLA"], mock_interaction.user.id
     )
-    assert cog._run_single_symbol_hub.call_count == 2
-    cog._run_single_symbol_hub.assert_any_call(
-        mock_interaction, "AAPL", mock_interaction.user.id, embeds_accumulator=ANY
-    )
-    cog._run_single_symbol_hub.assert_any_call(
-        mock_interaction, "TSLA", mock_interaction.user.id, embeds_accumulator=ANY
-    )
+    mock_interaction.followup.send.assert_not_called()
 
     # Case 3: Embed has no warnings
-    cog._run_single_symbol_hub.reset_mock()
+    cog._run_warning_symbols_hub.reset_mock()
     mock_interaction.followup.send.reset_mock()
     mock_field.value = (
         "```ansi\n• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。\n```"
@@ -858,23 +853,18 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     assert mock_interaction.followup.send.called
     _, kwargs = mock_interaction.followup.send.call_args
     assert "當前訊息的「即時聯動警示」中沒有列出任何標的" in kwargs["embed"].description
-    assert cog._run_single_symbol_hub.call_count == 0
+    cog._run_warning_symbols_hub.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bot: Any):  # type: ignore
+async def test_batch_scan_warning_button_many_symbols_single_hub_call(
+    mock_interaction: Any, mock_bot: Any
+) -> None:
+    """警示標的再多，按鈕也只呼叫一次 hub，不逐檔／逐塊 followup（40094）。"""
     from cogs.unified_terminal import BatchScanWarningButton
-    import discord
 
     cog = UnifiedTerminalCog(mock_bot)
-
-    async def mock_run_hub(
-        interaction: Any, symbol: Any, user_id: Any, embeds_accumulator: Any = None
-    ) -> None:
-        if embeds_accumulator is not None:
-            embeds_accumulator.append(discord.Embed(title=f"Mock Embed for {symbol}"))
-
-    cog._run_single_symbol_hub = mock_run_hub
+    cog._run_warning_symbols_hub = AsyncMock()
 
     btn = BatchScanWarningButton(cog, mock_bot)
     mock_msg = MagicMock()
@@ -896,19 +886,10 @@ async def test_batch_scan_warning_button_chunking(mock_interaction: Any, mock_bo
     mock_interaction.followup.send.reset_mock()
     await btn.callback(mock_interaction)
 
-    # 12 embeds total. Under our dynamic chunking logic with default max_count=10:
-    # They should be split into 2 chunks of sizes: 10, 2.
-    # So followup.send should be called 1 (initial progress message) + 2 (chunks) = 3 times.
-    assert mock_interaction.followup.send.call_count == 3
-
-    calls = mock_interaction.followup.send.call_args_list
-    assert "正在批次分析以下 12 個警示標的" in calls[0][0][0]
-
-    assert "embeds" in calls[1][1]
-    assert len(calls[1][1]["embeds"]) == 10
-
-    assert "embeds" in calls[2][1]
-    assert len(calls[2][1]["embeds"]) == 2
+    cog._run_warning_symbols_hub.assert_awaited_once()
+    args = cog._run_warning_symbols_hub.call_args.args
+    assert args[1] == [f"SYM{i}" for i in range(12)]
+    mock_interaction.followup.send.assert_not_called()
 
 
 @pytest.mark.asyncio

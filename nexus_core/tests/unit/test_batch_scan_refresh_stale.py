@@ -339,7 +339,7 @@ def test_footer_caps_failed_list() -> None:
 @pytest.mark.asyncio
 async def test_warning_button_keeps_prev_disabled_on_first_page() -> None:
     cog = MagicMock()
-    cog._run_single_symbol_hub = AsyncMock()
+    cog._run_warning_symbols_hub = AsyncMock()
     embeds = [discord.Embed(title="1"), discord.Embed(title="2")]
     view = BatchScanPaginatedView(embeds, cog, MagicMock(), total_items=2)
     it = _interaction()

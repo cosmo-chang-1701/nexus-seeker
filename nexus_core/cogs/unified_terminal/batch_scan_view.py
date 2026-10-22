@@ -3,7 +3,7 @@ from typing import Any, List, Optional
 import discord
 import logging
 from services import market_data_service
-from cogs.embed_builder import create_error_embed, chunk_embeds
+from cogs.embed_builder import create_error_embed
 
 logger = logging.getLogger(__name__)
 
@@ -85,42 +85,10 @@ class BatchScanWarningButton(discord.ui.Button):
                 if s not in unique_warnings:
                     unique_warnings.append(s)
 
-            user_id = interaction.user.id
-            await interaction.followup.send(
-                f"🔄 正在批次分析以下 {len(unique_warnings)} 個警示標的: {', '.join(unique_warnings)}...",
-                ephemeral=True,
+            # 以單一 followup 訊息逐檔換頁，不逐檔／逐塊 followup（會撞 Discord 40094）
+            await self.cog._run_warning_symbols_hub(
+                interaction, unique_warnings, interaction.user.id
             )
-
-            accumulated_embeds: List[discord.Embed] = []
-            analysis_sem = asyncio.Semaphore(3)
-            embed_lock = asyncio.Lock()
-
-            async def _analyze_symbol(sym: str) -> None:
-                async with analysis_sem:
-                    sym_embeds: List[discord.Embed] = []
-                    try:
-                        await self.cog._run_single_symbol_hub(
-                            interaction,
-                            sym,
-                            user_id,
-                            embeds_accumulator=sym_embeds,
-                        )
-                        async with embed_lock:
-                            accumulated_embeds.extend(sym_embeds)
-                    except Exception as e:
-                        logger.error(f"Batch analysis failed for {sym}: {e}")
-
-            await asyncio.gather(*(_analyze_symbol(s) for s in unique_warnings))
-
-            # Chunk embeds safely by cumulative character length (under 5,500 characters) and size limits (max 10 embeds)
-            chunks = chunk_embeds(accumulated_embeds, max_size=5500, max_count=10)
-            for chunk in chunks:
-                try:
-                    await interaction.followup.send(embeds=chunk, ephemeral=True)
-                except Exception as send_err:
-                    logger.error(
-                        f"Failed to send chunk of batch analysis embeds: {send_err}"
-                    )
         except Exception as outer_err:
             logger.error(f"Outer Batch Scan Warning Button callback error: {outer_err}")
         finally:
