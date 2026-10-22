@@ -621,9 +621,9 @@ async def test_batch_scan_warning_button_concurrent_semaphore(
     mock_bot: Any,
     mock_interaction: Any,
 ) -> None:
-    """測試 BatchScanWarningButton 點擊時能解析警示標的並使用 Semaphore(3) 併發分析。"""
+    """測試 BatchScanWarningButton 點擊時能解析警示標的並交給單一警示 hub。"""
     cog = UnifiedTerminalCog(mock_bot)
-    cog._run_single_symbol_hub = AsyncMock()
+    cog._run_warning_symbols_hub = AsyncMock()
 
     # 模擬 Embed 帶有即時聯動警示
     embed = discord.Embed(title="Radar")
@@ -641,13 +641,9 @@ async def test_batch_scan_warning_button_concurrent_semaphore(
 
     await warning_btn.callback(mock_interaction)
 
-    # 驗證兩個標的皆被呼叫分析
-    assert cog._run_single_symbol_hub.call_count == 2
-    called_symbols = [
-        call.args[1] for call in cog._run_single_symbol_hub.call_args_list
-    ]
-    assert "NVDA" in called_symbols
-    assert "TSLA" in called_symbols
+    # 驗證兩個標的皆交給 hub（單一 followup 訊息逐檔換頁）
+    cog._run_warning_symbols_hub.assert_awaited_once()
+    assert cog._run_warning_symbols_hub.call_args.args[1] == ["NVDA", "TSLA"]
 
 
 @pytest.mark.asyncio

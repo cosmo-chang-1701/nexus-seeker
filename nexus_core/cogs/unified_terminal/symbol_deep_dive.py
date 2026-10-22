@@ -4,7 +4,7 @@ import asyncio
 import math
 import logging
 import re
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional
 
 import discord
 
@@ -926,14 +926,17 @@ class SymbolDeepDiveMixin:
             embed=page.embed, view=view, ephemeral=True, wait=True
         )
 
-    @market_data_service.interactive
-    async def _run_multi_symbol_hub(
+    async def _gather_symbol_hub_pages(
         self,
-        interaction: discord.Interaction,
         symbols: list[str],
         user_id: int,
-    ) -> Any:
-        """多標的深度分析：全程不使用 followup，結果以單則訊息逐檔換頁呈現。"""
+        on_progress: Callable[[int, int], Awaitable[None]],
+    ) -> list[SymbolHubPage]:
+        """並行分析多檔並依輸入順序回傳分頁（逾時／例外者為錯誤頁）。
+
+        `on_progress(done, total)` 由此處依序呼叫（數字單調遞增）；其例外與逾時
+        皆被吞掉，不拖慢整批。供 /x 多標的與批次雷達的警示按鈕共用。
+        """
         from services.llm_service import is_memory_safe
 
         total = len(symbols)
@@ -968,13 +971,11 @@ class SymbolDeepDiveMixin:
             if pending:
                 try:
                     await asyncio.wait_for(
-                        interaction.edit_original_response(
-                            content=f"⏳ 分析中 {total - len(pending)}/{total}…"
-                        ),
+                        on_progress(total - len(pending), total),
                         _PROGRESS_EDIT_TIMEOUT_S,
                     )
                 except Exception as e:
-                    logger.debug(f"/x 多檔進度更新失敗（忽略）: {e}")
+                    logger.debug(f"多檔進度更新失敗（忽略）: {e}")
         for t in pending:
             t.cancel()
         if pending:
@@ -988,7 +989,7 @@ class SymbolDeepDiveMixin:
                     _error_page(sym, f"⏱️ `{sym}` 分析逾時，請改為單獨查詢。", "逾時")
                 )
             elif t.exception() is not None:
-                logger.error(f"/x 多檔分析任務例外 {sym}: {t.exception()!r}")
+                logger.error(f"多檔分析任務例外 {sym}: {t.exception()!r}")
                 pages.append(
                     _error_page(
                         sym, f"載入 `{sym}` 資料時發生錯誤，請稍後再試。", "錯誤"
@@ -996,21 +997,40 @@ class SymbolDeepDiveMixin:
                 )
             else:
                 pages.append(t.result())
+        return pages
+
+    @staticmethod
+    def _all_failed_embed(pages: list[SymbolHubPage]) -> discord.Embed:
+        """全部標的皆載入失敗時，逐檔列出原因（無效代號／資源不足／逾時），
+        避免使用者誤以為系統故障。"""
+        reasons = "\n".join(
+            f"• {p.symbol or '（空白）'}：{p.embed.description or '載入失敗'}"
+            for p in pages
+        )
+        return create_error_embed(f"以下標的皆無法載入：\n{reasons}", title="載入失敗")
+
+    @market_data_service.interactive
+    async def _run_multi_symbol_hub(
+        self,
+        interaction: discord.Interaction,
+        symbols: list[str],
+        user_id: int,
+    ) -> Any:
+        """多標的深度分析：全程不使用 followup，結果以單則訊息逐檔換頁呈現。"""
+
+        async def _progress(done: int, total: int) -> None:
+            await interaction.edit_original_response(
+                content=f"⏳ 分析中 {done}/{total}…"
+            )
+
+        pages = await self._gather_symbol_hub_pages(symbols, user_id, _progress)
 
         first_ok = next(
             (i for i, p in enumerate(pages) if p.base_data is not None), None
         )
         if first_ok is None:
-            # 逐檔列出原因（無效代號／資源不足／逾時），避免使用者誤以為系統故障
-            reasons = "\n".join(
-                f"• {p.symbol or '（空白）'}：{p.embed.description or '載入失敗'}"
-                for p in pages
-            )
             await interaction.edit_original_response(
-                content=None,
-                embed=create_error_embed(
-                    f"以下標的皆無法載入：\n{reasons}", title="載入失敗"
-                ),
+                content=None, embed=self._all_failed_embed(pages)
             )
             return
 
@@ -1018,4 +1038,50 @@ class SymbolDeepDiveMixin:
         view.last_interaction = interaction
         await interaction.edit_original_response(
             content=None, embed=view.current_embed(), view=view
+        )
+
+    @market_data_service.interactive
+    async def _run_warning_symbols_hub(
+        self,
+        interaction: discord.Interaction,
+        symbols: list[str],
+        user_id: int,
+    ) -> Any:
+        """批次雷達警示按鈕：以單一 followup 訊息逐檔換頁呈現（不逐檔 followup，
+        避免撞 Discord 40094）。
+
+        與 `_run_multi_symbol_hub` 的差別：`interaction` 是掃描結果訊息上的按鈕點擊，
+        其原始回應是掃描訊息本身，不能拿來編輯結果；因此另送一則 followup 訊息
+        承載進度與換頁 View，進度與最終結果都編輯這則訊息。
+        """
+        capped = symbols[:_MAX_BATCH_SYMBOLS]
+        note = (
+            f"（僅分析前 {_MAX_BATCH_SYMBOLS} 檔，其餘 {len(symbols) - len(capped)} 檔略過）"
+            if len(symbols) > len(capped)
+            else ""
+        )
+        # wait=True 取得 WebhookMessage，後續進度與結果皆編輯這則訊息
+        status_msg = await interaction.followup.send(
+            f"🔄 正在批次分析以下 {len(capped)} 個警示標的: {', '.join(capped)}...{note}",
+            ephemeral=True,
+            wait=True,
+        )
+
+        async def _progress(done: int, total: int) -> None:
+            await status_msg.edit(content=f"⏳ 分析中 {done}/{total}…{note}")
+
+        pages = await self._gather_symbol_hub_pages(capped, user_id, _progress)
+
+        first_ok = next(
+            (i for i, p in enumerate(pages) if p.base_data is not None), None
+        )
+        if first_ok is None:
+            await status_msg.edit(content=None, embed=self._all_failed_embed(pages))
+            return
+
+        view = SymbolBatchHubView(pages, user_id, self.bot, start_index=first_ok)
+        # 此 interaction 的原始回應是掃描訊息，逾時移除按鈕必須改編輯結果訊息
+        view.message = status_msg
+        await status_msg.edit(
+            content=note or None, embed=view.current_embed(), view=view
         )

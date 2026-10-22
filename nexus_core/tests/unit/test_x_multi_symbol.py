@@ -325,6 +325,124 @@ async def test_multi_hub_per_symbol_memory_gate(cog: Any, interaction: Any) -> N
 
 
 # ---------------------------------------------------------------------------
+# 4b. _run_warning_symbols_hub（批次雷達「批次分析警示標的」按鈕）
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def warning_interaction(interaction: Any) -> Any:
+    """按鈕點擊的 interaction：followup.send(wait=True) 回傳可編輯的訊息。"""
+    msg = MagicMock()
+    msg.edit = AsyncMock()
+    interaction.followup.send = AsyncMock(return_value=msg)
+    interaction._status_msg = msg
+    return interaction
+
+
+@pytest.mark.asyncio
+async def test_warning_hub_single_followup_and_edits_message(
+    cog: Any, warning_interaction: Any
+) -> None:
+    _patch_builder(cog)
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        await cog._run_warning_symbols_hub(
+            warning_interaction, ["NVDA", "TSLA", "BE"], 4242
+        )
+
+    # 只送一則 followup（wait=True），其餘全部編輯這則訊息；不得動原始回應（掃描訊息）
+    warning_interaction.followup.send.assert_awaited_once()
+    assert warning_interaction.followup.send.await_args.kwargs["wait"] is True
+    assert warning_interaction.followup.send.await_args.kwargs["ephemeral"] is True
+    warning_interaction.edit_original_response.assert_not_called()
+
+    msg = warning_interaction._status_msg
+    kwargs = msg.edit.await_args.kwargs
+    view = kwargs["view"]
+    assert isinstance(view, SymbolBatchHubView)
+    assert [p.symbol for p in view.pages] == ["NVDA", "TSLA", "BE"]
+    assert view.message is msg
+    assert kwargs["embed"] is not None
+
+
+@pytest.mark.asyncio
+async def test_warning_hub_caps_symbols_and_notes_skipped(
+    cog: Any, warning_interaction: Any
+) -> None:
+    _patch_builder(cog)
+    syms = [f"S{i}" for i in range(13)]
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        await cog._run_warning_symbols_hub(warning_interaction, syms, 4242)
+
+    first = warning_interaction.followup.send.await_args.args[0]
+    assert "10 個警示標的" in first and "略過" in first
+    view = warning_interaction._status_msg.edit.await_args.kwargs["view"]
+    assert [p.symbol for p in view.pages] == syms[:10]
+    assert (
+        "其餘 3 檔略過"
+        in warning_interaction._status_msg.edit.await_args.kwargs["content"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_warning_hub_all_failed_lists_reasons(
+    cog: Any, warning_interaction: Any
+) -> None:
+    _patch_builder(cog, failing=("NVDA", "TSLA"))
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        await cog._run_warning_symbols_hub(warning_interaction, ["NVDA", "TSLA"], 4242)
+    kwargs = warning_interaction._status_msg.edit.await_args.kwargs
+    assert "view" not in kwargs
+    assert kwargs["content"] is None
+    assert "• NVDA：" in kwargs["embed"].description
+
+
+@pytest.mark.asyncio
+async def test_warning_hub_reports_progress_on_status_message(
+    cog: Any, warning_interaction: Any
+) -> None:
+    async def _build(sym: str, user_id: int) -> SymbolHubPage:
+        if sym == "TSLA":
+            await asyncio.sleep(0.05)
+        return _page(sym)
+
+    cog._build_symbol_hub_page = AsyncMock(side_effect=_build)
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        await cog._run_warning_symbols_hub(warning_interaction, ["NVDA", "TSLA"], 4242)
+    contents = [
+        c.kwargs.get("content")
+        for c in warning_interaction._status_msg.edit.call_args_list
+    ]
+    assert any(c and "分析中 1/2" in c for c in contents)
+
+
+@pytest.mark.asyncio
+async def test_batch_hub_timeout_prefers_result_message() -> None:
+    view = _view(["NVDA", "TSLA"])
+    msg = MagicMock()
+    msg.edit = AsyncMock()
+    view.message = msg
+    stale = MagicMock()
+    stale.edit_original_response = AsyncMock()
+    view.last_interaction = stale
+    await view.on_timeout()
+    msg.edit.assert_awaited_once_with(view=None)
+    stale.edit_original_response.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_hub_timeout_falls_back_when_message_edit_fails() -> None:
+    view = _view(["NVDA", "TSLA"])
+    msg = MagicMock()
+    msg.edit = AsyncMock(side_effect=RuntimeError("token expired"))
+    view.message = msg
+    last = MagicMock()
+    last.edit_original_response = AsyncMock()
+    view.last_interaction = last
+    await view.on_timeout()
+    last.edit_original_response.assert_awaited_once_with(view=None)
+
+
+# ---------------------------------------------------------------------------
 # 5. SymbolBatchHubView
 # ---------------------------------------------------------------------------
 

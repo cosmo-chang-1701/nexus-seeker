@@ -518,6 +518,10 @@ class SymbolBatchHubView(SymbolHubView):
         # 功能按鈕（含即時整理）執行中不得換頁，否則結果會寫到別頁
         self._busy = False
         self.last_interaction: Optional[discord.Interaction] = None
+        # 結果不是 /x 原始回應（例如批次雷達警示按鈕的 followup）時，由呼叫端指定
+        # 承載 View 的訊息；逾時移除按鈕優先編輯它，因 last_interaction 的原始回應
+        # 可能是別則訊息。
+        self.message: Optional[Any] = None
 
         self.btn_prev: discord.ui.Button[Any] = discord.ui.Button(
             label="◀ 上一檔",
@@ -647,6 +651,12 @@ class SymbolBatchHubView(SymbolHubView):
 
     async def on_timeout(self) -> None:
         """逾時後移除按鈕，避免殘留點了只會顯示「此互動失敗」的殭屍按鈕。"""
+        if self.message is not None:
+            try:
+                await self.message.edit(view=None)
+                return
+            except Exception as e:
+                logger.debug(f"SymbolBatchHubView 逾時編輯結果訊息失敗: {e}")
         if self.last_interaction is None:
             return
         try:
