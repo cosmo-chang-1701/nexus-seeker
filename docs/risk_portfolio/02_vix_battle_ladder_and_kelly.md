@@ -311,6 +311,19 @@ $$\text{unit\_weighted\_delta} = 0.16 \times \beta \times \frac{S}{S_{SPY}} \tim
 
 **0 口原因的呈現欄位（僅呈現，不參與 sizing）**：`OptimizationResult` 新增 `unit_adj_delta`（$|\text{val\_adj\_unit\_delta}|$，單口含 IV 調整的 SPY 等值股數）與 `risk_budget_shares`（$\text{max\_safe\_shares} \mp \text{current\_delta}$：單口 Delta 為正取減、為負取加；單口 Delta 為 0 時為 `None`），皆四捨五入至 2 位、預設 `None`，僅在 `optimize_position_risk` 最後的回傳帶入，提前返回路徑與 `suggested_contracts` 不變。`/x` 在 0 口時：`risk_budget_shares` $\le 0$ 顯示「組合既有 β 加權 Delta 已用盡可用額度」；否則顯示「單口 ≈X 股 SPY 等值（含 IV 調整）> 可用額度 ≈Y 股」；欄位為 `None` 時沿用「單口 β 加權 Delta 已超過可用風險額度」。
 
+### 5.7 賣 Put 的現金擔保上限、無對沖折抵與 /x 倉位用 IV
+
+僅適用賣出 Put 類策略（`is_short_put_strategy()`：`STO_PUT`／`CSP`／`Short Put`／`Cash Secured Put`／Bull Put 價差）。Short Call／Covered Call 維持原路徑，負 β 加權 Delta 對多頭組合仍是合法的對沖。
+
+1. **無負 β 對沖折抵**：賣 Put 的下行風險是個股被指派，統計上 $\approx 0$ 或為負的 β 無法對沖它。$\beta \le 0$ 時帶號單口 Delta 為負，舊邏輯走 `else` 分支並把既有多頭部位算進預算；現在 `val_adj_unit_delta < 0` 時取量值，賣 Put 一律消耗多頭側預算。價差亦適用。
+2. **現金擔保硬上限**（僅裸賣／現金擔保 Put，價差的擔保金是價差寬度，不套用）：$|\beta| \to 0$ 時 Delta 預算不再限制口數（`/x WMT`，β −0.09 曾建議 28 口、約 $327K 接貨名目）。
+
+$$\text{cap} = \max\left(0, \left\lfloor \frac{\text{可動用現金}}{\text{每口擔保}} \right\rfloor\right),\quad \text{可動用現金} = \text{現金儲備} - \text{未平倉 Short Put 擔保金}$$
+
+可動用現金與 `/dash` 同定義（`short_put_collateral()`，價差已淨額）。每口擔保：`/x` 無指定履約價，取 `現價 × 100`（OTM Put 的保守上界）；掃描與手動分析取候選合約 `strike × 100`，缺值才用現價。口數超過 cap 時截斷並重算投影 Delta、避險股數與曝險 %，警告 `擔保上限 N 口（現金 $X）`；cap 為 0 時警告 `現金擔保不足：暫停賣方新倉`（含「暫停」，使 /x 不再印出假的 Delta 0 口原因）。現金儲備未設（0）不套用上限，警告 `未設現金儲備：無擔保上限`；讀取持倉失敗同樣不阻斷 sizing，警告 `持倉讀取失敗：無擔保上限`。以上字串皆 $\le 20$ 字（/x embed 字數餘裕極小）。
+3. **/x 參考 Delta 帶號**：引擎的方向乘數預期**帶號合約 Delta**，/x 傳入 $-0.16 \times \beta \times S/S_{SPY} \times 100$（策略 `STO_PUT`）；顯示欄位 `kelly_unit_weighted_delta` 維持正的量值。
+4. **/x 倉位用 IV**：規則與呈現層完全一致——`LIVE_IV` 且 `current_iv_dte` $\le 2$ 且未做尺度修正視為近到期；有跨式反推 IV 且（近到期或與 `current_iv` 背離 $\ge 2$ 倍）時，倉位改用跨式 IV；近到期但無跨式可校驗時沿用原值，並列入降級原因「近到期 IV 未校驗」（觸發資料降級減半）。IV 被低估會縮小 $IV_{stock}/IV_{SPY}$ 而放大口數，故不再用近到期的失真值。上限／背離門檻皆為 `PRE_CALIBRATION／僅呈現` 未校準值。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **VIX 戰情階梯與分位數配置**:
