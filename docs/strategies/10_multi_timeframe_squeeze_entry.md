@@ -192,6 +192,7 @@ flowchart TD
 
 - `⚠ 日內衝突`：(1) 65m 或 15m `momentum_value < 0` 且 `momentum_color == "Red"`（負且增強；Golden 為負但減弱，不算）；(2) 最新 15m 為實體陰線、有效量比 $\ge$ `INTRADAY_BREAK_RVOL`（直接引用 `dynamic_rollover/constants.py::_ENTRY_VOLUME_SURGE_MULTIPLIER`，$1.5$，與 `RVOL_EXPANSION_THRESHOLD` 同源）且 $\text{Close} < \text{LVN} \le \text{Open}$。文案附「（判定未改）」。
 - 判定行尾附 `⚠封頂`：CallWall 貼牆（距離 $<$ 1×ATR₁₅ₘ，見 strategies/06 §5）時（不另立一行以節省字數）。
+- 未貼牆但報酬小於風險時判定行尾附 `⚠封頂R{x}`：$x = (\text{CallWall}-\text{現價})/(\text{現價}-\text{擠壓參考停損})$，$x <$ `_SQUEEZE_CAP_RR_MIN`（$1.0$，PRE_CALIBRATION／僅呈現）時標示，例如 `⚠封頂R0.4`；CallWall 未取得／降級、或停損不在現價之下則不標。僅呈現，判定與部位不變。區塊標題同時縮短為「現貨擠壓進場 (strategies/10)」以抵銷字數。
 - 參考停損距離 $>$ `room_threshold._BUFFER_MAX_STOP_DISTANCE_PCT`（$8\%$）時尾附 `⚠ 超寬（{部位}%倉≈{部位×停損%}% NAV）`。
 - 擠壓欄位的「⚠ 日內轉弱」與本檢核共用 `negative_momentum_tfs()` 原語：轉弱提示只要求動能為負，日內衝突另要求 Red（負且增強），因此 65m 為 Golden 時擠壓欄位有「日內轉弱」而 Target Lock 無「日內衝突」，屬強度分級而非矛盾。
 - 15m 陽線量比 $<$ `_LOW_VOLUME_BOUNCE_RVOL`（$0.7$，PRE_CALIBRATION／僅呈現）且 15m 動能為負增強（Red）→ 即時量比狀態改印「無量反彈＋15m 空方動能加速（疑似熊旗）」。
