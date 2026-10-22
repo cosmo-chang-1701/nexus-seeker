@@ -61,6 +61,36 @@ def parse_symbol_list(raw: str) -> list[str]:
     return result
 
 
+def select_sizing_iv(
+    current_iv: float,
+    straddle_iv: Optional[float],
+    iv_source: Any,
+    current_iv_dte: Any,
+    iv_scale_corrected: bool,
+) -> tuple[float, Optional[str]]:
+    """/x 倉位用 IV 的選擇（規則與呈現層 portfolio_embeds 的跨式取代完全一致）。
+
+    近到期 (LIVE_IV 且 DTE <= 2 且未做尺度修正) 或與跨式 IV 背離 >= 2 倍時，
+    以跨式反推 IV 取代；近到期但沒有跨式可校驗時沿用原值並回傳降級原因。
+    Returns: (sizing_iv, degraded_reason)
+    """
+    from cogs.embed_builders.portfolio_embeds import _iv_diverged_from_straddle
+
+    near_expiry = (
+        iv_source == "LIVE_IV"
+        and current_iv_dte is not None
+        and int(current_iv_dte) <= 2
+        and not iv_scale_corrected
+    )
+    if straddle_iv and (
+        near_expiry or _iv_diverged_from_straddle(current_iv, straddle_iv)
+    ):
+        return float(straddle_iv), None
+    if near_expiry:
+        return current_iv, "近到期 IV 未校驗"
+    return current_iv, None
+
+
 # /x 的 Kelly 欄位以「賣出 16Δ Put」為參考單位（單口 Delta 再乘 β×S/SPY×100 換成 SPY 等值股數）
 _KELLY_REF_SHORT_PUT_DELTA = 0.16
 
@@ -380,7 +410,10 @@ class SymbolDeepDiveMixin:
         """將原始抓取的量化與社群數據轉換為標的深度分析 (Tactical Deep-Dive) 統一資料模型。"""
         from services.asset_manager import AssetManager
         from models.asset import ContextType
-        from market_analysis.risk_engine import optimize_position_risk
+        from market_analysis.risk_engine import (
+            load_available_collateral,
+            optimize_position_risk,
+        )
         from cogs.unified_terminal.utils import (
             find_matching_polymarket_odds,
             calculate_polymarket_weighted_odds,
@@ -777,6 +810,22 @@ class SymbolDeepDiveMixin:
                 else getattr(iv_metrics, "current_iv", None)
             )
             stock_iv_val = _safe_float(raw_stock_iv, 0.0)
+
+            def _iv_field(name: str) -> Any:
+                return (
+                    iv_metrics.get(name)
+                    if isinstance(iv_metrics, dict)
+                    else getattr(iv_metrics, name, None)
+                )
+
+            # 倉位用 IV：近到期或與跨式背離時改用跨式 IV（同呈現層規則）。
+            stock_iv_val, sizing_iv_reason = select_sizing_iv(
+                stock_iv_val,
+                _safe_float(_iv_field("straddle_implied_iv"), 0.0) or None,
+                _iv_field("iv_source"),
+                _iv_field("current_iv_dte"),
+                bool(_iv_field("iv_scale_corrected")),
+            )
             # 0.40 只是讓公式可算的佔位值；真實 IV 缺失以 stock_iv_unknown 交給引擎 fail-closed。
             stock_iv_unknown = stock_iv_val <= 0
             stock_iv = stock_iv_val if stock_iv_val > 0 else 0.40
@@ -789,6 +838,8 @@ class SymbolDeepDiveMixin:
             skew_val = _safe_float(safe_skew.get("skew"), 0.0)
 
             degraded_reasons: list[str] = []
+            if sizing_iv_reason:
+                degraded_reasons.append(sizing_iv_reason)
             if result.get("iv_rank") is None:
                 degraded_reasons.append("IV Rank 缺失")
             if vol_pcr is None:
@@ -833,15 +884,22 @@ class SymbolDeepDiveMixin:
                 else 0.0
             )
             result["kelly_beta"] = beta
-            result["kelly_unit_weighted_delta"] = unit_wd
+            # 引擎吃帶號合約 Delta（賣 Put 的 Delta 為負）；顯示值維持量值。
+            result["kelly_unit_weighted_delta"] = abs(unit_wd)
+
+            # 現金擔保上限：可動用現金 = 現金儲備 − 未平倉 Short Put 擔保金。
+            cash_reserve = _safe_float(getattr(ctx, "cash_reserve", 0.0), 0.0)
+            available_collateral, collateral_warning = await load_available_collateral(
+                user_id, cash_reserve
+            )
 
             opt_result = optimize_position_risk(
                 current_delta=0.0,
-                unit_weighted_delta=unit_wd,
+                unit_weighted_delta=-unit_wd,
                 user_capital=user_capital,
                 spy_price=spy_price if spy_price is not None else 0.0,
                 stock_iv=stock_iv,
-                strategy="STO",
+                strategy="STO_PUT",
                 macro_data=macro_data,
                 risk_limit=risk_limit,
                 vix_spot=vix_now,
@@ -850,7 +908,11 @@ class SymbolDeepDiveMixin:
                 vix_unknown=macro_data is None,
                 stock_iv_unknown=stock_iv_unknown,
                 data_degraded_reasons=degraded_reasons,
+                collateral_per_contract=px * 100.0 if px > 0 else None,
+                available_collateral=available_collateral,
             )
+            if collateral_warning:
+                opt_result.warnings.append(collateral_warning)
             result["kelly_sizing"] = opt_result
         except Exception as e:
             logger.warning(f"[{symbol}] Kelly sizing calculation skipped: {e}")

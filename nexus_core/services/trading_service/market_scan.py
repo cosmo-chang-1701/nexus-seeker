@@ -229,6 +229,17 @@ class MarketScanMixin:
             user_context = database.get_full_user_context(uid)
             user_capital = user_context.capital
             current_total_delta = user_context.total_weighted_delta
+            # 現金擔保上限所需的可動用現金：每位使用者每輪掃描只算一次。
+            from market_analysis.risk_engine import (
+                is_cash_secured_put_strategy,
+                load_available_collateral,
+            )
+
+            _cash_reserve = float(getattr(user_context, "cash_reserve", 0.0) or 0.0)
+            (
+                available_collateral,
+                collateral_warning,
+            ) = await load_available_collateral(uid, _cash_reserve)
 
             for sym, stock_cost in watchlist_items:
                 if (sym, stock_cost) in scan_results:
@@ -317,6 +328,11 @@ class MarketScanMixin:
                         tte_hours = cached_sent["tte_hours"]
 
                         strategy = opt_data.get("strategy", "")
+                        _strike = float(opt_data.get("strike") or 0.0)
+                        _ref_px = float(opt_data.get("price") or 0.0)
+                        collateral_per_contract = (
+                            _strike * 100.0 if _strike > 0 else _ref_px * 100.0
+                        )
                         opt_res = optimize_position_risk(
                             current_delta=current_total_delta,
                             unit_weighted_delta=opt_data.get("weighted_delta", 0.0),
@@ -331,7 +347,17 @@ class MarketScanMixin:
                             skew=skew_val,
                             event_tte_hours=tte_hours,
                             vix_unknown=macro_data is None,
+                            collateral_per_contract=(
+                                collateral_per_contract
+                                if collateral_per_contract > 0
+                                else None
+                            ),
+                            available_collateral=available_collateral,
                         )
+                        if collateral_warning and is_cash_secured_put_strategy(
+                            strategy
+                        ):
+                            opt_res.warnings.append(collateral_warning)
                         safe_qty = opt_res.suggested_contracts
                         hedge_spy = opt_res.suggested_hedge_spy
 

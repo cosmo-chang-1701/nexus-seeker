@@ -99,7 +99,11 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
     embeds_to_send = []
     if is_option_valid:
         from services import llm_service, news_service
-        from market_analysis.risk_engine import optimize_position_risk
+        from market_analysis.risk_engine import (
+            is_cash_secured_put_strategy,
+            load_available_collateral,
+            optimize_position_risk,
+        )
         from market_analysis.sentiment_engine import SentimentEngine
 
         # 使用快取 Reddit 資料
@@ -137,6 +141,12 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
         )
 
         user_context = database.get_full_user_context(user_id)
+        available_collateral, collateral_warning = await load_available_collateral(
+            user_id, float(getattr(user_context, "cash_reserve", 0.0) or 0.0)
+        )
+        _strike = float(result.get("strike") or 0.0)
+        _ref_px = float(result.get("price") or 0.0)
+        collateral_per_contract = _strike * 100.0 if _strike > 0 else _ref_px * 100.0
         # SPY 未知時 spy_price 傳 0.0：optimize_position_risk 對 spy_price<=0
         # 直接回傳 0 口 (fail-closed)，不以 670 換算曝險。
         opt_res = optimize_position_risk(
@@ -152,7 +162,15 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
             pcr=pcr_val,
             skew=skew_val,
             vix_unknown=macro_data is None,
+            collateral_per_contract=(
+                collateral_per_contract if collateral_per_contract > 0 else None
+            ),
+            available_collateral=available_collateral,
         )
+        if collateral_warning and is_cash_secured_put_strategy(
+            result.get("strategy", "")
+        ):
+            opt_res.warnings.append(collateral_warning)
         if spy_price is None:
             opt_res.warnings.append("SPY 現價資料不足：不提供建議口數")
         if opt_res.warnings:

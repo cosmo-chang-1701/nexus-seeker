@@ -241,6 +241,109 @@ def classify_trade_intent(strategy: str) -> TradeIntent:
     return "DIRECTIONAL_LONG"
 
 
+# 賣出 Put 類策略標籤：無負 β 對沖折抵。價差 (Bull Put) 另列，擔保金為價差寬度。
+_SHORT_PUT_TOKENS: Tuple[str, ...] = (
+    "STO_PUT",
+    "STO PUT",
+    "CSP",
+    "SHORT PUT",
+    "SHORT_PUT",
+    "CASH SECURED PUT",
+    "CASH-SECURED PUT",
+    "CASH_SECURED_PUT",
+    "CASH-SECURED",
+    "CASH_SECURED",
+)
+_PUT_CREDIT_SPREAD_TOKENS: Tuple[str, ...] = (
+    "BULL PUT",
+    "BULL_PUT",
+    "PUT CREDIT",
+    "PUT_CREDIT",
+)
+
+
+def is_put_credit_spread_strategy(strategy: str) -> bool:
+    """是否為 Bull Put／Put credit 價差 (擔保金為價差寬度，非 strike × 100)。"""
+    upper = str(strategy).upper()
+    return any(t in upper for t in _PUT_CREDIT_SPREAD_TOKENS)
+
+
+def is_short_put_strategy(strategy: str) -> bool:
+    """是否為賣出 Put 類策略 (含 Bull Put 價差)。
+
+    僅這類策略適用「無負 β 對沖折抵」：賣 Put 的下行風險是個股被指派，
+    統計上 ≈ 0 或為負的 β 並不會對沖它。Short Call／Covered Call 不屬此類。
+    """
+    upper = str(strategy).upper()
+    return any(t in upper for t in _SHORT_PUT_TOKENS) or is_put_credit_spread_strategy(
+        upper
+    )
+
+
+def is_cash_secured_put_strategy(strategy: str) -> bool:
+    """裸賣／現金擔保 Put (不含價差)：每口需 strike × 100 現金擔保。"""
+    return is_short_put_strategy(strategy) and not is_put_credit_spread_strategy(
+        strategy
+    )
+
+
+# 現金擔保上限無法套用時的提示（≤ 20 字，/x embed 字數餘裕極小）。
+CASH_RESERVE_UNSET_WARNING = "未設現金儲備：無擔保上限"
+POSITIONS_READ_FAILED_WARNING = "持倉讀取失敗：無擔保上限"
+
+
+def compute_available_collateral(
+    cash_reserve: float, trades: List[Dict[str, Any]]
+) -> Optional[float]:
+    """可動用現金 = 現金儲備 − 未平倉 Short Put 擔保金（與 /dash 同定義）。
+
+    現金儲備未設定 (<= 0) 回傳 None，表示不套用擔保上限。
+    """
+    if cash_reserve <= 0:
+        return None
+    from market_analysis.payout_coverage import short_put_collateral
+
+    return float(cash_reserve) - short_put_collateral(trades)
+
+
+async def load_available_collateral(
+    user_id: int, cash_reserve: float
+) -> Tuple[Optional[float], Optional[str]]:
+    """讀取使用者未平倉部位並計算可動用現金。
+
+    Returns:
+        (available_collateral, warning)：未設現金儲備或讀取失敗時
+        available 為 None（不套用上限），並附繁中提示。
+    """
+    if cash_reserve <= 0:
+        return None, CASH_RESERVE_UNSET_WARNING
+    try:
+        from services.asset_manager import AssetManager
+        from models.asset import ContextType
+
+        assets = await asyncio.to_thread(
+            AssetManager().get_assets, user_id, ContextType.TRADE
+        )
+        trades: List[Dict[str, Any]] = []
+        for a in assets:
+            m = getattr(a, "metadata", None) or {}
+            if not m.get("opt_type"):
+                continue
+            trades.append(
+                {
+                    "symbol": a.symbol,
+                    "opt_type": m.get("opt_type"),
+                    "strike": m.get("strike"),
+                    "expiry": m.get("expiry"),
+                    "quantity": m.get("quantity", 0),
+                }
+            )
+        return compute_available_collateral(cash_reserve, trades), None
+    except Exception as e:
+        logger.warning(f"可動用現金計算失敗 (user={user_id}): {e}")
+        return None, POSITIONS_READ_FAILED_WARNING
+
+
 def position_delta_sign(strategy: str) -> int:
     """候選交易的部位方向乘數，乘在**帶號合約 Delta** 或無號股數 Delta 上。
 
@@ -430,6 +533,8 @@ def optimize_position_risk(
     vix_unknown: bool = False,
     stock_iv_unknown: bool = False,
     data_degraded_reasons: Optional[List[str]] = None,
+    collateral_per_contract: Optional[float] = None,
+    available_collateral: Optional[float] = None,
 ) -> OptimizationResult:
     """NRO 風險優化器：根據宏觀環境與日曆事件計算安全持倉口數。
 
@@ -447,6 +552,10 @@ def optimize_position_risk(
         data_degraded_reasons: 期權決策數據的降級原因 (IVR／PCR 缺失、GEX 快取
             降級、結算日引力等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
             並以繁中原因列入 warnings。
+        collateral_per_contract: 每口現金擔保 (strike × 100)。
+        available_collateral: 可動用現金 (現金儲備 − 未平倉 Short Put 擔保金)。
+            兩者皆給且僅限裸賣／現金擔保 Put 時，口數不得超過
+            floor(available / per_contract)；價差與其他策略不受影響。
     """
     if spy_price <= 0:
         return OptimizationResult(suggested_contracts=0, exposure_pct=0.0)
@@ -583,6 +692,11 @@ def optimize_position_risk(
         * (stock_iv / max(spy_iv, 0.01))
         * position_delta_sign(strategy)
     )
+    # 賣 Put 無負 β 對沖折抵：β ≤ 0 時帶號 Delta 為負，原本會走 else 分支把既有
+    # 多頭部位算進預算。賣方指派風險不被 ≈0／負 β 對沖，故一律取量值消耗多頭預算。
+    is_short_put = is_short_put_strategy(strategy)
+    if is_short_put and val_adj_unit_delta < 0:
+        val_adj_unit_delta = abs(val_adj_unit_delta)
     max_safe_shares = (user_capital * (current_risk_limit / 100)) / spy_price
     safe_qty = (
         int((max_safe_shares - current_delta) // val_adj_unit_delta)
@@ -601,6 +715,32 @@ def optimize_position_risk(
     )
 
     suggested_contracts = int(max(0, safe_qty))
+
+    # 現金擔保硬上限：僅裸賣／現金擔保 Put；|β| → 0 時 Delta 預算不再限制口數。
+    if (
+        is_cash_secured_put_strategy(strategy)
+        and collateral_per_contract is not None
+        and available_collateral is not None
+        and collateral_per_contract > 0
+    ):
+        cap = max(0, int(available_collateral // collateral_per_contract))
+        if suggested_contracts > cap:
+            suggested_contracts = cap
+            if cap >= 1:
+                warnings.append(
+                    f"擔保上限 {cap} 口（現金 ${max(available_collateral, 0.0):,.0f}）"
+                )
+            else:
+                warnings.append("現金擔保不足：暫停賣方新倉")
+            proj_delta = current_delta + (val_adj_unit_delta * suggested_contracts)
+            suggested_hedge_spy = (
+                proj_delta - max_safe_shares
+                if proj_delta > max_safe_shares
+                else proj_delta + max_safe_shares
+                if proj_delta < -max_safe_shares
+                else 0.0
+            )
+
     exposure_pct = (
         (abs(proj_delta) * spy_price / user_capital * 100) if user_capital > 0 else 0
     )
