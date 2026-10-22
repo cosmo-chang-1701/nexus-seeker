@@ -1055,6 +1055,27 @@ def test_evaluate_advanced_filters_excludes_whale_hedge_and_low_dte_uoa() -> Non
     assert passed_without_valid is False
 
 
+def test_scan_params_defaults_apply_no_filter() -> None:
+    """ScanParams 的欄位代表使用者選取的條件：預設全部不過濾，動能衰竭剔除需明確啟用。"""
+    from market_analysis.intraday_pipeline import evaluate_advanced_filters
+    from models.schemas import ScanParams
+
+    metrics = SimpleNamespace(
+        squeeze_status=False,
+        squeeze_momentum=-6.0,
+        current_price=100.0,
+    )
+
+    assert ScanParams().momentum_decay_rejection is False
+    passed, _tags = evaluate_advanced_filters(metrics, {}, [], ScanParams())
+    assert passed is True
+
+    passed_rejected, _ = evaluate_advanced_filters(
+        metrics, {}, [], ScanParams(momentum_decay_rejection=True)
+    )
+    assert passed_rejected is False
+
+
 def test_evaluate_advanced_filters_tdp_signal_with_volume_poc() -> None:
     """驗證 TDP 估值三擊過濾器以 volume_poc 為依歸的正確性。"""
     from market_analysis.intraday_pipeline import evaluate_advanced_filters

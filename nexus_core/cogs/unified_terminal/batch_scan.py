@@ -187,7 +187,8 @@ class BatchScanMixin:
 
         # 僅在使用者實際選取進階條件時才執行 evaluate_advanced_filters
         advanced_active = bool(scan_params_kwargs)
-        # 批次掃描不套用「動能衰竭剔除」預設值：使用者並未選取該條件
+        # 批次掃描不套用「動能衰竭剔除」：使用者並未選取該條件（明確傳 False，
+        # 不依賴 ScanParams 的預設值）
         adv_params = ScanParams(**scan_params_kwargs, momentum_decay_rejection=False)
 
         from .silent_period import is_in_silent_period, load_silent_period_context
