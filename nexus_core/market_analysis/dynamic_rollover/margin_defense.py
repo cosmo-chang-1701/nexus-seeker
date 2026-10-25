@@ -145,6 +145,12 @@ async def evaluate_margin_defense_impl(
             total_deficit += price * o.get("quantity", 0.0)
 
     user_ctx = get_full_user_context(user_id)
+    if getattr(user_ctx, "load_failed", False) is True:
+        # 帳戶資料讀取失敗：cash_reserve 為佔位 0，會造成假的保證金警報。
+        logger.warning(
+            f"[MARGIN_DEFENSE] 使用者 {user_id} 帳戶資料讀取失敗，略過保證金防禦"
+        )
+        return []
     buffer = user_ctx.cash_reserve if user_ctx else 0.0
 
     if total_deficit > 0.0:

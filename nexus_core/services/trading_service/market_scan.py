@@ -227,6 +227,9 @@ class MarketScanMixin:
             await portfolio.refresh_portfolio_greeks(uid)
 
             user_context = database.get_full_user_context(uid)
+            if getattr(user_context, "load_failed", False) is True:
+                logger.error(f"[Scan] 使用者 {uid} 帳戶資料讀取失敗，本輪略過該使用者")
+                continue
             user_capital = user_context.capital
             current_total_delta = user_context.total_weighted_delta
             # 現金擔保上限所需的可動用現金：每位使用者每輪掃描只算一次。

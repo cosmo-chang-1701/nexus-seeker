@@ -109,6 +109,11 @@ class MarketScanCog(commands.Cog):
                             ):
                                 continue
                             ctx = database.get_full_user_context(uid)
+                            if getattr(ctx, "load_failed", False) is True:
+                                logger.error(
+                                    f"[Scan] 使用者 {uid} 帳戶資料讀取失敗，略過 DDP 警報"
+                                )
+                                continue
                             if await self._should_send_alert(
                                 uid, sym, ctx.option_alert_mode
                             ):
@@ -139,6 +144,11 @@ class MarketScanCog(commands.Cog):
                     if not (iv_opportunity_on or iv_risk_on):
                         continue
                 user_context = database.get_full_user_context(uid)
+                if getattr(user_context, "load_failed", False) is True:
+                    logger.error(
+                        f"[Scan] 使用者 {uid} 帳戶資料讀取失敗，略過 IV 掃描警報"
+                    )
+                    continue
                 user_watch = [row[1] for row in all_watchlists if row[0] == uid]
                 vol_results = await self.trading_service.run_iv_opportunity_scan(
                     user_watch, uid
@@ -186,6 +196,11 @@ class MarketScanCog(commands.Cog):
                 valid_alerts = []
 
                 user_context = database.get_full_user_context(uid)
+                if getattr(user_context, "load_failed", False) is True:
+                    logger.error(
+                        f"[Scan] 使用者 {uid} 帳戶資料讀取失敗，略過該使用者的掃描警報與 VTR 進場"
+                    )
+                    continue
                 for data in alerts_data:
                     sym = data["symbol"]
                     ai_decision = data.get("ai_decision", "APPROVE")

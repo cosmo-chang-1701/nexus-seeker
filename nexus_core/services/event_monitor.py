@@ -257,6 +257,10 @@ class EventMonitor:
             )
             return False
         user_context = await asyncio.to_thread(get_full_user_context, user_id)
+        if getattr(user_context, "load_failed", False) is True:
+            # 佔位的零 Greeks 會讓警報顯示「熱度 0% / Gamma 穩定」，寧可不發。
+            logger.error(f"使用者 {user_id} 帳戶資料讀取失敗，略過事件預警")
+            return False
         try:
             spy_quote = await get_quote("SPY")
             spy_price = _extract_quote_price(spy_quote)

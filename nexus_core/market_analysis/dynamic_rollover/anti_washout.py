@@ -1535,6 +1535,8 @@ async def check_satellite_rebalancing_impl(
     # DB 讀取。
     try:
         user_ctx = get_full_user_context(user_id)
+        if getattr(user_ctx, "load_failed", False) is True:
+            raise RuntimeError("帳戶資料讀取失敗 (load_failed)")
         risk_appetite = user_ctx.risk_appetite
         pyramid_capital = float(getattr(user_ctx, "capital", 0.0) or 0.0)
         pyramid_risk_limit_pct = float(getattr(user_ctx, "risk_limit", 15.0) or 0.0)

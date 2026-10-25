@@ -162,6 +162,9 @@ class _ShortEntryMixin:
         except Exception as e:
             logger.warning(f"[SHORT_ENTRY] 讀取使用者 {user_id} 設定失敗，略過: {e}")
             return instructions
+        if getattr(ctx, "load_failed", False) is True:
+            logger.warning(f"[SHORT_ENTRY] 使用者 {user_id} 帳戶資料讀取失敗，略過")
+            return instructions
         strategy = str(getattr(ctx, "trading_strategy", "") or "")
         if strategy not in _SHORT_ENTRY_STRATEGIES:
             return instructions

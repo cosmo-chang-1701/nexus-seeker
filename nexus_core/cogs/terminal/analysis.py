@@ -141,54 +141,78 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
         )
 
         user_context = database.get_full_user_context(user_id)
-        available_collateral, collateral_warning = await load_available_collateral(
-            user_id, float(getattr(user_context, "cash_reserve", 0.0) or 0.0)
-        )
-        _strike = float(result.get("strike") or 0.0)
-        _ref_px = float(result.get("price") or 0.0)
-        collateral_per_contract = _strike * 100.0 if _strike > 0 else _ref_px * 100.0
-        # SPY 未知時 spy_price 傳 0.0：optimize_position_risk 對 spy_price<=0
-        # 直接回傳 0 口 (fail-closed)，不以 670 換算曝險。
-        opt_res = optimize_position_risk(
-            current_delta=user_context.total_weighted_delta,
-            unit_weighted_delta=result.get("weighted_delta", 0.0),
-            user_capital=user_context.capital,
-            spy_price=spy_price if spy_price is not None else 0.0,
-            stock_iv=result.get("iv", 0.15),
-            strategy=result.get("strategy", ""),
-            macro_data=macro_data,
-            risk_limit=user_context.risk_limit,
-            vix_spot=vix_now,
-            pcr=pcr_val,
-            skew=skew_val,
-            vix_unknown=macro_data is None,
-            collateral_per_contract=(
-                collateral_per_contract if collateral_per_contract > 0 else None
-            ),
-            available_collateral=available_collateral,
-        )
-        if collateral_warning and is_cash_secured_put_strategy(
-            result.get("strategy", "")
-        ):
-            opt_res.warnings.append(collateral_warning)
-        if spy_price is None:
-            opt_res.warnings.append("SPY 現價資料不足：不提供建議口數")
-        if opt_res.warnings:
-            result["nro_warnings"] = opt_res.warnings
-        safe_qty = opt_res.suggested_contracts
-        hedge_spy = opt_res.suggested_hedge_spy
-        projected_exposure_pct = opt_res.exposure_pct
+        if getattr(user_context, "load_failed", False) is True:
+            # 帳戶資料讀取失敗：不以佔位資金定倉，fail closed 為 0 口 + 警示。
+            from models.quant import OptimizationResult
+            from database.user_settings import USER_CONTEXT_LOAD_FAILED_WARNING
 
-        result.update(
-            {
-                "projected_exposure_pct": round(projected_exposure_pct, 2),
-                "safe_qty": safe_qty,
-                "hedge_spy": hedge_spy,
-                "spy_price": spy_price,
-                "risk_limit": user_context.risk_limit,
-            }
-        )
-        embeds_to_send.append(create_scan_embed(result, user_context.capital))
+            opt_res = OptimizationResult(
+                suggested_contracts=0,
+                exposure_pct=0.0,
+                warnings=[USER_CONTEXT_LOAD_FAILED_WARNING],
+            )
+            result["nro_warnings"] = opt_res.warnings
+            result.update(
+                {
+                    "projected_exposure_pct": 0.0,
+                    "safe_qty": 0,
+                    "hedge_spy": 0.0,
+                    "spy_price": spy_price,
+                    "risk_limit": user_context.risk_limit,
+                }
+            )
+            embeds_to_send.append(create_scan_embed(result, user_context.capital))
+        else:
+            available_collateral, collateral_warning = await load_available_collateral(
+                user_id, float(getattr(user_context, "cash_reserve", 0.0) or 0.0)
+            )
+            _strike = float(result.get("strike") or 0.0)
+            _ref_px = float(result.get("price") or 0.0)
+            collateral_per_contract = (
+                _strike * 100.0 if _strike > 0 else _ref_px * 100.0
+            )
+            # SPY 未知時 spy_price 傳 0.0：optimize_position_risk 對 spy_price<=0
+            # 直接回傳 0 口 (fail-closed)，不以 670 換算曝險。
+            opt_res = optimize_position_risk(
+                current_delta=user_context.total_weighted_delta,
+                unit_weighted_delta=result.get("weighted_delta", 0.0),
+                user_capital=user_context.capital,
+                spy_price=spy_price if spy_price is not None else 0.0,
+                stock_iv=result.get("iv", 0.15),
+                strategy=result.get("strategy", ""),
+                macro_data=macro_data,
+                risk_limit=user_context.risk_limit,
+                vix_spot=vix_now,
+                pcr=pcr_val,
+                skew=skew_val,
+                vix_unknown=macro_data is None,
+                collateral_per_contract=(
+                    collateral_per_contract if collateral_per_contract > 0 else None
+                ),
+                available_collateral=available_collateral,
+            )
+            if collateral_warning and is_cash_secured_put_strategy(
+                result.get("strategy", "")
+            ):
+                opt_res.warnings.append(collateral_warning)
+            if spy_price is None:
+                opt_res.warnings.append("SPY 現價資料不足：不提供建議口數")
+            if opt_res.warnings:
+                result["nro_warnings"] = opt_res.warnings
+            safe_qty = opt_res.suggested_contracts
+            hedge_spy = opt_res.suggested_hedge_spy
+            projected_exposure_pct = opt_res.exposure_pct
+
+            result.update(
+                {
+                    "projected_exposure_pct": round(projected_exposure_pct, 2),
+                    "safe_qty": safe_qty,
+                    "hedge_spy": hedge_spy,
+                    "spy_price": spy_price,
+                    "risk_limit": user_context.risk_limit,
+                }
+            )
+            embeds_to_send.append(create_scan_embed(result, user_context.capital))
 
     if psq_result:
         result["price"] = df_hist_1d["Close"].iloc[-1] if not df_hist_1d.empty else 0.0

@@ -706,6 +706,11 @@ class IntradayScanPipeline:
 
                 for uid in user_ids:
                     ctx = database.get_full_user_context(uid)
+                    if getattr(ctx, "load_failed", False) is True:
+                        logger.error(
+                            f"[Intraday Pipeline] 使用者 {uid} 帳戶資料讀取失敗，本輪略過心跳推播"
+                        )
+                        continue
                     # 掃描 watchlist 中的標的
                     # 戰術曝險每位使用者每輪只算一次（含一次全站 TRADE 讀取），
                     # 不在每檔標的的迴圈裡重複查詢。

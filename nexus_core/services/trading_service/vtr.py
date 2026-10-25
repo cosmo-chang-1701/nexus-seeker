@@ -154,6 +154,11 @@ class VtrMixin:
 
                     uid = trade_info["user_id"]
                     user_context = database.get_full_user_context(uid)
+                    if getattr(user_context, "load_failed", False) is True:
+                        logger.warning(
+                            f"[VTR] 使用者 {uid} 帳戶資料讀取失敗，略過該筆避險計算"
+                        )
+                        continue
                     current_total_delta = user_context.total_weighted_delta
                     user_capital = user_context.capital
 
