@@ -1028,6 +1028,18 @@ def _add_risk_optimization_fields(embed: Any, data: Any, user_capital: Any = Non
     if projected_pct is None:
         return
 
+    # 帳戶資料讀取失敗：曝險為佔位值，不給「風險受控」之類的判定，只顯示警示。
+    from database.user_settings import USER_CONTEXT_LOAD_FAILED_WARNING
+
+    _early_warnings = data.get("nro_warnings") or []
+    if USER_CONTEXT_LOAD_FAILED_WARNING in _early_warnings:
+        embed.add_field(
+            name="⚠️ 風控警示",
+            value="\n".join(f"• {w}" for w in _early_warnings)[:1000] + "\n\u200b",
+            inline=False,
+        )
+        return
+
     safe_qty = data.get("safe_qty", 0)
     hedge_spy = data.get("hedge_spy", 0.0)
     suggested = data.get("suggested_contracts", 0)

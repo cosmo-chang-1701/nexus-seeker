@@ -887,6 +887,18 @@ class SymbolDeepDiveMixin:
             # 引擎吃帶號合約 Delta（賣 Put 的 Delta 為負）；顯示值維持量值。
             result["kelly_unit_weighted_delta"] = abs(unit_wd)
 
+            # 帳戶資料讀取失敗：不以佔位資金定倉，fail closed 為 0 口 + 警示。
+            if getattr(ctx, "load_failed", False) is True:
+                from models.quant import OptimizationResult
+                from database.user_settings import USER_CONTEXT_LOAD_FAILED_WARNING
+
+                result["kelly_sizing"] = OptimizationResult(
+                    suggested_contracts=0,
+                    exposure_pct=0.0,
+                    warnings=[USER_CONTEXT_LOAD_FAILED_WARNING],
+                )
+                return result
+
             # 現金擔保上限：可動用現金 = 現金儲備 − 未平倉 Short Put 擔保金。
             cash_reserve = _safe_float(getattr(ctx, "cash_reserve", 0.0), 0.0)
             available_collateral, collateral_warning = await load_available_collateral(

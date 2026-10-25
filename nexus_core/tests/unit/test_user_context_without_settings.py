@@ -47,6 +47,7 @@ def test_no_settings_row_keeps_greeks_and_defaults(db_conn: sqlite3.Connection) 
     _seed_assets(db_conn)
     ctx = database.get_full_user_context(UID)
     _assert_greeks(ctx)
+    assert ctx.load_failed is False  # 無設定列是合法讀取，不是讀取失敗
     assert ctx.risk_limit == 15.0
     base = database.UserContext(UID, ctx.capital, 15.0, 0.0, 0.0, 0.0, 0.0)
     for f in dataclasses.fields(ctx):

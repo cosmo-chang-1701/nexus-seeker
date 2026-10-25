@@ -9,6 +9,9 @@ from database.connection import execute_write_many, get_read_connection
 
 logger = logging.getLogger(__name__)
 
+# 帳戶資料讀取失敗時附在口數建議上的警示（須含「暫停」，/x 據此略過「0 口原因」行）
+USER_CONTEXT_LOAD_FAILED_WARNING = "帳戶資料讀取失敗：暫停口數建議"
+
 
 @dataclass
 class UserContext:
@@ -49,6 +52,8 @@ class UserContext:
     withdrawal_anchor_month: Optional[str] = None  # 通膨調整基準月 YYYY-MM
     withdrawal_months: str = "1,7"  # 每年提領月份
     withdrawal_target_weights: Optional[str] = None  # JSON；None = 現有持股等權
+    # True = 讀取帳戶資料失敗，其餘欄位僅為佔位值，呼叫端須 fail closed
+    load_failed: bool = False
 
 
 # ==========================================
@@ -492,7 +497,7 @@ def get_full_user_context(user_id: int) -> UserContext:
 
     except Exception as e:
         logger.error(f"獲取 UserContext 失敗 (UID: {user_id}): {e}")
-        return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0)
+        return UserContext(user_id, 100000.0, 15.0, 0.0, 0.0, 0.0, load_failed=True)
     finally:
         if conn:
             conn.close()

@@ -661,6 +661,9 @@ class AccountSettingsModal(discord.ui.Modal):
             )
 
 
+_SETTINGS_LOAD_FAILED_MESSAGE = "⚠️ 帳戶設定讀取失敗，請稍後再試"
+
+
 class AccountSettingsView(discord.ui.View):
     def __init__(self, user_id: int) -> None:
         super().__init__(timeout=180)
@@ -732,6 +735,12 @@ class AccountSettingsView(discord.ui.View):
 
         key = str(select_values[0])
         ctx = database.get_full_user_context(self.user_id)
+        if getattr(ctx, "load_failed", False) is True:
+            # 讀取失敗時 ctx 只是佔位值：切換布林或預填 Modal 都會寫回假資料，一律拒絕。
+            await interaction.response.send_message(
+                _SETTINGS_LOAD_FAILED_MESSAGE, ephemeral=True
+            )
+            return
 
         # 針對布林值，直接切換狀態
         if key in [
@@ -845,7 +854,9 @@ class TradingStrategySelect(discord.ui.Select):
     ui/watchlist_tags.py::WatchlistTagSelect 的 Select 子類別模式）。"""
 
     def __init__(self, user_id: int, parent_view: "AccountSettingsView") -> None:
-        current = database.get_full_user_context(user_id).trading_strategy
+        _ctx = database.get_full_user_context(user_id)
+        current = _ctx.trading_strategy
+        self._load_failed = getattr(_ctx, "load_failed", False) is True
         options = [
             discord.SelectOption(
                 label=TRADING_STRATEGY_DISPLAY[code],
@@ -868,6 +879,12 @@ class TradingStrategySelect(discord.ui.Select):
             return
         select_values = interaction.data.get("values")
         if not select_values or not isinstance(select_values, list):
+            return
+
+        if self._load_failed:
+            await interaction.response.send_message(
+                _SETTINGS_LOAD_FAILED_MESSAGE, ephemeral=True
+            )
             return
 
         selected = str(select_values[0])
@@ -894,7 +911,9 @@ class RiskAppetiteSelect(discord.ui.Select):
     既有 Select 子類別模式）。"""
 
     def __init__(self, user_id: int, parent_view: "AccountSettingsView") -> None:
-        current = database.get_full_user_context(user_id).risk_appetite
+        _ctx = database.get_full_user_context(user_id)
+        current = _ctx.risk_appetite
+        self._load_failed = getattr(_ctx, "load_failed", False) is True
         options = [
             discord.SelectOption(
                 label=RISK_APPETITE_DISPLAY[code],
@@ -917,6 +936,12 @@ class RiskAppetiteSelect(discord.ui.Select):
             return
         select_values = interaction.data.get("values")
         if not select_values or not isinstance(select_values, list):
+            return
+
+        if self._load_failed:
+            await interaction.response.send_message(
+                _SETTINGS_LOAD_FAILED_MESSAGE, ephemeral=True
+            )
             return
 
         selected = str(select_values[0])

@@ -321,6 +321,10 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
 async def calculate_daily_effectiveness(user_id: int) -> Any:
     perf = await analyze_hedge_performance(user_id)
     u_ctx = await asyncio.to_thread(database.get_full_user_context, user_id)
+    if getattr(u_ctx, "load_failed", False) is True:
+        # 帳戶資料讀取失敗：dynamic_tau 為佔位值，不寫入對沖歷史。
+        logger.warning(f"[Hedging] 使用者 {user_id} 帳戶資料讀取失敗，略過對沖歷史寫入")
+        return perf
     await asyncio.to_thread(
         database.add_hedge_history,
         user_id=user_id,
@@ -344,6 +348,9 @@ async def calculate_dynamic_tau(user_id: int, lookback_days: int = 7) -> float:
     hedge_pnls = [h["hedge_pnl"] for h in history]
     avg_effectiveness = np.average(scores, weights=np.linspace(0.5, 1.0, len(scores)))
     u_ctx = await asyncio.to_thread(database.get_full_user_context, user_id)
+    if getattr(u_ctx, "load_failed", False) is True:
+        # 不以佔位 tau 計算或寫回設定；呼叫端會捕捉並記錄。
+        raise RuntimeError(f"使用者 {user_id} 帳戶資料讀取失敗，無法調整對沖係數")
     new_tau = u_ctx.dynamic_tau
     if avg_effectiveness < 0.5 and sum(alpha_pnls) > 0 and sum(hedge_pnls) < 0:
         new_tau -= 0.05
@@ -362,6 +369,9 @@ def get_tuned_risk_advice(user_id: int, raw_advice: Dict[str, Any]) -> Dict[str,
     # 為了方便，我們維持同步獲取，或者讓 caller 傳入 u_ctx
     u_ctx = database.get_full_user_context(user_id)
     if not (raw_advice and raw_advice.get("action") == "RE_HEDGE"):
+        return raw_advice
+    if getattr(u_ctx, "load_failed", False) is True:
+        # 帳戶資料讀取失敗：不以佔位 tau 校正建議口數。
         return raw_advice
     raw_advice["suggested_spy_qty"] = round(
         raw_advice.get("suggested_spy_qty", 0) * u_ctx.dynamic_tau, 2
