@@ -101,7 +101,9 @@ async def _compute_long_levels(
     from market_analysis.dynamic_rollover.structural_signals import (
         _resolve_canonical_anchor_base,
         _scan_gex_walls,
+        _scan_resistance_wall_above_spot,
     )
+    from market_analysis.gex_wall_depth import callwall_depth_ok
     from market_analysis.room_threshold import (
         compute_reference_stop,
         resolve_effective_target,
@@ -130,7 +132,18 @@ async def _compute_long_levels(
         stop = compute_reference_stop(spot, anchor, atr_15m, "LONG")
 
     high_60d = await fetch_high_60d(symbol)
-    eff = resolve_effective_target(spot, call_wall, high_60d, atr_1d)
+    # 目標只採用通過深度驗證的 CallWall（比照 /x）：edge 牆缺失、不在現價之上或為
+    # 遠端薄牆時，重錨到現價上方最大正 GEX 牆；仍無有效牆則傳 0.0（不編造目標）。
+    # 僅顯示用；停損錨點仍用 edge 原值。
+    gex_prof = gex.get("gex_profile")
+    adv = gex.get("adv_dollar_20d")
+    target_wall = call_wall
+    if target_wall <= spot or not callwall_depth_ok(target_wall, gex_prof, adv):
+        target_wall = 0.0
+        dyn_res, _ = _scan_resistance_wall_above_spot(symbol, gex, spot)
+        if dyn_res > 0 and callwall_depth_ok(dyn_res, gex_prof, adv):
+            target_wall = dyn_res
+    eff = resolve_effective_target(spot, target_wall, high_60d, atr_1d)
     target = eff.target if eff.target > 0 else None
 
     rr: Optional[float] = None
