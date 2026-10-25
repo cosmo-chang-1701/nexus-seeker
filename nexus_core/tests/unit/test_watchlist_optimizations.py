@@ -162,9 +162,9 @@ def test_apply_sort_and_filter_alpha_and_query() -> None:
 
 
 def test_classify_watchlist_cache_tag_thresholds() -> None:
-    # 超跌磁吸: 跌破 expected_move_lower 且偏離 > 5%
+    # 統計超跌（不宣稱磁吸方向）: 跌破 expected_move_lower 且偏離 > 5%
     assert (
-        _classify_watchlist_cache_tag(spot=90.0, max_pain=100.0, em_lower=95.0) == "🚀"
+        _classify_watchlist_cache_tag(spot=90.0, max_pain=100.0, em_lower=95.0) == "📉"
     )
     # 偏離超過 10% 但未跌破 em_lower -> 警示
     assert (

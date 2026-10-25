@@ -44,12 +44,16 @@ def _classify_watchlist_cache_tag(
     偏離百分比分類為戰術標籤。刻意只依賴 `market_cache` 的輕量欄位
     (spot/max_pain/expected_move_lower)，不耦合 `/x` 全量掃描才有的 GEX/UOA 資料，
     以維持 `/list_watch` 零額外運算成本的特性。
+
+    跌破週預期區間下緣且低於 Max Pain 逾 5% 僅標 📉（統計超跌，不宣稱方向）：
+    負 Gamma 會使 Max Pain 磁吸失效（雷達已遮蔽），但 `market_cache` 無 Gamma 欄位，
+    此處無從檢查，故不使用 🚀 暗示看多磁吸。
     """
     if max_pain <= 0 or spot <= 0:
         return ""
     delta_mp_pct = (spot - max_pain) / max_pain * 100.0
     if em_lower and spot <= em_lower and delta_mp_pct < -5.0:
-        return "🚀"
+        return "📉"
     if abs(delta_mp_pct) > 10.0:
         return "⚠️"
     return ""

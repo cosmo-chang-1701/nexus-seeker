@@ -60,13 +60,13 @@ def _format_uoa_field(uoa_data: list) -> str:
             if trade_type == "SWEEP":
                 if opt_type.upper() == "CALL":
                     intent = (
-                        f"🔥 {symbol_tag}機構在 {strike_tag} 主動買入 {vol_tag} 口"
-                        f" CALL (OI={oi_tag})，Gamma 逼空火力集中"
+                        f"🔥 {symbol_tag}在 {strike_tag} 主動買入 {vol_tag} 口"
+                        f" CALL (OI={oi_tag})，舊快取無法判定意圖"
                     )
                 else:
                     intent = (
-                        f"⚠️ {symbol_tag}機構在 {strike_tag} 急買 {vol_tag} 口"
-                        f" PUT (OI={oi_tag})，恐慌性避險避雷"
+                        f"⚠️ {symbol_tag}在 {strike_tag} 急買 {vol_tag} 口"
+                        f" PUT (OI={oi_tag})，舊快取無法判定意圖"
                     )
             else:
                 if opt_type.upper() == "CALL":
