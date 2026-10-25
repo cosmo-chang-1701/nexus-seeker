@@ -327,6 +327,8 @@ def get_all_user_ids() -> Any:
             SELECT user_id FROM watchlist
             UNION
             SELECT user_id FROM user_settings
+            UNION
+            SELECT user_id FROM assets
         """)
         rows = cursor.fetchall()
         return [row[0] for row in rows]
@@ -404,8 +406,31 @@ def get_full_user_context(user_id: int) -> UserContext:
         user_row = cursor.fetchone()
 
         if not user_row:
+            # 尚未儲存過帳戶設定的使用者：Greeks 仍須取自 assets（唯讀聚合），
+            # 其餘欄位維持 dataclass 預設值。
+            cursor.execute(
+                """
+                SELECT
+                    SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)),
+                    SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)),
+                    SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)),
+                    SUM(COALESCE(CAST(json_extract(metadata, '$.vanna') AS REAL), 0.0))
+                FROM assets
+                WHERE user_id = ? AND context_type IN ('TRADE', 'HOLDING')
+                """,
+                (user_id,),
+            )
+            g = cursor.fetchone()
             capital = calculate_auto_capital(user_id, conn)
-            return UserContext(user_id, capital, 15.0, 0.0, 0.0, 0.0, 0.0)
+            return UserContext(
+                user_id,
+                capital,
+                15.0,
+                float(g[0] or 0.0),
+                float(g[1] or 0.0),
+                float(g[2] or 0.0),
+                float(g[3] or 0.0),
+            )
 
         # 提取 Greeks。DB 內 metadata.theta 由 refresh_portfolio_greeks 以
         # py_vollib 的 analytical theta (已是每日值) × 口數 × 100 寫入，本身就是
