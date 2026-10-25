@@ -30,3 +30,30 @@ def test_absolute_floor_without_peak() -> None:
 
 def test_ratio_constant() -> None:
     assert CALLWALL_MIN_PEAK_RATIO == 0.01
+
+
+# ── callwall_depth_ok ────────────────────────────────────────────
+
+
+def test_callwall_depth_ok_thin_wall_rejected_str_keys() -> None:
+    from market_analysis.gex_wall_depth import callwall_depth_ok
+
+    prof = {"710.0": 303_526_351.95, "790.0": 2_041_178.28}
+    assert callwall_depth_ok(790.0, prof, None) is False
+    assert callwall_depth_ok(710.0, prof, None) is True
+
+
+def test_callwall_depth_ok_float_keys_and_adv() -> None:
+    from market_analysis.gex_wall_depth import callwall_depth_ok
+
+    prof = {710.0: 303_526_351.95, 790.0: 2_041_178.28}
+    assert callwall_depth_ok(790.0, prof, 5.46e9) is False
+
+
+def test_callwall_depth_ok_unknown_or_non_positive_kept() -> None:
+    from market_analysis.gex_wall_depth import callwall_depth_ok
+
+    prof = {"710.0": 303_526_351.95, "800.0": -5.0}
+    assert callwall_depth_ok(750.0, prof, None) is True  # 不在 profile
+    assert callwall_depth_ok(800.0, prof, None) is True  # 淨 GEX ≤ 0
+    assert callwall_depth_ok(790.0, None, None) is True  # 無 profile

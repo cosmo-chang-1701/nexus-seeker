@@ -6,7 +6,7 @@
 """
 
 import math
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 # 薄牆門檻 (D-04)。GEX 原始值為 edge 的 `OI × 100 × Γ × S²`，是「每 100% 價格
 # 變動」的尺度，量級隨股價平方與合約數成長，固定絕對門檻對大型股形同虛設。
@@ -62,3 +62,33 @@ def is_wall_depth_sufficient(
     if profile_max_positive is not None and math.isfinite(profile_max_positive):
         floor = max(floor, CALLWALL_MIN_PEAK_RATIO * profile_max_positive)
     return d >= floor
+
+
+def callwall_depth_ok(
+    strike: float,
+    gex_profile: Optional[Mapping[Any, Any]],
+    adv_dollar_20d: Optional[float] = None,
+) -> bool:
+    """CallWall 深度驗證（與 /x `_cw_depth_ok` 同規則）：僅攔「薄正牆」。
+
+    履約價不在 profile（深度未知）或淨 GEX ≤ 0 的牆一律保留（回 True）；
+    profile 鍵可為字串或浮點數。
+    """
+    try:
+        target = float(strike)
+    except (TypeError, ValueError):
+        return True
+    by_strike: dict[float, float] = {}
+    if isinstance(gex_profile, Mapping):
+        for k, v in gex_profile.items():
+            try:
+                kf, vf = float(k), float(v)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(kf) and math.isfinite(vf):
+                by_strike[kf] = vf
+    depth = by_strike.get(target)
+    if depth is not None and depth <= 0:
+        return True
+    peak = max((v for v in by_strike.values() if v > 0), default=None)
+    return is_wall_depth_sufficient(depth, peak, adv_dollar_20d) is not False
