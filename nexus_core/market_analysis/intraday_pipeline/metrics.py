@@ -389,7 +389,7 @@ async def build_enhanced_watchlist_metrics(
     from market_analysis.psq_engine import analyze_psq
 
     squeeze_cache = get_squeeze_cache(symbol)
-    if squeeze_cache:
+    if squeeze_cache and not squeeze_cache.get("is_expired"):
         squeeze_status = squeeze_cache.get("is_squeezing", False)
         squeeze_momentum = squeeze_cache.get("momentum", 0.0)
         squeeze_direction = squeeze_cache.get("direction", "⚪")

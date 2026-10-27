@@ -114,6 +114,9 @@ def _positive_number(value: Any) -> Optional[float]:
     return float(value) if value > 0 else None
 
 
+_SENTIMENT_HISTORY_MAX_AGE_SECONDS = 5 * 86400  # PRE_CALIBRATION: 5 calendar days
+
+
 def _load_history_reads(
     sym: str, need_last_iv: bool
 ) -> tuple[Optional[float], Optional[float], Any, Optional[float]]:
@@ -130,13 +133,27 @@ def _load_history_reads(
     from market_analysis.sentiment.skew_taxonomy import SKEW_INDICATOR
 
     last_iv = get_last_stored_iv(sym) if need_last_iv else None
-    stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
+    try:
+        stored_skew = get_last_stored_sentiment(
+            sym, SKEW_INDICATOR, max_age_seconds=_SENTIMENT_HISTORY_MAX_AGE_SECONDS
+        )
+    except TypeError:
+        # 相容測試中定義為二參數之 mock patch (lambda s, i: ...)
+        stored_skew = get_last_stored_sentiment(sym, SKEW_INDICATOR)
+
     stored_pct = (
         get_indicator_percentile_detail(sym, SKEW_INDICATOR, stored_skew)
         if stored_skew is not None
         else None
     )
-    volume_pcr = get_last_stored_sentiment(sym, "PCR")
+
+    try:
+        volume_pcr = get_last_stored_sentiment(
+            sym, "PCR", max_age_seconds=_SENTIMENT_HISTORY_MAX_AGE_SECONDS
+        )
+    except TypeError:
+        # 相容測試中定義為二參數之 mock patch (lambda s, i: ...)
+        volume_pcr = get_last_stored_sentiment(sym, "PCR")
     return last_iv, stored_skew, stored_pct, volume_pcr
 
 
@@ -263,12 +280,18 @@ class RadarDataMixin:
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
         # Fast path 讀取 gex_metrics_{sym} 為未經 fetch_symbol_gex_metrics() 的原始
         # kv_cache 讀取，繞過了該函式內建的新鮮度檢查；這裡直接利用信封本身已內含的
-        # timestamp（寫入端見 index_microstructure.py）自行判斷是否過期，門檻沿用
-        # 與該函式相同的 _EDGE_SNAPSHOT_MAX_AGE_SECONDS，避免此層另立不同步的門檻。
-        gex_is_stale = bool(gex_cached) and (
-            time.time() - gex_cached.get("timestamp", 0)
-            >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+        # data_timestamp（若無則退回 timestamp；寫入端見 index_microstructure.py）
+        # 自行判斷是否過期，門檻沿用與該函式相同的 _EDGE_SNAPSHOT_MAX_AGE_SECONDS，
+        # 避免此層另立不同步的門檻。若 gex_data 帶有 _is_stale_cache 標記亦視為過期。
+        gex_ts = float(
+            (gex_cached.get("data_timestamp") or gex_cached.get("timestamp") or 0.0)
+            if isinstance(gex_cached, dict)
+            else 0.0
         )
+        gex_is_stale = (
+            bool(gex_cached)
+            and (time.time() - gex_ts >= _EDGE_SNAPSHOT_MAX_AGE_SECONDS)
+        ) or bool(gex_data.get("_is_stale_cache"))
 
         uoa_data: list[Any] = []
         uoa_from_radar = False
@@ -418,17 +441,22 @@ class RadarDataMixin:
             float(avg_vol_20d) * float(price) if avg_vol_20d > 0 and price > 0 else None
         )
 
-        # Max Pain：market_cache 受 SWR 重算（≤ 6 h）且 is_stale/updated_at 描述的就是它，
+        # Max Pain：若市場快取標記斷路器觸發，痛點與到期日均置為 None（不沿用快照舊痛點）。
+        # 否則 market_cache 受 SWR 重算（≤ 6 h）且 is_stale/updated_at 描述的就是它，
         # 故優先採用；快照 mp_near 僅作回退。到期日只在確實已知時才配對。
-        mc_mp = _positive_number(market_cache.get("max_pain"))
-        if mc_mp is not None:
-            mp_near: Any = mc_mp
-            mp_near_expiry = _parse_iso_date(market_cache.get("expiry"))
-            if mp_near_expiry is None and radar_cache.get("mp_near") == mc_mp:
-                mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
+        if market_cache and bool(market_cache.get("circuit_breaker_triggered", 0)):
+            mp_near = None
+            mp_near_expiry = None
         else:
-            mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
-            mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
+            mc_mp = _positive_number(market_cache.get("max_pain"))
+            if mc_mp is not None:
+                mp_near = mc_mp
+                mp_near_expiry = _parse_iso_date(market_cache.get("expiry"))
+                if mp_near_expiry is None and radar_cache.get("mp_near") == mc_mp:
+                    mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
+            else:
+                mp_near = radar_cache.get("mp_near") or market_cache.get("max_pain")
+                mp_near_expiry = _parse_iso_date(radar_cache.get("mp_near_expiry"))
 
         # 讀取真實 Skew 與分位點
         # 分位需要足夠樣本，樣本不足時百分位為 None；
@@ -445,8 +473,18 @@ class RadarDataMixin:
                 skew_percentile = stored_percentile
                 skew_percentile_source = stored_pct.source
             else:
-                skew_percentile = radar_cache.get("skew_percentile")
-        elif "skew" in radar_cache:
+                skew_percentile = (
+                    radar_cache.get("skew_percentile")
+                    if (
+                        radar_age_seconds is None
+                        or radar_age_seconds <= _SENTIMENT_HISTORY_MAX_AGE_SECONDS
+                    )
+                    else None
+                )
+        elif "skew" in radar_cache and (
+            radar_age_seconds is None
+            or radar_age_seconds <= _SENTIMENT_HISTORY_MAX_AGE_SECONDS
+        ):
             raw_skew = radar_cache.get("skew")
             skew_val = float(raw_skew) if raw_skew is not None else None
             raw_sp = radar_cache.get("skew_percentile")
@@ -491,7 +529,10 @@ class RadarDataMixin:
 
         # 讀取 PCR (買賣權成交量比 / 未平倉比)
         volume_pcr = stored_volume_pcr
-        if volume_pcr is None:
+        if volume_pcr is None and (
+            radar_age_seconds is None
+            or radar_age_seconds <= _SENTIMENT_HISTORY_MAX_AGE_SECONDS
+        ):
             volume_pcr = radar_cache.get("volume_pcr")
         oi_pcr = radar_cache.get("oi_pcr")
 
@@ -609,6 +650,7 @@ class RadarDataMixin:
             "uoa": uoa_data,
             "uoa_age_seconds": uoa_age_seconds,
             "atr_14": atr_14,
+            "atr_15m": float(radar_cache.get("atr_15m") or 0.0),
             "ma20": float(ma20_val) if ma20_val is not None else None,
             "month_max_pains": month_max_pains,
             "psq_result": {
@@ -807,6 +849,7 @@ class RadarDataMixin:
         physical_cap_above_spot = any(
             str(s.get("type", "")).upper().startswith("C")
             and float(s.get("strike", 0.0) or 0.0) > price
+            and (not s.get("structure_leg") or bool(s.get("spread_credit")))
             for s in physical_cap_strikes
         )
         gex_prof = gex_data.get("gex_profile", {}) if isinstance(gex_data, dict) else {}
@@ -911,15 +954,18 @@ class RadarDataMixin:
         except Exception:
             pass
 
-        # 取得 PSQ 與簡易 EMA 21
+        # 取得 PSQ 與真實 20 日 SMA
         from services.market_data_service import get_history_df
 
         df_hist = await get_history_df(sym, period="1y", interval="1d")
         psq_res = {}
-        ema_21 = 0.0
+        ma20_val: Optional[float] = None
         atr_14 = 0.0
         if df_hist is not None and not df_hist.empty:
-            ema_21 = df_hist["Close"].ewm(span=21, adjust=False).mean().iloc[-1]
+            if len(df_hist) >= 20:
+                sma20 = df_hist["Close"].rolling(20).mean().iloc[-1]
+                if sma20 is not None and not math.isnan(float(sma20)):
+                    ma20_val = float(sma20)
             try:
                 import pandas_ta as ta
 
@@ -934,7 +980,7 @@ class RadarDataMixin:
             from market_analysis.psq_engine import analyze_psq
 
             sc = await asyncio.to_thread(get_squeeze_cache, sym)
-            if sc and not force_refresh:
+            if sc and not sc.get("is_expired") and not force_refresh:
                 psq_res = {
                     "is_squeezing": sc.get("is_squeezing", False),
                     "momentum_value": sc.get("momentum", 0.0),
@@ -1059,7 +1105,7 @@ class RadarDataMixin:
             "psq_result": psq_res,
             "volume_poc": volume_poc,
             "dp_poc": volume_poc,
-            "ma20": ema_21,
+            "ma20": ma20_val,
             "atr_14": atr_14,
             "atr_15m": atr_15m,
             "nearest_dte": nearest_dte,
@@ -1145,6 +1191,7 @@ class RadarDataMixin:
                 "avg_vol_20d": vol_data.get("avg_volume_20", 0.0),
                 "skew": skew_val,
                 "skew_percentile": skew_percentile,
+                "ma20": ma20_val,
                 "atr_14": atr_14,
                 "atr_15m": atr_15m,
                 "iv_rank": iv_rank_val,

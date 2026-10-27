@@ -678,8 +678,14 @@ async def _scrape_symbol_gex_raw(
                             result_data["_is_stale_cache"] = True
 
                     try:
+                        now_ts = time.time()
                         await save_kv_cache(
-                            cache_key, {"data": result_data, "timestamp": time.time()}
+                            cache_key,
+                            {
+                                "data": result_data,
+                                "timestamp": now_ts,
+                                "data_timestamp": now_ts,
+                            },
                         )
                     except Exception as e:
                         logger.warning(f"寫入 GEX 快取失敗 ({symbol}): {e}")
@@ -716,10 +722,14 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                 # 快取有效期與下方 Edge Snapshot 共用同一個新鮮度閾值常數
                 # （_EDGE_SNAPSHOT_MAX_AGE_SECONDS），避免此層獨立設定更長
                 # 的門檻而遮蔽 edge 背景輪詢器早已寫入的更新鮮資料。
+                cached_data_ts = float(
+                    cached_obj.get("data_timestamp")
+                    or cached_obj.get("timestamp")
+                    or 0.0
+                )
                 if (
                     not force_live
-                    and time.time() - cached_obj.get("timestamp", 0)
-                    < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+                    and time.time() - cached_data_ts < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
                 ):
                     return data
                 # 快取已過期（或 force_live 要求略過），保留作為 API 失敗時的降級備援
@@ -739,9 +749,16 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
             if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
                 edge_data = edge_cached["data"]
+                now_ts = time.time()
+                data_ts = now_ts - float(edge_age)
                 try:
                     await save_kv_cache(
-                        cache_key, {"data": edge_data, "timestamp": time.time()}
+                        cache_key,
+                        {
+                            "data": edge_data,
+                            "timestamp": now_ts,
+                            "data_timestamp": data_ts,
+                        },
                     )
                 except Exception as e:
                     logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
