@@ -321,16 +321,23 @@ def get_last_stored_iv(symbol: str) -> Optional[float]:
     return None
 
 
-def get_last_stored_sentiment(symbol: str, indicator: str) -> Optional[float]:
-    """從 sentiment_history 中取得最後一次記錄的情緒指標值。"""
+def get_last_stored_sentiment_with_age(
+    symbol: str, indicator: str, max_age_seconds: Optional[float] = None
+) -> tuple[Optional[float], Optional[float]]:
+    """從 sentiment_history 中取得最後一次記錄的情緒指標值與其年齡（秒）。
+
+    若指定 max_age_seconds 且記錄年齡超過該秒數，則指標值回傳 None。
+    """
     try:
         from database.connection import get_read_connection
+        from datetime import datetime, timezone
 
         conn = get_read_connection()
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT value FROM sentiment_history
+            SELECT value, timestamp, (strftime('%s', 'now') - strftime('%s', timestamp))
+            FROM sentiment_history
             WHERE symbol = ? AND indicator = ?
             ORDER BY timestamp DESC LIMIT 1
             """,
@@ -338,11 +345,54 @@ def get_last_stored_sentiment(symbol: str, indicator: str) -> Optional[float]:
         )
         row = cursor.fetchone()
         conn.close()
-        if row:
-            return float(row[0])
+        if not row:
+            return None, None
+
+        val = float(row[0])
+        age_seconds: Optional[float] = None
+        if row[2] is not None:
+            try:
+                age_seconds = max(0.0, float(row[2]))
+            except (ValueError, TypeError):
+                age_seconds = None
+
+        if age_seconds is None and row[1]:
+            # Python 層備援解析 SQLite UTC timestamp 字串
+            try:
+                ts_str = str(row[1]).replace("T", " ").rstrip("Z").split(".")[0]
+                dt = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone.utc
+                )
+                age_seconds = max(
+                    0.0, (datetime.now(timezone.utc) - dt).total_seconds()
+                )
+            except Exception:
+                age_seconds = None
+
+        if (
+            max_age_seconds is not None
+            and age_seconds is not None
+            and age_seconds > max_age_seconds
+        ):
+            return None, age_seconds
+
+        return val, age_seconds
     except Exception as e:
         logger.error(f"取得資料庫最後情緒歷史失敗 ({indicator}): {e}")
-    return None
+    return None, None
+
+
+def get_last_stored_sentiment(
+    symbol: str, indicator: str, max_age_seconds: Optional[float] = None
+) -> Optional[float]:
+    """從 sentiment_history 中取得最後一次記錄的情緒指標值。
+
+    維持向後相容簽章，測試對本函式之 mock patch 均可正常生效。
+    """
+    val, _ = get_last_stored_sentiment_with_age(
+        symbol, indicator, max_age_seconds=max_age_seconds
+    )
+    return val
 
 
 async def _resolve_iv_for_storage(symbol: str, iv: Any) -> Optional[float]:
