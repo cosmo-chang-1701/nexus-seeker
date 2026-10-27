@@ -118,6 +118,19 @@ def _clip_cell(text: str, max_chars: int) -> str:
     return cleaned[: max_chars - 1] + "…"
 
 
+def _radar_sto_eligible(item: dict[str, Any]) -> bool:
+    """過濾 STO 項目，排除跨式及借方價差賣出腿，保留單腿及貸方價差賣出腿。"""
+    if not isinstance(item, dict):
+        return False
+    # 若為 UOA 項（帶 structure 或 spread_role）
+    if "structure" in item or "spread_role" in item:
+        return item.get("structure") != "STRADDLE" and (
+            item.get("spread_role") != "SHORT_LEG" or bool(item.get("spread_credit"))
+        )
+    # 若為封頂清單項（帶 structure_leg 或 spread_credit，或一般單腿項）
+    return not bool(item.get("structure_leg")) or bool(item.get("spread_credit"))
+
+
 def _format_sto_cell(items: Any, price: float, max_items: int = 2) -> str:
     """把 STO / 物理封頂履約價清單格式化為 `C$365.0 / P$300.0 +N`。
 
@@ -639,27 +652,6 @@ def build_radar_scan_embed(
         except Exception:
             pass
 
-        # 動態計算本頁最具代表性的 Max Pain DTE，用於在表頭標注到期語境
-        # 以本頁第一個有效的 max_pain expiry 為準
-        _mp_header_dte_label = ""
-        try:
-            _today = datetime.now().date()
-            for _r in chunk:
-                _mp_d = _r.get("max_pain") or {}
-                _expiry_str = _mp_d.get("expiry") if isinstance(_mp_d, dict) else None
-                if _expiry_str and isinstance(_expiry_str, str):
-                    _exp_dt = datetime.strptime(_expiry_str, "%Y-%m-%d").date()
-                    _dte_days = (_exp_dt - _today).days
-                    if _dte_days <= 7:
-                        _mp_header_dte_label = " (本週)"
-                    else:
-                        _mp_header_dte_label = f" (DTE {_dte_days})"
-                    break
-        except Exception:
-            _mp_header_dte_label = ""
-
-        _max_pain_col_header = f"Max Pain{_mp_header_dte_label}"
-
         insights = []
         md_lines = []
         page_has_degraded_row = False
@@ -732,10 +724,19 @@ def build_radar_scan_embed(
                     )
                     ref_p = getattr(iv_metrics, "reference_price", None)
                 if em_high <= em_low:
-                    reference_price = round(float(ref_p or price_val), 2)
-                    em_weekly_rounded = round(em_weekly, 2)
-                    em_low = reference_price - em_weekly_rounded
-                    em_high = reference_price + em_weekly_rounded
+                    pc_raw = quote.get("pc")
+                    pc_val = _safe_float(pc_raw) if pc_raw is not None else 0.0
+                    ref_val = _safe_float(ref_p) if ref_p is not None else 0.0
+                    center_price = (
+                        pc_val if pc_val > 0 else (ref_val if ref_val > 0 else 0.0)
+                    )
+                    if center_price > 0:
+                        reference_price = round(float(center_price), 2)
+                        em_weekly_rounded = round(em_weekly, 2)
+                        em_low = reference_price - em_weekly_rounded
+                        em_high = reference_price + em_weekly_rounded
+                    else:
+                        em_low = em_high = 0.0
             else:
                 price_val_rounded = round(price_val, 2)
                 fallback_em = round(price_val_rounded * 0.05, 2)
@@ -802,6 +803,7 @@ def build_radar_scan_embed(
                 if val is not None:
                     put_wall = _safe_float(val)
             put_wall_is_proxy = False
+            put_wall_display = put_wall
             if put_wall == 0.0:
                 # 嘗試從 metrics 提取 (如果是 Watchlist pipeline 的輸出)
                 mp_raw = r.get("max_pain")
@@ -813,8 +815,9 @@ def build_radar_scan_embed(
                     mp_val = None
 
                 mp_flt = _safe_float(mp_val)
-                put_wall = round(mp_flt * 0.9, 2) if mp_flt > 0 else 0.0
-                put_wall_is_proxy = put_wall > 0
+                proxy_val = round(mp_flt * 0.9, 2) if mp_flt > 0 else 0.0
+                put_wall_display = proxy_val
+                put_wall_is_proxy = proxy_val > 0
 
             # 解析 CallWall
             call_wall = 0.0
@@ -973,8 +976,8 @@ def build_radar_scan_embed(
                 max_pain_deviation_pct=dist_pct / 100.0,
                 can_trade_spreads=ctx_db.can_trade_spreads,
                 cash_reserve_protection=ctx_db.cash_reserve_protection,
-                expected_move_lower=em_low if em_weekly > 0 else None,
-                expected_move_upper=em_high if em_weekly > 0 else None,
+                expected_move_lower=em_low if em_weekly > 0 and em_low > 0 else None,
+                expected_move_upper=em_high if em_weekly > 0 and em_high > 0 else None,
                 sqz_mom=sqz_mom_val,
                 has_positive_gamma_support=has_positive_gamma_support,
                 cb_triggered=cb_triggered,
@@ -1010,7 +1013,7 @@ def build_radar_scan_embed(
 
             # Local Rules: 聯動警示 insights
             if max_pain_strike > 0 and price_val > 0:
-                if price_val <= em_low * 1.02 and dist_pct < -3.0:
+                if em_weekly > 0 and price_val <= em_low * 1.02 and dist_pct < -3.0:
                     matched_order = next(
                         (
                             o
@@ -1192,9 +1195,20 @@ def build_radar_scan_embed(
             oi_pcr_val = (
                 _safe_float(r.get("oi_pcr")) if r.get("oi_pcr") is not None else None
             )
-            rule1_no_sto_veto = not bool(
-                radar_cache.get("physical_cap_above_spot", False)
-            )
+            sto_strikes_cache = radar_cache.get("sto_strikes")
+            if isinstance(sto_strikes_cache, list):
+                has_sto_veto = any(
+                    isinstance(s, dict)
+                    and _radar_sto_eligible(s)
+                    and str(s.get("type", "")).upper().startswith("C")
+                    and _safe_float(s.get("strike"), 0.0) > price_val
+                    for s in sto_strikes_cache
+                )
+                rule1_no_sto_veto = not has_sto_veto
+            else:
+                rule1_no_sto_veto = not bool(
+                    radar_cache.get("physical_cap_above_spot", False)
+                )
 
             gex_prof_data_dict = r.get("gex_profile_data")
             gex_profile_gate = (
@@ -1379,8 +1393,25 @@ def build_radar_scan_embed(
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
-            hvn = _safe_float(radar_cache.get("hvn_price"), 0.0)
-            lvn = _safe_float(radar_cache.get("lvn_price"), 0.0)
+            # 安全讀取經交易日檢驗之 vp_data（優先重用上游 hvn_p / lvn_p，缺則安全回退 radar_cache）
+            raw_vp = r.get("vp_data")
+            vp_dict_safe: dict[str, Any] = raw_vp if isinstance(raw_vp, dict) else {}
+            hvn = (
+                hvn_p
+                if hvn_p > 0
+                else _safe_float(
+                    vp_dict_safe.get("hvn"),
+                    _safe_float(radar_cache.get("hvn_price"), 0.0),
+                )
+            )
+            lvn = (
+                lvn_p
+                if lvn_p > 0
+                else _safe_float(
+                    vp_dict_safe.get("lvn"),
+                    _safe_float(radar_cache.get("lvn_price"), 0.0),
+                )
+            )
             if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
                 insights.append(
                     f"• 📉 {sym}: 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
@@ -1420,14 +1451,14 @@ def build_radar_scan_embed(
                 em_z_score_str = f"{z_score:+.2f}σ"
 
             # 4. G-Wall / P-Wall & Neg-GEX Distance
-            p_wall = float(put_wall)
-            if p_wall > 0:
+            p_wall_disp = float(put_wall_display)
+            if p_wall_disp > 0:
                 if pw_class == "助跌":
-                    p_wall_str = f"${p_wall:.1f}(助)"
+                    p_wall_str = f"${p_wall_disp:.1f}(助)"
                 elif pw_class == "紙牆":
-                    p_wall_str = f"${p_wall:.1f}(薄)"
+                    p_wall_str = f"${p_wall_disp:.1f}(薄)"
                 else:
-                    p_wall_str = f"${p_wall:.1f}"
+                    p_wall_str = f"${p_wall_disp:.1f}"
                 if put_wall_is_proxy:
                     # R5：Max Pain×0.9 代理值，非 GEX 實測 PutWall
                     p_wall_str += "*"
@@ -1452,15 +1483,15 @@ def build_radar_scan_embed(
 
             if (
                 call_wall > 0
-                or p_wall > 0
+                or p_wall_disp > 0
                 or (overhead_neg_swamp and overhead_neg_swamp[0] > 0)
             ):
                 g_p_wall_str = f"{c_wall_str} / {p_wall_str}"
             else:
                 g_p_wall_str = "N/A"
 
-            if p_wall > 0 and price_val > 0:
-                neg_gex_dist = (price_val - p_wall) / p_wall * 100
+            if put_wall > 0 and price_val > 0:
+                neg_gex_dist = (price_val - put_wall) / put_wall * 100
                 neg_gex_str = f"{neg_gex_dist:+.1f}%"
             else:
                 neg_gex_str = "N/A"
@@ -1495,10 +1526,22 @@ def build_radar_scan_embed(
             sto_uoa_items = [
                 u
                 for u in uoa_list
-                if isinstance(u, dict) and "STO" in str(u.get("action", "")).upper()
+                if isinstance(u, dict)
+                and "STO" in str(u.get("action", "")).upper()
+                and _radar_sto_eligible(u)
             ]
+            sto_strikes_raw = radar_cache.get("sto_strikes")
+            sto_strikes_filtered = (
+                [
+                    s
+                    for s in sto_strikes_raw
+                    if isinstance(s, dict) and _radar_sto_eligible(s)
+                ]
+                if isinstance(sto_strikes_raw, list)
+                else sto_strikes_raw
+            )
             sto_cell = _format_sto_cell(sto_uoa_items, price_val) or _format_sto_cell(
-                radar_cache.get("sto_strikes"), price_val
+                sto_strikes_filtered, price_val
             )
             if sto_cell:
                 sto_str = sto_cell
@@ -1653,7 +1696,7 @@ def build_radar_scan_embed(
                 price_str_md = (
                     f"${price_val:.2f} ({'+' if dp_val >= 0 else ''}{dp_val:.2f}%)"
                 )
-            is_below_put_wall = p_wall > 0 and price_val > 0 and price_val < p_wall
+            is_below_put_wall = put_wall > 0 and price_val > 0 and price_val < put_wall
             gex_pol = "-" if (net_gex < 0 or is_below_put_wall) else "+"
             g_p_wall_str = (
                 f"({gex_pol}) {g_p_wall_str}" if g_p_wall_str != "N/A" else "N/A"
@@ -1827,10 +1870,9 @@ def build_radar_scan_embed(
         legend_notes = (
             "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
             "提示: 🕓 代表該標的本列存在快取/降級數據 (Max Pain/GEX/UOA)，詳見下方即時聯動警示。\n"
-            "備註: EM Pos % 代表價格處於預期波動區間之下緣(0%)或上緣(100%)。\n"
-            "指標: SQZ 🟢多頭動能/🔴空頭動能。MOM 顯示數值代表處於擠壓蓄力期，需防突破或殺跌。\n"
+            "備註: EM Z-Score：(現價−前收)/週預期波動，±1 代表觸及預期區間上下緣。\n"
+            "指標: SQZ 🟢多頭動能/🔴空頭動能，⏱️ 代表處於擠壓蓄力期，數值為動能。\n"
             "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。\n"
-            "提示: 🧲 共振磁吸代表現價站穩期權 Put Wall 且 Volume-POC (HVN) 與 Put Wall 差距在 1% 內。\n"
             f"時效: {OPTION_DATA_TIMING_NOTE}。"
         )
         if page_has_proxy_put_wall:
