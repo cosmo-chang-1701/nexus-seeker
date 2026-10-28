@@ -296,6 +296,102 @@ def test_threshold_studies_dedupe_without_key_columns_keeps_all_rows() -> None:
     assert studies["skew_percentile"]["CANONICAL"][0]["n"] == 2
 
 
+def test_threshold_studies_dedupe_multi_bar_and_distinct_log_source() -> None:
+    from calibration.forward_log import build_threshold_studies
+
+    feat = json.dumps({"skew_percentile": 50.0, "skew_percentile_source": "CANONICAL"})
+
+    def _row(
+        evaluator: str, bar_ts: str, source: str, win: int, outcome: int
+    ) -> dict[str, Any]:
+        return {
+            "evaluator": evaluator,
+            "symbol": "AAPL",
+            "bar_ts": bar_ts,
+            "source": source,
+            "features_json": feat,
+            "win": win,
+            "outcome": outcome,
+            "date": "2026-10-05",
+        }
+
+    rows = [
+        # 兩根不同 K 棒，各被 REGIME 與 SQUEEZE 記錄，每根只計 1
+        _row("REGIME_CLASSIFIER", "2026-10-05T10:00", "WATCHLIST_ADVISOR", 1, 1),
+        _row("ENTRY_SQUEEZE", "2026-10-05T10:00", "WATCHLIST_ADVISOR", 0, -1),
+        _row("REGIME_CLASSIFIER", "2026-10-05T11:00", "WATCHLIST_ADVISOR", 1, 1),
+        _row("ENTRY_SQUEEZE", "2026-10-05T11:00", "WATCHLIST_ADVISOR", 0, -1),
+        # 同 symbol／bar_ts 但 log 來源不同 (SCAN)，視為另一筆紀錄，另算 1
+        _row("ENTRY_SQUEEZE", "2026-10-05T10:00", "SCAN", 0, -1),
+    ]
+    studies = build_threshold_studies(pd.DataFrame(rows))
+    bins = studies["skew_percentile"]["CANONICAL"]
+    assert len(bins) == 1  # 三者 skew 皆為 50，同一區間
+    row = bins[0]
+    assert row["n"] == 3
+    # 保留的是兩根 K 棒的 REGIME 列 (win=1) 與 SCAN 列 (win=0)：win 2/3、adverse 1/3
+    assert row["win_rate"] == pytest.approx(2 / 3)
+    assert row["adverse_rate"] == pytest.approx(1 / 3)
+
+
+def test_threshold_studies_dedupe_without_evaluator_keeps_first_row() -> None:
+    from calibration.forward_log import build_threshold_studies
+
+    feat = json.dumps({"skew_percentile": 50.0, "skew_percentile_source": "CANONICAL"})
+    base: dict[str, Any] = {
+        "symbol": "AAPL",
+        "bar_ts": "2026-10-05T10:00",
+        "source": "WATCHLIST_ADVISOR",
+        "features_json": feat,
+        "date": "2026-10-05",
+    }
+    # 無 evaluator 欄：同一根 K 棒兩列，應保留原順序第一列 (win=0)
+    rows = [
+        {**base, "win": 0, "outcome": -1},
+        {**base, "win": 1, "outcome": 1},
+    ]
+    studies = build_threshold_studies(pd.DataFrame(rows))
+    row = studies["skew_percentile"]["CANONICAL"][0]
+    assert row["n"] == 1
+    assert row["win_rate"] == 0.0
+    assert row["adverse_rate"] == 1.0
+
+
+def test_threshold_studies_dedupe_regime_nan_skew_keeps_squeeze_row() -> None:
+    from calibration.forward_log import build_threshold_studies
+
+    base: dict[str, Any] = {
+        "symbol": "AAPL",
+        "bar_ts": "2026-10-05T10:00",
+        "source": "WATCHLIST_ADVISOR",
+        "date": "2026-10-05",
+    }
+    # REGIME 列無 skew (會被 dropna 剔除)，SQUEEZE 列有 skew；去重須在 dropna 之後
+    rows = [
+        {
+            **base,
+            "evaluator": "REGIME_CLASSIFIER",
+            "features_json": json.dumps({}),
+            "win": 0,
+            "outcome": 1,
+        },
+        {
+            **base,
+            "evaluator": "ENTRY_SQUEEZE",
+            "features_json": json.dumps(
+                {"skew_percentile": 50.0, "skew_percentile_source": "CANONICAL"}
+            ),
+            "win": 1,
+            "outcome": -1,
+        },
+    ]
+    studies = build_threshold_studies(pd.DataFrame(rows))
+    row = studies["skew_percentile"]["CANONICAL"][0]
+    assert row["n"] == 1
+    assert row["win_rate"] == 1.0
+    assert row["adverse_rate"] == 1.0
+
+
 # ---------------------------------------------------------------- /x (SYMBOL_VIEW)
 @pytest.mark.asyncio
 async def test_hub_data_skew_source_comes_from_same_result_as_percentile() -> None:
