@@ -210,7 +210,9 @@ jobs:
             # 使用更精確的過濾器來尋找現有服務
             if docker service ls --filter "name=$SERVICE_NAME" --format '{{.Name}}' | grep -q "^${SERVICE_NAME}$"; then
               echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
+              DEPLOY_MODE="update"
               docker service update \
+                --detach=false \
                 --image "$FULL_IMAGE" \
                 --with-registry-auth \
                 --update-parallelism 1 \
@@ -226,8 +228,10 @@ jobs:
                 --env-add OPTIONS_ROLLOVER_DRY_RUN="$OPTIONS_ROLLOVER_DRY_RUN" \
                 $SECRET_UPDATE_FLAGS \
                 "$SERVICE_NAME"
+              UPDATE_RC=$?
             else
               echo "🆕 建立全新服務: $SERVICE_NAME"
+              DEPLOY_MODE="create"
               # 初次建立服務時需要特殊處理祕密掛載
               INIT_SECRET_FLAGS=""
               for KEY in "${!SECRETS_MAP[@]}"; do
@@ -235,6 +239,7 @@ jobs:
               done
 
               docker service create \
+                --detach=false \
                 --name "$SERVICE_NAME" \
                 --with-registry-auth \
                 --mount type=volume,source=nexus-data,target=/app/data \
@@ -249,9 +254,63 @@ jobs:
                 --env DEPLOYMENT_TIMESTAMP=$(date +%s) \
                 $INIT_SECRET_FLAGS \
                 "$FULL_IMAGE"
+              UPDATE_RC=$?
             fi
 
-            # 5. 清理與驗證
+            # 5. 佈署結果驗證 (確認服務真的跑在新映像檔，Swarm 回滾也視為失敗)
+            VERIFY_INTERVAL="${DEPLOY_VERIFY_INTERVAL:-5}"
+            VERIFY_TIMEOUT="${DEPLOY_VERIFY_TIMEOUT:-180}"
+            VERIFY_START=$SECONDS
+            echo "🔍 等待服務更新進入最終狀態 (逾時 ${VERIFY_TIMEOUT}s)..."
+            while true; do
+              UPDATE_STATE=$(docker service inspect "$SERVICE_NAME" --format '{{if .UpdateStatus}}{{.UpdateStatus.State}}{{end}}' 2>/dev/null || true)
+              case "$UPDATE_STATE" in
+                updating|rollback_started) ;;
+                *) break ;;
+              esac
+              if [ $((SECONDS - VERIFY_START)) -ge "$VERIFY_TIMEOUT" ]; then
+                echo "⏰ 等待更新狀態逾時，目前仍為: $UPDATE_STATE"
+                break
+              fi
+              sleep "$VERIFY_INTERVAL"
+            done
+            ACTUAL_IMAGE=$(docker service inspect "$SERVICE_NAME" --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}' 2>/dev/null || true)
+
+            VERIFY_OK=1
+            [ "${UPDATE_RC:-1}" -eq 0 ] || VERIFY_OK=0
+            if [ "$ACTUAL_IMAGE" != "$FULL_IMAGE" ] && [ "${ACTUAL_IMAGE#"${FULL_IMAGE}"@}" = "$ACTUAL_IMAGE" ]; then
+              VERIFY_OK=0
+            fi
+            if [ "$DEPLOY_MODE" = "update" ]; then
+              [ "$UPDATE_STATE" = "completed" ] || VERIFY_OK=0
+            else
+              case "$UPDATE_STATE" in
+                ""|completed) ;;
+                *) VERIFY_OK=0 ;;
+              esac
+            fi
+
+            if [ "$VERIFY_OK" -ne 1 ]; then
+              echo "❌ 佈署失敗：服務未切換到新映像檔（可能已被 Swarm 回滾）。預期映像檔: $FULL_IMAGE；實際映像檔: ${ACTUAL_IMAGE:-無}；更新狀態: ${UPDATE_STATE:-無}；指令結束碼: ${UPDATE_RC:-未知}"
+              echo "📋 最近失敗的任務:"
+              docker service ps "$SERVICE_NAME" --no-trunc --filter desired-state=shutdown | head -n 6
+              FAILED_TASK=$(docker service ps -q --filter desired-state=shutdown "$SERVICE_NAME" 2>/dev/null | head -n 1 || true)
+              if [ -n "$FAILED_TASK" ]; then
+                FAILED_CONTAINER=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$FAILED_TASK" 2>/dev/null || true)
+                if [ -n "$FAILED_CONTAINER" ]; then
+                  echo "🩺 失敗容器的健康檢查紀錄:"
+                  docker inspect --format '{{json .State.Health}}' "$FAILED_CONTAINER" 2>/dev/null || true
+                fi
+              fi
+              # 公開倉庫：應用程式日誌只寫入伺服器檔案，不輸出到 Actions 日誌
+              FAIL_LOG_FILE="${DEPLOY_FAIL_LOG_DIR:-/tmp}/nexus-deploy-failed-${DEPLOY_VERSION}.log"
+              docker service logs --no-trunc --timestamps --tail 300 "$SERVICE_NAME" > "$FAIL_LOG_FILE" 2>&1 || true
+              echo "📝 應用程式日誌已存至伺服器檔案: $FAIL_LOG_FILE"
+              exit 1
+            fi
+            echo "✅ 已確認服務執行新映像檔: $FULL_IMAGE"
+
+            # 6. 清理與驗證
             echo "🧹 執行環境清理..."
             # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
             # 注意：由於 start-first 策略，舊版本可能短暫仍在運行，若 rm 失敗通常是有殘留引用
