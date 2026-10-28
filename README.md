@@ -4,45 +4,123 @@
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white)](nexus_core/docker-compose.yml)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Nexus Seeker 是一個 **Discord-first 的多租戶選擇權風控與交易營運平台**。本平台深度結合了技術指標分析、Black-Scholes-Merton 期權定價、希臘字母（Greeks）投資組合風險管理、事件日曆防禦及大型語言模型（LLM）輔助分析，旨在低內存 VPS 部署環境下，為實盤交易者提供最即時、可持續、自動化的高勝率風控操作指南。
+**給「Buy & Hold 加上期權」投資人的個人化風險顧問。**
 
-> 核心版本（nexus_core）：**v1.19.17** (請參考最新 Release)
+Nexus Seeker 把做市商 GEX 結構、總經日曆、SEC 財報、輿情與預測市場等數據，接到**你自己的持倉、掛單與提領計畫**上，透過 Discord 主動告知你：哪個部位正在逼近結構失效、帳戶在壓力情境下還能支撐幾年提領、自選標的何時出現進場條件。
 
----
+它**不替你下單、不承諾勝率**，也不取代你的選股判斷。
 
-## ✨ 核心特色 (Key Features)
-
-- **高效能非阻塞背景排程與快取共享 (High-Performance Background Scheduling & Cache-Sharing)**：針對低內存 VPS 全面重構背景任務管線。11 大產業板塊輪動與 15 分鐘價量監測全面採用 `Semaphore(3)` 併行化加速；`:05 / :35` 錯峰排程分散盤中 CPU 峰值；多使用者市場掃描實施 $O(U \times S) \to O(S)$ 標的層級去重快取；盤前預熱流水線提前至 08:45 ET，搭配 GEX SingleFlight 防重疊查詢與 SWR 降級，杜絕開盤壅塞與 API 穿透。
-- **量化雷達終端與單訊息翻頁架構 (Quantitative Radar & Batch Scan Paging)**：`/x` 批次掃描全面升級為高 Alpha 精簡 Markdown 報表，直擊 `G/P-Wall(±)` 動態極性、`IV 策略` 負 Gamma 熔斷、⚠️ 異常標的視覺連動、`Skw%`、`SQZ向量`、`Neg-GEX`、`STO 鎖死`、`EM Z-Score` 與 `Top UOA`。多頁掃描結果採用 `BatchScanPaginatedView` 於單一 Ephemeral 訊息中進行 `◀ 上一頁` / `下一頁 ▶` 就地翻頁，徹底告別洗版與 Discord 40094 限制，並支援 `⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
-- **個股深度分析面板強化 (Symbol Hub Deep-Dive Upgrades)**：`/x symbol:` 標的分析中心新增 Session VWAP、15m ATR 獨立顯示、GEX Net 曝險 Regime／個股 Gamma Flip 線／CallWall 水位與距現價空間、UOA 權利金欄位與 SWEEP/BLOCK/CROSS 啟發式三分類。凡是由啟發式規則或代理指標（而非真實第一手數據）推算出的判定，一律在對應欄位旁明確標註揭露，避免與即時市場數據混淆。新增「🔐 進場鐵律檢核」頁籤，一鍵呈現「六重鐵律」的即時 Pass/Fail 判定（條件二正 Gamma 支撐牆嚴格約束於現價下方 $K < \text{Spot}$ 避免上方阻力誤判；條件一 Gamma Flip 無交叉點時根據全域 Net GEX 區分空頭阻擋或 VWAP+0.5×ATR₁₅ₘ 替代門檻），取代原本需逐欄位人工核對放量突破、正 Gamma 底牆、UOA 封頂與主力買盤確認等條件的流程。
-- **自動化戰場心跳 (Watchlist Heartbeat)**：盤中每半小時主動推送自選標的之技術與期權快照，預設完整整合 UOA 巨鯨異動大單、成交量分佈 (Volume Profile / Volume-POC) 磁吸點位、100% 確定性量化 Skew 解析與動態買賣定價指引。
-- **4 大戰術維度通知中樞與快捷情境 (Tactical Notifications & 1-Click Presets)**：`/notif_settings` 全面收斂為 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）與 13 大核心通知頻道（含 `alpha_wti_oil` 與全新 SEC 財報自動掃描 `defense_fundamental_thesis`），並提供「🛡️ 戰備全開」、「🎯 精準交易」、「🔕 盤中靜音」三大 1-Click Preset 情境模式，徹底告別零碎雜訊。
-- **Polymarket 巨鯨成交量加權勝率 (VWBP) 與雙頁籤輿情社群雷達 (Dual-Tab Sentiment & Resonance Radar)**：
-  - 搭載 `StockAliasMatrix` 4 層別名解析、Gamma API 即時搜尋與**成交量加權看多勝率 (VWBP)** 演算法（自動標準化看跌事件為看多勝率，計算資金池加權總體共識）。
-  - 個股終端 (`SymbolHubView`) 實施 **1-to-1 資料同步雙頁籤架構**：`🏠 核心指標` (Core Tab) 在 ANSI 區塊保留純粹計算結果，杜絕連結雜訊；`🎭 輿情社群` (Media Tab) 完整展開 `📊 輿情與期權共振雷達`、Polymarket 預測事件超連結、Top 3 Reddit 熱門討論貼文（附看板標籤）與結構化權威新聞。
-- **總經日曆 150+ 項目精確中文化與聯準會官員動態解析引擎 (Macro Calendar Translation Engine)**：
-  - 內建標準 150+ 總經事件中英字典 (`_RAW_MACRO_EVENT_TRANSLATIONS`)，全面覆蓋通膨 (CPI/PCE)、就業 (非農/失業率)、GDP、國債拍賣與 PMI 指數。
-  - 整合動態 Regex 解析引擎與 30+ 位聯準會官員名冊 (`FED_OFFICIALS_MAP`)，自動將「Fed Waller Speech」等事件精準轉化為「聯準會華勒發表演說」。
-- **WTI 原油價格警報與大宗商品情報 (WTI Crude Oil Alert & Commodity Intelligence)**：支援全天候 30 分鐘原油期貨 (`CL=F`) 輪詢，具備「絕對價格上下限」與「30 分鐘波動 %」雙軌觸發機制。嚴格遵循 100% Field-Based + ANSI 代碼塊排版規範，即時整合技術指標 (RSI, MA20/50/200, ATR)、能源關聯股衝擊 (`XLE`, `XOM`, `CVX`, `OXY`, `SLB`, `USO` 自動標註持倉與自選)、地緣政治事件 (OPEC+, EIA, 制裁) 與投資組合風險權重壓縮。支援 `/notif_settings` 與 `/wti_config` 互動式 Modal 配置，具備 00:00–06:00 ET 深夜靜默保護與每日 KV Cache 防重複去重。
-- **個股 15 分鐘價量突破警報 (Price-Volume Breakout Alert)**：支援每 15 分鐘輪詢確認實體 K 線收盤價與量能突破，支援純價格警報模式 (`volume_multiplier=0`) 與價量共振模式，每日 KV Cache 自動防重複去重。
-- **盤後綜合風險與 AI 策略報告 (Post-Market Intelligence)**：每日收盤後主動推送盤後結算報告，全面支援**現貨持倉 (`HOLDING`) 與期權 (`TRADE`) 混合結算**。搭載 Target Center 2.0 樹狀 ANSI 儀表板、財務生存跑道 (Financial Runway)、對沖績效 Brinson 歸因 (OPTIMAL 狀態標註)、板塊焦點矩陣 (Top Inflows vs Outflows) 與 100% 現金空狀態行動引導。
-- **戰場情境轉折警報與進階雷達 (Market Scenario & Advanced Radar)**：整合獨立事件驅動引擎（6 階 GEX 決策矩陣，新增「巨鯨護航共振」）與進階雷達過濾器 (UOA Barrier, Gravity Filter, Divergence Gate)。支援 $PutWall - 1.5 \times ATR_{14}$ 防洗盤絕對防守位、15 分鐘實體 K 線收盤離場鐵律與多維度灰階戰術決策樹。
-- **動態轉倉與防洗盤風控 (Dynamic Rollover & Anti-Washout Defense)**：搭載全新「防洗盤動態停損引擎」與「GEX 做市商意圖映射引擎」，動態鎖定支撐錨定牆並給予 1.5x 15m ATR 緩衝；現貨 (SPOT) 必須經 15 分鐘實體 K 線跌破才確認清倉，選擇權合約 (OPTIONS) 則於高 IVR 啟動降槓桿平倉。支援 `/verify_thesis` 互動式 SEC 財報選擇介面與每日 08:00 ET 自動化財報掃描。大盤系統性風險發生時，除既有轉入 BOXX 鎖定無風險利息外，亦會依個股結構性風險嚴重程度與反向ETF自身現貨動能確認，動態建議轉入對應的 1x/2x 反向ETF 把握方向性對沖機會。
-- **三態交易策略與 4-Regime 決策矩陣 (Trading Strategy Modes & Regime Router)**：`/settings` 新增交易策略選單，可切換「**右側交易**」（順勢動能突破六重鐵律，維持既有預設行為）、「**左側交易**」（逆勢均值回歸／做市商 Put Wall 底牆接刀六重鐵律，含極值乖離、止跌 K 棒型態、量能窒息／恐慌吸收、主力 PUT STO 接刀認證與 Theta 磨底防禦）或「**動態調整**」。動態調整模式依 Put Wall／Call Wall／Gamma Flip／Session VWAP／ATR₁₅ₘ／RSI／量能／UOA／VIX 期限結構／大盤 Regime，將盤勢自動分類為 4 態（左側接刀態、混沌泥淖態、右側動能態、結構封頂危機態），路由至對應鐵律或強制休眠／全面鎖倉，杜絕「在追高區摸底、在接刀區追單」的邏輯衝突。職責邊界嚴格劃分：**Regime 只負責環境識別與進場權限許可**，部位的生死存亡一律回歸獨立的防洗盤風控階梯（`SL-結構失效`／`TP1-3` 等分層對所有部位一律照跑，不因 Regime 標記而跳過；唯一的例外是**顧問模式**——標記為顧問的 Buy & Hold 持倉會把該階梯的輸出語意由指令改為位階告知，見下方持倉管理模式說明）。**狀態切換引擎**因此只保留「左側部位帶量站上 VWAP 與 Gamma Flip 時，停損上移保本並授權順勢加碼」這條真正屬於狀態轉換的路徑；上移後的保本價會持久化為停損地板交由風控階梯執行。部位歸屬透過 `/add_trade`、`/add_holding` 的選填參數手動標記，未標記部位完全不受影響。
-- **總體經濟與事件日曆防護**：自動抓取 CME FedWatch 利率機率、FRED 關鍵總經數據與財報日曆（已擴展至 14 日前瞻預警並深度整併至 `/market` 總經風險情報中心與盤前報告），結合避險邏輯進行動態逃頂窗口前置與 4 小時自動快取維護。
-- **大盤微觀結構解析**：計算零 Gamma 線 (Gamma Flip Line) 與 GEX 分佈，在市場進入高壓 $VIX > 20$ 時動態縮小合約建倉口數（Kelly Criterion 調節）與拉大網格距離。
-- **互動式 UI 介面**：所有交易參數（資本、風險上限、虛擬交易室、Polymarket 巨鯨門檻等）與推送偏好均透過 Discord 內建的 Buttons / Select Menu / Modal 進行管理。
-
-> 💡 **進階量化策略與運作邏輯**：關於 TDP 估值三擊、成交量籌碼與期權底牆共振、動態均價 Covered Call 解鎖等深度架構細節，請參閱專案內的 [`AGENTS.md`](AGENTS.md) 說明文件。
+> 核心版本（nexus_core）：**v1.19.17**（請參考最新 Release）
 
 ---
 
-## 🏗️ 系統架構 (Architecture)
+## 🧭 定位
 
-本專案採用雙服務（Microservices）架構，透過 API 與資料庫非同步通信：
+| Nexus Seeker 是 | Nexus Seeker 不是 |
+|---|---|
+| 以**你的部位**為中心的風險告知系統 | 全市場訊號推送服務 |
+| 顧問：告知位階、風險與條件是否成立 | 自動交易或代操作引擎 |
+| 數據整合層：把分散在多個網站的資訊收斂到一處 | 機構級數據供應商（見[數據來源與限制](#-數據來源與限制)） |
+| 可逐欄稽核：推估值一律標註，閘門有前向紀錄 | 黑盒子模型或勝率保證 |
 
-- **`nexus_core/`**：主 Discord Bot。管理所有的 slash commands、背景排程、量化策略引擎、主動推播佇列與 SQLite 資料庫。
-- **`nexus_edge_scraper/`**：邊緣爬蟲服務 (FastAPI + Playwright)。負責隔離高耗能的網頁渲染與容易遭受防火牆封鎖的作業（如 Reddit RSS 輿情監控、SEC 財報抽取），並提供**優雅降級方案 (Graceful Degradation)**（當核心端 `yfinance` 遭遇機房 IP 封鎖時，自動將歷史 K 線與期權鏈抓取任務轉交給 Edge 端突破防護），最後透過 Cloudflare Tunnel 安全地暴露給 Core 調用。
+### 適合誰
+
+- 長期持有個股／ETF 為主，自行完成基本面選股的投資人。
+- 同時操作期權（買 Call、買 Put 避險、賣 Put、Covered Call），需要盯 Greeks、IV 與到期風險。
+- 帳戶同時是生活費來源，需要知道「在最壞情境下還能提領幾年」。
+- 習慣使用 Discord，偏好繁體中文介面。
+
+### 設計原則
+
+1. **左尾優先**：截斷下行的推播（保證金、結構失效、財報護城河破滅、提領跑道）不受任何預設情境關閉。
+2. **不推你離開自己的策略**：多頭現貨一律以顧問語意呈現（告知目標區與結構失效位階），不發出「減碼換股」指令；停利分批類推播在「🧭 B&H 防守」情境預設關閉。
+3. **誠實標註**：凡由啟發式規則或代理指標推算的欄位（例如 UOA 的 SWEEP/BLOCK/CROSS 分類），一律在欄位旁註明，不與一手市場數據混淆。
+4. **以 Sortino、MDD 與 CVaR 評估，永遠附 Buy & Hold 對照組**：勝率不作為成效指標。
+
+---
+
+## 🧩 核心能力
+
+### 🛡️ 左尾防護（預設開啟，預設情境無法關閉）
+
+| 推播 | 內容 |
+|---|---|
+| 保證金與槓桿警戒 | 帳戶生存等級的強制平倉風險 |
+| SEC 財報護城河破滅 | 每日 08:00 ET 掃描 10-K／10-Q／8-K，由 LLM 比對你登錄的投資假設；`/verify_thesis` 可手動觸發 |
+| VIX 恐慌與期限結構倒掛 | 尾部風險事件；VIX 急升時提供 SPY 對沖股數與 Delta 再平衡建議 |
+| 48 小時事件預警 | 自選與持倉標的財報、重要經濟數據 |
+| 結構失效與保護性 Put | 以 Put Wall 與 15 分鐘 ATR 緩衝計算防洗盤停損位，15 分鐘實體 K 棒收盤確認跌破才告知 |
+| 持倉負 Gamma 斷層 | 高 IV 崩跌風險 |
+| 投組下行風險 | 距高點回撤階梯、CVaR 超出預算 |
+| 提領跑道 | 以「2008 SPY × Beta」與「2000 QQQ × 股票占比」重演取較差者，壓力跑道跌破 3／2／1 年時警示，並在提領前提供賣出清單 |
+
+### 🚀 進場與加碼顧問
+
+- **多時間框架擠壓進場**：以 W／3D／D／65m／15m／5m 的 PowerSqueeze 狀態判斷自選標的進場與順勢加碼條件，推播參考進場價、停損與目標（規格見 [`docs/strategies/10_multi_timeframe_squeeze_entry.md`](docs/strategies/10_multi_timeframe_squeeze_entry.md)）。
+- **B&H 目標區位階告知**：持倉抵達分層目標區時告知位置，不建議減碼。
+- **進階策略模式**：`/settings` 可切換動態調整、左側、右側或做空的進場鐵律路由，供期權短線部位使用。
+
+### 🔭 市場結構與情報
+
+- **`/x` 標的分析中心**：報價、Session VWAP、15m ATR、GEX Net Regime、個股 Gamma Flip、Put／Call Wall 與距現價空間、Skew、UOA 權利金；支援多標的批次雷達與單一訊息翻頁。
+- **`/market` 總經情報中心**：SPX、VIX 期限結構、US10Y、大盤 Gamma Flip、CME FedWatch、FRED 總經數據（含薩姆規則）、RRP 與 Fed 資產負債表。
+- **`/calendar` 總經與財報日曆**：150 多項總經事件與 30 多位聯準會官員名稱中文化，14 日前瞻。
+- **`/fa` 基本面雷達**：基本面事件、治理閘門與估值概覽。
+- **輿情與預測市場**：Polymarket 成交量加權看多勝率（VWBP）與巨鯨異動、Reddit 熱門討論、權威新聞。
+- **WTI 原油警報**：絕對價位與 30 分鐘波動雙軌觸發，標註能源關聯持倉。
+- **個股價量突破警報**：自訂目標價與放量倍數，以 15 分鐘 K 棒收盤確認。
+
+### 💼 持倉、掛單與期權工具
+
+- **`/dash` 交易員看板**：現貨與期權混合持倉、未實現損益、提領跑道。
+- **盤前／盤後報告**：盤前 09:00 ET 綜合報告；盤後 16:15 ET 結算，含 Brinson 歸因與板塊資金流向。
+- **掛單遙測**：待成交掛單與現價的實時對齊及撤退線；`/stress_test` 計算 GTC 掛單成交後的現金赤字。
+- **期權工具**：`/event_impact` Greeks What-if 模擬、`/cc_recovery` Covered Call 解套篩選、`/iv_rank`、`/skew_scan`、`/max_pain`。
+- **虛擬交易室（VTR）**：紙上交易與對沖歸因，不涉及真實部位。
+
+---
+
+## 🔔 通知管理
+
+`/notif_settings` 將 28 個推播頻道分為 6 個模組：
+
+| 模組 | 用途 |
+|---|---|
+| 🛡️ 左尾防護 | 截斷下行；預設情境不會關閉 |
+| 🚀 上行捕捉 | 進場與順勢加碼 |
+| ✂️ 上行削減 | 停利分批、Covered Call、獲利鎖定、目標區告知 |
+| 📡 盤中情報 | 個股 30 分鐘深度心跳、掛單遙測、期權掃描、價量突破 |
+| 🌐 全天候情報 | Polymarket、WTI 原油 |
+| 📋 定時報告與系統 | 盤前盤後報告、VTR 週報、機器人啟停 |
+
+預設情境：**🧭 B&H 防守**（建議）、🎯 精準交易、🔕 盤中靜音、🛡️ 戰備全開。
+
+---
+
+## ⚠️ 數據來源與限制
+
+Nexus Seeker 使用免費或低成本數據源，以下限制在使用前應先了解：
+
+| 項目 | 來源 | 限制 |
+|---|---|---|
+| 報價與 K 線 | Finnhub、yfinance（核心端遭封鎖時改由 edge 服務代抓） | 非交易所直連；盤前盤後可能延遲 |
+| 期權鏈、GEX、Put／Call Wall、Gamma Flip | yfinance 期權鏈自行計算 | OI 為每日更新，盤中牆位不反映當日新增部位；與 SpotGamma、MenthorQ 等專業模型可能有出入 |
+| UOA 大單分類 | 期權鏈成交量與 OI 推估 | **啟發式推估**，非交易所逐筆成交流 |
+| 總經 | CME FedWatch、FRED、財報日曆 | FRED 部分序列月更 |
+| 財報 | SEC EDGAR（edge 服務擷取） | 假設比對依賴 LLM，結果僅供參考 |
+
+**關於擇時效果**：專案內的回測（2007–2025 日線、2022–2025 多資產）顯示，本系統各種擇時與進出場規則**都未能穩定勝過**同等曝險的 Buy & Hold，降低回撤最可靠的方法仍是固定持股比例（詳見 [`docs/strategies/09_static_allocation_rebalance.md`](docs/strategies/09_static_allocation_rebalance.md)）。因此請把 Nexus Seeker 當作**風險告知與省時工具**，而非報酬來源。
+
+若需要更高品質的 GEX 或逐筆期權流，Nexus Seeker 可與 SpotGamma、Unusual Whales 等商業服務互補使用。
+
+---
+
+## 🏗️ 系統架構
+
+採雙服務架構，可部署於低記憶體 VPS：
+
+- **`nexus_core/`**：主 Discord Bot。負責 slash commands、背景排程、風控引擎、持久化推播佇列與 SQLite 資料庫。多使用者掃描以標的層級去重，盤前 08:45 ET 預熱快取。
+- **`nexus_edge_scraper/`**：邊緣爬蟲服務（FastAPI + Playwright）。隔離高耗能的網頁渲染與容易被封鎖的作業（Reddit、SEC 財報擷取、FedWatch），在核心端 yfinance 遭機房 IP 封鎖時代抓 K 線與期權鏈，並透過 Cloudflare Tunnel 提供給 Core 呼叫。
 
 ```mermaid
 graph TD
@@ -74,173 +152,150 @@ graph TD
     Tunnel --> EdgeAPI
 ```
 
+量化模型、策略規格與回測結論請見 [`docs/README.md`](docs/README.md)；開發規範請見 [`AGENTS.md`](AGENTS.md)。
+
 ---
 
-## 📂 專案結構 (Project Structure)
+## 📂 專案結構
 
 ```text
 nexus-seeker/
 ├── nexus_core/              # 核心 Discord Bot 服務
 │   ├── bot.py               # Bot 進入點與健康監控
-│   ├── cogs/                # Discord 交互指令、背景排程與 UI 元件
-│   ├── market_analysis/     # 核心量化引擎 (Scan Pipeline, Translator)
-│   ├── services/            # 外部 API 封裝 (Calendar, LLM, Polymarket 等)
-│   ├── database/            # SQLite Schema 與 Migrations
-│   ├── risk_engine/         # SDDM 戰術路由與風險控制 (NRO)
-│   ├── ui/                  # ANSI 字符格式化與表格渲染
+│   ├── cogs/                # Discord 指令、背景排程與 UI 元件
+│   ├── market_analysis/     # 量化引擎（掃描管線、提領跑道、總經訊號）
+│   ├── services/            # 外部 API 封裝（日曆、LLM、Polymarket 等）
+│   ├── database/            # SQLite Schema、遷移與通知頻道定義
+│   ├── risk_engine/         # 風控路由與 NRO
+│   ├── ui/                  # ANSI 格式化與表格渲染
 │   └── tests/               # 單元與整合測試
-├── nexus_edge_scraper/      # 邊緣爬蟲服務 (Playwright)
-│   ├── local_api.py         # FastAPI 應用程式路由
-│   ├── section_extractor.py # SEC 財報結構化區塊擷取邏輯
+├── nexus_edge_scraper/      # 邊緣爬蟲服務（Playwright）
+│   ├── local_api.py         # FastAPI 路由
+│   ├── section_extractor.py # SEC 財報區塊擷取
 │   └── tests/               # 爬蟲端測試
 ├── scripts/                 # 輔助腳本與部署工具
-├── docs/                    # 附加文件
-└── README.md                # 專案主說明檔
+├── docs/                    # 技術規格與策略文件
+└── README.md
 ```
 
 ---
 
-## 🚀 快速上手 (Getting Started)
+## 🚀 快速上手
 
-專案支援 Docker 容器化部署，預設資料庫將存在 Named Volume 中以確保資料不遺失。
+專案以 Docker 部署，資料庫存於 Named Volume。
 
 ### 1. 必備條件
 - Docker 與 Docker Compose
 - Discord Bot Token
 - Finnhub API Key
-- Cloudflare Tunnel Token (用於邊緣爬蟲)
+- Cloudflare Tunnel Token（邊緣爬蟲用）
 
-### 2. 啟動 `nexus_edge_scraper` (邊緣爬蟲服務)
+### 2. 啟動 `nexus_edge_scraper`
 ```bash
-git clone https://github.com/cosmo-chang-1701/nexus-seeker.git
+git clone https://github.com/star-netrunners/nexus-seeker.git
 cd nexus-seeker/nexus_edge_scraper
 
-# 設定環境變數
 cp .env.example .env
-# 編輯 .env 設定您的 CF_TUNNEL_TOKEN
+# 編輯 .env 設定 CF_TUNNEL_TOKEN
 
-# 啟動容器
 docker compose up -d --build
 ```
 
-### 3. 啟動 `nexus_core` (主機器人服務)
-取得 `nexus_edge_scraper` 在公網上的 HTTPS URL 後，填入 Core 的 `.env` 中。
+### 3. 啟動 `nexus_core`
+取得 `nexus_edge_scraper` 的公網 HTTPS URL 後填入 Core 的 `.env`：
 ```bash
 cd ../nexus_core
 
-# 設定環境變數
 cp .env.example .env
-# 編輯 .env 填入 DISCORD_TOKEN, FINNHUB_API_KEY, 以及 TUNNEL_URL
+# 編輯 .env 填入 DISCORD_TOKEN、FINNHUB_API_KEY、TUNNEL_URL
 
-# 啟動容器
 docker compose up -d --build
 ```
 
+### 4. 首次設定（建議順序）
+1. `/settings`：設定資本、風險上限與提領參數。
+2. `/add_holding`、`/add_trade`：登錄現貨與期權持倉。
+3. `/add_watch`：加入自選標的（可一次加入多檔）。
+4. `/notif_settings`：套用「🧭 B&H 防守」情境，再依需要微調。
+
 ---
 
-## ⚙️ 環境變數設定
+## ⚙️ 環境變數
 
 ### `nexus_core/.env`
 | 變數名稱 | 必填 | 說明 |
 |---|---|---|
 | `DISCORD_TOKEN` | ✅ | Discord 機器人 Token |
-| `DISCORD_ADMIN_USER_ID` | ✅ | 系統管理員的 Discord 帳號 ID（允許使用 admin 指令） |
+| `DISCORD_ADMIN_USER_ID` | ✅ | 管理員 Discord 帳號 ID（允許使用 admin 指令） |
 | `FINNHUB_API_KEY` | 建議 | Finnhub 數據源 API Key |
 | `TUNNEL_URL` | ✅ | Edge Scraper 的公開 API URL |
 | `LLM_API_BASE` | 選用 | OpenAI 相容的 LLM API 網址 |
 | `LLM_MODEL_NAME` | 選用 | LLM 模型名稱 |
 | `API_KEY` | 選用 | LLM 驗證金鑰 |
-| `LOG_LEVEL` | 選用 | 預設為 `WARNING` (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `LOG_LEVEL` | 選用 | 預設為 `WARNING`（`DEBUG`、`INFO`、`WARNING`、`ERROR`） |
 
 ### `nexus_edge_scraper/.env`
 | 變數名稱 | 必填 | 說明 |
 |---|---|---|
-| `CF_TUNNEL_TOKEN` | ✅ | Cloudflare Tunnel token（用以將 API 安全暴露於公網） |
+| `CF_TUNNEL_TOKEN` | ✅ | Cloudflare Tunnel token |
 
 ---
 
-## 🔌 常用指令與操作 (Usage)
+## 🔌 指令一覽
 
-透過 Discord 頻道輸入斜線指令即可與機器人互動：
+| 類別 | 指令 |
+|---|---|
+| 設定 | `/settings`、`/notif_settings`、`/wti_config` |
+| 持倉 | `/add_holding`、`/edit_holding`、`/list_holdings`、`/remove_holding` |
+| 期權部位 | `/add_trade`、`/edit_trade`、`/list_trades`、`/remove_trade`、`/settle_trade` |
+| 自選標的 | `/add_watch`、`/remove_watch`、`/set_watch`、`/list_watch`、`/promote_watch` |
+| 分析 | `/x`、`/market`、`/calendar`、`/fa`、`/quote`、`/verify_thesis` |
+| 期權工具 | `/event_impact`、`/cc_recovery`、`/iv_rank`、`/iv_scan`、`/skew_scan`、`/max_pain`、`/ddp_scan` |
+| 看板與掛單 | `/dash`、`/stress_test`、`/order_panel`、`/add_order`、`/edit_order`、`/remove_order`、`/list_orders`、`/telemetry_alert` |
+| 警報 | `/price_alert_set`、`/price_alert_list`、`/price_alert_remove` |
+| 對沖紀錄 | `/hedge_list`、`/settle_hedge`、`/rollover_history` |
+| 輿情 | `/scan_news`、`/scan_reddit`、`/poly_list` |
+| 虛擬交易室 | `/vtr_stats`、`/vtr_list` |
+| 管理 | `/force_macro_update`、`/force_scan`、`/force_after_report`、`/sys_health` |
 
-- **`/settings`**：帳戶全域參數配置中心（資本、風險上限設定、虛擬交易室、Polymarket 巨鯨門檻與 AI 分析開關等），並可切換**交易策略**（動態調整／左側交易／右側交易）與**持倉管理模式**（指令／顧問，適合 Buy & Hold 使用者）。
-- **`/add_trade` / `/add_holding`（及對應 `/edit_*`）**：記錄實單期權與現貨持倉，可選填 `dynamic_entry_regime` 將部位標記為「動態調整」引擎託管，交由狀態切換引擎進行加碼、停損上移與防禦性平倉管理；`/add_holding`、`/edit_holding` 亦可選填 `advisory_mode` 為單檔覆寫帳戶層持倉管理模式（跟隨帳戶／顧問／指令）。
-- **`/notif_settings`**：戰術型通知管理中控台，支援以 4 大戰術維度（定時戰報、盤中遙測、持倉防禦、Alpha 策略）自訂 17 項核心通知頻道（含 WTI 原油價格警報、SEC 財報自動掃描警報、自選標的進場顧問與 B&H 持倉位階顧問），並提供 3 大 1-Click Preset 模式（🛡️ 戰備全開、🎯 精準交易、🔕 盤中靜音）。
-- **`/x [scan_type]`**：批次量化雷達終端，支援統一雷達面板進行多層次過濾，並採用 `BatchScanPaginatedView` 支援單一訊息 `◀ 上一頁` / `下一頁 ▶` 就地翻頁、`⚡ 批次分析警示標的` 併行分析與 `🔄 返回控制面板`。
-- **`/wti_config`**：🛢️ WTI 原油價格警報閾值設定彈窗，隨時配置上限價格、下限價格與 30 分鐘波動百分比（支援留空無限制）。
-- **`/price_alert_set`**：配置個股 15 分鐘 K 線突破警報，支援目標價、方向與成交量倍數（可設 `volume_multiplier: 0` 開啟純價格警報）。
-- **`/price_alert_list` / `/price_alert_remove`**：檢視與移除活躍的個股 15 分鐘價量突破警報。
-- **`/poly_list [query]`**：顯示或搜尋 Polymarket 預測市場活躍清單與成交量加權勝率。
-- **`/quote [symbol]`**：獲取標的即時報價快照 (Finnhub)。
-- **`/scan_news [symbol]` / `/scan_reddit [symbol]`**：掃描特定標的之即時新聞與 Reddit 散戶情緒。
-- **`/dash`**：交易員主控板，檢視持倉、備用流動性與極限跑道天數。
-- **`/stress_test`**：委託單壓力測試與現金赤字警報。
-- **`/list_orders` / `/order_panel`**：檢視活躍委託單與新增委託單。
-- **`/cc_recovery`**：根據現有持倉自動過濾與顯示最佳的 OTM Covered Call 合約 (收租解套策略)。
-- **`/calendar`**：總經與自選股財報事件時間軸日曆，支援 TTE 倒數與發布日程查詢。
-- **`/market`**：全局宏觀風控情報中心，深度整合 SPX、VIX、US10Y、零 Gamma 翻轉線、FedWatch 利率定價、RRP 逆回購、Fed 資產負債表與利率逃頂窗口防禦。
-- **`/verify_thesis [symbol]`**：手動觸發特定標的之 SEC 財報護城河假設驗證 (支援互動式 10-K/10-Q/8-K 下拉選單)。
-- **`/sys_health`**：`(Hidden)` 系統健康診斷面板，檢視主節點與邊緣節點的即時硬體資源 (RAM, CPU, RSS, Swap) 與快取狀態。
-- **`/force_macro_update`**：`(Admin 專用)` 強制更新大盤 GEX 與 FedWatch 數據快取。若邊緣爬蟲當下抓取失敗，會自動改用最近一次成功抓取的快取數據，並在回報訊息中標記 `⚠️ [使用快取資料]` 提醒非即時數據。
-
-> 在主機本機端也提供 `cli.py` 開發者工具，供管理員手動觸發爬蟲或強制執行掃描任務。
+> 主機端另有 `cli.py` 開發者工具，供管理員手動觸發爬蟲或掃描。
 
 ---
 
-## 🛠️ 開發與測試 (Development & Testing)
+## 🛠️ 開發與測試
 
-本專案啟用 Mypy 嚴格模式，所有提交皆應維持型別安全與通過單元測試。請務必在 Docker 環境中執行以確保依賴一致。
+本專案啟用 Mypy 嚴格模式，所有提交須通過型別檢查與測試。請在 Docker 環境中執行以確保依賴一致。
 
-**執行型別檢查 (Mypy)**：
 ```bash
 cd nexus_core
-docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
-```
 
-**執行單元與整合測試 (Pytest)**：
-```bash
-# 執行所有測試
+# 型別檢查
+docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
+
+# 全部測試
 docker compose run --rm nexus-seeker python -m pytest tests
 
-# 執行特定功能測試
+# 單一測試檔
 docker compose run --rm nexus-seeker python -m pytest tests/unit/test_edge_detection_sentiment.py
 ```
 
-### 🌿 Git Worktree 多工作區架構 (Bare Worktree Pattern)
+### 🌿 Git Worktree 多工作區（Bare Repo）
 
-專案支援 Git Worktree Bare Repo 拓撲架構，透過集中託管 `.bare/` 實現多分支平行工作區，並以 `nexus-seeker.code-workspace` 支援 VS Code 與 Antigravity 多工作區統一載入：
+專案以 `.bare/` 集中託管 Git，多分支平行開發；`nexus-seeker.code-workspace` 可在 VS Code 統一載入。
 
-#### Worktree 管理輔助工具 (`scripts/wt.sh`)
 ```bash
-# 列出所有活躍工作區
-./scripts/wt.sh list
-
-# 檢視所有工作區的 Dirty / Clean 狀態
-./scripts/wt.sh status
-
-# 簡寫模式與緊湊輸出
-./scripts/wt.sh st -s
-
-# 自動化 CI 檢查 (若有髒污退出碼為 1)
-./scripts/wt.sh st --check
-
-# 建立新分支工作區（自動複製 .env 設定檔）
-./scripts/wt.sh add feat-new-feature origin/main
-
-# 進入工作區目錄執行開發與測試
-cd feat-new-feature/nexus_core
-docker compose run --rm nexus-seeker python -m pytest tests/unit/test_db_write_centralization.py
-
-# 移除工作區並清理參照（保護 main 不被移除）
-./scripts/wt.sh remove feat-new-feature
+./scripts/wt.sh list                              # 列出工作區
+./scripts/wt.sh status                            # 各工作區 Dirty / Clean 狀態
+./scripts/wt.sh st --check                        # 有未提交變更時退出碼為 1
+./scripts/wt.sh add feat-new-feature origin/main  # 建立工作區（自動複製 .env）
+./scripts/wt.sh remove feat-new-feature           # 移除工作區（保護 main）
 ```
 
-#### 自動化遷移與回滾腳本
-- **遷移至 Bare Repo**：執行 `./scripts/migrate_to_bare.sh`，自動建立防護快照、重構 `.bare/` 拓撲並搬遷環境設定至 `main/`。
-- **安全回滾**：若需還原為單一工作區目錄，執行 `./scripts/rollback_bare.sh` 即由備份快照安全回滾。
+- 遷移至 Bare Repo：`./scripts/migrate_to_bare.sh`（自動建立快照）。
+- 回滾為單一工作區：`./scripts/rollback_bare.sh`。
 
 ---
 
-## 📄 授權條款 (License)
+## 📄 授權條款
 
-本專案採用 [MIT License](LICENSE) 授權。
+本專案採用 [MIT License](LICENSE) 授權。本專案內容不構成投資建議，所有交易決策與風險由使用者自行承擔。

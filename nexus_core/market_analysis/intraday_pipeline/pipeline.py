@@ -465,7 +465,8 @@ class IntradayScanPipeline:
         ctx: Any,
         now_ny: datetime,
     ) -> None:
-        """自選標的進場顧問：六重鐵律通過時，獨立推播一則進場 DM（含價位建議）。
+        """自選標的進場顧問：進場條件成立時（右側為多時間框架擠壓，左側／做空為六重鐵律），
+        獨立推播一則進場 DM（含價位建議）。
 
         與 30 分鐘心跳本體**完全獨立**：不新增 `scenario`、不覆寫 `tactical`、
         不受其他訊號約束，只受 `/notif_settings` 的
