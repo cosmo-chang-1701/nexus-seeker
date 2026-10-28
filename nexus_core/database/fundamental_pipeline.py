@@ -46,6 +46,25 @@ from database.connection import (
 
 logger = logging.getLogger(__name__)
 
+_SELECT_LATEST_LIQUIDITY_SQL = """
+SELECT trading_date, nfci, anfci, net_liquidity_bn,
+       net_liquidity_chg_13w_pct, reserves_chg_13w_pct,
+       us10y, regime, equity_risk_premium
+FROM liquidity_regime_log
+ORDER BY trading_date DESC
+LIMIT 1
+"""
+
+_SELECT_LATEST_LIQUIDITY_WITH_US10Y_SQL = """
+SELECT trading_date, nfci, anfci, net_liquidity_bn,
+       net_liquidity_chg_13w_pct, reserves_chg_13w_pct,
+       us10y, regime, equity_risk_premium
+FROM liquidity_regime_log
+WHERE us10y IS NOT NULL
+ORDER BY trading_date DESC
+LIMIT 1
+"""
+
 _UPSERT_LIQUIDITY_REGIME_SQL = """
 INSERT INTO liquidity_regime_log (
     trading_date,
@@ -113,20 +132,14 @@ def get_latest_liquidity_regime(
     （nfci 與 us10y 來自同一交易日）；供估值在最新列抓取失敗時退回較早的有效讀數。
     預設 False 維持取最新一列（`/fa` 如實顯示 UNKNOWN）。
     """
-    where_clause = "WHERE us10y IS NOT NULL" if require_us10y else ""
+    sql = (
+        _SELECT_LATEST_LIQUIDITY_WITH_US10Y_SQL
+        if require_us10y
+        else _SELECT_LATEST_LIQUIDITY_SQL
+    )
     conn = get_read_connection()
     try:
-        row = conn.execute(
-            f"""
-            SELECT trading_date, nfci, anfci, net_liquidity_bn,
-                   net_liquidity_chg_13w_pct, reserves_chg_13w_pct,
-                   us10y, regime, equity_risk_premium
-            FROM liquidity_regime_log
-            {where_clause}
-            ORDER BY trading_date DESC
-            LIMIT 1
-            """
-        ).fetchone()
+        row = conn.execute(sql).fetchone()
         if not row:
             return None
         return LiquidityReading(
