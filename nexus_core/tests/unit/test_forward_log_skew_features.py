@@ -253,6 +253,49 @@ def test_threshold_studies_without_evaluator_column_does_not_fail() -> None:
     assert isinstance(studies["skew_percentile_by_evaluator"], str)
 
 
+def _dedupe_entries(with_keys: bool = True) -> pd.DataFrame:
+    feat = json.dumps({"skew_percentile": 50.0, "skew_percentile_source": "CANONICAL"})
+    rows = []
+    for ev, win, outcome in (
+        ("ENTRY_SQUEEZE", 0, -1),
+        ("REGIME_CLASSIFIER", 1, 1),
+    ):
+        row: dict[str, Any] = {
+            "evaluator": ev,
+            "features_json": feat,
+            "win": win,
+            "outcome": outcome,
+            "date": "2026-10-05",
+        }
+        if with_keys:
+            row.update(
+                symbol="AAPL", bar_ts="2026-10-05T10:00", source="WATCHLIST_ADVISOR"
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def test_threshold_studies_dedupe_pooled_skew_counts_bar_once() -> None:
+    from calibration.forward_log import build_threshold_studies
+
+    studies = build_threshold_studies(_dedupe_entries())
+    row = studies["skew_percentile"]["CANONICAL"][0]
+    assert row["n"] == 1
+    # 保留 REGIME_CLASSIFIER 那一列 (win=1, outcome=1)，而非先出現的 SQUEEZE 列
+    assert row["win_rate"] == 1.0
+    assert row["adverse_rate"] == 0.0
+    by_ev = studies["skew_percentile_by_evaluator"]
+    assert by_ev["REGIME_CLASSIFIER"]["CANONICAL"][0]["n"] == 1
+    assert by_ev["ENTRY_SQUEEZE"]["CANONICAL"][0]["n"] == 1
+
+
+def test_threshold_studies_dedupe_without_key_columns_keeps_all_rows() -> None:
+    from calibration.forward_log import build_threshold_studies
+
+    studies = build_threshold_studies(_dedupe_entries(with_keys=False))
+    assert studies["skew_percentile"]["CANONICAL"][0]["n"] == 2
+
+
 # ---------------------------------------------------------------- /x (SYMBOL_VIEW)
 @pytest.mark.asyncio
 async def test_hub_data_skew_source_comes_from_same_result_as_percentile() -> None:

@@ -248,6 +248,8 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
       只取 REGIME_CLASSIFIER 與進場閘門，EXIT_* 已由呼叫端排除。
     - `skew_percentile`：依現行門檻區間分組，並分開日級母體 (`CANONICAL`) 與
       高頻回退池——兩者的分位語意不同，混在一起無法判讀。
+      總表依 (symbol, bar_ts, source) 對同一根 K 棒去重，優先保留
+      REGIME_CLASSIFIER 的列；依評估器拆分的子表則使用未去重的資料。
     """
     feats = _features(entries)
     result: dict[str, Any] = {}
@@ -290,7 +292,7 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
                 "outcome": entries["outcome"],
             }
         ).dropna(subset=["x"])
-        by_source = _skew_by_source(frame)
+        by_source = _skew_by_source(_dedupe_bars(entries, frame))
         result["skew_percentile"] = by_source or "資料累積中 (尚無 skew_percentile)"
         result["skew_percentile_by_evaluator"] = _skew_by_evaluator(entries, frame)
     else:
@@ -300,6 +302,30 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
         )
     result["gamma_flip_materiality"] = _gamma_flip_materiality_study(entries, feats)
     return result
+
+
+def _dedupe_bars(entries: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
+    """同一根 K 棒被多個評估器記錄時只計一次 (鍵為紀錄的 symbol／bar_ts／source)。
+
+    每個鍵優先保留 REGIME_CLASSIFIER 的列，否則取原順序第一列；
+    缺任一鍵欄位時維持原樣。`frame` 索引沿用 `entries`。
+    """
+    keys = ["symbol", "bar_ts", "source"]
+    if not set(keys).issubset(entries.columns):
+        return frame
+    key_df = entries[keys].reindex(frame.index)
+    if "evaluator" in entries.columns:
+        is_regime = entries["evaluator"].reindex(frame.index) == "REGIME_CLASSIFIER"
+    else:
+        is_regime = pd.Series(False, index=frame.index)
+    order = pd.Series(range(len(frame)), index=frame.index)
+    ranked = (
+        pd.DataFrame({"pref": (~is_regime).astype(int), "pos": order})
+        .join(key_df)
+        .sort_values(["pref", "pos"], kind="stable")
+    )
+    keep = ranked[~ranked.duplicated(subset=keys, keep="first")].index
+    return frame.loc[frame.index.isin(keep)]
 
 
 def _skew_by_source(frame: pd.DataFrame) -> dict[str, Any]:
