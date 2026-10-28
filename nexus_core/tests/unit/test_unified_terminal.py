@@ -819,7 +819,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     mock_embed = MagicMock()
     mock_field = MagicMock()
     mock_field.name = "💡 即時聯動警示 (Real-time Insights)"
-    mock_field.value = "```ansi\n• 🚀 AAPL: 價格接近下緣\n• ⚠️ TSLA: 籌碼面異常\n```"
+    mock_field.value = "```ansi\nAAPL\n• 🚀 價格接近下緣\n\nTSLA\n• ⚠️ 籌碼面異常\n```"
     mock_embed.fields = [mock_field]
     mock_embed.description = "```ansi\n```"
     mock_msg.embeds = [mock_embed]

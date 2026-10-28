@@ -114,6 +114,15 @@ def test_amat_lvn_vacuum_and_positive_gex_exhaustion() -> None:
 # ==========================================
 
 
+def _bullet_under_header(value: str, sym: str, snippet: str) -> bool:
+    """snippet 必須出現在 sym 的 ANSI 標頭之後、下一個標頭之前。"""
+    hdr = f"\u001b[1;36m{sym}\u001b[0m"
+    if hdr not in value:
+        return False
+    block = value.split(hdr, 1)[1].split("\u001b[1;36m", 1)[0]
+    return snippet in block
+
+
 def test_radar_embed_renders_all_three_case_studies() -> None:
     """驗證 build_radar_scan_embed 能對 STX、AMAT、RCAT 正確輸出所有修復後的欄位與即時穿透警示。"""
     scan_results = [
@@ -234,20 +243,28 @@ def test_radar_embed_renders_all_three_case_studies() -> None:
 
     assert len(embeds) == 1
     field_text = "\n".join([str(f.value) for f in embeds[0].fields])
+    insights_value = next(
+        str(f.value) for f in embeds[0].fields if "即時聯動警示" in str(f.name)
+    )
 
     # 1. 驗證 STX 欄位與警示
     assert "PCR:1.81⚠️" in field_text
     assert "C$885.0" in field_text
-    assert "STX: 實體跌破 $850.00 PutWall" in field_text
+    assert _bullet_under_header(insights_value, "STX", "• 🚨 實體跌破 $850.00 PutWall")
 
     # 2. 驗證 AMAT 欄位與警示
     assert "阻$500" in field_text
-    assert "AMAT: 跌穿 20 日 LVN 真空區 ($488.60)" in field_text
+    assert _bullet_under_header(
+        insights_value, "AMAT", "• 📉 跌穿 20 日 LVN 真空區 ($488.60)"
+    )
     assert "上方 $500.0 聚集 35.9M 負 Gamma 泥淖" in field_text
+    assert _bullet_under_header(insights_value, "AMAT", "上方 $500.0 聚集 35.9M")
 
     # 3. 驗證 RCAT 欄位與警示
     assert "$9.5(薄)" in field_text
-    assert "RCAT: 名義 PutWall ($9.50) 僅單薄 +62K GEX" in field_text
+    assert _bullet_under_header(
+        insights_value, "RCAT", "• ⚠️ 名義 PutWall ($9.50) 僅單薄 +62K GEX"
+    )
 
 
 def test_volume_profile_dynamic_bins_and_boundary_exclusion() -> None:
