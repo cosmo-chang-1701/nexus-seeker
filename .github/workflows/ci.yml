@@ -5,12 +5,25 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
+  workflow_dispatch:
+    inputs:
+      use_local_runner:
+        description: '改用本地 Self-hosted Runner 執行'
+        required: false
+        type: boolean
+        default: false
   workflow_call:
+    inputs:
+      use_local_runner:
+        description: '改用本地 Self-hosted Runner 執行'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   test-and-lint:
     name: 🧹 Test and Lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
 
     steps:
     - name: 📥 Checkout repository

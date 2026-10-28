@@ -11,6 +11,11 @@ on:
         required: false
         type: string
         default: 'Manual deploy via workflow_dispatch'
+      use_local_runner:
+        description: '改用本地 Self-hosted Runner 執行'
+        required: false
+        type: boolean
+        default: false
 
 env:
   # Opt into Node.js 24 for all actions to resolve deprecation warnings
@@ -25,6 +30,8 @@ jobs:
   # --- 第零階段：測試與品質檢查 (Test & Lint) ---
   test:
     uses: ./.github/workflows/ci.yml
+    with:
+      use_local_runner: ${{ inputs.use_local_runner || false }}
 
   # --- 第一階段：持續整合 (CI) - 建置並推送映像檔 ---
   build-and-push:
@@ -33,7 +40,7 @@ jobs:
     # 僅允許 v* 標籤或 main 分支建置並推送映像檔；從任意功能分支手動觸發時只跑測試，
     # 避免未審查的分支映像檔進入 GHCR。
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
+    runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
@@ -96,7 +103,7 @@ jobs:
     # 推送 v* 標籤時執行佈署；手動觸發 (workflow_dispatch) 僅限 main 分支或 v* 標籤，
     # 不可從任意功能分支部署到正式環境。
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')))
-    runs-on: ubuntu-latest
+    runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
     environment: production
     # 正式環境部署序列化：同時只允許一個部署執行，排隊者不取消進行中的部署。
     concurrency:
