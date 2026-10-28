@@ -49,9 +49,11 @@ $$FV_{\text{DCF}} = \sum_{t=1}^{5} \frac{FCF_0 \times (1 + g_1)^t}{(1 + r)^t} + 
 - $g_1$：未來 5 年預估複合成長率，以 1 年期預估成長率 $g_{\text{est}}$ 進行區間箝制：
   $$g_1 = \text{clip}(g_{\text{est}}, -0.10, +0.25)$$
   $g_{\text{est}}$ 依序取（免費方案沒有分析師年度成長率欄位）：
-  1. **前瞻隱含成長**：$g_{\text{est}} = \text{Forward EPS} / \text{EPS}_{\text{TTM}} - 1$（兩者皆為正；Forward EPS 定義見 §2.3）。
-  2. **歷史成長率**（無前瞻值時，記 `G_EST_HISTORICAL`）：`epsGrowthTTMYoy` → `epsGrowth3Y` → `epsGrowth5Y` → `revenueGrowthTTMYoy`，百分比轉小數。
+  1. **營收成長率**（主要來源，不記旗標）：`revenueGrowth5Y`，缺值用 `revenueGrowth3Y`，百分比轉小數；`0.0` 為有效值。
+  2. **前瞻隱含成長**（無營收成長率時，記 `G_EST_FORWARD`）：$g_{\text{est}} = \text{Forward EPS} / \text{EPS}_{\text{TTM}} - 1$（兩者皆為正，Forward EPS 定義見 §2.3），且結果須落在 `[G_EST_FORWARD_MIN, G_EST_FORWARD_MAX]` = [-50%, +100%]（含端點）；區間外視為口徑或幣別不符而略過。
   3. **預設值**（全缺時，記 `G_EST_DEFAULT`）：`DEFAULT_GROWTH_EST = 0.05`。
+  - 舊版（2026-10-28 前）依序取前瞻隱含成長與歷史 EPS／營收成長率，歷史備援記 `G_EST_HISTORICAL`；該旗標僅保留供舊列在 `/fa` 呈現，新估值不再產生。
+  - **景氣循環組**另加第一階段成長率上限：見 2.4.2 的 `CYCLICAL_GROWTH_CAP`。
 - $g_T$：永續終端成長率，嚴格定錨於全美長期潛在 GDP 增長率 $2.5\%$（0.025）：
   $$g_T = 0.025$$
 - **分母利差防禦門檻 (Spread Constraint)**：
@@ -119,7 +121,7 @@ $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 - **估值分歧（`VALUATION_DIVERGENCE`／`VALUATION_DIVERGENCE_CAPPED`）**：方法為 `BLENDED` 且 $\max/\min \ge 3$ 時，公允價值改取兩者較低值並加註兩旗標，`/fa` 顯示「DCF 與同業倍數相差 3 倍以上」「兩者分歧，公允價值改取較低者」；**會**影響 `fair_value`、MOS 與 `DEEP_VALUE`（`method` 仍為 `BLENDED`，`DCF_ONLY`／`COMPS_ONLY` 不適用）。門檻 `VALUATION_DIVERGENCE_RATIO = 3.0` 為暫定值、未經校準。詳見 2.4.1。
 - **同業乘數輸入留存（`comps_detail_json`，v095）**：每次估值把 Comps 的輸入寫入 `fair_value_log.comps_detail_json`（可為 NULL；v095 以前的列為 NULL），供事後稽核：`forward_eps`、`forward_eps_source`（`FORWARD_PE`／`TRAILING_EPS`／null）、`forward_pe`、`peers`（只列取得有效 PE 的同業，依序含 `symbol`、`pe`、`trailing`）、`peers_requested`（實際請求的前 10 檔）、`median_pe`、`liquidity_penalty`、`rejection_reason`、`peer_source`、`peer_group`、`cyclical`。純記錄，不參與任何判定。
 - **無效值存 NULL**：方法為 `NONE` 時 `fair_value` 與 `margin_of_safety` 皆存 NULL；有公允價值但無現價時 `margin_of_safety` 存 NULL 並記 `SPOT_UNAVAILABLE`。不以 0.0 作為哨兵值。下游 `/fa` 與離線報告依 NULL 與 `method = 'NONE'` 排除。
-- **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、$g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
+- **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、營收與前瞻成長率皆缺（或前瞻隱含成長超出區間）時 $g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
 
 ### 2.4.1 DCF／Comps 分歧取低值
 - **規則**：兩模型皆有效且皆大於 0，且 $\max(FV_{\text{DCF}}, FV_{\text{Comps}}) / \min(\cdot) \ge$ `VALUATION_DIVERGENCE_RATIO`（3.0）時，$FV = \min(FV_{\text{DCF}}, FV_{\text{Comps}})$，並同時記 `VALUATION_DIVERGENCE` 與 `VALUATION_DIVERGENCE_CAPPED`。MOS、`DEEP_VALUE`、治理壓制皆以取低後的 $FV$ 計算。未達門檻時仍為 50/50 平均。
@@ -129,6 +131,7 @@ $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 - **對 10/8–10/13 資料的影響**：已寫入的歷史列不會重算，其公允價值仍是舊的平均值（無 `CAPPED` 旗標；離線報表以比值現算分歧筆數）。新規則自部署後的估值排程起生效，候選名單會因此改變（此變動已取得使用者同意）。離線報表「候選名單穩健度」另列「取低值觸發筆數」。
 
 ### 2.4.2 景氣循環組 DCF 上限
+- **第一階段成長率上限（`CYCLICAL_GROWTH_CAP`）**：景氣循環組若 $g_1$ 大於 `DEFAULT_PERPETUAL_GROWTH`（2.5%），在計算 DCF 之前即把 $g_1$ 設為 2.5% 並記 `CYCLICAL_GROWTH_CAP`，因此早於下述 `CYCLICAL_DCF_CAP`。原因：舊版以前瞻共識 EPS（多為調整後口徑）除以 GAAP 近四季 EPS，ADR 另有幣別不符，比值無法使用（2026-10-28 稽核：31 檔中 16 檔頂到 +25% 上限），週期高點也不應外推五年高成長。
 - **規則**：標的屬於 `CYCLICAL_GROUPS`（記憶體與儲存、銅礦、稀土與關鍵礦產）時，先套用 2.4.1 的分歧取低值，再檢查：若 DCF 有效且大於 0，且此時的 $FV > FV_{\text{DCF}}$，則 $FV = FV_{\text{DCF}}$ 並記 `CYCLICAL_DCF_CAP`。`method` 維持原值（`BLENDED` 或 `COMPS_ONLY` 等，受 v094 CHECK 約束）。MOS、`DEEP_VALUE`、治理壓制皆以封頂後的 $FV$ 計算。
 - **DCF 無效時**無法封頂：$FV$ 不變，改記 `CYCLICAL_NO_DCF_CAP`，讓 `/fa` 看得出這是未封頂的景氣循環估值，請人工複核。
 - **理由**：MU 換成正確同業（SNDK、SKHY、WDC、STX）後，Comps 為 2068、DCF 為 1184，比值只有 1.75，3 倍分歧門檻抓不到。記憶體股在週期高峰時，同業的本益比也同步被壓低，同業倍數乘上高峰 EPS 仍會高估公允價值，因此以現金流折現值為上限。
@@ -242,7 +245,9 @@ flowchart TD
 | `PRIOR_TARGET_DAYS` | `30` | 日曆日 | $t-30d$ 基準快照的目標距離 |
 | `PRIOR_WINDOW_MIN_DAYS` / `PRIOR_WINDOW_MAX_DAYS` | `28` / `35` | 日曆日 | $t-30d$ 基準快照的接受窗口 $[t-35, t-28]$，窗口外不退回 |
 | `DEFAULT_US10Y_PCT` | `4.25` | 百分比 (%) | 流動性體制尚無 10 年債殖利率時的預設值，套用時記 `US10Y_DEFAULT` |
-| `DEFAULT_GROWTH_EST` | `0.05` | 小數比率 (5%) | 前瞻與歷史成長率皆缺時的 $g_{\text{est}}$，套用時記 `G_EST_DEFAULT` |
+| `DEFAULT_GROWTH_EST` | `0.05` | 小數比率 (5%) | 營收與前瞻成長率皆缺時的 $g_{\text{est}}$，套用時記 `G_EST_DEFAULT` |
+| `G_EST_FORWARD_MIN` | `-0.50` | 小數比率 (-50%) | 前瞻隱含成長可採信下限（暫定值，未經校準） |
+| `G_EST_FORWARD_MAX` | `1.00` | 小數比率 (+100%) | 前瞻隱含成長可採信上限（暫定值，未經校準） |
 | `DEFAULT_BETA` | `1.0` | 無因次 | Beta 缺值時的預設值，套用時記 `BETA_DEFAULT` |
 | `MODERATE_DISCOUNT_MOS` / `FAIR_VALUE_MOS_BAND` | `0.10` / `0.10` | 小數比率 | 中度折價下限與合理估值區間半寬（`/fa` 與離線報告共用） |
 | `MAX_PEERS` | `10` | 家數整數 | 同業本益比抽樣上限 |

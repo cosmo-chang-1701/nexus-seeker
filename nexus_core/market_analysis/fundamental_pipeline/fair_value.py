@@ -16,6 +16,8 @@
           + [FCF_0 * (1 + g_1)^5 * (1 + g_T)] / [(r - g_T) * (1 + r)^5]
    - FCF_0 <= 0 則 DCF 模型失效退回同業乘數。
    - g_1 = clip(g_est, -0.10, +0.25)
+     g_est 來源：營收 5Y／3Y 成長率優先；缺值時用前瞻 EPS 隱含成長（限 -50%～+100%，
+     超出視為口徑／幣別不符而略過）；皆缺則預設 5%。景氣循環組 g_est 再封頂於 g_T。
    - g_T = 0.025 (2.5% 永續成長定錨)
    - 安全利差邊界：r - g_T < 0.010 則強制拒絕 DCF 輸出。
 
@@ -52,7 +54,10 @@ FAIR_VALUE_MOS_BAND: float = 0.10
 
 # 輸入缺值時套用的預設值（套用時必須寫入 flags 並於 /fa 呈現）
 DEFAULT_US10Y_PCT: float = 4.25  # 流動性體制尚無 10 年債殖利率時
-DEFAULT_GROWTH_EST: float = 0.05  # 前瞻與歷史成長率皆缺時的 g_est
+DEFAULT_GROWTH_EST: float = 0.05  # 營收與前瞻成長率皆缺時的 g_est
+# 前瞻 EPS 隱含成長率可採信區間（超出視為共識／GAAP 口徑或 ADR 幣別不符）；暫定值，未經校準
+G_EST_FORWARD_MIN: float = -0.50
+G_EST_FORWARD_MAX: float = 1.00
 DEFAULT_BETA: float = 1.0
 
 # 估值旗標代碼（寫入 fair_value_log.flags_json；/fa 以 VALUATION_FLAG_LABELS_ZH 呈現）
@@ -61,6 +66,8 @@ FLAG_NFCI_MISSING = "NFCI_MISSING"
 FLAG_BETA_DEFAULT = "BETA_DEFAULT"
 FLAG_G_EST_DEFAULT = "G_EST_DEFAULT"
 FLAG_G_EST_HISTORICAL = "G_EST_HISTORICAL"
+FLAG_G_EST_FORWARD = "G_EST_FORWARD"
+FLAG_CYCLICAL_GROWTH_CAP = "CYCLICAL_GROWTH_CAP"
 FLAG_FCF_UNAVAILABLE = "FCF_UNAVAILABLE"
 FLAG_FORWARD_EPS_TRAILING = "FORWARD_EPS_TRAILING"
 FLAG_PEER_PE_TRAILING = "PEER_PE_TRAILING"
@@ -83,7 +90,9 @@ VALUATION_FLAG_LABELS_ZH: dict[str, str] = {
     FLAG_NFCI_MISSING: "NFCI 缺值，ERP 與同業倍數不做流動性調整",
     FLAG_BETA_DEFAULT: f"Beta 缺值，套用預設 {DEFAULT_BETA:.1f}",
     FLAG_G_EST_DEFAULT: f"成長率缺值，套用預設 {DEFAULT_GROWTH_EST:.0%}",
-    FLAG_G_EST_HISTORICAL: "無前瞻成長率，改用歷史 EPS／營收成長率",
+    FLAG_G_EST_HISTORICAL: "（舊版）無前瞻成長率，改用歷史 EPS／營收成長率",
+    FLAG_G_EST_FORWARD: "無營收成長率，改用前瞻 EPS 隱含成長（區間 −50%～+100%）",
+    FLAG_CYCLICAL_GROWTH_CAP: "景氣循環股：第一階段成長率上限 2.5%（避免外推週期高點成長）",
     FLAG_FCF_UNAVAILABLE: "無每股自由現金流（缺 P/FCF），DCF 不計",
     FLAG_FORWARD_EPS_TRAILING: "無前瞻本益比，同業倍數改用近四季 EPS",
     FLAG_PEER_PE_TRAILING: "部分同業缺前瞻本益比，改用近四季本益比",
