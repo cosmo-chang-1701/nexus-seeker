@@ -1,7 +1,7 @@
 """估值與修正動能服務單元測試。
 
 Fixture 使用 Finnhub `/stock/metric?metric=all` 的真實鍵名（2026-10 實測 MSFT / AAPL 回 133 個鍵，
-沒有 `fcfPerShareTTM`；每股 FCF 以 `現價 / pfcfShareTTM` 推得）。數值取自 MSFT 實測回應。
+沒有 `fcfPerShareTTM`；每股 FCF 以 `現價 / pfcfShareTTM` 推得）。數值取自 MSFT 實測回應；唯 revenueGrowth5Y／revenueGrowth3Y 兩鍵為示意值，非實測。
 """
 
 from __future__ import annotations
@@ -35,6 +35,7 @@ from market_analysis.fundamental_pipeline.fair_value import (
     FLAG_NFCI_MISSING,
     FLAG_PEER_PE_TRAILING,
     FLAG_US10Y_DEFAULT,
+    calculate_cost_of_equity,
 )
 from market_analysis.fundamental_pipeline.models import (
     EarningsSurpriseDTO,
@@ -63,8 +64,8 @@ MSFT_METRICS: dict[str, Any] = {
     "epsGrowthTTMYoy": 31.56,
     "epsGrowth3Y": 22.83,
     "revenueGrowthTTMYoy": 17.79,
-    "revenueGrowth5Y": 14.5,
-    "revenueGrowth3Y": 12.0,
+    "revenueGrowth5Y": 14.5,  # 示意值，非實測
+    "revenueGrowth3Y": 12.0,  # 示意值，非實測
     "peTTM": 29.505,
 }
 # SPY 實測只回 19 個鍵，估值相關僅 beta
@@ -145,8 +146,8 @@ def test_derivations_handle_missing_and_zero() -> None:
     g, flag = derive_growth_estimate({"revenueGrowth5Y": 0.0}, None)
     assert (g, flag) == (0.0, None)
     # 舊版 EPS 歷史成長鍵不再使用
-    g_old, flag_old = derive_growth_estimate({"epsGrowthTTMYoy": 31.0}, None)
-    assert flag_old == FLAG_G_EST_DEFAULT
+    _, flag_legacy = derive_growth_estimate({"epsGrowthTTMYoy": 31.0}, None)
+    assert flag_legacy == FLAG_G_EST_DEFAULT
     g_def, flag_def = derive_growth_estimate({}, None)
     assert flag_def == FLAG_G_EST_DEFAULT
     assert g_def == pytest.approx(0.05)
@@ -642,9 +643,9 @@ async def test_cyclical_growth_cap_revenue_first_applied_for_cyclical_group(
     assert saved is not None and saved.dcf_value is not None
     assert FLAG_CYCLICAL_GROWTH_CAP in json.loads(saved.flags_json)
     fcf = MSFT_SPOT / 58.911
-    assert saved.dcf_value == pytest.approx(
-        _dcf_for(fcf, 0.025, saved.discount_rate), rel=2e-3
-    )
+    r = calculate_cost_of_equity(us10y=4.15, nfci=-0.25, beta=MSFT_METRICS["beta"])[0]
+    assert saved.discount_rate == pytest.approx(r, abs=1e-4)
+    assert saved.dcf_value == pytest.approx(_dcf_for(fcf, 0.025, r), rel=1e-4)
 
 
 @pytest.mark.asyncio
@@ -660,9 +661,9 @@ async def test_cyclical_growth_cap_revenue_first_not_for_non_cyclical(
     assert saved is not None and saved.dcf_value is not None
     assert FLAG_CYCLICAL_GROWTH_CAP not in json.loads(saved.flags_json)
     fcf = MSFT_SPOT / 58.911
-    assert saved.dcf_value == pytest.approx(
-        _dcf_for(fcf, 0.25, saved.discount_rate), rel=2e-3
-    )
+    r = calculate_cost_of_equity(us10y=4.15, nfci=-0.25, beta=MSFT_METRICS["beta"])[0]
+    assert saved.discount_rate == pytest.approx(r, abs=1e-4)
+    assert saved.dcf_value == pytest.approx(_dcf_for(fcf, 0.25, r), rel=1e-4)
 
 
 @pytest.mark.asyncio
@@ -685,6 +686,6 @@ async def test_cyclical_growth_cap_revenue_first_not_when_growth_below_cap(
     assert saved is not None and saved.dcf_value is not None
     assert FLAG_CYCLICAL_GROWTH_CAP not in json.loads(saved.flags_json)
     fcf = MSFT_SPOT / 58.911
-    assert saved.dcf_value == pytest.approx(
-        _dcf_for(fcf, 0.01, saved.discount_rate), rel=2e-3
-    )
+    r = calculate_cost_of_equity(us10y=4.15, nfci=-0.25, beta=MSFT_METRICS["beta"])[0]
+    assert saved.discount_rate == pytest.approx(r, abs=1e-4)
+    assert saved.dcf_value == pytest.approx(_dcf_for(fcf, 0.01, r), rel=1e-4)
