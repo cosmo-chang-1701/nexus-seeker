@@ -250,7 +250,7 @@ CHANNELS: tuple[NotificationChannel, ...] = (
     NotificationChannel(
         "advisory_entry_signal",
         "upside_capture",
-        "🎯 自選標的進場顧問 (六重鐵律通過時推播進場價 / 停損 / 目標)",
+        "🎯 自選標的進場顧問 (進場條件成立時推播進場價 / 停損 / 目標)",
         "UPSIDE_CAPTURE",
         "INTRADAY",
     ),

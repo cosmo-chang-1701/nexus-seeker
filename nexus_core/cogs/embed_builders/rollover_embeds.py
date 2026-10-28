@@ -1146,8 +1146,7 @@ def create_advisory_levels_embed(
     embed.add_field(name="📍 位階資訊", value="\n".join(level_lines), inline=False)
 
     embed.set_footer(
-        text="Risk & Rollover Engine • 顧問模式 (/settings 持倉管理模式；"
-        "單檔可用 /edit_holding advisory_mode 覆寫)"
+        text="Risk & Rollover Engine • 顧問模式 (多頭現貨一律告知位階、不下指令)"
     )
     return embed
 
