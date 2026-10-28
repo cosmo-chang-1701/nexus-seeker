@@ -38,16 +38,20 @@ from database.fundamental_pipeline import (
 )
 from market_analysis.fundamental_pipeline.fair_value import (
     DEFAULT_GROWTH_EST,
+    DEFAULT_PERPETUAL_GROWTH,
     DEFAULT_US10Y_PCT,
     FLAG_BETA_DEFAULT,
+    FLAG_CYCLICAL_GROWTH_CAP,
     FLAG_FCF_UNAVAILABLE,
     FLAG_FORWARD_EPS_TRAILING,
     FLAG_G_EST_DEFAULT,
-    FLAG_G_EST_HISTORICAL,
+    FLAG_G_EST_FORWARD,
     FLAG_NFCI_MISSING,
     FLAG_NO_COMPARABLE_PEERS,
     FLAG_PEER_PE_TRAILING,
     FLAG_US10Y_DEFAULT,
+    G_EST_FORWARD_MAX,
+    G_EST_FORWARD_MIN,
     calculate_comps_value,
     calculate_cost_of_equity,
     calculate_dcf_value,
@@ -82,13 +86,6 @@ logger = logging.getLogger(__name__)
 _ET_ZONE = ZoneInfo("America/New_York")
 
 MAX_PEERS: int = 10  # 同業本益比抽樣上限
-# 歷史成長率備援順序（Finnhub 以百分比表示）
-_HISTORICAL_GROWTH_KEYS: tuple[str, ...] = (
-    "epsGrowthTTMYoy",
-    "epsGrowth3Y",
-    "epsGrowth5Y",
-    "revenueGrowthTTMYoy",
-)
 
 
 def _safe_float(val: Any) -> float | None:
@@ -134,10 +131,15 @@ def derive_growth_estimate(
 ) -> tuple[float, str | None]:
     """g_est 推估，回傳 (g_est, flag)。
 
-    1. 前瞻：forward EPS / 近四季 EPS - 1（兩者皆為正時）；flag 為 None。
-    2. 歷史：EPS / 營收歷史成長率（百分比轉小數）；flag = G_EST_HISTORICAL。
+    1. 營收：revenueGrowth5Y，缺值用 revenueGrowth3Y（Finnhub 百分比轉小數）；flag 為 None。
+    2. 前瞻：forward EPS / 近四季 EPS - 1（兩者皆為正，且落在
+       [G_EST_FORWARD_MIN, G_EST_FORWARD_MAX]；區間外視為共識／GAAP 口徑或 ADR 幣別
+       不符而略過）；flag = G_EST_FORWARD。
     3. 預設：DEFAULT_GROWTH_EST；flag = G_EST_DEFAULT。
     """
+    rev = _first_metric(metrics, ("revenueGrowth5Y", "revenueGrowth3Y"))
+    if rev is not None:
+        return rev / 100.0, None
     eps_ttm = _first_metric(metrics, ("epsTTM", "epsExclExtraItemsTTM"))
     if (
         forward_eps is not None
@@ -145,10 +147,9 @@ def derive_growth_estimate(
         and eps_ttm is not None
         and eps_ttm > 0
     ):
-        return forward_eps / eps_ttm - 1.0, None
-    hist = _first_metric(metrics, _HISTORICAL_GROWTH_KEYS)
-    if hist is not None:
-        return hist / 100.0, FLAG_G_EST_HISTORICAL
+        implied = forward_eps / eps_ttm - 1.0
+        if G_EST_FORWARD_MIN <= implied <= G_EST_FORWARD_MAX:
+            return implied, FLAG_G_EST_FORWARD
     return DEFAULT_GROWTH_EST, FLAG_G_EST_DEFAULT
 
 
@@ -360,7 +361,7 @@ class ValuationService:
                 fwd_eps_source = "TRAILING_EPS"
                 input_flags.append(FLAG_FORWARD_EPS_TRAILING)
 
-        # g_est：前瞻 EPS 相對近四季 EPS 的隱含成長率；缺值退回歷史、再退回預設
+        # g_est：營收 5Y／3Y 成長率優先；缺值退回前瞻 EPS 隱含成長（限區間內）、再退回預設
         growth_1y, growth_flag = derive_growth_estimate(
             metrics,
             fwd_eps if FLAG_FORWARD_EPS_TRAILING not in input_flags else None,
@@ -398,6 +399,11 @@ class ValuationService:
                     used_trailing_peer = used_trailing_peer or is_trailing
         if used_trailing_peer:
             input_flags.append(FLAG_PEER_PE_TRAILING)
+
+        # 景氣循環組：第一階段成長率封頂於永續成長率，避免外推週期高點成長
+        if resolution.cyclical and growth_1y > DEFAULT_PERPETUAL_GROWTH:
+            growth_1y = DEFAULT_PERPETUAL_GROWTH
+            input_flags.append(FLAG_CYCLICAL_GROWTH_CAP)
 
         # 4. 計算折現率、DCF 與 Comps
         cost_of_equity, erp = calculate_cost_of_equity(

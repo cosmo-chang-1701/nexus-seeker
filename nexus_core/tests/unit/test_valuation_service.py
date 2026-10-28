@@ -28,8 +28,9 @@ from market_analysis.fundamental_pipeline.fair_value import (
     FLAG_BETA_DEFAULT,
     FLAG_FCF_UNAVAILABLE,
     FLAG_FORWARD_EPS_TRAILING,
+    FLAG_CYCLICAL_GROWTH_CAP,
     FLAG_G_EST_DEFAULT,
-    FLAG_G_EST_HISTORICAL,
+    FLAG_G_EST_FORWARD,
     FLAG_GOVERNANCE_RISK,
     FLAG_NFCI_MISSING,
     FLAG_PEER_PE_TRAILING,
@@ -62,6 +63,8 @@ MSFT_METRICS: dict[str, Any] = {
     "epsGrowthTTMYoy": 31.56,
     "epsGrowth3Y": 22.83,
     "revenueGrowthTTMYoy": 17.79,
+    "revenueGrowth5Y": 14.5,
+    "revenueGrowth3Y": 12.0,
     "peTTM": 29.505,
 }
 # SPY 實測只回 19 個鍵，估值相關僅 beta
@@ -125,7 +128,7 @@ def test_derivations_use_real_finnhub_keys() -> None:
     assert fwd == pytest.approx(MSFT_SPOT / 24.19122)
     g, flag = derive_growth_estimate(MSFT_METRICS, fwd)
     assert flag is None
-    assert g == pytest.approx(fwd / 17.9466 - 1.0)
+    assert g == pytest.approx(0.145)  # 營收 5Y 優先，不再用前瞻／TTM EPS 比值
     assert peer_pe({"forwardPE": 26.0}) == (26.0, False)
     assert peer_pe({"peTTM": 30.0}) == (30.0, True)
     assert peer_pe({}) == (None, False)
@@ -138,9 +141,12 @@ def test_derivations_handle_missing_and_zero() -> None:
     # P/FCF 為負 → FCF 為負（由 DCF 判定 FCF_NON_POSITIVE）
     neg = derive_fcf_per_share({"pfcfShareTTM": -20.0}, 100.0)
     assert neg == pytest.approx(-5.0)
-    # 歷史成長率 0.0 是有效值（is not None），不得被吞掉退回預設
-    g, flag = derive_growth_estimate({"epsGrowthTTMYoy": 0.0}, None)
-    assert (g, flag) == (0.0, FLAG_G_EST_HISTORICAL)
+    # 營收成長率 0.0 是有效值（is not None），不得被吞掉退回預設
+    g, flag = derive_growth_estimate({"revenueGrowth5Y": 0.0}, None)
+    assert (g, flag) == (0.0, None)
+    # 舊版 EPS 歷史成長鍵不再使用
+    g_old, flag_old = derive_growth_estimate({"epsGrowthTTMYoy": 31.0}, None)
+    assert flag_old == FLAG_G_EST_DEFAULT
     g_def, flag_def = derive_growth_estimate({}, None)
     assert flag_def == FLAG_G_EST_DEFAULT
     assert g_def == pytest.approx(0.05)
@@ -208,7 +214,7 @@ async def test_default_inputs_are_flagged(db_conn: Any) -> None:
     metrics = {
         "pfcfShareTTM": 25.0,
         "epsTTM": 4.0,
-        "epsGrowth3Y": 12.0,
+        "epsGrowth3Y": 12.0,  # 舊版歷史鍵已不使用 → 預設
     }
     service = ValuationService(
         data_provider=FakeProvider(
@@ -223,7 +229,7 @@ async def test_default_inputs_are_flagged(db_conn: Any) -> None:
         FLAG_NFCI_MISSING,
         FLAG_BETA_DEFAULT,
         FLAG_FORWARD_EPS_TRAILING,
-        FLAG_G_EST_HISTORICAL,
+        FLAG_G_EST_DEFAULT,
         FLAG_PEER_PE_TRAILING,
     ):
         assert flag in fv_res.flags, flag
@@ -555,3 +561,130 @@ async def test_finnhub_symbol_detail_has_source_fields(db_conn: Any) -> None:
     assert not any(f.startswith("CYCLICAL_") for f in non_cyc_flags)
     assert detail["peer_group"] is None
     assert detail["cyclical"] is False
+
+
+def test_growth_revenue_first_primary_5y_and_3y_fallback() -> None:
+    g, flag = derive_growth_estimate(
+        {"revenueGrowth5Y": 14.34, "forwardPE": 14.3, "epsTTM": 10.98}, 16.8
+    )
+    assert g == pytest.approx(0.1434)
+    assert flag is None
+    # 5Y 缺值 → 3Y
+    g3, flag3 = derive_growth_estimate({"revenueGrowth3Y": 8.0}, None)
+    assert (g3, flag3) == (pytest.approx(0.08), None)
+
+
+def test_growth_revenue_first_zero_is_kept() -> None:
+    assert derive_growth_estimate(
+        {"revenueGrowth5Y": 0.0, "revenueGrowth3Y": 9.0}, 5.0
+    ) == (
+        0.0,
+        None,
+    )
+
+
+def test_growth_revenue_first_forward_fallback_in_band() -> None:
+    g, flag = derive_growth_estimate({"epsTTM": 4.0}, 5.0)
+    assert g == pytest.approx(0.25)
+    assert flag == FLAG_G_EST_FORWARD
+    # 邊界含端點
+    assert derive_growth_estimate({"epsTTM": 1.0}, 2.0) == (
+        pytest.approx(1.0),
+        FLAG_G_EST_FORWARD,
+    )
+    assert derive_growth_estimate({"epsTTM": 2.0}, 1.0) == (
+        pytest.approx(-0.5),
+        FLAG_G_EST_FORWARD,
+    )
+
+
+def test_growth_revenue_first_forward_outside_band_uses_default() -> None:
+    # 隱含 +154%（口徑不符）
+    assert derive_growth_estimate({"forwardPE": 38.0, "epsTTM": 1.60}, 4.07) == (
+        0.05,
+        "G_EST_DEFAULT",
+    )
+    # 隱含 -76%（ADR 幣別不符）
+    assert derive_growth_estimate({"epsTTM": 10.0}, 2.4) == (0.05, FLAG_G_EST_DEFAULT)
+
+
+def test_growth_revenue_first_all_missing_uses_default() -> None:
+    assert derive_growth_estimate({}, None) == (0.05, FLAG_G_EST_DEFAULT)
+    assert derive_growth_estimate({"epsTTM": -1.0}, 2.0) == (0.05, FLAG_G_EST_DEFAULT)
+
+
+def _dcf_for(fcf: float, growth: float, rate: float) -> float | None:
+    from market_analysis.fundamental_pipeline.fair_value import calculate_dcf_value
+    from market_analysis.fundamental_pipeline.models import DCFInputs
+
+    return calculate_dcf_value(
+        DCFInputs(fcf_per_share=fcf, growth_rate_1y=growth, cost_of_equity=rate)
+    ).dcf_value
+
+
+@pytest.mark.asyncio
+async def test_cyclical_growth_cap_revenue_first_applied_for_cyclical_group(
+    db_conn: Any,
+) -> None:
+    await _save_liquidity()
+    metrics = {**MSFT_METRICS, "revenueGrowth5Y": 40.0}
+    provider = _CountingProvider(
+        metrics,
+        peers=["X1", "X2", "X3"],
+        pe_by_symbol={
+            s: {"forwardPE": 10.0 + i} for i, s in enumerate(["SNDK", "SKHY", "WDC"])
+        },
+    )
+    await ValuationService(data_provider=provider).compute_and_save_valuation(
+        symbol="MU", as_of_date=date(2026, 10, 5)
+    )
+    saved = get_fair_value("MU", "2026-10-05")
+    assert saved is not None and saved.dcf_value is not None
+    assert FLAG_CYCLICAL_GROWTH_CAP in json.loads(saved.flags_json)
+    fcf = MSFT_SPOT / 58.911
+    assert saved.dcf_value == pytest.approx(
+        _dcf_for(fcf, 0.025, saved.discount_rate), rel=2e-3
+    )
+
+
+@pytest.mark.asyncio
+async def test_cyclical_growth_cap_revenue_first_not_for_non_cyclical(
+    db_conn: Any,
+) -> None:
+    await _save_liquidity()
+    metrics = {**MSFT_METRICS, "revenueGrowth5Y": 40.0}
+    await ValuationService(
+        data_provider=FakeProvider(metrics)
+    ).compute_and_save_valuation(symbol="ZZCO", as_of_date=date(2026, 10, 5))
+    saved = get_fair_value("ZZCO", "2026-10-05")
+    assert saved is not None and saved.dcf_value is not None
+    assert FLAG_CYCLICAL_GROWTH_CAP not in json.loads(saved.flags_json)
+    fcf = MSFT_SPOT / 58.911
+    assert saved.dcf_value == pytest.approx(
+        _dcf_for(fcf, 0.25, saved.discount_rate), rel=2e-3
+    )
+
+
+@pytest.mark.asyncio
+async def test_cyclical_growth_cap_revenue_first_not_when_growth_below_cap(
+    db_conn: Any,
+) -> None:
+    await _save_liquidity()
+    metrics = {**MSFT_METRICS, "revenueGrowth5Y": 1.0}
+    provider = _CountingProvider(
+        metrics,
+        peers=["X1", "X2", "X3"],
+        pe_by_symbol={
+            s: {"forwardPE": 10.0 + i} for i, s in enumerate(["SNDK", "SKHY", "WDC"])
+        },
+    )
+    await ValuationService(data_provider=provider).compute_and_save_valuation(
+        symbol="MU", as_of_date=date(2026, 10, 5)
+    )
+    saved = get_fair_value("MU", "2026-10-05")
+    assert saved is not None and saved.dcf_value is not None
+    assert FLAG_CYCLICAL_GROWTH_CAP not in json.loads(saved.flags_json)
+    fcf = MSFT_SPOT / 58.911
+    assert saved.dcf_value == pytest.approx(
+        _dcf_for(fcf, 0.01, saved.discount_rate), rel=2e-3
+    )

@@ -424,3 +424,21 @@ def test_cyclical_cap_governance_and_deep_value_use_capped_value() -> None:
     sup = _cyc(100.0, 250.0, spot=60.0, cyclical=True, is_governance_clean=False)
     assert sup.is_deep_value is False
     assert "DEEP_VALUE_SUPPRESSED_BY_GOVERNANCE" in sup.flags
+
+
+def test_valuation_flag_labels_revenue_first_cover_growth_flags() -> None:
+    from market_analysis.fundamental_pipeline.fair_value import (
+        FLAG_CYCLICAL_GROWTH_CAP,
+        FLAG_G_EST_DEFAULT,
+        FLAG_G_EST_FORWARD,
+        FLAG_G_EST_HISTORICAL,
+        VALUATION_FLAG_LABELS_ZH,
+    )
+
+    for flag in (
+        FLAG_G_EST_FORWARD,
+        FLAG_CYCLICAL_GROWTH_CAP,
+        FLAG_G_EST_HISTORICAL,
+        FLAG_G_EST_DEFAULT,
+    ):
+        assert flag in VALUATION_FLAG_LABELS_ZH
