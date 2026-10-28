@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import date, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +13,13 @@ from services.liquidity_service import (
     compute_net_liquidity_series,
     run_liquidity_pipeline,
 )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_db_load() -> Iterator[None]:
+    """預設資料庫既有紀錄為空，避免管線測試讀取真實 DB。"""
+    with patch("services.liquidity_service.load_observations", return_value=[]):
+        yield
 
 
 def test_find_prior_obs() -> None:
@@ -172,11 +180,16 @@ async def test_run_liquidity_pipeline_missing_history_is_unknown() -> None:
     with patch(
         "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch_short
     ), patch(
+        "services.liquidity_service.load_observations", return_value=[]
+    ) as mock_load, patch(
         "services.liquidity_service.store_observations", new_callable=AsyncMock
     ), patch(
         "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
     ):
         reading = await run_liquidity_pipeline(today)
+        # 抓取為空的序列（如 DGS10）必須嘗試退回資料庫，且資料庫亦無資料
+        called = {c.args[0] for c in mock_load.call_args_list}
+        assert "DGS10" in called
         # 季增率必須為 None，不得被強制降級或短路為 0.0
         assert reading.net_liquidity_chg_13w_pct is None
         # 關鍵指標缺失時，體制必須判定為 UNKNOWN (而非因 0.0 >= 0 誤判為 EASY)
@@ -225,3 +238,131 @@ async def test_run_liquidity_pipeline_keeps_fetched_series_when_store_fails() ->
     assert reading.us10y == 4.15
     assert reading.net_liquidity_bn == 6000.0
     assert reading.regime == "EASY"
+
+
+def _fallback_data(today: date) -> dict[str, list[Observation]]:
+    avail = today - timedelta(days=1)
+    return {
+        "NFCI": [Observation(today - timedelta(days=7), -0.50, avail)],
+        "ANFCI": [Observation(today - timedelta(days=7), -0.55, avail)],
+        "DGS10": [Observation(today - timedelta(days=1), 5.13, avail)],
+        "WALCL": [
+            Observation(today - timedelta(days=98), 6_800_000.0, avail),
+            Observation(today - timedelta(days=7), 7_000_000.0, avail),
+        ],
+        "WTREGEN": [
+            Observation(today - timedelta(days=98), 800_000.0, avail),
+            Observation(today - timedelta(days=7), 800_000.0, avail),
+        ],
+        "RRPONTSYD": [
+            Observation(today - timedelta(days=98), 200.0, avail),
+            Observation(today - timedelta(days=7), 200.0, avail),
+        ],
+        "WRESBAL": [
+            Observation(today - timedelta(days=98), 3_000_000.0, avail),
+            Observation(today - timedelta(days=7), 3_150_000.0, avail),
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_db_fallback_when_all_fetch_raise() -> None:
+    """全部抓取拋錯時改用資料庫既有觀測，不得產生全 NULL 的 UNKNOWN 列。"""
+    today = date(2026, 10, 21)
+    data = _fallback_data(today)
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series",
+        side_effect=RuntimeError("fred down"),
+    ), patch(
+        "services.liquidity_service.load_observations",
+        side_effect=lambda sid: data.get(sid, []),
+    ), patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ) as mock_store, patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ) as mock_save:
+        reading = await run_liquidity_pipeline(today)
+
+    assert reading.nfci is not None
+    assert reading.us10y == 5.13
+    assert reading.regime != "UNKNOWN"
+    mock_store.assert_not_awaited()
+    mock_save.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_db_fallback_only_for_empty_series() -> None:
+    """DGS10 抓回空清單時僅該序列退回資料庫，其餘沿用抓取結果。"""
+    today = date(2026, 10, 21)
+    fetched = _fallback_data(today)
+    fetched["DGS10"] = []
+    stored = {
+        "DGS10": [
+            Observation(today - timedelta(days=2), 5.15, today - timedelta(days=1))
+        ]
+    }
+
+    def mock_fetch(sid: str, t: date, kind: str | None = None) -> list[Observation]:
+        return fetched[sid]
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch
+    ), patch(
+        "services.liquidity_service.load_observations",
+        side_effect=lambda sid: stored.get(sid, []),
+    ) as mock_load, patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ), patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ):
+        reading = await run_liquidity_pipeline(today)
+
+    assert reading.us10y == 5.15
+    assert reading.nfci == -0.50
+    mock_load.assert_called_once_with("DGS10")
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_db_fallback_not_used_when_fetch_ok() -> None:
+    """抓取成功且非空時不得讀取資料庫。"""
+    today = date(2026, 10, 21)
+    data = _fallback_data(today)
+
+    def mock_fetch(sid: str, t: date, kind: str | None = None) -> list[Observation]:
+        return data[sid]
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch
+    ), patch("services.liquidity_service.load_observations") as mock_load, patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ), patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ):
+        reading = await run_liquidity_pipeline(today)
+
+    mock_load.assert_not_called()
+    assert reading.us10y == 5.13
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_db_fallback_read_failure_keeps_none() -> None:
+    """抓取與資料庫讀取皆失敗時不得拋例外，欄位維持 None。"""
+    today = date(2026, 10, 21)
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series",
+        side_effect=RuntimeError("fred down"),
+    ), patch(
+        "services.liquidity_service.load_observations",
+        side_effect=RuntimeError("db read failed"),
+    ), patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ), patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ):
+        reading = await run_liquidity_pipeline(today)
+
+    assert reading.us10y is None
+    assert reading.nfci is None
+    assert reading.regime == "UNKNOWN"

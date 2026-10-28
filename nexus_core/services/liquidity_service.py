@@ -10,12 +10,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import date, timedelta
 
 from database.fundamental_pipeline import save_liquidity_regime
-from database.macro_signal_log import store_observations
+from database.macro_signal_log import load_observations, store_observations
 from market_analysis.fundamental_pipeline.liquidity_regime import (
     calculate_13w_change,
     calculate_dynamic_erp,
@@ -124,7 +125,11 @@ def compute_net_liquidity_series(
 
 
 async def run_liquidity_pipeline(today: date) -> LiquidityReading:
-    """執行流動性分析管線：抓取、精算、判定體制並寫入資料庫。"""
+    """執行流動性分析管線：抓取、精算、判定體制並寫入資料庫。
+
+    FRED 抓取失敗或無可用觀測時，退回 macro_series_observation 既有紀錄，
+    避免單日抓取失敗寫入全 NULL 的 UNKNOWN 列；退回的資料可能已過時（不設時效上限）。
+    """
     logger.info(f"[LiquidityService] 啟動流動性分析管線 (交易日: {today})")
 
     series_data: dict[str, list[Observation]] = {}
@@ -132,20 +137,41 @@ async def run_liquidity_pipeline(today: date) -> LiquidityReading:
     # 1. 抓取並存儲各序列觀測值
     # 抓取與寫入分開防護：DB 寫入失敗不應丟棄已成功抓取的序列（本輪精算仍可使用）
     for sid, kind in LIQUIDITY_FRED_SERIES.items():
+        fetched: list[Observation] = []
+        fetch_ok = False
         try:
-            obs = await fetch_fred_series(sid, today, kind=kind)
+            fetched = await fetch_fred_series(sid, today, kind=kind)
+            fetch_ok = True
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[LiquidityService] 抓取 FRED 序列 {sid} 失敗: {e}")
-            series_data[sid] = []
-            continue
 
         # 僅保留 today 當天已可用的觀測
-        series_data[sid] = usable(obs, today)
+        usable_obs = usable(fetched, today) if fetch_ok else []
 
-        try:
-            await store_observations(sid, obs, today)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"[LiquidityService] 寫入 FRED 序列 {sid} 失敗: {e}")
+        # 抓取失敗或無可用觀測：退回 macro_series_observation 既有紀錄（可能已過時）
+        if not usable_obs:
+            try:
+                stored = await asyncio.to_thread(load_observations, sid)
+                usable_obs = usable(stored, today)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"[LiquidityService] 讀取 FRED 序列 {sid} 既有紀錄失敗，維持空序列: {e}"
+                )
+                usable_obs = []
+            if usable_obs:
+                logger.warning(
+                    f"[LiquidityService] FRED 序列 {sid} 無可用新資料，"
+                    f"改用資料庫既有 {len(usable_obs)} 筆觀測 "
+                    f"(最新觀測日: {usable_obs[-1].obs_date})"
+                )
+
+        series_data[sid] = usable_obs
+
+        if fetch_ok:
+            try:
+                await store_observations(sid, fetched, today)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[LiquidityService] 寫入 FRED 序列 {sid} 失敗: {e}")
 
     # 2. 提取最新宏觀數值
     latest_nfci = _latest_val(series_data.get("NFCI", []))

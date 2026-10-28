@@ -104,6 +104,7 @@ flowchart TD
 - **預期差防前視偏差**：計算某次發布的 Z 分數時，歷史樣本查詢帶入 `before = release_time_utc`，只取事件之前的 12 期；`macro_release_surprise` 已存在的 `(event_key, release_time_utc)` 一律略過，不以事後才公布的資料重算覆寫。
 - **日曆實際值時效**：08:30 / 10:00 任務執行前強制重抓當月總經日曆（見 `docs/architecture/06_fundamental_pipeline_and_event_clock.md` §5）；Edge 不可用時沿用既有快取，當日實際值延至下一次成功刷新後補算。
 - **抓取與寫入隔離**：FRED 序列抓取成功但寫入 `macro_series_observation` 失敗時，僅記錄警告，本輪流動性精算仍使用已抓取的序列。
+- **抓取失敗退回資料庫既有紀錄**：某 FRED 序列抓取拋錯或無可用觀測時，流動性管線改讀 `macro_series_observation` 既有觀測（可能已過時，不設時效上限），讀取亦失敗才維持空序列。緣由：2026-10-21 單日抓取失敗曾寫入全 NULL 的 `UNKNOWN` 列，使當日估值全部套用預設 10Y 殖利率 4.25%（實際約 5.1%）與 `NFCI_MISSING`，折現率偏低約 85 bp。
 - **序列發布節奏必須註冊**：`fetch_fred_series()` 未傳入 `kind` 且序列未註冊於 `FRED_SERIES` 時直接拋出 `ValueError`，不默默套用 daily 可用日。
 - **可用日延遲防前視偏差**：FRED 序列依其官方公布節奏（`weekly_nfci` 延遲 5 天，`weekly_h41` 延遲 2 天）設定可用日，回測與前向驗證嚴禁引用尚未發布之未來數據。
 
