@@ -9,6 +9,7 @@ import discord
 import pytest
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders.fundamental_embeds import (
+    ansi_bold,
     build_fa_terminal_embed,
     build_governance_flag_embed,
 )
@@ -38,7 +39,7 @@ from market_analysis.fundamental_pipeline.models import (
 def test_build_fa_terminal_embed() -> None:
     """測試全景診斷 Embed 構建與 NexusEmbed 規格相容性。"""
     sections = [
-        ("🌊 宏觀流動性體制", "• 當前體制: **EASY** (NFCI: -0.58)"),
+        ("🌊 宏觀流動性體制", f"• 當前體制: {ansi_bold('EASY')} (NFCI: -0.58)"),
         ("🚨 治理與重大事件監控", "• 狀態: 🟢 治理無重大異常"),
     ]
 
@@ -51,6 +52,8 @@ def test_build_fa_terminal_embed() -> None:
     assert isinstance(embed, NexusEmbed)
     assert "TSLA" in (embed.title or "")
     assert "Tesla, Inc." in (embed.description or "")
+    assert "查詢時間" in (embed.description or "")
+    assert embed.title == "🔬 基本面事件與全景估值雷達 | TSLA"
     assert len(embed.fields) == 2
     assert embed.fields[0].name == "🌊 宏觀流動性體制"
 
@@ -92,6 +95,10 @@ async def test_fa_section_registry_extensibility() -> None:
         def section_id(self) -> str:
             return "working"
 
+        @property
+        def header(self) -> str:
+            return "✅ 測試區塊"
+
         async def render(self, symbol: str) -> tuple[str, str]:
             return "✅ 測試區塊", f"{symbol} 數據正常"
 
@@ -99,6 +106,10 @@ async def test_fa_section_registry_extensibility() -> None:
         @property
         def section_id(self) -> str:
             return "failing"
+
+        @property
+        def header(self) -> str:
+            return "🧪 失敗測試區塊"
 
         async def render(self, symbol: str) -> tuple[str, str]:
             raise RuntimeError("模擬異常")
@@ -109,7 +120,7 @@ async def test_fa_section_registry_extensibility() -> None:
     rendered = await registry.render_all("AAPL")
     assert len(rendered) == 2
     assert rendered[0] == ("✅ 測試區塊", "AAPL 數據正常")
-    assert rendered[1] == ("⚠️ failing", "資料載入異常")
+    assert rendered[1] == ("⚠️ 🧪 失敗測試區塊", "資料載入異常")
 
 
 @pytest.mark.asyncio
@@ -193,7 +204,7 @@ async def test_governance_gate_section_render() -> None:
         assert "治理與重大事件監控" in header
         assert "治理狀態: 🟢 已同步，最近未觸發 4.02 / 5.02 警訊" in body
         assert "2026-10-05 21:00" in body
-        assert "內部人行為 (30D): ⚪ **NEUTRAL**" in body
+        assert f"內部人行為 (30D): ⚪ {ansi_bold('NEUTRAL')}" in body
 
 
 @pytest.mark.asyncio
@@ -380,10 +391,10 @@ async def test_earnings_surprise_section_render() -> None:
     assert "+3.7%" in body
     assert "+1.2%" in body
     # 絕對分數與邊際變化分開呈現
-    assert "語意分數 **+37.5**" in body
-    assert "較前期（2026-Q2）`+25.0`" in body
-    assert "本季: `$1.45`" in body
-    assert "下季: `$1.60`" in body
+    assert f"語意分數 {ansi_bold('+37.5')}" in body
+    assert "較前期（2026-Q2）+25.0" in body
+    assert "本季: $1.45" in body
+    assert "下季: $1.60" in body
     assert "0Q" not in body and "+1Q" not in body
     assert "小基數" not in body
 
@@ -395,7 +406,7 @@ async def test_earnings_surprise_section_without_prior_shows_no_delta() -> None:
     curr = _guidance_obj("2026-Q3", backlog=2)
     with _patch_pr3(None, _guidance_dto(curr, "2026-Q3", "ACC-Q3", 0.0), []):
         _, body = await sec.render("AAPL")
-    assert "語意分數 **+37.5**" in body
+    assert f"語意分數 {ansi_bold('+37.5')}" in body
     assert "無前期指引可比" in body
     assert "較前期" not in body
 
@@ -416,7 +427,7 @@ async def test_earnings_surprise_section_guidance_verdict_uses_prior() -> None:
         ):
             _, body = await sec.render("AAPL")
     prior_lookup.assert_called_once_with("AAPL", "2026-Q3", "ACC-Q3")
-    assert "前瞻指引方向: **調升**（利潤率擴張）" in body
+    assert f"前瞻指引方向: {ansi_bold('調升')}（利潤率擴張）" in body
     assert "RAISED" not in body and "Expanding" not in body
 
 
@@ -427,8 +438,8 @@ async def test_earnings_surprise_section_guidance_without_numbers_is_unknown() -
     curr = _guidance_obj("2026-Q3", backlog=2)
     with _patch_pr3(None, _guidance_dto(curr, "2026-Q3", "ACC-Q3", 0.0), []):
         _, body = await sec.render("AAPL")
-    assert "前瞻指引方向: **無法判定**" in body
-    assert "無同期別前後數值指引" in body
+    assert f"前瞻指引方向: {ansi_bold('無法判定')}" in body
+    assert "└─ 無同期別前後數值指引" in body
 
 
 @pytest.mark.asyncio
@@ -446,6 +457,7 @@ async def test_earnings_surprise_section_small_base_and_pending() -> None:
     with _patch_pr3(small, None, []):
         _, body = await sec.render("RKLB")
     assert "小基數" in body
+    assert "└─ ⚠️ 小基數" in body
     assert "尚無指引擷取資料（待下一份財報 8-K 觸發）" in body
     assert "尚無共識快照資料（待 NYSE 交易日 19:00 ET 快照排程）" in body
 
@@ -454,7 +466,7 @@ async def test_earnings_surprise_section_small_base_and_pending() -> None:
     )
     with _patch_pr3(pending, None, []):
         _, body = await sec.render("RKLB")
-    assert "⏳ 待實際值公布（共識 EPS: `$0.10`）" in body
+    assert "⏳ 待實際值公布（共識 EPS: $0.10）" in body
 
 
 def _cc_log(
@@ -516,7 +528,10 @@ async def test_channel_check_section_render_with_data_in_chinese() -> None:
         "cogs.fundamental_terminal.get_channel_checks_by_symbol", return_value=[record]
     ):
         _, body = await sec.render("TSLA")
-    assert "自主移動載具台灣供應鏈預測（高頻臨近預測）2026-Q3: 🟢 **共振確認**" in body
+    assert (
+        f"自主移動載具台灣供應鏈預測（高頻臨近預測）2026-Q3: 🟢 {ansi_bold('共振確認')}"
+        in body
+    )
     assert "驅動 +8.1%" in body
     assert "預測向上" in body
     assert "尚無檢驗紀錄" in body  # TSLA 其他鏈尚無紀錄
@@ -554,8 +569,10 @@ async def test_channel_check_section_prefers_latest_substantive_verdict() -> Non
         return_value=[newer_insufficient, fleet_insufficient, older],
     ):
         _, body = await sec.render("TSLA")
-    assert "2026-Q2: 🟢 **共振確認**（驅動 +12.0%）" in body
-    assert "全美汽車總體景氣需求鏈（因果傳導）2026-Q3: ⚪ **資料不足**" in body
+    assert f"2026-Q2: 🟢 {ansi_bold('共振確認')}（驅動 +12.0%）" in body
+    assert (
+        f"全美汽車總體景氣需求鏈（因果傳導）2026-Q3: ⚪ {ansi_bold('資料不足')}" in body
+    )
     assert "跟隨端美股覆蓋 1/4 低於門檻" in body
 
 
@@ -609,7 +626,7 @@ def test_fa_embed_trims_longest_fields_instead_of_dropping_sections() -> None:
     """6 個區塊總長超過 5800 時截短最長欄位，所有區塊都保留、短欄位不動。"""
     long_body = "\n".join(f"• 第 {i} 行產業鏈檢驗明細" + "資料" * 20 for i in range(40))
     sections = [
-        ("🌊 宏觀流動性體制", "• 當前體制: **EASY**"),
+        ("🌊 宏觀流動性體制", f"• 當前體制: {ansi_bold('EASY')}"),
         ("🚨 治理", long_body),
         ("📊 業績預期差", long_body),
         ("💰 內在價值、安全邊際與修正動能", long_body),
@@ -627,7 +644,8 @@ def test_fa_embed_trims_longest_fields_instead_of_dropping_sections() -> None:
         + sum(len(f["name"]) + len(f["value"]) for f in fields)
     )
     assert total <= 5800
-    assert fields[0]["value"].startswith("• 當前體制: **EASY**")
+    assert total <= 5750
+    assert fields[0]["value"].startswith(f"```ansi\n• 當前體制: {ansi_bold('EASY')}")
     assert fields[-1]["name"] == "🔗 產業鏈交叉驗證"
 
 
