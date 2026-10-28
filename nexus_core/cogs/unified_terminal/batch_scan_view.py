@@ -1,9 +1,11 @@
 import asyncio
+import re
 from typing import Any, List, Optional
 import discord
 import logging
 from services import market_data_service
 from cogs.embed_builder import create_error_embed
+from cogs.embed_builders._ansi_utils import _clean_ansi
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,25 @@ def _is_stale_result(r: dict) -> bool:
     """雷達資料年齡為 None（從未計算）或超過一小時即視為過期。"""
     age = (r.get("_freshness") or {}).get("radar_age_seconds")
     return age is None or age > RADAR_REFRESH_STALE_SECONDS
+
+
+_SYMBOL_HEADER_RE = re.compile(r"[A-Za-z0-9.\-]{1,10}")
+
+
+def _extract_warning_symbols(field_value: str) -> list[str]:
+    """從「即時聯動警示」欄位解析標的：先讀新版分組標頭，無標頭才退回舊版 `• … SYM:`。"""
+    cleaned = _clean_ansi(field_value)
+    headers: list[str] = []
+    for raw in cleaned.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("```") or line.startswith("•"):
+            continue
+        if _SYMBOL_HEADER_RE.fullmatch(line):
+            headers.append(line)
+    if headers:
+        return [h.upper() for h in headers]
+    # 舊格式（訊息仍在畫面上）："• 🚀 TSLA: ..."
+    return [s.upper() for s in re.findall(r"•.*?([A-Za-z0-9.-]+):", cleaned)]
 
 
 class BatchScanWarningButton(discord.ui.Button):
@@ -62,11 +83,7 @@ class BatchScanWarningButton(discord.ui.Button):
             for field in embed.fields:
                 if field.name and "即時聯動警示" in field.name:
                     if field.value:
-                        import re
-
-                        # 尋找類似 "• 🚀 TSLA:" 的標的代號
-                        symbols = re.findall(r"•.*?([A-Za-z0-9.-]+):", field.value)
-                        warning_symbols.extend([s.upper() for s in symbols])
+                        warning_symbols.extend(_extract_warning_symbols(field.value))
                     break
 
             if not warning_symbols:

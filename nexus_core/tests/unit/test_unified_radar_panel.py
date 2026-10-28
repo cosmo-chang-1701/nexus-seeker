@@ -629,7 +629,7 @@ async def test_batch_scan_warning_button_concurrent_semaphore(
     embed = discord.Embed(title="Radar")
     embed.add_field(
         name="💡 即時聯動警示 (Real-time Insights)",
-        value="• 🚀 NVDA: 價格逼近波動下緣\n• 🚀 TSLA: 價格逼近波動下緣",
+        value="```ansi\nNVDA\n• 🚀 價格逼近波動下緣\n\nTSLA\n• 🚀 價格逼近波動下緣\n```",
         inline=False,
     )
     mock_interaction.message = MagicMock()

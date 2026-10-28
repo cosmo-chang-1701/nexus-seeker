@@ -514,6 +514,81 @@ def create_iv_risk_scan_embed(results: List[Dict[str, Any]]) -> discord.Embed:
     return embed
 
 
+_INSIGHTS_MAX_CHARS = 920
+_INSIGHTS_MAX_BULLETS = 10
+_INSIGHTS_EMPTY_TEXT = "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
+
+
+def _strip_sym_prefix(text: str, sym: str) -> str:
+    """移除「• {emoji} {sym}: 」中的標的前綴（僅第一次），空字串原樣回傳。"""
+    text = (text or "").strip()
+    return text.replace(f"{sym}: ", "", 1) if text else ""
+
+
+def _layout_grouped_insights(
+    groups: dict[str, list[str]], budget: int, max_bullets: int
+) -> tuple[list[str], int]:
+    """依字數／則數預算排版分組警示，回傳 (行列表, 被捨棄的則數)。"""
+    lines: list[str] = []
+    cur_len = 0
+    kept = 0
+    dropped = 0
+    full = False
+    for sym, items in groups.items():
+        header = f"\u001b[1;36m{sym}\u001b[0m"
+        header_emitted = False
+        for it in items:
+            ins = it.strip()
+            if not ins:
+                continue
+            if full:
+                dropped += 1
+                continue
+            sep = 0 if not lines else (1 if header_emitted else 2)
+            head_cost = 0 if header_emitted else len(header) + 1
+            cost = sep + head_cost + len(ins)
+            if kept >= max_bullets or cur_len + cost > budget:
+                full = True
+                if kept == 0:
+                    # 第一則就放不下：維持舊行為，截斷後置於標頭下
+                    ins = _truncate_with_boundary(ins, 900)
+                    lines.extend([header, ins])
+                    kept += 1
+                    cur_len += len(header) + 1 + len(ins)
+                    header_emitted = True
+                else:
+                    dropped += 1
+                continue
+            if not header_emitted:
+                if lines:
+                    lines.append("")
+                lines.append(header)
+                header_emitted = True
+            lines.append(ins)
+            kept += 1
+            cur_len += cost
+    return lines, dropped
+
+
+def _render_grouped_insights(groups: dict[str, list[str]]) -> str:
+    """將每標的警示渲染為「標的標頭 + 項目符號」分組文字（含字數／則數預算）。"""
+    lines, dropped = _layout_grouped_insights(
+        groups, _INSIGHTS_MAX_CHARS, _INSIGHTS_MAX_BULLETS
+    )
+    if dropped:
+        # 為「其餘 N 則警示略」行預留字數與則數
+        total = sum(1 for items in groups.values() for it in items if it.strip())
+        reserve = len(f"\n• …其餘 {total} 則警示略")
+        lines, dropped = _layout_grouped_insights(
+            groups, _INSIGHTS_MAX_CHARS - reserve, _INSIGHTS_MAX_BULLETS - 1
+        )
+        if dropped:
+            lines.append(f"• …其餘 {dropped} 則警示略")
+    if not lines:
+        return _INSIGHTS_EMPTY_TEXT
+    return "\n".join(lines)
+
+
 def build_radar_scan_embed(
     scan_results: List[Dict[str, Any]],
     scan_type_name: str,
@@ -652,13 +727,15 @@ def build_radar_scan_embed(
         except Exception:
             pass
 
-        insights = []
+        # 依標的分組（保持列順序；同標的多列合併為同一組）
+        insights_by_sym: dict[str, list[str]] = {}
         md_lines = []
         page_has_degraded_row = False
         page_has_proxy_put_wall = False
 
         for r in chunk:
             sym = r["symbol"]
+            insights = insights_by_sym.setdefault(sym, [])
             quote = r["quote"] or {}
             iv_metrics: Any = r.get("iv_metrics")
             is_premarket_row = False
@@ -1027,15 +1104,15 @@ def build_radar_scan_embed(
                         # 負 Gamma 下 Max Pain 磁吸不成立：否決多頭磁吸／限價捕獵建議
                         if matched_order:
                             insights.append(
-                                f"• ⚠️ {sym}: 負 Gamma 環境 Max Pain 磁吸不成立，既有限價買單 ID: {matched_order['id']} (${matched_order['limit_price']:.2f}) 建議重新評估。"
+                                f"• ⚠️ 負 Gamma 環境 Max Pain 磁吸不成立，既有限價買單 ID: {matched_order['id']} (${matched_order['limit_price']:.2f}) 建議重新評估。"
                             )
                     elif matched_order:
                         insights.append(
-                            f"• 🚀 {sym}: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
+                            f"• 🚀 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，系統已自動激活 ID: {matched_order['id']} 坑底捕獸夾 (${matched_order['limit_price']:.2f})。"
                         )
                     else:
                         insights.append(
-                            f"• 🚀 {sym}: 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
+                            f"• 🚀 價格已極度逼近本週波動下緣 (${em_low:.2f})，且距離 Max Pain 有 {dist_pct:+.1f}% 的多頭磁吸引力，建議部署限價捕獵。"
                         )
 
                 # 穿透式 UOA 與偏離度聯動判定：當偏離度顯著時 (例如 |dist_pct| > 10%)
@@ -1056,8 +1133,11 @@ def build_radar_scan_embed(
 
                     # Skew 分位未知時維持 None (insight_generator 跳過該指標)；
                     # 過去依 skew 正負號捏造 75/25/50 分位。
-                    insight_str = compute_realtime_insights(data)
-                    insights.append(insight_str)
+                    insight_str = _strip_sym_prefix(
+                        compute_realtime_insights(data), sym
+                    )
+                    if insight_str:
+                        insights.append(insight_str)
 
             # 連動 SQZ MOM 擠壓蓄力 (Squeeze Momentum)
             psq_result = r.get("psq_result") or {}
@@ -1112,14 +1192,14 @@ def build_radar_scan_embed(
                 if sqz_dir == "🟢":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 {sym}: 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能方向已降級為中性。"
+                    f"• 🧱 偵測到上方 ${uoa_barrier_cap:.2f} 存在實質硬封頂 (Volume > 5x OI)，SQZ 多頭動能方向已降級為中性。"
                 )
 
             if uoa_barrier_floor is not None and sqz_mom < 0:
                 if sqz_dir == "🔴":
                     sqz_dir = "⚪"
                 insights.append(
-                    f"• 🧱 {sym}: 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能方向已降級為中性。"
+                    f"• 🧱 偵測到下方 ${uoa_barrier_floor:.2f} 存在實質硬地板 (Volume > 5x OI)，SQZ 空頭動能方向已降級為中性。"
                 )
 
             # --- 新增：多週期 Max Pain 引力階梯 (Multi-DTE Gravity Filter) ---
@@ -1146,7 +1226,7 @@ def build_radar_scan_embed(
                                 if 0 <= dte <= 1 and abs(dev) > 8.0:
                                     dir_text = "向下" if dev > 0 else "向上"
                                     insights.append(
-                                        f"• 🧲 {sym}: 末日痛點 (DTE {dte}, ${mp_val:.2f}) 偏離高達 {dev:+.1f}%，觸發【做市商末日對沖{dir_text}磁吸力】，避免逆勢防守。"
+                                        f"• 🧲 末日痛點 (DTE {dte}, ${mp_val:.2f}) 偏離高達 {dev:+.1f}%，觸發【做市商末日對沖{dir_text}磁吸力】，避免逆勢防守。"
                                     )
                                     status_label = f"{dir_text}末日磁吸 ⚠️"
                                     embed.color = 0xE74C3C
@@ -1156,7 +1236,7 @@ def build_radar_scan_embed(
                                 elif 1 < dte <= 14:
                                     if dev > 10.0:
                                         insights.append(
-                                            f"• 🧲 {sym}: 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
+                                            f"• 🧲 遠期痛點 (DTE {dte}, ${mp_val:.2f}) 正乖離高達 +{dev:.1f}%，上方空間受限，觸發【下行磁吸預警】。"
                                         )
                                         if (
                                             "正常運行" in status_label
@@ -1180,7 +1260,7 @@ def build_radar_scan_embed(
                 status_label = "🚫 偽突破 (嚴禁單腿看多)"
                 embed.color = 0xE74C3C
                 insights.append(
-                    f"• 🚨 {sym}: SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
+                    f"• 🚨 SQZ 呈現多頭但 Skew 分位極端 ({skew_percentile_val:.1f}%)，判定為散戶追高/機構偷買 Put 防禦之偽突破，【已封鎖單腿看多建議】。"
                 )
 
             radar_cache = r.get("radar_cache")
@@ -1265,9 +1345,7 @@ def build_radar_scan_embed(
                 if walls_active and put_wall > 0
                 else None
             )
-            has_putwall_warning = any(
-                "PutWall" in msg for msg in insights if sym in msg
-            )
+            has_putwall_warning = any("PutWall" in msg for msg in insights)
             pw_near = (
                 pw_dist is not None and 0 <= pw_dist <= 2.0 and not has_putwall_warning
             )
@@ -1301,11 +1379,11 @@ def build_radar_scan_embed(
 
             if pw_near and pw_class == "助跌":
                 insights.append(
-                    f"• 🛡️ {sym}: 價格已逼近 GEX PutWall (${put_wall:.2f}{wall_pos_note})，但該履約價淨 GEX 為負，屬助跌區而非承接支撐，跌破後做市商避險將加劇賣壓。"
+                    f"• 🛡️ 價格已逼近 GEX PutWall (${put_wall:.2f}{wall_pos_note})，但該履約價淨 GEX 為負，屬助跌區而非承接支撐，跌破後做市商避險將加劇賣壓。"
                 )
             elif pw_near:
                 insights.append(
-                    f"• 🛡️ {sym}: 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f}{wall_pos_note})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
+                    f"• 🛡️ 價格已逼近 GEX PutWall 做市商底牆 (${put_wall:.2f}{wall_pos_note})，此處具備強大流動性支撐，若有效跌破將觸發 Delta 負向螺旋。"
                 )
             elif (
                 pw_dist is not None
@@ -1316,7 +1394,7 @@ def build_radar_scan_embed(
             ):
                 if vol_pcr is None or vol_pcr < 1.2:
                     insights.append(
-                        f"• 🚨 {sym}: 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
+                        f"• 🚨 價格已跌破 GEX PutWall 做市商底牆 (${put_wall:.2f})，進入 Delta 負向螺旋高風險區間，嚴防流動性踩踏。"
                     )
 
             # 行動建議與下方灰階戰術建議同一套 AND-gate 分支，兩處措辭不得互相矛盾
@@ -1330,7 +1408,7 @@ def build_radar_scan_embed(
                         "進場訊號未全數共振 (Gamma Flip/PCR/IV 期限結構)，保持觀察"
                     )
                 insights.append(
-                    f"• 🟢 {sym}: 價格強勢逼近或突破 Call Wall (${call_wall:.1f}{wall_pos_note})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，{cw_action}。"
+                    f"• 🟢 價格強勢逼近或突破 Call Wall (${call_wall:.1f}{wall_pos_note})，且 SQZ 動能偏多 ({sqz_mom:+.1f})，{cw_action}。"
                 )
             elif cw_capped:
                 cw_action = (
@@ -1339,17 +1417,17 @@ def build_radar_scan_embed(
                     else "且偵測到 STO 物理封頂，禁止進場"
                 )
                 insights.append(
-                    f"• 🔴 {sym}: 價格已觸及 Call Wall (${call_wall:.1f}{wall_pos_note}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，{cw_action}。"
+                    f"• 🔴 價格已觸及 Call Wall (${call_wall:.1f}{wall_pos_note}) 且 SQZ 動能轉弱 ({sqz_mom:+.1f})，面臨物理封頂壓力，{cw_action}。"
                 )
 
             if psq_result and sqz_is_squeezing:
                 if sqz_mom > 0:
                     insights.append(
-                        f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom:+.1f})，建議關注向上突破機會。"
+                        f"• ⏱️ SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏多 ({sqz_mom:+.1f})，建議關注向上突破機會。"
                     )
                 elif sqz_mom < 0:
                     insights.append(
-                        f"• ⏱️ {sym}: SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
+                        f"• ⏱️ SQZ 正處於動能擠壓蓄力期 (Squeezing)，當前動能偏空 ({sqz_mom:+.1f})，建議嚴防向下殺跌風險。"
                     )
 
             # 案例 1：STX 結構破位與 Volume PCR 殺盤背離警示
@@ -1360,7 +1438,7 @@ def build_radar_scan_embed(
                 and vol_pcr >= 1.2
             ):
                 insights.append(
-                    f"• 🚨 {sym}: 實體跌破 ${put_wall:.2f} PutWall，Volume PCR 飆升至 {vol_pcr:.2f} (順向搶購 Put 殺盤)，期權偏斜結構性背離，嚴禁抄底！"
+                    f"• 🚨 實體跌破 ${put_wall:.2f} PutWall，Volume PCR 飆升至 {vol_pcr:.2f} (順向搶購 Put 殺盤)，期權偏斜結構性背離，嚴禁抄底！"
                 )
 
             # 案例 2：AMAT 跌穿 20日 LVN 真空區且正 Gamma 枯竭 / 負 Gamma 泥淖
@@ -1373,7 +1451,7 @@ def build_radar_scan_embed(
                 and pos_gex_below < 500_000.0
             ):
                 insights.append(
-                    f"• 📉 {sym}: 跌穿 20 日 LVN 真空區 (${lvn_p:.2f}) 且下方正 Gamma 枯竭，失守支撐易引發無量滑步暴跌！"
+                    f"• 📉 跌穿 20 日 LVN 真空區 (${lvn_p:.2f}) 且下方正 Gamma 枯竭，失守支撐易引發無量滑步暴跌！"
                 )
             if (
                 overhead_neg_swamp
@@ -1383,13 +1461,13 @@ def build_radar_scan_embed(
             ):
                 sw_k, sw_gex = overhead_neg_swamp
                 insights.append(
-                    f"• 🪨 {sym}: 上方 ${sw_k:.1f} 聚集 {abs(sw_gex) / 1_000_000:.1f}M 負 Gamma 泥淖，反彈必遭壓制。"
+                    f"• 🪨 上方 ${sw_k:.1f} 聚集 {abs(sw_gex) / 1_000_000:.1f}M 負 Gamma 泥淖，反彈必遭壓制。"
                 )
 
             # 案例 3：RCAT 薄弱紙牆 (無做市商深度)
             if pw_gex_val is not None and pw_class == "紙牆" and put_wall > 0:
                 insights.append(
-                    f"• ⚠️ {sym}: 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
+                    f"• ⚠️ 名義 PutWall (${put_wall:.2f}) 僅單薄 +{pw_gex_val / 1000:.0f}K GEX (無做市商深度)，過濾零星雜訊防假防守。"
                 )
 
             # Volume Profile Level (hvn_price/lvn_price)
@@ -1414,11 +1492,11 @@ def build_radar_scan_embed(
             )
             if lvn > 0 and abs(price_val - lvn) / lvn < 0.01:
                 insights.append(
-                    f"• 📉 {sym}: 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
+                    f"• 📉 價格接近 LVN 真空區 (${lvn:.2f})，注意突破或無支撐風險。"
                 )
             if hvn > 0 and abs(price_val - hvn) / hvn < 0.01:
                 insights.append(
-                    f"• 📈 {sym}: 價格接近 HVN 密集區 (${hvn:.2f})，此處為籌碼換手重要支撐/壓力。"
+                    f"• 📈 價格接近 HVN 密集區 (${hvn:.2f})，此處為籌碼換手重要支撐/壓力。"
                 )
 
             # ---- 產生 Markdown 行 (高 Alpha 欄位) ----
@@ -1646,7 +1724,7 @@ def build_radar_scan_embed(
                     "🚨 三重結構性風險合流：避險背離+痛點引力+機構真空，嚴禁抄底"
                 )
                 insights.append(
-                    f"• 🚨 {sym}: Skew 避險分位 {skew_percentile_val:.0f}% 極端背離，疊加 Max Pain 向下引力，且無 DTE≥7 機構買盤護航，結構性風險合流。"
+                    f"• 🚨 Skew 避險分位 {skew_percentile_val:.0f}% 極端背離，疊加 Max Pain 向下引力，且無 DTE≥7 機構買盤護航，結構性風險合流。"
                 )
             elif (
                 skew_percentile_val is not None
@@ -1753,12 +1831,12 @@ def build_radar_scan_embed(
                 tag = age_note if age_note else " [快取 / API 降級]"
                 if is_benign_premarket_staleness:
                     insights.append(
-                        f"• 🌙 {sym}: 本列數據{tag} [盤前/前日收盤]，選擇權市場尚未開盤，"
+                        f"• 🌙 本列數據{tag} [盤前/前日收盤]，選擇權市場尚未開盤，"
                         "Max Pain/GEX/UOA 為前一交易日收盤快照，屬正常現象。"
                     )
                 else:
                     insights.append(
-                        f"• 🕓 {sym}: 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
+                        f"• 🕓 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
                     )
             if price_missing or (
                 is_data_stale_or_degraded and not is_benign_premarket_staleness
@@ -1784,27 +1862,7 @@ def build_radar_scan_embed(
         if page_has_degraded_row:
             embed.title = f"{embed.title} [快取/降級]"
 
-        safe_insights: List[str] = []
-        cur_insights_len = 0
-        for ins in insights:
-            ins_strip = ins.strip()
-            if not ins_strip:
-                continue
-            if cur_insights_len + len(ins_strip) + 1 > 920:
-                if not safe_insights:
-                    safe_insights.append(_truncate_with_boundary(ins_strip, 900))
-                break
-            safe_insights.append(ins_strip)
-            cur_insights_len += len(ins_strip) + 1
-            if len(safe_insights) >= 10:
-                break
-
-        if safe_insights:
-            insights_str = "\n".join(safe_insights)
-        else:
-            insights_str = (
-                "• ✨ 所有標的當前價格與 Max Pain 及波動邊界皆無極端異常偏離。"
-            )
+        insights_str = _render_grouped_insights(insights_by_sym)
 
         if macro_ansi_header:
             # macro_ansi_header[0] is the title, macro_ansi_header[1:-1] is the content
