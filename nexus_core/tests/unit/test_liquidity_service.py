@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from datetime import date, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 import pytest
 from market_analysis.macro_signals import Observation
@@ -366,3 +366,50 @@ async def test_run_liquidity_pipeline_db_fallback_read_failure_keeps_none() -> N
     assert reading.us10y is None
     assert reading.nfci is None
     assert reading.regime == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_run_liquidity_pipeline_db_fallback_when_fetched_not_yet_available() -> (
+    None
+):
+    """抓取成功但觀測 available_date 皆晚於 today 時退回資料庫，且仍寫入抓到的觀測。"""
+    today = date(2026, 10, 21)
+    future = today + timedelta(days=1)
+    stored_data = _fallback_data(today)
+    # 抓到的觀測數值與 DB 不同，且 available_date 尚未可用
+    fetched = {
+        sid: [Observation(o.obs_date, o.value + 1.0, future) for o in obs]
+        for sid, obs in stored_data.items()
+    }
+
+    def mock_fetch(sid: str, t: date, kind: str | None = None) -> list[Observation]:
+        return fetched[sid]
+
+    with patch(
+        "services.liquidity_service.fetch_fred_series", side_effect=mock_fetch
+    ), patch(
+        "services.liquidity_service.load_observations",
+        side_effect=lambda sid: stored_data.get(sid, []),
+    ), patch(
+        "services.liquidity_service.store_observations", new_callable=AsyncMock
+    ) as mock_store, patch(
+        "services.liquidity_service.save_liquidity_regime", new_callable=AsyncMock
+    ) as mock_save:
+        reading = await run_liquidity_pipeline(today)
+
+    assert mock_save.await_args is not None
+    saved = mock_save.await_args.args[0]
+    assert saved.us10y == 5.13
+    assert saved.nfci == -0.50
+    assert saved.us10y != fetched["DGS10"][-1].value
+    assert saved.nfci != fetched["NFCI"][-1].value
+    assert saved.regime != "UNKNOWN"
+    assert reading == saved
+
+    actual = sorted(mock_store.call_args_list, key=lambda c: c.args[0])
+    expected = sorted(
+        (call(sid, fetched[sid], today) for sid in fetched),
+        key=lambda c: c.args[0],
+    )
+    assert mock_store.await_count == len(fetched)
+    assert actual == expected
