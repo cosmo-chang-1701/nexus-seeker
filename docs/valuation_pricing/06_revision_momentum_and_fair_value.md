@@ -121,7 +121,7 @@ $$MOS = \frac{FV - \text{Spot Price}}{FV}$$
 - **估值分歧（`VALUATION_DIVERGENCE`／`VALUATION_DIVERGENCE_CAPPED`）**：方法為 `BLENDED` 且 $\max/\min \ge 3$ 時，公允價值改取兩者較低值並加註兩旗標，`/fa` 顯示「DCF 與同業倍數相差 3 倍以上」「兩者分歧，公允價值改取較低者」；**會**影響 `fair_value`、MOS 與 `DEEP_VALUE`（`method` 仍為 `BLENDED`，`DCF_ONLY`／`COMPS_ONLY` 不適用）。門檻 `VALUATION_DIVERGENCE_RATIO = 3.0` 為暫定值、未經校準。詳見 2.4.1。
 - **同業乘數輸入留存（`comps_detail_json`，v095）**：每次估值把 Comps 的輸入寫入 `fair_value_log.comps_detail_json`（可為 NULL；v095 以前的列為 NULL），供事後稽核：`forward_eps`、`forward_eps_source`（`FORWARD_PE`／`TRAILING_EPS`／null）、`forward_pe`、`peers`（只列取得有效 PE 的同業，依序含 `symbol`、`pe`、`trailing`）、`peers_requested`（實際請求的前 10 檔）、`median_pe`、`liquidity_penalty`、`rejection_reason`、`peer_source`、`peer_group`、`cyclical`。純記錄，不參與任何判定。
 - **無效值存 NULL**：方法為 `NONE` 時 `fair_value` 與 `margin_of_safety` 皆存 NULL；有公允價值但無現價時 `margin_of_safety` 存 NULL 並記 `SPOT_UNAVAILABLE`。不以 0.0 作為哨兵值。下游 `/fa` 與離線報告依 NULL 與 `method = 'NONE'` 排除。
-- **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、營收與前瞻成長率皆缺（或前瞻隱含成長超出區間）時 $g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
+- **預設輸入必須標註**：10 年債殖利率缺值時套用 `DEFAULT_US10Y_PCT = 4.25`（記 `US10Y_DEFAULT`；估值讀取最近一筆 us10y 非 NULL 的流動性體制讀數，全無時才套預設）、NFCI 缺值（記 `NFCI_MISSING`，ERP 與同業倍數不做流動性調整）、Beta 缺值套用 1.0（記 `BETA_DEFAULT`）、營收與前瞻成長率皆缺（或前瞻隱含成長超出區間）時 $g_{\text{est}}$ 套用 0.05（記 `G_EST_DEFAULT`）。旗標寫入 `fair_value_log.flags_json`，`/fa` 逐條以中文呈現。
 
 ### 2.4.1 DCF／Comps 分歧取低值
 - **規則**：兩模型皆有效且皆大於 0，且 $\max(FV_{\text{DCF}}, FV_{\text{Comps}}) / \min(\cdot) \ge$ `VALUATION_DIVERGENCE_RATIO`（3.0）時，$FV = \min(FV_{\text{DCF}}, FV_{\text{Comps}})$，並同時記 `VALUATION_DIVERGENCE` 與 `VALUATION_DIVERGENCE_CAPPED`。MOS、`DEEP_VALUE`、治理壓制皆以取低後的 $FV$ 計算。未達門檻時仍為 50/50 平均。
@@ -244,7 +244,7 @@ flowchart TD
 | `PEAD_THRESHOLD` | `15.0` | 分數絕對值 | 觸發 PEAD 共振所需之業績驚喜與修正動能最低顯著性門檻 |
 | `PRIOR_TARGET_DAYS` | `30` | 日曆日 | $t-30d$ 基準快照的目標距離 |
 | `PRIOR_WINDOW_MIN_DAYS` / `PRIOR_WINDOW_MAX_DAYS` | `28` / `35` | 日曆日 | $t-30d$ 基準快照的接受窗口 $[t-35, t-28]$，窗口外不退回 |
-| `DEFAULT_US10Y_PCT` | `4.25` | 百分比 (%) | 流動性體制尚無 10 年債殖利率時的預設值，套用時記 `US10Y_DEFAULT` |
+| `DEFAULT_US10Y_PCT` | `4.25` | 百分比 (%) | 流動性體制歷史上全無非 NULL 的 10 年債殖利率時的預設值，套用時記 `US10Y_DEFAULT` |
 | `DEFAULT_GROWTH_EST` | `0.05` | 小數比率 (5%) | 營收與前瞻成長率皆缺時的 $g_{\text{est}}$，套用時記 `G_EST_DEFAULT` |
 | `G_EST_FORWARD_MIN` | `-0.50` | 小數比率 (-50%) | 前瞻隱含成長可採信下限（暫定值，未經校準） |
 | `G_EST_FORWARD_MAX` | `1.00` | 小數比率 (+100%) | 前瞻隱含成長可採信上限（暫定值，未經校準） |
