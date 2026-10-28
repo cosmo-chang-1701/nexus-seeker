@@ -192,7 +192,7 @@ nexus-seeker/
 
 ### 2. 啟動 `nexus_edge_scraper`
 ```bash
-git clone https://github.com/cosmo-chang-1701/nexus-seeker.git
+git clone https://github.com/star-netrunners/nexus-seeker.git
 cd nexus-seeker/nexus_edge_scraper
 
 cp .env.example .env
