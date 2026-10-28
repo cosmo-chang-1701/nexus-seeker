@@ -23,7 +23,8 @@ on:
 jobs:
   test-and-lint:
     name: 🧹 Test and Lint
-    runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    # public repo：來自 fork 的 PR 一律使用 GitHub 託管 runner，避免外部程式碼在本地 Self-hosted Runner 上執行。
+    runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
 
     steps:
     - name: 📥 Checkout repository
