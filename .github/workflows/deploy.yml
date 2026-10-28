@@ -1,4 +1,4 @@
-name: Build and Deploy Nexus Seeker (Swarm Zero-Downtime)
+name: Build and Deploy Nexus Seeker (Swarm Stop-First)
 
 on:
   push:
@@ -148,7 +148,7 @@ jobs:
             IMAGE_LOWER=$(echo $REGISTRY/$IMAGE_NAME | tr '[:upper:]' '[:lower:]')
             FULL_IMAGE="$IMAGE_LOWER:$IMAGE_TAG"
 
-            echo "🚀 開始執行零停機佈署，版本: $DEPLOY_VERSION"
+            echo "🚀 開始執行 stop-first 佈署，版本: $DEPLOY_VERSION"
             echo "📦 使用映像檔: $FULL_IMAGE"
 
             # 1. 檢查並初始化 Docker Swarm (冪等性)
@@ -206,10 +206,12 @@ jobs:
               fi
             done
 
-            # 4. 服務更新與建立 (Zero-Downtime Strategy)
+            # 4. 服務更新與建立 (Stop-First Strategy)
+            # 單核 960MB 小機：先停舊容器再起新容器，避免新舊並存的記憶體／CPU 尖峰。
+            # 代價是更新期間短暫離線（舊容器停止 → 新容器通過 healthcheck）。
             # 使用更精確的過濾器來尋找現有服務
             if docker service ls --filter "name=$SERVICE_NAME" --format '{{.Name}}' | grep -q "^${SERVICE_NAME}$"; then
-              echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (start-first)..."
+              echo "🔄 偵測到服務 $SERVICE_NAME 已存在，執行滾動更新 (stop-first)..."
               DEPLOY_MODE="update"
               docker service update \
                 --detach=false \
@@ -217,7 +219,7 @@ jobs:
                 --with-registry-auth \
                 --update-parallelism 1 \
                 --update-delay 5s \
-                --update-order start-first \
+                --update-order stop-first \
                 --update-failure-action rollback \
                 --update-monitor 60s \
                 --mount-add type=volume,source=nexus-data,target=/app/data \
@@ -246,7 +248,7 @@ jobs:
                 --replicas 1 \
                 --update-parallelism 1 \
                 --update-delay 5s \
-                --update-order start-first \
+                --update-order stop-first \
                 --env TZ=America/New_York \
                 --env ENABLE_ALPACA_STREAM="$ENABLE_ALPACA_STREAM" \
                 --env ENABLE_OPTIONS_ROLLOVER_INGESTION="$ENABLE_OPTIONS_ROLLOVER_INGESTION" \
@@ -314,7 +316,7 @@ jobs:
             # 6. 清理與驗證
             echo "🧹 執行環境清理..."
             # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
-            # 注意：由於 start-first 策略，舊版本可能短暫仍在運行，若 rm 失敗通常是有殘留引用
+            # 注意：舊版本任務剛停止時仍可能持有祕密引用，若 rm 失敗通常是有殘留引用
             for KEY in "${!SECRETS_MAP[@]}"; do
               docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | while read -r OLD_SEC; do
                 docker secret rm "$OLD_SEC" 2>/dev/null || echo "⏳ 祕密 $OLD_SEC 仍在使用中，跳過清理"
