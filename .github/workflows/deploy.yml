@@ -294,7 +294,7 @@ jobs:
               echo "❌ 佈署失敗：服務未切換到新映像檔（可能已被 Swarm 回滾）。預期映像檔: $FULL_IMAGE；實際映像檔: ${ACTUAL_IMAGE:-無}；更新狀態: ${UPDATE_STATE:-無}；指令結束碼: ${UPDATE_RC:-未知}"
               echo "📋 最近失敗的任務:"
               docker service ps "$SERVICE_NAME" --no-trunc --filter desired-state=shutdown | head -n 6
-              FAILED_TASK=$(docker service ps -q --filter desired-state=shutdown "$SERVICE_NAME" 2>/dev/null | head -n 1 || true)
+              FAILED_TASK=$(docker service ps --no-trunc --filter desired-state=shutdown --format '{{.ID}}|{{.Error}}' "$SERVICE_NAME" 2>/dev/null | awk -F'|' '$2 != "" { print $1; exit }' || true)
               if [ -n "$FAILED_TASK" ]; then
                 FAILED_CONTAINER=$(docker inspect --format '{{.Status.ContainerStatus.ContainerID}}' "$FAILED_TASK" 2>/dev/null || true)
                 if [ -n "$FAILED_CONTAINER" ]; then
@@ -304,7 +304,8 @@ jobs:
               fi
               # 公開倉庫：應用程式日誌只寫入伺服器檔案，不輸出到 Actions 日誌
               FAIL_LOG_FILE="${DEPLOY_FAIL_LOG_DIR:-/tmp}/nexus-deploy-failed-${DEPLOY_VERSION}.log"
-              docker service logs --no-trunc --timestamps --tail 300 "$SERVICE_NAME" > "$FAIL_LOG_FILE" 2>&1 || true
+              # 🔒 日誌檔權限限縮為 600（其他本機使用者不可讀）
+              (umask 077; docker service logs --no-trunc --timestamps --tail 300 "$SERVICE_NAME" > "$FAIL_LOG_FILE" 2>&1) || true
               echo "📝 應用程式日誌已存至伺服器檔案: $FAIL_LOG_FILE"
               exit 1
             fi
