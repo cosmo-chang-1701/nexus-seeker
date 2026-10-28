@@ -157,7 +157,6 @@ async def run_liquidity_pipeline(today: date) -> LiquidityReading:
                 logger.warning(
                     f"[LiquidityService] 讀取 FRED 序列 {sid} 既有紀錄失敗，維持空序列: {e}"
                 )
-                usable_obs = []
             if usable_obs:
                 logger.warning(
                     f"[LiquidityService] FRED 序列 {sid} 無可用新資料，"
