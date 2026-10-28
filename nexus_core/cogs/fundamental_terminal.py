@@ -15,7 +15,10 @@ import logging
 from typing import Any, Protocol
 
 import discord
-from cogs.embed_builders.fundamental_embeds import build_fa_terminal_embed
+from cogs.embed_builders.fundamental_embeds import (
+    ansi_bold,
+    build_fa_terminal_embed,
+)
 from database.fundamental_pipeline import (
     get_active_governance_flags,
     get_channel_checks_by_symbol,
@@ -87,9 +90,23 @@ class FaSection(Protocol):
         """區塊唯一識別代號。"""
         ...
 
+    @property
+    def header(self) -> str:
+        """區塊欄位標題（渲染失敗時也用它顯示中文標題）。"""
+        ...
+
     async def render(self, symbol: str) -> tuple[str, str] | None:
         """渲染並產出 (欄位標題, 欄位內文)；若無資料可回傳 None。"""
         ...
+
+
+FA_SECTION_ERROR_TEXT = "資料載入異常"
+
+
+def _tree_children(items: list[str]) -> list[str]:
+    """同一父項的連續子項：非最後一項用 ├─，最後一項用 └─。"""
+    last = len(items) - 1
+    return [f"  {'└─' if i == last else '├─'} {item}" for i, item in enumerate(items)]
 
 
 class FaSectionRegistry:
@@ -114,7 +131,9 @@ class FaSectionRegistry:
                 logger.error(
                     f"[FaSectionRegistry] 渲染區塊 {sec.section_id} 失敗 ({symbol}): {e}"
                 )
-                results.append((f"⚠️ {sec.section_id}", "資料載入異常"))
+                results.append(
+                    (f"⚠️ {getattr(sec, 'header', '診斷區塊')}", FA_SECTION_ERROR_TEXT)
+                )
         return results
 
 
@@ -130,9 +149,13 @@ class MacroLiquiditySection:
     def section_id(self) -> str:
         return "macro_liquidity"
 
+    @property
+    def header(self) -> str:
+        return "🌊 宏觀流動性體制 (Macro Liquidity)"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         reading = await asyncio.to_thread(get_latest_liquidity_regime)
-        header = "🌊 宏觀流動性體制 (Macro Liquidity)"
+        header = self.header
         if reading is None:
             return header, "• 當前體制: UNKNOWN ｜ 暫無最新流動性讀數"
 
@@ -150,8 +173,8 @@ class MacroLiquiditySection:
         us10y_str = f"{reading.us10y:.2f}%" if reading.us10y is not None else "--%"
 
         lines = [
-            f"• 當前體制: **{reading.regime}** (NFCI: `{nfci_str}` ｜ 淨流動性季增: `{chg_str}`)",
-            f"• 隱含股權風險溢價 (ERP): `{erp_str}` (無風險 10Y: `{us10y_str}`)",
+            f"• 當前體制: {ansi_bold(reading.regime)} (NFCI: {nfci_str} ｜ 淨流動性季增: {chg_str})",
+            f"• 隱含股權風險溢價 (ERP): {erp_str} (無風險 10Y: {us10y_str})",
         ]
         return header, "\n".join(lines)
 
@@ -163,9 +186,13 @@ class GovernanceGateSection:
     def section_id(self) -> str:
         return "governance_gate"
 
+    @property
+    def header(self) -> str:
+        return "🚨 治理與重大事件監控 (Governance Gate)"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "🚨 治理與重大事件監控 (Governance Gate)"
+        header = self.header
 
         # SEC 申報同步由平日 07:00–20:00 ET 每整點排程執行，只涵蓋持倉與自選標的池。
         # 從未同步（無游標：尚未輪到首次同步、不在標的池或同步失敗）時不得把「沒有資料」
@@ -197,9 +224,11 @@ class GovernanceGateSection:
                 gov_status.max_severity or "", "⚪"
             )
             if gov_status.max_severity in ("CRITICAL", "HIGH"):
-                status_text = "**觸發風控審查**"
+                status_text = ansi_bold("觸發風控審查")
             else:
-                status_text = "**待人工複核**（5.02 僅有 item code，未判定為離任）"
+                status_text = (
+                    ansi_bold("待人工複核") + "（5.02 僅有 item code，未判定為離任）"
+                )
             gov_line = (
                 f"• 治理狀態: {sev_icon} {status_text} "
                 f"({gov_status.max_severity}，共 {len(gov_status.active_flags)} 項旗標生效中)"
@@ -211,7 +240,7 @@ class GovernanceGateSection:
             else ("🔴" if insider_summary.verdict == "HEAVY_INSIDER_SALE" else "⚪")
         )
         insider_line = (
-            f"• 內部人行為 (30D): {insider_icon} **{insider_summary.verdict}** "
+            f"• 內部人行為 (30D): {insider_icon} {ansi_bold(insider_summary.verdict)} "
             f"({insider_summary.summary_text})"
         )
 
@@ -247,9 +276,13 @@ class EarningsSurpriseSection:
     def section_id(self) -> str:
         return "earnings_surprise"
 
+    @property
+    def header(self) -> str:
+        return "📊 業績預期差與財報後漂移"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "📊 業績預期差與財報後漂移"
+        header = self.header
 
         latest_surprise = await asyncio.to_thread(
             get_latest_earnings_surprise, sym_upper
@@ -276,7 +309,7 @@ class EarningsSurpriseSection:
         period = latest_surprise.fiscal_period
         if latest_surprise.status != "PROCESSED":
             cons = (
-                f"`${latest_surprise.consensus_eps:.2f}`"
+                f"${latest_surprise.consensus_eps:.2f}"
                 if latest_surprise.consensus_eps is not None
                 else "--"
             )
@@ -300,13 +333,13 @@ class EarningsSurpriseSection:
             else "--%"
         )
         line = (
-            f"• {period} 業績評分: {score_icon} **{score_str}** "
-            f"(EPS 驚喜: `{eps_str}` ｜ 營收: `{rev_str}`)"
+            f"• {period} 業績評分: {score_icon} {ansi_bold(score_str)} "
+            f"(EPS 驚喜: {eps_str} ｜ 營收: {rev_str})"
         )
         cons_eps = latest_surprise.consensus_eps
         if cons_eps is not None and abs(cons_eps) < FLOOR_EPS:
             line += (
-                f"\n  ⚠️ 小基數：共識 EPS `${cons_eps:.2f}` 絕對值低於 ${FLOOR_EPS:.2f}，"
+                f"\n  └─ ⚠️ 小基數：共識 EPS ${cons_eps:.2f} 絕對值低於 ${FLOOR_EPS:.2f}，"
                 "EPS 驚喜百分比以下限為分母，僅供參考"
             )
         return line
@@ -337,21 +370,23 @@ class EarningsSurpriseSection:
         tone_icon = "🟢" if tone_abs > 10 else ("🔴" if tone_abs < -10 else "⚪")
         if g_summary.tone_delta is not None and prior_record is not None:
             delta_str = (
-                f"較前期（{prior_record.fiscal_period}）`{g_summary.tone_delta:+.1f}`"
+                f"較前期（{prior_record.fiscal_period}）{g_summary.tone_delta:+.1f}"
             )
         else:
             delta_str = "無前期指引可比"
 
         verdict_zh = VERDICT_LABELS_ZH.get(g_summary.verdict, "無法判定")
-        verdict_line = f"• 前瞻指引方向: **{verdict_zh}**（{g_summary.margin_trend}）"
+        verdict_line = (
+            f"• 前瞻指引方向: {ansi_bold(verdict_zh)}（{g_summary.margin_trend}）"
+        )
         if g_summary.verdict == "UNKNOWN" and g_summary.comparison_note:
-            verdict_line += f"\n  ↳ {g_summary.comparison_note}"
+            verdict_line += f"\n  └─ {g_summary.comparison_note}"
 
         return [
             (
                 f"• 管理層前瞻態度（{guidance.fiscal_period} 財報）: {tone_icon} "
-                f"語意分數 **{tone_abs:+.1f}** ｜ {delta_str} "
-                f"(指引模型: `{guidance.model_version}`)"
+                f"語意分數 {ansi_bold(f"{tone_abs:+.1f}")} ｜ {delta_str} "
+                f"(指引模型: {guidance.model_version})"
             ),
             verdict_line,
         ]
@@ -366,7 +401,7 @@ class EarningsSurpriseSection:
             if snap is not None:
                 period = f" {snap.fiscal_period}" if snap.fiscal_period else ""
                 snap_parts.append(
-                    f"{_HORIZON_LABELS_ZH[horizon]}{period}: `${snap.eps_mean:.2f}`"
+                    f"{_HORIZON_LABELS_ZH[horizon]}{period}: ${snap.eps_mean:.2f}"
                 )
         if not snap_parts:
             return "• 分析師共識快照: ⚪ 無季度共識預估"
@@ -427,7 +462,7 @@ def _format_channel_line(
             parts.append(reason)
     detail = " ｜ ".join(p for p in parts if p)
     detail_str = f"（{detail}）" if detail else ""
-    return f"• {link.title}（{tag}）{log.as_of_period}: {icon} **{verdict_zh}**{detail_str}"
+    return f"• {link.title}（{tag}）{log.as_of_period}: {icon} {ansi_bold(verdict_zh)}{detail_str}"
 
 
 class ChannelCheckSection:
@@ -441,9 +476,13 @@ class ChannelCheckSection:
     def section_id(self) -> str:
         return "channel_checks"
 
+    @property
+    def header(self) -> str:
+        return "🔗 實體產業鏈交叉驗證"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "🔗 實體產業鏈交叉驗證"
+        header = self.header
 
         links = get_links_for_symbol(sym_upper)
         if not links:
@@ -504,7 +543,7 @@ def _valuation_flag_lines(flags: list[str]) -> list[str]:
     labels = [
         VALUATION_FLAG_LABELS_ZH[f] for f in flags if f in VALUATION_FLAG_LABELS_ZH
     ]
-    return [f"  ⚠️ {label}" for label in labels]
+    return _tree_children([f"⚠️ {label}" for label in labels])
 
 
 def _revision_lines(rev_record: RevisionScoreRecord | None) -> list[str]:
@@ -520,14 +559,16 @@ def _revision_lines(rev_record: RevisionScoreRecord | None) -> list[str]:
         line = f"• 分析師修正動能（{rev_record.trading_date}）: ⚪ 無可比財期 ｜ PEAD: {pead_str}"
     else:
         line = (
-            f"• 分析師修正動能（{rev_record.trading_date}）: **{rev_record.score_30d:+.1f}** "
+            f"• 分析師修正動能（{rev_record.trading_date}）: {ansi_bold(f"{rev_record.score_30d:+.1f}")} "
             f"｜ PEAD: {pead_str}"
         )
     out = [line]
-    for flag in flags if isinstance(flags, list) else []:
-        label = _REVISION_FLAG_LABELS_ZH.get(str(flag))
-        if label:
-            out.append(f"  ↳ {label}")
+    flag_labels = [
+        label
+        for flag in (flags if isinstance(flags, list) else [])
+        if (label := _REVISION_FLAG_LABELS_ZH.get(str(flag)))
+    ]
+    out.extend(_tree_children(flag_labels))
     return out
 
 
@@ -542,9 +583,13 @@ class ValuationEngineSection:
     def section_id(self) -> str:
         return "valuation_engine"
 
+    @property
+    def header(self) -> str:
+        return "💰 內在價值、安全邊際與修正動能"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "💰 內在價值、安全邊際與修正動能"
+        header = self.header
 
         fv_record, rev_record = await asyncio.gather(
             asyncio.to_thread(get_latest_fair_value, sym_upper),
@@ -587,7 +632,7 @@ class ValuationEngineSection:
                     method_zh = _VALUATION_METHOD_CYCLICAL_ZH
                 lines.append(
                     f"• 公允價值中樞（{fv_record.trading_date}，{method_zh}）: "
-                    f"**${fv_record.fair_value:.2f}** (DCF: `{dcf_str}` ｜ 同業倍數: `{comps_str}`)"
+                    f"{ansi_bold(f"${fv_record.fair_value:.2f}")} (DCF: {dcf_str} ｜ 同業倍數: {comps_str})"
                 )
                 mos = fv_record.margin_of_safety
                 if mos is None:
@@ -603,10 +648,12 @@ class ValuationEngineSection:
                         val_tag = "⚪ 合理估值區間"
                     else:
                         val_tag = "🔴 明顯溢價"
-                    lines.append(f"• 安全邊際 (MOS): **{mos:+.2%}** ({val_tag})")
+                    lines.append(
+                        f"• 安全邊際 (MOS): {ansi_bold(f"{mos:+.2%}")} ({val_tag})"
+                    )
             lines.append(
-                f"• 權益資本成本: `{fv_record.discount_rate:.2%}` "
-                f"(ERP: `{fv_record.equity_risk_premium:.2%}`)"
+                f"• 權益資本成本: {fv_record.discount_rate:.2%} "
+                f"(ERP: {fv_record.equity_risk_premium:.2%})"
             )
             lines.extend(_valuation_flag_lines(flags))
         lines.extend(_revision_lines(rev_record))
@@ -623,9 +670,13 @@ class WatchCandidateSection:
     def section_id(self) -> str:
         return "watch_candidate"
 
+    @property
+    def header(self) -> str:
+        return "📋 次日基本面候選評級"
+
     async def render(self, symbol: str) -> tuple[str, str]:
         sym_upper = symbol.strip().upper()
-        header = "📋 次日基本面候選評級"
+        header = self.header
 
         candidates = await asyncio.to_thread(get_watch_candidates)
         if not candidates:
@@ -645,14 +696,14 @@ class WatchCandidateSection:
             return (
                 header,
                 (
-                    f"• 次日排定狀態（名單日 {list_date}）: ⛔ **風控排除** (排名: #{cand.rank})\n"
+                    f"• 次日排定狀態（名單日 {list_date}）: ⛔ {ansi_bold("風控排除")} (排名: #{cand.rank})\n"
                     f"• 排除原因: {cand.excluded_reason or '未符合基本面池準入標準'}"
                 ),
             )
 
         status_zh = "🎯 優先候選" if cand.status == "CANDIDATE" else "👀 觀察"
         lines = [
-            f"• 次日排定狀態（名單日 {list_date}）: **{status_zh}** (排名: #{cand.rank})"
+            f"• 次日排定狀態（名單日 {list_date}）: {ansi_bold(status_zh)} (排名: #{cand.rank})"
         ]
         try:
             r_dict = json.loads(cand.reasons_json) if cand.reasons_json else {}
@@ -667,12 +718,14 @@ class WatchCandidateSection:
                 f"{mos_val:+.1%}" if isinstance(mos_val, (int, float)) else "無有效估值"
             )
             lines.append(
-                f"• 綜合評估分: **{score_str}** (安全邊際: `{mos_str}` ｜ {pead_str})"
+                f"• 綜合評估分: {ansi_bold(score_str)} (安全邊際: {mos_str} ｜ {pead_str})"
             )
-            for key in ("governance_note", "valuation_note"):
-                note = r_dict.get(key)
-                if note:
-                    lines.append(f"  ↳ {note}")
+            notes = [
+                str(note)
+                for key in ("governance_note", "valuation_note")
+                if (note := r_dict.get(key))
+            ]
+            lines.extend(_tree_children(notes))
         return header, "\n".join(lines)
 
 
@@ -754,10 +807,12 @@ class FundamentalTerminalCog(commands.Cog, name="FundamentalTerminalCog"):
         sections = await fa_section_registry.render_all(sym_clean)
 
         # 構建專屬 NexusEmbed 與輔助 View
+        degraded = any(body == FA_SECTION_ERROR_TEXT for _, body in sections)
         embed = build_fa_terminal_embed(
             symbol=sym_clean,
             company_name=company_name,
             sections=sections,
+            degraded=degraded,
         )
         view = FaTerminalView(sym_clean)
 
