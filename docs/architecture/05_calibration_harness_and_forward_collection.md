@@ -479,7 +479,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
 - 以上各分桶表（D-04、Skew、依評估器拆分）的勝率與逆向先觸及率皆附日期叢集 bootstrap 95% CI（`win_ci95`／`adverse_ci95`；無日期欄時為空）。同一交易日的樣本高度相關，n 很大但交易日數很少時 CI 會很寬，方向翻轉不代表訊號；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
-- 自 PR-2 起 `REGIME_CLASSIFIER` 與 `ENTRY_SQUEEZE` 紀錄也帶 `skew_percentile`／`skew_percentile_source`（純記錄，不參與分類或擠壓判定）；報表另提供「依評估器拆分」子表（`REGIME_CLASSIFIER`／`ENTRY_SQUEEZE`／其他），避免不同母體混在一起。`CANONICAL` 需每標的 ≥ 20 個交易日的日級快照，未滿前一律為 `INTRADAY_FALLBACK`，屬預期。`/x` 手動檢核（`SYMBOL_VIEW`）同樣帶 skew：hub 資料的 `skew_percentile_source` 取自計算分位的同一次 `calculate_skew` 結果（取不到則為空），不顯示於 embed。
+- 自 PR-2 起 `REGIME_CLASSIFIER` 與 `ENTRY_SQUEEZE` 紀錄也帶 `skew_percentile`／`skew_percentile_source`（純記錄，不參與分類或擠壓判定）；報表另提供「依評估器拆分」子表（`REGIME_CLASSIFIER`／`ENTRY_SQUEEZE`／其他），避免不同母體混在一起；依母體來源的總表則依 (symbol, bar_ts, source) 對同一根 K 棒去重，只計一次（優先保留 `REGIME_CLASSIFIER` 的列）。`CANONICAL` 需每標的 ≥ 20 個交易日的日級快照，未滿前一律為 `INTRADAY_FALLBACK`，屬預期。`/x` 手動檢核（`SYMBOL_VIEW`）同樣帶 skew：hub 資料的 `skew_percentile_source` 取自計算分位的同一次 `calculate_skew` 結果（取不到則為空），不顯示於 embed。
 - `gamma_flip_materiality`：只取閘門 Flip 存在的紀錄，依重要性比分成「雜訊交叉」（< 5%）與「重要交叉」兩組，比較勝率與逆向先觸及率（依日期叢集 bootstrap 的 95% CI），並附重要性比四分位。判讀規則見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6。
 
 每組 $n < 100$ 時標示「資料累積中」。EXIT_* 紀錄不納入（其勝率語意與進場相反）。
