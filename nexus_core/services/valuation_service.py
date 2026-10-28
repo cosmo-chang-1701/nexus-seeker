@@ -327,7 +327,9 @@ class ValuationService:
         input_flags: list[str] = []
 
         # 1. 注入宏觀流動性體制讀數
-        liquidity = await asyncio.to_thread(get_latest_liquidity_regime)
+        liquidity = await asyncio.to_thread(
+            get_latest_liquidity_regime, require_us10y=True
+        )
         nfci = liquidity.nfci if liquidity is not None else None
         if nfci is None:
             input_flags.append(FLAG_NFCI_MISSING)
