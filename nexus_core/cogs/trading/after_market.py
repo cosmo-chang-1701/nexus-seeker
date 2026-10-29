@@ -139,6 +139,12 @@ class AfterMarketCog(commands.Cog):
         )
 
         for uid, data in user_reports.items():
+            if data.get("report_failed"):
+                # 結算失敗不可渲染成「無持倉資料」(fail-open)
+                stats["users_failed"] += 1
+                stats["errors"].append(f"report_failed: uid={uid}")
+                logger.error(f"盤後報告結算失敗，略過發送，uid={uid}")
+                continue
             report_lines = data.get("report_lines", [])
             hedge_analysis = data.get("hedge_analysis", {})
             runway = data.get("runway")

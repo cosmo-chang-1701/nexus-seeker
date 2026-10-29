@@ -309,22 +309,28 @@ class ReportsMixin:
             uid = row[0]
             user_ports.setdefault(uid, []).append(row[2:])
 
-        results = {}
+        results: Dict[int, Dict[str, Any]] = {}
         for uid, rows in user_ports.items():
             try:
                 user_ctx = database.get_full_user_context(uid)
+                if getattr(user_ctx, "load_failed", False) is True:
+                    # 讀取失敗的佔位 context (capital=100000) 不可拿來結算
+                    logger.error(f"盤後報告失敗：使用者設定載入失敗，uid={uid}")
+                    results[uid] = {"report_failed": True}
+                    continue
                 user_capital = await get_adjusted_user_capital(uid, user_ctx.capital)
             except Exception:
-                logger.exception(f"盤後報告略過：讀取使用者資產設定失敗，uid={uid}")
+                logger.exception(f"盤後報告失敗：讀取使用者資產設定失敗，uid={uid}")
+                results[uid] = {"report_failed": True}
                 continue
 
             try:
                 # 1. 執行標準持倉報告邏輯
-                report_lines = await portfolio.check_portfolio_status_logic(
-                    rows, user_capital
-                )
+                status = await portfolio.run_portfolio_status(rows, user_capital)
+                report_lines = status.report_lines
             except Exception:
-                logger.exception(f"盤後報告略過：持倉報告計算失敗，uid={uid}")
+                logger.exception(f"盤後報告失敗：持倉報告計算失敗，uid={uid}")
+                results[uid] = {"report_failed": True}
                 continue
 
             if not report_lines:
@@ -338,7 +344,9 @@ class ReportsMixin:
 
             try:
                 # 2. 執行對沖績效分析
-                hedge_analysis = await hedging.analyze_hedge_performance(uid)
+                hedge_analysis = await hedging.analyze_hedge_performance(
+                    uid, include_virtual=False, include_holdings=True
+                )
             except Exception:
                 logger.exception(f"盤後報告警告：對沖績效分析失敗，uid={uid}")
                 hedge_analysis = {}
@@ -366,5 +374,8 @@ class ReportsMixin:
                 "hedge_analysis": hedge_analysis,
                 "runway": runway,
                 "runway_stale": runway_stale,
+                "risk_metrics": status.metrics.model_dump() if status.metrics else None,
+                "positions": status.positions,
+                "report_failed": False,
             }
         return results
