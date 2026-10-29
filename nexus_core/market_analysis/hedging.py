@@ -237,14 +237,25 @@ def suggest_hedge_unlock(
     }
 
 
-async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
-    """分析投資組合的對沖有效性與績效歸因。"""
+async def analyze_hedge_performance(
+    user_id: int, *, include_virtual: bool = True, include_holdings: bool = False
+) -> Dict[str, Any]:
+    """分析投資組合的對沖有效性與績效歸因。
+
+    預設（含模擬倉、不含現貨）維持既有行為；盤後報告以
+    include_virtual=False, include_holdings=True 只歸因真實部位。
+    報價缺失的項目計入 unpriced_count，不靜默當成 0。
+    """
     from database.portfolio import get_user_portfolio
     from database.virtual_trading import get_open_virtual_trades
     from market_analysis.portfolio import get_option_chain_mid_iv
 
     real_trades = await asyncio.to_thread(get_user_portfolio, user_id)
-    virtual_trades = await asyncio.to_thread(get_open_virtual_trades, user_id)
+    virtual_trades = (
+        await asyncio.to_thread(get_open_virtual_trades, user_id)
+        if include_virtual
+        else []
+    )
 
     all_trades_normalized = []
     for t in real_trades:
@@ -275,6 +286,7 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
         )
 
     alpha_pnl, hedge_pnl, alpha_delta, hedge_delta = 0.0, 0.0, 0.0, 0.0
+    unpriced_count = 0
 
     for t in all_trades_normalized:
         current_price, _, _bid, _ask = await get_option_chain_mid_iv(
@@ -283,6 +295,8 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
             t["strike"],
             t["opt_type"],
         )
+        if not current_price > 0:
+            unpriced_count += 1
         pnl = (
             (current_price - t["entry_price"]) * t["quantity"] * 100
             if current_price > 0
@@ -295,6 +309,25 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
         else:
             alpha_pnl += pnl
             alpha_delta += delta
+
+    if include_holdings:
+        from database.holdings import get_user_holdings
+
+        holdings = await asyncio.to_thread(get_user_holdings, user_id)
+        for h in holdings:
+            qty = h.get("quantity") or 0.0
+            if qty == 0:
+                continue
+            try:
+                quote = await market_data_service.get_quote(h["symbol"])
+                price = float(quote["c"])
+            except Exception:
+                price = 0.0
+            if not price > 0:
+                unpriced_count += 1
+                continue
+            alpha_pnl += (price - (h.get("avg_cost") or 0.0)) * qty
+            alpha_delta += h.get("weighted_delta") or 0.0
 
     net_pnl = alpha_pnl + hedge_pnl
     hedge_ratio = abs(hedge_delta / alpha_delta) if alpha_delta != 0 else 0.0
@@ -315,6 +348,8 @@ async def analyze_hedge_performance(user_id: int) -> Dict[str, Any]:
         else "UNDER_HEDGED"
         if hedge_ratio < 0.8
         else "OPTIMAL",
+        "unpriced_count": unpriced_count,
+        "scope": "real_and_virtual" if include_virtual else "real_positions_only",
     }
 
 
