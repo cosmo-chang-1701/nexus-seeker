@@ -12,7 +12,6 @@ from cogs.embed_builders._ansi_utils import (
     _safe_float,
     _to_float_or_none,
     fmt_or_dash,
-    _is_macro_report_marker,
     _is_correlation_report_marker,
     _chunk_text_blocks,
     _format_macro_report_ansi,
@@ -119,6 +118,12 @@ def _format_to_target_center_style_with_title(title: str, text: str) -> str:
     return f"```ansi\n{content}\n```"
 
 
+def _uoa_str(value: Any) -> str:
+    """UOA 筆數：缺值顯示 `--`，不得當 0。"""
+    num = _to_float_or_none(value)
+    return "--" if num is None else str(int(num))
+
+
 def build_post_market_intelligence_embed(
     report_lines: List[str],
     hedge_analysis: Optional[Dict[str, Any]] = None,
@@ -127,68 +132,52 @@ def build_post_market_intelligence_embed(
     sectors_data: Optional[List[Dict[str, Any]]] = None,
     ai_commentary: Optional[str] = None,
     downside_fields: Optional[List[Tuple[str, str, bool]]] = None,
+    report_failed: bool = False,
 ) -> List[discord.Embed]:
-    """建立盤後綜合風險與 AI 策略報告 Embed (📋 盤後綜合風險與 AI 策略報告)"""
-    embed_color = discord.Color.blue()
-    if ai_commentary:
-        if "🚨" in ai_commentary or "🆘" in ai_commentary:
-            embed_color = discord.Color.red()
-        elif "⚠️" in ai_commentary:
-            embed_color = discord.Color.orange()
+    """建立盤後綜合風險與 AI 策略報告 Embed (📋 盤後綜合風險與 AI 策略報告)
 
-    embed = NexusEmbed(
-        title="📋 報告：盤後綜合風險與 AI 策略",
-        description="由 Nexus Seeker 風險引擎生成之每日風險控制結算報告。",
-        color=embed_color,
-        timestamp=datetime.now(timezone.utc),
-    )
-
+    `report_failed=True` 表示持倉結算失敗：各欄位改顯示「未產生」，不得呈現成
+    100% 現金或零曝險帳戶。
+    """
     runway_lines = format_runway_lines(runway, stale=runway_stale)
-    _add_ansi_field_safely(
-        embed,
-        "🏁 提領跑道 (Withdrawal Runway)",
-        _ansi_tree_lines([f"{_ANSI_W}{ln}{_ANSI_0}" for ln in runway_lines]),
-    )
-
-    positions_list = []
+    positions_list: List[str] = []
     debit_cost_val = "$0.00 USD"
     credit_cash_val = "$0.00 USD"
     pnl_val_str = "$0.00 USD"
 
     correlation_text: Optional[str] = None
-    if report_lines:
-        macro_index = -1
+    macro_text = "目前無宏觀風險數據。"
+    if report_failed:
+        macro_text = "持倉結算失敗，宏觀風險未產生。"
+        positions_text = "目前無持倉部位。"
+    elif report_lines:
+        correlation_index = -1
         for i, line in enumerate(report_lines):
-            if _is_macro_report_marker(line):
-                macro_index = i
+            if _is_correlation_report_marker(line):
+                correlation_index = i
                 break
-        if macro_index != -1:
-            positions_list = [
-                line.strip() for line in report_lines[:macro_index] if line.strip()
-            ]
-            correlation_index = -1
-            for i in range(macro_index + 1, len(report_lines)):
-                if _is_correlation_report_marker(report_lines[i]):
-                    correlation_index = i
-                    break
-            if correlation_index != -1:
-                macro_text = "\n".join(
-                    line.strip()
-                    for line in report_lines[macro_index:correlation_index]
-                    if line.strip()
-                )
-                correlation_text = "\n".join(
-                    line.strip()
-                    for line in report_lines[correlation_index:]
-                    if line.strip()
-                )
+        if correlation_index != -1:
+            correlation_text = "\n".join(
+                line.strip()
+                for line in report_lines[correlation_index:]
+                if line.strip()
+            )
+        head_lines = (
+            report_lines[:correlation_index]
+            if correlation_index != -1
+            else report_lines
+        )
+        macro_lines: List[str] = []
+        for line in head_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if "成本:" in stripped and "動作:" in stripped:
+                positions_list.append(stripped)
             else:
-                macro_text = "\n".join(
-                    line.strip() for line in report_lines[macro_index:] if line.strip()
-                )
-        else:
-            positions_list = [line.strip() for line in report_lines if line.strip()]
-            macro_text = "目前無宏觀風險數據。"
+                macro_lines.append(stripped)
+        if macro_lines:
+            macro_text = "\n".join(macro_lines)
         if positions_list:
             positions_text = _parse_and_format_positions_table(
                 positions_list, runway_lines
@@ -197,8 +186,30 @@ def build_post_market_intelligence_embed(
             positions_text = "目前無持倉部位。"
     else:
         positions_text = "目前無持倉部位。"
-        macro_text = "目前無宏觀風險數據。"
 
+    # 底色由確定性風險決定（宏觀文字），不再受 AI 評論內的標題 emoji 影響
+    if "🆘" in macro_text or "🚨" in macro_text:
+        embed_color = discord.Color.red()
+    elif "⚠️" in macro_text or report_failed:
+        embed_color = discord.Color.orange()
+    else:
+        embed_color = discord.Color.blue()
+
+    embed = NexusEmbed(
+        title="📋 報告：盤後綜合風險與 AI 策略",
+        description="由 Nexus Seeker 風險引擎生成之每日風險控制結算報告。",
+        color=embed_color,
+        timestamp=datetime.now(timezone.utc),
+    )
+
+    runway_lines_field = format_runway_lines(runway, stale=runway_stale)
+    _add_ansi_field_safely(
+        embed,
+        "🏁 提領跑道 (Withdrawal Runway)",
+        _ansi_tree_lines([f"{_ANSI_W}{ln}{_ANSI_0}" for ln in runway_lines_field]),
+    )
+
+    extra_fin_lines: List[str] = []
     if positions_list and positions_text and positions_text != "目前無持倉部位。":
         if "財務摘要 (Financial Summary)" in positions_text:
             table_part, summary_part = positions_text.split(
@@ -223,6 +234,13 @@ def build_post_market_intelligence_embed(
                 _clean_ansi(pnl_match.group(1).strip()) if pnl_match else "$0.00 USD"
             )
             positions_text = table_part.strip()
+            for sline in summary_part.split("\n"):
+                sline = sline.strip()
+                if "缺現價" in sline or "零 bid" in sline:
+                    cleaned = sline.replace("`*`", "").replace("`", "")
+                    cleaned = cleaned.replace("**", "").lstrip("* ").strip()
+                    if cleaned:
+                        extra_fin_lines.append(f" • {cleaned}")
 
         debit_cost_clean = debit_cost_val.replace("`", "").replace("**", "").strip()
         credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
@@ -232,24 +250,31 @@ def build_post_market_intelligence_embed(
         credit_cash_clean = "$0.00 USD"
         pnl_val_clean = "$0.00 USD"
 
+    pnl_num_match = re.search(r"([+-]?)\s*\$\s*([\d,]+(?:\.\d+)?)", pnl_val_clean)
+    pnl_num = 0.0
+    if pnl_num_match:
+        pnl_num = float(pnl_num_match.group(2).replace(",", ""))
+        if pnl_num_match.group(1) == "-":
+            pnl_num = -pnl_num
     pnl_color = (
         "\u001b[1;32m"
-        if (
-            "+" in pnl_val_clean
-            or ("-" not in pnl_val_clean and pnl_val_clean != "$0.00 USD")
-        )
+        if pnl_num > 0
         else "\u001b[1;31m"
+        if pnl_num < 0
+        else "\u001b[1;37m"
     )
-    if pnl_val_clean == "$0.00 USD":
-        pnl_color = "\u001b[1;37m"
 
-    fin_lines = [
-        "```ansi",
-        f" • 實質暴露 (Debit Cost)   : {debit_cost_clean}",
-        f" • 收取權利金 (Credit Cash) : {credit_cash_clean}",
-        f" • 未實現損益 (Unrealized)  : {pnl_color}{pnl_val_clean}\u001b[0m",
-        "```",
-    ]
+    if report_failed:
+        fin_lines = ["```ansi", " • ⚠️ 持倉結算失敗，數值未產生", "```"]
+    else:
+        fin_lines = [
+            "```ansi",
+            f" • 實質暴露 (Debit Cost)   : {debit_cost_clean}",
+            f" • 收取權利金 (Credit Cash) : {credit_cash_clean}",
+            f" • 未實現損益 (Unrealized)  : {pnl_color}{pnl_val_clean}\u001b[0m",
+            *extra_fin_lines,
+            "```",
+        ]
     embed.add_field(
         name="💰 資金與實質暴露 (Financial Summary)",
         value="\n".join(fin_lines),
@@ -289,6 +314,16 @@ def build_post_market_intelligence_embed(
             embed.add_field(
                 name=field_name, value=f"```ansi\n{chunk}\n```", inline=False
             )
+    elif report_failed:
+        embed.add_field(
+            name="📊 持倉明細 (Positions)",
+            value=(
+                "```ansi\n"
+                " • ⚠️ 持倉結算失敗：本次無法取得持倉與風險數據，以下不代表帳戶為空手。\n"
+                "```"
+            ),
+            inline=False,
+        )
     else:
         empty_lines = [
             "```ansi",
@@ -383,10 +418,14 @@ def build_post_market_intelligence_embed(
                     f" 動態 Tau (τ)     : {ha_dynamic_tau:.4f} (模型自適應調整)"
                 )
 
+            ha_unpriced = int(_safe_float(hedge_analysis.get("unpriced_count"), 0.0))
+            if ha_unpriced > 0:
+                hedge_lines.append(f" ⚠️ {ha_unpriced} 筆缺報價，未計入損益")
+
             hedge_lines.append("```")
 
             embed.add_field(
-                name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+                name="🛡️ 對沖績效歸因（真實部位・建倉至今累計）",
                 value="\n".join(hedge_lines),
                 inline=False,
             )
@@ -430,7 +469,7 @@ def build_post_market_intelligence_embed(
                         item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"
                     )
                     skew_str = fmt_or_dash(item.get("skew"), "+.1f")
-                    uoa_count = int(item.get("uoa_count", 0))
+                    uoa_count = _uoa_str(item.get("uoa_count"))
                     sector_content_lines.append(
                         f" • {symbol} ({sec_name})：\u001b[1;32m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol_str} ｜ Skew {skew_str} ｜ UOA {uoa_count}"
                     )
@@ -449,7 +488,7 @@ def build_post_market_intelligence_embed(
                         item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"
                     )
                     skew_str = fmt_or_dash(item.get("skew"), "+.1f")
-                    uoa_count = int(item.get("uoa_count", 0))
+                    uoa_count = _uoa_str(item.get("uoa_count"))
                     sector_content_lines.append(
                         f" • {symbol} ({sec_name})：\u001b[1;31m{change:+.2f}%\u001b[0m ｜ 量比 {rel_vol_str} ｜ Skew {skew_str} ｜ UOA {uoa_count}"
                     )
@@ -463,7 +502,7 @@ def build_post_market_intelligence_embed(
                 for item in unknown_sectors:
                     symbol = item.get("symbol", "N/A")
                     sec_name = item.get("name", "N/A")
-                    uoa_count = int(item.get("uoa_count", 0))
+                    uoa_count = _uoa_str(item.get("uoa_count"))
                     sector_content_lines.append(
                         f" • {symbol} ({sec_name})：--% ｜ UOA {uoa_count}"
                     )

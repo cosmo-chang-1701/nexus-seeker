@@ -2779,7 +2779,7 @@ def test_build_post_market_intelligence_embed_markdown_headers_and_independent_c
     assert "推薦策略 A" in strat_val
 
     # 2. Hedge Attribution ANSI colors
-    hedge_val = field_dict.get("🛡️ 對沖績效歸因 (Hedge Attribution)", "")
+    hedge_val = field_dict.get("🛡️ 對沖績效歸因（真實部位・建倉至今累計）", "")
     # Alpha (+300.00) is green (32m), Hedge (-200.00) is red (31m), Net (+100.00) is green (32m)
     assert "\033[1;32m$+300.00\033[0m" in hedge_val
     assert "\033[1;31m$-200.00\033[0m" in hedge_val
@@ -4505,7 +4505,7 @@ def test_build_post_market_intelligence_embed_target_center_styling_and_sector_m
     assert "•" in pos_val
 
     # 3. Hedge attribution
-    hedge_val = field_dict.get("🛡️ 對沖績效歸因 (Hedge Attribution)", "")
+    hedge_val = field_dict.get("🛡️ 對沖績效歸因（真實部位・建倉至今累計）", "")
     assert "OPTIMAL (對沖結構健康)" in hedge_val
     assert "0.0312" in hedge_val
     assert "85.0%" in hedge_val
