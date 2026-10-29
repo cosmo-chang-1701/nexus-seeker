@@ -27,7 +27,6 @@ from typing import List, Dict, Optional, Tuple
 
 from cogs.embed_builders._ansi_utils import (
     _clean_ansi,
-    _is_macro_report_marker,
     _is_correlation_report_marker,
     _chunk_text_blocks,
     _truncate_with_boundary,
@@ -73,40 +72,32 @@ def create_portfolio_report_embed(  # type: ignore
         embed.set_footer(text="盤後風險結算報告")
         return embed
 
-    macro_index = -1
-    for i, line in enumerate(report_lines):
-        if _is_macro_report_marker(line):
-            macro_index = i
-            break
-
     correlation_text: Optional[str] = None
-    if macro_index != -1:
-        positions_list = [
-            line.strip() for line in report_lines[:macro_index] if line.strip()
-        ]
-        correlation_index = -1
-        for i in range(macro_index + 1, len(report_lines)):
-            if _is_correlation_report_marker(report_lines[i]):
-                correlation_index = i
-                break
-        if correlation_index != -1:
-            macro_text = "\n".join(
-                line.strip()
-                for line in report_lines[macro_index:correlation_index]
-                if line.strip()
-            )
-            correlation_text = "\n".join(
-                line.strip()
-                for line in report_lines[correlation_index:]
-                if line.strip()
-            )
+    macro_text = "目前無宏觀風險數據。"
+    correlation_index = -1
+    for i, line in enumerate(report_lines):
+        if _is_correlation_report_marker(line):
+            correlation_index = i
+            break
+    if correlation_index != -1:
+        correlation_text = "\n".join(
+            line.strip() for line in report_lines[correlation_index:] if line.strip()
+        )
+    head_lines = (
+        report_lines[:correlation_index] if correlation_index != -1 else report_lines
+    )
+    positions_list: List[str] = []
+    macro_lines: List[str] = []
+    for line in head_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if "成本:" in stripped and "動作:" in stripped:
+            positions_list.append(stripped)
         else:
-            macro_text = "\n".join(
-                line.strip() for line in report_lines[macro_index:] if line.strip()
-            )
-    else:
-        positions_list = [line.strip() for line in report_lines if line.strip()]
-        macro_text = "目前無宏觀風險數據。"
+            macro_lines.append(stripped)
+    if macro_lines:
+        macro_text = "\n".join(macro_lines)
 
     runway_lines = format_runway_lines(runway, stale=runway_stale)
     positions_text = (
@@ -124,7 +115,15 @@ def create_portfolio_report_embed(  # type: ignore
     debit_cost_val = "$0.00 USD"
     credit_cash_val = "$0.00 USD"
     pnl_val_str = "$0.00 USD"
+    extra_fin_lines: List[str] = []
     if summary_text:
+        for sline in summary_text.split("\n"):
+            sline = sline.strip()
+            if "缺現價" in sline or "零 bid" in sline:
+                cleaned = sline.replace("`*`", "").replace("`", "")
+                cleaned = cleaned.replace("**", "").lstrip("* ").strip()
+                if cleaned:
+                    extra_fin_lines.append(f" • {cleaned}")
         debit_match = re.search(r"Debit Cost.*:\s*(.*)", summary_text)
         credit_match = re.search(r"Credit Cash.*:\s*(.*)", summary_text)
         pnl_match = re.search(r"Unrealized PnL.*:\s*(.*)", summary_text)
@@ -135,8 +134,7 @@ def create_portfolio_report_embed(  # type: ignore
         if pnl_match:
             pnl_val_str = _clean_ansi(pnl_match.group(1).strip())
 
-    color_probe = "\n".join([macro_text, pnl_val_str, str(hedge_analysis or "")])
-    embed_color = _report_embed_color(color_probe)
+    embed_color = _report_embed_color(macro_text)
     embed = NexusEmbed(
         title="📊 Nexus Seeker 盤後風險結算報告",
         description="由 Nexus Seeker 風險引擎生成之每日持倉結算與風險控管摘要。",
@@ -155,10 +153,25 @@ def create_portfolio_report_embed(  # type: ignore
     credit_cash_clean = credit_cash_val.replace("`", "").replace("**", "").strip()
     pnl_val_clean = pnl_val_str.replace("`", "").replace("**", "").strip()
 
+    pnl_num = 0.0
+    pnl_num_match = re.search(r"([+-]?)\s*\$\s*([\d,]+(?:\.\d+)?)", pnl_val_clean)
+    if pnl_num_match:
+        pnl_num = float(pnl_num_match.group(2).replace(",", ""))
+        if pnl_num_match.group(1) == "-":
+            pnl_num = -pnl_num
+    pnl_color = (
+        "\u001b[1;32m"
+        if pnl_num > 0
+        else "\u001b[1;31m"
+        if pnl_num < 0
+        else "\u001b[1;37m"
+    )
+
     financial_lines = [
         f" • 實質暴露 (Debit Cost)   : {debit_cost_clean}",
         f" • 收取權利金 (Credit Cash) : {credit_cash_clean}",
-        f" • 未實現損益 (Unrealized PnL): {pnl_val_clean}",
+        f" • 未實現損益 (Unrealized PnL): {pnl_color}{pnl_val_clean}\u001b[0m",
+        *extra_fin_lines,
     ]
     embed.add_field(
         name="💰 資金與實質暴露 (Financial Summary)",
@@ -250,8 +263,9 @@ def create_portfolio_report_embed(  # type: ignore
         ha_hedge_pnl = _safe_float(hedge_analysis.get("hedge_contribution"), 0.0)
         ha_effectiveness = _safe_float(hedge_analysis.get("effectiveness"), 0.0)
         ha_hedge_ratio = _safe_float(hedge_analysis.get("hedge_ratio"), 0.0)
-        ha_status = str(hedge_analysis.get("status", "N/A"))
+        ha_status = str(hedge_analysis.get("status") or "OPTIMAL")
         ha_dynamic_tau = hedge_analysis.get("dynamic_tau")
+        ha_unpriced = int(_safe_float(hedge_analysis.get("unpriced_count"), 0.0))
 
         has_active_hedge = (
             ha_hedge_ratio > 0.0
@@ -259,7 +273,13 @@ def create_portfolio_report_embed(  # type: ignore
             or bool(hedge_analysis.get("has_hedge"))
         )
 
+        hedge_lines: List[str] = []
         if has_active_hedge:
+            status_desc = {
+                "OPTIMAL": "OPTIMAL (對沖結構健康)",
+                "OVER_HEDGED": "OVER_HEDGED (過度對沖/拖累Alpha)",
+                "UNDER_HEDGED": "UNDER_HEDGED (對沖不足/需防下行)",
+            }.get(ha_status, ha_status)
             ha_status_color = (
                 "\033[1;32m"
                 if ha_status == "OPTIMAL"
@@ -267,26 +287,30 @@ def create_portfolio_report_embed(  # type: ignore
                 if ha_status == "OVER_HEDGED"
                 else "\033[1;31m"
             )
-            ha_pnl_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
+            ha_alpha_color = "\033[1;32m" if ha_alpha_pnl >= 0 else "\033[1;31m"
+            ha_hedge_color = "\033[1;32m" if ha_hedge_pnl >= 0 else "\033[1;31m"
+            ha_net_color = "\033[1;32m" if ha_net_pnl >= 0 else "\033[1;31m"
             hedge_lines = [
-                f" Alpha 選股 PnL   : {ha_pnl_color}${ha_alpha_pnl:+,.2f}\033[0m",
-                f" 對沖避險 PnL     : {ha_pnl_color}${ha_hedge_pnl:+,.2f}\033[0m",
-                f" 淨損益 (Net PnL)  : {ha_pnl_color}${ha_net_pnl:+,.2f}\033[0m",
+                f" Alpha 選股 PnL   : {ha_alpha_color}${ha_alpha_pnl:+,.2f}\033[0m",
+                f" 對沖避險 PnL     : {ha_hedge_color}${ha_hedge_pnl:+,.2f}\033[0m",
+                f" 淨損益 (Net PnL)  : {ha_net_color}${ha_net_pnl:+,.2f}\033[0m",
                 " --------------------------------------------------",
                 f" 對沖比率 (Hedge Ratio)  : {ha_hedge_ratio:.2%}",
                 f" 對沖有效性 (Effectiveness): {ha_effectiveness * 100:.1f}%",
-                f" 對沖狀態 : {ha_status_color}{ha_status}\033[0m",
+                f" 對沖狀態 : {ha_status_color}{status_desc}\033[0m",
             ]
             if ha_dynamic_tau is not None:
                 hedge_lines.append(
                     f" 動態 Tau (τ)      : {_safe_float(ha_dynamic_tau, 0.0):.4f}"
                 )
-            hedge_panel = "\n".join(hedge_lines)
+        if ha_unpriced > 0:
+            hedge_lines.append(f" ⚠️ {ha_unpriced} 筆缺報價，未計入損益")
 
+        if hedge_lines:
             embed.add_field(
-                name="🛡️ 對沖績效歸因 (Hedge Attribution)",
+                name="🛡️ 對沖績效歸因（真實部位・建倉至今累計）",
                 value=_safe_embed_codeblock_value(
-                    hedge_panel, " • 暫無對沖績效數據。", lang="ansi"
+                    "\n".join(hedge_lines), " • 暫無對沖績效數據。", lang="ansi"
                 ),
                 inline=False,
             )

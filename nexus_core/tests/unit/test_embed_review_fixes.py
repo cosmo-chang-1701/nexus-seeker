@@ -173,7 +173,7 @@ def test_after_market_field_lookup_by_name() -> None:
 
     embed = create_portfolio_report_embed(
         [
-            "🔹 **AAPL** ｜ `2026-12-18` ｜ `$200` **CALL**\n├─ 💰 成本: `$1.00` ｜ 📈 現價: `$2.00`\n"
+            "🔹 **AAPL** ｜ `2026-12-18` ｜ `$200` **CALL**\n├─ 💰 成本: `$1.00` ｜ 📈 現價: `$2.00`\n└─ 🎯 動作: HOLD\n"
         ],
         {},
         None,
@@ -181,6 +181,10 @@ def test_after_market_field_lookup_by_name() -> None:
     )
     names = [str(f.name) for f in embed.fields]
     assert any(n.startswith("📊 持倉明細") for n in names)
+    pos_val = next(
+        str(f.value) for f in embed.fields if str(f.name).startswith("📊 持倉明細")
+    )
+    assert "AAPL" in pos_val
 
 
 # 7. squeeze no-data row alignment
