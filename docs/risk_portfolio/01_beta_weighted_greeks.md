@@ -107,9 +107,9 @@ $$\Gamma_{\text{portfolio, SPY}} = \sum_{k \in \text{Options}} \Gamma_{\text{SPY
    `py_vollib` 的 analytical theta **已是每日值**（內部已除以 365），部位層級每日 Theta 美元值直接加總，不可再除以 365：
    $$\Theta_{\text{daily}} = \sum_{k \in \text{Options}} \Theta_{\text{daily}, k} \times Q_k \times 100$$
    `refresh_portfolio_greeks` 寫入 `assets.metadata.theta` 的即為此部位層級值；盤後報告與 `get_full_user_context()` 的 `total_theta` 過去重複除以 365，使組合 Theta 被縮小 365 倍。
-2. **Beta 加權 Vega（波動率曝險）**：
-   $$\text{Vega}_{\text{SPY}} = \sum_{k \in \text{Options}} \text{Vega}_k \times Q_k \times 100 \times w_k$$
-3. **Beta 加權 Vanna（二階波動-方向交叉敏感度）**：
+2. **Vega（波動率曝險，不做 Beta 加權）**：定義為「隱含波動率每 +1 點的美元損益」，直接加總、不依賴 SPY 現價；盤後報告顯示為「$ / IV +1 點」：
+   $$\text{Vega}_{\$} = \sum_{k \in \text{Options}} \text{Vega}_k \times Q_k \times 100$$
+3. **Beta 加權 Vanna（二階波動-方向交叉敏感度，維持加權）**：
    $$\text{Vanna}_{\text{SPY}} = \sum_{k \in \text{Options}} \text{Vanna}_k \times Q_k \times 100 \times w_k$$
 
 ---
@@ -135,7 +135,7 @@ flowchart TD
     CalcWeightOpt --> OptDelta[Delta_SPY = Delta_BSM * Q * 100 * w]
     CalcWeightOpt --> OptGamma[Gamma_SPY = Gamma_BSM * Q * 100 * w^2]
     CalcWeightOpt --> OptTheta[Daily Theta = Theta_annual * Q * 100 / 365]
-    CalcWeightOpt --> OptVega[Vega_SPY = Vega_BSM * Q * 100 * w]
+    CalcWeightOpt --> OptVega["Vega_$ = Vega_BSM * Q * 100（不加權）"]
 
     OptDelta --> AccumulateAll[累加全域總曝險]
     OptGamma --> AccumulateAll

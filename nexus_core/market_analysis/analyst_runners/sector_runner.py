@@ -92,49 +92,71 @@ async def gather_sector_rotation_data(bot: Any) -> dict:
 
     sem = asyncio.Semaphore(3)
 
-    async def _fetch_sector_data(symbol: str, name: str) -> Optional[dict[str, Any]]:
+    def _empty_row(symbol: str, name: str) -> dict[str, Any]:
+        return {
+            "symbol": symbol,
+            "name": name,
+            "pct_change": None,
+            "rel_vol": None,
+            "skew": None,
+            "skew_state": "N/A",
+            "uoa_count": None,
+        }
+
+    async def _fetch_sector_data(symbol: str, name: str) -> dict[str, Any]:
         async with sem:
             try:
-                df = await get_history_df(symbol, period="1mo")
-                if df.empty:
-                    return None
+                df = await get_history_df(symbol, period="2mo")
+                if df.empty or len(df) < 2:
+                    return _empty_row(symbol, name)
 
                 pct_change = (
                     (df["Close"].iloc[-1] - df["Close"].iloc[-2])
                     / df["Close"].iloc[-2]
                     * 100
                 )
+                # 量比 = 今日量 / 前 20 個交易日均量（不含今日）；樣本不足為 None
                 vol_current = df["Volume"].iloc[-1]
-                vol_avg = df["Volume"].tail(20).mean()
-                rel_vol = vol_current / vol_avg if vol_avg > 0 else 1.0
+                prior_vol = df["Volume"].iloc[-21:-1].dropna()
+                rel_vol: Optional[float] = None
+                if len(prior_vol) >= 5:
+                    vol_avg = prior_vol.mean()
+                    if vol_avg > 0:
+                        rel_vol = round(float(vol_current / vol_avg), 2)
 
+                skew: Any = None
+                skew_state = "N/A"
                 try:
                     skew_data = await SentimentEngine.calculate_skew(symbol)
+                    skew = skew_data.get("skew")
+                    skew_state = skew_data.get("state", "N/A")
                 except Exception:
-                    skew_data = {"skew": 0, "state": "N/A"}
+                    pass
 
+                uoa_count: Optional[int] = None
                 try:
                     uoa = await SentimentEngine.detect_uoa(symbol)
+                    uoa_count = len(uoa)
                 except Exception:
-                    uoa = []
+                    pass
 
                 return {
                     "symbol": symbol,
                     "name": name,
                     "pct_change": round(pct_change, 2),
-                    "rel_vol": round(rel_vol, 2),
-                    "skew": skew_data.get("skew", 0),
-                    "skew_state": skew_data.get("state", "N/A"),
-                    "uoa_count": len(uoa),
+                    "rel_vol": rel_vol,
+                    "skew": skew,
+                    "skew_state": skew_state,
+                    "uoa_count": uoa_count,
                 }
             except Exception as e:
                 logger.error(f"Error gathering data for {symbol}: {e}")
-                return None
+                return _empty_row(symbol, name)
 
     raw_results = await asyncio.gather(
         *[_fetch_sector_data(sym, name) for sym, name in SECTORS.items()]
     )
-    sector_results: list[dict] = [r for r in raw_results if r is not None]
+    sector_results: list[dict] = list(raw_results)
 
     poly_events = await _fetch_poly_events(bot)
 

@@ -237,11 +237,13 @@ class AnalystAgent(commands.Cog):
         from services.trading_service import TradingService
 
         ts = TradingService(self.bot)
+        gather_failed = False
         try:
             user_reports = await ts.get_after_market_report_data()
         except Exception as e:
             logger.error(f"Error gathering after market report data: {e}")
             user_reports = {}
+            gather_failed = True
 
         user_ids = database.get_all_user_ids()
         from cogs.embed_builder import build_post_market_intelligence_embed
@@ -253,6 +255,7 @@ class AnalystAgent(commands.Cog):
             user_ctx = database.get_full_user_context(uid)
 
             u_report = user_reports.get(uid, {})
+            report_failed = gather_failed or bool(u_report.get("report_failed"))
             report_lines = u_report.get("report_lines", [])
             hedge_analysis = u_report.get("hedge_analysis", {})
             runway = u_report.get("runway")
@@ -275,39 +278,42 @@ class AnalystAgent(commands.Cog):
                         "為確保系統穩定，盤後 AI 深度分析與歸因點評已暫停。"
                     )
                 else:
+                    spy_px = sector_rotation_data["spy_price"]
+                    risk_metrics = u_report.get("risk_metrics") or {}
+                    hedge = hedge_analysis or {}
+
+                    def _hedge_val(key: str) -> Any:
+                        val = hedge.get(key)
+                        return round(float(val), 2) if val is not None else None
+
+                    if report_failed:
+                        report_status = "failed"
+                    elif uid not in user_reports:
+                        report_status = "no_positions"
+                    else:
+                        report_status = "ok"
                     raw_data = {
+                        "report_status": report_status,
                         "macro_snapshot": {
                             "vix": sector_rotation_data["vix"],
                             "vix_tier": sector_rotation_data["vix_tier_name"],
-                            "spy_price": sector_rotation_data["spy_price"],
+                            "spy_price": (
+                                spy_px if spy_px is not None and spy_px > 0 else None
+                            ),
                         },
-                        "brinson_attribution_proxy": {
-                            "total_net_pnl": round(
-                                float(hedge_analysis.get("net_pnl") or 0.0), 2
-                            ),
-                            "alpha_selection_pnl": round(
-                                float(hedge_analysis.get("alpha_contribution") or 0.0),
-                                2,
-                            ),
-                            "market_hedge_pnl": round(
-                                float(hedge_analysis.get("hedge_contribution") or 0.0),
-                                2,
-                            ),
+                        "pnl_attribution_since_entry": {
+                            "scope": hedge.get("scope"),
+                            "total_net_pnl": _hedge_val("net_pnl"),
+                            "alpha_selection_pnl": _hedge_val("alpha_contribution"),
+                            "hedge_pnl": _hedge_val("hedge_contribution"),
+                            "unpriced_count": hedge.get("unpriced_count"),
                         },
                         "aggregate_risk_metrics": {
-                            "total_theta": round(user_ctx.total_theta, 2),
-                            "total_beta_delta": round(user_ctx.total_weighted_delta, 2),
-                            "portfolio_heat_pct": round(
-                                (
-                                    abs(user_ctx.total_weighted_delta)
-                                    * sector_rotation_data["spy_price"]
-                                    / user_ctx.capital
-                                    * 100
-                                )
-                                if user_ctx.capital > 0
-                                else 0,
-                                2,
-                            ),
+                            "total_theta": risk_metrics.get("total_theta"),
+                            "total_beta_delta": risk_metrics.get("total_beta_delta"),
+                            "net_delta_exposure_pct": risk_metrics.get("exposure_pct"),
+                            "margin_heat_pct": risk_metrics.get("portfolio_heat"),
+                            "total_margin_used": risk_metrics.get("total_margin_used"),
                             "withdrawal_runway": (
                                 {
                                     "stress_years": round(runway.stress_years, 1),
@@ -320,6 +326,7 @@ class AnalystAgent(commands.Cog):
                                 else None
                             ),
                         },
+                        "positions": list(u_report.get("positions") or [])[:20],
                         "sectors": sector_rotation_data["sectors"],
                         "poly_events": sector_rotation_data["poly_events"],
                         "spy_max_pain": sector_rotation_data["spy_max_pain"],
@@ -337,16 +344,24 @@ class AnalystAgent(commands.Cog):
                         ai_commentary = "⚠️ 無法生成 AI 報告分析。"
 
             downside_fields = None
-            try:
-                from cogs.embed_builders.alert_embeds.downside_alerts import (
-                    create_downside_snapshot_fields,
-                )
-                from services.downside_risk_service import get_downside_snapshots
+            if report_failed:
+                # 結算失敗：不帶對沖與下行欄位，避免出現 $+0.00 之類的假數字
+                hedge_analysis = {}
+            else:
+                try:
+                    from cogs.embed_builders.alert_embeds.downside_alerts import (
+                        create_downside_snapshot_fields,
+                    )
+                    from services.downside_risk_service import (
+                        get_downside_snapshots,
+                    )
 
-                simulated, realized = await get_downside_snapshots(uid)
-                downside_fields = create_downside_snapshot_fields(simulated, realized)
-            except Exception as e:
-                logger.warning(f"盤後戰報下行風險快照失敗 (uid={uid}): {e}")
+                    simulated, realized = await get_downside_snapshots(uid)
+                    downside_fields = create_downside_snapshot_fields(
+                        simulated, realized
+                    )
+                except Exception as e:
+                    logger.warning(f"盤後戰報下行風險快照失敗 (uid={uid}): {e}")
 
             embeds = build_post_market_intelligence_embed(
                 report_lines=report_lines,
@@ -356,6 +371,7 @@ class AnalystAgent(commands.Cog):
                 sectors_data=sector_rotation_data["sectors"],
                 ai_commentary=ai_commentary,
                 downside_fields=downside_fields,
+                report_failed=report_failed,
             )
             await notify_many(self.bot, uid, "briefing_post_market", embeds)
 
