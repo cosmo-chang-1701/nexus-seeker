@@ -29,6 +29,7 @@ PNL_KEYS = {
     "alpha_selection_pnl",
     "hedge_pnl",
     "unpriced_count",
+    "uncosted_count",
 }
 RISK_KEYS = {
     "total_theta",
@@ -319,6 +320,7 @@ async def test_dispatch_ok_contract() -> None:
             "alpha_contribution": 7.0,
             "hedge_contribution": 3.0,
             "unpriced_count": 1,
+            "uncosted_count": 2,
             "scope": "real",
         },
         "risk_metrics": _metrics().model_dump(),
@@ -332,6 +334,7 @@ async def test_dispatch_ok_contract() -> None:
     assert raw["aggregate_risk_metrics"]["margin_heat_pct"] == 12.0
     assert raw["aggregate_risk_metrics"]["net_delta_exposure_pct"] == 2.5
     assert raw["pnl_attribution_since_entry"]["hedge_pnl"] == 3.0
+    assert raw["pnl_attribution_since_entry"]["uncosted_count"] == 2
     assert len(raw["positions"]) == 20
     assert kwargs["report_failed"] is False
 

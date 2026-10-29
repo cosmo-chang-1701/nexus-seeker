@@ -140,3 +140,18 @@ def test_hedge_name_and_unpriced_line() -> None:
     hedge.pop("unpriced_count")
     val2 = _find(_fields(_build([], hedge_analysis=hedge)), "對沖績效歸因")
     assert "缺報價" not in val2
+    assert "未填成本" not in val2
+
+
+def test_hedge_uncosted_line() -> None:
+    hedge = {
+        "net_pnl": 10.0,
+        "alpha_contribution": 5.0,
+        "hedge_contribution": 5.0,
+        "hedge_ratio": 0.2,
+        "has_hedge": True,
+        "uncosted_count": 3,
+    }
+    val = _find(_fields(_build([], hedge_analysis=hedge)), "對沖績效歸因")
+    assert "3 筆現貨未填成本，未計入損益" in val
+    assert "缺報價" not in val

@@ -421,6 +421,9 @@ def build_post_market_intelligence_embed(
             ha_unpriced = int(_safe_float(hedge_analysis.get("unpriced_count"), 0.0))
             if ha_unpriced > 0:
                 hedge_lines.append(f" ⚠️ {ha_unpriced} 筆缺報價，未計入損益")
+            ha_uncosted = int(_safe_float(hedge_analysis.get("uncosted_count"), 0.0))
+            if ha_uncosted > 0:
+                hedge_lines.append(f" ℹ️ {ha_uncosted} 筆現貨未填成本，未計入損益")
 
             hedge_lines.append("```")
 
