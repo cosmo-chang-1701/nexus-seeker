@@ -244,7 +244,8 @@ async def analyze_hedge_performance(
 
     預設（含模擬倉、不含現貨）維持既有行為；盤後報告以
     include_virtual=False, include_holdings=True 只歸因真實部位。
-    報價缺失的項目計入 unpriced_count，不靜默當成 0。
+    報價缺失的項目計入 unpriced_count，不靜默當成 0；
+    現貨成本缺失或 ≤0 者不計損益、delta 照計，計入 uncosted_count。
     """
     from database.portfolio import get_user_portfolio
     from database.virtual_trading import get_open_virtual_trades
@@ -287,6 +288,7 @@ async def analyze_hedge_performance(
 
     alpha_pnl, hedge_pnl, alpha_delta, hedge_delta = 0.0, 0.0, 0.0, 0.0
     unpriced_count = 0
+    uncosted_count = 0
 
     for t in all_trades_normalized:
         current_price, _, _bid, _ask = await get_option_chain_mid_iv(
@@ -321,13 +323,21 @@ async def analyze_hedge_performance(
             try:
                 quote = await market_data_service.get_quote(h["symbol"])
                 price = float(quote["c"])
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    f"[Hedging] 使用者 {user_id} 持股 {h['symbol']} 報價取得失敗，"
+                    f"未計入損益: {e}"
+                )
                 price = 0.0
             if not price > 0:
                 unpriced_count += 1
                 continue
-            alpha_pnl += (price - (h.get("avg_cost") or 0.0)) * qty
             alpha_delta += h.get("weighted_delta") or 0.0
+            avg_cost = h.get("avg_cost") or 0.0
+            if avg_cost > 0:
+                alpha_pnl += (price - avg_cost) * qty
+            else:
+                uncosted_count += 1
 
     net_pnl = alpha_pnl + hedge_pnl
     hedge_ratio = abs(hedge_delta / alpha_delta) if alpha_delta != 0 else 0.0
@@ -349,6 +359,7 @@ async def analyze_hedge_performance(
         if hedge_ratio < 0.8
         else "OPTIMAL",
         "unpriced_count": unpriced_count,
+        "uncosted_count": uncosted_count,
         "scope": "real_and_virtual" if include_virtual else "real_positions_only",
     }
 

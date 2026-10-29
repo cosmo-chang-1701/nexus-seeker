@@ -1,5 +1,6 @@
 """盤後報告：對沖歸因（真實部位）與板塊輪動缺值語意測試。"""
 
+import logging
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -114,6 +115,71 @@ async def test_include_holdings_long_short_and_unpriced() -> None:
 
 
 @pytest.mark.asyncio
+async def test_holdings_quote_exception_logs_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    holdings = [
+        {"symbol": "BOOM", "quantity": 3, "avg_cost": 1.0, "weighted_delta": 3.0}
+    ]
+    with _hedge_patches(holdings, {}):
+        with caplog.at_level(logging.WARNING, logger="market_analysis.hedging"):
+            r = await analyze_hedge_performance(
+                1, include_virtual=False, include_holdings=True
+            )
+    assert r["unpriced_count"] == 2
+    assert r["uncosted_count"] == 0
+    assert any(
+        rec.levelno == logging.WARNING and "BOOM" in rec.getMessage()
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_holdings_missing_cost_excluded_from_pnl_keeps_delta() -> None:
+    holdings = [
+        {"symbol": "NOC", "quantity": 100, "avg_cost": None, "weighted_delta": -20.0},
+        {"symbol": "ZRC", "quantity": 100, "avg_cost": 0, "weighted_delta": -10.0},
+    ]
+    with _hedge_patches(holdings, {"NOC": 500.0, "ZRC": 500.0}):
+        r = await analyze_hedge_performance(
+            1, include_virtual=False, include_holdings=True
+        )
+    assert r["uncosted_count"] == 2
+    assert r["unpriced_count"] == 1  # 僅 BBB 選擇權
+    assert r["alpha_contribution"] == 100.0
+    # alpha delta = 50 + 10 - 20 - 10 = 30；hedge delta = -30
+    assert r["hedge_ratio"] == 1.0
+    assert r["status"] == "OPTIMAL"
+
+
+@pytest.mark.asyncio
+async def test_holdings_normal_cost_unchanged() -> None:
+    holdings = [
+        {"symbol": "LNG", "quantity": 10, "avg_cost": 100.0, "weighted_delta": 10.0}
+    ]
+    with _hedge_patches(holdings, {"LNG": 110.0}):
+        r = await analyze_hedge_performance(
+            1, include_virtual=False, include_holdings=True
+        )
+    assert r["alpha_contribution"] == 200.0
+    assert r["uncosted_count"] == 0
+    assert r["unpriced_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_holdings_nonpositive_quote_is_unpriced() -> None:
+    holdings = [
+        {"symbol": "NEG", "quantity": 5, "avg_cost": 10.0, "weighted_delta": 5.0}
+    ]
+    with _hedge_patches(holdings, {"NEG": 0.0}):
+        r = await analyze_hedge_performance(
+            1, include_virtual=False, include_holdings=True
+        )
+    assert r["unpriced_count"] == 2
+    assert r["uncosted_count"] == 0
+
+
+@pytest.mark.asyncio
 async def test_holdings_not_loaded_by_default() -> None:
     holdings = [
         {"symbol": "LNG", "quantity": 10, "avg_cost": 100.0, "weighted_delta": 10.0}
@@ -121,6 +187,7 @@ async def test_holdings_not_loaded_by_default() -> None:
     with _hedge_patches(holdings, {"LNG": 110.0}):
         r = await analyze_hedge_performance(1)
     assert r["alpha_contribution"] == 150.0
+    assert r["uncosted_count"] == 0
 
 
 def _hist(rows: int, last_vol: float = 200.0) -> pd.DataFrame:

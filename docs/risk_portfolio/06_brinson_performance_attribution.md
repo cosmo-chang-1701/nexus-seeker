@@ -178,7 +178,7 @@ $$\Delta_{\text{portfolio}} < 0 \;\nRightarrow\; \text{存在可解除的對沖}
 ## 6. 核心程式碼檔案路徑關聯
 
 - **對沖績效分析與動態 Tau 自我進化閉環**:
-  - `nexus_core/market_analysis/hedging.py`: `analyze_hedge_performance(user_id, *, include_virtual=True, include_holdings=False)` (line 240；盤後報告以 `include_virtual=False, include_holdings=True` 呼叫＝僅實單持倉含現貨，自建倉起累計；回傳額外含 `unpriced_count`、`scope`), `calculate_daily_effectiveness()` (line 356), `calculate_dynamic_tau()` (line 375)
+  - `nexus_core/market_analysis/hedging.py`: `analyze_hedge_performance(user_id, *, include_virtual=True, include_holdings=False)` (line 240；盤後報告以 `include_virtual=False, include_holdings=True` 呼叫＝僅實單持倉含現貨，自建倉起累計；回傳額外含 `unpriced_count`、`uncosted_count`（現貨報價正常但 `avg_cost` 缺失或 ≤0：不計損益、delta 照計）、`scope`), `calculate_daily_effectiveness()` (line 356), `calculate_dynamic_tau()` (line 375)
 - **分析中心投資組合執行管線 (Brinson Proxy 整合)**:
   - `nexus_core/market_analysis/analyst_runners/portfolio_runner.py`: lines 68–124 (`brinson_attribution_proxy`)
 - **自我進化歸因引擎與事件保護評分**:
