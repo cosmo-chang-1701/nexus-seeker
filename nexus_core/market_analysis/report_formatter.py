@@ -80,7 +80,11 @@ def format_macro_risk_report(
 
     # Theta
     theta_status = "✅ 現金流健康"
-    if theta_yield < 0.05:
+    if abs(total_theta) < 0.005:
+        theta_status = "➖ 無 Theta 部位 (現貨或無選擇權)"
+    elif total_theta < 0:
+        theta_status = "📉 **時間價值流失** (淨買方部位，每日支付 Theta)"
+    elif theta_yield < 0.05:
         theta_status = "⚠️ **收益率過低** (資金利用率不足)"
     elif theta_yield > 0.30:
         theta_status = "🔥 **過度收租** (暗示承擔了極高的尾部風險)"
@@ -105,26 +109,28 @@ def format_macro_risk_report(
     lines.append(EMPTY_LINE)
 
     # Vega & Vanna
-    lines.append(f"🔹 **組合淨 Vega:** `${total_vega:+.2f}`\n")
-    lines.append(" └─ 指向 IV 升高時的盈虧變動。\n")
-    lines.append(f"🔹 **組合淨 Vanna:** `${total_vanna:+.2f}`\n")
-    lines.append(" └─ 指向 IV 升高對 Delta 曝險的二次影響 (Hidden Delta)。\n")
+    lines.append(f"🔹 **組合淨 Vega:** `${total_vega:+.2f}` / IV +1 點\n")
+    lines.append(" └─ IV 上升 1 個百分點時的估計損益。\n")
+    lines.append(f"🔹 **組合淨 Vanna:** `{total_vanna / 100:+.2f}` 股 / IV +1 點\n")
+    lines.append(" └─ IV 上升 1 個百分點時，SPY 等效 Delta 的變動 (Hidden Delta)。\n")
 
     return lines
 
 
 def format_correlation_report(
-    high_corr_pairs: List[tuple], symbol_count: int
+    high_corr_pairs: Optional[List[tuple]], symbol_count: int
 ) -> List[str]:
     """
     格式化相關性報告。
     """
     lines = ["🕸️ **【非系統性集中風險 (板塊連動性)】**", EMPTY_LINE]
     lines.append(
-        f"🔹 **板塊相關性掃描:** 目標 `{symbol_count}` 檔 (60 日 Pearson 係數)\n"
+        f"🔹 **板塊相關性掃描:** 目標 `{symbol_count}` 檔 (60 個交易日 Pearson 係數)\n"
     )
 
-    if high_corr_pairs:
+    if high_corr_pairs is None:
+        lines.append("   ⚪ **資料不足，未評估**：無法取得足夠的共同交易日報酬。\n")
+    elif high_corr_pairs:
         lines.append("   🚨 **高度正相關警告:** 發現板塊重疊曝險！\n")
         for sym1, sym2, rho in high_corr_pairs:
             lines.append(f"      ⚠️ `{sym1}` & `{sym2}` (ρ = {rho:.2f})\n")
