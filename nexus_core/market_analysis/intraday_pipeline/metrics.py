@@ -5,7 +5,6 @@ import logging
 import math
 from datetime import datetime
 from typing import Any, Dict, Optional
-import market_time
 
 import pandas as pd
 
@@ -119,86 +118,6 @@ def _relative_strength_vs_spy(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> f
     from market_analysis.risk_engine import calculate_relative_strength_index
 
     return round(calculate_relative_strength_index(df_stock, df_spy, n=20), 4)
-
-
-async def _estimate_options_wall_metrics(
-    symbol: str,
-    current_price: float,
-    dividend_yield: float,
-) -> tuple[float | None, float | None]:
-    from market_analysis.greeks import calculate_greeks, calculate_vanna
-    from services import market_data_service
-
-    expiries = await market_data_service.get_all_option_expiries(symbol)
-    if not expiries:
-        return None, None
-
-    expiry = expiries[0]
-    chain = await market_data_service.get_option_chain(symbol, expiry)
-    if chain is None or chain.puts.empty:
-        return None, None
-
-    t_years = max(market_time.days_to_expiry_et(expiry), 7) / 365.0
-
-    puts = chain.puts.copy()
-    puts = puts.dropna(subset=["strike", "openInterest", "impliedVolatility"])
-    if puts.empty:
-        return None, None
-
-    max_wall_score = -1.0
-    max_wall_strike = current_price
-    for _, row in puts.iterrows():
-        greeks = calculate_greeks(
-            "put",
-            current_price,
-            float(row["strike"]),
-            t_years,
-            float(row["impliedVolatility"]),
-            dividend_yield,
-        )
-        gamma_score = abs(float(greeks["gamma"])) * float(row["openInterest"]) * 100.0
-        if gamma_score > max_wall_score:
-            max_wall_score = gamma_score
-            max_wall_strike = float(row["strike"])
-
-    call_vanna = 0.0
-    put_vanna = 0.0
-    try:
-        atm_call_idx = (chain.calls["strike"] - current_price).abs().idxmin()
-        atm_call = chain.calls.loc[atm_call_idx]
-        call_vanna = float(
-            calculate_vanna(
-                "c",
-                current_price,
-                float(atm_call["strike"]),
-                t_years,
-                float(atm_call["impliedVolatility"]),
-                dividend_yield,
-            )
-        )
-    except Exception:
-        pass
-
-    try:
-        atm_put_idx = (puts["strike"] - current_price).abs().idxmin()
-        atm_put = puts.loc[atm_put_idx]
-        put_vanna = float(
-            calculate_vanna(
-                "p",
-                current_price,
-                float(atm_put["strike"]),
-                t_years,
-                float(atm_put["impliedVolatility"]),
-                dividend_yield,
-            )
-        )
-    except Exception:
-        pass
-
-    avg_vanna = (abs(call_vanna) + abs(put_vanna)) / (
-        2.0 if call_vanna or put_vanna else 1.0
-    )
-    return round(max_wall_strike, 4), round(avg_vanna, 4)
 
 
 async def build_enhanced_watchlist_metrics(
