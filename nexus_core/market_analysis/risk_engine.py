@@ -144,21 +144,28 @@ def calculate_beta(df_stock: pd.DataFrame, df_spy: pd.DataFrame) -> float:
 
 async def analyze_sector_correlation(
     symbols: List[str],
-) -> List[Tuple[str, str, float]]:
-    """計算板塊非系統性集中風險 (Async)。"""
+) -> Optional[List[Tuple[str, str, float]]]:
+    """計算板塊非系統性集中風險 (Async)。
+
+    回傳 `[]` 代表「無可比較標的或無高相關配對」；回傳 `None` 代表「資料不足或
+    運算失敗，未能評估」，呼叫端不得把它當成分散性良好。
+    """
     if len(symbols) <= 1:
         return []
     try:
         dfs = {}
-        tasks = {sym: market_data_service.get_history_df(sym, "60d") for sym in symbols}
+        tasks = {sym: market_data_service.get_history_df(sym, "6mo") for sym in symbols}
         results = await asyncio.gather(*tasks.values())
         for sym, df in zip(tasks.keys(), results):
             if not df.empty:
-                dfs[sym] = df["Close"]
+                # 取最近 61 筆收盤 → 最多 60 個日報酬
+                dfs[sym] = df["Close"].tail(61)
         if len(dfs) <= 1:
-            return []
+            return None
         hist_data = pd.DataFrame(dfs)
         returns = hist_data.pct_change().dropna()
+        if len(returns) < 40:
+            return None
         corr_matrix = returns.corr()
         high_corr_pairs = []
         for i in range(len(corr_matrix.columns)):
@@ -171,7 +178,7 @@ async def analyze_sector_correlation(
         return high_corr_pairs
     except Exception as e:
         logger.error(f"相關性矩陣運算失敗: {e}")
-        return []
+        return None
 
 
 # 「賣出開倉」字元：STO 必須排除 STOCK (否則 "LONG_STOCK" / "BUY STOCK" 會被
