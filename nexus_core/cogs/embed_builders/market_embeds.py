@@ -30,6 +30,7 @@ from cogs.embed_builders._embed_helpers import (
     _ANSI_G,
     _ANSI_R,
     _ANSI_W,
+    ANSI_CONTINUATION_FIELD_NAME,
     _add_ansi_field_safely,
     _ansi_tree_lines,
     fedwatch_source_note,
@@ -587,6 +588,149 @@ def _render_grouped_insights(groups: dict[str, list[str]]) -> str:
     if not lines:
         return _INSIGHTS_EMPTY_TEXT
     return "\n".join(lines)
+
+
+# ---- 多欄位警示排版（批次雷達頁面預算內） ----
+_INSIGHTS_FIELD_NAME = "💡 即時聯動警示 (Real-time Insights)"
+_INSIGHTS_PAGE_BUDGET = 5300
+_INSIGHTS_MAX_FIELDS = 3
+_INSIGHTS_FIELD_BODY_MAX = 920
+_INSIGHTS_MULTI_MAX_BULLETS = 30
+_INSIGHTS_FIELD_FENCE_OVERHEAD = len("```ansi\n\n```")
+
+_TIER_CRITICAL_EMOJIS = ("🚨", "🔴", "⛔")
+_TIER_INFO_EMOJIS = ("🚀", "🟢", "⏱️", "📈")
+_TIER_DATA_QUALITY_EMOJIS = ("🕓", "🌙")
+
+
+def _insight_tier(bullet: str) -> int:
+    """依項目符號後的 emoji 判斷嚴重度：0 嚴重、1 警告（含未知）、2 機會／資訊、3 資料品質。"""
+    text = bullet.strip()
+    if text.startswith("•"):
+        text = text[1:].lstrip()
+    if text.startswith(_TIER_CRITICAL_EMOJIS):
+        return 0
+    if text.startswith(_TIER_DATA_QUALITY_EMOJIS):
+        return 3
+    if text.startswith(_TIER_INFO_EMOJIS):
+        return 2
+    return 1
+
+
+def _pack_insight_fields(
+    kept: list[tuple[str, str, int]], dropped: int, max_fields: int, total_budget: int
+) -> list[str] | None:
+    """將已選定的警示（依標的順序、標的內依嚴重度）切成最多 max_fields 個欄位本文。
+
+    塞不下時回傳 None。跨欄的標的會在新欄頂端重複標頭。
+    """
+    fields: list[list[str]] = [[]]
+    lens: list[int] = [0]
+    cur_sym: str | None = None
+    # 只含標頭而尚無項目符號的狀態不會出現：標頭永遠與其第一則一起放入
+
+    def add(lines_cost: int, new_lines: list[str]) -> bool:
+        if lens[-1] + lines_cost > _INSIGHTS_FIELD_BODY_MAX:
+            return False
+        fields[-1].extend(new_lines)
+        lens[-1] += lines_cost
+        return True
+
+    entries: list[tuple[str, str]] = [(sym, text) for sym, text, _ in kept]
+    if dropped:
+        entries.append(("", f"• …其餘 {dropped} 則警示略"))
+    for sym, text in entries:
+        header = f"\u001b[1;36m{sym}\u001b[0m" if sym else ""
+        while True:
+            nonempty = bool(fields[-1])
+            if sym and sym != cur_sym:
+                sep = 2 if nonempty else 0
+                cost = sep + len(header) + 1 + len(text)
+                new_lines = ([""] if nonempty else []) + [header, text]
+            else:
+                sep = 1 if nonempty else 0
+                cost = sep + len(text)
+                new_lines = [text]
+                if nonempty is False and sym:
+                    # 新欄頂端重複標頭
+                    cost = len(header) + 1 + len(text)
+                    new_lines = [header, text]
+            if add(cost, new_lines):
+                break
+            if not nonempty:
+                return None
+            fields.append([])
+            lens.append(0)
+            cur_sym = None if sym else cur_sym
+            if len(fields) > max_fields:
+                return None
+        if sym:
+            cur_sym = sym
+    bodies = ["\n".join(f) for f in fields]
+    if sum(len(b) for b in bodies) > total_budget:
+        return None
+    return bodies
+
+
+def _render_grouped_insights_fields(
+    groups: dict[str, list[str]], available: int
+) -> list[str]:
+    """回傳警示欄位本文列表（1~3 欄）。
+
+    全部放得進單欄時與 _render_grouped_insights 完全相同；放不下時依嚴重度
+    （tier 小者優先，同級保留原順序）挑選，再依原標的順序、標的內依嚴重度排版。
+    """
+    single = _render_grouped_insights(groups)
+    total = sum(1 for items in groups.values() for it in items if it.strip())
+    if "…其餘" not in single.rsplit("\n", 1)[-1] or total == 0:
+        return [single]
+
+    first_cost = len(_INSIGHTS_FIELD_NAME) + _INSIGHTS_FIELD_FENCE_OVERHEAD
+    cont_cost = len(ANSI_CONTINUATION_FIELD_NAME) + _INSIGHTS_FIELD_FENCE_OVERHEAD
+    max_fields = 1
+    for k in range(_INSIGHTS_MAX_FIELDS, 1, -1):
+        if available - first_cost - (k - 1) * cont_cost >= 200 * k:
+            max_fields = k
+            break
+    total_budget = max(
+        min(
+            available - first_cost - (max_fields - 1) * cont_cost,
+            max_fields * _INSIGHTS_FIELD_BODY_MAX,
+        ),
+        0,
+    )
+
+    ranked: list[tuple[int, int, int, str, str]] = []
+    order = 0
+    for sym_idx, (sym, items) in enumerate(groups.items()):
+        for it in items:
+            ins = it.strip()
+            if not ins:
+                continue
+            ins = _truncate_with_boundary(ins, 800)
+            ranked.append((_insight_tier(ins), order, sym_idx, sym, ins))
+            order += 1
+    ranked.sort(key=lambda r: (r[0], r[1]))
+
+    def arrange(
+        chosen: list[tuple[int, int, int, str, str]],
+    ) -> list[tuple[str, str, int]]:
+        ordered = sorted(chosen, key=lambda r: (r[2], r[0], r[1]))
+        return [(r[3], r[4], r[0]) for r in ordered]
+
+    best: list[str] | None = None
+    limit = min(len(ranked), _INSIGHTS_MULTI_MAX_BULLETS)
+    for n in range(1, limit + 1):
+        dropped = len(ranked) - n
+        packed = _pack_insight_fields(
+            arrange(ranked[:n]), dropped, max_fields, total_budget
+        )
+        if packed is None:
+            break
+        best = packed
+    if best is None:
+        return [single]
+    return best
 
 
 def build_radar_scan_embed(
@@ -1862,8 +2006,6 @@ def build_radar_scan_embed(
         if page_has_degraded_row:
             embed.title = f"{embed.title} [快取/降級]"
 
-        insights_str = _render_grouped_insights(insights_by_sym)
-
         if macro_ansi_header:
             # macro_ansi_header[0] is the title, macro_ansi_header[1:-1] is the content
             macro_content = "\n".join(macro_ansi_header[1:-1])
@@ -1918,12 +2060,6 @@ def build_radar_scan_embed(
 
         embed.description = ""
 
-        embed.add_field(
-            name="💡 即時聯動警示 (Real-time Insights)",
-            value=f"```ansi\n{insights_str}\n```",
-            inline=False,
-        )
-
         # 獨立風控圖例與指標指引欄位 (避免擠佔表格 codeblock 字元數)
         legend_notes = (
             "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
@@ -1937,9 +2073,28 @@ def build_radar_scan_embed(
             legend_notes += (
                 "\n註: PutWall 後綴 * 為 Max Pain×0.9 代理估算，非 GEX 實測。"
             )
+        legend_name = "📋 雷達圖例與風控指引"
+        legend_value = f"```ansi\n{legend_notes}\n```"
+        insight_available = _INSIGHTS_PAGE_BUDGET - (
+            len(embed) + len(legend_name) + len(legend_value)
+        )
+        insight_bodies = _render_grouped_insights_fields(
+            insights_by_sym, insight_available
+        )
+        for body_idx, body in enumerate(insight_bodies):
+            embed.add_field(
+                name=(
+                    _INSIGHTS_FIELD_NAME
+                    if body_idx == 0
+                    else ANSI_CONTINUATION_FIELD_NAME
+                ),
+                value=f"```ansi\n{body}\n```",
+                inline=False,
+            )
+
         embed.add_field(
-            name="📋 雷達圖例與風控指引",
-            value=f"```ansi\n{legend_notes}\n```",
+            name=legend_name,
+            value=legend_value,
             inline=False,
         )
 
