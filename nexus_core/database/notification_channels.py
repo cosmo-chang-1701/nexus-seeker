@@ -60,6 +60,7 @@ NotificationKey = Literal[
     "alpha_market_signals",
     "alpha_option_scan",
     "alpha_price_volume_watch",
+    "alpha_wall_break",
     # 🌐 全天候情報
     "alpha_polymarket",
     "alpha_wti_oil",
@@ -150,7 +151,7 @@ MODULES: tuple[NotificationModule, ...] = (
         "intel_intraday",
         "📡 盤中情報",
         "盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、"
-        "NRO 期權掃描與價量突破警報。",
+        "NRO 期權掃描、價量突破警報與 GEX 牆突破／跌破確認推播。",
     ),
     NotificationModule(
         "intel_always",
@@ -344,6 +345,14 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "INTRADAY",
         noise=True,
         user_configured=True,
+    ),
+    NotificationChannel(
+        "alpha_wall_break",
+        "intel_intraday",
+        "🧱 GEX 牆突破／跌破確認推播 (自選標的，未校準)",
+        "INTEL",
+        "INTRADAY",
+        noise=True,
     ),
     # ------------------------------------------------------------- 🌐 全天候情報
     NotificationChannel(
