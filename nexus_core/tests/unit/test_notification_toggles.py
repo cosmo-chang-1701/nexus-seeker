@@ -31,7 +31,7 @@ def test_default_all_enabled(db_conn: Any):  # type: ignore
     user_id = 999111
     settings = get_user_notification_settings(user_id)
     assert len(settings) == len(ALL_NOTIFICATION_KEYS)
-    assert len(ALL_NOTIFICATION_KEYS) == 28
+    assert len(ALL_NOTIFICATION_KEYS) == 29
 
     for key in ALL_NOTIFICATION_KEYS:
         expected = key != "system_lifecycle"
@@ -496,6 +496,7 @@ def test_full_preset_assertions_all_keys(db_conn: Any):  # type: ignore
         "alpha_market_signals": False,
         "alpha_option_scan": False,
         "alpha_price_volume_watch": True,
+        "alpha_wall_break": False,
         "alpha_polymarket": False,
         "alpha_wti_oil": True,
         "briefing_pre_market": True,
@@ -1008,3 +1009,14 @@ def test_v087_deletes_only_removed_radar_channels(db_conn: Any) -> None:
     ]
     for key in ("heartbeat_watchlist", "intel_market_scenario"):
         assert key not in ALL_NOTIFICATION_KEYS
+
+
+def test_alpha_wall_break_channel(db_conn: Any) -> None:
+    """GEX 牆突破／跌破推播：列於盤中情報模組、預設開啟、可開關。"""
+    assert "alpha_wall_break" in TRADING_MODULES["intel_intraday"]["items"]
+    assert DEFAULT_NOTIFICATION_SETTINGS["alpha_wall_break"] is True
+    user_id = 999777
+    set_user_notification_setting(user_id, "alpha_wall_break", False)
+    assert is_notification_enabled(user_id, "alpha_wall_break") is False
+    set_user_notification_setting(user_id, "alpha_wall_break", True)
+    assert is_notification_enabled(user_id, "alpha_wall_break") is True

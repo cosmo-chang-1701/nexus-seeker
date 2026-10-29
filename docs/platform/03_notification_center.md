@@ -23,7 +23,7 @@
 以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。頻道的 key、模組、標籤與屬性只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`DEFAULT_NOTIFICATION_SETTINGS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生。
 
 #### 2.2.1 分類準則：依對 B&H 投組報酬分佈的影響分組
-使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 28 個頻道）：
+使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 29 個頻道）：
 
 | 模組 | `risk_role` | 頻道 | 內容 |
 |---|---|---|---|
@@ -48,12 +48,13 @@
 | | | `alpha_market_signals` | DDP、廉價期權（Gamma Squeeze SPEAR 已於 2026-10-17 退役） |
 | | | `alpha_option_scan` | NRO 期權掃描執行決策、PowerSqueeze、期權掃描卡 |
 | | | `alpha_price_volume_watch` | 個股 15 分鐘價量突破（自訂門檻） |
+| | | `alpha_wall_break` | 🧱 GEX 牆突破／跌破確認推播（自選標的，未校準）：前一交易日收盤牆被突破／跌破的盤中候選與 T+1 確認；FAKE／UNDETERMINED 只記錄不推播。`INTRADAY`、雜訊、預設開啟，環境變數 `WALL_BREAK_ALERT_ENABLED` 可整體關閉推播；去重前綴 `wall_break_`（`services/wall_break_service.py`，見 [`../microstructure/07_wall_break_verification.md`](../microstructure/07_wall_break_verification.md)） |
 | 🌐 全天候情報 | `INTEL` | `alpha_polymarket`、`alpha_wti_oil` | Polymarket 巨鯨與機率突變；WTI 原油（自訂門檻） |
 | 📋 定時戰報與系統 | `BRIEFING` | `briefing_pre_market`、`briefing_post_market`、`briefing_weekly_vtr` | 盤前／盤後／VTR 週報 |
 | | | `vtr_virtual_trades` | 虛擬交易室自動轉倉／平倉（紙上交易，不涉及真實部位） |
 | | | `system_lifecycle` | 機器人啟動／關閉廣播（**預設關閉**） |
 
-`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、NRO 期權掃描與價量突破警報」），不再提自選雷達。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
+`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、NRO 期權掃描與價量突破警報」），不再提自選雷達；新增 `alpha_wall_break` 後，該模組亦涵蓋 GEX 牆突破／跌破確認推播。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
 
 #### 2.2.2 動態轉倉指令的頻道對照
 `database/notification_channels.py::resolve_rollover_channel()` 取代 `portfolio_monitor.py` 過去的 if/elif 鏈，優先序：
@@ -143,6 +144,7 @@ self.update_settings._callback = compat_callback
 - `nexus_core/database/migrations/v068_add_trading_strategy.py`：`trading_strategy` 欄位遷移
 - `nexus_core/database/migrations/v061_consolidate_notification_settings.py`：通知偏好 4 模組頻道整併遷移（當時為 13 頻道）
 - `nexus_core/database/migrations/v078_backfill_advisory_entry_signal.py`：以 `heartbeat_symbol_deep` 回填 `advisory_entry_signal`
+- `nexus_core/database/migrations/v097_add_wall_break_tables.py`：建立牆錨點與事件表，並依使用者明確的 `alpha_price_volume_watch` 設定回填 `alpha_wall_break`（比照 `v070`／`v078`，已靜音盤中雜訊者不會被悄悄重新訂閱）
 - `nexus_core/database/migrations/v081_split_notification_channels.py`：依下行風險影響拆分頻道並以母頻道回填
 - `nexus_core/tests/unit/test_rollover_channel_routing.py`：轉倉情境／出場分層 → 頻道對照的窮舉測試
 - `nexus_core/database/migrations/v079_add_portfolio_mode.py`：`portfolio_mode` 欄位遷移

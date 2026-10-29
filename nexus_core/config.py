@@ -116,6 +116,11 @@ REGIME_III_B_DRY_RUN = (
     get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
 )
 
+# GEX 牆突破／跌破推播開關 (預設開啟)：只關閉推播，錨點與事件的資料蒐集照常進行。
+WALL_BREAK_ALERT_ENABLED = (
+    get_env_or_secret("WALL_BREAK_ALERT_ENABLED", "true").lower() == "true"
+)
+
 # 基本面分析管線 (Fundamental Event Pipeline) 核心開關與前向乾跑標記
 ENABLE_FUNDAMENTAL_PIPELINE_LOG = (
     get_env_or_secret("ENABLE_FUNDAMENTAL_PIPELINE_LOG", "true").lower() == "true"

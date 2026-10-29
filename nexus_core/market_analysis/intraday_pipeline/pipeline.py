@@ -76,6 +76,10 @@ class IntradayScanPipeline:
         self._last_scan_started: Optional[datetime] = None
         # 進場顧問 radar 補抓的併發上限 (比照 portfolio_monitor.py 的 Semaphore(3))。
         self._radar_fetch_sem = asyncio.Semaphore(3)
+        # GEX 牆突破／跌破：同一輪內同一標的只計算一次，多位使用者共用結果。
+        from services.wall_break_service import WallBreakMonitor
+
+        self._wall_break_monitor = WallBreakMonitor()
 
     def start(self) -> None:
         """啟動異步監控管道"""
@@ -620,6 +624,97 @@ class IntradayScanPipeline:
         except Exception as e:
             logger.warning(f"[{ticker}] 進場顧問派發失敗 (uid={user_id}): {e}")
 
+    async def _dispatch_wall_break_alerts(
+        self,
+        user_id: int,
+        ticker: str,
+        watchlist_eval: Optional[WatchlistEvaluation],
+    ) -> None:
+        """GEX 牆突破／跌破推播（通道 alpha_wall_break）。
+
+        與心跳、進場顧問完全獨立。資料蒐集（錨點、事件、T+1 結算）一律執行，
+        即使推播開關關閉——事件表是前向蒐集紀錄。只推真突破：盤中 CANDIDATE 與
+        T+1 CONFIRMED；FAKE／UNDETERMINED 只記錄不推播。任何失敗只記錄警告。
+        """
+        try:
+            import config
+
+            outcome = await self._wall_break_monitor.process_symbol(
+                ticker, watchlist_eval
+            )
+            if not config.WALL_BREAK_ALERT_ENABLED:
+                return
+            if not outcome.intraday and not outcome.t1:
+                return
+
+            from cogs.embed_builders.wall_break_embeds import (
+                create_wall_break_embed,
+                create_wall_break_t1_embed,
+            )
+            from services.notification_dispatch_recorder import DispatchRecord
+            from services.notification_dispatcher import notify
+
+            sym = ticker.upper()
+            for result in outcome.intraday:
+                if result.verdict != "CANDIDATE":
+                    continue
+                try:
+                    trig = result.trigger
+                    await notify(
+                        self.bot,
+                        user_id,
+                        "alpha_wall_break",
+                        embed=create_wall_break_embed(sym, result),
+                        dedup_key=(
+                            f"wall_break_{user_id}_{sym}_{trig.direction}_"
+                            f"{trig.trigger}_{trig.bar_time.strftime('%Y%m%d')}"
+                        ),
+                        record=DispatchRecord(
+                            symbol=sym,
+                            signal_kind="INFO",
+                            scenario=result.label,
+                            action=f"WALL_BREAK_{trig.trigger}",
+                            direction=(
+                                "LONG" if trig.direction == "BREAKOUT" else "SHORT"
+                            ),
+                            price=trig.close,
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[{sym}] 牆突破盤中推播失敗 (uid={user_id}): {e}")
+
+            for row, ev, t1 in outcome.t1:
+                if t1.verdict != "CONFIRMED":
+                    continue
+                try:
+                    event_date = str(row["trade_date"])
+                    await notify(
+                        self.bot,
+                        user_id,
+                        "alpha_wall_break",
+                        embed=create_wall_break_t1_embed(sym, event_date, ev, t1),
+                        dedup_key=(
+                            f"wall_break_t1_{user_id}_{sym}_{ev.direction}_"
+                            f"{event_date.replace('-', '')}"
+                        ),
+                        record=DispatchRecord(
+                            sym,
+                            "INFO",
+                            scenario=f"{t1.label}_T1",
+                            action="WALL_BREAK_T1_CLOSE_BEYOND",
+                            direction="LONG" if ev.direction == "BREAKOUT" else "SHORT",
+                            price=(
+                                watchlist_eval.metrics.current_price
+                                if watchlist_eval is not None
+                                else None
+                            ),
+                        ),
+                    )
+                except Exception as e:
+                    logger.warning(f"[{sym}] 牆突破 T+1 推播失敗 (uid={user_id}): {e}")
+        except Exception as e:
+            logger.warning(f"[{ticker}] 牆突破派發失敗 (uid={user_id}): {e}")
+
     async def _run_loop(self) -> None:
         while self.is_running:
             try:
@@ -694,6 +789,7 @@ class IntradayScanPipeline:
                     continue
 
                 self._last_scan_started = datetime.now(ny_tz)
+                self._wall_break_monitor.begin_cycle()
                 logger.info(
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
@@ -766,6 +862,9 @@ class IntradayScanPipeline:
                             # 都不影響這裡，每檔標的每輪一律評估一次。
                             await self._dispatch_entry_advisor_alert(
                                 uid, ticker, watchlist_eval, ctx, now_ny
+                            )
+                            await self._dispatch_wall_break_alerts(
+                                uid, ticker, watchlist_eval
                             )
 
                         except Exception as ticker_err:
