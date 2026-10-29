@@ -169,6 +169,12 @@ flowchart TD
 | `APPROACH_ATR_MULT` | 0.5 | 衝擊判定距離（× ATR₁D；只用於標註） | `squeeze_entry/resistance.py` |
 | `_BREAKOUT_LOOKBACK` | 3 | 日線突破回看根數 | `squeeze_entry/resistance.py` |
 | `SQUEEZE_ENTRY_DRY_RUN` | `true` | 只記錄、不推播 | `config.py` |
+| `SHADOW_CEILING_ATR` | 1.5 | 影子旗標 `sv_f_ceil`：CallWall／上方負 GEX 泥淖距現價 ≤ 1.5 ATR₁D；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_SKEW_PCTL` | 80.0 | 影子旗標 `sv_f_skew`：`skew_percentile` ≥ 80；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_MP_MAX_DTE` / `SHADOW_MP_DIST_PCT` | 2 / 3.0 | 影子旗標 `sv_f_mp`：Max Pain 到期 ≤ 2 日、淨 GEX 為正且現價高於 Max Pain 逾 3%；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_MIN_RR` | 2.0 | 影子旗標 `sv_f_rr`：牆位盈虧比 < 2；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_MAX_STOP_PCT` | 10.0 | 影子旗標 `sv_f_wide`：停損寬度 > 10%；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_MACRO_EVENT_HOURS` / `SHADOW_MACRO_POST_HOURS` | 48.0 / 2.0 | 影子旗標 `sv_f_mev`：高影響總經事件前 48 小時至公布後 2 小時；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
@@ -201,12 +207,15 @@ flowchart TD
 
 `evaluate_squeeze_entry()` 的判定、參考停損與推播閘門**不變**。「日內衝突要不要否決 T3」改由 `record_squeeze_entry` 新增的 `65m_mv`／`15m_mv`／`intraday_conflict` 前向樣本決定（見 architecture/05 §5.17）。
 
+**影子否決（僅紀錄，判定不動）**：使用者提案的「微結構／盈虧比／總經一票否決」，既有證據不支持直接硬擋（§3.2），改為在 `record_squeeze_entry` 的 `features_json` 寫入七個影子旗標（`sv_f_ceil`、`sv_f_skew`、`sv_f_mp`、`sv_f_rr`、`sv_f_wide`、`sv_f_mev`、`sv_any`）與其原始值，由 `calibration forward-report` 比較「旗標成立」與「放行」兩組的 20 日報酬差。規則、欄位契約與判讀見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.18。`evaluate_squeeze_entry()` 的判定、停損與推播**不變**。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/psq_engine.py`：`analyze_psq()`（Green Dot 回看窗、Turbo、擠壓區間低點）、`compute_psq_series()`（逐根序列，回測用）。
 - `nexus_core/market_analysis/squeeze_entry/timeframes.py`：重採樣、已收盤截斷、`build_matrix()`、`fetch_psq_matrix()`。
 - `nexus_core/market_analysis/squeeze_entry/resistance.py`：`detect_resistance()`。
 - `nexus_core/market_analysis/squeeze_entry/rules.py`：`evaluate_squeeze_entry()`。
+- `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py`：影子否決旗標計算（僅紀錄，不參與判定）。
 - `nexus_core/market_analysis/squeeze_entry/vetoes.py`：`resolve_long_entry_vetoes()`、`compute_macro_escape_tier()`。
 - `nexus_core/market_analysis/squeeze_entry/evaluator.py`：`evaluate_symbol()`（進場顧問與加碼共用）。
 - `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`：`_evaluate_squeeze_long()` 與策略路由。

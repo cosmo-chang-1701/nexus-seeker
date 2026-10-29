@@ -1,5 +1,6 @@
 """forward-report：擠壓乾跑翻轉檢核 (§5.8 G)、體制分組、--snapshot-db 唯讀載入。全部合成資料。"""
 
+import json
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -9,6 +10,9 @@ import pandas as pd
 
 from calibration.config import CalibrationConfig
 from calibration.forward_log import (
+    SHADOW_FLAG_KEYS,
+    SHADOW_MIN_N,
+    _independent_events,
     _prepare,
     build_regime_breakdown,
     build_squeeze_flip_check,
@@ -276,3 +280,149 @@ def test_events_after_last_price_date_not_wrongly_deduped() -> None:
     rows = pd.DataFrame([_sq(last + timedelta(days=7)), _sq(last + timedelta(days=28))])
     g1 = build_squeeze_flip_check(rows, {"AAA": cl}, CFG)["primary"]["g1"]
     assert g1["independent_events"] == 2
+
+
+# ----------------------------------------------------------------- 影子否決分組
+_CONTRACT_KEYS = "sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any"
+
+
+def _shadow_setup(
+    flags: list[Any], rets: list[float], with_features: bool = True
+) -> tuple[pd.DataFrame, dict[str, list[tuple[date, float]]]]:
+    """每個事件一檔標的、事件日錯開；報酬剛好等於指定值。flags 為 sv_any 的值。"""
+    base = [d for d, _ in _closes(n=60)]
+    rows: list[dict[str, Any]] = []
+    closes: dict[str, list[tuple[date, float]]] = {}
+    for i, (f, r) in enumerate(zip(flags, rets)):
+        sym = f"S{i}"
+        idx = i % 15
+        closes[sym] = [
+            (d, 100.0 if k < idx + 20 else 100.0 * (1 + r)) for k, d in enumerate(base)
+        ]
+        row = _sq(base[idx], symbol=sym)
+        if with_features:
+            row["features_json"] = json.dumps({"sv_any": f})
+        rows.append(row)
+    return pd.DataFrame(rows), closes
+
+
+def _jit(n: int, centre: float) -> list[float]:
+    return [centre + (i % 5 - 2) * 0.002 for i in range(n)]
+
+
+def _shadow(flags: list[Any], rets: list[float]) -> dict[str, Any]:
+    rows, closes = _shadow_setup(flags, rets)
+    res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
+    assert isinstance(res, dict)
+    return res["sv_any"]  # type: ignore[no-any-return]
+
+
+def test_shadow_flags_from_features() -> None:
+    d = date(2026, 3, 2)
+    rows = pd.DataFrame(
+        [
+            {
+                **_sq(d, symbol="A"),
+                "features_json": json.dumps({"sv_f_ceil": True, "sv_f_rr": False}),
+            },
+            {**_sq(d, symbol="B"), "features_json": "{壞掉"},
+            {**_sq(d, symbol="C"), "features_json": json.dumps({"x": 1})},
+            {**_sq(d, symbol="D"), "features_json": None},
+        ]
+    )
+    ev = {e["symbol"]: e["flags"] for e in _independent_events(rows, {})}
+    assert ev["A"]["sv_f_ceil"] is True
+    assert ev["A"]["sv_f_rr"] is False
+    assert ev["A"]["sv_any"] is None
+    for s in "BCD":
+        assert all(v is None for v in ev[s].values())
+        assert set(ev[s]) == set(SHADOW_FLAG_KEYS)
+
+
+def test_shadow_legacy_no_features_column() -> None:
+    rows, closes = _shadow_setup([None] * 4, [0.01] * 4, with_features=False)
+    assert "features_json" not in rows.columns
+    res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
+    for key in SHADOW_FLAG_KEYS:
+        assert res[key]["n_null"] == 4
+        assert res[key]["verdict"] == "樣本不足"
+    md = render_markdown(_results(rows, closes))
+    assert "影子否決分組" in md
+
+
+def test_shadow_verdict_insufficient() -> None:
+    n = SHADOW_MIN_N - 1
+    e = _shadow([True] * n + [False] * 20, _jit(n, -0.1) + _jit(20, 0.1))
+    assert e["verdict"] == "樣本不足"
+    assert e["n_flag"] == n
+
+
+def test_shadow_verdict_worse() -> None:
+    e = _shadow([True] * 20 + [False] * 20, _jit(20, -0.10) + _jit(20, 0.10))
+    assert e["verdict"] == "影子否決組顯著較差（支持評估接進判定，仍須人工審核）"
+    assert e["diff"] < 0
+
+
+def test_shadow_verdict_better() -> None:
+    e = _shadow([True] * 20 + [False] * 20, _jit(20, 0.10) + _jit(20, -0.10))
+    assert e["verdict"] == "影子否決組反而較好（不支持否決）"
+
+
+def test_shadow_verdict_no_diff() -> None:
+    same = _jit(20, 0.0)
+    e = _shadow([True] * 20 + [False] * 20, same + same)
+    assert e["verdict"] == "無顯著差異（不支持否決）"
+
+
+def test_shadow_n_null() -> None:
+    e = _shadow(
+        [True] * 12 + [False] * 12 + [None] * 5,
+        _jit(12, -0.1) + _jit(12, 0.1) + _jit(5, 0.0),
+    )
+    assert (e["n_flag"], e["n_pass"], e["n_null"]) == (12, 12, 5)
+
+
+def _results(rows: pd.DataFrame, closes: Any) -> dict[str, Any]:
+    return {
+        "config": {},
+        "parameters": [],
+        "event_tables": [],
+        "data_coverage": {},
+        "forward_collection": {
+            "status": "OK",
+            "total_labeled": 0,
+            "sections": [],
+            "squeeze_flip_check": build_squeeze_flip_check(rows, closes, CFG),
+            "regime_breakdown": [],
+        },
+        "generated_at": "x",
+        "git_sha": "x",
+        "schema_version": 1,
+    }
+
+
+def test_shadow_render() -> None:
+    rows, closes = _shadow_setup(
+        [True] * 20 + [False] * 20, _jit(20, -0.10) + _jit(20, 0.10)
+    )
+    md = render_markdown(_results(rows, closes))
+    assert "影子否決分組（僅參考，判定不動）" in md
+    for label in ("封頂", "Skew 高分位", "Max Pain 引力", "停損過寬", "任一"):
+        assert label in md
+    assert "影子否決組顯著較差" in md
+
+
+def test_shadow_g1_g2_unchanged() -> None:
+    flags = [True] * 12 + [False] * 12
+    rets = _jit(12, -0.1) + _jit(12, 0.1)
+    with_f, closes = _shadow_setup(flags, rets)
+    without_f, _ = _shadow_setup(flags, rets, with_features=False)
+    a = build_squeeze_flip_check(with_f, closes, CFG)["primary"]
+    b = build_squeeze_flip_check(without_f, closes, CFG)["primary"]
+    assert a["g1"] == b["g1"]
+    assert a["g2"] == b["g2"]
+    assert a["g3"] == b["g3"]
+
+
+def test_shadow_contract_keys() -> None:
+    assert ", ".join(SHADOW_FLAG_KEYS) == _CONTRACT_KEYS

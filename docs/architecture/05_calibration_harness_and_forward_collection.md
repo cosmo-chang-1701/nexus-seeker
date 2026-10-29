@@ -142,6 +142,8 @@ flowchart TD
 | `_INTRADAY_15M_MAX_AGE_DAYS` | `55` | 超過即改抓 1h K 線標註（15m 上限 60 天） | `nexus_core/services/regime_outcome_labeler.py` |
 | `retention_days` / `no_data_days` | `365` / `30` | 評估紀錄與 NO_DATA 標註保留期 | `nexus_core/database/regime_evaluation_log.py` |
 | `FORWARD_MIN_ROWS` | `100` | 前向報告每決策類「資料累積中」門檻 | `nexus_core/calibration/forward_log.py` |
+| `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 
 ---
 
@@ -632,6 +634,45 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 - **(b) 貸方價差賣出腿是否納入 STO 封頂**：`classify_dynamic_regime` 公開入口 wrapper 以相同參數重算 `detect_uoa_sto_call_physical_cap`，經 `record_regime_classification(extra_features=...)` 併入 `sto_cap_base_strike`（現行判定）與 `sto_cap_shadow_strike`（`include_credit_short_legs=True` 的影子值；皆為 0 時存 `null`），以及 `sto_cap_shadow_changes_decision`（`base` 無封頂而 `shadow` 有封頂＝納入貸方腿會改變判定）。影子運算只在紀錄器啟用（已標記評估來源且功能開啟）時才執行；計算失敗時改記 `sto_cap_shadow_error = true`，以區分「沒算」與「沒命中」。分類結果與 `is_structural_cap` **不使用**影子值；`include_credit_short_legs` 預設 `False`，行為不變。
 - **(c) PutWall 紙牆／助跌是否改停損錨點**：不需新欄位。`put_wall_gex`（PutWall 處**淨** GEX）與 `adv_dollar_20d` 已在 `features_json`，離線重建：`put_wall_gex < thin_wall_threshold(adv_dollar_20d)` 為紙牆，`put_wall_gex < 0` 為助跌。
 
+### 5.18 擠壓進場影子否決（「管線式一票否決」提案的前向紀錄）
+
+**提案背景**：技術面（擠壓進場）喊進場，但微結構（上方 CallWall／負 Gamma 泥淖貼近、Max Pain 引力）、盈虧比、停損寬度或總經事件亮紅燈時，兩邊結論互相衝突。提案是把這些改成「一票否決」，由微結構／盈虧比／總經任一項擋下技術面進場。
+
+**為何不直接硬擋**：既有證據不支持。strategies/10 §3.2 的壓力區閘門研究顯示，被擋下的「衝擊壓力區中」組 20 日超額為 +0.62%，放行組為 +0.31%，皆 $|t| < 2$：沒有證據顯示擋下有幫助。PutWall 的定義差異見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點與本檔 §5.13 的 micro-report 段落；GEX 只使用最近到期日、配息標的 q 的修正見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.w。因此比照 §5.17：呈現先行、前向紀錄，**判定、停損與推播一律不動**。
+
+**契約欄位**（`record_squeeze_entry` 的 `features_json`，不參與任何判定；缺輸入寫 `null`，三值為 `true`／`false`／`null`＝無資料；`features_json` 上限 `_FEATURES_JSON_MAX = 2048` 字元，超過時整列 features 變 `null`）。旗標門檻皆為 PRE_CALIBRATION／僅紀錄、不參與判定的具名常數，定義於 `market_analysis/squeeze_entry/shadow_vetoes.py`：
+
+| 旗標鍵 | 成立條件 | 常數 |
+| :--- | :--- | :--- |
+| `sv_f_ceil` | `sv_cw_atr ≤ 1.5` 或 `sv_sw_atr ≤ 1.5`（CallWall／上方負 GEX 泥淖距現價 ≤ 1.5 ATR₁D）；兩者皆無資料時 `null` | `SHADOW_CEILING_ATR = 1.5` |
+| `sv_f_skew` | `skew_percentile ≥ 80`；無資料時 `null` | `SHADOW_SKEW_PCTL = 80.0` |
+| `sv_f_mp` | `sv_mp_dte ≤ 2` 且 `sv_ngex == 1` 且 `sv_mp_dist > 3.0`（Max Pain 距到期日近、淨 GEX 為正、現價高於 Max Pain 逾 3%）；任一輸入無資料時 `null` | `SHADOW_MP_MAX_DTE = 2`、`SHADOW_MP_DIST_PCT = 3.0` |
+| `sv_f_rr` | `sv_rr < 2.0`（牆位盈虧比：目標 `min(CallWall, 泥淖)`，停損 `PutWall − 0.5×ATR₁D`）；無資料時 `null` | `SHADOW_MIN_RR = 2.0` |
+| `sv_f_wide` | `sv_stop_pct > 10.0` 或 `sv_wstop_pct > 10.0`；兩者皆無資料時 `null` | `SHADOW_MAX_STOP_PCT = 10.0` |
+| `sv_f_mev` | 高影響總經事件 `−2 ≤ sv_mev_h ≤ 48`（事件前 48 小時＋公布後 2 小時，與既有 `has_macro_guard` 一致；`sv_mev_h` 以事件 ISO 時間與當下重算，不用凍結的 `tte_hours`）；日曆成功且無事件為 `false`，日曆失敗為 `null` | `SHADOW_MACRO_EVENT_HOURS = 48.0`、`SHADOW_MACRO_POST_HOURS = 2.0` |
+| `sv_any` | 上述六旗標任一為 `true` → `true`；全為 `false` → `false`；否則（無 `true` 但有 `null`）→ `null` | — |
+
+原始值鍵（`sv_cw`、`sv_cw_atr`、`sv_sw`、`sv_sw_atr`、`sv_pw`、`sv_rr`、`sv_wstop_pct`、`sv_stop_pct`、`sv_mp_dist`、`sv_mp_dte`、`sv_ngex`、`sv_mev_h`、`sv_gex_stale`）一併寫入供離線重算；`sv_*` 數值不得經過 `evaluation_recorder._num()`（它把 `0.0` 轉成 `None`，會讓 DTE=0、偏離 0.0%、tte 0.0h 消失）。
+
+**報表**：`calibration forward-report` 的「擠壓乾跑翻轉檢核」每個來源區塊（主結果 `WATCHLIST_ADVISOR`、全部來源參考）末尾新增「影子否決分組（僅參考，判定不動）」。對每個旗標，只取 20 日報酬已可得的獨立事件，分「成立」與「放行」兩組（旗標為 `null` 者計入「無資料」、不進任一組），以事件日期分群 bootstrap 比較「成立組 − 放行組」的 20 日報酬差。舊快照沒有 `features_json` 欄時，所有旗標視為無資料、判讀「樣本不足」，報表照常產出；價格不可得時顯示「價格不可得」。
+
+**判讀規則**（`SHADOW_MIN_N = 10`）：
+
+| 條件 | 判讀 |
+| :--- | :--- |
+| 任一組 $< 10$ 筆 | 樣本不足 |
+| 差的 95% CI 上界 $< 0$ | 影子否決組顯著較差（支持評估接進判定，仍須人工審核） |
+| 差的 95% CI 下界 $> 0$ | 影子否決組反而較好（不支持否決） |
+| 其他 | 無顯著差異（不支持否決） |
+
+只有「顯著較差」且各組 n 足夠時，才由使用者決定是否把該否決接進判定；接進判定須另開 PR 並重新審核，本報表不會自動變更任何常數或閘門。
+
+**刻意不納入**：
+- 大盤負 Gamma：已是硬否決（`SHORT_GAMMA_CRITICAL`），不重複。
+- Kelly 0 口：依帳戶而定，而擠壓紀錄跨使用者共用，無法放進同一份紀錄。
+
+**日曆限制**：總經日曆只從今天起抓，`sv_f_mev` 只涵蓋今日起的事件；公布後 48 小時那半段沒有資料，刻意不判。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
@@ -647,11 +688,12 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
   - `nexus_core/calibration/labeling.py`、`nexus_core/calibration/stats.py`：方向化標註與統計
   - `nexus_core/calibration/parameter_registry.py`：可校準參數登錄表
   - `nexus_core/calibration/calibrators/vix_short.py`、`kelly_priors.py`、`rsi_threshold.py`、`room_atr.py`
-  - `nexus_core/calibration/forward_log.py`：前向蒐集報告
+  - `nexus_core/calibration/forward_log.py`：前向蒐集報告（含擠壓影子否決分組，§5.18）
   - `nexus_core/calibration/report.py`：報告輸出與路徑限制
 - **共用標註**：`nexus_core/market_analysis/outcome_labeling.py`
 - **前向蒐集 (core)**
   - `nexus_core/market_analysis/evaluation_recorder.py`：熱路徑記錄器。`_LONG_ENTRY_REGIMES` 是「會放行多頭新開倉」的 Regime 白名單——新增這類 Regime 時必須同步加入，否則它會被記成 `direction=None` / `decision=0`，該路徑的校準資料靜默歸零。`record_exit_signal()`／`HOLD_EXIT_TIERS` 為出場分層記錄（§5.12）
+  - `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py`：擠壓進場影子否決旗標計算（純函式，僅紀錄，§5.18）
   - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`_record_exit_tier()` 出場分層記錄點（顧問模式轉換之前）
   - `nexus_core/database/migrations/v075_add_regime_evaluation_log.py`：資料表定義
   - `nexus_core/database/regime_evaluation_log.py`：存取層

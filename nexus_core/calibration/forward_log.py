@@ -562,6 +562,33 @@ SQUEEZE_G4_REMINDER = (
 SQUEEZE_FOOTER = "本段只供人工審核；`SQUEEZE_ENTRY_DRY_RUN` 是否翻轉由使用者決定。"
 PRICE_UNAVAILABLE = "價格不可得"
 
+# 影子否決旗標鍵（契約見 docs/architecture/05 §5.18）。
+# 旗標只寫入 features_json、不參與任何判定；本段只做離線分組比較。
+SHADOW_FLAG_KEYS: tuple[str, ...] = (
+    "sv_f_ceil",
+    "sv_f_skew",
+    "sv_f_mp",
+    "sv_f_rr",
+    "sv_f_wide",
+    "sv_f_mev",
+    "sv_any",
+)
+SHADOW_FLAG_LABELS: dict[str, str] = {
+    "sv_f_ceil": "封頂",
+    "sv_f_skew": "Skew 高分位",
+    "sv_f_mp": "Max Pain 引力",
+    "sv_f_rr": "牆位盈虧比 <2",
+    "sv_f_wide": "停損過寬",
+    "sv_f_mev": "總經事件 −2～+48h",
+    "sv_any": "任一",
+}
+# 每組（旗標成立／放行）最少事件數。PRE_CALIBRATION／僅紀錄，不參與判定
+SHADOW_MIN_N = 10
+SHADOW_VERDICT_INSUFFICIENT = "樣本不足"
+SHADOW_VERDICT_WORSE = "影子否決組顯著較差（支持評估接進判定，仍須人工審核）"
+SHADOW_VERDICT_BETTER = "影子否決組反而較好（不支持否決）"
+SHADOW_VERDICT_NO_DIFF = "無顯著差異（不支持否決）"
+
 Closes = Mapping[str, Sequence[tuple[date, float]]]
 
 
@@ -569,9 +596,16 @@ def load_squeeze_rows(snapshot_db: Optional[Path] = None) -> pd.DataFrame:
     """讀取全部 ENTRY_SQUEEZE 判定列（含尚未標註者，不 JOIN outcome 表）。"""
     conn = _open_readonly(snapshot_db)
     try:
+        # 舊快照可能沒有 features_json 欄：此時影子旗標全部視為無資料
+        has_features = any(
+            r[1] == "features_json"
+            for r in conn.execute("PRAGMA table_info(regime_evaluation_log)")
+        )
         return pd.read_sql_query(
             """
-            SELECT id, bar_ts, symbol, source, sub_mode, decision, conditions_mask
+            SELECT id, bar_ts, symbol, source, sub_mode, decision, conditions_mask"""
+            + (", features_json" if has_features else "")
+            + """
             FROM regime_evaluation_log
             WHERE evaluator = 'ENTRY_SQUEEZE'
             """,
@@ -603,6 +637,23 @@ def _trade_pos(sym_dates: Optional[list[date]], d: date, anchor: date) -> int:
     return int(np.busday_count(anchor.isoformat(), d.isoformat()))
 
 
+def _shadow_flags(raw: Any) -> dict[str, Optional[bool]]:
+    """解析 features_json 的影子旗標；解析失敗、缺鍵或非布林值一律為 None。"""
+    obj: Any = {}
+    if isinstance(raw, str):
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            obj = {}
+    if not isinstance(obj, dict):
+        obj = {}
+    out: dict[str, Optional[bool]] = {}
+    for k in SHADOW_FLAG_KEYS:
+        v = obj.get(k)
+        out[k] = v if isinstance(v, bool) else None
+    return out
+
+
 def _independent_events(
     rows: pd.DataFrame, dates_by_sym: Mapping[str, list[date]]
 ) -> list[dict[str, Any]]:
@@ -610,22 +661,23 @@ def _independent_events(
     events: list[dict[str, Any]] = []
     anchor = date(2000, 1, 3)
     pos = rows[rows["decision"] == 1]
-    parsed: list[tuple[str, Any, date, Any]] = []
+    parsed: list[tuple[str, Any, date, Any, dict[str, Optional[bool]]]] = []
     for r in pos.itertuples(index=False):
         d = _event_date(r.bar_ts)
         if d is None:
             continue
         tier = None if pd.isna(r.conditions_mask) else int(r.conditions_mask)
-        parsed.append((str(r.symbol), tier, d, r.bar_ts))
+        flags = _shadow_flags(getattr(r, "features_json", None))
+        parsed.append((str(r.symbol), tier, d, r.bar_ts, flags))
     parsed.sort(key=lambda x: (x[0], str(x[1]), x[2], str(x[3])))
     last: dict[tuple[str, Any], int] = {}
-    for sym, tier, d, _ts in parsed:
+    for sym, tier, d, _ts, flags in parsed:
         p = _trade_pos(dates_by_sym.get(sym), d, anchor)
         key = (sym, tier)
         if key in last and p - last[key] < SQUEEZE_DEDUP_TRADING_DAYS:
             continue
         last[key] = p
-        events.append({"symbol": sym, "tier": tier, "date": d})
+        events.append({"symbol": sym, "tier": tier, "date": d, "flags": flags})
     return events
 
 
@@ -741,6 +793,70 @@ def _squeeze_strata(
     return out
 
 
+def _shadow_veto_groups(
+    events: Sequence[Mapping[str, Any]], closes: Closes, cfg: CalibrationConfig
+) -> dict[str, Any]:
+    """影子否決分組（僅參考，不影響 G.1／G.2 判定）。
+
+    只取 20 日報酬已可得的獨立事件；每個旗標分「成立」與「放行」兩組
+    （旗標為 None 者計入 n_null、不進任一組），以事件日期分群 bootstrap 比較
+    成立組 − 放行組的 20 日報酬差。
+    """
+    samples: list[tuple[float, str, dict[str, Optional[bool]]]] = []
+    for e in events:
+        series = closes.get(e["symbol"])
+        if not series:
+            continue
+        r = _ret20(series, e["date"])
+        if r is None:
+            continue
+        flags = e.get("flags") or {}
+        samples.append((r, e["date"].isoformat(), flags))
+    out: dict[str, Any] = {}
+    for key in SHADOW_FLAG_KEYS:
+        fv: list[float] = []
+        fc: list[str] = []
+        pv: list[float] = []
+        pc: list[str] = []
+        n_null = 0
+        for r, c, flags in samples:
+            f = flags.get(key)
+            if f is None:
+                n_null += 1
+            elif f:
+                fv.append(r)
+                fc.append(c)
+            else:
+                pv.append(r)
+                pc.append(c)
+        entry: dict[str, Any] = {
+            "label": SHADOW_FLAG_LABELS[key],
+            "n_flag": len(fv),
+            "n_pass": len(pv),
+            "n_null": n_null,
+            "n_dates_flag": len(set(fc)),
+            "diff": None,
+            "ci": None,
+            "verdict": SHADOW_VERDICT_INSUFFICIENT,
+        }
+        if fv and pv:
+            diff, lo, hi, _se = clustered_bootstrap_diff(
+                fv, fc, pv, pc, cfg.n_boot, cfg.seed
+            )
+            entry["diff"] = diff
+            ci = _finite_ci(lo, hi)
+            entry["ci"] = ci
+            if len(fv) >= SHADOW_MIN_N and len(pv) >= SHADOW_MIN_N and ci:
+                if ci[1] < 0:
+                    entry["verdict"] = SHADOW_VERDICT_WORSE
+                elif ci[0] > 0:
+                    entry["verdict"] = SHADOW_VERDICT_BETTER
+                else:
+                    entry["verdict"] = SHADOW_VERDICT_NO_DIFF
+        out[key] = entry
+    return out
+
+
 def _squeeze_analysis(
     rows: pd.DataFrame, closes: Closes, cfg: CalibrationConfig
 ) -> dict[str, Any]:
@@ -758,6 +874,9 @@ def _squeeze_analysis(
         and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
     }
     result: dict[str, Any] = {"g1": g1}
+    result["shadow_vetoes"] = (
+        _shadow_veto_groups(events, closes, cfg) if dates_by_sym else PRICE_UNAVAILABLE
+    )
     if not dates_by_sym:
         result["g2"] = {"status": PRICE_UNAVAILABLE, "g2_passed": None}
         result["g3"] = None
