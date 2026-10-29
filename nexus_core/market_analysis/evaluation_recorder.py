@@ -383,6 +383,7 @@ def record_squeeze_entry(
     regime: Optional[str] = None,
     *,
     candidate_radar: Optional[Mapping[str, Any]] = None,
+    shadow_vetoes: Optional[Mapping[str, Any]] = None,
 ) -> None:
     """記錄多時間框架擠壓進場判定（`SqueezeEntryResult` 以 duck typing 讀取）。
 
@@ -420,6 +421,11 @@ def record_squeeze_entry(
             features["skew_percentile_source"] = candidate_radar.get(
                 "skew_percentile_source"
             )
+        # 影子否決（sv_* 原始值與旗標；純記錄，不參與判定）
+        if shadow_vetoes:
+            for key, val in shadow_vetoes.items():
+                if isinstance(key, str) and key.startswith("sv_"):
+                    features[key] = val
         _append(
             {
                 "symbol": symbol.upper(),

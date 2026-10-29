@@ -156,6 +156,37 @@ async def _compute_long_levels(
     return _r(entry), _r(stop), _r(target), _r(rr)
 
 
+async def _compute_shadow(
+    spot: float, radar: Optional[Mapping[str, Any]], ev: Any, r: Any
+) -> Optional[dict[str, Any]]:
+    """影子否決（僅供前向紀錄）：紀錄器未啟用時不抓日曆；任何例外一律回傳 None。"""
+    try:
+        from market_analysis import evaluation_recorder
+
+        if not evaluation_recorder.recording_active():
+            return None
+        from datetime import datetime
+
+        from market_analysis.squeeze_entry import shadow_vetoes
+        from market_time import ny_tz
+
+        cal_ok, mev_h = await shadow_vetoes.nearest_macro_event_tte_hours()
+        rd: Mapping[str, Any] = radar or {}
+        return shadow_vetoes.compute_shadow_vetoes(
+            spot,
+            rd,
+            getattr(ev.resistance, "atr_1d", None),
+            getattr(r, "stop", None),
+            rd.get("skew_percentile"),
+            mev_h,
+            cal_ok,
+            datetime.now(ny_tz).date(),
+        )
+    except Exception as e:
+        logger.debug(f"[EntryAdvisor] 影子否決計算失敗（略過）: {e}")
+        return None
+
+
 async def _evaluate_squeeze_long(
     strategy: str,
     symbol: str,
@@ -177,6 +208,7 @@ async def _evaluate_squeeze_long(
     vetoes, downgrade = await resolve_long_entry_vetoes(symbol)
     ev = await evaluate_symbol(symbol, spot, vetoes, downgrade)
     r = ev.result
+    shadow = await _compute_shadow(spot, radar, ev, r)
     evaluation_recorder.record_squeeze_entry(
         symbol,
         spot,
@@ -185,6 +217,7 @@ async def _evaluate_squeeze_long(
         ev.resistance,
         regime=regime_value,
         candidate_radar=radar,
+        shadow_vetoes=shadow,
     )
     reason = r.reason
     if r.resistance_note:

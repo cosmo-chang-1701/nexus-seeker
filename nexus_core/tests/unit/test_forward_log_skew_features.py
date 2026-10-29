@@ -21,6 +21,16 @@ def _clean_buffer() -> Iterator[None]:
     rec._BUFFER.clear()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_macro_calendar() -> Iterator[None]:
+    """影子否決的日曆抓取一律 mock，測試不碰真實日曆。"""
+    with patch(
+        "market_analysis.squeeze_entry.shadow_vetoes.nearest_macro_event_tte_hours",
+        AsyncMock(return_value=(True, None)),
+    ):
+        yield
+
+
 def _features(row: dict[str, Any]) -> dict[str, Any]:
     feats = row["features_json"]
     parsed: dict[str, Any] = (
