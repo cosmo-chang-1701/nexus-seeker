@@ -16,9 +16,11 @@ import pytest
 from cogs.embed_builders import market_embeds
 from cogs.embed_builders.market_embeds import (
     _render_grouped_insights,
+    _render_grouped_insights_fields,
     _strip_sym_prefix,
     build_radar_scan_embed,
 )
+from cogs.embed_builders._embed_helpers import ANSI_CONTINUATION_FIELD_NAME
 from cogs.unified_terminal.batch_scan_view import (
     BatchScanWarningButton,
     _extract_warning_symbols,
@@ -294,3 +296,127 @@ def test_same_symbol_in_two_rows_merges_into_one_group() -> None:
     ]
     value = _insights_field_value(_build(rows))
     assert value.count(_hdr("AAOI")) == 1
+
+
+# ==========================================
+# 多欄位溢出排版
+# ==========================================
+
+_SYMS = [f"S{i}" for i in range(10)]
+
+
+def _plain(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def _many_groups() -> dict[str, list[str]]:
+    groups: dict[str, list[str]] = {}
+    for i, sym in enumerate(_SYMS):
+        n = 3 if i < 9 else 2
+        groups[sym] = [f"• ⚠️ {sym} 警示{j}" + "文" * 55 for j in range(n)]
+    return groups
+
+
+def test_fields_small_input_identical_to_single_render() -> None:
+    groups = {"AAA": ["• 🪨 一", "• 📈 二"], "BBB": ["• 🧱 三"]}
+    assert _render_grouped_insights_fields(groups, 5000) == [
+        _render_grouped_insights(groups)
+    ]
+
+
+def test_fields_29_insights_spread_over_up_to_three_fields() -> None:
+    groups = _many_groups()
+    assert sum(len(v) for v in groups.values()) == 29
+    assert "其餘" in _render_grouped_insights(groups)
+    bodies = _render_grouped_insights_fields(groups, 4000)
+    assert 2 <= len(bodies) <= 3
+    assert all(len(b) <= 920 for b in bodies)
+    text = "\n".join(bodies)
+    kept = text.count("• ⚠️")
+    assert kept > 10
+    m = re.search(r"其餘 (\d+) 則", text)
+    assert (int(m.group(1)) if m else 0) + kept == 29
+
+
+def test_fields_tight_budget_drops_least_severe_and_keeps_symbol_order() -> None:
+    groups: dict[str, list[str]] = {}
+    for sym in _SYMS:
+        groups[sym] = [
+            f"• 🕓 {sym} 資料" + "甲" * 60,
+            f"• 📈 {sym} 資訊" + "乙" * 60,
+            f"• 🚨 {sym} 嚴重" + "丙" * 60,
+        ]
+    bodies = _render_grouped_insights_fields(groups, 1400)
+    text = "\n".join(bodies)
+    assert text.count("• 🚨") == 10
+    # 較低嚴重度被保留時，更低一級不得先於其被保留
+    assert text.count("• 🕓") <= text.count("• 📈")
+    assert text.count("• 🕓") + text.count("• 📈") < 20
+    assert "其餘" in text
+    plain = _plain(text).splitlines()
+    headers = [ln for ln in plain if re.fullmatch(r"S\d", ln)]
+    assert headers == sorted(headers, key=_SYMS.index)
+    # 同一標的內嚴重者在前
+    first = plain.index("S0")
+    assert plain[first + 1].startswith("• 🚨")
+
+
+def test_fields_continuation_repeats_symbol_header() -> None:
+    groups = {"AAA": [f"• ⚠️ 第{i}則" + "文" * 150 for i in range(8)]}
+    bodies = _render_grouped_insights_fields(groups, 4000)
+    assert len(bodies) >= 2
+    for b in bodies:
+        assert b.startswith(_hdr("AAA"))
+
+
+@pytest.mark.parametrize("n_rows", [10])
+def test_end_to_end_many_insights_fit_page_and_fields(n_rows: int) -> None:
+    rows = [
+        _row(f"T{i}", 77.5, 100.0, put_wall=80.0, vol_pcr=1.8, hvn=77.6)
+        for i in range(n_rows)
+    ]
+    embeds = _build(rows)
+    for e in embeds:
+        assert len(e) <= 5300
+        names = [f.name for f in e.fields]
+        idx = next(i for i, n in enumerate(names) if n and "即時聯動警示" in n)
+        assert names[-1] == "📋 雷達圖例與風控指引"
+        for f in e.fields:
+            assert len(str(f.value)) <= 1024
+            v = str(f.value)
+            assert v.startswith("```") and v.endswith("```")
+        cont = [n for n in names[idx + 1 : -1]]
+        assert all(n == ANSI_CONTINUATION_FIELD_NAME for n in cont)
+        assert len(cont) <= 2
+
+
+@pytest.mark.asyncio
+async def test_button_reads_continuation_fields_but_not_legend() -> None:
+    def fld(name: str, body: str) -> MagicMock:
+        f = MagicMock()
+        f.name = name
+        f.value = f"```ansi\n{body}\n```"
+        return f
+
+    embed = MagicMock()
+    embed.fields = [
+        fld("表格", "ZZZ"),
+        fld("💡 即時聯動警示 (Real-time Insights)", f"{_hdr('AAA')}\n• 🚨 x"),
+        fld(ANSI_CONTINUATION_FIELD_NAME, f"{_hdr('BBB')}\n• 🚨 y"),
+        fld(ANSI_CONTINUATION_FIELD_NAME, f"{_hdr('CCC')}\n• 🚨 z"),
+        fld("📋 雷達圖例與風控指引", "LEGEND\n• 提示"),
+        fld(ANSI_CONTINUATION_FIELD_NAME, "DDD\n• q"),
+    ]
+    cog = MagicMock()
+    cog._run_warning_symbols_hub = AsyncMock()
+    btn = BatchScanWarningButton(cog, MagicMock())
+    interaction = MagicMock()
+    interaction.response.edit_message = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.message = MagicMock()
+    interaction.message.embeds = [embed]
+    view = MagicMock()
+    view.children = [btn]
+    btn._view = view
+    await btn.callback(interaction)
+    assert cog._run_warning_symbols_hub.call_args.args[1] == ["AAA", "BBB", "CCC"]

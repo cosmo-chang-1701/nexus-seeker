@@ -6,6 +6,7 @@ import logging
 from services import market_data_service
 from cogs.embed_builder import create_error_embed
 from cogs.embed_builders._ansi_utils import _clean_ansi
+from cogs.embed_builders._embed_helpers import ANSI_CONTINUATION_FIELD_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +81,19 @@ class BatchScanWarningButton(discord.ui.Button):
             embed = interaction.message.embeds[0]
             warning_symbols = []
 
+            in_insights = False
             for field in embed.fields:
-                if field.name and "即時聯動警示" in field.name:
+                if not in_insights:
+                    if field.name and "即時聯動警示" in field.name:
+                        in_insights = True
+                        if field.value:
+                            warning_symbols.extend(
+                                _extract_warning_symbols(field.value)
+                            )
+                elif field.name == ANSI_CONTINUATION_FIELD_NAME:
                     if field.value:
                         warning_symbols.extend(_extract_warning_symbols(field.value))
+                else:
                     break
 
             if not warning_symbols:
