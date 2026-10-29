@@ -266,6 +266,7 @@ def create_portfolio_report_embed(  # type: ignore
         ha_status = str(hedge_analysis.get("status") or "OPTIMAL")
         ha_dynamic_tau = hedge_analysis.get("dynamic_tau")
         ha_unpriced = int(_safe_float(hedge_analysis.get("unpriced_count"), 0.0))
+        ha_uncosted = int(_safe_float(hedge_analysis.get("uncosted_count"), 0.0))
 
         has_active_hedge = (
             ha_hedge_ratio > 0.0
@@ -305,6 +306,8 @@ def create_portfolio_report_embed(  # type: ignore
                 )
         if ha_unpriced > 0:
             hedge_lines.append(f" ⚠️ {ha_unpriced} 筆缺報價，未計入損益")
+        if ha_uncosted > 0:
+            hedge_lines.append(f" ℹ️ {ha_uncosted} 筆現貨未填成本，未計入損益")
 
         if hedge_lines:
             embed.add_field(

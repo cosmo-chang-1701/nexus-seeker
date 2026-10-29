@@ -124,6 +124,23 @@ def test_unpriced_disclosed_without_active_hedge() -> None:
     assert HEDGE_NAME not in _fields(create_portfolio_report_embed([_pos()], clean))
 
 
+def test_uncosted_disclosed() -> None:
+    hedged = _hedge(uncosted_count=2)
+    val = _fields(create_portfolio_report_embed([_pos()], hedged))[HEDGE_NAME]
+    assert "2 筆現貨未填成本，未計入損益" in val
+    assert "Alpha" in val
+    spot_only = _hedge(
+        alpha_contribution=0.0,
+        hedge_contribution=0.0,
+        hedge_ratio=0.0,
+        has_hedge=False,
+        uncosted_count=1,
+    )
+    val2 = _fields(create_portfolio_report_embed([_pos()], spot_only))[HEDGE_NAME]
+    assert "1 筆現貨未填成本，未計入損益" in val2
+    assert "缺報價" not in val2
+
+
 def test_color_from_macro_only() -> None:
     def color(lines: List[str], hedge: Any = None) -> Any:
         return create_portfolio_report_embed(lines, hedge).color

@@ -307,6 +307,7 @@ class AnalystAgent(commands.Cog):
                             "alpha_selection_pnl": _hedge_val("alpha_contribution"),
                             "hedge_pnl": _hedge_val("hedge_contribution"),
                             "unpriced_count": hedge.get("unpriced_count"),
+                            "uncosted_count": hedge.get("uncosted_count"),
                         },
                         "aggregate_risk_metrics": {
                             "total_theta": risk_metrics.get("total_theta"),
