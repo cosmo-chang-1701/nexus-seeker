@@ -310,3 +310,63 @@ async def test_expiry_none_when_contract_code_unparseable() -> None:
 
 def test_fallback_gex_carries_expiry_key() -> None:
     assert gex_scraper.FALLBACK_GEX["expiry"] is None
+
+
+def test_info_dividend_percent_converted_to_decimal() -> None:
+    info = {"dividendYield": 0.99, "trailingAnnualDividendYield": 0.0073}
+    assert gex_scraper._resolve_info_dividend_yield(info) == pytest.approx(0.0099)
+
+
+def test_info_dividend_falls_back_to_trailing_decimal() -> None:
+    f = gex_scraper._resolve_info_dividend_yield
+    assert f({"trailingAnnualDividendYield": 0.0073}) == pytest.approx(0.0073)
+    assert f(
+        {"dividendYield": None, "trailingAnnualDividendYield": 0.0073}
+    ) == pytest.approx(0.0073)
+    assert f(
+        {"dividendYield": float("nan"), "trailingAnnualDividendYield": 0.0073}
+    ) == pytest.approx(0.0073)
+
+
+def test_info_dividend_empty_returns_zero() -> None:
+    assert gex_scraper._resolve_info_dividend_yield({}) == 0.0
+    assert gex_scraper._resolve_info_dividend_yield(None) == 0.0
+
+
+@pytest.mark.parametrize(
+    "info",
+    [
+        {"dividendYield": 99},
+        {"dividendYield": -0.5},
+        {"trailingAnnualDividendYield": 0.5},
+    ],
+)
+def test_info_dividend_out_of_range_returns_zero_with_warning(
+    info: dict[str, Any], caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger=gex_scraper.logger.name):
+        assert gex_scraper._resolve_info_dividend_yield(info) == 0.0
+    assert any("超出合理範圍" in r.getMessage() for r in caplog.records)
+
+
+async def test_info_dividend_auto_resolved_matches_explicit_decimal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import yfinance
+
+    class _FakeTicker:
+        def __init__(self, symbol: str) -> None:
+            self.info = {"dividendYield": 1.3}
+
+    monkeypatch.setattr(yfinance, "Ticker", _FakeTicker)
+    html = _make_html(
+        spot=100.0,
+        call_rows=[_row("TESTC1", 105.0, 500, 25), _row("TESTC2", 110.0, 300, 25)],
+        put_rows=[_row("TESTP1", 95.0, 500, 25), _row("TESTP2", 90.0, 300, 25)],
+    )
+    auto = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
+    explicit = await gex_scraper.scrape_symbol_gex_core(
+        "TEST", _make_browser(html), dividend_yield=0.013
+    )
+    assert auto["gex_profile"]
+    assert auto["gex_profile"] == pytest.approx(explicit["gex_profile"])

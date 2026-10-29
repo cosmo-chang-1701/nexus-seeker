@@ -8,7 +8,7 @@ Gamma Flip 臨界翻轉線（Gamma Neutral Level / Flip Line）是做市商整�
 
 ### 個股輕量估算與大盤端點分離架構
 在 Nexus Seeker 系統中：
-1. **大盤 SPY**：直接調用宏觀數據端點（`/api/v1/scrape/macro/gex`），取得與機構端比對的高精度全鏈 Gamma Flip；端點缺值、標記備援或離群時，改以 SPY 個股期權鏈經 `estimate_macro_spy_gamma_flip` 備援估算，兩者都須通過大盤合理性閘門（§2.2）。
+1. **大盤 SPY**：直接調用宏觀數據端點（`/api/v1/scrape/macro/gex`），取得大盤 Gamma Flip。edge 只解析 Yahoo 期權頁的預設表格，即**最近一個到期日**（SPY 平日每日有到期，故為 0DTE，並以 2 天 $t$ 下限定價），並非全鏈多到期日聚合，涵蓋範圍與實測見 §5.w；端點缺值、標記備援或離群時，改以 SPY 個股期權鏈經 `estimate_macro_spy_gamma_flip` 備援估算，兩者都須通過大盤合理性閘門（§2.2）。
 2. **個股標的**：因個股期權即時端點（`fetch_symbol_gex_metrics`）並未直接提供 Flip 欄位，系統設計了**輕量客戶端逐履約價符號變化估算演算法**（`estimate_symbol_gamma_flip`）。該演算法直接複用已抓取的 `gex_profile`，完全零額外網路請求，透過對相鄰履約價對掃描個別 Net GEX 值的符號變化（由負轉非負），並結合「$\pm 30\%$ Bracket 邊界」與「Net GEX Regime 方向一致性校驗」，徹底排除價外雜訊與偽交叉點。
 
 ---
@@ -200,8 +200,44 @@ $$
 
 **與其他機制的關係**：本規則與 §5.6 的逐檔重要性門檻（`estimate_symbol_gamma_flip()`）無關；core 閘門與 `MACRO_GEX_FLIP_MAX_*` 皆不變。
 
+### 5.w 到期日涵蓋範圍與股息率單位實測（2026-10-29）
+
+**到期日涵蓋範圍**：edge `/api/v1/scrape/macro/gex`（`local_api/macro.py`）與個股 GEX（`gex_scraper.py`）都只解析 Yahoo 期權頁的預設表格，即最近一個到期日。SPY 平日為 0DTE（edge 個股端點實測回傳 `expiry: "2026-10-29"`），0DTE 合約以 $t = \max(\text{days}, 2) / 365$ 的 2 天下限定價。
+
+2026-10-29 10:08 ET 實測（spot 769.26，$q = 0.013$，同一套 edge 演算法，以 yfinance 鏈重算）：
+
+| 口徑 | 總 OI | 淨 GEX@spot | 曲線掃描 Flip（`find_gamma_flip`） | 逐檔 Flip（`estimate_symbol_gamma_flip`） |
+| :--- | :--- | :--- | :--- | :--- |
+| 僅最近到期日 0DTE（現行） | 329,226 | −3.2B | 769.38 | 771 |
+| $\le$ 7DTE | 2,969,819 | −187B | 771.42 | 770 |
+| $\le$ 60DTE（15 個到期日） | 10,968,352 | −452B | 772.93 | 770 |
+| $\le$ 60DTE 排除 0DTE | 10,639,126 | −452B | 773.94 | 770 |
+
+- 0DTE 僅占 $\le$ 60DTE 總 OI 的 3.0%。
+- 現行口徑判 SPY 緩衝 +0.02%（臨界），$\le$ 60DTE 口徑判 −0.47%（已在負 Gamma 區），差距與 `_FLIP_KNIFE_EDGE_PCT`（0.5%）同量級。
+- edge 當時回傳 769.36（spot 769.54），與復刻值 769.38 吻合，演算法本身正確。
+- 同一時點 `/market`（曲線掃描，Flip 769.36，緩衝為正）與 `/x` SPY（逐檔法，內插 Flip 770.93，現價處 local_gex −10.2B 判負 Gamma）結論相反。
+
+**股息率單位修正**：`scrape_symbol_gex_core()` 未傳 `dividend_yield` 時，原程式把 yfinance `info["dividendYield"]`（百分比，SPY 0.99 即 0.99%）當小數，q 放大 100 倍（SPY 變成 99%）；`fast_info.dividend_yield` 屬性並不存在。修正後由 `_resolve_info_dividend_yield()` 解析：`dividendYield` $/ 100$；缺值、非數值或非有限值時退回 `trailingAnnualDividendYield`（小數，不除）；結果須在 $[0, 0.20]$（`_MAX_PLAUSIBLE_DIVIDEND_YIELD`），否則回傳 0.0 並留 warning。大盤端點 `local_api/macro.py` 寫死 $q = 0.013$，不受影響。
+
+同一時點錯 q 與正確 q 對照：
+
+| 標的 | 淨 GEX（錯 q） | 淨 GEX（正確 q） |
+| :--- | :--- | :--- |
+| SPY | −173.8B | −56.0B |
+| QQQ | −54.2B | −42.1B |
+| TSM | +9.0B | +10.3B |
+| AAPL | +44.7B | +48.1B |
+
+SPY PutWall 由 758（錯 q）修正為 767。
+
+**校準提醒**：本修正上線前，edge `gex_snapshot_history` 的配息標的 GEX 皆以放大 100 倍的 q 計算。PutWall 校準與 Gamma Flip 重要性 forward-report 判讀，須以 edge 重新部署日切分前後樣本，不得混用。
+
+**後續觀察（不改閘門）**：大盤 Flip 是否改為多到期日聚合，屬閘門定義變更（影響 `short_gamma_critical` 與 regime），須先校準再決策；本節僅記錄，程式與閘門不動。
+
 ## 6. 核心程式碼檔案路徑關聯
 
+- `nexus_edge_scraper/gex_scraper.py`：`_resolve_info_dividend_yield()`（個股 GEX 股息率單位解析，§5.w）
 - `nexus_edge_scraper/local_api/macro.py`：`find_gamma_flip()`（大盤總 GEX 曲線零點、尾端交叉剔除）
 - `nexus_core/market_analysis/index_microstructure.py`：
   - 核心估算函式：`estimate_symbol_gamma_flip()`；大盤 SPY 備援：`estimate_macro_spy_gamma_flip()`

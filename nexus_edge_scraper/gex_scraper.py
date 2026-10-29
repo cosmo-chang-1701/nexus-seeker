@@ -10,7 +10,7 @@ Playwright `Browser` 實例，而非每次呼叫自行 launch 一顆新的 headl
 - scheduler.py 的背景排程（重用一顆長駐 browser，逐一輪詢多個標的以降低成本）
 """
 
-from typing import Any
+from typing import Any, Mapping
 import logging
 import math
 import re
@@ -35,6 +35,45 @@ FALLBACK_GEX: dict[str, Any] = {
 _GEX_MIN_DELTA_THRESHOLD = 0.02
 # 與 nexus_core/config.py RISK_FREE_RATE 一致 (兩服務不共用模組，由測試鎖定)
 RISK_FREE_RATE = 0.042
+
+# 股息率 q 的合理上限（小數，0.20 = 20%）。超出視為單位錯誤或壞資料，改用 0.0。
+_MAX_PLAUSIBLE_DIVIDEND_YIELD = 0.20
+
+
+def _finite_number(value: Any) -> float | None:
+    """將值轉為有限浮點數；缺值、非數值、NaN／Inf 回傳 None。"""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        num = float(value)
+    except (TypeError, ValueError):
+        return None
+    return num if math.isfinite(num) else None
+
+
+def _resolve_info_dividend_yield(info: Mapping[str, Any] | None) -> float:
+    """由 yfinance info 解析股息率 q（小數）。
+
+    yfinance 1.x 的 `dividendYield` 為百分比（0.99 代表 0.99%），須除以 100；
+    `trailingAnnualDividendYield` 才是小數，不須換算。前者缺值或無效時退回後者。
+    結果須落在 [0, _MAX_PLAUSIBLE_DIVIDEND_YIELD]，否則回傳 0.0 並記錄警告。
+    """
+    if not info:
+        return 0.0
+    pct = _finite_number(info.get("dividendYield"))
+    if pct is not None:
+        q = pct / 100.0
+    else:
+        trailing = _finite_number(info.get("trailingAnnualDividendYield"))
+        if trailing is None:
+            return 0.0
+        q = trailing
+    if not 0.0 <= q <= _MAX_PLAUSIBLE_DIVIDEND_YIELD:
+        logger.warning(
+            f"股息率解析結果 {q} 超出合理範圍 [0, {_MAX_PLAUSIBLE_DIVIDEND_YIELD}]，改用 0.0。"
+        )
+        return 0.0
+    return q
 
 
 def _ndtr_prime(x: float) -> float:
@@ -280,15 +319,9 @@ async def scrape_symbol_gex_core(
                 import yfinance as yf
 
                 t_obj = yf.Ticker(symbol_upper)
-                fast_div = getattr(t_obj.fast_info, "dividend_yield", None)
-                if fast_div is not None and float(fast_div) > 0:
-                    effective_div_yield = float(fast_div)
-                elif hasattr(t_obj, "info") and t_obj.info:
-                    raw_div = t_obj.info.get("dividendYield") or t_obj.info.get(
-                        "trailingAnnualDividendYield"
-                    )
-                    if raw_div:
-                        effective_div_yield = float(raw_div)
+                effective_div_yield = _resolve_info_dividend_yield(
+                    getattr(t_obj, "info", None)
+                )
             except Exception:
                 effective_div_yield = 0.0
 
