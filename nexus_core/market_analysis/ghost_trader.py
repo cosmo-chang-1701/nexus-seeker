@@ -25,6 +25,15 @@ class GhostTrader:
     def __init__(self) -> None:
         self.today = datetime.datetime.now().date()
 
+    async def _dividend_yield(self, symbol: str) -> float:
+        """取得標的年化股息率（小數）；未知或查詢失敗時視為 0.0。"""
+        try:
+            value = await market_data_service.get_dividend_yield_strict(symbol)
+        except Exception as e:
+            logger.warning(f"GhostTrader 取得 {symbol} 股息率失敗，改用 0.0: {e}")
+            return 0.0
+        return 0.0 if value is None else float(value)
+
     async def get_option_mid_price(
         self, symbol: str, opt_type: str, strike: float, expiry: str
     ) -> Any:
@@ -138,6 +147,7 @@ class GhostTrader:
 
             if current_stock_price and iv and iv > 0:
                 t_years = max(dte, 1) / 365.0
+                dividend_yield = await self._dividend_yield(symbol)
                 try:
                     current_delta = delta(
                         ("c" if opt_type == "call" else "p"),
@@ -146,7 +156,7 @@ class GhostTrader:
                         t_years,
                         RISK_FREE_RATE,
                         iv,
-                        0.0,
+                        dividend_yield,
                     )
                     pnl_pct = (mid - entry_price) / entry_price
 
@@ -322,6 +332,7 @@ class GhostTrader:
 
             exp_date = datetime.datetime.strptime(expiry, "%Y-%m-%d").date()
             t_years = max((exp_date - self.today).days, 1) / 365.0
+            dividend_yield = await self._dividend_yield(symbol)
 
             try:
                 opt_delta = delta(
@@ -331,7 +342,7 @@ class GhostTrader:
                     t_years,
                     RISK_FREE_RATE,
                     iv,
-                    0.0,
+                    dividend_yield,
                 )
                 if abs(opt_delta) >= 0.40:
                     logger.info(
@@ -409,6 +420,7 @@ class GhostTrader:
             / 365.0
         )
         flag = "c" if opt_type == "call" else "p"
+        dividend_yield = await self._dividend_yield(symbol)
 
         for _, row in opts.iterrows():
             strike, iv = row["strike"], row["impliedVolatility"]
@@ -416,7 +428,13 @@ class GhostTrader:
                 continue
             try:
                 opt_delta = delta(
-                    flag, current_stock_price, strike, t_years, RISK_FREE_RATE, iv, 0.0
+                    flag,
+                    current_stock_price,
+                    strike,
+                    t_years,
+                    RISK_FREE_RATE,
+                    iv,
+                    dividend_yield,
                 )
                 diff = abs(abs(opt_delta) - target_delta)
                 if diff < min_diff:
