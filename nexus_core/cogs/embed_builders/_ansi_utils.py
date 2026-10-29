@@ -310,8 +310,15 @@ def _format_macro_report_ansi(macro_text: str) -> str:
                 or "高度正相關" in sub
             ):
                 colored_sub = f"\u001b[1;31m{sub}\u001b[0m"
-            elif "⚠️" in sub or "收益率過低" in sub or "水位警戒" in sub:
+            elif (
+                "⚠️" in sub
+                or "收益率過低" in sub
+                or "水位警戒" in sub
+                or "時間價值流失" in sub
+            ):
                 colored_sub = f"\u001b[1;33m{sub}\u001b[0m"
+            elif "無 Theta 部位" in sub or "資料不足，未評估" in sub:
+                colored_sub = f"\u001b[1;30m{sub}\u001b[0m"
             elif (
                 "✅" in sub
                 or "🛡️" in sub
