@@ -364,13 +364,13 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
 
     ### Specific Instructions for "盤後綜合風險與 AI 策略報告" (Post-market Intelligence):
     If the report type contains "盤後綜合風險與 AI 策略報告", you MUST include the following in your analysis under the headers above:
+    - **Report status**: This rule takes precedence over every other item in this section. If report_status is not "ok", state that portfolio settlement data is unavailable (when "failed") or that the account has no positions (when "no_positions"), and skip the 提領跑道, the 建倉至今損益歸因, the 持倉風險檢視, and every aggregate_risk_metrics metric in the 盤後風險對沖決策; write the market, sector and next-day strategy sections using only macro_snapshot and sectors. Apply the remaining items only when report_status is "ok".
     - **🏁 提領跑道 (Withdrawal Runway)**: Use aggregate_risk_metrics.withdrawal_runway (stress_years is the headline; also cite gfc_years, dotcom_years and zero_return_years; if capped_at_10y is true say "≥ 10 年"). It is a conditional historical-replay figure, not a forecast. If withdrawal_runway is null, state that no runway data is available; never invent a number.
     - **📦 建倉至今損益歸因 (PnL Since Entry)**: Use pnl_attribution_since_entry (total_net_pnl, alpha_selection_pnl, hedge_pnl). State that it is the cumulative unrealized P&L since entry for real positions only, never describe it as "當日" (daily) P&L. Mention unpriced_count only if it is > 0.
     - **⚙️ 行業板塊資金輪動 (Sector Rotation)**: Analyze the sectors data (pct_change, rel_vol, skew).
     - **🛡️ 盤後風險對沖決策**: Analyze macro_snapshot (vix, vix_tier) together with aggregate_risk_metrics.net_delta_exposure_pct, margin_heat_pct, total_theta and total_beta_delta.
     - **📋 持倉風險檢視 (Positions)**: When `positions` is present, comment on the IV (iv_pct), IV Rank (iv_rank_pct) and DTE (dte) of the held positions.
     - **🎯 次日交易策略模板 (Next Day Strategy)**: Generate specific tactical guidelines for tomorrow, including execution trigger conditions (觸發條件). Any price levels may only come from macro_snapshot.spy_price and spy_max_pain; otherwise omit price levels. Never invent support/resistance numbers.
-    - **Report status**: If report_status is not "ok", state that portfolio settlement data is unavailable (when "failed") or that the account has no positions (when "no_positions"), and do not discuss portfolio metrics.
 
     ### Specific Instructions for "盤前財報與估值調整" (Pre-market Earnings):
     If the report type contains "盤前財報與估值調整", you MUST include the following in your analysis under the headers above:
