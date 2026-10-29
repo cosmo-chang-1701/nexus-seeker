@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from typing import Any, Optional
 from services import market_data_service
 from services.market_data_service import get_option_chain
@@ -11,6 +12,7 @@ from .greeks import calculate_greeks
 from .option_quote import resolve_option_mid
 import market_time
 
+from models.quant import MacroRiskMetrics
 from .risk_engine import (
     evaluate_defense_status as evaluate_defense_status_core,
     BETA_HISTORY_PERIOD,
@@ -29,17 +31,38 @@ from .report_formatter import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class PortfolioStatusResult:
+    """盤後結算結果：報告文字，加上本次計算的風險指標與逐部位摘要。"""
+
+    report_lines: List[str]
+    metrics: Optional[MacroRiskMetrics]  # SPY 現價缺失時為 None
+    positions: List[Dict[str, Any]] = field(default_factory=list)
+
+
+async def run_portfolio_status(
+    portfolio_rows: Any, user_capital: float = 50000.0
+) -> PortfolioStatusResult:
+    """執行盤後結算並回傳報告行、風險指標與逐部位摘要。"""
+    if not portfolio_rows:
+        return PortfolioStatusResult(report_lines=[], metrics=None, positions=[])
+
+    analyzer = PortfolioStatusOrchestrator(user_capital)
+    report_lines = await analyzer.run(portfolio_rows)
+    return PortfolioStatusResult(
+        report_lines=report_lines,
+        metrics=analyzer.metrics,
+        positions=analyzer.positions,
+    )
+
+
 async def check_portfolio_status_logic(
     portfolio_rows: Any, user_capital: float = 50000.0
 ) -> List[str]:
     """
     [Facade] 盤後動態結算與風險管線編排者 (Orchestrator)
     """
-    if not portfolio_rows:
-        return []
-
-    analyzer = PortfolioStatusOrchestrator(user_capital)
-    return await analyzer.run(portfolio_rows)
+    return (await run_portfolio_status(portfolio_rows, user_capital)).report_lines
 
 
 class PortfolioStatusOrchestrator:
@@ -67,6 +90,33 @@ class PortfolioStatusOrchestrator:
         self.total_gamma = 0.0
         self.total_vega = 0.0
         self.total_vanna = 0.0
+
+        # 本次結算產出的風險指標與逐部位摘要（供 LLM raw_data 使用）
+        self.metrics: Optional[MacroRiskMetrics] = None
+        self.positions: List[Dict[str, Any]] = []
+
+    @staticmethod
+    def _position_summary(
+        symbol: Any,
+        opt_type: Any,
+        quantity: Any,
+        dte: Optional[int],
+        iv: Optional[float],
+        iv_rank: Optional[float],
+        pnl_pct: Optional[float],
+    ) -> Dict[str, Any]:
+        """組裝單一部位的摘要（IV / IVR / 損益皆可為 None）。"""
+        kind = str(opt_type).lower()
+        return {
+            "symbol": symbol,
+            "type": "STOCK" if kind == "stock" else kind.upper(),
+            "direction": "BTO" if quantity >= 0 else "STO",
+            "quantity": quantity,
+            "dte": dte,
+            "iv_pct": round(iv * 100, 1) if iv is not None and iv > 0 else None,
+            "iv_rank_pct": round(iv_rank, 1) if iv_rank is not None else None,
+            "pnl_pct": round(pnl_pct * 100, 2) if pnl_pct is not None else None,
+        }
 
     async def run(self, portfolio_rows: Any) -> List[str]:
         # 1. 預處理：批次下載資料
@@ -207,6 +257,17 @@ class PortfolioStatusOrchestrator:
                             iv_rank=iv_rank_val,
                         )
                     )
+                    self.positions.append(
+                        self._position_summary(
+                            symbol,
+                            "stock",
+                            quantity,
+                            None,
+                            None,
+                            iv_rank_val,
+                            stock_pnl,
+                        )
+                    )
                     continue
 
                 if expiry not in option_chains_cache:
@@ -264,9 +325,12 @@ class PortfolioStatusOrchestrator:
                     self.total_beta_delta += opt_weighted_delta
                     pos_gamma = greeks["gamma"] * quantity * 100
                     self.total_gamma += pos_gamma * (weight_factor**2)
-                    # Vega & Vanna
-                    self.total_vega += greeks["vega"] * quantity * 100 * weight_factor
+                    # Vanna（維持 Beta 加權）
                     self.total_vanna += greeks["vanna"] * quantity * 100 * weight_factor
+
+                # Vega 不做 Beta 加權：定義為「IV 每 +1 點的美元損益」，
+                # 且不依賴 SPY 現價。
+                self.total_vega += greeks["vega"] * quantity * 100
 
                 # py_vollib 的 analytical theta 已是「每日」值 (原始碼內已除以
                 # 365)，不可再除一次——過去重複除 365 使 Theta 被縮小 365 倍。
@@ -310,6 +374,17 @@ class PortfolioStatusOrchestrator:
                         iv=iv,
                         iv_rank=iv_rank_val,
                         price_note=price_note,
+                    )
+                )
+                self.positions.append(
+                    self._position_summary(
+                        symbol,
+                        opt_type,
+                        quantity,
+                        dte_days,
+                        iv,
+                        iv_rank_val,
+                        pnl_pct,
                     )
                 )
         except Exception as e:
@@ -370,6 +445,7 @@ class PortfolioStatusOrchestrator:
                 total_vega=self.total_vega,
                 total_vanna=self.total_vanna,
             )
+            self.metrics = metrics
             self.report_lines.extend(
                 format_macro_risk_report_core(metrics, self.spy_price)
             )
