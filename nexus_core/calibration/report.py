@@ -154,7 +154,23 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
         lines += _render_squeeze_strata(strata)
     if data.get("g3"):
         lines.append(f"- G.3 判讀：{data['g3']}")
+    lines += _render_shadow_vetoes(data.get("shadow_vetoes"))
     lines.append("")
+    return lines
+
+
+def _render_shadow_vetoes(shadow: Any) -> list[str]:
+    if not shadow:
+        return []
+    lines = ["- 影子否決分組（僅參考，判定不動）："]
+    if not isinstance(shadow, dict):
+        return lines + [f"  - {shadow}"]
+    for e in shadow.values():
+        lines.append(
+            f"  - {e.get('label')}：成立 n={e.get('n_flag', 0)}／放行 n={e.get('n_pass', 0)}"
+            f"／無資料 n={e.get('n_null', 0)}；差 {_fmt(e.get('diff'))} {_fmt(e.get('ci'))}；"
+            f"{e.get('verdict')}"
+        )
     return lines
 
 
