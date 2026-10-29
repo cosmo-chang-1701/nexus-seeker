@@ -65,6 +65,7 @@ flowchart TB
         U04["異常期權活動 (UOA) 權利金排序與進度正規化<br/>(04_uoa_notional_and_paced_ratio.md)"]
         U05["成交量分佈 (VP) 與 Volume-POC 磁吸模型<br/>(05_volume_profile_and_dp_poc.md)"]
         U06["已退役：Gamma Squeeze 引擎與 SPEAR 進攻訊號<br/>(06_gamma_squeeze_engine_and_spear.md)"]
+        U07["GEX 牆突破／跌破判讀與 T+1 確認推播（未校準）<br/>(07_wall_break_verification.md)"]
     end
 
     subgraph Strategies_Layer["1. 交易策略與進出場體系 (strategies/)"]
@@ -151,6 +152,7 @@ flowchart TB
 | 09 | [`04_uoa_notional_and_paced_ratio.md`](microstructure/04_uoa_notional_and_paced_ratio.md) | 異常期權活動 (UOA) 權利金排序與時段正規化 | 名目價值排序 (`trade_price * vol * 100`), 時段進度正規化 `paced_ratio`, SWEEP/BLOCK/CROSS | `market_analysis/uoa_detector.py` |
 | 10 | [`05_volume_profile_and_dp_poc.md`](microstructure/05_volume_profile_and_dp_poc.md) | 成交量分佈 (VP) 與 Volume-POC 磁吸模型 | 20 日 50-Bin 等寬分箱演算法, HVN/LVN 識別, 1% 共振磁吸底牆 | `market_analysis/volume_profile.py` |
 | 11 | [`06_gamma_squeeze_engine_and_spear.md`](microstructure/06_gamma_squeeze_engine_and_spear.md) | 已退役（2026-10-17）：Gamma Squeeze 引擎與 SPEAR 進攻訊號體系 | 退役紀錄：四項退役原因、取代方案（擠壓進場規格 10）、已移除檔案清單 | 已退役，無現行程式碼 |
+| 11b | [`07_wall_break_verification.md`](microstructure/07_wall_break_verification.md) | GEX 牆突破／跌破判讀與 T+1 確認推播（自選標的，未校準） | 前一交易日收盤牆為錨、緩衝 $0.5\times\text{ATR}_{15m}$, 六關卡 Kleene 三值判定, T+1 ΔOI／遲滯 $1.10$, 全部門檻 PRE_CALIBRATION | `market_analysis/wall_break.py` |
 
 ---
 
