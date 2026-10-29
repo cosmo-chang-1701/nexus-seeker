@@ -117,14 +117,15 @@ def test_mrvl_after_hours_embed_within_budget() -> None:
     if embed.footer and embed.footer.text:
         total += len(embed.footer.text)
     total += sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
-    assert total <= 5600, f"總字數 {total} 超過 5600 緩衝線"
+    # 瘦身後實測 3869 字（+100 緩衝）
+    assert total <= 4000, f"總字數 {total} 超過 4000 緩衝線"
     names = [f.name or "" for f in embed.fields]
     assert any("🐋 異常活動" in n for n in names)
     assert any("🧲 Gamma 曝險分布" in n for n in names)
 
 
 def test_mrvl_without_callwall_within_budget() -> None:
-    """沒有 CallWall（R:R 分支不輸出）的一般路徑：同樣不得有欄位被 pop、總字數 ≤ 5600。"""
+    """沒有 CallWall（R:R 分支不輸出）的一般路徑：同樣不得有欄位被 pop、總字數 ≤ 4000。"""
     from market_time import ny_tz
     from datetime import datetime
 
@@ -147,7 +148,8 @@ def test_mrvl_without_callwall_within_budget() -> None:
     if embed.footer and embed.footer.text:
         total += len(embed.footer.text)
     total += sum(len(f.name or "") + len(f.value or "") for f in embed.fields)
-    assert total <= 5600, f"總字數 {total} 超過 5600 緩衝線"
+    # 瘦身後實測 3876 字（+100 緩衝）
+    assert total <= 4000, f"總字數 {total} 超過 4000 緩衝線"
 
 
 def _total_chars(embed: Any) -> int:
@@ -209,4 +211,5 @@ def test_wall_integrity_worst_case_within_budget() -> None:
     text = "\n".join(f.value or "" for f in embed.fields)
     assert "〔紙牆" in text and "貼牆" in text
     assert "STO CALL 1,200口" in text and "已跌破(價內)" in text
-    assert _total_chars(embed) <= 5600
+    # 瘦身後實測 4114 字（+100 緩衝）
+    assert _total_chars(embed) <= 4250, _total_chars(embed)

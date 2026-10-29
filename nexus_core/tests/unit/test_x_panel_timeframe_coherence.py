@@ -623,7 +623,7 @@ def test_worst_case_all_new_lines_within_budget() -> None:
         "VIX 戰情階梯", "單一標的集中度", "W 擠壓釋放", "自動壓力區",
     ):  # fmt: skip
         assert needle in text, needle
-    assert _total_chars(embed) <= 5600, _total_chars(embed)
+    assert _total_chars(embed) <= 5330, _total_chars(embed)
 
 
 def test_embed_overflow_logs_warning_with_trimmed_field_names(
