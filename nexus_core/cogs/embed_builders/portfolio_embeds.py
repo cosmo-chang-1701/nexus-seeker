@@ -1045,7 +1045,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     if not quote or c_val == 0.0:
         quote_lines = [
             "```ansi",
-            " 當前現價 (Current Price)",
+            " 當前現價",
             " └─ 現價: \u001b[1;37m--\u001b[0m (暫無即時報價數據)",
             "```",
         ]
@@ -1053,9 +1053,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         color_code = "\u001b[1;32m" if dp_val >= 0 else "\u001b[1;31m"
         quote_lines = [
             "```ansi",
-            " 當前現價 (Current Price)",
-            f" └─ 現價: {color_code}${c_val:.2f}\u001b[0m ({price_emoji} {color_code}{dp_val:+.2f}%\u001b[0m / {color_code}{d_val:+.2f}\u001b[0m)",
-            " 今日區間 (Daily Range)",
+            " 當前現價",
+            f" └─ 現價: {color_code}${c_val:.2f} ({price_emoji} {dp_val:+.2f}% / {d_val:+.2f})\u001b[0m",
+            " 今日區間",
             f" └─ 開盤: \u001b[1;36m{fmt_or_dash(o_raw, '.2f')}\u001b[0m | 最高: \u001b[1;31m{fmt_or_dash(h_raw, '.2f')}\u001b[0m | 最低: \u001b[1;32m{fmt_or_dash(l_raw, '.2f')}\u001b[0m | 前收: \u001b[1;30m{fmt_or_dash(pc_raw, '.2f')}\u001b[0m",
         ]
 
@@ -1065,7 +1065,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             lvn = fmt_or_dash(vp.get("lvn"), ".2f", prefix="$")
             quote_lines.extend(
                 [
-                    " 近期成交量分佈 (Volume Profile, 20D)",
+                    " 近 20 日成交量分佈",
                     f" └─ 高密集區 (HVN): \u001b[1;35m{hvn}\u001b[0m | 籌碼真空區 (LVN): \u001b[1;33m{lvn}\u001b[0m",
                 ]
             )
@@ -1462,8 +1462,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     edge_lines = [
         "```ansi",
-        " Option Skew (期權偏斜)",
-        f" └─ Skew (P−C): {skew_color}{skew_val_str}{skew_note}\u001b[0m (分位點: {skew_color}{skew_per_str}\u001b[0m)",
+        " 期權偏斜",
+        f" └─ Skew (P−C): {skew_color}{skew_val_str}{skew_note} (分位點: {skew_per_str})\u001b[0m",
     ]
     if skew_percentile is not None and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
         edge_lines.append(
@@ -1497,7 +1497,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     edge_lines.extend(
         [
-            " 情緒背離偵測 (Divergence Check)",
+            " 情緒背離偵測",
             f" {'├─' if action else '└─'} 狀態: {divergence_color}{divergence}\u001b[0m",
         ]
     )
@@ -1604,14 +1604,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 " └─ 值: \u001b[1;30m--%\u001b[0m (數據未更新 / 降級模式)",
                 " IV Rank / IV Percentile",
                 " └─ IV Rank: \u001b[1;30m--%\u001b[0m | IV Percentile: \u001b[1;30m--%\u001b[0m (狀態: 待開盤)",
-                " Expected Move (預期區間)",
+                " 預期區間",
                 " └─ 7 日 1σ: \u001b[1;30m--\u001b[0m (開盤後更新)",
                 "```",
             ]
         else:
             if is_premarket:
                 vol_title = (
-                    "Historical Volatility (HV, 30D)"
+                    "歷史波動率 (HV, 30D)"
                     if iv_source == "HV_PROXY"
                     else "Implied Volatility (IV)"
                 )
@@ -1630,7 +1630,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     em_note = "基於前日收盤 IV 計算"
             else:
                 if iv_source == "HV_PROXY":
-                    vol_title = "Historical Volatility (HV, 30D)"
+                    vol_title = "歷史波動率 (HV, 30D)"
                     vol_note = "30D 歷史實現波動率代理（即時 IV 不可用）"
                     em_note = "基於 30D HV 代理估算"
                 elif iv_source == "LIVE_IV":
@@ -1739,7 +1739,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 )
                 iv_term_ratio = iv_data.get("term_structure_ratio") or iv_term_ratio
 
-            iv_lines.append(" IV 期限結構 (Term Structure)")
+            iv_lines.append(" IV 期限結構")
             if iv_term_status and iv_term_ratio is not None:
                 try:
                     ratio_val = float(iv_term_ratio)
@@ -1764,7 +1764,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else:
                 iv_lines.append(" └─ --")
 
-            iv_lines.append(" Expected Move (預期區間)")
+            iv_lines.append(" 預期區間")
 
             em_reference = _to_float_or_none(em_context.get("reference_price"))
             safe_em_weekly = expected_move_weekly_num
@@ -1809,7 +1809,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
             catalysts = data.get("catalysts")
             if catalysts:
-                iv_lines.append(" 事件日曆防護 (Catalyst Calendar)")
+                iv_lines.append(" 事件日曆防護")
                 # 事件清單含發布後冷卻期 (tte_hours < 0)；已公布的不得印成「僅剩 -0.1 天」，
                 # 合併為一行置於未到事件之後，且不佔 3 筆上限。
                 released_names: List[str] = []
@@ -3332,17 +3332,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     target_lines = [
         "```ansi",
-        " 最大痛點結算 (Max Pain Settlement" + ("，±結算前1σ)" if _any_sigma else ")"),
+        " 最大痛點結算" + ("（±結算前1σ）" if _any_sigma else ""),
     ]
     target_lines.extend(mp_lines)
     target_lines.extend(
         [
-            " DDP 與期權風控 (DDP & Risk Metrics)",
+            " DDP 與期權風控",
             f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
             f" ├─ IV Rank: {ivr_color}{ivr_str}\u001b[0m",
-            f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str}\u001b[0m ({vol_pcr_color}{volume_state}\u001b[0m)",
-            f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str}\u001b[0m ({oi_pcr_color}{oi_state}\u001b[0m)",
-            " 結算價操作指引 (Scenario Analysis)",
+            f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str} ({volume_state})\u001b[0m",
+            f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str} ({oi_state})\u001b[0m",
+            " 結算價操作指引",
         ]
     )
     if not scenario_overlays:

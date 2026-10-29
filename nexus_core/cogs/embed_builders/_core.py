@@ -5,6 +5,7 @@
 """
 
 import logging
+import re
 from typing import Any, Optional
 import discord
 
@@ -24,6 +25,78 @@ _MAX_DESCRIPTION_LEN = 4096
 _MAX_TOTAL_LEN = 5800  # 保守值，低於官方 6000 字元總長上限
 
 _OVERFLOW_DESC_WARNING = "…（內容過長已自動截斷）"
+
+
+_FENCE = "```"
+_TRIM_MARKER = "…（餘 {n} 行略）"
+_FOOTNOTE_PREFIXES = ("⚠", "※", "註")
+_CONTINUATION_NAME = "\u200b"  # 與 _embed_helpers.ANSI_CONTINUATION_FIELD_NAME 相同
+_MIN_SINGLE_LINE_KEEP = 20
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _describe_field(index: int, name: Any) -> str:
+    """日誌用欄位描述：`#<1-based 序號> <名稱>`；空名或零寬續欄顯示為（續欄）。"""
+    text = str(name or "")
+    if not text.strip() or text.strip(_CONTINUATION_NAME) == "":
+        return f"#{index + 1}（續欄）"
+    return f"#{index + 1} {text}"
+
+
+def _shrink_lines(
+    head: str, lines: list[str], suffix: str, original: str, target_len: int
+) -> str:
+    """以整行為單位從尾端移除 lines，補上標記行；結尾註腳行（⚠／※／註）保留。"""
+    footnote: Optional[str] = None
+    main = lines
+    if len(lines) >= 3 and lines[-1].startswith(_FOOTNOTE_PREFIXES):
+        footnote = lines[-1]
+        main = lines[:-1]
+        while len(main) > 1 and not main[-1].strip():
+            main = main[:-1]
+    best: Optional[str] = None
+    for keep in range(len(main) - 1, 0, -1):
+        kept = main[:keep] + [_TRIM_MARKER.format(n=len(main) - keep)]
+        if footnote is not None:
+            kept.extend(["", footnote])
+        candidate = head + "\n".join(kept) + suffix
+        if len(candidate) >= len(original):
+            continue
+        best = candidate
+        if len(candidate) <= target_len:
+            break
+    return best if best is not None else original
+
+
+def _shrink_field_value(value: str, target_len: int) -> str:
+    """把欄位值縮短到 target_len 以內（盡力而為），絕不回傳比輸入更長的值。
+
+    - 以 ``` 圍欄的值：保留開頭與結尾圍欄（含圍欄後尾綴），整行移除本文尾端。
+    - 無圍欄多行值：同樣整行移除。
+    - 單行值：字元截斷並以「…」結尾，不切斷 ANSI escape。
+    """
+    if len(value) <= target_len:
+        return value
+    if value.startswith(_FENCE) and "\n" not in value:
+        return value  # 單行圍欄區塊不可切斷收尾圍欄
+    if value.startswith(_FENCE):
+        first_nl = value.find("\n")
+        close = value.rfind("\n" + _FENCE)
+        if first_nl != -1 and close > first_nl:
+            head = value[: first_nl + 1]
+            body = value[first_nl + 1 : close]
+            return _shrink_lines(
+                head, body.split("\n"), value[close:], value, target_len
+            )
+    if "\n" in value:
+        return _shrink_lines("", value.split("\n"), "", value, target_len)
+    keep = max(target_len - 1, _MIN_SINGLE_LINE_KEEP)
+    cut = value[:keep]
+    esc = cut.rfind("\x1b")
+    if esc != -1 and not _ANSI_ESCAPE_RE.match(cut, esc):
+        cut = cut[:esc]
+    candidate = cut + "…"
+    return candidate if len(candidate) < len(value) else value
 
 
 # ============================================================================
@@ -264,20 +337,46 @@ class NexusEmbed(discord.Embed):
         overflowed_by_length = total_len > _MAX_TOTAL_LEN
         if overflowed_by_length:
             original_total = total_len
-            dropped_names: list[str] = []
+            # 以副本工作：discord.py 的 to_dict() 回傳的欄位 dict 即 embed 自身的
+            # _fields，就地修改會讓 embed.fields 永久變短，且第二次序列化結果不同。
+            copied: list[Any] = [dict(f) for f in fields]
+            fields = copied
+            trimmed: dict[int, int] = {}
+            # 最後防線：由尾端往前逐欄以整行為單位縮短，優先保留所有欄位。
+            for idx in range(len(fields) - 1, -1, -1):
+                excess = total_len - _MAX_TOTAL_LEN
+                if excess <= 0:
+                    break
+                value = fields[idx].get("value") or ""
+                new_value = _shrink_field_value(value, len(value) - excess)
+                if len(new_value) < len(value):
+                    fields[idx]["value"] = new_value
+                    trimmed[idx] = len(value) - len(new_value)
+                    total_len -= len(value) - len(new_value)
+
+            # 全部縮到下限仍超標才整欄捨棄尾端欄位。
+            dropped: list[str] = []
             while total_len > _MAX_TOTAL_LEN and fields:
                 field = fields.pop()
-                dropped_names.append(str(field.get("name") or ""))
+                dropped.append(_describe_field(len(fields), field.get("name")))
+                trimmed.pop(len(fields), None)
                 total_len -= len(field.get("name") or "") + len(
                     field.get("value") or ""
                 )
 
-            # 靜默丟欄曾讓整塊 UOA／Target Lock 無聲消失，至少留下可追查的警告。
+            trimmed_text = "、".join(
+                f"{_describe_field(i, fields[i].get('name'))}(-{n}字)"
+                for i, n in sorted(trimmed.items())
+            )
+            title_text = (result.get("title") or "")[:60] or "（無標題）"
             logger.warning(
-                "[NexusEmbed] 總字數 %d 超過 %d，已捨棄尾端欄位：%s",
+                "[NexusEmbed] %s 總字數 %d 超過 %d，已逐行縮減尾端欄位：%s；"
+                "已捨棄欄位：%s",
+                title_text,
                 original_total,
                 _MAX_TOTAL_LEN,
-                "、".join(dropped_names),
+                trimmed_text or "無",
+                "、".join(dropped) or "無",
             )
 
         result["fields"] = fields

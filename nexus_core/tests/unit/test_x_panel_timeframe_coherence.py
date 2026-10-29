@@ -623,10 +623,10 @@ def test_worst_case_all_new_lines_within_budget() -> None:
         "VIX 戰情階梯", "單一標的集中度", "W 擠壓釋放", "自動壓力區",
     ):  # fmt: skip
         assert needle in text, needle
-    assert _total_chars(embed) <= 5600, _total_chars(embed)
+    assert _total_chars(embed) <= 5330, _total_chars(embed)
 
 
-def test_embed_overflow_logs_warning_with_dropped_field_names(
+def test_embed_overflow_logs_warning_with_trimmed_field_names(
     caplog: Any,
 ) -> None:
     import logging
@@ -634,11 +634,16 @@ def test_embed_overflow_logs_warning_with_dropped_field_names(
     from cogs.embed_builders._core import NexusEmbed
 
     e = NexusEmbed(title="t")
-    for i in range(6):
+    for i in range(5):
         e.add_field(name=f"欄位{i}", value="字" * 1000, inline=False)
+    e.add_field(
+        name="欄位5",
+        value="```ansi\n" + "\n".join("字" * 100 for _ in range(10)) + "\n```",
+        inline=False,
+    )
     with caplog.at_level(logging.WARNING, logger="cogs.embed_builders._core"):
         d = e.to_dict()
-    assert len(d["fields"]) < 6
+    assert len(d["fields"]) == 6
     msg = "\n".join(r.getMessage() for r in caplog.records)
     assert "欄位5" in msg and "6" in msg
 
@@ -650,10 +655,13 @@ def test_embed_overflow_logs_warning_with_dropped_field_names(
     assert not caplog.records
 
 
-def test_extreme_overflow_only_drops_trailing_uoa(caplog: Any) -> None:
+def test_extreme_overflow_trims_uoa_but_keeps_gex_and_target_lock(
+    caplog: Any,
+) -> None:
     """再加上財報／總經事件、每口 Delta、長 UOA intent 會超過 5800：
 
-    此時被丟的必須只有尾端的 UOA；GEX 與 Target Lock 欄位保留，且留下警告日誌。
+    GEX 與 Target Lock 欄位原樣保留；UOA 欄位逐行縮短（含標記）並保留揭露註腳，
+    且留下提及 UOA 的警告日誌。
     """
     import logging
 
@@ -662,14 +670,38 @@ def test_extreme_overflow_only_drops_trailing_uoa(caplog: Any) -> None:
     embed = _render_embed(
         _worst_case_data(extreme=True), datetime(2026, 10, 7, 12, 0, tzinfo=ny_tz)
     )
-    assert _total_chars(embed) > 5800
+    # UOA 欄位本身已近 1024 上限，改在其後追加不可縮減的單行圍欄欄位，
+    # 使總量穩定超標 400 字以上（/x 版面縮減後仍成立），迫使縮減溢到 UOA。
+    idx = next(i for i, f in enumerate(embed.fields) if "異常活動" in (f.name or ""))
+    injected = embed.fields[idx].value
+    pad_name = "補位"
+    room = 5800 + 400 + 50 - _total_chars(embed) - len(pad_name)
+    assert 40 < room <= 1024, room
+    embed.add_field(
+        name=pad_name, value="```ansi\n" + "字" * (room - 12) + "\n```", inline=False
+    )
+    assert _total_chars(embed) > 5800 + 400
+    original = {f.name: f.value for f in embed.fields}
     with caplog.at_level(logging.WARNING, logger="cogs.embed_builders._core"):
         kept = embed.to_dict()["fields"]
-    names = [f["name"] for f in kept]
-    assert any(GEX_FIELD in n for n in names)
-    assert any("Target Lock" in n for n in names)
-    assert not any("異常活動" in n for n in names)
+    assert len(kept) == len(embed.fields)
+    assert kept[-1]["value"] == original[pad_name]
+    by_name = {f["name"]: f["value"] for f in kept}
+    gex = [n for n in by_name if GEX_FIELD in n]
+    lock = [n for n in by_name if "Target Lock" in n]
+    assert gex and lock
+    for n in gex + lock:
+        assert by_name[n] == original[n]
+    uoa_name = next(n for n in by_name if "異常活動" in n)
+    uoa = by_name[uoa_name]
+    assert len(uoa) < len(original[uoa_name])
+    assert "餘" in uoa and "行略" in uoa
+    assert "Bid-Ask 啟發式" in uoa
+    assert uoa.index("行略") < uoa.rindex("\n```")
+    assert uoa.rstrip(" \n\u200b").endswith("```")
     assert any("異常活動" in r.getMessage() for r in caplog.records)
+    # 不得改動 embed 本身：to_dict() 之後重新讀取
+    assert embed.fields[idx].value == injected
 
 
 def test_b1_verdict_line_gets_cap_suffix_only_for_entry() -> None:
