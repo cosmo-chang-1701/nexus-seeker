@@ -188,6 +188,15 @@ class SchedulerCog(commands.Cog):
         except Exception as e:
             logger.error(f"uoa_history 保留期清理失敗: {e}")
 
+        # GEX 牆突破紀錄保留期清理：錨點保留 14 天、事件（前向校準樣本）保留 180 天。
+        try:
+            from database.wall_break import purge_stale_wall_break
+
+            purged_wb = await purge_stale_wall_break()
+            logger.info(f"🧹 [GEX 牆突破紀錄清理] 已清除 {purged_wb} 筆過期紀錄。")
+        except Exception as e:
+            logger.error(f"wall_break 保留期清理失敗: {e}")
+
         # 情緒指標保留期清理：高頻日誌保留 60 個交易日，日級規範母體保留約一年
         # (見 market_analysis/sentiment/canonical_history.py)。
         try:
