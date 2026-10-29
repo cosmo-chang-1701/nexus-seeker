@@ -9,7 +9,7 @@
 ### 1.1 核心哲學
 在多租戶的即時金融量化監控系統中，交易員對自選標的的資訊需求可分為兩大維度：
 1. **高頻率的廣度快照（Breadth Snapshot）**：全體自選股之 Greeks 牆體、最大痛點、Skew 偏斜與主力 UOA 的批次面板。**現已改為按需查詢**：由 `/x` 經 `RadarDataMixin._fetch_sym_radar_data_slow()` 抓取、`build_radar_scan_embed()` 分頁渲染，不再每 15 分鐘主動推播。
-2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合（Gamma Squeeze SPEAR 攻擊訊號已於 2026-10-17 退役）。由 30 分鐘深度心跳管線主動推播。
+2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合（Gamma Squeeze SPEAR 攻擊訊號已於 2026-10-17 退役）。由 30 分鐘深度心跳管線主動推播；同一管線亦對自選標的執行 GEX 牆突破／跌破偵測，以獨立頻道 `alpha_wall_break` 推播（見 [`../microstructure/07_wall_break_verification.md`](../microstructure/07_wall_break_verification.md)）。
 
 重度量化計算與定時迴圈必須物理隔離，否則會阻塞其他盤中任務並因 API 併發過載觸發外部數據源（Finnhub, yfinance）之限流封鎖。因此 30 分鐘管線是獨立的 `asyncio.Task`，不掛在 15 分鐘 `tasks.loop` 之下，並受 `is_memory_safe()`（85% RAM+Swap）閘門約束。
 
@@ -171,6 +171,7 @@ flowchart TD
   - `_sync_edge_watchlist`: 同步去重後的自選標的與持倉 priority 清單給 `nexus_edge_scraper`（自已移除的 `heartbeat.py` 搬來）
 - `nexus_core/market_analysis/intraday_pipeline/pipeline.py`
   - `IntradayScanPipeline`: 30 分鐘深度監控管道類別與 `_run_loop` 調度狀態機（含 `is_memory_safe()` 閘門）
+  - `WallBreakMonitor`（`nexus_core/services/wall_break_service.py`）: 每輪對自選標的偵測 GEX 牆突破／跌破與 T+1 結算，獨立於心跳警報等級與進場顧問，推播至 `alpha_wall_break`
   - `_dispatch_entry_advisor_alert` / `_resolve_candidate_radar`: 進場顧問獨立派發與 radar 取得（共享快取優先、Semaphore(3) 補抓）
 - `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`
   - `evaluate_entry_advice`: 策略分派、六重鐵律確認、價位計算與跨使用者記憶化

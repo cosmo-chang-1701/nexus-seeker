@@ -6,13 +6,13 @@ documentation repository under `docs/` according to PROJECT.md and ORIGINAL_REQU
 
 Verification Batteries:
 1. [CLEANUP] Obsolete documentation cleanup (STRATEGY.md, architecture.md, etc. must not exist).
-2. [STRUCTURE] Directory taxonomy and file count (all 43 specifications + docs/README.md).
+2. [STRUCTURE] Directory taxonomy and file count (all 44 specifications + docs/README.md).
 3. [SECTIONS] 6-part specification structure (Headers, LaTeX math, Mermaid diagrams,
    named constants table, and valid repository source code paths).
 4. [LANGUAGE] 100% Traditional Chinese purity (zero tolerance for Simplified Chinese).
 5. [SEPARATION] Separation from root README.md (no Docker commands, .env tables, slash command lists).
 6. [LINKS] Internal markdown link and anchor integrity (no broken relative links or dead anchors).
-7. [INDEX] Master index coverage (docs/README.md references all 43 specification documents).
+7. [INDEX] Master index coverage (docs/README.md references all 44 specification documents).
 
 Exit Code:
 - 0: All checks passed.
@@ -63,6 +63,7 @@ EXPECTED_SPECIFICATIONS: dict[str, list[str]] = {
         "04_uoa_notional_and_paced_ratio.md",
         "05_volume_profile_and_dp_poc.md",
         "06_gamma_squeeze_engine_and_spear.md",
+        "07_wall_break_verification.md",
     ],
     "docs/valuation_pricing": [
         "01_tdp_valuation_model.md",
@@ -534,7 +535,7 @@ class DocsVerifier:
     def battery_structure_and_count(self) -> BatteryResult:
         result: BatteryResult = BatteryResult(
             category="STRUCTURE",
-            description="Directory taxonomy and 43 specification documents + README existence",
+            description="Directory taxonomy and 44 specification documents + README existence",
         )
 
         # Check master README
@@ -559,7 +560,7 @@ class DocsVerifier:
         else:
             result.passed_checks += 1
 
-        # Check all 43 specification documents
+        # Check all 44 specification documents
         expected_total_specs: int = 0
         for category_dir, spec_files in EXPECTED_SPECIFICATIONS.items():
             dir_path: Path = self.repo_root / category_dir
