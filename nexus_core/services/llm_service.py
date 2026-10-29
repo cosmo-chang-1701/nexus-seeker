@@ -351,9 +351,9 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     3. 🛡️ 高勝率交易策略推薦
 
     ### 🧮 MATHEMATICAL CROSS-VALIDATION RULES
-    You must mathematically cross-reference the input data:
-    1. **IV Bubble Validation**: If Technical Overheating occurs (e.g. Price/MA20 Deviation/乖離率 > 10% or RSI > 65) while `IV Rank > 90%` AND `days_to_earnings > 20`, you MUST explicitly flag an artificial IV bubble ("人工隱含波動率泡沫") and strictly avoid recommending single-leg long options ("單邊買入選擇權" e.g., 買入買權/賣權). Recommend defined-risk spreads or defensive actions instead.
-    2. **Market Divergence Validation**: If `Option Skew` is negative (meaning Calls are expensive, skew < 0, showing speculative retail/momentum buying) but `Put/Call Ratio (PCR) > 1.5` (Heavy Put volume, indicating institutional hedging), you MUST explain this as retail momentum vs. institutional hedging ("散戶動能與機構避險的背離").
+    You must mathematically cross-reference the input data, but apply each rule below ONLY when every field it needs is present and non-null in raw_data. When any required field is absent or null, skip that rule silently: do not mention the missing data and do not write any 資料限制 / data-limitation statement.
+    1. **IV Bubble Validation**: If Technical Overheating occurs (e.g. Price/MA20 Deviation/乖離率 > 10% or RSI > 65) while `IV Rank > 90%` AND `days_to_earnings > 20` (all of these fields present), you MUST explicitly flag an artificial IV bubble ("人工隱含波動率泡沫") and strictly avoid recommending single-leg long options ("單邊買入選擇權" e.g., 買入買權/賣權). Recommend defined-risk spreads or defensive actions instead.
+    2. **Market Divergence Validation**: If `Option Skew` is negative (meaning Calls are expensive, skew < 0, showing speculative retail/momentum buying) but `Put/Call Ratio (PCR) > 1.5` (Heavy Put volume, indicating institutional hedging) (both fields present), you MUST explain this as retail momentum vs. institutional hedging ("散戶動能與機構避險的背離").
 
     ### Specific Instructions for "盤後交易與每日總結" (Post-market Summary):
     If the report type contains "盤後交易與每日總結", you MUST include the following in your analysis under the headers above:
@@ -365,10 +365,12 @@ async def generate_analyst_report(report_type: str, raw_data: dict) -> str:
     ### Specific Instructions for "盤後綜合風險與 AI 策略報告" (Post-market Intelligence):
     If the report type contains "盤後綜合風險與 AI 策略報告", you MUST include the following in your analysis under the headers above:
     - **🏁 提領跑道 (Withdrawal Runway)**: Use aggregate_risk_metrics.withdrawal_runway (stress_years is the headline; also cite gfc_years, dotcom_years and zero_return_years; if capped_at_10y is true say "≥ 10 年"). It is a conditional historical-replay figure, not a forecast. If withdrawal_runway is null, state that no runway data is available; never invent a number.
-    - **📦 當日盈虧歸因 (PnL Attribution)**: Use brinson_attribution_proxy data.
+    - **📦 建倉至今損益歸因 (PnL Since Entry)**: Use pnl_attribution_since_entry (total_net_pnl, alpha_selection_pnl, hedge_pnl). State that it is the cumulative unrealized P&L since entry for real positions only, never describe it as "當日" (daily) P&L. Mention unpriced_count only if it is > 0.
     - **⚙️ 行業板塊資金輪動 (Sector Rotation)**: Analyze the sectors data (pct_change, rel_vol, skew).
-    - **🛡️ 盤後風險對沖決策**: Analyze Delta/Theta exposure and margin utilization.
-    - **🎯 次日交易策略模板 (Next Day Strategy)**: Generate specific tactical guidelines for tomorrow, including defense/resistance zones (防線區間) and execution trigger conditions (觸發條件).
+    - **🛡️ 盤後風險對沖決策**: Analyze macro_snapshot (vix, vix_tier) together with aggregate_risk_metrics.net_delta_exposure_pct, margin_heat_pct, total_theta and total_beta_delta.
+    - **📋 持倉風險檢視 (Positions)**: When `positions` is present, comment on the IV (iv_pct), IV Rank (iv_rank_pct) and DTE (dte) of the held positions.
+    - **🎯 次日交易策略模板 (Next Day Strategy)**: Generate specific tactical guidelines for tomorrow, including execution trigger conditions (觸發條件). Any price levels may only come from macro_snapshot.spy_price and spy_max_pain; otherwise omit price levels. Never invent support/resistance numbers.
+    - **Report status**: If report_status is not "ok", state that portfolio settlement data is unavailable (when "failed") or that the account has no positions (when "no_positions"), and do not discuss portfolio metrics.
 
     ### Specific Instructions for "盤前財報與估值調整" (Pre-market Earnings):
     If the report type contains "盤前財報與估值調整", you MUST include the following in your analysis under the headers above:
