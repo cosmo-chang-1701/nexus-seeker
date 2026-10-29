@@ -6,9 +6,10 @@ GEX 區塊整段包在 try/except，錯誤只會讓欄位消失，故每例都�
 import asyncio
 from datetime import datetime
 from types import SimpleNamespace
-from typing import Any
-from unittest.mock import patch
+from typing import Any, Iterator
+from unittest.mock import AsyncMock, patch
 
+import pytest
 from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 from market_analysis.squeeze_entry.intraday_conflict import (
     assess_intraday_conflict,
@@ -16,6 +17,16 @@ from market_analysis.squeeze_entry.intraday_conflict import (
 )
 
 GEX_FIELD = "🧲 Gamma 曝險分布"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_macro_calendar() -> Iterator[None]:
+    """影子否決的日曆抓取一律 mock，測試不碰真實日曆。"""
+    with patch(
+        "market_analysis.squeeze_entry.shadow_vetoes.nearest_macro_event_tte_hours",
+        AsyncMock(return_value=(True, None)),
+    ):
+        yield
 
 
 def _render_embed(data: dict[str, Any], now: datetime | None = None) -> Any:

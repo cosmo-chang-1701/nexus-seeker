@@ -40,6 +40,16 @@ def _clean_state() -> Iterator[None]:
     evaluation_recorder.clear_buffer()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_macro_calendar() -> Iterator[None]:
+    """影子否決的日曆抓取一律 mock，測試不碰真實日曆。"""
+    with patch(
+        "market_analysis.squeeze_entry.shadow_vetoes.nearest_macro_event_tte_hours",
+        AsyncMock(return_value=(True, None)),
+    ):
+        yield
+
+
 def _eval(alert_level: str = "green", scenario: str = "wait") -> Any:
     return SimpleNamespace(
         tactical=SimpleNamespace(alert_level=alert_level, scenario=scenario),
