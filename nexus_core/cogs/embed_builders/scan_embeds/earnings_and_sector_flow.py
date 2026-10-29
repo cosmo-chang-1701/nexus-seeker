@@ -167,7 +167,7 @@ def create_sector_flow_report_embed(
                 ),
                 fmt_or_dash(item.get("rel_vol"), ".2f", suffix="x", placeholder="--x"),
                 fmt_or_dash(item.get("skew"), "+.1f"),
-                str(int(item.get("uoa_count", 0))),
+                fmt_or_dash(item.get("uoa_count"), ".0f"),
             ]
             for item in sorted_sectors
         ]
