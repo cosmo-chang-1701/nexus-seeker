@@ -270,6 +270,7 @@ async def test_analyze_sector_correlation() -> None:
         mock_hist.side_effect = [df1, df2]
 
         pairs = await analyze_sector_correlation(symbols)
+        assert pairs is not None
         assert len(pairs) == 1
         assert pairs[0][0] == "AAPL"
         assert pairs[0][1] == "MSFT"
