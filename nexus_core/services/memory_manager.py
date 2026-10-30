@@ -1,6 +1,6 @@
 from collections import deque
 from collections.abc import Sequence
-from typing import Any, Optional
+from typing import Any
 import asyncio
 import math
 import time
@@ -26,7 +26,7 @@ def estimate_battery_secs_left(
     *,
     min_span_s: float = 900.0,
     min_drop_pct: float = 2.0,
-) -> Optional[tuple[float, float]]:
+) -> tuple[float, float] | None:
     """依 (monotonic 秒, 電量%) 取樣（舊→新）以耗電速率推估剩餘秒數。
 
     回傳 (剩餘秒數, 取樣視窗秒數)；樣本不足、視窗過短、降幅過小
@@ -274,20 +274,19 @@ class MemoryManager:
 
                         # Check battery (0%, 25%, 50%, 75% thresholds)
                         battery = edge.get("battery")
-                        if not battery:
-                            self._battery_samples.clear()
                         if battery:
                             if not battery.get("power_plugged"):
                                 percent = battery.get("percent", 100)
-                                # 記錄未插電取樣；電量回升（充電或讀數異常）則重新起算
-                                if (
-                                    self._battery_samples
-                                    and float(percent) > self._battery_samples[-1][1]
-                                ):
-                                    self._battery_samples.clear()
-                                self._battery_samples.append(
-                                    (_monotonic(), float(percent))
-                                )
+                                # 記錄未插電取樣；電量回升（充電或讀數異常）則重新起算，
+                                # 非有限值（NaN 等）不入樣本以免污染估算視窗
+                                pct = float(percent)
+                                if math.isfinite(pct):
+                                    if (
+                                        self._battery_samples
+                                        and pct > self._battery_samples[-1][1]
+                                    ):
+                                        self._battery_samples.clear()
+                                    self._battery_samples.append((_monotonic(), pct))
                                 alert_level = None
                                 last_level = getattr(
                                     self, "_last_power_alert_level", 100
@@ -340,6 +339,8 @@ class MemoryManager:
                                 # Reset tracking when plugged in
                                 self._last_power_alert_level = 100
                                 self._battery_samples.clear()
+                        else:
+                            self._battery_samples.clear()
             except Exception:
                 pass  # Edge offline, ignore for background alerts
 

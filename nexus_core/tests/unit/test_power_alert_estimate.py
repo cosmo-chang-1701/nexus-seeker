@@ -60,7 +60,7 @@ def _make_mm() -> tuple[MemoryManager, MagicMock]:
     return MemoryManager(bot, threshold=90.0, swap_threshold=50.0), bot
 
 
-def _payload(percent: int, plugged: bool) -> dict[str, Any]:
+def _payload(percent: float, plugged: bool) -> dict[str, Any]:
     return {
         "os_system": "Darwin",
         "memory_percent": 50.0,
@@ -167,3 +167,13 @@ async def test_rising_percent_restarts_samples() -> None:
     assert len(mm._battery_samples) == 2
     await _run_check(mm, _payload(85, False), clock)
     assert len(mm._battery_samples) == 1
+    assert mm._battery_samples[-1][1] == 85.0
+
+
+@pytest.mark.asyncio
+async def test_nan_percent_not_sampled() -> None:
+    mm, _ = _make_mm()
+    clock = _Clock()
+    await _run_check(mm, _payload(80, False), clock)
+    await _run_check(mm, _payload(float("nan"), False), clock)
+    assert [s[1] for s in mm._battery_samples] == [80.0]
