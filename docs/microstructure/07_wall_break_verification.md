@@ -85,6 +85,8 @@ $$
 
 最終判定：盤中 FAKE 維持 FAKE；其餘對各檢核取三值 AND：False → FAKE（翻假）、True → CONFIRMED、Unknown → UNDETERMINED。
 
+結算時效：待結算事件只能在事件日之後的第一個 NYSE 交易日結算（`T1_MAX_SESSION_GAP = 1`，以 `market_time.count_nyse_sessions_after` 計，假日不算、半日市算）。已逾期（相隔 $\ge 2$ 個交易日，例如長期停機或標的被移除後重新加入）者標記為 `EXPIRED`（逾期未結算），只紀錄、不評估、不推播，也不計入該輪的結算清單。今日非交易日（相隔 0）或日曆計算失敗時維持 pending，不得過期。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -96,7 +98,10 @@ flowchart TD
     Fresh -- 否 --> SkipUp[不寫入錨點]
     Upsert --> T1{有待結算事件且已過 10:00 ET 且 GEX 非過期?}
     SkipUp --> T1
-    T1 -- 是 --> Settle[T+1 結算: ΔOI / 遲滯 / hold]
+    T1 -- 是 --> Age{距事件日幾個 NYSE 交易日?}
+    Age -- 1 --> Settle[T+1 結算: ΔOI / 遲滯 / hold]
+    Age -- 2 以上 --> Expired[EXPIRED: 只紀錄不推播]
+    Age -- 0 或日曆失敗 --> Pending
     T1 -- 否 --> Pending[事件維持 pending]
     Settle --> Anchor
     Pending --> Anchor{錨點為前一個 NYSE 交易日?}
@@ -157,6 +162,7 @@ flowchart TD
 | `RETEST_STOP_PCT_MIN` | `0.006` ($0.6\%$) | 劇本回測停損區間下緣 | `nexus_core/market_analysis/wall_break.py` |
 | `RETEST_STOP_PCT_MAX` | `0.010` ($1.0\%$) | 劇本回測停損區間上緣 | `nexus_core/market_analysis/wall_break.py` |
 | T+1 最早時間 | `10:00 ET` | 當日第一個不早於 10:00 且 GEX 非過期的 30 分鐘掃描 | `nexus_core/services/wall_break_service.py` |
+| `T1_MAX_SESSION_GAP` | `1` | 事件日後最多 1 個 NYSE 交易日內結算，逾期標 `EXPIRED`（`T1_EXPIRED_VERDICT`） | `nexus_core/services/wall_break_service.py` |
 | `wall_anchor` 保留期 | 14 日 | 03:00 ET 維護 `purge_stale_wall_break()` | `nexus_core/database/wall_break.py` |
 | `wall_break_events` 保留期 | 180 日 | 同上 | `nexus_core/database/wall_break.py` |
 | `WALL_BREAK_ALERT_ENABLED` | 預設 `true` | 環境變數；僅抑制推播 | `nexus_core/config.py` |
@@ -184,6 +190,7 @@ flowchart TD
 
 - 只有 CLOSE_BEYOND 事件在 T+1 結算；WICK_REJECT 事件直接終局為 FAKE，沒有 T+1 列。盤中為 FAKE 的 CLOSE_BEYOND 事件仍會結算並記錄。
 - 只推播盤中 CANDIDATE 與 T+1 CONFIRMED；FAKE／UNDETERMINED 只記錄。
+- 逾期未結算（事件日後第一個 NYSE 交易日之外才輪到結算）的 CLOSE_BEYOND 事件寫入 `t1_verdict = 'EXPIRED'`，只紀錄、不推播。日後任何校準必須排除 EXPIRED 列（目前尚無校準報表讀取 `t1_verdict`）。
 - 去重鍵：`wall_break_{uid}_{SYM}_{direction}_{trigger}_{YYYYMMDD}` 與 `wall_break_t1_{uid}_{SYM}_{direction}_{YYYYMMDD}`。
 - `DispatchRecord` 的 signal_kind 為 `INFO`、scenario 為標籤（只有被推播的案例會進 `notify`，故為 `TRUE_BREAKOUT`／`TRUE_BREAKDOWN`，T+1 加後綴 `_T1`）、action 為 `WALL_BREAK_CLOSE_BEYOND`（盤中候選）或 `WALL_BREAK_T1_CLOSE_BEYOND`（T+1 確認）。WICK_REJECT、FAKE、UNDETERMINED 不會派發，因此沒有派發紀錄。
 - 通知頻道 `alpha_wall_break`（📡 盤中情報、`INTEL`、`INTRADAY`、雜訊、預設開啟），標籤「🧱 GEX 牆突破／跌破確認推播 (自選標的，未校準)」，可於 `/notif_settings` 開關。遷移 `v097` 依使用者明確的 `alpha_price_volume_watch` 設定回填，已靜音盤中雜訊者不會被悄悄重新訂閱。

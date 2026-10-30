@@ -12,7 +12,7 @@ import json
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
 import pandas as pd
@@ -54,6 +54,9 @@ _SKIP_SYMBOLS = frozenset({"BOXX", "BIL"})
 _SETTLE_MIN_MINUTES = (
     10 * 60
 )  # T+1 結算最早 10:00 ET，避開開盤初期仍是前一日的 edge GEX
+# T+1 只能在事件日後的第一個 NYSE 交易日結算；更晚者標記 EXPIRED（只紀錄、不推播）
+T1_MAX_SESSION_GAP = 1
+T1_EXPIRED_VERDICT = "EXPIRED"
 _OPEN_MINUTES = 9 * 60 + 30
 _SESSION_MINUTES = 390.0
 _BAR_MINUTES = 15
@@ -341,8 +344,36 @@ class WallBreakMonitor:
         outcome: WallBreakOutcome,
     ) -> None:
         pending = await asyncio.to_thread(get_pending_t1_events, sym, today)
+        gap_cache: dict[str, Optional[int]] = {}
         for row in pending:
             try:
+                trade_date = str(row["trade_date"])
+                if trade_date not in gap_cache:
+                    gap_cache[trade_date] = await self._sessions_elapsed(
+                        sym, trade_date, today
+                    )
+                gap = gap_cache[trade_date]
+                if gap is None:
+                    continue
+                if gap == 0:
+                    logger.debug(
+                        f"[{sym}] 牆突破 T+1：{today} 非交易日，事件 {trade_date} 維持待結算"
+                    )
+                    continue
+                if gap > T1_MAX_SESSION_GAP:
+                    saved_exp = await save_wall_break_t1(
+                        int(row["id"]),
+                        today,
+                        T1_EXPIRED_VERDICT,
+                        "逾期未結算（非 T+1）",
+                        json.dumps({"sessions_elapsed": gap}),
+                    )
+                    if saved_exp:
+                        logger.info(
+                            f"[{sym}] 牆突破事件 {trade_date} 逾期未結算"
+                            f"（已過 {gap} 個交易日），標記 EXPIRED"
+                        )
+                    continue
                 oi_now: Optional[float] = None
                 oi_expiry = row.get("oi_expiry")
                 if oi_expiry and str(oi_expiry) >= today:
@@ -378,6 +409,19 @@ class WallBreakMonitor:
                     outcome.t1.append((row, ev, res))
             except Exception as e:
                 logger.warning(f"[{sym}] 牆突破 T+1 單筆結算失敗: {e}")
+
+    @staticmethod
+    async def _sessions_elapsed(sym: str, trade_date: str, today: str) -> Optional[int]:
+        """事件日（不含）到今日（含）的 NYSE 交易日數；日曆失敗回傳 None（不得過期）。"""
+        try:
+            return await asyncio.to_thread(
+                market_time.count_nyse_sessions_after,
+                date.fromisoformat(trade_date),
+                date.fromisoformat(today),
+            )
+        except Exception as e:
+            logger.warning(f"[{sym}] 牆突破 T+1 交易日曆計算失敗，維持待結算: {e}")
+            return None
 
     async def _daily_volume_sma20(self, sym: str, today: str) -> Optional[float]:
         try:
