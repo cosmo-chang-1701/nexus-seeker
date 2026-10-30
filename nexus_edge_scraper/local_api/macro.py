@@ -205,184 +205,202 @@ async def scrape_gex() -> dict[str, Any]:
         "is_fallback": True,
     }
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
-        )
-        try:
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True, args=["--no-sandbox", "--disable-setuid-sandbox"]
             )
-            await Stealth().apply_stealth_async(context)
-
-            # Speed up loading by blocking images and CSS
-            async def safe_route(route: Any) -> None:
-                try:
-                    if route.request.resource_type in ["image", "stylesheet", "font"]:
-                        await route.abort()
-                    else:
-                        await route.continue_()
-                except Exception:
-                    pass
-
-            await context.route("**/*", safe_route)
-            page = await context.new_page()
             try:
-                try:
-                    await page.goto(
-                        "https://finance.yahoo.com/quote/SPY/options",
-                        timeout=10000,
-                        wait_until="commit",
-                    )
-                except PlaywrightTimeoutError:
-                    logger.info(
-                        "Page.goto timeout for SPY, attempting to proceed with loaded content..."
-                    )
-
-                try:
-                    # 等待關鍵資料(表格)出現，最多等待 10 秒
-                    await page.wait_for_selector("table", timeout=10000)
-                except PlaywrightTimeoutError:
-                    pass
-
-                # 短暫等待以確保動態渲染(React/Client-side)完成
-                await page.wait_for_timeout(1500)
-
-                html = await page.content()
-            finally:
-                await context.unroute_all(behavior="ignoreErrors")
-                await page.close()
-            soup = BeautifulSoup(html, "lxml")
-
-            # Parse spot price
-            spot_elem = soup.select_one('[data-testid="qsp-price"]')
-            spot_price = 0.0
-            if spot_elem and spot_elem.text:
-                try:
-                    spot_price = float(spot_elem.text.replace(",", ""))
-                except ValueError:
-                    pass
-
-            if spot_price <= 0:
-                logger.warning(
-                    "SPY spot price parsed <= 0 from Yahoo Finance, using fallbacks."
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
                 )
-                return {"status": "success", "data": fallback}
+                await Stealth().apply_stealth_async(context)
 
-            # Parse option tables
-            tables = soup.select("table")
-            if len(tables) < 2:
-                logger.warning(
-                    "Yahoo Finance options tables not found, using fallbacks."
-                )
-                return {"status": "success", "data": fallback}
-
-            option_chain: list[dict[str, Any]] = []
-            today = date.today()
-
-            def parse_table(table: Any, is_call: bool) -> None:
-                rows = table.select("tr")
-                for r in rows[1:]:
-                    cols = [td.text.strip() for td in r.select("td")]
-                    if len(cols) < 11:
-                        continue
+                # Speed up loading by blocking images and CSS
+                async def safe_route(route: Any) -> None:
                     try:
-                        contract_name = cols[0]
-                        strike = float(cols[2].replace(",", ""))
-
-                        oi_text = cols[9].replace(",", "")
-                        oi = int(oi_text) if oi_text and oi_text != "-" else 0
-
-                        iv_text = cols[10].replace("%", "").replace(",", "")
-                        try:
-                            iv_val_parsed = (
-                                float(iv_text) / 100.0
-                                if iv_text and iv_text != "-"
-                                else None
-                            )
-                        except ValueError:
-                            iv_val_parsed = None
-
-                        match = re.match(r"SPY(\d{2})(\d{2})(\d{2})[CP]", contract_name)
-                        if match:
-                            exp_yr = 2000 + int(match.group(1))
-                            exp_mo = int(match.group(2))
-                            exp_dy = int(match.group(3))
-                            exp_date = date(exp_yr, exp_mo, exp_dy)
-                            days_to_exp = (exp_date - today).days
+                        if route.request.resource_type in [
+                            "image",
+                            "stylesheet",
+                            "font",
+                        ]:
+                            await route.abort()
                         else:
-                            days_to_exp = 7
-
-                        # 防範假牆：0-DTE / 1-DTE 合約在結算日當天 t->0 導致 Gamma 虛高膨脹，至少以 2.0 天作為 Gamma 定價底限
-                        t = max(days_to_exp, 2.0) / 365.0
-
-                        option_chain.append(
-                            {
-                                "strike": strike,
-                                "oi": oi,
-                                "iv": iv_val_parsed,
-                                "t": t,
-                                "is_call": is_call,
-                            }
-                        )
+                            await route.continue_()
                     except Exception:
                         pass
 
-            parse_table(tables[0], is_call=True)
-            parse_table(tables[1], is_call=False)
+                await context.route("**/*", safe_route)
+                page = await context.new_page()
+                try:
+                    try:
+                        await page.goto(
+                            "https://finance.yahoo.com/quote/SPY/options",
+                            timeout=10000,
+                            wait_until="commit",
+                        )
+                    except PlaywrightTimeoutError:
+                        logger.info(
+                            "Page.goto timeout for SPY, attempting to proceed with loaded content..."
+                        )
 
-            if not option_chain:
-                logger.warning("No option chain contracts parsed, using fallbacks.")
-                return {"status": "success", "data": fallback}
+                    try:
+                        # 等待關鍵資料(表格)出現，最多等待 10 秒
+                        await page.wait_for_selector("table", timeout=10000)
+                    except PlaywrightTimeoutError:
+                        pass
 
-            # 自適應 IV 估計：提取全鏈有效 IV 中位數作為缺失合約的自適應基準
-            valid_ivs = [
-                c["iv"] for c in option_chain if c["iv"] is not None and c["iv"] > 0.01
-            ]
-            adaptive_iv = float(statistics.median(valid_ivs)) if valid_ivs else 0.20
-            for c in option_chain:
-                if c["iv"] is None or c["iv"] <= 0.01:
-                    c["iv"] = adaptive_iv
+                    # 短暫等待以確保動態渲染(React/Client-side)完成
+                    await page.wait_for_timeout(1500)
 
-            # 過濾深度價外雜訊合約 (|delta| < 0.02)
-            option_chain = _filter_noise_contracts(
-                option_chain, spot_price, r=RISK_FREE_RATE, q=0.013
-            )
-            if not option_chain:
+                    html = await page.content()
+                finally:
+                    await context.unroute_all(behavior="ignoreErrors")
+                    await page.close()
+                soup = BeautifulSoup(html, "lxml")
+
+                # Parse spot price
+                spot_elem = soup.select_one('[data-testid="qsp-price"]')
+                spot_price = 0.0
+                if spot_elem and spot_elem.text:
+                    try:
+                        spot_price = float(spot_elem.text.replace(",", ""))
+                    except ValueError:
+                        pass
+
+                if spot_price <= 0:
+                    logger.warning(
+                        "SPY spot price parsed <= 0 from Yahoo Finance, using fallbacks."
+                    )
+                    return {"status": "success", "data": fallback}
+
+                # Parse option tables
+                tables = soup.select("table")
+                if len(tables) < 2:
+                    logger.warning(
+                        "Yahoo Finance options tables not found, using fallbacks."
+                    )
+                    return {"status": "success", "data": fallback}
+
+                option_chain: list[dict[str, Any]] = []
+                today = date.today()
+
+                def parse_table(table: Any, is_call: bool) -> None:
+                    rows = table.select("tr")
+                    for r in rows[1:]:
+                        cols = [td.text.strip() for td in r.select("td")]
+                        if len(cols) < 11:
+                            continue
+                        try:
+                            contract_name = cols[0]
+                            strike = float(cols[2].replace(",", ""))
+
+                            oi_text = cols[9].replace(",", "")
+                            oi = int(oi_text) if oi_text and oi_text != "-" else 0
+
+                            iv_text = cols[10].replace("%", "").replace(",", "")
+                            try:
+                                iv_val_parsed = (
+                                    float(iv_text) / 100.0
+                                    if iv_text and iv_text != "-"
+                                    else None
+                                )
+                            except ValueError:
+                                iv_val_parsed = None
+
+                            match = re.match(
+                                r"SPY(\d{2})(\d{2})(\d{2})[CP]", contract_name
+                            )
+                            if match:
+                                exp_yr = 2000 + int(match.group(1))
+                                exp_mo = int(match.group(2))
+                                exp_dy = int(match.group(3))
+                                exp_date = date(exp_yr, exp_mo, exp_dy)
+                                days_to_exp = (exp_date - today).days
+                            else:
+                                days_to_exp = 7
+
+                            # 防範假牆：0-DTE / 1-DTE 合約在結算日當天 t->0 導致 Gamma 虛高膨脹，至少以 2.0 天作為 Gamma 定價底限
+                            t = max(days_to_exp, 2.0) / 365.0
+
+                            option_chain.append(
+                                {
+                                    "strike": strike,
+                                    "oi": oi,
+                                    "iv": iv_val_parsed,
+                                    "t": t,
+                                    "is_call": is_call,
+                                }
+                            )
+                        except Exception:
+                            pass
+
+                parse_table(tables[0], is_call=True)
+                parse_table(tables[1], is_call=False)
+
+                if not option_chain:
+                    logger.warning("No option chain contracts parsed, using fallbacks.")
+                    return {"status": "success", "data": fallback}
+
+                # 自適應 IV 估計：提取全鏈有效 IV 中位數作為缺失合約的自適應基準
+                valid_ivs = [
+                    c["iv"]
+                    for c in option_chain
+                    if c["iv"] is not None and c["iv"] > 0.01
+                ]
+                adaptive_iv = float(statistics.median(valid_ivs)) if valid_ivs else 0.20
+                for c in option_chain:
+                    if c["iv"] is None or c["iv"] <= 0.01:
+                        c["iv"] = adaptive_iv
+
+                # 過濾深度價外雜訊合約 (|delta| < 0.02)
+                option_chain = _filter_noise_contracts(
+                    option_chain, spot_price, r=RISK_FREE_RATE, q=0.013
+                )
+                if not option_chain:
+                    logger.warning(
+                        "All option chain contracts filtered as noise, using fallbacks."
+                    )
+                    return {"status": "success", "data": fallback}
+
+                # Calculate Put Wall
+                put_wall = spot_price - 5.0
+                put_oi_by_strike: dict[float, int] = {}
+                for c in option_chain:
+                    if not c["is_call"] and c["oi"] > 0:
+                        put_oi_by_strike[c["strike"]] = (
+                            put_oi_by_strike.get(c["strike"], 0) + c["oi"]
+                        )
+                if put_oi_by_strike:
+                    put_wall = max(put_oi_by_strike, key=lambda k: put_oi_by_strike[k])
+
+                # Calculate Gamma Flip
+                gamma_flip = find_gamma_flip(
+                    spot_price, option_chain, r=RISK_FREE_RATE, q=0.013
+                )
+
+                return {
+                    "status": "success",
+                    "data": {
+                        "spy_spot": round(spot_price, 2),
+                        "gamma_flip": round(gamma_flip, 2),
+                        "put_wall": round(put_wall, 2),
+                    },
+                }
+            except Exception as e:
                 logger.warning(
-                    "All option chain contracts filtered as noise, using fallbacks."
+                    f"GEX scrape failed with exception: {e}, using fallbacks."
                 )
                 return {"status": "success", "data": fallback}
-
-            # Calculate Put Wall
-            put_wall = spot_price - 5.0
-            put_oi_by_strike: dict[float, int] = {}
-            for c in option_chain:
-                if not c["is_call"] and c["oi"] > 0:
-                    put_oi_by_strike[c["strike"]] = (
-                        put_oi_by_strike.get(c["strike"], 0) + c["oi"]
-                    )
-            if put_oi_by_strike:
-                put_wall = max(put_oi_by_strike, key=lambda k: put_oi_by_strike[k])
-
-            # Calculate Gamma Flip
-            gamma_flip = find_gamma_flip(
-                spot_price, option_chain, r=RISK_FREE_RATE, q=0.013
-            )
-
-            return {
-                "status": "success",
-                "data": {
-                    "spy_spot": round(spot_price, 2),
-                    "gamma_flip": round(gamma_flip, 2),
-                    "put_wall": round(put_wall, 2),
-                },
-            }
-        except Exception as e:
-            logger.warning(f"GEX scrape failed with exception: {e}, using fallbacks.")
-            return {"status": "success", "data": fallback}
-        finally:
-            await browser.close()
+            finally:
+                try:
+                    await browser.close()
+                except Exception as close_err:
+                    logger.warning(f"GEX browser close failed: {close_err}")
+    except Exception as e:
+        # Playwright 啟動／關閉失敗（例如 Chromium 版本與套件不符）也不得讓路由拋出 500
+        logger.warning(f"GEX scrape failed with exception: {e}, using fallbacks.")
+        return {"status": "success", "data": fallback}
 
 
 @router.get("/api/v1/scrape/macro/core_metrics")
