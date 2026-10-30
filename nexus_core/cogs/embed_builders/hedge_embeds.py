@@ -318,14 +318,32 @@ def create_memory_alert_embed(
 
 def create_power_alert_embed(
     percent: float,
-    secsleft: float,
+    secsleft: Optional[float],
     source: str = "邊緣節點",
+    window_minutes: Optional[int] = None,
 ) -> discord.Embed:
-    """建立邊緣節點電力不足警報 Embed。"""
-    time_left_str = "未知"
-    if secsleft > 0:
+    """建立邊緣節點電力不足警報 Embed。
+
+    secsleft 為 core 依實測耗電速率推估的剩餘秒數（None＝取樣不足）；
+    不採用 OS 回報值（macOS 恆為 1200 分鐘）。
+    """
+    if secsleft is None:
+        time_left_str = "估算中（未插電取樣不足）"
+    else:
         mins = int(secsleft // 60)
-        time_left_str = f"約 {mins} 分鐘"
+        if mins <= 0:
+            time_left_str = "即將耗盡"
+        else:
+            if mins >= 60:
+                dur = f"{mins // 60} 小時 {mins % 60} 分鐘"
+            else:
+                dur = f"{mins} 分鐘"
+            basis = (
+                f"（依近 {window_minutes} 分鐘耗電速率推估）"
+                if window_minutes is not None
+                else "（依實測耗電速率推估）"
+            )
+            time_left_str = f"約 {dur}{basis}"
 
     embed = NexusEmbed(
         title=f"🔋 【系統緊急警報：電力不足】 - {source}",
