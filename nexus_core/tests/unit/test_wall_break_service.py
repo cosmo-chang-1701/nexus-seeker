@@ -454,6 +454,54 @@ async def test_t1_before_ten_stays_pending_then_settles_later() -> None:
     assert len(out2.t1) == 1
 
 
+async def test_t1_event_older_than_previous_session_expires() -> None:
+    await insert_wall_break_event(_event(trade_date="2026-10-27"))
+    with env(now=f"{TODAY} 10:10") as e:
+        out = await WallBreakMonitor().process_symbol("NVDA", make_eval())
+    assert out.t1 == []
+    saved = get_wall_break_event("NVDA", "2026-10-27", "BREAKOUT", "CLOSE_BEYOND")
+    assert saved is not None
+    assert saved["t1_verdict"] == "EXPIRED"
+    assert saved["t1_trade_date"] == TODAY
+    e.chain.assert_not_called()
+
+
+async def test_t1_settles_across_holiday() -> None:
+    await insert_wall_break_event(
+        _event(trade_date="2026-11-25", oi_expiry="2026-12-04")
+    )
+    with env(now="2026-11-27 10:10", chain=make_chain(call_oi=400.0)) as e:
+        out = await WallBreakMonitor().process_symbol("NVDA", make_eval())
+    assert len(out.t1) == 1
+    assert out.t1[0][2].verdict in {"CONFIRMED", "FAKE", "UNDETERMINED"}
+    saved = get_wall_break_event("NVDA", "2026-11-25", "BREAKOUT", "CLOSE_BEYOND")
+    assert saved is not None
+    assert saved["t1_trade_date"] == "2026-11-27"
+    e.chain.assert_awaited()
+
+
+async def test_t1_non_session_day_leaves_pending() -> None:
+    await insert_wall_break_event(_event(trade_date="2026-10-30"))
+    with env(now="2026-10-31 10:10") as e:
+        out = await WallBreakMonitor().process_symbol("NVDA", make_eval())
+    assert out.t1 == []
+    saved = get_wall_break_event("NVDA", "2026-10-30", "BREAKOUT", "CLOSE_BEYOND")
+    assert saved is not None and saved["t1_verdict"] is None
+    e.chain.assert_not_called()
+
+
+async def test_t1_calendar_error_leaves_pending() -> None:
+    await insert_wall_break_event(_event(trade_date="2026-10-27"))
+    with env(now=f"{TODAY} 10:10") as e, patch(
+        "market_time.count_nyse_sessions_after", side_effect=RuntimeError("boom")
+    ):
+        out = await WallBreakMonitor().process_symbol("NVDA", make_eval())
+    assert out.t1 == []
+    saved = get_wall_break_event("NVDA", "2026-10-27", "BREAKOUT", "CLOSE_BEYOND")
+    assert saved is not None and saved["t1_verdict"] is None
+    e.chain.assert_not_called()
+
+
 # ------------------------------------------------------------------ 多使用者
 
 

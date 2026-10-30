@@ -164,7 +164,10 @@ def get_wall_break_event(
 
 
 def get_pending_t1_events(symbol: str, before_trade_date: str) -> list[dict[str, Any]]:
-    """尚未做 T+1 結算的收盤突破事件 (僅 CLOSE_BEYOND、且事件日早於 before_trade_date)。"""
+    """尚未做 T+1 結算的收盤突破事件 (僅 CLOSE_BEYOND、且事件日早於 before_trade_date)。
+
+    t1_verdict 可能值：CONFIRMED | FAKE | UNDETERMINED | EXPIRED（逾期未結算，僅紀錄）。
+    """
     conn = None
     try:
         conn = get_read_connection()
