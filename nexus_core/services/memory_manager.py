@@ -1,5 +1,9 @@
-from typing import Any
+from collections import deque
+from collections.abc import Sequence
+from typing import Any, Optional
 import asyncio
+import math
+import time
 import psutil
 import logging
 import gc
@@ -10,6 +14,35 @@ from cogs.embed_builder import create_memory_alert_embed
 from services.llm_service import is_memory_safe
 
 logger = logging.getLogger(__name__)
+
+
+def _monotonic() -> float:
+    """單調時鐘包裝（測試以 patch 本函式取代，勿 patch time.monotonic）。"""
+    return time.monotonic()
+
+
+def estimate_battery_secs_left(
+    samples: Sequence[tuple[float, float]],
+    *,
+    min_span_s: float = 900.0,
+    min_drop_pct: float = 2.0,
+) -> Optional[tuple[float, float]]:
+    """依 (monotonic 秒, 電量%) 取樣（舊→新）以耗電速率推估剩餘秒數。
+
+    回傳 (剩餘秒數, 取樣視窗秒數)；樣本不足、視窗過短、降幅過小
+    （macOS 電量為整數）或含非有限值時回傳 None。電量 <= 0 視為 0 秒。
+    """
+    if len(samples) < 2:
+        return None
+    t_old, p_old = samples[0]
+    t_new, p_new = samples[-1]
+    if not all(math.isfinite(v) for v in (t_old, p_old, t_new, p_new)):
+        return None
+    span = t_new - t_old
+    drop = p_old - p_new
+    if span < min_span_s or drop < min_drop_pct:
+        return None
+    return max(0.0, p_new) / (drop / span), span
 
 
 class MemoryManager:
@@ -50,6 +83,8 @@ class MemoryManager:
         self._last_alert_at: float = 0.0
         self._last_alerts: dict[str, float] = {}
         self._last_power_alert_level = 100
+        # 未插電期間的 (monotonic 秒, 電量%) 取樣，約 2 小時（5 分鐘一筆）
+        self._battery_samples: deque[tuple[float, float]] = deque(maxlen=25)
         self._last_warmup_date = None
 
     def start(self) -> None:
@@ -239,9 +274,20 @@ class MemoryManager:
 
                         # Check battery (0%, 25%, 50%, 75% thresholds)
                         battery = edge.get("battery")
+                        if not battery:
+                            self._battery_samples.clear()
                         if battery:
                             if not battery.get("power_plugged"):
                                 percent = battery.get("percent", 100)
+                                # 記錄未插電取樣；電量回升（充電或讀數異常）則重新起算
+                                if (
+                                    self._battery_samples
+                                    and float(percent) > self._battery_samples[-1][1]
+                                ):
+                                    self._battery_samples.clear()
+                                self._battery_samples.append(
+                                    (_monotonic(), float(percent))
+                                )
                                 alert_level = None
                                 last_level = getattr(
                                     self, "_last_power_alert_level", 100
@@ -266,10 +312,22 @@ class MemoryManager:
 
                                     if DISCORD_ADMIN_USER_ID:
                                         edge_os = edge.get("os_system", "Edge")
+                                        estimate = estimate_battery_secs_left(
+                                            self._battery_samples
+                                        )
                                         embed = create_power_alert_embed(
                                             percent=percent,
-                                            secsleft=battery.get("secsleft", -1),
+                                            secsleft=(
+                                                estimate[0]
+                                                if estimate is not None
+                                                else None
+                                            ),
                                             source=f"{edge_os} (邊緣節點)",
+                                            window_minutes=(
+                                                round(estimate[1] / 60)
+                                                if estimate is not None
+                                                else None
+                                            ),
                                         )
                                         await self.bot.queue_dm(
                                             DISCORD_ADMIN_USER_ID, embed=embed
@@ -281,6 +339,7 @@ class MemoryManager:
                             else:
                                 # Reset tracking when plugged in
                                 self._last_power_alert_level = 100
+                                self._battery_samples.clear()
             except Exception:
                 pass  # Edge offline, ignore for background alerts
 
