@@ -313,18 +313,68 @@ jobs:
             fi
             echo "✅ 已確認服務執行新映像檔: $FULL_IMAGE"
 
-            # 6. 清理與驗證
+            # 6. 清理與驗證（僅保留目前版本與前一版本，前一版本即 PreviousSpec，供 docker service rollback 使用）
             echo "🧹 執行環境清理..."
-            # 移除未被使用的舊版本祕密 (排除目前剛建立的版本)
-            # 注意：舊版本任務剛停止時仍可能持有祕密引用，若 rm 失敗通常是有殘留引用
-            for KEY in "${!SECRETS_MAP[@]}"; do
-              docker secret ls --format "{{.Name}}" | grep "^${KEY}_" | grep -v "$DEPLOY_VERSION" | while read -r OLD_SEC; do
-                docker secret rm "$OLD_SEC" 2>/dev/null || echo "⏳ 祕密 $OLD_SEC 仍在使用中，跳過清理"
-              done
-            done
+            CLEAN_OK=1
+            PREV_IMAGE=""
+            PREV_SECRETS=""
+            # 讀取前一版本；必須檢查結束碼，讀取失敗時不可清理，以免無法回滾
+            if PREV_IMAGE=$(docker service inspect "$SERVICE_NAME" --format '{{if .PreviousSpec}}{{.PreviousSpec.TaskTemplate.ContainerSpec.Image}}{{end}}' 2>/dev/null) \
+              && PREV_SECRETS=$(docker service inspect "$SERVICE_NAME" --format '{{if .PreviousSpec}}{{range .PreviousSpec.TaskTemplate.ContainerSpec.Secrets}}{{.SecretName}}{{"\n"}}{{end}}{{end}}' 2>/dev/null); then
+              if [ "$DEPLOY_MODE" = "update" ] && [ -z "$PREV_IMAGE" ]; then
+                echo "⚠️ 無法取得前一版本映像檔，為保留回滾能力，跳過所有祕密與映像檔清理"
+                CLEAN_OK=0
+              fi
+            else
+              if [ "$DEPLOY_MODE" = "update" ]; then
+                echo "⚠️ 讀取前一版本資訊失敗，為保留回滾能力，跳過所有祕密與映像檔清理"
+                CLEAN_OK=0
+              else
+                PREV_IMAGE=""
+                PREV_SECRETS=""
+              fi
+            fi
 
-            # 清理過期映像檔
-            docker image prune -af
+            if [ "$CLEAN_OK" = "1" ]; then
+              # 要保留的映像檔 ID：目前版本與前一版本（以完整參照解析，無法解析者不加入）
+              KEEP_IDS=""
+              for REF in "$ACTUAL_IMAGE" "$PREV_IMAGE"; do
+                [ -n "$REF" ] || continue
+                KEEP_ID=$(docker image inspect --format '{{.Id}}' "$REF" 2>/dev/null || true)
+                [ -n "$KEEP_ID" ] && KEEP_IDS="${KEEP_IDS}${KEEP_ID}"$'\n'
+              done
+
+              # 移除舊版本祕密：僅處理「名稱_版本」格式，保留目前版本與前一版本
+              for KEY in "${!SECRETS_MAP[@]}"; do
+                docker secret ls --format "{{.Name}}" | grep -E "^${KEY}_[^_]+_[0-9]+_[0-9]+$" | while read -r OLD_SEC; do
+                  [ "$OLD_SEC" = "${KEY}_${DEPLOY_VERSION}" ] && continue
+                  if [ -n "$PREV_SECRETS" ] && printf '%s\n' "$PREV_SECRETS" | grep -qxF -- "$OLD_SEC"; then
+                    continue
+                  fi
+                  docker secret rm "$OLD_SEC" >/dev/null 2>&1 || echo "⏳ 祕密 $OLD_SEC 仍在使用中，跳過清理"
+                done
+              done
+
+              # 移除本專案舊映像檔（以映像檔 ID 比對，Swarm 以摘要拉取時標籤常為 <none>）
+              docker image ls --no-trunc --format '{{.ID}} {{.Repository}}' \
+                | awk -v reg="$REGISTRY" '{ n = split($2, p, "/"); if (n == 3 && p[1] == reg && p[3] == "nexus-seeker") print $1 }' \
+                | sort -u | while read -r IMG_ID; do
+                  [ -n "$IMG_ID" ] || continue
+                  if [ -n "$KEEP_IDS" ] && printf '%s' "$KEEP_IDS" | grep -qxF -- "$IMG_ID"; then
+                    continue
+                  fi
+                  # 先移除本服務已停止的任務容器，否則映像檔會因被引用而無法移除
+                  for CID in $(docker ps -aq --filter "label=com.docker.swarm.service.name=$SERVICE_NAME" --filter "ancestor=$IMG_ID" 2>/dev/null); do
+                    docker rm "$CID" >/dev/null 2>&1 || true
+                  done
+                  docker image rm "$IMG_ID" >/dev/null 2>&1 || echo "⏳ 映像檔 ${IMG_ID:0:19} 仍在使用中，跳過清理"
+                done
+
+              # 僅清理本專案的懸空映像檔；前一版本映像檔靠其已停止的 Swarm 任務容器保護，故前面移除迴圈會跳過保留集的映像檔與其容器
+              docker image prune -f --filter label=org.opencontainers.image.title=nexus-seeker >/dev/null 2>&1 || true
+
+              echo "🧹 已保留目前版本: $ACTUAL_IMAGE；前一版本: ${PREV_IMAGE:-無}"
+            fi
 
             echo "✅ 佈署驗證狀態:"
             docker service ls | grep "$SERVICE_NAME"
