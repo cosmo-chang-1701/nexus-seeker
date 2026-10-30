@@ -2,10 +2,25 @@ from typing import Any, Dict, List, Optional
 import asyncio
 import re
 import threading
+import warnings
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
+
+
+def _silence_yfinance_pandas_inplace_warnings() -> None:
+    warnings.filterwarnings(
+        "ignore",
+        message="The inplace keyword in DataFrame",
+        module=r"yfinance(\.|$)",
+    )
+
+
+# yfinance 在 import 時會以 filterwarnings('default', DeprecationWarning) 插到
+# 過濾清單最前面，故必須在 import yfinance 之後註冊，才不會被蓋掉；
+# 且只限 yfinance 模組，避免掩蓋本專案自身程式碼的同類警告
+_silence_yfinance_pandas_inplace_warnings()
 
 router = APIRouter()
 

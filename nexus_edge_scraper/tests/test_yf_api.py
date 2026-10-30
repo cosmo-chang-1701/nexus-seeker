@@ -1,3 +1,4 @@
+import warnings
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -208,3 +209,22 @@ def test_scrape_yf_options_chain_endpoint_nan_becomes_null() -> None:
     assert body["status"] == "success"
     assert body["data"]["calls"][0]["volume"] is None
     assert body["data"]["puts"][0]["bid"] is None
+
+
+def test_silence_yfinance_pandas_inplace_warnings() -> None:
+    import pandas.errors as pd_errors
+
+    cat: type[Warning] = getattr(pd_errors, "Pandas4Warning", DeprecationWarning)
+    msg = "The inplace keyword in DataFrame.sort_index is deprecated ..."
+    # pytest 會在最前面插入 always，故須在自己的 catch_warnings 內重設後再呼叫
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.filterwarnings("always", category=cat)
+        yf_api._silence_yfinance_pandas_inplace_warnings()
+        warnings.warn_explicit(
+            msg, cat, "utils.py", 1, module="yfinance.utils", registry={}
+        )
+        assert caught == []
+        warnings.warn_explicit(
+            msg, cat, "x.py", 1, module="nexus_test_module", registry={}
+        )
+        assert len(caught) == 1

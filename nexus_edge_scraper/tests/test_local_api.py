@@ -175,6 +175,23 @@ def test_scrape_gex_fallback() -> None:
         assert data["data"]["put_wall"] == 505.0
 
 
+def test_scrape_gex_launch_failure_returns_fallback() -> None:
+    # Playwright 啟動瀏覽器失敗（Chromium 版本不符）時，路由不得拋出 500
+    mock_p = MagicMock()
+    mock_p.chromium.launch = AsyncMock(
+        side_effect=Exception("Executable doesn't exist")
+    )
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=mock_p)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    with patch("local_api.macro.async_playwright", return_value=cm):
+        response = client.get("/api/v1/scrape/macro/gex")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "success"
+        assert body["data"]["is_fallback"] is True
+
+
 def test_find_gamma_flip_finds_zero_crossing() -> None:
     from local_api.macro import find_gamma_flip
 
