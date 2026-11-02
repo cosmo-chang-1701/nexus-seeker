@@ -1,7 +1,7 @@
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import pandas as pd
 import sys
@@ -669,10 +669,14 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
     with patch("discord.ext.tasks.Loop.start"):
         agent = AnalystAgent(bot)
 
-    # Mock user context with custom October window
+    now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    ref_date = now_tw.date()
+    cur_month = ref_date.month
+
+    # Mock user context with custom dynamic window
     user_ctx = MagicMock()
-    user_ctx.escape_window_start = "10-15"  # 15th is "中旬"
-    user_ctx.escape_window_end = "10-25"  # 25th is "下旬"
+    user_ctx.escape_window_start = f"{cur_month:02d}-15"
+    user_ctx.escape_window_end = f"{cur_month:02d}-28"
 
     # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
     with (
@@ -700,7 +704,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         kwargs = mock_create_embed.call_args.kwargs
         assert kwargs["direction"] == "前移"
         assert "🚨 收縮警戒" in kwargs["tier_title"]
-        assert "10月" in kwargs["adjusted_start"]
+        assert f"{cur_month}月" in kwargs["adjusted_start"]
         assert kwargs["shift_days"] in [5, 8]
         assert "前移" in kwargs["reason"]
 
@@ -764,8 +768,17 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
 
     # Case 4: Expired setting auto-rollover
     expired_ctx = MagicMock()
-    expired_ctx.escape_window_start = "01-15"
-    expired_ctx.escape_window_end = "01-31"
+    if cur_month > 1:
+        past_month = cur_month - 1
+        expired_ctx.escape_window_start = f"{past_month:02d}-01"
+        expired_ctx.escape_window_end = f"{past_month:02d}-05"
+    else:
+        if ref_date.day > 8:
+            expired_ctx.escape_window_start = "01-01"
+            expired_ctx.escape_window_end = "01-02"
+        else:
+            expired_ctx.escape_window_start = "11-01"
+            expired_ctx.escape_window_end = "11-05"
     with (
         patch("sqlite3.connect") as mock_conn,
         patch("database.user_settings.get_full_user_context", return_value=expired_ctx),
