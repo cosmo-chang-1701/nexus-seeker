@@ -120,3 +120,58 @@ def test_get_trading_day_elapsed_fraction_calendar_error_returns_one() -> None:
         fraction = market_time.get_trading_day_elapsed_fraction()
 
     assert fraction == 1.0
+
+
+def test_get_sleep_seconds_dst_fall_back() -> None:
+    """冬令時間切換（EDT -> EST，秋季日光節約結束）：
+    週日有 25 小時，睡眠秒數應為 72h 59m (262,740s)，而非本地相減的 71h 59m (259,140s)。
+    """
+    now_ny = datetime(2026, 10, 30, 9, 1, tzinfo=market_time.ny_tz)
+    target_ny = datetime(2026, 11, 2, 9, 0, tzinfo=market_time.ny_tz)
+
+    with patch("market_time.datetime", _patch_now(now_ny)):
+        sleep_secs = market_time.get_sleep_seconds(target_ny)
+
+    assert sleep_secs == 262740.0
+    assert sleep_secs != 259140.0
+
+
+def test_get_sleep_seconds_dst_spring_forward() -> None:
+    """夏令時間切換（EST -> EDT，春季日光節約開始）：
+    週日僅 23 小時，睡眠秒數應為 70h 59m (255,540s)，而非本地相減的 71h 59m (259,140s)。
+    """
+    now_ny = datetime(2026, 3, 6, 9, 1, tzinfo=market_time.ny_tz)
+    target_ny = datetime(2026, 3, 9, 9, 0, tzinfo=market_time.ny_tz)
+
+    with patch("market_time.datetime", _patch_now(now_ny)):
+        sleep_secs = market_time.get_sleep_seconds(target_ny)
+
+    assert sleep_secs == 255540.0
+    assert sleep_secs != 259140.0
+
+
+def test_get_sleep_seconds_same_day() -> None:
+    """同一日內常態計算：9:00 至 9:30 應為 1800 秒。"""
+    now_ny = datetime(2026, 3, 2, 9, 0, tzinfo=market_time.ny_tz)
+    target_ny = datetime(2026, 3, 2, 9, 30, tzinfo=market_time.ny_tz)
+
+    with patch("market_time.datetime", _patch_now(now_ny)):
+        sleep_secs = market_time.get_sleep_seconds(target_ny)
+
+    assert sleep_secs == 1800.0
+
+
+def test_get_sleep_seconds_none_target_returns_one_hour() -> None:
+    """目標時間為 None 時應預設回傳 3600.0 秒。"""
+    assert market_time.get_sleep_seconds(None) == 3600.0
+
+
+def test_get_sleep_seconds_past_target_clamps_to_zero() -> None:
+    """目標時間若已過期，應鉗制回傳 0.0 秒。"""
+    now_ny = datetime(2026, 3, 2, 9, 30, tzinfo=market_time.ny_tz)
+    target_ny = datetime(2026, 3, 2, 9, 0, tzinfo=market_time.ny_tz)
+
+    with patch("market_time.datetime", _patch_now(now_ny)):
+        sleep_secs = market_time.get_sleep_seconds(target_ny)
+
+    assert sleep_secs == 0.0

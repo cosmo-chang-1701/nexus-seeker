@@ -1,7 +1,8 @@
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import pandas as pd
 import sys
 import os
@@ -162,6 +163,138 @@ async def test_post_market_loop_triggers_sector_report() -> None:
 
         # Verify dispatch_post_market_intelligence was called
         agent.dispatch_post_market_intelligence.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pre_market_loop_skips_if_already_dispatched_today() -> None:
+    """若今日（目標交易日）已發送過盤前報告，pre_market_loop 應略過執行不重複發送。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_pre_market_briefing = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 9, 0, tzinfo=ZoneInfo("America/New_York"))
+    agent._last_pre_market_date = target_dt.date()
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        mock_sleep.return_value = 0.0
+        # 第一次 sleep 為初始等待，第二次 sleep(60) 略過時拋出中斷迴圈
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.pre_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_pre_market_briefing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_market_loop_dispatches_once_and_records_date() -> None:
+    """正常觸發盤前報告後，應記錄目標日期於 _last_pre_market_date。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_pre_market_briefing = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 9, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        mock_sleep.return_value = 0.0
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.pre_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_pre_market_briefing.assert_called_once()
+        assert agent._last_pre_market_date == target_dt.date()
+
+
+@pytest.mark.asyncio
+async def test_pre_market_loop_sleep_verification_rem_sleep() -> None:
+    """若喚醒後剩餘秒數仍大於 2 秒（如跨 DST 提前喚醒），應進入防禦 while 迴圈補睡至到達目標。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_pre_market_briefing = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 9, 0, tzinfo=ZoneInfo("America/New_York"))
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        # 初始 sleep 10s，喚醒後檢查仍差 5s，補睡後檢查差 0s
+        mock_sleep.side_effect = [10.0, 5.0, 0.0]
+        mock_async_sleep.side_effect = [None, None, Exception("Stop loop")]
+
+        try:
+            await agent.pre_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        assert mock_async_sleep.call_args_list[0][0][0] == 10.0
+        assert mock_async_sleep.call_args_list[1][0][0] == 5.0
+        agent.dispatch_pre_market_briefing.assert_called_once()
+        assert agent._last_pre_market_date == target_dt.date()
+
+
+@pytest.mark.asyncio
+async def test_post_market_loop_skips_if_already_dispatched_today() -> None:
+    """若今日（目標交易日）已發送過盤後報告，post_market_loop 應略過執行不重複發送。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_post_market_intelligence = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 16, 15, tzinfo=ZoneInfo("America/New_York"))
+    agent._last_post_market_date = target_dt.date()
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        mock_sleep.return_value = 0.0
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.post_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_post_market_intelligence.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -536,10 +669,14 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
     with patch("discord.ext.tasks.Loop.start"):
         agent = AnalystAgent(bot)
 
-    # Mock user context with custom October window
+    now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+    ref_date = now_tw.date()
+    cur_month = ref_date.month
+
+    # Mock user context with custom dynamic window
     user_ctx = MagicMock()
-    user_ctx.escape_window_start = "10-15"  # 15th is "中旬"
-    user_ctx.escape_window_end = "10-25"  # 25th is "下旬"
+    user_ctx.escape_window_start = f"{cur_month:02d}-15"
+    user_ctx.escape_window_end = f"{cur_month:02d}-28"
 
     # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
     with (
@@ -567,7 +704,7 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         kwargs = mock_create_embed.call_args.kwargs
         assert kwargs["direction"] == "前移"
         assert "🚨 收縮警戒" in kwargs["tier_title"]
-        assert "10月" in kwargs["adjusted_start"]
+        assert f"{cur_month}月" in kwargs["adjusted_start"]
         assert kwargs["shift_days"] in [5, 8]
         assert "前移" in kwargs["reason"]
 
@@ -631,8 +768,17 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
 
     # Case 4: Expired setting auto-rollover
     expired_ctx = MagicMock()
-    expired_ctx.escape_window_start = "01-15"
-    expired_ctx.escape_window_end = "01-31"
+    if cur_month > 1:
+        past_month = cur_month - 1
+        expired_ctx.escape_window_start = f"{past_month:02d}-01"
+        expired_ctx.escape_window_end = f"{past_month:02d}-05"
+    else:
+        if ref_date.day > 8:
+            expired_ctx.escape_window_start = "01-01"
+            expired_ctx.escape_window_end = "01-02"
+        else:
+            expired_ctx.escape_window_start = "11-01"
+            expired_ctx.escape_window_end = "11-05"
     with (
         patch("sqlite3.connect") as mock_conn,
         patch("database.user_settings.get_full_user_context", return_value=expired_ctx),
