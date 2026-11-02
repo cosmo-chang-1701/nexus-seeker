@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import database
@@ -44,6 +44,8 @@ logger = logging.getLogger(__name__)
 class AnalystAgent(commands.Cog):
     def __init__(self, bot: Any):
         self.bot = bot
+        self._last_pre_market_date: date | None = None
+        self._last_post_market_date: date | None = None
         self.pre_market_loop.start()
         self.post_market_loop.start()
 
@@ -82,12 +84,30 @@ class AnalystAgent(commands.Cog):
             )
             await asyncio.sleep(sleep_secs)
 
+            target_date: date | None = (
+                target.date() if isinstance(target, (datetime, date)) else None
+            )
+            if target_date is not None and self._last_pre_market_date == target_date:
+                logger.info(
+                    f"🤖 [Analyst Pre-Market] 交易日 {target_date} 盤前報告已發送過，略過重複執行。"
+                )
+                await asyncio.sleep(60)
+                continue
+
+            while target is not None and (rem_secs := get_sleep_seconds(target)) > 2.0:
+                logger.info(
+                    f"🤖 [Analyst Pre-Market] 尚未到達目標時間 {target}，補睡 {rem_secs:.1f} 秒..."
+                )
+                await asyncio.sleep(rem_secs)
+
             try:
                 if not getattr(self.bot, "_is_leader_instance", True):
                     await asyncio.sleep(30)
                     continue
                 logger.info("🤖 [Analyst Pre-Market] 啟動盤前綜合宏觀與自選股報告...")
                 await self.dispatch_pre_market_briefing()
+                if target_date is not None:
+                    self._last_pre_market_date = target_date
             except Exception as e:
                 logger.error(f"Analyst Pre-Market loop error: {e}")
 
@@ -107,6 +127,22 @@ class AnalystAgent(commands.Cog):
             )
             await asyncio.sleep(sleep_secs)
 
+            target_date: date | None = (
+                target.date() if isinstance(target, (datetime, date)) else None
+            )
+            if target_date is not None and self._last_post_market_date == target_date:
+                logger.info(
+                    f"🤖 [Analyst Post-Market] 交易日 {target_date} 盤後報告已發送過，略過重複執行。"
+                )
+                await asyncio.sleep(60)
+                continue
+
+            while target is not None and (rem_secs := get_sleep_seconds(target)) > 2.0:
+                logger.info(
+                    f"🤖 [Analyst Post-Market] 尚未到達目標時間 {target}，補睡 {rem_secs:.1f} 秒..."
+                )
+                await asyncio.sleep(rem_secs)
+
             try:
                 if not getattr(self.bot, "_is_leader_instance", True):
                     await asyncio.sleep(30)
@@ -115,6 +151,8 @@ class AnalystAgent(commands.Cog):
                     "🤖 [Analyst Post-Market] 啟動盤後綜合風險與 AI 策略報告流程..."
                 )
                 await self.dispatch_post_market_intelligence()
+                if target_date is not None:
+                    self._last_post_market_date = target_date
             except Exception as e:
                 logger.error(f"Analyst Post-Market loop error: {e}")
 

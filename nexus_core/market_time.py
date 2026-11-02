@@ -48,10 +48,16 @@ def get_next_market_target_time(
 
 
 def get_sleep_seconds(target_time: datetime | None) -> float:
-    if not target_time:
+    """計算距離目標時間的剩餘秒數（以 UTC 基準計算，避免跨日光節約時間 DST 產生誤差）。"""
+    if target_time is None:
         return 3600.0
 
-    sleep_secs = (target_time - datetime.now(ny_tz)).total_seconds()
+    if target_time.tzinfo is None:
+        target_time = target_time.replace(tzinfo=ny_tz)
+
+    target_utc = target_time.astimezone(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
+    sleep_secs = (target_utc - now_utc).total_seconds()
     return max(0.0, sleep_secs)
 
 
