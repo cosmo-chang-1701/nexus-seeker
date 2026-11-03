@@ -309,6 +309,20 @@ def _eligible_uoa(
     return out
 
 
+def _uoa_side(u: Mapping[str, Any]) -> Optional[Literal["BTO", "STO"]]:
+    """由 UOA action 標籤（子字串，不分大小寫）判定開倉方向；MIDPOINT 等回傳 None。"""
+    action = str(u.get("action") or "").upper()
+    if "BTO" in action:
+        return "BTO"
+    if "STO" in action:
+        return "STO"
+    return None
+
+
+def _uoa_type(u: Mapping[str, Any]) -> str:
+    return str(u.get("type") or "").upper()
+
+
 def _gate_flow(
     t: WallBreakTrigger, bar: BarSnapshot, opt: OptionsSnapshot
 ) -> GateResult:
@@ -318,8 +332,8 @@ def _gate_flow(
         for u in entries:
             strike = u.get("strike")
             if (
-                u.get("type") == "CALL"
-                and u.get("action") == "STO"
+                _uoa_type(u) == "CALL"
+                and _uoa_side(u) == "STO"
                 and strike is not None
                 and float(strike) > close
                 and not u.get("level_breached")
@@ -328,7 +342,7 @@ def _gate_flow(
                     "flow", "選擇權流向", "FAIL", f"STO Call ${float(strike):g} 封頂"
                 )
         for u in entries:
-            if u.get("type") == "CALL" and u.get("action") == "BTO":
+            if _uoa_type(u) == "CALL" and _uoa_side(u) == "BTO":
                 return GateResult("flow", "選擇權流向", "PASS", "有 BTO Call 大單支持")
         return GateResult(
             "flow", "選擇權流向", "UNKNOWN", "無可判定方向的 Call 大單（資料不足）"
@@ -336,8 +350,8 @@ def _gate_flow(
     for u in entries:
         strike = u.get("strike")
         if (
-            u.get("type") == "PUT"
-            and u.get("action") == "STO"
+            _uoa_type(u) == "PUT"
+            and _uoa_side(u) == "STO"
             and strike is not None
             and float(strike) < close
             and not u.get("level_breached")
@@ -347,8 +361,8 @@ def _gate_flow(
             )
     for u in entries:
         if (
-            u.get("type") == "PUT"
-            and u.get("action") == "BTO"
+            _uoa_type(u) == "PUT"
+            and _uoa_side(u) == "BTO"
             and "Whale_Hedge" not in str(u.get("intent") or "")
         ):
             return GateResult("flow", "選擇權流向", "PASS", "有 BTO Put 恐慌買盤")
@@ -444,11 +458,16 @@ def evaluate_t1(event: T1EventInput, snapshot: T1Snapshot) -> T1Result:
         )
 
     if event.direction == "BREAKOUT":
-        if (
-            event.gex_expiry is not None
-            and snapshot.gex_expiry is not None
-            and event.gex_expiry != snapshot.gex_expiry
-        ):
+        if event.gex_expiry is None or snapshot.gex_expiry is None:
+            checks.append(
+                GateResult(
+                    "hysteresis",
+                    "新牆 GEX 遲滯",
+                    "UNKNOWN",
+                    "GEX 到期日不明，牆位不可比",
+                )
+            )
+        elif event.gex_expiry != snapshot.gex_expiry:
             checks.append(
                 GateResult(
                     "hysteresis",
