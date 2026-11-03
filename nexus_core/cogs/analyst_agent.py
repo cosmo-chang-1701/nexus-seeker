@@ -84,8 +84,15 @@ class AnalystAgent(commands.Cog):
             )
             await asyncio.sleep(sleep_secs)
 
+            if target is None:
+                logger.warning(
+                    "🤖 [Analyst Pre-Market] 未取得市場目標時間，略過本次排程並重試。"
+                )
+                await asyncio.sleep(60)
+                continue
+
             target_date: date | None = (
-                target.date() if isinstance(target, (datetime, date)) else None
+                target.date() if isinstance(target, datetime) else None
             )
             if target_date is not None and self._last_pre_market_date == target_date:
                 logger.info(
@@ -127,8 +134,15 @@ class AnalystAgent(commands.Cog):
             )
             await asyncio.sleep(sleep_secs)
 
+            if target is None:
+                logger.warning(
+                    "🤖 [Analyst Post-Market] 未取得市場目標時間，略過本次排程並重試。"
+                )
+                await asyncio.sleep(60)
+                continue
+
             target_date: date | None = (
-                target.date() if isinstance(target, (datetime, date)) else None
+                target.date() if isinstance(target, datetime) else None
             )
             if target_date is not None and self._last_post_market_date == target_date:
                 logger.info(

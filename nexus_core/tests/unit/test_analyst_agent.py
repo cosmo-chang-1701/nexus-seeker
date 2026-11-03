@@ -298,6 +298,135 @@ async def test_post_market_loop_skips_if_already_dispatched_today() -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_market_loop_dispatches_once_and_records_date() -> None:
+    """正常觸發盤後報告後，應記錄目標日期於 _last_post_market_date。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_post_market_intelligence = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 16, 15, tzinfo=ZoneInfo("America/New_York"))
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        mock_sleep.return_value = 0.0
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.post_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_post_market_intelligence.assert_called_once()
+        assert agent._last_post_market_date == target_dt.date()
+
+
+@pytest.mark.asyncio
+async def test_post_market_loop_sleep_verification_rem_sleep() -> None:
+    """若喚醒後剩餘秒數仍大於 2 秒（如跨 DST 提前喚醒），應進入防禦 while 迴圈補睡至到達目標。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_post_market_intelligence = AsyncMock()  # type: ignore
+
+    target_dt = datetime(2026, 11, 2, 16, 15, tzinfo=ZoneInfo("America/New_York"))
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time") as mock_target,
+        patch("cogs.analyst_agent.get_sleep_seconds") as mock_sleep,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_target.return_value = target_dt
+        # 初始 sleep 10s，喚醒後檢查仍差 5s，補睡後檢查差 0s
+        mock_sleep.side_effect = [10.0, 5.0, 0.0]
+        mock_async_sleep.side_effect = [None, None, Exception("Stop loop")]
+
+        try:
+            await agent.post_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        assert mock_async_sleep.call_args_list[0][0][0] == 10.0
+        assert mock_async_sleep.call_args_list[1][0][0] == 5.0
+        agent.dispatch_post_market_intelligence.assert_called_once()
+        assert agent._last_post_market_date == target_dt.date()
+
+
+@pytest.mark.asyncio
+async def test_pre_market_loop_skips_when_target_is_none() -> None:
+    """當 get_next_market_target_time 回傳 None 時，pre_market_loop 應記錄警告並略過發送。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_pre_market_briefing = AsyncMock()  # type: ignore
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time", return_value=None),
+        patch("cogs.analyst_agent.get_sleep_seconds", return_value=3600.0),
+        patch("cogs.analyst_agent.logger.warning") as mock_warning,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.pre_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_pre_market_briefing.assert_not_called()
+        assert agent._last_pre_market_date is None
+        mock_warning.assert_called_once()
+        assert "未取得市場目標時間" in mock_warning.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_post_market_loop_skips_when_target_is_none() -> None:
+    """當 get_next_market_target_time 回傳 None 時，post_market_loop 應記錄警告並略過發送。"""
+    bot = MagicMock()
+    bot.wait_until_ready = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        agent = AnalystAgent(bot)
+
+    agent.dispatch_post_market_intelligence = AsyncMock()  # type: ignore
+
+    with (
+        patch("cogs.analyst_agent.get_next_market_target_time", return_value=None),
+        patch("cogs.analyst_agent.get_sleep_seconds", return_value=3600.0),
+        patch("cogs.analyst_agent.logger.warning") as mock_warning,
+        patch("asyncio.sleep", new_callable=AsyncMock) as mock_async_sleep,
+    ):
+        mock_async_sleep.side_effect = [None, Exception("Stop loop")]
+
+        try:
+            await agent.post_market_loop()
+        except Exception as e:
+            if str(e) != "Stop loop":
+                raise e
+
+        agent.dispatch_post_market_intelligence.assert_not_called()
+        assert agent._last_post_market_date is None
+        mock_warning.assert_called_once()
+        assert "未取得市場目標時間" in mock_warning.call_args[0][0]
+
+
+@pytest.mark.asyncio
 async def test_run_next_day_strategy_success() -> None:
     bot = MagicMock()
     with patch("discord.ext.tasks.Loop.start"):
