@@ -31,6 +31,10 @@ MIN_VAR_SAMPLES = 60
 
 DEFAULT_VAR_CONFIDENCE = 0.95
 
+# 年化下行差低於此值視同 0，避免四捨五入殘差（例如現金腿日報酬存到 8 位小數後，
+# 每期與 MAR 相差約 5e-9 以內，年化約 8e-8）讓 Sortino 比值爆量。真實報酬序列的年化下行差遠大於此值。
+_DOWNSIDE_DEV_EPS = 1e-7
+
 
 class DrawdownResult(NamedTuple):
     max_drawdown: float
@@ -96,9 +100,11 @@ def sortino_ratio(
     `annual_return` 未提供時以 `returns` 的幾何年化報酬計算；回測呼叫端傳入以期初
     本金精算的 CAGR，使分子與報告中的 CAGR 一致。下行差為 0（整段期間沒有任何一期
     低於 MAR）時回傳 0.0，而不是無限大——後者會讓任何排序或比較失去意義。
+    「下行差為 0」以年化下行差 ≤ `_DOWNSIDE_DEV_EPS` 判定，涵蓋浮點／四捨五入殘差造成的
+    數值零（例如現金腿每期與 MAR 相差約 5e-9 以內的捨入殘差）。
     """
     dd = annualized_downside_deviation(returns, mar_annual, periods)
-    if dd <= 0.0:
+    if dd <= _DOWNSIDE_DEV_EPS:
         return 0.0
     r = annualized_return(returns, periods) if annual_return is None else annual_return
     return (r - mar_annual) / dd

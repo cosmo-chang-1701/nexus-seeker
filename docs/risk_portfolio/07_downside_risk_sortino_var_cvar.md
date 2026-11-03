@@ -151,6 +151,7 @@ flowchart TD
 | `TRADING_DAYS_PER_YEAR` | $252$ | 年化期數 | `market_analysis/downside_risk.py` |
 | `DEFAULT_VAR_CONFIDENCE` | $0.95$ | VaR / CVaR 信賴水準 | 同上 |
 | `MIN_VAR_SAMPLES` | $60$ | 歷史模擬的最低樣本數；95% 下左尾僅 3 筆，再少只是在描述單一事件 | 同上 |
+| `_DOWNSIDE_DEV_EPS` | $10^{-7}$ | 年化下行差低於此值視同 0（Sortino 回傳 0.0），吸收 8 位小數捨入殘差 | 同上 |
 | 回測 MAR / $R_f$ | $4.5\%$ | 2025 年無風險利率基準，兼作 Sortino 的 MAR | `calibration/static_allocation_backtest.py` |
 | 減碼權重上限 | $w \le 1$ | 本引擎不使用槓桿，$w > 1$ 只會是估計雜訊，放行會讓對照組憑空虛增 | 同上 |
 | `LOOKBACK_DAYS` | $252$ | 模擬報酬序列長度 | `market_analysis/downside_monitor.py` |
@@ -167,7 +168,7 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-- **下行差為 0**（整段期間沒有任何一期低於 MAR）：`sortino_ratio()` 回傳 $0.0$ 而非無限大，避免排序與比較失去意義。
+- **下行差為 0**（整段期間沒有任何一期低於 MAR）：`sortino_ratio()` 回傳 $0.0$ 而非無限大，避免排序與比較失去意義。判定以年化下行差 $\le 10^{-7}$（`_DOWNSIDE_DEV_EPS`）為準，涵蓋現金腿等序列經 8 位小數捨入後與 MAR 僅差捨入殘差的情形；此容忍值遠低於任何真實報酬序列的下行差，對真實資料無影響。
 - **VaR / CVaR 樣本不足**：`historical_var_cvar()` 回傳 `None`，呼叫端必須視為「無法評估」而非「零風險」；回測報告在此情況填 $0.0$。
 - **左尾仍為正報酬**：VaR / CVaR 以 $0$ 為下限，不回報負的損失。
 - **非有限值**：NaN / inf 在計算前濾除。
