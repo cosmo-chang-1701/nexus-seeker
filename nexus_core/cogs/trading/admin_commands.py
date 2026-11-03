@@ -1,10 +1,10 @@
 """
 cogs/trading/admin_commands.py
 
-[Admin] 管理員手動觸發指令：force_scan、force_after_report、force_macro_update。
+[Admin] 管理員手動觸發指令：sync、force_scan、force_after_report、force_macro_update。
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 import asyncio
 import logging
 
@@ -29,6 +29,79 @@ class AdminCommandsCog(commands.Cog):
 
     def __init__(self, bot: Any) -> None:
         self.bot = bot
+
+    @commands.command(name="sync")
+    async def sync(
+        self, ctx: commands.Context[Any], spec: Optional[str] = None
+    ) -> None:
+        """[Admin] 手動同步 Slash Commands。
+
+        用法:
+          !sync         - 全局同步
+          !sync guild   - 複製全局指令並同步至當前伺服器 (或 !sync ~)
+          !sync clear   - 清除當前伺服器專屬指令並同步
+        """
+        if ctx.author.id != DISCORD_ADMIN_USER_ID:
+            await ctx.reply(
+                embed=create_error_embed(
+                    "權限不足：此指令僅限管理員使用。", title="權限錯誤"
+                )
+            )
+            logger.warning(
+                f"Unauthorized sync attempt by {ctx.author.name} ({ctx.author.id})"
+            )
+            return
+
+        logger.info(
+            f"Admin {ctx.author.name} ({ctx.author.id}) triggered sync with spec={spec}"
+        )
+
+        try:
+            if spec is None:
+                synced = await ctx.bot.tree.sync()
+                mode_desc = "全局"
+            elif spec in ("guild", "~"):
+                if ctx.guild is None:
+                    await ctx.reply(
+                        embed=create_error_embed(
+                            "此指令必須在伺服器（Guild）中執行。", title="執行錯誤"
+                        )
+                    )
+                    return
+                ctx.bot.tree.copy_global_to(guild=ctx.guild)
+                synced = await ctx.bot.tree.sync(guild=ctx.guild)
+                mode_desc = spec
+            elif spec == "clear":
+                if ctx.guild is None:
+                    await ctx.reply(
+                        embed=create_error_embed(
+                            "此指令必須在伺服器（Guild）中執行。", title="執行錯誤"
+                        )
+                    )
+                    return
+                ctx.bot.tree.clear_commands(guild=ctx.guild)
+                synced = await ctx.bot.tree.sync(guild=ctx.guild)
+                mode_desc = spec
+            else:
+                await ctx.reply(
+                    embed=create_error_embed(
+                        f"未知的同步參數 `{spec}`。可用參數: 無（全局）、`guild` 或 `~`（伺服器）、`clear`（清除伺服器指令）。",
+                        title="參數錯誤",
+                    )
+                )
+                return
+
+            await ctx.reply(
+                embed=create_info_embed(
+                    "系統控制",
+                    f"✅ 成功同步 {len(synced)} 個指令（{'全局' if not spec else mode_desc}）",
+                )
+            )
+        except Exception as e:
+            logger.error(f"❌ 手動同步指令失敗: {e}")
+            await ctx.reply(
+                embed=create_error_embed(f"手動同步指令失敗: {e}", title="系統錯誤")
+            )
 
     @app_commands.command(
         name="force_scan", description="[Admin] 立即手動執行全站掃描 (不論開盤時間)"

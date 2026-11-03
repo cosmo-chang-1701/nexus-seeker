@@ -124,6 +124,7 @@ class NexusBot(commands.Bot):
         self.message_signal = asyncio.Event()
         self._has_notified_ready = False
         self._has_broadcast_startup_notice = False
+        self._has_synced_commands = False
         self._is_closing = False
         self._setup_done = False
 
@@ -244,12 +245,6 @@ class NexusBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ 建立 Alpaca 串流服務失敗: {e}")
 
-        try:
-            synced = await self.tree.sync()
-            logger.info(f"✅ 成功同步 {len(synced)} 個 Slash Commands")
-        except Exception as e:
-            logger.error(f"❌ 同步指令失敗: {e}")
-
     async def on_ready(self) -> None:
         if self._has_notified_ready:
             logger.info("Bot 已重連，跳過啟動通知。")
@@ -313,7 +308,29 @@ class NexusBot(commands.Bot):
             self._has_broadcast_startup_notice = True
             asyncio.create_task(self.notify_all_users("🚀 Nexus Seeker 機器人已啟動！"))
 
+        if not self._has_synced_commands:
+            self._has_synced_commands = True
+            asyncio.create_task(self._sync_commands_background())
+
         logger.info("✅ on_ready 流程處理完畢，機器人進入運行狀態。")
+
+    async def _sync_commands_background(self) -> None:
+        """在背景非阻塞執行 Slash Commands 同步，避免阻塞開機流程。"""
+        try:
+            logger.info(
+                "⏳ 背景指令同步排程中，等待 3 秒以待 Gateway 連線與初始流程穩定..."
+            )
+            await asyncio.sleep(3)
+            if self._is_closing:
+                return
+            logger.info("開始執行 Slash Commands 背景同步...")
+            synced = await self.tree.sync()
+            logger.info(f"✅ 成功背景同步 {len(synced)} 個 Slash Commands")
+        except asyncio.CancelledError:
+            logger.info("Slash Commands 背景同步任務已被取消。")
+            raise
+        except Exception as e:
+            logger.error(f"❌ 背景同步指令失敗: {e}")
 
     async def close(self) -> None:
         if self._is_closing:
