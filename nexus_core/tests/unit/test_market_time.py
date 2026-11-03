@@ -1,5 +1,4 @@
 from datetime import datetime, timezone, tzinfo
-from typing import Optional, Type
 from unittest.mock import patch
 
 import pandas as pd
@@ -20,13 +19,13 @@ def _mock_schedule(
     )
 
 
-def _patch_now(fake_now_ny: datetime) -> Type[datetime]:
+def _patch_now(fake_now_ny: datetime) -> type[datetime]:
     """回傳一個可作為 `market_time.datetime` 替身的類別，`now(tz)` 固定回傳
     `fake_now_ny`（轉換至呼叫端指定的時區），其餘行為委派給真實 datetime。"""
 
     class _FixedDatetime(datetime):
         @classmethod
-        def now(cls, tz: Optional[tzinfo] = None) -> datetime:  # type: ignore[override]
+        def now(cls, tz: tzinfo | None = None) -> datetime:  # type: ignore[override]
             if tz is not None:
                 return fake_now_ny.astimezone(tz)
             return fake_now_ny
