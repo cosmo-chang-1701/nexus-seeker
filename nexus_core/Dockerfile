@@ -22,7 +22,7 @@ RUN mkdir -p /app/data && chown -R appuser:appuser /app /entrypoint.sh
 
 USER appuser
 
-HEALTHCHECK --interval=10s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
     CMD python bot_healthy.py || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
