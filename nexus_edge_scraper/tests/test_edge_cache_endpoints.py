@@ -67,6 +67,17 @@ def test_get_cached_gex_hit_returns_snapshot_with_age() -> None:
     assert data["age_seconds"] >= 0.0
 
 
+def test_get_cached_gex_returns_expiry() -> None:
+    database.save_gex_snapshot("AAPL", 230.5, 1.0, 240.0, 220.0, {}, "2026-11-20")
+    data = client.get("/api/v1/cache/gex/AAPL").json()["data"]
+    assert data["expiry"] == "2026-11-20"
+    assert data["call_wall"] == 240.0
+
+    database.save_gex_snapshot("TSLA", 230.5, 1.0, 240.0, 220.0, {})
+    data = client.get("/api/v1/cache/gex/TSLA").json()["data"]
+    assert data["expiry"] is None
+
+
 def test_get_cached_option_chain_miss_returns_error_status() -> None:
     response = client.get("/api/v1/cache/options/AAPL/chain")
     assert response.status_code == 200

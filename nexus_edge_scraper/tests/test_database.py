@@ -116,6 +116,51 @@ def test_gex_snapshot_roundtrip() -> None:
     assert row["updated_at"] is not None
 
 
+def test_gex_snapshot_expiry_roundtrip() -> None:
+    database.save_gex_snapshot("AAPL", 100.0, 1.0, 110.0, 90.0, {}, "2026-11-20")
+    row = database.get_gex_snapshot("AAPL")
+    assert row is not None
+    assert row["expiry"] == "2026-11-20"
+    # 之後的輪詢 expiry 為 None 時，upsert 會覆寫為 NULL
+    database.save_gex_snapshot("AAPL", 100.0, 1.0, 110.0, 90.0, {}, None)
+    row = database.get_gex_snapshot("AAPL")
+    assert row is not None
+    assert row["expiry"] is None
+
+
+def test_gex_snapshot_expiry_migration_preserves_rows() -> None:
+    """舊版 gex_snapshot（無 expiry 欄位）經 init_db() 就地補欄位且不遺失資料。"""
+    conn = database._get_connection()
+    try:
+        conn.execute("DROP TABLE gex_snapshot")
+        conn.execute(
+            "CREATE TABLE gex_snapshot ("
+            "symbol TEXT PRIMARY KEY, spot REAL, net_gex REAL, call_wall REAL, "
+            "put_wall REAL, gex_profile_json TEXT, "
+            "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
+        )
+        conn.execute(
+            "INSERT INTO gex_snapshot (symbol, spot, net_gex, call_wall, put_wall, "
+            "gex_profile_json) VALUES ('AAPL', 100.0, 1.0, 110.0, 90.0, '{}')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database.init_db()
+
+    conn = database._get_connection()
+    try:
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(gex_snapshot)")}
+    finally:
+        conn.close()
+    assert "expiry" in cols
+    row = database.get_gex_snapshot("AAPL")
+    assert row is not None
+    assert row["call_wall"] == 110.0
+    assert row["expiry"] is None
+
+
 def test_gex_snapshot_upsert_overwrites() -> None:
     database.save_gex_snapshot("AAPL", 100.0, 1.0, 110.0, 90.0, {})
     database.save_gex_snapshot("AAPL", 200.0, 2.0, 210.0, 190.0, {})

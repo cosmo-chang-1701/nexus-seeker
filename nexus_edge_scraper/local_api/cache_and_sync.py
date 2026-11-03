@@ -72,6 +72,7 @@ async def get_cached_gex(symbol: str) -> dict[str, Any]:
                 "call_wall": row.get("call_wall", 0.0),
                 "put_wall": row.get("put_wall", 0.0),
                 "gex_profile": row.get("gex_profile", {}),
+                "expiry": row.get("expiry"),
             },
             "age_seconds": _row_age_seconds(row.get("updated_at")),
         }
