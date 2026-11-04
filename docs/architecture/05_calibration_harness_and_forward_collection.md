@@ -143,6 +143,8 @@ flowchart TD
 | `retention_days` / `no_data_days` | `365` / `30` | 評估紀錄與 NO_DATA 標註保留期 | `nexus_core/database/regime_evaluation_log.py` |
 | `FORWARD_MIN_ROWS` | `100` | 前向報告每決策類「資料累積中」門檻 | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時顯示「樣本不足（交易日數 n／20）」，不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
+| `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 
 ---
@@ -272,6 +274,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 2. 以 03:30 labeler 的前向標註比較「`decision = 1`」與同期間 `decision = 0` 的 20 日報酬：超額報酬不得為負。
 3. 日線事件研究（[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) §3.2）已顯示 W／3D／D 層級**沒有**顯著擇時優勢；盤中時間框架（65m／15m／5m）只能靠前向紀錄證明。若前向結果同樣 $|t| < 2$，推播的價值僅止於「把使用者自己的判斷規則自動化、省去看盤」，翻轉與否由使用者決定，不得宣稱有 alpha。
 4. 抽查至少 3 檔標的的 W／3D／65m K 棒與 TradingView 一致（切分規則已依 TradingView Bar alignment 實作，此項只防資料源差異）。
+
+G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個不同事件日（`SQUEEZE_MIN_DATES`）才判讀 t 值：事件日過少時日期叢集 bootstrap 退化，信賴區間與 t 值失去意義。不足時報表仍列出超額與 CI 供描述，但 `t_stat`、`g2_passed` 皆為空值，G.2 顯示「樣本不足（交易日數 n／20）」，G.3 顯示「交易日數不足，不判讀 t 值」，不輸出「達標」或「達統計顯著」。
 
 第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 
@@ -429,6 +433,7 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 
 `forward-report` 新增「出場分層洗盤率」表（`forward_log.py::build_exit_tier_breakdown`），依 evaluator × 顧問旗標分組：
 **訊號正確率**（先觸及訊號方向的 1.5×ATR₁D 帶）、**洗盤率**（反向先觸及）、逾時率、5 日報酬中位數。
+表中另列各組的標的數與交易日數（`n_symbols`／`n_dates`），避免單一標的或單日主導。現金等價標的（`BOXX`／`BIL`／`SHV`／`SGOV`，`EXIT_BREAKDOWN_EXCLUDED_SYMBOLS`）的選擇權鏈極薄、淨 GEX 常為負而每 15 分鐘觸發 `SL_REGIME_FLIP`，會讓洗盤率恆為 100%，故不納入此表；記錄器也不再記錄這些標的（同一批次由 `evaluation_recorder` 端實作），報表排除則用來擋掉歷史列，被排除的列數另列於 `exit_tiers_excluded` 並在報表註記。
 `EXIT_*` 列會從 GEX 量值四分位分析中排除（win 的語意與進場相反，混入會失真）。
 
 **判讀準則**：
@@ -656,11 +661,11 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **報表**：`calibration forward-report` 的「擠壓乾跑翻轉檢核」每個來源區塊（主結果 `WATCHLIST_ADVISOR`、全部來源參考）末尾新增「影子否決分組（僅參考，判定不動）」。對每個旗標，只取 20 日報酬已可得的獨立事件，分「成立」與「放行」兩組（旗標為 `null` 者計入「無資料」、不進任一組），以事件日期分群 bootstrap 比較「成立組 − 放行組」的 20 日報酬差。舊快照沒有 `features_json` 欄時，所有旗標視為無資料、判讀「樣本不足」，報表照常產出；價格不可得時顯示「價格不可得」。
 
-**判讀規則**（`SHADOW_MIN_N = 10`）：
+**判讀規則**（`SHADOW_MIN_N = 10`、`SQUEEZE_MIN_DATES = 20`）：
 
 | 條件 | 判讀 |
 | :--- | :--- |
-| 任一組 $< 10$ 筆 | 樣本不足 |
+| 任一組 $< 10$ 筆，或任一組事件交易日數 $< 20$ | 樣本不足 |
 | 差的 95% CI 上界 $< 0$ | 影子否決組顯著較差（支持評估接進判定，仍須人工審核） |
 | 差的 95% CI 下界 $> 0$ | 影子否決組反而較好（不支持否決） |
 | 其他 | 無顯著差異（不支持否決） |
