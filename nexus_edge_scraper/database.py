@@ -104,7 +104,8 @@ def init_db() -> None:
                 call_wall REAL,
                 put_wall REAL,
                 gex_profile_json TEXT,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expiry TEXT
             );
 
             CREATE TABLE IF NOT EXISTS gex_snapshot_history (
@@ -161,6 +162,12 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE tracked_symbols ADD COLUMN is_priority INTEGER NOT NULL DEFAULT 0"
             )
+        # gex_snapshot 後補的 expiry 欄位（最常見到期日），舊列在下次輪詢前為 NULL。
+        gex_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(gex_snapshot)")
+        }
+        if "expiry" not in gex_cols:
+            conn.execute("ALTER TABLE gex_snapshot ADD COLUMN expiry TEXT")
         conn.commit()
     finally:
         conn.close()
@@ -251,19 +258,21 @@ def save_gex_snapshot(
     call_wall: float,
     put_wall: float,
     gex_profile: dict[str, float],
+    expiry: Optional[str] = None,
 ) -> None:
     conn = _get_connection()
     try:
         conn.execute(
             """
-            INSERT INTO gex_snapshot (symbol, spot, net_gex, call_wall, put_wall, gex_profile_json, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO gex_snapshot (symbol, spot, net_gex, call_wall, put_wall, gex_profile_json, expiry, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(symbol) DO UPDATE SET
                 spot = excluded.spot,
                 net_gex = excluded.net_gex,
                 call_wall = excluded.call_wall,
                 put_wall = excluded.put_wall,
                 gex_profile_json = excluded.gex_profile_json,
+                expiry = excluded.expiry,
                 updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -273,6 +282,7 @@ def save_gex_snapshot(
                 call_wall,
                 put_wall,
                 json.dumps(gex_profile),
+                expiry,
             ),
         )
         if GEX_HISTORY_ENABLED:

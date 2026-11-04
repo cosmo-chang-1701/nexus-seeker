@@ -242,6 +242,7 @@ async def _poll_symbol(symbol: str, browser: Browser, sem: "asyncio.Semaphore") 
                 float(gex_data.get("call_wall", 0.0)),
                 float(gex_data.get("put_wall", 0.0)),
                 gex_data.get("gex_profile", {}),
+                gex_data.get("expiry"),
             )
         except Exception as e:
             logger.warning(f"[{symbol}] 排程 GEX 抓取失敗: {e}")

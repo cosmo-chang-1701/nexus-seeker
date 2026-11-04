@@ -1,7 +1,8 @@
+import asyncio
 import os
 import tempfile
 from datetime import datetime
-from typing import Any, Generator
+from typing import Any, Generator, cast
 
 import pytest
 
@@ -89,6 +90,36 @@ async def test_poll_once_writes_snapshots_for_tracked_symbols(
         assert chain_row is not None
         assert chain_row["expiry"] == "2026-09-18"
         assert chain_row["calls"] == [{"strike": 100.0}]
+
+
+@pytest.mark.asyncio
+async def test_poll_symbol_passes_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _fake_gex_core(symbol: str, browser: object) -> dict[str, Any]:
+        return {
+            "spot": 100.0,
+            "net_gex": 1.0,
+            "call_wall": 110.0,
+            "put_wall": 90.0,
+            "gex_profile": {},
+            "expiry": "2026-11-20",
+        }
+
+    async def _fake_nearest_chain(symbol: str) -> None:
+        return None
+
+    async def _no_sleep(delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(scheduler, "scrape_symbol_gex_core", _fake_gex_core)
+    monkeypatch.setattr(scheduler, "fetch_nearest_option_chain", _fake_nearest_chain)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", _no_sleep)
+
+    browser = cast(Any, _FakeBrowser())
+    await scheduler._poll_symbol("AAPL", browser, asyncio.Semaphore(1))
+
+    row = database.get_gex_snapshot("AAPL")
+    assert row is not None
+    assert row["expiry"] == "2026-11-20"
 
 
 @pytest.mark.asyncio
