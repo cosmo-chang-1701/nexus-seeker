@@ -124,7 +124,7 @@ flowchart TD
 
 ### 3.1 推播政策（使用者決議 2026-10-29）
 
-**只推播真正的突破／跌破**：盤中 CANDIDATE（突破候選／跌破候選），以及 T+1 CONFIRMED（確認突破／確認跌破，含盤中為 UNDETERMINED 者）。FAKE 與 UNDETERMINED 一律只分類與記錄（供日後校準），不推播。盤中候選訊息前綴為「（候選，待 T+1 確認；次日未收到確認推播即視為未成立）」。
+**只推播真正的突破／跌破**：盤中 CANDIDATE（突破候選／跌破候選），以及 T+1 CONFIRMED（確認突破／確認跌破，含盤中為 UNDETERMINED 者）。FAKE 與 UNDETERMINED 一律只分類與記錄（供日後校準），不推播。盤中候選訊息的「📋 操作指引」首行為「（候選，待 T+1 確認；次日未收到確認推播即視為未成立）」。Embed 依 NexusEmbed 規範分為三個 ansi 樹狀欄位：「🎯 觸發事件」、「🧪 判定關卡」（T+1 為「🧪 T+1 定案檢核」）、「📋 操作指引」；盤中的「※ UOA 方向為日累積推斷（非逐筆成交方向）」揭露緊貼於判定關卡欄位之後，頁尾僅標示門檻未校準與錨點。
 
 ### 3.2 使用者操作規則（來源框架，非系統驗證）
 
@@ -228,7 +228,7 @@ flowchart TD
 - `nexus_core/database/migrations/v097_add_wall_break_tables.py`
   - 建立 `wall_anchor`（PK symbol + trade_date）與 `wall_break_events`（UNIQUE symbol + trade_date + direction + trigger_kind，含 T+1 欄位），並回填 `alpha_wall_break`
 - `nexus_core/cogs/embed_builders/wall_break_embeds.py`
-  - 兩種被推播案例的 Embed（關卡表與劇本指令）
+  - 兩種被推播案例的 Embed（欄位：觸發事件／判定關卡／操作指引；※ UOA 揭露置於判定關卡欄）
 - `nexus_edge_scraper/gex_scraper.py`
   - 約每 30 分鐘重算 CallWall／PutWall 的來源
 - `nexus_core/market_analysis/volume_profile.py`
