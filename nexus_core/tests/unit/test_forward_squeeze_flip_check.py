@@ -295,7 +295,7 @@ def _shadow_setup(
     closes: dict[str, list[tuple[date, float]]] = {}
     for i, (f, r) in enumerate(zip(flags, rets)):
         sym = f"S{i}"
-        idx = i % 15
+        idx = i % 20
         closes[sym] = [
             (d, 100.0 if k < idx + 20 else 100.0 * (1 + r)) for k, d in enumerate(base)
         ]
@@ -355,6 +355,20 @@ def test_shadow_verdict_insufficient() -> None:
     e = _shadow([True] * n + [False] * 20, _jit(n, -0.1) + _jit(20, 0.1))
     assert e["verdict"] == "樣本不足"
     assert e["n_flag"] == n
+
+
+def test_shadow_verdict_insufficient_dates() -> None:
+    """兩組 n 皆 ≥ SHADOW_MIN_N 但事件日數 < 20 → 樣本不足。"""
+    n = SHADOW_MIN_N + 2
+    flags = [True] * n + [False] * n
+    rets = _jit(n, -0.10) + _jit(n, 0.10)
+    rows, closes = _shadow_setup(flags, rets)
+    e = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"][
+        "sv_any"
+    ]
+    assert e["n_flag"] == n and e["n_pass"] == n
+    assert e["n_dates_flag"] < 20 and e["n_dates_pass"] < 20
+    assert e["verdict"] == "樣本不足"
 
 
 def test_shadow_verdict_worse() -> None:

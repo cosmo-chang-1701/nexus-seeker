@@ -143,11 +143,15 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
         lines.append("- G.2 20 日超額報酬：價格不可得")
     else:
         extra = f"；{g2['status']}" if g2.get("status") else ""
+        if g2.get("g2_passed") is None and g2.get("status"):
+            verdict = extra[1:]
+        else:
+            verdict = f"達標：{_flag(g2.get('g2_passed'))}{extra}"
         lines.append(
             f"- G.2 20 日超額報酬：處理組 n={g2.get('n_treat', 0)}、對照組 n={g2.get('n_control', 0)}、"
             f"待滿 20 日 {g2.get('pending', 0)}；超額 {_fmt(g2.get('excess'))} "
             f"{_fmt(g2.get('excess_ci'))}、t={_fmt(g2.get('t_stat'))}；"
-            f"達標：{_flag(g2.get('g2_passed'))}{extra}"
+            f"{verdict}"
         )
     strata = g2.get("strata")
     if strata:
@@ -205,6 +209,48 @@ def _render_squeeze_strata(strata: dict[str, Any]) -> list[str]:
 
 def _flag(value: Any) -> str:
     return "—" if value is None else ("是" if value else "否")
+
+
+def _render_gamma_flip_materiality(data: Any) -> list[str]:
+    """Gamma Flip 雜訊交叉 vs 重要交叉研究 (docs §5.13)；缺值或字串照實呈現。"""
+    if data is None:
+        return []
+    lines = ["**Gamma Flip 重要性 (ρ)**", ""]
+    if not isinstance(data, dict):
+        return lines + [f"- {data}", ""]
+    lines.append(f"- 呈現層門檻 ρ = {_fmt(data.get('threshold'))}")
+    groups = data.get("groups")
+    if isinstance(groups, dict) and groups:
+        lines += [
+            "",
+            "| 分組 | n | 交易日數 | 勝率 | 逆向先觸及 [95% CI] |",
+            "|---|---|---|---|---|",
+        ]
+        for name, g in groups.items():
+            g = g if isinstance(g, dict) else {}
+            lines.append(
+                f"| {name} | {_fmt(g.get('n'))} | {_fmt(g.get('n_dates'))} "
+                f"| {_fmt(g.get('win_rate'))} "
+                f"| {_fmt_ci(g.get('adverse_rate'), g.get('adverse_ci95'))} |"
+            )
+    quartiles = data.get("ratio_quartiles")
+    if isinstance(quartiles, list) and quartiles:
+        lines += [
+            "",
+            "| ρ 區間 | n | 交易日數 | 勝率 [95% CI] | 逆向先觸及 [95% CI] | 狀態 |",
+            "|---|---|---|---|---|---|",
+        ]
+        for r in quartiles:
+            lines.append(
+                f"| {r.get('bucket')} | {_fmt(r.get('n'))} | {_fmt(r.get('n_dates'))} "
+                f"| {_fmt_ci(r.get('win_rate'), r.get('win_ci95'))} "
+                f"| {_fmt_ci(r.get('adverse_rate'), r.get('adverse_ci95'))} "
+                f"| {_fmt(r.get('status'))} |"
+            )
+    if data.get("判讀"):
+        lines += ["", f"- 判讀：{data['判讀']}"]
+    lines.append("")
+    return lines
 
 
 def _render_squeeze_flip_check(check: Optional[dict[str, Any]]) -> list[str]:
@@ -292,16 +338,23 @@ def render_markdown(results: dict[str, Any]) -> str:
                 "訊號正確＝平倉後價格先朝不利原部位的方向觸及 1.5×ATR₁D；"
                 "洗盤＝反向先觸及 (被掃出後價格回到原方向)。",
                 "",
-                "| evaluator | 顧問持倉 | n | 訊號正確 | 洗盤 | 逾時 | 5 日報酬中位數 | 狀態 |",
-                "|---|---|---|---|---|---|---|---|",
+                "| evaluator | 顧問持倉 | n | 標的數 | 交易日數 | 訊號正確 | 洗盤 | 逾時 | 5 日報酬中位數 | 狀態 |",
+                "|---|---|---|---|---|---|---|---|---|---|",
             ]
             for e in exit_tiers:
                 lines.append(
                     f"| `{e['evaluator']}` | {'是' if e['advisory'] else '否'} | {e['n']} "
+                    f"| {_fmt(e.get('n_symbols'))} | {_fmt(e.get('n_dates'))} "
                     f"| {_fmt(e['correct_rate'])} | {_fmt(e['washout_rate'])} "
                     f"| {_fmt(e['timeout_rate'])} | {_fmt(e['median_fwd_ret_5d'])} "
                     f"| {e['status']} |"
                 )
+            excluded = forward.get("exit_tiers_excluded")
+            if excluded is not None:
+                lines += [
+                    "",
+                    f"已排除現金等價標的 (BOXX／BIL／SHV／SGOV) 的 EXIT_* 列 {excluded} 筆，不計入上表。",
+                ]
     lines += _render_regime_breakdown(forward or {})
     lines += _render_squeeze_flip_check((forward or {}).get("squeeze_flip_check"))
     studies = (forward or {}).get("threshold_studies") or {}
@@ -341,6 +394,7 @@ def render_markdown(results: dict[str, Any]) -> str:
                         f"| {_fmt_ci(r['adverse_rate'], r.get('adverse_ci95'))} | {r['status']} |"
                     )
                 lines.append("")
+        lines += _render_gamma_flip_materiality(studies.get("gamma_flip_materiality"))
         by_ev = studies.get("skew_percentile_by_evaluator")
         if isinstance(by_ev, dict):
             lines += ["**Skew 分位區間（依評估器拆分）**", ""]

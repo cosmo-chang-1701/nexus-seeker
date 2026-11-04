@@ -193,9 +193,13 @@ def test_strata_without_benchmark_and_g2_unchanged() -> None:
     assert withb["g3"] == base["g3"]
     for k in ("n_treat", "n_control", "pending", "excess", "t_stat", "g2_passed"):
         assert withb["g2"][k] == base["g2"][k]
+    # 處理組只有 2 個事件日 (< SQUEEZE_MIN_DATES)：不判讀 t／達標
+    for r in (base, withb):
+        assert r["g2"]["t_stat"] is None
+        assert r["g2"]["g2_passed"] is None
+        assert r["g2"]["status"].startswith("樣本不足（交易日數 2／")
     expected = ((130 / 110 - 1) + (150 / 130 - 1)) / 2 - (160 / 120 - 1)
     assert base["g2"]["excess"] == pytest.approx(expected)
-    assert base["g2"]["g2_passed"] is bool(expected >= 0)
 
 
 # ------------------------------------------------------------------ 報告渲染

@@ -172,6 +172,7 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
         ]
     report["magnitudes"] = magnitudes
     report["exit_tiers"] = build_exit_tier_breakdown(df)
+    report["exit_tiers_excluded"] = count_excluded_exit_rows(df)
     report["regime_breakdown"] = build_regime_breakdown(df, cfg)
     report["threshold_studies"] = build_threshold_studies(entries)
     return report
@@ -444,6 +445,46 @@ def _is_advisory(features_json: Any) -> bool:
         return False
 
 
+# 現金等價標的，出場分層無意義；刻意為 services/wall_break_service.py
+# `_SKIP_SYMBOLS`、market_analysis/signal_calculator.py 排除清單的超集，
+# 並與 evaluation_recorder 的 `_EXIT_RECORD_EXCLUDED_SYMBOLS` 保持相同內容
+EXIT_BREAKDOWN_EXCLUDED_SYMBOLS: frozenset[str] = frozenset(
+    {"BOXX", "BIL", "SHV", "SGOV"}
+)
+
+
+def _excluded_exit_mask(exits: pd.DataFrame) -> pd.Series:
+    """EXIT_* 列中屬現金等價標的者 (不分大小寫)；缺 symbol 欄時全為 False。"""
+    if "symbol" not in exits.columns:
+        return pd.Series(False, index=exits.index)
+    return (
+        exits["symbol"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .isin(EXIT_BREAKDOWN_EXCLUDED_SYMBOLS)
+    )
+
+
+def count_excluded_exit_rows(df: pd.DataFrame) -> int:
+    """出場分層表排除的現金等價標的 EXIT_* 列數 (僅供報表揭露)。"""
+    if df.empty or "evaluator" not in df.columns:
+        return 0
+    exits = df[df["evaluator"].astype(str).str.startswith("EXIT_")]
+    if exits.empty:
+        return 0
+    return int(_excluded_exit_mask(exits).sum())
+
+
+def _exit_n_dates(grp: pd.DataFrame) -> Optional[int]:
+    """分組內不同事件日數；無 date／bar_ts 欄時為 None。"""
+    if "date" in grp.columns:
+        return int(grp["date"].nunique())
+    if "bar_ts" in grp.columns:
+        return int(len({_event_date(x) for x in grp["bar_ts"]} - {None}))
+    return None
+
+
 def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
     """出場分層洗盤率 (handoff §5.4)：EXIT_* evaluator 依分層 × 顧問旗標分組。
 
@@ -457,6 +498,9 @@ def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
     if df.empty or "evaluator" not in df.columns:
         return []
     exits = df[df["evaluator"].astype(str).str.startswith("EXIT_")].copy()
+    if exits.empty:
+        return []
+    exits = exits[~_excluded_exit_mask(exits)].copy()
     if exits.empty:
         return []
     features = (
@@ -473,6 +517,10 @@ def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
                 "evaluator": str(evaluator),
                 "advisory": bool(advisory),
                 "n": n,
+                "n_symbols": int(grp["symbol"].nunique())
+                if "symbol" in grp.columns
+                else None,
+                "n_dates": _exit_n_dates(grp),
                 "correct_rate": float((grp["outcome"] == 1).mean()),
                 "washout_rate": float((grp["outcome"] == -1).mean()),
                 "timeout_rate": float((grp["outcome"] == 0).mean()),
@@ -584,6 +632,8 @@ SHADOW_FLAG_LABELS: dict[str, str] = {
 }
 # 每組（旗標成立／放行）最少事件數。PRE_CALIBRATION／僅紀錄，不參與判定
 SHADOW_MIN_N = 10
+# G.2／G.3 與影子否決判讀所需最少事件交易日數（與 micro-report「≥20 個可標註日」一致）
+SQUEEZE_MIN_DATES = 20
 SHADOW_VERDICT_INSUFFICIENT = "樣本不足"
 SHADOW_VERDICT_WORSE = "影子否決組顯著較差（支持評估接進判定，仍須人工審核）"
 SHADOW_VERDICT_BETTER = "影子否決組反而較好（不支持否決）"
@@ -835,6 +885,7 @@ def _shadow_veto_groups(
             "n_pass": len(pv),
             "n_null": n_null,
             "n_dates_flag": len(set(fc)),
+            "n_dates_pass": len(set(pc)),
             "diff": None,
             "ci": None,
             "verdict": SHADOW_VERDICT_INSUFFICIENT,
@@ -846,7 +897,13 @@ def _shadow_veto_groups(
             entry["diff"] = diff
             ci = _finite_ci(lo, hi)
             entry["ci"] = ci
-            if len(fv) >= SHADOW_MIN_N and len(pv) >= SHADOW_MIN_N and ci:
+            if (
+                len(fv) >= SHADOW_MIN_N
+                and len(pv) >= SHADOW_MIN_N
+                and len(set(fc)) >= SQUEEZE_MIN_DATES
+                and len(set(pc)) >= SQUEEZE_MIN_DATES
+                and ci
+            ):
                 if ci[1] < 0:
                     entry["verdict"] = SHADOW_VERDICT_WORSE
                 elif ci[0] > 0:
@@ -942,17 +999,25 @@ def _squeeze_analysis(
         "excess_ci": None,
         "t_stat": None,
         "g2_passed": None,
+        "n_dates_treat": len(set(treat_c)),
+        "min_dates": SQUEEZE_MIN_DATES,
     }
     if len(treat_v) >= 1 and len(control_v) >= 1:
         diff, lo, hi, se = clustered_bootstrap_diff(
             treat_v, treat_c, control_v, control_c, cfg.n_boot, cfg.seed
         )
         g2["excess"] = diff
-        g2["g2_passed"] = bool(diff >= 0)
         if math.isfinite(lo) and math.isfinite(hi):
             g2["excess_ci"] = [lo, hi]
-        if math.isfinite(se) and se > 0:
-            g2["t_stat"] = diff / se
+        if g2["n_dates_treat"] >= SQUEEZE_MIN_DATES:
+            g2["g2_passed"] = bool(diff >= 0)
+            if math.isfinite(se) and se > 0:
+                g2["t_stat"] = diff / se
+        else:
+            # 處理組事件日過少時日期叢集 bootstrap 退化，不判讀 t／達標
+            g2["status"] = (
+                f"樣本不足（交易日數 {g2['n_dates_treat']}／{SQUEEZE_MIN_DATES}）"
+            )
     else:
         g2["status"] = "樣本不足"
     g2["strata"] = _squeeze_strata(
@@ -960,7 +1025,11 @@ def _squeeze_analysis(
     )
     result["g2"] = g2
     t_stat = g2["t_stat"]
-    if t_stat is None:
+    if g2["n_dates_treat"] < SQUEEZE_MIN_DATES and len(treat_v) >= 1:
+        result["g3"] = (
+            f"交易日數不足（{g2['n_dates_treat']}／{SQUEEZE_MIN_DATES}），不判讀 t 值"
+        )
+    elif t_stat is None:
         result["g3"] = "樣本不足，尚無法判讀 t 值"
     elif abs(t_stat) < SQUEEZE_T_THRESHOLD:
         result["g3"] = SQUEEZE_G3_NOTE
