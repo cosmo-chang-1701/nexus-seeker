@@ -370,10 +370,30 @@ def test_calendar_service_stale_kv_returns_unknown_not_calendar_fallback() -> No
 
     with patch("database.cache.get_kv_cache", side_effect=_kv), patch(
         "database.cache.get_fedwatch_probability_fresh", return_value=(None, True)
-    ), patch("services.calendar_service.get_read_connection") as conn:
+    ), patch("sqlite3.connect") as conn:
         result = calendar_service.get_latest_fedwatch_probability()
         conn.assert_not_called()  # 沒有查 economic_calendar_events 備援
     assert result == (None, False, True)
+
+
+def test_cold_start_kv_missing_returns_none_without_calendar_fallback() -> None:
+    """冷啟動（kv 完全無值）：回傳未知 (None, True, False)，不查日曆備援、不捏造 0.50，
+    與進場閘門的 (None, False) 同樣視為未知。"""
+    from services.calendar_service import calendar_service
+
+    with patch("database.cache.get_kv_cache", return_value=None), patch(
+        "database.cache.get_fedwatch_probability_fresh", return_value=(None, False)
+    ), patch("sqlite3.connect") as conn, patch(
+        "services.calendar_service.get_read_connection", create=True
+    ) as read_conn:
+        assert calendar_service.get_latest_fedwatch_probability() == (
+            None,
+            True,
+            False,
+        )
+        assert calendar_service.get_latest_fedwatch_info() == (None, True, {}, False)
+        conn.assert_not_called()
+        read_conn.assert_not_called()
 
 
 def test_calendar_service_info_stale_has_no_fallback_details() -> None:

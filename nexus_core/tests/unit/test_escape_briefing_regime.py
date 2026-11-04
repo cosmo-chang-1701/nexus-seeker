@@ -23,6 +23,7 @@ async def _run_briefing(
     prob_stale: bool = False,
     defense_enabled: bool = False,
     prob_details: Optional[dict[str, Any]] = None,
+    cold_start: bool = False,
 ) -> tuple[Any, list[str]]:
     """以同一組輸入跑簡報；回傳 (embed, 逃頂評分 tier 紀錄)。"""
     import market_analysis.index_microstructure as ims
@@ -44,6 +45,7 @@ async def _run_briefing(
         "fear_greed": fear_greed,
         "_is_fallback": fear_greed is None,
     }
+    read_conn: Any = None
     ctx = MagicMock()
     ctx.enable_macro_top_escape_defense = defense_enabled
     from services.calendar_service import calendar_service
@@ -77,20 +79,30 @@ async def _run_briefing(
                 return_value=core_metrics,
             )
         )
-        stack.enter_context(
-            patch.object(
-                calendar_service,
-                "get_latest_fedwatch_info",
-                return_value=(prob, False, prob_details or {}, prob_stale),
+        if cold_start:
+            # 冷啟動：簡報與閘門讀同一個空的 kv，不繞過 calendar_service
+            stack.enter_context(
+                patch("database.cache.get_kv_cache_with_age", return_value=(None, None))
             )
-        )
-        stack.enter_context(
-            patch(
-                "database.cache.get_fedwatch_probability_fresh",
-                return_value=(prob, prob_stale),
+            stack.enter_context(patch("database.cache.get_kv_cache", return_value=None))
+            read_conn = stack.enter_context(
+                patch("services.calendar_service.get_read_connection", create=True)
             )
-        )
-        stack.enter_context(patch("database.cache.get_kv_cache", return_value=None))
+        else:
+            stack.enter_context(
+                patch.object(
+                    calendar_service,
+                    "get_latest_fedwatch_info",
+                    return_value=(prob, False, prob_details or {}, prob_stale),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "database.cache.get_fedwatch_probability_fresh",
+                    return_value=(prob, prob_stale),
+                )
+            )
+            stack.enter_context(patch("database.cache.get_kv_cache", return_value=None))
         stack.enter_context(
             patch("database.user_settings.get_full_user_context", return_value=ctx)
         )
@@ -98,6 +110,8 @@ async def _run_briefing(
         embed = await strategy_runner.run_fomc_escape_window_analysis(1)
         # 同一組輸入再跑一次進場閘門的 tier（spy 會多記一筆）
         gate_tier = await compute_macro_escape_tier()
+    if read_conn is not None:
+        read_conn.assert_not_called()  # 未查 economic_calendar_events 備援
     assert embed is not None
     # 簡報與進場閘門各跑一次評分 + 閘門回傳值 = 3 筆，確保兩邊都真的算到分數
     assert len(tiers) == 2
@@ -215,6 +229,25 @@ async def test_briefing_tier_equals_entry_gate_tier(
     _, tiers = await _run_briefing(**kwargs)
     briefing_tier, gate_tier = tiers[0], tiers[-1]
     assert briefing_tier == gate_tier == expected_tier
+
+
+@pytest.mark.asyncio
+async def test_cold_start_briefing_tier_equals_gate_tier() -> None:
+    """冷啟動（kv 完全無 FedWatch）：簡報與閘門同為 UNKNOWN，不得捏造 0.50 而說「維持持有」。"""
+    embed, tiers = await _run_briefing(
+        regime="NORMAL",
+        vts_ratio=0.85,
+        fear_greed=50.0,
+        prob=None,
+        cold_start=True,
+    )
+    assert tiers[0] == tiers[-1] == "UNKNOWN"
+    text = _directive(embed)
+    assert "資料不足" in text and "維持持有" not in text
+    panel = _fields(embed)["📊 多因子監測結果"]
+    rows = [r for r in panel.splitlines() if "FOMC 利率定價" in r]
+    assert len(rows) == 1
+    assert "暫無數據" in rows[0] and "50.0%" not in rows[0]
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,6 @@ from typing import List, Optional, Union, Tuple, Any
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, field_validator
-from database.connection import get_read_connection
 from database.calendar_cache import (
     get_cached_earnings,
     get_macro_events_between,
@@ -773,9 +772,12 @@ class CalendarService:
           `(None, is_fallback, True)`——**不得**改用 `economic_calendar_events` 的備援
           值（那是 `update_fedwatch_probability()` 同一次寫入的同一個數字，等於
           繞過年齡上限），也不得回傳寫死的 0.50。`is_fallback` 沿用 kv 的實際旗標。
-        - 查無有效資料（非過期）：沿用既有日曆備援，再不行才 `(0.50, True, False)`。
+        - 查無有效資料（冷啟動：kv 完全無值；或值超出 (0.01, 0.99)／無法轉成 float）：
+          回傳 `(None, True, False)`，視為「未知」。**不得**查 `economic_calendar_events`
+          （該欄位與 kv 同一次寫入、無年齡上限，不含獨立資訊），也不得回傳寫死的 0.50，
+          使簡報與進場閘門在無資料時落在同一逃頂分級（其餘因子常態時為 UNKNOWN）。
+          超出範圍的原始值閘門仍會計分，兩者僅在無資料與過期情境保證一致。
         """
-        import sqlite3
         from database.cache import (
             FEDWATCH_PROB_MAX_AGE_HOURS,
             get_fedwatch_probability_fresh,
@@ -798,42 +800,12 @@ class CalendarService:
                 prob_val = float(cached_prob)
                 if 0.01 < prob_val < 0.99:
                     return prob_val, is_fallback, False
-                else:
-                    is_fallback = True
             except (ValueError, TypeError):
                 pass
 
-        try:
-            # 注意：sqlite3 的 context manager 只 commit/rollback，不會關閉連線，
-            # 因此這裡改用 try/finally 明確 close()。
-            conn = get_read_connection()
-            try:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT fedwatch_probability
-                    FROM economic_calendar_events
-                    WHERE (event LIKE '%利率決策%' OR event LIKE '%Fed Interest Rate%' OR event LIKE '%Federal Funds Rate%' OR event LIKE '%Rate Decision%')
-                      AND event NOT LIKE '%記者會%' AND event NOT LIKE '%Press%'
-                      AND event NOT LIKE '%Minutes%' AND event NOT LIKE '%紀要%'
-                      AND fedwatch_probability IS NOT NULL
-                      AND fedwatch_probability > 0.01
-                      AND fedwatch_probability < 0.99
-                      AND event_time >= date('now')
-                    ORDER BY event_time ASC
-                    LIMIT 1
-                    """
-                )
-                row = cursor.fetchone()
-            finally:
-                conn.close()
-            if row and row["fedwatch_probability"] is not None:
-                return float(row["fedwatch_probability"]), is_fallback, False
-        except Exception as e:
-            logger.warning(f"查詢 FedWatch 概率失敗: {e}")
-
-        return 0.50, True, False
+        # 冷啟動（kv 完全無值）或值超出 (0.01, 0.99)／無法轉成 float：視為未知，
+        # 與進場閘門的 (None, False) 一致，不得以 0.50 或日曆表備援值冒充。
+        return None, True, False
 
     def get_latest_fedwatch_info(
         self,
