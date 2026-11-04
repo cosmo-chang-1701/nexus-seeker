@@ -1,10 +1,12 @@
 """market_analysis/downside_risk.py：Sortino / MDD / VaR / CVaR 單一權威定義的手算驗證。"""
 
 import math
+from typing import Any
 
 import numpy as np
 import pytest
 
+from calibration.notif_report import _metrics, _pooled_sortino
 from market_analysis.downside_risk import (
     MIN_VAR_SAMPLES,
     annualized_downside_deviation,
@@ -137,3 +139,51 @@ def test_scaled_mix_downside_deviation_is_linear_in_weight() -> None:
     assert annualized_downside_deviation(mix, rf) == pytest.approx(
         w * annualized_downside_deviation(bench, rf)
     )
+
+
+def test_sortino_degenerate_cash_leg_rounding() -> None:
+    """現金腿日報酬存到 8 位小數後每期與 MAR（4.5%/252）僅差捨入殘差，年化下行差視同 0。"""
+    assert sortino_ratio([0.00017857] * 21, 0.045) == 0.0
+
+
+def test_sortino_degenerate_constant_above_mar() -> None:
+    """每期皆高於 MAR，下行差為 0，回傳 0.0。"""
+    assert sortino_ratio([0.001] * 21, 0.045) == 0.0
+
+
+def test_sortino_degenerate_boundary_above_eps_unchanged() -> None:
+    """年化下行差略高於容忍值（2 倍）時不視為 0，維持原本的非零比值。"""
+    mar = 0.045
+    gap = 2e-7 / math.sqrt(252)
+    returns = [mar / 252 - gap] * 252
+    dd = annualized_downside_deviation(returns, mar)
+    assert dd == pytest.approx(2e-7)
+    expected = (annualized_return(returns) - mar) / dd
+    result = sortino_ratio(returns, mar)
+    assert result != 0.0
+    assert result == pytest.approx(expected)
+
+
+def test_sortino_degenerate_notif_pooled_cash_leg() -> None:
+    """notif-report 的 follow 腿為現金時 Sortino 為 0，Δ 等於負的 hold Sortino 且有限。"""
+    cash = [0.00017857] * 21
+    hold = [0.012, -0.008, 0.02, -0.015, 0.006, 0.009, -0.004] * 3
+    events: list[dict[str, Any]] = [
+        {
+            "follow": list(cash),
+            "hold": list(hold),
+            "follow_mdd": 0.0,
+            "hold_mdd": 0.1,
+            "follow_total_return": 0.0,
+            "hold_total_return": 0.05,
+        }
+        for _ in range(2)
+    ]
+    assert _pooled_sortino(events, "follow") == 0.0
+    hold_sortino = _pooled_sortino(events, "hold")
+    assert hold_sortino != 0.0
+    delta = _metrics(events)["delta_sortino"]
+    assert delta is not None
+    assert math.isfinite(delta)
+    assert delta == pytest.approx(-hold_sortino)
+    assert abs(delta) < 100
