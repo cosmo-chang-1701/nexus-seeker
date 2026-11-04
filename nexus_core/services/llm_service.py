@@ -5,6 +5,7 @@ from openai import (
     APIConnectionError,
     APITimeoutError,
     AsyncOpenAI,
+    BadRequestError,
     InternalServerError,
     RateLimitError,
 )
@@ -55,6 +56,34 @@ if LLM_API_BASE:
 client = AsyncOpenAI(timeout=120.0, max_retries=0, **client_args)
 
 
+# 推理 token 計入 max_completion_tokens 上限，需保留推理空間
+LLM_MIN_COMPLETION_TOKENS: int = 4096
+
+# 模型拒絕自訂 temperature（400）後設為 True，之後的請求一律不再帶 temperature
+_temperature_unsupported: bool = False
+
+
+def _normalize_llm_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """正規化 LLM 請求參數（回傳新 dict，不修改呼叫端傳入的 dict）。
+
+    - 舊式 `max_tokens` 改為 `max_completion_tokens`（兩者並存時保留後者、丟棄前者）。
+    - 有 `max_completion_tokens` 時至少提高到 `LLM_MIN_COMPLETION_TOKENS`；
+      呼叫端兩者皆未傳時不新增。
+    - 已確認模型不支援自訂 temperature 時，移除 `temperature`。
+    """
+    out = dict(kwargs)
+    legacy = out.pop("max_tokens", None)
+    if legacy is not None and out.get("max_completion_tokens") is None:
+        out["max_completion_tokens"] = legacy
+    if out.get("max_completion_tokens") is not None:
+        out["max_completion_tokens"] = max(
+            int(out["max_completion_tokens"]), LLM_MIN_COMPLETION_TOKENS
+        )
+    if _temperature_unsupported:
+        out.pop("temperature", None)
+    return out
+
+
 # ==========================================
 # 🚦 LLM 請求閘門（併發上限、429 冷卻、單次重試）
 # ==========================================
@@ -68,11 +97,18 @@ async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
       `APIConnectionError`／`InternalServerError`：暫時性故障。兩類都在**離開 slot 後**
       重新排隊重試 1 次（`llm` 閘門背景不快速熔斷，冷卻中會排隊等待）。
     - `APITimeoutError`（`APIConnectionError` 的子類）不重試：逾時已佔用 120 秒。
+    - 送出前以 `_normalize_llm_kwargs` 正規化參數（max_tokens → max_completion_tokens）。
+    - `BadRequestError` 訊息含 temperature 且本次帶有 temperature：記住「不支援」旗標，
+      立即去除 temperature 重送一次（不計入暫時性重試）；其他 400 原樣拋出。
     """
+    global _temperature_unsupported
     gate = get_gate("llm")
     endpoint = f"chat_{kind}"
     last_exc: Exception | None = None
-    for attempt in range(2):
+    temp_retried = False
+    attempt = 0
+    while attempt < 2:
+        call_kwargs = _normalize_llm_kwargs(kwargs)
         async with gate.slot():
             c = _client if _client is not None else client
             fn = (
@@ -85,8 +121,21 @@ async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
             )
             started_at = clock()
             try:
-                result = await fn(**kwargs)
+                result = await fn(**call_kwargs)
             except APITimeoutError:
+                raise
+            except BadRequestError as e:
+                if (
+                    not temp_retried
+                    and "temperature" in str(e)
+                    and "temperature" in call_kwargs
+                ):
+                    temp_retried = True
+                    _temperature_unsupported = True
+                    logger.warning(
+                        "LLM 模型不支援自訂 temperature，之後的請求改用預設值"
+                    )
+                    continue
                 raise
             except RateLimitError as e:
                 api_budget.record_rate_limited("llm", endpoint)
@@ -105,6 +154,7 @@ async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
             logger.warning(
                 f"LLM 請求暫時性失敗，離開名額後重新排隊重試 1 次: {last_exc}"
             )
+        attempt += 1
     assert last_exc is not None
     raise last_exc
 
@@ -197,7 +247,7 @@ async def evaluate_reddit_sentiment(symbol: str, raw_text: str) -> str:
             ],
             response_format=RedditSentimentAnalysis,
             temperature=0.0,
-            max_tokens=50,
+            max_completion_tokens=50,
         )
         if completion.choices[0].message.parsed:
             return str(completion.choices[0].message.parsed.sentiment)

@@ -412,7 +412,7 @@ class EarningsSurpriseService:
             ],
             response_format=GuidanceExtraction,
             temperature=0.0,
-            max_tokens=LLM_GUIDANCE_MAX_TOKENS,
+            max_completion_tokens=LLM_GUIDANCE_MAX_TOKENS,
         )
         parsed = completion.choices[0].message.parsed if completion.choices else None
         if isinstance(parsed, GuidanceExtraction):

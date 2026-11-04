@@ -143,7 +143,7 @@ LLM 用戶端另設 `AsyncOpenAI(timeout=120.0, max_retries=0)`：逾時由 SDK 
 | `tsa`／`twse`／`tpex` | `services/alt_data_service.py`（TSA 客流頁、TWSE／TPEx 月營收 OpenAPI，依來源各走一個閘門） | 各自獨立冷卻；取代原本三者共用的 `asyncio.Semaphore(3)`；失敗一律回空 dict，不中斷其他產業鏈 |
 | `polymarket` | `services/polymarket_service.py`（`public-search`、CLOB `book`、Gamma `markets` 分頁與單筆查詢）與 `market_analysis/analyst_runners/sector_runner.py` | HTTP 429 → `trip()`；`min_interval=0.1s` 取代原本 `_initialize_order_books` 內的 `asyncio.sleep(0.1)`；冷卻中既有 `except Exception` 路徑回空或沿用快取。WebSocket 不納管（有自己的重連退避） |
 | `alpaca_rest` | `services/alpaca_stream_service.py::fetch_historical_bars` 的分頁請求 | HTTP 429 → `trip()`；`fetch_historical_bars` 既有 `except Exception` 回傳 `None`。WebSocket 不納管 |
-| `llm` | `services/llm_service.py` 的 `llm_parse`／`llm_create`（`attribution`、`fundamental_thesis`、`earnings_surprise_service`、`hedge_monitor_service` 與 `llm_service` 內 5 處皆已遷移） | `openai.RateLimitError` → `trip()`（Retry-After 取自回應標頭）；`RateLimitError`／`APIConnectionError`／`InternalServerError` 離開 slot 後重新排隊重試 1 次；`APITimeoutError` 不重試 |
+| `llm` | `services/llm_service.py` 的 `llm_parse`／`llm_create`（`attribution`、`fundamental_thesis`、`earnings_surprise_service`、`hedge_monitor_service` 與 `llm_service` 內 5 處皆已遷移） | `openai.RateLimitError` → `trip()`（Retry-After 取自回應標頭）；`RateLimitError`／`APIConnectionError`／`InternalServerError` 離開 slot 後重新排隊重試 1 次；`APITimeoutError` 不重試；送出前正規化參數（`max_tokens`→`max_completion_tokens`，下限 4096 以保留推理 token 空間）；`BadRequestError` 訊息含 temperature 時去除 temperature 立即重送一次並記住旗標（之後的請求直接不帶 temperature），其他 400 不重試 |
 
 ---
 
