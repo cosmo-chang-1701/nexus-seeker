@@ -63,7 +63,7 @@ def test_ten_bullet_cap_and_summary_line() -> None:
     out = _render_grouped_insights({"AAA": [f"• 🔹 第{i}則" for i in range(14)]})
     bullets = [ln for ln in out.splitlines() if ln.startswith("•")]
     assert len(bullets) <= 10
-    assert bullets[-1] == "• …其餘 5 則警示略"
+    assert bullets[-1] == "• …其餘 5 則警示略：AAA"
     assert out.count(_hdr("AAA")) == 1
     assert len(out) <= 920
 
@@ -80,7 +80,7 @@ def test_budget_truncation_never_orphans_header() -> None:
     out = _render_grouped_insights({"AAA": [long_a], "BBB": [long_b, long_b]})
     lines = out.splitlines()
     assert len(out) <= 920
-    assert lines[-1] == "• …其餘 2 則警示略"
+    assert lines[-1] == "• …其餘 2 則警示略：BBB"
     # BBB 的第一則放不下 -> 標頭不得單獨出現
     assert _hdr("BBB") not in out
     assert lines[0] == _hdr("AAA")
@@ -95,7 +95,7 @@ def test_header_not_followed_by_summary_only() -> None:
     for i, ln in enumerate(lines):
         if ln.startswith("\u001b[1;36m"):
             assert lines[i + 1].startswith("• ")
-    assert lines[-1] == "• …其餘 2 則警示略"
+    assert lines[-1] == "• …其餘 2 則警示略：BBB、CCC"
 
 
 def test_first_bullet_too_long_is_truncated_under_header() -> None:
@@ -420,3 +420,134 @@ async def test_button_reads_continuation_fields_but_not_legend() -> None:
     btn._view = view
     await btn.callback(interaction)
     assert cog._run_warning_symbols_hub.call_args.args[1] == ["AAA", "BBB", "CCC"]
+
+
+# ==========================================
+# 資料時效合併／溢出行名單
+# ==========================================
+
+
+def _stale_row(
+    sym: str, age_s: float = 7200.0, premarket: bool = False
+) -> dict[str, Any]:
+    row = _row(sym, 100.0, 100.0)
+    row["max_pain"] = {
+        "max_pain": 100.0,
+        "distance_pct": 0.0,
+        "is_stale": not premarket,
+        "calculation_mode": "OI",
+        "is_degraded": False,
+        "circuit_breaker_triggered": False,
+        "cache_age_seconds": age_s,
+    }
+    if premarket:
+        row["iv_metrics"]["is_premarket"] = True
+        row["gex_metrics"]["_is_stale_cache"] = True
+        row["gex_metrics"]["cache_age_seconds"] = age_s
+    return row
+
+
+def _all_insight_text(embeds: list[Any]) -> str:
+    return "\n".join(
+        _plain(str(f.value))
+        for e in embeds
+        for f in e.fields
+        if f.name
+        and ("即時聯動警示" in f.name or f.name == ANSI_CONTINUATION_FIELD_NAME)
+    )
+
+
+def test_freshness_consolidated_stale_rows_single_line() -> None:
+    syms = [f"ST{i}" for i in range(10)]
+    text = _all_insight_text(_build([_stale_row(s) for s in syms]))
+    assert text.count("• 🕓") == 1
+    assert "本列數據" not in text
+    line = next(ln for ln in text.splitlines() if ln.startswith("• 🕓"))
+    for s in syms:
+        assert s in line
+    headers = [ln for ln in text.splitlines() if re.fullmatch(r"ST\d", ln)]
+    assert headers == []
+    assert "資料時效" in text
+
+
+def test_freshness_consolidated_premarket_single_line() -> None:
+    text = _all_insight_text(
+        _build([_stale_row("NVDA", premarket=True), _stale_row("TSM", premarket=True)])
+    )
+    assert text.count("• 🌙") == 1
+    assert "• 🕓" not in text
+    line = next(ln for ln in text.splitlines() if ln.startswith("• 🌙"))
+    assert "NVDA、TSM" in line
+
+
+def test_freshness_consolidated_mixed_with_real_alert() -> None:
+    rows = [_stale_row("AAA"), _stale_row("BBB", premarket=True)]
+    text = _all_insight_text(_build(rows))
+    assert text.count("• 🕓") <= 1
+    assert text.count("• 🌙") <= 1
+    assert text.count("資料時效") == 1
+    assert "\n".join(_extract_warning_symbols(text)) == ""
+
+
+def test_overflow_names_single_field_lists_dropped_symbols() -> None:
+    groups = {
+        "AAA": ["• ⚠️ " + "甲" * 500],
+        "BBB": ["• ⚠️ " + "乙" * 500],
+        "CCC": ["• ⚠️ 丙"],
+        "資料時效": ["• 🕓 非即時：X 1小時前"],
+    }
+    out = _render_grouped_insights(groups)
+    last = out.splitlines()[-1]
+    assert last.startswith("• …其餘 ")
+    assert "：" in last
+    assert "BBB" in last
+    assert "資料時效" not in last
+    assert len(out) <= 920
+
+
+def test_overflow_names_only_freshness_dropped_keeps_plain_line() -> None:
+    groups = {
+        "AAA": [f"• ⚠️ 第{i}則" for i in range(9)],
+        "資料時效": ["• 🕓 非即時：A 1小時前", "• 🌙 盤前：B"],
+    }
+    out = _render_grouped_insights(groups)
+    assert out.splitlines()[-1] == "• …其餘 2 則警示略"
+
+
+def test_overflow_names_caps_at_six_with_deng() -> None:
+    groups = {f"S{i}": ["• ⚠️ " + "文" * 100] for i in range(20)}
+    out = _render_grouped_insights(groups)
+    last = out.splitlines()[-1]
+    assert last.endswith("等")
+    assert last.count("、") == 5
+    assert len(out) <= 920
+
+
+def test_overflow_names_multi_field_paths_fit_budget() -> None:
+    groups = _many_groups()
+    groups["資料時效"] = ["• 🕓 非即時：" + "、".join(_SYMS)]
+    bodies = _render_grouped_insights_fields(groups, 1400)
+    assert all(len(b) <= 1024 for b in bodies)
+    assert sum(len(b) for b in bodies) <= 1400
+    last = _plain(bodies[-1]).splitlines()[-1]
+    assert last.startswith("• …其餘 ")
+    assert "：" in last
+    assert "資料時效" not in last
+
+
+def test_extract_warning_overflow_names_parsed_and_freshness_ignored() -> None:
+    value = (
+        "```ansi\n"
+        + _hdr("AAA")
+        + "\n• ⚠️ x\n\n"
+        + _hdr("aaa")
+        + "\n• ⚠️ y\n"
+        + "• …其餘 3 則警示略：TSM、nvda、BRK.B等\n"
+        + "資料時效\n• 🕓 非即時：ZZZ 1小時前\n```"
+    )
+    assert _extract_warning_symbols(value) == ["AAA", "AAA", "TSM", "NVDA", "BRK.B"]
+
+
+def test_extract_warning_overflow_plain_line_adds_nothing() -> None:
+    value = "```ansi\n" + _hdr("AAA") + "\n• ⚠️ x\n• …其餘 2 則警示略\n```"
+    assert _extract_warning_symbols(value) == ["AAA"]

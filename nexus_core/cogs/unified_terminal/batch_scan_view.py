@@ -29,6 +29,8 @@ def _is_stale_result(r: dict) -> bool:
 
 
 _SYMBOL_HEADER_RE = re.compile(r"[A-Za-z0-9.\-]{1,10}")
+# 溢出行：「• …其餘 N 則警示略：TSM、NVDA等」
+_OVERFLOW_NAMES_RE = re.compile(r"•\s*…其餘\s*\d+\s*則警示略：(.+)")
 
 
 def _extract_warning_symbols(field_value: str) -> list[str]:
@@ -42,7 +44,16 @@ def _extract_warning_symbols(field_value: str) -> list[str]:
         if _SYMBOL_HEADER_RE.fullmatch(line):
             headers.append(line)
     if headers:
-        return [h.upper() for h in headers]
+        result = [h.upper() for h in headers]
+        for line in cleaned.splitlines():
+            m = _OVERFLOW_NAMES_RE.match(line.strip())
+            if not m:
+                continue
+            for name in m.group(1).strip().removesuffix("等").split("、"):
+                name = name.strip().upper()
+                if _SYMBOL_HEADER_RE.fullmatch(name) and name not in result:
+                    result.append(name)
+        return result
     # 舊格式（訊息仍在畫面上）："• 🚀 TSLA: ..."
     return [s.upper() for s in re.findall(r"•.*?([A-Za-z0-9.-]+):", cleaned)]
 
