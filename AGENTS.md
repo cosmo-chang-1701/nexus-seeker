@@ -53,6 +53,7 @@ All background schedules follow `US/Eastern` time. Heavy jobs require `_is_leade
 | **09:30–16:00 (:02,:17,:32,:47)** | `price_volume_alert_monitor` | 15m price-volume breakout (`tasks.loop(time=...)`, `Semaphore(3)`) |
 | **09:30–16:00 (every 30m, not clock-aligned)** | `monitor_order_telemetry_alignment_task` | Pending-order telemetry alignment (`telemetry_orders`) |
 | **09:30–16:00 (:05,:20,:35,:50)** | `monitor_real_portfolio_task` | Staggered portfolio Greeks & downside drawdown check (shared radar cache has no writer; fetches via `Semaphore(3)`) |
+| **09:30–16:00 (:03,:18,:33,:48)** | `IntradayScanPipeline` fast pass | Wall-break fast detection on cached deep-scan evals (`detect_only`: no anchor upsert / T+1 / new chain fetch) |
 | **09:30–16:00 (:10,:40)** | `IntradayScanPipeline` | 30m deep watchlist scan (GEX & Volume Profile POC, wall-break detection), `is_memory_safe()` gated |
 | **Every 5m (08:30/10:00/16:15)** | `fundamental_pipeline_clock` | Event clock patrol: 08:30/10:00 macro surprise & 16:15 Fed net liquidity regime (dry-run, no DM); also drives the five ClockJobs below |
 | **Weekdays 07:00–20:00 (hourly)** | `sec_filing_sync_hourly` (ClockJob) | SEC EDGAR direct sync for holdings+watchlist universe (Form 4, 8-K 4.02/5.02 governance flags, 13D activist gate log-only); new 8-K Item 2.02 (incl. backfill) triggers `EarningsSurpriseService` earnings surprise + guidance LLM extraction (record-only, no DM); background task, no overlap, dry-run by default |
