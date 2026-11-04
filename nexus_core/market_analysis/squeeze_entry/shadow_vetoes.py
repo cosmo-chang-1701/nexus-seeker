@@ -105,7 +105,10 @@ def _bps(value: Any) -> Optional[int]:
 
 
 def _credit_fields(credit: Any, today: date) -> dict[str, Any]:
-    """信用利差四個原始值與兩旗標；原始值不論是否過期都照記，過期只讓旗標為 None。"""
+    """信用利差四個原始值與兩旗標；原始值不論是否過期都照記，過期只讓旗標為 None。
+
+    觀測日晚於 today（age < 0，資料異常）同樣不可信：sv_hy_age_d 照記負值，旗標為 None。
+    """
     out: dict[str, Any] = {k: None for k in _CREDIT_FLAG_KEYS}
     out.update(sv_hy_oas=None, sv_hy_chg1m=None, sv_hy_age_d=None, sv_ig_oas=None)
     if not isinstance(credit, Mapping):
@@ -124,7 +127,7 @@ def _credit_fields(credit: Any, today: date) -> dict[str, Any]:
     except ValueError:
         out["sv_hy_age_d"] = None
     age = out["sv_hy_age_d"]
-    if age is None or age > SHADOW_CREDIT_STALE_DAYS:
+    if age is None or age < 0 or age > SHADOW_CREDIT_STALE_DAYS:
         return out
     if out["sv_hy_oas"] is not None:
         out["sv_f_hy_lvl"] = out["sv_hy_oas"] >= SHADOW_HY_OAS_BPS
@@ -340,4 +343,5 @@ def compute_shadow_vetoes(
     else:
         out["sv_any"] = None
     out.update(_credit_fields(credit_spreads, today))
-    return out
+    # 依 SHADOW_KEYS 順序輸出，使 features_json 的鍵序穩定
+    return {k: out[k] for k in SHADOW_KEYS}
