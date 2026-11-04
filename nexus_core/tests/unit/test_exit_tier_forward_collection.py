@@ -93,6 +93,19 @@ class TestRecordExitSignal:
             rec.record_exit_signal("AAA", "SL_STRUCTURAL", "LONG", None)  # type: ignore[arg-type]
         assert rec.pending_count() == 0
 
+    @pytest.mark.parametrize("symbol", ["BOXX", "boxx", "SGOV", "BIL", "SHV"])
+    def test_cash_equivalent_symbol_is_not_recorded(self, symbol: str) -> None:
+        with rec.evaluation_source("PORTFOLIO_MONITOR"):
+            rec.record_exit_signal(symbol, "SL_REGIME_FLIP", "LONG", _metrics())
+        assert rec.pending_count() == 0
+
+    def test_cash_equivalent_skip_keeps_other_symbols_recorded(self) -> None:
+        with rec.evaluation_source("PORTFOLIO_MONITOR"):
+            rec.record_exit_signal("BOXX", "SL_REGIME_FLIP", "LONG", _metrics())
+            rec.record_exit_signal("sqqq", "SL_REGIME_FLIP", "LONG", _metrics())
+        assert rec.pending_count() == 1
+        assert rec._BUFFER[0]["symbol"] == "SQQQ"
+
 
 # ---------------------------------------------------------------- 端到端掛點
 def _asset(**overrides: Any) -> Dict[str, Any]:

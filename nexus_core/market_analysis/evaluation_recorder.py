@@ -454,6 +454,13 @@ HOLD_EXIT_TIERS: frozenset[str] = frozenset(
 )
 
 
+# 現金等價標的：出場分層對其無意義，且會支配前向樣本，故不記錄。
+# 刻意為 wall_break_service／signal_calculator 排除清單的超集。
+_EXIT_RECORD_EXCLUDED_SYMBOLS: frozenset[str] = frozenset(
+    {"BOXX", "BIL", "SHV", "SGOV"}
+)
+
+
 def exit_evaluator_name(tier: str, position_side: str) -> str:
     """出場分層的 evaluator 名稱。
 
@@ -488,11 +495,14 @@ def record_exit_signal(
     依 direction 解讀為進場計畫的停損，對出場訊號語意不符。
     """
     try:
+        symbol_upper = symbol.upper()
+        if symbol_upper in _EXIT_RECORD_EXCLUDED_SYMBOLS:
+            return
         side = "SHORT" if position_side == "SHORT" else "LONG"
         opposite = "LONG" if side == "SHORT" else "SHORT"
         _append(
             {
-                "symbol": symbol.upper(),
+                "symbol": symbol_upper,
                 "evaluator": exit_evaluator_name(tier, side),
                 "direction": side if tier in HOLD_EXIT_TIERS else opposite,
                 "sub_mode": tier,
