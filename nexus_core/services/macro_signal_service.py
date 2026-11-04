@@ -48,6 +48,7 @@ from market_analysis.macro_signals import (
     confirm_state,
     credit_spread_widen,
     level_at_least,
+    spread_widen,
     tech_relative_weak,
     usable,
     vix_term_inversion,
@@ -218,6 +219,8 @@ def fred_readings(
         level_at_least(Indicator.FIN_STRESS, u("STLFSI4"), FIN_STRESS_THRESHOLD),
         claims_surge(u("ICSA")),
         credit_spread_widen(u("BAA10Y")),
+        spread_widen(Indicator.HY_OAS_WIDEN, u("BAMLH0A0HYM2")),
+        spread_widen(Indicator.IG_OAS_WIDEN, u("BAMLC0A0CM")),
         level_at_least(Indicator.SAHM_RULE, u("SAHMREALTIME"), SAHM_THRESHOLD),
         change_over(
             Indicator.FED_HIKE_CYCLE, u("DFF"), RATE_LOOKBACK_OBS, FED_HIKE_JUMP_PP

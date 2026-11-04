@@ -175,6 +175,10 @@ flowchart TD
 | `SHADOW_MIN_RR` | 2.0 | 影子旗標 `sv_f_rr`：牆位盈虧比 < 2；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_MAX_STOP_PCT` | 10.0 | 影子旗標 `sv_f_wide`：停損寬度 > 10%；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_MACRO_EVENT_HOURS` / `SHADOW_MACRO_POST_HOURS` | 48.0 / 2.0 | 影子旗標 `sv_f_mev`：高影響總經事件前 48 小時至公布後 2 小時；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_HY_OAS_BPS` | 400 | 影子旗標 `sv_f_hy_lvl`：HY OAS ≥ 400 bps（對齊 /market 黃色下限）；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_HY_CHG1M_BPS` | 50 | 影子旗標 `sv_f_hy_chg`：HY OAS 1M 變動 ≥ +50 bps；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_CREDIT_STALE_DAYS` | 5 | 信用利差觀測日距今超過 5 日曆天，兩個信用旗標為 null；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_CREDIT_TIMEOUT_SECONDS` | 1.5 | `_compute_shadow` 等待信用利差的秒數上限，逾時信用欄位為 null；非判定門檻，僅紀錄 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
@@ -207,7 +211,7 @@ flowchart TD
 
 `evaluate_squeeze_entry()` 的判定、參考停損與推播閘門**不變**。「日內衝突要不要否決 T3」改由 `record_squeeze_entry` 新增的 `65m_mv`／`15m_mv`／`intraday_conflict` 前向樣本決定（見 architecture/05 §5.17）。
 
-**影子否決（僅紀錄，判定不動）**：使用者提案的「微結構／盈虧比／總經一票否決」，既有證據不支持直接硬擋（§3.2），改為在 `record_squeeze_entry` 的 `features_json` 寫入七個影子旗標（`sv_f_ceil`、`sv_f_skew`、`sv_f_mp`、`sv_f_rr`、`sv_f_wide`、`sv_f_mev`、`sv_any`）與其原始值，由 `calibration forward-report` 比較「旗標成立」與「放行」兩組的 20 日報酬差。規則、欄位契約與判讀見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.18。`evaluate_squeeze_entry()` 的判定、停損與推播**不變**。
+**影子否決（僅紀錄，判定不動）**：使用者提案的「微結構／盈虧比／總經一票否決」，既有證據不支持直接硬擋（§3.2），改為在 `record_squeeze_entry` 的 `features_json` 寫入九個影子旗標（`sv_f_ceil`、`sv_f_skew`、`sv_f_mp`、`sv_f_rr`、`sv_f_wide`、`sv_f_mev`、`sv_any`，另加信用利差旗標 `sv_f_hy_lvl`、`sv_f_hy_chg`；後兩者不併入 `sv_any`）與其原始值，由 `calibration forward-report` 比較「旗標成立」與「放行」兩組的 20 日報酬差。規則、欄位契約與判讀見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.18。`evaluate_squeeze_entry()` 的判定、停損與推播**不變**。
 
 ## 6. 核心程式碼檔案路徑關聯
 

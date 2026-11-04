@@ -12,6 +12,7 @@ from market_analysis import evaluation_recorder as rec
 from market_analysis.squeeze_entry import shadow_vetoes as sv
 
 _TODAY = date(2026, 10, 29)
+_CREDIT = "services.credit_spread_service.get_credit_spreads"
 _NAV = "market_analysis.squeeze_entry.shadow_vetoes.nearest_macro_event_tte_hours"
 
 
@@ -20,6 +21,16 @@ def _clean_buffer() -> Iterator[None]:
     rec._BUFFER.clear()
     yield
     rec._BUFFER.clear()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_credit_spreads() -> Iterator[None]:
+    """影子否決的信用利差抓取一律 mock，測試不碰 FRED。"""
+    with patch(
+        _CREDIT,
+        AsyncMock(return_value={"hy": None, "ig": None}),
+    ):
+        yield
 
 
 def _calc(
@@ -533,3 +544,130 @@ async def test_shadow_exception_keeps_advice() -> None:
     assert _advice_tuple(broken) == _advice_tuple(baseline)
     assert len(rec._BUFFER) == 1
     assert not any(k.startswith("sv_") for k in _features(rec._BUFFER[0]))
+
+
+# ------------------------------------------------------------- 信用利差
+_CREDIT_KEYS = (
+    "sv_hy_oas",
+    "sv_hy_chg1m",
+    "sv_hy_age_d",
+    "sv_ig_oas",
+    "sv_f_hy_lvl",
+    "sv_f_hy_chg",
+)
+
+
+def _credit(bps: Any, chg: Any, obs: str, ig: Any = 95) -> dict[str, Any]:
+    return {
+        "hy": {"bps": bps, "change_1m_bps": chg, "obs_date": obs},
+        "ig": {"bps": ig, "change_1m_bps": 5, "obs_date": obs},
+    }
+
+
+def _calc_credit(credit: Any) -> dict[str, Any]:
+    return sv.compute_shadow_vetoes(
+        100.0, {}, 2.0, None, 10.0, None, True, date(2026, 11, 4), credit_spreads=credit
+    )
+
+
+def test_credit_flags_true_when_fresh_and_wide() -> None:
+    out = _calc_credit(_credit(420, 60, "2026-11-02"))
+    assert out["sv_f_hy_lvl"] is True and out["sv_f_hy_chg"] is True
+    assert out["sv_hy_age_d"] == 2 and out["sv_ig_oas"] == 95
+
+
+def test_credit_flags_false_when_narrow() -> None:
+    out = _calc_credit(_credit(343, 33, "2026-11-02"))
+    assert out["sv_f_hy_lvl"] is False and out["sv_f_hy_chg"] is False
+
+
+def test_credit_stale_keeps_raw_but_flags_none() -> None:
+    out = _calc_credit(_credit(420, 60, "2026-10-29"))
+    assert out["sv_hy_oas"] == 420 and out["sv_hy_chg1m"] == 60
+    assert out["sv_hy_age_d"] == 6
+    assert out["sv_f_hy_lvl"] is None and out["sv_f_hy_chg"] is None
+
+
+def test_credit_bad_obs_date_flags_none() -> None:
+    out = _calc_credit(_credit(420, 60, "garbage"))
+    assert out["sv_hy_oas"] == 420 and out["sv_hy_age_d"] is None
+    assert out["sv_f_hy_lvl"] is None and out["sv_f_hy_chg"] is None
+
+
+@pytest.mark.parametrize("credit", [None, {"hy": None, "ig": None}, "x", []])
+def test_credit_missing_all_none(credit: Any) -> None:
+    out = _calc_credit(credit)
+    assert all(out[k] is None for k in _CREDIT_KEYS)
+
+
+def test_credit_zero_preserved_and_invalid_none() -> None:
+    out = _calc_credit(_credit(0, 0, "2026-11-03", ig=0))
+    assert out["sv_hy_oas"] == 0 and out["sv_hy_chg1m"] == 0 and out["sv_ig_oas"] == 0
+    assert out["sv_f_hy_lvl"] is False and out["sv_f_hy_chg"] is False
+    bad = _calc_credit(_credit(True, float("nan"), "2026-11-03", ig="x"))
+    assert bad["sv_hy_oas"] is None and bad["sv_hy_chg1m"] is None
+    assert bad["sv_ig_oas"] is None
+    assert bad["sv_f_hy_lvl"] is None and bad["sv_f_hy_chg"] is None
+
+
+def test_credit_flags_do_not_affect_sv_any() -> None:
+    radar = {
+        "gex_profile_data": {"call_wall": 120.0, "put_wall": 98.0, "net_gex": 1e6},
+        "max_pain": {"max_pain": 100.0, "expiry": "2026-12-01"},
+    }
+
+    def run(credit: Any) -> dict[str, Any]:
+        return sv.compute_shadow_vetoes(
+            100.0, radar, 2.0, 97.0, 10.0, None, True, date(2026, 11, 4),
+            credit_spreads=credit,
+        )  # fmt: skip
+
+    base = run(None)
+    out = run(_credit(420, 60, "2026-11-02"))
+    assert out["sv_f_hy_lvl"] is True and out["sv_f_hy_chg"] is True
+    assert all(out[k] is False for k in sv._FLAG_KEYS)
+    assert out["sv_any"] is False and base["sv_any"] is False
+    assert set(sv._CREDIT_FLAG_KEYS) == {"sv_f_hy_lvl", "sv_f_hy_chg"}
+    assert sv.SHADOW_KEYS[-6:] == _CREDIT_KEYS
+
+
+@pytest.mark.asyncio
+async def test_credit_passed_into_shadow_record() -> None:
+    mock = AsyncMock(return_value=_credit(421, 61, "2026-11-02"))
+    with patch(_NAV, AsyncMock(return_value=(True, None))), patch(_CREDIT, mock):
+        await _run_squeeze(_RADAR_FULL, active=True)
+    mock.assert_awaited_once()
+    feats = _features(rec._BUFFER[0])
+    assert feats["sv_hy_oas"] == 421 and feats["sv_hy_chg1m"] == 61
+    assert feats["sv_ig_oas"] == 95
+
+
+@pytest.mark.asyncio
+async def test_credit_timeout_keeps_other_shadow_fields() -> None:
+    import asyncio
+
+    async def slow() -> dict[str, Any]:
+        await asyncio.sleep(1.0)
+        return _credit(421, 61, "2026-11-02")
+
+    with (
+        patch(_NAV, AsyncMock(return_value=(True, 3.0))),
+        patch(_CREDIT, slow),
+        patch.object(sv, "SHADOW_CREDIT_TIMEOUT_SECONDS", 0.01),
+    ):
+        await _run_squeeze(_RADAR_FULL, active=True)
+    feats = _features(rec._BUFFER[0])
+    assert feats["sv_cw"] == 104.0 and feats["sv_f_mev"] is True
+    assert all(feats[k] is None for k in _CREDIT_KEYS)
+
+
+@pytest.mark.asyncio
+async def test_credit_exception_keeps_other_shadow_fields() -> None:
+    with (
+        patch(_NAV, AsyncMock(return_value=(True, None))),
+        patch(_CREDIT, AsyncMock(side_effect=RuntimeError("boom"))),
+    ):
+        await _run_squeeze(_RADAR_FULL, active=True)
+    feats = _features(rec._BUFFER[0])
+    assert feats["sv_cw"] == 104.0
+    assert all(feats[k] is None for k in _CREDIT_KEYS)

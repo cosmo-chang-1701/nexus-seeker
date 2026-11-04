@@ -620,6 +620,8 @@ SHADOW_FLAG_KEYS: tuple[str, ...] = (
     "sv_f_wide",
     "sv_f_mev",
     "sv_any",
+    "sv_f_hy_lvl",
+    "sv_f_hy_chg",
 )
 SHADOW_FLAG_LABELS: dict[str, str] = {
     "sv_f_ceil": "封頂",
@@ -629,6 +631,8 @@ SHADOW_FLAG_LABELS: dict[str, str] = {
     "sv_f_wide": "停損過寬",
     "sv_f_mev": "總經事件 −2～+48h",
     "sv_any": "任一",
+    "sv_f_hy_lvl": "HY OAS ≥400bps",
+    "sv_f_hy_chg": "HY OAS 1M ≥+50bps",
 }
 # 每組（旗標成立／放行）最少事件數。PRE_CALIBRATION／僅紀錄，不參與判定
 SHADOW_MIN_N = 10

@@ -52,6 +52,8 @@ class Indicator(str, Enum):
     CREDIT_SPREAD_WIDEN = "credit_spread_widen"  # FRED BAA10Y
     SAHM_RULE = "sahm_rule"  # FRED SAHMREALTIME
     FED_HIKE_CYCLE = "fed_hike_cycle"  # FRED DFF
+    HY_OAS_WIDEN = "hy_oas_widen"  # FRED BAMLH0A0HYM2（高收益債 OAS，僅記錄）
+    IG_OAS_WIDEN = "ig_oas_widen"  # FRED BAMLC0A0CM（投資級債 OAS，僅記錄）
 
 
 TIER1: frozenset[Indicator] = frozenset(
@@ -61,7 +63,13 @@ TIER2: frozenset[Indicator] = frozenset(
     {Indicator.VIX_TERM_INVERSION, Indicator.FIN_STRESS, Indicator.CLAIMS_SURGE}
 )
 CONTROL: frozenset[Indicator] = frozenset(
-    {Indicator.CREDIT_SPREAD_WIDEN, Indicator.SAHM_RULE, Indicator.FED_HIKE_CYCLE}
+    {
+        Indicator.CREDIT_SPREAD_WIDEN,
+        Indicator.SAHM_RULE,
+        Indicator.FED_HIKE_CYCLE,
+        Indicator.HY_OAS_WIDEN,
+        Indicator.IG_OAS_WIDEN,
+    }
 )
 
 # ---------------------------------------------------------------------------
@@ -111,6 +119,8 @@ FRED_SERIES: dict[str, SeriesKind] = {
     "DFII10": "daily",
     "DGS2": "daily",
     "BAA10Y": "daily",
+    "BAMLH0A0HYM2": "daily",  # 高收益債 OAS（對照組，僅記錄）
+    "BAMLC0A0CM": "daily",  # 投資級債 OAS（對照組，僅記錄）
     "DFF": "daily",
     "STLFSI4": "weekly_stlfsi",
     "ICSA": "weekly_claims",
@@ -232,8 +242,12 @@ def change_over(
     )
 
 
-def credit_spread_widen(obs: Sequence[Observation]) -> IndicatorReading:
-    ind = Indicator.CREDIT_SPREAD_WIDEN
+def spread_widen(ind: Indicator, obs: Sequence[Observation]) -> IndicatorReading:
+    """利差擴大：最新值 ≥ 最近 126 筆均值 × 1.2 即亮（PRE_CALIBRATION，僅紀錄，不參與判定）。
+
+    BAA10Y、高收益債 OAS、投資級債 OAS 沿用同一組常數，僅屬對照組，
+    以便前向比較哪個利差序列先亮。
+    """
     if len(obs) < CREDIT_SPREAD_MA_OBS:
         return _missing(ind)
     window = obs[-CREDIT_SPREAD_MA_OBS:]
@@ -247,6 +261,10 @@ def credit_spread_widen(obs: Sequence[Observation]) -> IndicatorReading:
         last.obs_date,
         last.available_date,
     )
+
+
+def credit_spread_widen(obs: Sequence[Observation]) -> IndicatorReading:
+    return spread_widen(Indicator.CREDIT_SPREAD_WIDEN, obs)
 
 
 def level_at_least(
