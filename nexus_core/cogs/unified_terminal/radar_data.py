@@ -727,7 +727,7 @@ class RadarDataMixin:
         批次掃描的「⚡ 批次分析警示標的」按鈕）走的是完全獨立的
         `_fetch_single_symbol_data_raw`，那裡才是保證即時性的地方。
 
-        例外：`force_refresh=True`（僅供「更新逾 1 小時標的」按鈕等明確要求重算的
+        例外：`force_refresh=True`（僅供「更新逾 30 分鐘標的」按鈕等明確要求重算的
         呼叫端 opt-in）會強制重算 Max Pain、IV 指標與 PSQ（不沿用 squeeze 快取並
         重新寫回）；GEX 仍走 Edge Snapshot。預設 False 行為與上述完全一致。
         """

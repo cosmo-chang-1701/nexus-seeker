@@ -127,12 +127,12 @@ sequenceDiagram
     Discord->>View: 觸發 btn_return_panel 回調
     View->>Discord: interaction.response.edit_message(view=UnifiedRadarView，還原本次掃描的範圍／過濾條件／參數／標籤)
 
-    User->>Discord: 點擊 "🔄 更新逾 1 小時標的 (N)"
+    User->>Discord: 點擊 "🔄 更新逾 30 分鐘標的 (N)"
     Discord->>View: 觸發 BatchScanRefreshButton 回調
     View->>View: 記憶體閘門 is_memory_safe()（不足則回覆 ephemeral 錯誤並結束）
     View->>Discord: 停用所有元件並就地編輯（⏳ 更新中）
     Note over View: 以下整段於互動請求（interactive）情境內執行
-    View->>View: 僅對雷達資料 >1 小時或從未計算的標的，以 Semaphore(3)、總預算 540 秒呼叫 _fetch_sym_radar_data_slow(force_refresh=True)
+    View->>View: 僅對雷達資料 ≥30 分鐘或從未計算的標的，以 Semaphore(3)、總預算 540 秒呼叫 _fetch_sym_radar_data_slow(force_refresh=True)
     Note over View: GEX 仍跟隨 edge 快照（約 30 分鐘），不會被重算；失敗或逾時的標的僅記錄警告，保留舊資料年齡
     View->>View: _run_unified_scan() 以同一 state 重跑掃描（Embed 於背景執行緒建構）
     View->>Discord: interaction.edit_original_response(新 Embeds + 新 BatchScanPaginatedView)
