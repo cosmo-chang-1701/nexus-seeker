@@ -212,6 +212,46 @@ def test_flow_breakout() -> None:
     )
 
 
+PROD_BTO = "🟢 買入開倉 (BTO - Ask)"
+PROD_STO = "🔴 賣出開倉 (STO - Bid)"
+
+
+def test_flow_production_action_breakout_bto_pass() -> None:
+    u = {"type": "CALL", "action": PROD_BTO, "strike": 105.0}
+    assert gate(up(bar(close=103.0), opts(uoa=[u])), "flow").status == "PASS"
+
+
+def test_flow_production_action_breakout_sto_fail() -> None:
+    u = {"type": "call", "action": PROD_STO, "strike": 110.0}
+    g = gate(up(bar(close=103.0), opts(uoa=[u])), "flow")
+    assert g.status == "FAIL" and "STO Call" in g.detail
+
+
+def test_flow_production_action_breakdown_put_bto_pass() -> None:
+    u = {"type": "PUT", "action": PROD_BTO, "strike": 95.0, "intent": "Speculative"}
+    assert gate(down(bar(close=97.0), opts(uoa=[u])), "flow").status == "PASS"
+
+
+def test_flow_production_action_breakdown_sto_put_fail() -> None:
+    u = {"type": "PUT", "action": PROD_STO, "strike": 90.0}
+    g = gate(down(bar(close=97.0), opts(uoa=[u])), "flow")
+    assert g.status == "FAIL" and "STO Put" in g.detail
+
+
+def test_flow_production_action_midpoint_unknown() -> None:
+    for act in ("⚖️ MIDPOINT (CROSS)", "⚖️ MIDPOINT (Cross)"):
+        c = {"type": "CALL", "action": act, "strike": 105.0}
+        p = {"type": "PUT", "action": act, "strike": 95.0}
+        assert gate(up(bar(close=103.0), opts(uoa=[c])), "flow").status == "UNKNOWN"
+        assert gate(down(bar(close=97.0), opts(uoa=[p])), "flow").status == "UNKNOWN"
+
+
+def test_flow_production_action_breakout_candidate() -> None:
+    u = {"type": "CALL", "action": PROD_BTO, "strike": 105.0}
+    r = up(bar(close=103.0, open=101.0), opts(uoa=[u]))
+    assert r.verdict == "CANDIDATE" and gate(r, "flow").status == "PASS"
+
+
 def test_flow_breakdown() -> None:
     absorb = {"type": "PUT", "action": "STO", "strike": 90.0}
     panic = {"type": "PUT", "action": "BTO", "strike": 95.0, "intent": "Speculative"}
@@ -362,12 +402,12 @@ def test_t1_hysteresis() -> None:
         and "到期日已換檔" in c.detail
         and g.verdict == "UNDETERMINED"
     )
-    # 任一到期日未知則照常比較
+    # 任一到期日未知 → 不可比、UNKNOWN
     assert (
         chk(
             evaluate_t1(ev(exp=None), snap(gex_expiry="2026-12-18")), "hysteresis"
         ).status
-        == "PASS"
+        == "UNKNOWN"
     )
     assert (
         chk(evaluate_t1(ev(), snap(call_wall=None)), "hysteresis").status == "UNKNOWN"
@@ -397,6 +437,23 @@ def test_t1_hysteresis() -> None:
         chk(evaluate_t1(ev(), snap(gex_profile={110.0: 1.0})), "hysteresis").status
         == "PASS"
     )
+
+
+def test_t1_hysteresis_missing_expiry_event_none() -> None:
+    c = chk(evaluate_t1(ev(exp=None), snap()), "hysteresis")
+    assert c.status == "UNKNOWN" and "到期日不明" in c.detail
+
+
+def test_t1_hysteresis_missing_expiry_snapshot_none() -> None:
+    c = chk(evaluate_t1(ev(), snap(gex_expiry=None)), "hysteresis")
+    assert c.status == "UNKNOWN" and "到期日不明" in c.detail
+
+
+def test_t1_hysteresis_missing_expiry_both_none() -> None:
+    r = evaluate_t1(ev(exp=None), snap(gex_expiry=None))
+    assert chk(r, "hysteresis").status == "UNKNOWN"
+    # 到期日相同時行為不變
+    assert chk(evaluate_t1(ev(), snap()), "hysteresis").status == "PASS"
 
 
 def test_t1_hold() -> None:
