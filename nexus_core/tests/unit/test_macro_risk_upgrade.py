@@ -3296,3 +3296,15 @@ def test_escape_window_attribution_lists_all_factors_when_t_ge_3() -> None:
     )
     assert t_score == 3
     assert "(高油價+波動倒掛+結構承壓)" in status
+
+
+@pytest.fixture(autouse=True)
+def _no_credit_spread_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """信用利差抓取會連 FRED；此檔不測它，一律以空結果取代以避免任何網路呼叫。"""
+    import cogs.unified_terminal.utils as _ut
+
+    monkeypatch.setattr(
+        _ut,
+        "get_credit_spreads",
+        AsyncMock(return_value={"hy": None, "ig": None}),
+    )

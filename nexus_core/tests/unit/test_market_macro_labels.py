@@ -279,3 +279,102 @@ def test_complacency_premarket_without_trigger_prints_nothing(
 ) -> None:
     monkeypatch.setattr(market_embeds_mod, "_now_et", lambda: _et(2026, 10, 15, 8, 30))
     assert "低波自滿" not in _render(vix=21.0, us10y=5.23, wti=91.0)
+
+
+# ---- 信用利差（HY／IG OAS，僅呈現） ----
+
+_GREEN = "\u001b[1;32m"
+_YELLOW = "\u001b[1;33m"
+_RED = "\u001b[1;31m"
+
+
+def _spread(
+    bps: int, change: int | None = 5, obs_date: str = "2026-10-14"
+) -> dict[str, Any]:
+    return {"bps": bps, "change_1m_bps": change, "obs_date": obs_date}
+
+
+def _credit_line(text: str, label: str) -> str:
+    return next(ln for ln in text.splitlines() if label in ln)
+
+
+@pytest.mark.parametrize(
+    "bps,color",
+    [(399, _GREEN), (400, _YELLOW), (499, _YELLOW), (500, _RED)],
+)
+def test_credit_spread_threshold_hy(bps: int, color: str) -> None:
+    text = _render(credit_spreads={"hy": _spread(bps), "ig": _spread(94)})
+    assert f"{color}{bps} bps" in _credit_line(text, "HY OAS")
+
+
+@pytest.mark.parametrize(
+    "bps,color",
+    [(149, _GREEN), (150, _YELLOW), (199, _YELLOW), (200, _RED)],
+)
+def test_credit_spread_threshold_ig(bps: int, color: str) -> None:
+    text = _render(credit_spreads={"hy": _spread(343), "ig": _spread(bps)})
+    assert f"{color}{bps} bps" in _credit_line(text, "IG OAS")
+
+
+def test_credit_spread_row_format_and_stale_marker() -> None:
+    fresh = _render(credit_spreads={"hy": _spread(343, 29), "ig": _spread(94, None)})
+    hy = _credit_line(fresh, "HY OAS")
+    assert "343 bps" in hy and "(1M +29)" in hy and "10/14" in hy
+    assert "逾" not in hy
+    ig = _credit_line(fresh, "IG OAS")
+    assert "(1M" not in ig  # 變動為 None 時省略
+    stale = _render(
+        credit_spreads={"hy": _spread(343, -3, "2026-10-08"), "ig": _spread(94)}
+    )
+    hy_stale = _credit_line(stale, "HY OAS")
+    assert "(1M -3)" in hy_stale and "[逾 7 天]" in hy_stale
+    # 恰好 5 天不標示
+    edge = _render(credit_spreads={"hy": _spread(343, 1, "2026-10-10"), "ig": None})
+    assert "逾" not in _credit_line(edge, "HY OAS")
+
+
+def test_credit_spread_missing_side_and_key() -> None:
+    text = _render(credit_spreads={"hy": None, "ig": _spread(94)})
+    assert "獲取數據失敗" in _credit_line(text, "HY OAS")
+    assert "94 bps" in _credit_line(text, "IG OAS")
+    # 完全缺 key（舊快取 payload）與型別異常皆不得崩潰
+    payloads: list[Any] = [{}, None, "bad"]
+    for payload in payloads:
+        out = _render(credit_spreads=payload)
+        assert "獲取數據失敗" in _credit_line(out, "HY OAS")
+        assert "獲取數據失敗" in _credit_line(out, "IG OAS")
+    no_key = _text(build_market_macro_overview_embed(_macro()))
+    assert "HY OAS" in no_key and "IG OAS" in no_key
+    bad_side = _render(credit_spreads={"hy": {"bps": "x"}, "ig": {}})
+    assert "獲取數據失敗" in _credit_line(bad_side, "HY OAS")
+
+
+def test_credit_spread_field_length_worst_case() -> None:
+    embed = build_market_macro_overview_embed(
+        _macro(
+            credit_spreads={
+                "hy": _spread(1999, -1999, "2026-09-01"),
+                "ig": _spread(999, -999, "2026-09-01"),
+            },
+            core_is_expired=True,
+            core_cache_age_seconds=99 * 86400,
+            fedwatch_is_fallback=True,
+            fedwatch_details={
+                "meeting_date": "2026-12-09",
+                "prob_maintain": 0.0,
+                "prob_hike": 100.0,
+                "prob_cut": 0.0,
+                "prob_hike_25": 50.0,
+                "prob_hike_50": 50.0,
+                "ladder_saturated": True,
+                "source": "fallback",
+            },
+            fedwatch_probability=1.0,
+            rrp_change_30d=-99.9,
+            sahm_rule=0.5,
+            sahm_rule_date="2026-09-01",
+        )
+    )
+    field = next(f for f in embed.fields if "流動性與總經" in str(f.name))
+    assert len(str(field.value)) <= 1024
+    assert len(embed) <= 6000

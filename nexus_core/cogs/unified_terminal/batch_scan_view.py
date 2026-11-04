@@ -4,14 +4,17 @@ from typing import Any, List, Optional
 import discord
 import logging
 from services import market_data_service
+from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 from cogs.embed_builder import create_error_embed
 from cogs.embed_builders._ansi_utils import _clean_ansi
 from cogs.embed_builders._embed_helpers import ANSI_CONTINUATION_FIELD_NAME
 
 logger = logging.getLogger(__name__)
 
-# 雷達快照（radar_terminal_{SYM}）超過此秒數即視為過期，可由「更新逾 1 小時標的」重算
-RADAR_REFRESH_STALE_SECONDS = 3600
+# 雷達快照（radar_terminal_{SYM}）達此秒數即視為過期，可由「更新逾 30 分鐘標的」重算。
+# 直接沿用表格 🕓 過期標記的門檻（edge 快照最大年齡），使「列出現 🕓」⇔「按鈕會更新它」。
+RADAR_REFRESH_STALE_SECONDS = _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+_RADAR_REFRESH_STALE_MINUTES = RADAR_REFRESH_STALE_SECONDS // 60
 # 更新按鈕：同時重算的標的數與整體時間預算（秒）
 _REFRESH_CONCURRENCY = 3
 _REFRESH_BUDGET_SECONDS = 540
@@ -20,12 +23,14 @@ _FOOTER_MAX_FAILED_SYMBOLS = 10
 
 
 def _is_stale_result(r: dict) -> bool:
-    """雷達資料年齡為 None（從未計算）或超過一小時即視為過期。"""
+    """雷達資料年齡為 None（從未計算）或達 30 分鐘門檻即視為過期（與表格 🕓 規則一致）。"""
     age = (r.get("_freshness") or {}).get("radar_age_seconds")
-    return age is None or age > RADAR_REFRESH_STALE_SECONDS
+    return age is None or age >= RADAR_REFRESH_STALE_SECONDS
 
 
 _SYMBOL_HEADER_RE = re.compile(r"[A-Za-z0-9.\-]{1,10}")
+# 溢出行：「• …其餘 N 則警示略：TSM、NVDA等」
+_OVERFLOW_NAMES_RE = re.compile(r"•\s*…其餘\s*\d+\s*則警示略：(.+)")
 
 
 def _extract_warning_symbols(field_value: str) -> list[str]:
@@ -39,7 +44,16 @@ def _extract_warning_symbols(field_value: str) -> list[str]:
         if _SYMBOL_HEADER_RE.fullmatch(line):
             headers.append(line)
     if headers:
-        return [h.upper() for h in headers]
+        result = [h.upper() for h in headers]
+        for line in cleaned.splitlines():
+            m = _OVERFLOW_NAMES_RE.match(line.strip())
+            if not m:
+                continue
+            for name in m.group(1).strip().removesuffix("等").split("、"):
+                name = name.strip().upper()
+                if _SYMBOL_HEADER_RE.fullmatch(name) and name not in result:
+                    result.append(name)
+        return result
     # 舊格式（訊息仍在畫面上）："• 🚀 TSLA: ..."
     return [s.upper() for s in re.findall(r"•.*?([A-Za-z0-9.-]+):", cleaned)]
 
@@ -136,7 +150,7 @@ class BatchScanWarningButton(discord.ui.Button):
 
 class BatchScanRefreshButton(discord.ui.Button):
     """
-    按鈕：僅重算（慢速路徑）雷達資料超過 1 小時的標的，再就地重跑同一次掃描。
+    按鈕：僅重算（慢速路徑）雷達資料達 30 分鐘門檻的標的，再就地重跑同一次掃描。
 
     只會重算標的自身的快照（UOA、Max Pain、IV、PSQ 等）；GEX 仍跟隨 edge 快照
     （約 30 分鐘更新），不會因此重算。
@@ -144,9 +158,9 @@ class BatchScanRefreshButton(discord.ui.Button):
 
     def __init__(self, stale_count: int):
         if stale_count > 0:
-            label = f"🔄 更新逾 1 小時標的 ({stale_count})"
+            label = f"🔄 更新逾 {_RADAR_REFRESH_STALE_MINUTES} 分鐘標的 ({stale_count})"
         else:
-            label = "✅ 資料皆在 1 小時內"
+            label = f"✅ 資料皆在 {_RADAR_REFRESH_STALE_MINUTES} 分鐘內"
         super().__init__(
             label=label,
             style=discord.ButtonStyle.secondary,
@@ -293,7 +307,7 @@ class BatchScanPaginatedView(discord.ui.View):
         warning_button.row = 1
         self.add_item(warning_button)
 
-        # 「更新逾 1 小時標的」按鈕：需帶入掃描結果、state 與 user_id 才能重跑同一次掃描
+        # 「更新逾 30 分鐘標的」按鈕：需帶入掃描結果、state 與 user_id 才能重跑同一次掃描
         if scan_results is not None and state is not None and user_id is not None:
             self.refresh_button = BatchScanRefreshButton(len(self.stale_symbols()))
             self.add_item(self.refresh_button)
@@ -302,7 +316,7 @@ class BatchScanPaginatedView(discord.ui.View):
         self._update_button_states()
 
     def stale_symbols(self) -> List[str]:
-        """回傳雷達資料過期（>1 小時或從未計算）的標的代號（去重、保持順序）。"""
+        """回傳雷達資料過期（≥30 分鐘或從未計算）的標的代號（去重、保持順序）。"""
         symbols: List[str] = []
         for r in self.scan_results or []:
             sym = str(r.get("symbol") or "").upper()

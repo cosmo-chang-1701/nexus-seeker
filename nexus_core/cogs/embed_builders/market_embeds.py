@@ -526,10 +526,41 @@ def _strip_sym_prefix(text: str, sym: str) -> str:
     return text.replace(f"{sym}: ", "", 1) if text else ""
 
 
+_INSIGHTS_FRESHNESS_KEY = "資料時效"
+_INSIGHTS_OVERFLOW_MAX_NAMES = 6
+
+
+def _overflow_line(dropped: int, syms: list[str]) -> str:
+    """「其餘 N 則警示略」行；有被捨棄的標的時附上名單（至多 6 檔，超過加「等」）。"""
+    base = f"• …其餘 {dropped} 則警示略"
+    names = [s for s in syms if s and s != _INSIGHTS_FRESHNESS_KEY]
+    if not names:
+        return base
+    shown = names[:_INSIGHTS_OVERFLOW_MAX_NAMES]
+    more = "等" if len(names) > len(shown) else ""
+    return f"{base}：{'、'.join(shown)}{more}"
+
+
+def _overflow_reserve(groups: dict[str, list[str]]) -> int:
+    """預留溢出行的最大長度（含換行；名單以最長的 6 個標的名估算）。"""
+    total = sum(1 for items in groups.values() for it in items if it.strip())
+    lens = sorted(
+        (len(k) for k in groups if k != _INSIGHTS_FRESHNESS_KEY), reverse=True
+    )
+    worst = ["X" * n for n in lens[: _INSIGHTS_OVERFLOW_MAX_NAMES + 1]]
+    return len("\n" + _overflow_line(total, worst))
+
+
 def _layout_grouped_insights(
-    groups: dict[str, list[str]], budget: int, max_bullets: int
+    groups: dict[str, list[str]],
+    budget: int,
+    max_bullets: int,
+    dropped_syms: list[str] | None = None,
 ) -> tuple[list[str], int]:
-    """依字數／則數預算排版分組警示，回傳 (行列表, 被捨棄的則數)。"""
+    """依字數／則數預算排版分組警示，回傳 (行列表, 被捨棄的則數)。
+
+    dropped_syms（可選）會被填入有警示被捨棄的標的（依原順序、去重）。
+    """
     lines: list[str] = []
     cur_len = 0
     kept = 0
@@ -544,6 +575,8 @@ def _layout_grouped_insights(
                 continue
             if full:
                 dropped += 1
+                if dropped_syms is not None and sym not in dropped_syms:
+                    dropped_syms.append(sym)
                 continue
             sep = 0 if not lines else (1 if header_emitted else 2)
             head_cost = 0 if header_emitted else len(header) + 1
@@ -559,6 +592,8 @@ def _layout_grouped_insights(
                     header_emitted = True
                 else:
                     dropped += 1
+                    if dropped_syms is not None and sym not in dropped_syms:
+                        dropped_syms.append(sym)
                 continue
             if not header_emitted:
                 if lines:
@@ -577,14 +612,17 @@ def _render_grouped_insights(groups: dict[str, list[str]]) -> str:
         groups, _INSIGHTS_MAX_CHARS, _INSIGHTS_MAX_BULLETS
     )
     if dropped:
-        # 為「其餘 N 則警示略」行預留字數與則數
-        total = sum(1 for items in groups.values() for it in items if it.strip())
-        reserve = len(f"\n• …其餘 {total} 則警示略")
+        # 為「其餘 N 則警示略：名單」行預留字數與則數
+        reserve = _overflow_reserve(groups)
+        dropped_syms: list[str] = []
         lines, dropped = _layout_grouped_insights(
-            groups, _INSIGHTS_MAX_CHARS - reserve, _INSIGHTS_MAX_BULLETS - 1
+            groups,
+            _INSIGHTS_MAX_CHARS - reserve,
+            _INSIGHTS_MAX_BULLETS - 1,
+            dropped_syms,
         )
         if dropped:
-            lines.append(f"• …其餘 {dropped} 則警示略")
+            lines.append(_overflow_line(dropped, dropped_syms))
     if not lines:
         return _INSIGHTS_EMPTY_TEXT
     return "\n".join(lines)
@@ -618,7 +656,11 @@ def _insight_tier(bullet: str) -> int:
 
 
 def _pack_insight_fields(
-    kept: list[tuple[str, str, int]], dropped: int, max_fields: int, total_budget: int
+    kept: list[tuple[str, str, int]],
+    dropped: int,
+    max_fields: int,
+    total_budget: int,
+    dropped_syms: list[str] | None = None,
 ) -> list[str] | None:
     """將已選定的警示（依標的順序、標的內依嚴重度）切成最多 max_fields 個欄位本文。
 
@@ -638,7 +680,7 @@ def _pack_insight_fields(
 
     entries: list[tuple[str, str]] = [(sym, text) for sym, text, _ in kept]
     if dropped:
-        entries.append(("", f"• …其餘 {dropped} 則警示略"))
+        entries.append(("", _overflow_line(dropped, dropped_syms or [])))
     for sym, text in entries:
         header = f"\u001b[1;36m{sym}\u001b[0m" if sym else ""
         while True:
@@ -722,8 +764,13 @@ def _render_grouped_insights_fields(
     limit = min(len(ranked), _INSIGHTS_MULTI_MAX_BULLETS)
     for n in range(1, limit + 1):
         dropped = len(ranked) - n
+        dropped_rows = sorted(ranked[n:], key=lambda r: r[2])
+        dropped_names: list[str] = []
+        for r in dropped_rows:
+            if r[3] not in dropped_names:
+                dropped_names.append(r[3])
         packed = _pack_insight_fields(
-            arrange(ranked[:n]), dropped, max_fields, total_budget
+            arrange(ranked[:n]), dropped, max_fields, total_budget, dropped_names
         )
         if packed is None:
             break
@@ -873,6 +920,9 @@ def build_radar_scan_embed(
 
         # 依標的分組（保持列順序；同標的多列合併為同一組）
         insights_by_sym: dict[str, list[str]] = {}
+        # 資料時效備註改為整頁合併一行（不再逐標的各佔一則警示）
+        stale_notes: list[tuple[str, str]] = []
+        premarket_syms: list[str] = []
         md_lines = []
         page_has_degraded_row = False
         page_has_proxy_put_wall = False
@@ -1972,16 +2022,16 @@ def build_radar_scan_embed(
                     _stale_ages.append(uoa_age_seconds)
                 display_age = max(_stale_ages) if _stale_ages else mp_age_seconds
                 age_note = format_cache_age_suffix(display_age)
-                tag = age_note if age_note else " [快取 / API 降級]"
                 if is_benign_premarket_staleness:
-                    insights.append(
-                        f"• 🌙 本列數據{tag} [盤前/前日收盤]，選擇權市場尚未開盤，"
-                        "Max Pain/GEX/UOA 為前一交易日收盤快照，屬正常現象。"
-                    )
+                    if sym not in premarket_syms:
+                        premarket_syms.append(sym)
                 else:
-                    insights.append(
-                        f"• 🕓 本列數據{tag}，Max Pain/GEX/UOA 判讀可能非即時，請謹慎採信灰階建議。"
+                    _pos = age_note.find("更新於")
+                    compact_age = (
+                        age_note[_pos + 3 :].rstrip(")") if _pos >= 0 else "降級"
                     )
+                    if all(sym != _s for _s, _ in stale_notes):
+                        stale_notes.append((sym, compact_age))
             if price_missing or (
                 is_data_stale_or_degraded and not is_benign_premarket_staleness
             ):
@@ -2078,6 +2128,19 @@ def build_radar_scan_embed(
         insight_available = _INSIGHTS_PAGE_BUDGET - (
             len(embed) + len(legend_name) + len(legend_value)
         )
+        insights_by_sym = {k: v for k, v in insights_by_sym.items() if v}
+        freshness_bullets: list[str] = []
+        if stale_notes:
+            freshness_bullets.append(
+                "• 🕓 非即時（Max Pain/GEX/UOA，請謹慎採信灰階建議）："
+                + "、".join(f"{_s} {_a}" for _s, _a in stale_notes)
+            )
+        if premarket_syms:
+            freshness_bullets.append(
+                "• 🌙 盤前沿用前日收盤快照（屬正常）：" + "、".join(premarket_syms)
+            )
+        if freshness_bullets:
+            insights_by_sym[_INSIGHTS_FRESHNESS_KEY] = freshness_bullets
         insight_bodies = _render_grouped_insights_fields(
             insights_by_sym, insight_available
         )
@@ -2254,6 +2317,45 @@ def _complacency_note(
     ):
         return " └─ ⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀"
     return f" └─ ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
+
+
+# PRE_CALIBRATION／僅呈現：信用利差（ICE BofA OAS，bps）著色門檻，不接任何閘門。
+_HY_OAS_YELLOW_BPS = 400  # 高收益債利差：黃色下限
+_HY_OAS_RED_BPS = 500  # 高收益債利差：紅色下限
+_IG_OAS_YELLOW_BPS = 150  # 投資級債利差：黃色下限
+_IG_OAS_RED_BPS = 200  # 投資級債利差：紅色下限
+_CREDIT_SPREAD_STALE_DAYS = 5  # 觀測日距今超過此日曆天數即標示逾期
+
+
+def _format_credit_spread(
+    label: str, side: Any, yellow_bps: int, red_bps: int, today: Any
+) -> str:
+    """單行信用利差；缺值（含格式異常）顯示獲取數據失敗。僅呈現。"""
+    fail = f" ├─ {label}: \u001b[1;31m獲取數據失敗\u001b[0m"
+    if not isinstance(side, dict):
+        return fail
+    try:
+        bps = int(side["bps"])
+        obs = datetime.strptime(str(side["obs_date"]), "%Y-%m-%d").date()
+    except (KeyError, TypeError, ValueError):
+        return fail
+    if bps >= red_bps:
+        color = "\u001b[1;31m"
+    elif bps >= yellow_bps:
+        color = "\u001b[1;33m"
+    else:
+        color = "\u001b[1;32m"
+    change = side.get("change_1m_bps")
+    change_str = f" (1M {int(change):+d})" if isinstance(change, (int, float)) else ""
+    stale_str = (
+        f" \u001b[1;33m[逾 {(today - obs).days} 天]\u001b[0m"
+        if (today - obs).days > _CREDIT_SPREAD_STALE_DAYS
+        else ""
+    )
+    return (
+        f" ├─ {label}: {color}{bps} bps\u001b[0m{change_str} "
+        f"{obs.strftime('%m/%d')}{stale_str}"
+    )
 
 
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
@@ -2575,10 +2677,27 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
 
+    raw_credit = macro_data.get("credit_spreads")
+    credit_spreads: dict[str, Any] = raw_credit if isinstance(raw_credit, dict) else {}
+
     macro_lines = [
         f" ├─ WTI 原油價格: {wti_val_str}",
         f" ├─ 聯準會逆回購 (RRP): {rrp_val_str}",
         f" ├─ 聯準會資產負債表: {fed_bal_str}",
+        _format_credit_spread(
+            "高收益債利差 (HY OAS)",
+            credit_spreads.get("hy"),
+            _HY_OAS_YELLOW_BPS,
+            _HY_OAS_RED_BPS,
+            _now_et().date(),
+        ),
+        _format_credit_spread(
+            "投資級債利差 (IG OAS)",
+            credit_spreads.get("ig"),
+            _IG_OAS_YELLOW_BPS,
+            _IG_OAS_RED_BPS,
+            _now_et().date(),
+        ),
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",

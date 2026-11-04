@@ -1003,3 +1003,15 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
         mock_unified_mp.assert_awaited_once_with(
             "NVDA", expiry=target_expiry, force_refresh=True
         )
+
+
+@pytest.fixture(autouse=True)
+def _no_credit_spread_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """信用利差抓取會連 FRED；此檔不測它，一律以空結果取代以避免任何網路呼叫。"""
+    import cogs.unified_terminal.utils as _ut
+
+    monkeypatch.setattr(
+        _ut,
+        "get_credit_spreads",
+        AsyncMock(return_value={"hy": None, "ig": None}),
+    )
