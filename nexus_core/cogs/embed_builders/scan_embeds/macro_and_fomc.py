@@ -24,19 +24,26 @@ def create_macro_scan_embed(
     # 指數／殖利率水位不可能 <= 0；舊上游以 0.0 代表缺值，一併視為缺失
     dxy = _positive_float_or_none(macro_data.get("dxy"))
     tnx = _positive_float_or_none(macro_data.get("tnx"))
+    # 2Y／利差來自已儲存的 FRED 觀測，缺值僅顯示 `--`，不影響降級判定
     us2y = _positive_float_or_none(macro_data.get("us2y"))
+    spread = _to_float_or_none(macro_data.get("curve_spread"))
+    from market_analysis.analyst_runners.macro_runner import format_obs_date
+
+    us2y_md = format_obs_date(macro_data.get("us2y_date")) if us2y is not None else ""
+    curve_md = (
+        format_obs_date(macro_data.get("curve_date")) if spread is not None else ""
+    )
+    us2y_label = f"US2Y {us2y_md} 2Y" if us2y_md else "US2Y 2Y 公債"
     vix = _positive_float_or_none(macro_data.get("vix"))
     tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
     vix_change = _to_float_or_none(macro_data.get("vix_change"))
-    degraded = dxy is None or tnx is None or us2y is None or vix is None
+    degraded = dxy is None or tnx is None or vix is None
     embed = NexusEmbed(
         title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)"
         + (" [降級模式]" if degraded else ""),
         color=base_color,
         timestamp=datetime.now(timezone.utc),
     )
-
-    spread = tnx - us2y if tnx is not None and us2y is not None else None
 
     # Consolidate into monospace table；VIX 缺值時不做燈號判斷
     if vix is None:
@@ -46,7 +53,7 @@ def create_macro_scan_embed(
 
     lines = ["```ansi"]
     headers = ["指標", "數值", "變動 / 備註"]
-    widths = [14, 8, 14]
+    widths = [14, 8, 18]
     lines.append(
         " | ".join(
             _pad_string(h, w, "left" if i == 0 else "right")
@@ -65,7 +72,7 @@ def create_macro_scan_embed(
     )
     # 3. US2Y
     lines.append(
-        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string('利差 ' + fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%'), widths[2], 'right')}"
+        f"{_pad_string(us2y_label, widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string((curve_md + ' ' if curve_md else '') + '利差 ' + fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%'), widths[2], 'right')}"
     )
     # 4. VIX
     if vix is None:

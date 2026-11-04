@@ -4562,10 +4562,10 @@ def test_build_pre_market_briefing_embed_vix_ansi_and_macro_status() -> None:
     # 2. 驗證四維度宏觀狀態解讀 (ANSI 包裹)
     status_field = field_dict.get("✅ 宏觀狀態", "")
     assert status_field.startswith("```ansi")
-    assert "低波動沉睡區間" in status_field
+    assert "低於 15" in status_field
     assert "10Y 4.25%" in status_field
     assert "DXY 104.25" in status_field
-    assert "指標全數合規" in status_field
+    assert "未觸發總經警示" in status_field
 
     # 3. 驗證自選股無財報風險安全欄位 (ANSI 包裹)
     safe_field = field_dict.get("✅ 自選股財報季雷達", "")
@@ -4697,7 +4697,7 @@ def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
     # 驗證巨觀狀態動態解讀
     status_field = field_dict.get("✅ 巨觀狀態", "")
     assert "📈 **波動率環境**" in status_field
-    assert "常態健康位階" in status_field
+    assert "常態區間" in status_field
 
 
 def test_macro_report_ansi_no_fake_heading_from_zero_width_space() -> None:

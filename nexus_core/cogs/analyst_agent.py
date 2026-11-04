@@ -187,17 +187,6 @@ class AnalystAgent(commands.Cog):
 
         # 1. 宏觀資料
         macro_data = await self._fetch_macro_data()
-        if isinstance(macro_data, tuple):
-            vix, dxy, tnx = macro_data
-            macro_data = {
-                "vix": vix,
-                "vix_change": 0.0,
-                "dxy": dxy,
-                "tnx": tnx,
-                "tnx_change_bps": 0.0,
-                "us2y": tnx - 0.2,
-            }
-
         macro_alerts = macro_runner.build_macro_alerts(macro_data)
 
         # 2. 財報預警資料
