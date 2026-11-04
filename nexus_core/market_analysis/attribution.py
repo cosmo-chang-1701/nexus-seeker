@@ -199,7 +199,7 @@ class AttributionEngine:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                max_tokens=250,
+                max_completion_tokens=250,
             )
             content = response.choices[0].message.content
             return str(content.strip()) if content else "AI 歸因分析生成空白。"

@@ -249,3 +249,108 @@ async def test_llm_injected_client_is_used() -> None:
     fake.beta.chat.completions.parse = AsyncMock(return_value="injected")
     assert await llm_parse(_client=fake, model="m") == "injected"
     fake.beta.chat.completions.parse.assert_awaited_once_with(model="m")
+
+
+@pytest.fixture(autouse=True)
+def _reset_temperature_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    from services import llm_service
+
+    monkeypatch.setattr(llm_service, "_temperature_unsupported", False)
+
+
+def _bad_request(message: str) -> Any:
+    from openai import BadRequestError
+
+    req, httpx = _httpx_pair()
+    resp = httpx.Response(400, request=req)
+    return BadRequestError(message, response=resp, body=None)
+
+
+async def test_max_tokens_translated_and_floored() -> None:
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        return_value="ok",
+    ) as m_create:
+        caller_kwargs: dict[str, Any] = {"model": "m", "max_tokens": 50}
+        await llm_create(**caller_kwargs)
+        assert caller_kwargs == {"model": "m", "max_tokens": 50}
+        kw = m_create.await_args_list[-1].kwargs
+        assert kw["max_completion_tokens"] == 4096
+        assert "max_tokens" not in kw
+
+        await llm_create(model="m", max_completion_tokens=8000)
+        kw = m_create.await_args_list[-1].kwargs
+        assert kw["max_completion_tokens"] == 8000
+        assert "max_tokens" not in kw
+
+        await llm_create(model="m", max_tokens=50, max_completion_tokens=6000)
+        kw = m_create.await_args_list[-1].kwargs
+        assert kw["max_completion_tokens"] == 6000
+        assert "max_tokens" not in kw
+
+        await llm_create(model="m")
+        kw = m_create.await_args_list[-1].kwargs
+        assert "max_completion_tokens" not in kw
+        assert "max_tokens" not in kw
+
+
+async def test_temperature_unsupported_dropped_and_remembered() -> None:
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[
+            _bad_request("Unsupported value: 'temperature' does not support 0.0"),
+            "ok1",
+            "ok2",
+        ],
+    ) as m_create:
+        assert await llm_create(model="m", temperature=0.0) == "ok1"
+        assert m_create.await_count == 2
+        assert "temperature" in m_create.await_args_list[0].kwargs
+        assert "temperature" not in m_create.await_args_list[1].kwargs
+
+        assert await llm_create(model="m", temperature=0.0) == "ok2"
+        assert m_create.await_count == 3
+        assert "temperature" not in m_create.await_args_list[2].kwargs
+
+
+async def test_other_bad_request_not_retried() -> None:
+    from openai import BadRequestError
+
+    from services import rate_gate
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[_bad_request("Invalid schema"), "never"],
+    ) as m_create:
+        with pytest.raises(BadRequestError):
+            await llm_create(model="m", temperature=0.0)
+    assert m_create.await_count == 1
+    assert not rate_gate.get_gate("llm").in_cooldown()
+    assert rate_gate.get_gate("llm").in_flight() == 0
+
+
+def test_no_production_max_tokens_kwarg() -> None:
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    offenders: list[str] = []
+    for path in root.rglob("*.py"):
+        rel = path.relative_to(root).parts
+        if rel[0] in ("tests", ".venv"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and any(
+                kw.arg == "max_tokens" for kw in node.keywords
+            ):
+                offenders.append(f"{path}:{node.lineno}")
+    assert offenders == []

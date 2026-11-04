@@ -25,6 +25,7 @@ from services.earnings_surprise_service import (
     EarningsSurpriseService,
 )
 from services.fundamental_providers import ConsensusData
+from services.llm_service import LLM_MIN_COMPLETION_TOKENS
 
 _FIXTURES = Path(__file__).parent / "fixtures" / "sec"
 _AAPL_DIR = "https://www.sec.gov/Archives/edgar/data/320193/000032019326000005"
@@ -415,9 +416,11 @@ async def test_extract_guidance_via_llm_token_budget() -> None:
         llm_client.beta.chat.completions.parse = parse_mock
         res = await service._extract_guidance_via_llm("AAPL", "ACC", "text")
     assert res is not None
-    assert (
-        parse_mock.await_args_list[-1].kwargs["max_tokens"] == LLM_GUIDANCE_MAX_TOKENS
+    kwargs = parse_mock.await_args_list[-1].kwargs
+    assert kwargs["max_completion_tokens"] == max(
+        LLM_GUIDANCE_MAX_TOKENS, LLM_MIN_COMPLETION_TOKENS
     )
+    assert "max_tokens" not in kwargs
 
 
 @pytest.mark.asyncio

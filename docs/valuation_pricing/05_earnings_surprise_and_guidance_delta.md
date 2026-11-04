@@ -186,7 +186,7 @@ flowchart TD
 | `MAGNITUDE_MISMATCH_RATIO` | `100.0` (float) | 前後指引數值量綱差距上限，超過即判為單位不一致 |
 | `CONFIDENCE_EVIDENCE_ITEMS` | `7.0` (float) | 信心分數證據項總數（4 維態度 + 3 項數值） |
 | `PRESS_RELEASE_CHAR_CAP` | `15_000` (int) | 清洗後新聞稿純文字送入 LLM 之字元上限 |
-| `LLM_GUIDANCE_MAX_TOKENS` | `2_400` (int) | 指引擷取 LLM 輸出 token 上限 |
+| `LLM_GUIDANCE_MAX_TOKENS` | `2_400` (int) | 指引擷取 LLM 輸出 token 上限（以 `max_completion_tokens` 送出，並由 LLM 閘門提高到至少 4096） |
 | `CALENDAR_ALIGN_WINDOW_DAYS` | `5` (int) | 財報日曆發布日與 SEC 受理日之最大對齊誤差（日） |
 | `REPORT_LAG_MAX_DAYS` | `100` (int) | 財季期末至財報發布之最長間隔（`company_earnings` 對齊用） |
 | `EARNINGS_PENDING_RETRY_LOOKBACK_DAYS` | `14` (int) | PENDING 重試回看窗口（日曆日，約 10 個交易日），以 `created_at` 首次寫入時間界定 |
