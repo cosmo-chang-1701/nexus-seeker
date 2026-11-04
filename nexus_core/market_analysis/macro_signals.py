@@ -118,6 +118,8 @@ SeriesKind = Literal[
 FRED_SERIES: dict[str, SeriesKind] = {
     "DFII10": "daily",
     "DGS2": "daily",
+    # 僅記錄：供盤前簡報計算 10Y−2Y 利差，不參與任何指標判定
+    "DGS10": "daily",
     "BAA10Y": "daily",
     "BAMLH0A0HYM2": "daily",  # 高收益債 OAS（對照組，僅記錄）
     "BAMLC0A0CM": "daily",  # 投資級債 OAS（對照組，僅記錄）

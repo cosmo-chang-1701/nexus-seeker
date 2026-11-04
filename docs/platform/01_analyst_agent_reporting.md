@@ -20,6 +20,13 @@ Analyst Agent 是與「Watchlist 30 分鐘深度心跳」（見 [`../architectur
 - **14 天前瞻財報風險視窗**：盤前財報掃描視窗固定為 **14 天**（`warning_days = 14`），直接併入宏觀報告。標的來源為每位使用者持倉＋自選股的聯集，透過 `calendar_service.get_symbol_earnings_batch()` 解析，過濾至 `0 <= days_left <= 14`，並由 `TradingService.get_pre_market_alerts_data()`（`services/trading_service.py`）依到期日升冪排序——此步驟回傳**完整、無上限**的警示清單，不做 triage／深度掃描篩選。
 - **無顯示上限**：`build_pre_market_briefing_embed()`（`cogs/embed_builders/order_embeds/pre_market_briefing.py`）將財報雷達渲染為每 **10 檔標的**一個 Discord embed field（維持在 Discord 1024 字元欄位值上限內），超過一個 chunk 時在欄位名稱標註 `(第 X/Y 批)`。所有符合條件的標的均會顯示，不會被靜默捨棄。
 
+- **宏觀區塊（`macro_runner.fetch_macro_data()` / `build_macro_alerts()` / `build_macro_healthy_status()`）**：
+  - **資料來源**：`DXY`、`^TNX`（10Y）、`^VIX` 走 yfinance（`call_yf`）；**2Y 殖利率與 10Y−2Y 利差**不抓網路，改讀 16:15 ET FRED 排程已存入 `macro_series_observation` 的 `DGS2`／`DGS10`（`database/macro_signal_log.load_observations`，經 `asyncio.to_thread`）。2Y 取 `available_date <= 今日` 的最新值並標註觀測日（`MM/DD`）；利差取 DGS10 − DGS2 **同一觀測日**的最新值。觀測日距今超過 `_FRED_YIELD_STALE_DAYS = 5` 個日曆天（`# PRE_CALIBRATION`）、DB 讀取例外或序列缺值時為 `None`，簡報以 `--` 顯示（讀取失敗記 warning，不中斷簡報）。`DGS10` 僅供記錄與此利差，不參與任何總經指標判定；不得再由 `tnx` 推算 2Y 或利差。
+  - **部署後首次簡報**：`DGS10` 於本次改動才加入 `FRED_SERIES`，沒有回補，故部署後第一份盤前簡報的利差顯示 `--`，直到下一次 16:15 ET FRED 排程存入 DGS10 為止。
+  - **五條警示規則**：（1）曲線深度倒掛：利差 < -0.2；（2）曲線接近解除倒掛：-0.1 ≤ 利差 ≤ 0.2 且 10Y 當日變動 < 0 bps（兩條皆含利差數值與觀測日，利差缺值時略過）；（3）10Y > 4.5% 且當日升幅 > 8 bps；（4）VIX > 20 且單日升幅 > 2.0；（5）DXY > 105。
+  - **文字原則**：僅陳述已檢查的事實與風險（例如「高 Beta／高估值成長股波動可能放大」），**不得建議減碼、降低曝險或轉進防禦型資產**（使用者為長期持有，系統僅提供顧問資訊）；狀態文字只描述實際檢查過的數值（VIX 分級、10Y 水位與 bp 變動、利差與觀測日或「2Y 無資料」、DXY ≤ 103 溫和／103–105 偏強），指引為「未觸發總經警示，維持既有持有計畫」。利差缺值有兩種寫法：2Y 本身缺值寫「2Y 無資料」；2Y 有值但利差缺值寫「利差無資料（10Y 未入庫或與 2Y 無同日資料）」。2Y 觀測日標在表格列標籤 `US2Y MM/DD 2Y`，利差備註標的是利差的觀測日 `curve_date`（兩者可不同日）。
+  - **降級規則**：標題 `[盤前數據未更新/降級模式]`（孤兒 `create_macro_scan_embed` 為 `[降級模式]`）只由 `dxy`、`tnx`、`vix` 缺值觸發；僅 2Y／利差缺失時只在該列顯示 `--`，不降級、也不改變宏觀狀態判讀。
+
 ### 2.2 孤兒路徑（未接入生產排程，僅供測試）
 `market_analysis/analyst_runners/earnings_runner.py::run_premarket_earnings()` 實作了一套更重量級的管線（標的分析數上限 10 檔、`days_left <= 2` 深/淺掃描分流、透過 `SentimentEngine.calculate_pcr` 計算 PCR、公司檔案解析、LLM 上下文剪裁、`asyncio.Semaphore(3)` 速率限制），輸出獨立的 `create_earnings_report_embed()`（`📊 Nexus Seeker 盤前財報與估值調整`）。`AnalystAgent.run_premarket_earnings` 只是它的一層薄包裝，但**目前排程、slash command 或任何 `dispatch_*` 方法都沒有呼叫它**——只有 `tests/unit/test_analyst_agent.py` 會執行到。應視為未接線的遺留程式碼，而非生產環境實際的財報雷達行為，除非未來重新接回某條實際的派送路徑。
 

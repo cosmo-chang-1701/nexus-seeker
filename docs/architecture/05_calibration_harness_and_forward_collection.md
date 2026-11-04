@@ -574,7 +574,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 | 序列 | 可用日規則 |
 | :--- | :--- |
-| 每日序列（DFII10、DGS2、BAA10Y、BAMLH0A0HYM2、BAMLC0A0CM、DFF） | 觀測日的下一個平日（FRED 次一營業日更新） |
+| 每日序列（DFII10、DGS2、DGS10、BAA10Y、BAMLH0A0HYM2、BAMLC0A0CM、DFF） | 觀測日的下一個平日（FRED 次一營業日更新） |
 | STLFSI4 | 觀測日（週五）+ 6 天（隔週四公布） |
 | ICSA | 觀測日（週六，週結束）+ 5 天（隔週四公布） |
 | SAHMREALTIME | 次月 10 日，遇週末順延（實際於次月第一個週五就業報告後可算，採保守近似） |
