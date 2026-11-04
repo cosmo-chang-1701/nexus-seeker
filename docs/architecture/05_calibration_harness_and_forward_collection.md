@@ -559,16 +559,19 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 | 對照組（只記錄，不參與判定） | `credit_spread_widen` | FRED `BAA10Y` | $\ge$ 126 筆均值 $\times 1.2$ |
 | | `sahm_rule` | FRED `SAHMREALTIME` | $\ge 0.50$ |
 | | `fed_hike_cycle` | FRED `DFF` | 126 筆觀測變化 $\ge +1.0$ pp |
+| | `hy_oas_widen` | FRED `BAMLH0A0HYM2`（高收益債 OAS，每日） | $\ge$ 126 筆均值 $\times 1.2$ |
+| | `ig_oas_widen` | FRED `BAMLC0A0CM`（投資級債 OAS，每日） | $\ge$ 126 筆均值 $\times 1.2$ |
 
 - 第二層任一亮 → `WORST`（建議 BOXX）；否則第一層任一亮 → `CAUTION`（建議 VOO）；否則 `GOOD`（100% 科技股）。資料不足（`flag = NULL`）不視為亮起。
 - 狀態需連續 5 個交易日（`CONFIRM_DAYS`）成立才切換；同時記錄未經確認的原始狀態。上線初期未滿 5 天且無前一確認狀態時，確認狀態為 `NULL`（暖機期）。
+- HY／IG OAS 在 FRED 僅約 3 年歷史（2023-11 起），僅記錄、不參與判定；與 `credit_spread_widen`（BAA10Y）並列，以前向比較哪個利差序列先亮。
 - 科技池刻意使用固定清單、不讀使用者持倉，前向資料才能跨時間比較。
 
 **前視防護（資料可用日）**：每筆 FRED 觀測同時存「所屬日期」與「可用日」，判定只用 `available_date <= 當天` 的觀測（`available_date_for()`，寧晚勿早）：
 
 | 序列 | 可用日規則 |
 | :--- | :--- |
-| 每日序列（DFII10、DGS2、BAA10Y、DFF） | 觀測日的下一個平日（FRED 次一營業日更新） |
+| 每日序列（DFII10、DGS2、BAA10Y、BAMLH0A0HYM2、BAMLC0A0CM、DFF） | 觀測日的下一個平日（FRED 次一營業日更新） |
 | STLFSI4 | 觀測日（週五）+ 6 天（隔週四公布） |
 | ICSA | 觀測日（週六，週結束）+ 5 天（隔週四公布） |
 | SAHMREALTIME | 次月 10 日，遇週末順延（實際於次月第一個週五就業報告後可算，採保守近似） |
@@ -579,7 +582,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 1. 16:15 ET `dynamic_after_market_report`（leader-only、`is_memory_safe()`、`ENABLE_MACRO_SIGNAL_LOG`）呼叫 `services/macro_signal_service.run_macro_signal_job()`。
 2. 以 `fredgraph.csv` 抓取最近 3 年的 FRED 序列（經 `services/single_flight.py`；單一序列失敗不影響其他序列），寫入 `macro_series_observation`（v084）。
 3. 以 `get_vix_term_structure()` 取 VIX 期限結構；以 `get_history_df()`（`Semaphore(3)`）取科技池與 VOO 日線。
-4. 計算 9 個指標、原始與確認三態，單一交易寫入 `macro_signal_log`（唯一鍵：交易日 + 指標）與 `macro_regime_log`（唯一鍵：交易日），`INSERT OR REPLACE`，同日重跑冪等。任何一步失敗只記 log、不拋出，不影響同一排程的其他任務。
+4. 計算 11 個指標、原始與確認三態，單一交易寫入 `macro_signal_log`（唯一鍵：交易日 + 指標）與 `macro_regime_log`（唯一鍵：交易日），`INSERT OR REPLACE`，同日重跑冪等。任何一步失敗只記 log、不拋出，不影響同一排程的其他任務。
 
 **離線報告**：開發機以 `python -m calibration macro-forward-report --snapshot-db <快照>`，只讀快照、不寫 DB、不改參數。輸出已確認三態的區段（起訖日、天數）、各指標亮起時段，以及每段狀態開始後 20／60 個交易日科技池（等權）、VOO、BOXX 的報酬與「科技池 − VOO」差。**判讀**：`CAUTION`／`WORST` 開始後科技池相對轉弱，代表訊號領先；科技池反而較強，代表訊號落後（在反彈期才防守，正是歷史回測中三態切換失敗的原因）。
 

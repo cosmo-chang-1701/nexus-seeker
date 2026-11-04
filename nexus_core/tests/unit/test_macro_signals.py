@@ -5,8 +5,11 @@ from datetime import date, timedelta
 from market_analysis.macro_signals import (
     CONFIRM_DAYS,
     STATE_CAUTION,
+    CONTROL,
     STATE_GOOD,
     STATE_WORST,
+    TIER1,
+    TIER2,
     Indicator,
     IndicatorReading,
     Observation,
@@ -17,6 +20,7 @@ from market_analysis.macro_signals import (
     confirm_state,
     credit_spread_widen,
     level_at_least,
+    spread_widen,
     tech_relative_weak,
     usable,
     vix_term_inversion,
@@ -103,6 +107,39 @@ def test_credit_spread_widen_ratio() -> None:
     assert credit_spread_widen(obs).flag is True
     assert credit_spread_widen(_daily([2.0] * 126)).flag is False
     assert credit_spread_widen(_daily([2.0] * 10)).flag is None
+
+
+def test_oas_indicators_are_control_only() -> None:
+    oas = {Indicator.HY_OAS_WIDEN, Indicator.IG_OAS_WIDEN}
+    assert oas <= CONTROL
+    assert not (oas & (TIER1 | TIER2))
+
+
+def test_oas_lit_does_not_change_classify_raw() -> None:
+    readings = [
+        _reading(i, i in (Indicator.HY_OAS_WIDEN, Indicator.IG_OAS_WIDEN))
+        for i in Indicator
+    ]
+    assert classify_raw(readings) == STATE_GOOD
+
+
+def test_oas_spread_widen_threshold_and_insufficient() -> None:
+    lit = spread_widen(Indicator.HY_OAS_WIDEN, _daily([2.0] * 125 + [2.6]))
+    assert lit.indicator == Indicator.HY_OAS_WIDEN and lit.flag is True
+    assert spread_widen(Indicator.IG_OAS_WIDEN, _daily([2.0] * 126)).flag is False
+    # 比值略低於 1.2：1.0×125 + x，x/均值 < 1.2
+    assert (
+        spread_widen(Indicator.IG_OAS_WIDEN, _daily([1.0] * 125 + [1.19])).flag is False
+    )
+    short = spread_widen(Indicator.HY_OAS_WIDEN, _daily([2.0] * 125))
+    assert short.flag is None and short.value is None
+
+
+def test_oas_credit_spread_widen_wrapper_unchanged() -> None:
+    obs = _daily([2.0] * 125 + [2.6])
+    a = credit_spread_widen(obs)
+    b = spread_widen(Indicator.CREDIT_SPREAD_WIDEN, obs)
+    assert a == b and a.indicator == Indicator.CREDIT_SPREAD_WIDEN
 
 
 def test_claims_surge_vs_52_week_low() -> None:

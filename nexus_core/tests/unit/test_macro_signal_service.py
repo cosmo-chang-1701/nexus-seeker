@@ -122,6 +122,26 @@ def test_fred_readings_respect_availability() -> None:
     assert readings[Indicator.REAL_YIELD_JUMP].flag is None  # 無資料
 
 
+def test_fred_readings_oas_included_and_availability() -> None:
+    """HY／IG OAS 兩個對照組指標有回傳，且可用日過濾生效。"""
+    today = date(2026, 10, 9)
+    start = date(2026, 1, 1)
+    hy = [
+        Observation(start + timedelta(days=i), 1.0, start + timedelta(days=i + 1))
+        for i in range(125)
+    ]
+    # 最新一筆（亮起）可用日在今天之後 → 不得計入；HY 因此資料不足 126 筆
+    hy.append(Observation(date(2026, 10, 8), 1.5, date(2026, 10, 12)))
+    obs = {"BAMLH0A0HYM2": hy}
+    readings = {r.indicator: r for r in svc.fred_readings(obs, today)}
+    assert Indicator.HY_OAS_WIDEN in readings and Indicator.IG_OAS_WIDEN in readings
+    assert readings[Indicator.HY_OAS_WIDEN].flag is None
+    assert readings[Indicator.IG_OAS_WIDEN].flag is None
+    # 可用日已到 → 亮起
+    later = {r.indicator: r for r in svc.fred_readings(obs, date(2026, 10, 12))}
+    assert later[Indicator.HY_OAS_WIDEN].flag is True
+
+
 @pytest.mark.asyncio
 async def test_job_skipped_when_not_leader(db_conn: Any) -> None:
     bot = MagicMock()
@@ -146,8 +166,8 @@ async def test_job_writes_log_without_notifications(db_conn: Any) -> None:
     cur = db_conn.cursor()
     raw = cur.execute("SELECT raw_state FROM macro_regime_log").fetchone()[0]
     assert raw == "CAUTION"
-    # 9 個指標全部記錄（FRED 7 個 + 市場 1 個此處 mock 為 1 個）
-    assert cur.execute("SELECT COUNT(*) FROM macro_signal_log").fetchone()[0] == 8
+    # 11 個指標全部記錄（FRED 9 個 + 市場 1 個此處 mock 為 1 個）
+    assert cur.execute("SELECT COUNT(*) FROM macro_signal_log").fetchone()[0] == 10
     bot.queue_dm.assert_not_called()
 
 
