@@ -19,7 +19,7 @@ from cogs.embed_builders._embed_helpers import (
 
 
 # 1. macro healthy status / degraded
-def test_macro_embed_us2y_zero_or_none_is_degraded() -> None:
+def test_macro_embed_us2y_missing_is_not_degraded() -> None:
     from cogs.embed_builders.scan_embeds.macro_and_fomc import create_macro_scan_embed
 
     base = {
@@ -31,9 +31,11 @@ def test_macro_embed_us2y_zero_or_none_is_degraded() -> None:
     }
     for us2y in (0.0, None):
         embed = create_macro_scan_embed({**base, "us2y": us2y})
-        assert "[降級模式]" in (embed.title or "")
+        assert "[降級模式]" not in (embed.title or "")
         text = "\n".join(str(f.value) for f in embed.fields)
-        assert "曲線平穩" not in text
+        assert "曲線平穩" not in text and "2Y 無資料" in text
+    degraded = create_macro_scan_embed({**base, "vix": None})
+    assert "[降級模式]" in (degraded.title or "")
 
 
 def test_build_macro_healthy_status_never_crashes_on_missing() -> None:
@@ -51,7 +53,7 @@ def test_build_macro_healthy_status_never_crashes_on_missing() -> None:
             "us2y": None,
         }
     )
-    assert "曲線平穩" not in out and "缺失" in out
+    assert "曲線平穩" not in out and "2Y 無資料" in out
     assert "變動" not in out
     out0 = build_macro_healthy_status(
         {
@@ -72,9 +74,11 @@ def test_build_macro_healthy_status_never_crashes_on_missing() -> None:
             "tnx": 4.2,
             "tnx_change_bps": 2.0,
             "us2y": 3.9,
+            "curve_spread": 0.30,
+            "curve_date": "2026-11-02",
         }
     )
-    assert "利差 +0.30%" in full and "全數合規" in full
+    assert "利差 +0.30%，11/02" in full and "未觸發總經警示" in full
 
 
 # 2. ASK_HALF positions

@@ -4562,10 +4562,10 @@ def test_build_pre_market_briefing_embed_vix_ansi_and_macro_status() -> None:
     # 2. 驗證四維度宏觀狀態解讀 (ANSI 包裹)
     status_field = field_dict.get("✅ 宏觀狀態", "")
     assert status_field.startswith("```ansi")
-    assert "低波動沉睡區間" in status_field
+    assert "低於 15" in status_field
     assert "10Y 4.25%" in status_field
     assert "DXY 104.25" in status_field
-    assert "指標全數合規" in status_field
+    assert "未觸發總經警示" in status_field
 
     # 3. 驗證自選股無財報風險安全欄位 (ANSI 包裹)
     safe_field = field_dict.get("✅ 自選股財報季雷達", "")
@@ -4697,7 +4697,7 @@ def test_create_macro_scan_embed_vix_ansi_and_healthy_status() -> None:
     # 驗證巨觀狀態動態解讀
     status_field = field_dict.get("✅ 巨觀狀態", "")
     assert "📈 **波動率環境**" in status_field
-    assert "常態健康位階" in status_field
+    assert "常態區間" in status_field
 
 
 def test_macro_report_ansi_no_fake_heading_from_zero_width_space() -> None:
@@ -4787,29 +4787,22 @@ def test_nexus_embed_overflow_no_longer_shows_warning_text() -> None:
 
 
 def test_create_fomc_escape_window_embed_title_and_layout() -> None:
-    """驗證宏觀逃頂推演矩陣 Embed 標題與版面格式"""
+    """驗證宏觀逃頂 Embed 標題與版面格式（無逃頂窗口／位移天數欄位）"""
     embed = create_fomc_escape_window_embed(
-        prob=0.85,
-        direction="前移",
-        shift_days=5,
-        adjusted_start="10月中旬 (10-15)",
-        adjusted_end="10月下旬 (10-25)",
+        direction="收縮",
         reason="緊縮警戒測試",
         is_fallback=False,
         tier_title="🚨 收縮警戒 (Tightening Contraction)",
-        tactical_directive="提前防禦撤退指引",
+        tactical_directive="考慮 SPY 保護性 Put",
         factors_summary=[("FOMC 利率定價 (FedWatch)", "🚨 鷹派加息")],
-        was_auto_rolled=False,
     )
 
-    assert embed.title == "📅 宏觀逃頂：總經流動性撤退推演矩陣 (Macro Escape Matrix)"
+    assert embed.title == "🧭 宏觀逃頂：總經流動性狀態與逃頂評分 (Macro Escape Matrix)"
+    assert str(embed.footer.text).endswith("Risk Engine | 宏觀流動性狀態與逃頂評分")
     field_dict: dict[str, str] = {str(f.name): str(f.value or "") for f in embed.fields}
     assert "🧭 宏觀流動性狀態" in field_dict
     assert "🚨 收縮警戒" in field_dict["🧭 宏觀流動性狀態"]
-    assert "🔄 逃頂窗口調整方向" in field_dict
-    assert "前移 5 個交易日" in field_dict["🔄 逃頂窗口調整方向"]
-    assert "📆 調整後逃頂窗口預期" in field_dict
-    assert "10月中旬 (10-15)" in field_dict["📆 調整後逃頂窗口預期"]
+    assert not any("窗口" in name for name in field_dict)
     assert "🎯 戰術行動指引" in field_dict
     assert "```ansi" in field_dict["🎯 戰術行動指引"]
     assert "💡 推演邏輯與風控分析" in field_dict

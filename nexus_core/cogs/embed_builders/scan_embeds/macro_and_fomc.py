@@ -1,4 +1,4 @@
-"""巨觀環境掃描與 FOMC 逃頂窗口 Embed 建構函式。"""
+"""巨觀環境掃描與宏觀逃頂（流動性狀態＋逃頂評分）Embed 建構函式。"""
 
 import discord
 
@@ -24,19 +24,26 @@ def create_macro_scan_embed(
     # 指數／殖利率水位不可能 <= 0；舊上游以 0.0 代表缺值，一併視為缺失
     dxy = _positive_float_or_none(macro_data.get("dxy"))
     tnx = _positive_float_or_none(macro_data.get("tnx"))
+    # 2Y／利差來自已儲存的 FRED 觀測，缺值僅顯示 `--`，不影響降級判定
     us2y = _positive_float_or_none(macro_data.get("us2y"))
+    spread = _to_float_or_none(macro_data.get("curve_spread"))
+    from market_analysis.analyst_runners.macro_runner import format_obs_date
+
+    us2y_md = format_obs_date(macro_data.get("us2y_date")) if us2y is not None else ""
+    curve_md = (
+        format_obs_date(macro_data.get("curve_date")) if spread is not None else ""
+    )
+    us2y_label = f"US2Y {us2y_md} 2Y" if us2y_md else "US2Y 2Y 公債"
     vix = _positive_float_or_none(macro_data.get("vix"))
     tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
     vix_change = _to_float_or_none(macro_data.get("vix_change"))
-    degraded = dxy is None or tnx is None or us2y is None or vix is None
+    degraded = dxy is None or tnx is None or vix is None
     embed = NexusEmbed(
         title="🌍 巨觀環境與隔夜市場掃描 (Macro Scan)"
         + (" [降級模式]" if degraded else ""),
         color=base_color,
         timestamp=datetime.now(timezone.utc),
     )
-
-    spread = tnx - us2y if tnx is not None and us2y is not None else None
 
     # Consolidate into monospace table；VIX 缺值時不做燈號判斷
     if vix is None:
@@ -46,7 +53,7 @@ def create_macro_scan_embed(
 
     lines = ["```ansi"]
     headers = ["指標", "數值", "變動 / 備註"]
-    widths = [14, 8, 14]
+    widths = [14, 8, 18]
     lines.append(
         " | ".join(
             _pad_string(h, w, "left" if i == 0 else "right")
@@ -65,7 +72,7 @@ def create_macro_scan_embed(
     )
     # 3. US2Y
     lines.append(
-        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string('利差 ' + fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%'), widths[2], 'right')}"
+        f"{_pad_string(us2y_label, widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string((curve_md + ' ' if curve_md else '') + '利差 ' + fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%'), widths[2], 'right')}"
     )
     # 4. VIX
     if vix is None:
@@ -117,33 +124,30 @@ def create_macro_scan_embed(
 
 
 def create_fomc_escape_window_embed(
-    prob: float | None,
     direction: str,
-    shift_days: int,
-    adjusted_start: str,
-    adjusted_end: str,
     reason: str,
     is_fallback: bool = False,
     tier_title: str | None = None,
     tactical_directive: str | None = None,
     factors_summary: list[tuple[str, str]] | None = None,
-    was_auto_rolled: bool = False,
-    original_window_label: str = "",
     top_escape_score: int | None = None,
     top_escape_tier: str | None = None,
     top_escape_factors: list[tuple[str, str]] | None = None,
     fedwatch_source: str | None = None,
     prob_stale: bool = False,
 ) -> discord.Embed:
-    """建立全維度宏觀流動性逃頂推演矩陣 Embed (繁體中文)"""
-    if direction == "前移":
-        color = discord.Color.red()  # Tightening risk defense
-    elif direction == "後推":
-        color = discord.Color.green()  # Liquidity expansion risk-on
-    else:
-        color = discord.Color.gold()  # Neutral balance
+    """建立宏觀流動性狀態與逃頂評分 Embed (繁體中文)
 
-    title_text = "📅 宏觀逃頂：總經流動性撤退推演矩陣 (Macro Escape Matrix)"
+    direction 為流動性狀態：收縮（紅）／寬鬆（綠）／均衡（金）。
+    """
+    if direction == "收縮":
+        color = discord.Color.red()
+    elif direction == "寬鬆":
+        color = discord.Color.green()
+    else:
+        color = discord.Color.gold()
+
+    title_text = "🧭 宏觀逃頂：總經流動性狀態與逃頂評分 (Macro Escape Matrix)"
     if is_fallback:
         title_text += " [歷史快取/備援]"
     if prob_stale:
@@ -172,30 +176,8 @@ def create_fomc_escape_window_embed(
             value=panel,
             inline=False,
         )
-    else:
-        prob_suffix = " *(歷史快取/備援)*" if is_fallback else ""
-        if prob is None:
-            # 過期（或無資料）時不顯示舊數字，只標示狀態
-            from database.cache import FEDWATCH_PROB_MAX_AGE_HOURS
 
-            prob_text = (
-                f"**資料過期**（逾 {FEDWATCH_PROB_MAX_AGE_HOURS} 小時，不顯示舊值）"
-                if prob_stale
-                else "**暫無數據**"
-            )
-        else:
-            prob_text = f"**{prob * 100:.1f}%**{prob_suffix}"
-        embed.add_field(
-            name="📊 利率鷹派傾向分數 (FedWatch)",
-            value=(
-                f"下週 FOMC 鷹派傾向分數：{prob_text}\n"
-                + fedwatch_source_note(fedwatch_source)
-            ),
-            inline=False,
-        )
-
-    # 2.5. 宏觀逃頂綜合評分 (Top-Escape Composite Score) — 獨立於上方的利率擇時矩陣，
-    # 額外疊加 Fear & Greed / VTS / 負 Gamma / (可選) 衛星持倉亢奮廣度的組合式過熱評分
+    # 3. 宏觀逃頂綜合評分 (Top-Escape Composite Score)
     if top_escape_tier is not None:
         score_lines: list[str] = [f" ├─ {top_escape_tier} (綜合 {top_escape_score} 分)"]
         if top_escape_factors:
@@ -208,25 +190,6 @@ def create_fomc_escape_window_embed(
             value=score_panel,
             inline=False,
         )
-
-    # 3. 調整方向與窗口
-    shift_label = (
-        f"**{direction} {shift_days} 個交易日**"
-        if shift_days > 0
-        else f"**{direction} (偏移 0 天)**"
-    )
-    embed.add_field(
-        name="🔄 逃頂窗口調整方向",
-        value=f"調整方向：{shift_label}",
-        inline=False,
-    )
-
-    rollover_note = " *(已自動滾動至下季)*" if was_auto_rolled else ""
-    embed.add_field(
-        name="📆 調整後逃頂窗口預期",
-        value=f"預估窗口：**{adjusted_start}** 至 **{adjusted_end}**{rollover_note}",
-        inline=False,
-    )
 
     if tactical_directive:
         clean_directive = tactical_directive.replace("**", "")
@@ -250,5 +213,5 @@ def create_fomc_escape_window_embed(
         name="💡 推演邏輯與風控分析", value="\n".join(reason_lines), inline=False
     )
 
-    embed.set_footer(text="Risk Engine | 宏觀流動性逃頂推演矩陣")
+    embed.set_footer(text="Risk Engine | 宏觀流動性狀態與逃頂評分")
     return embed

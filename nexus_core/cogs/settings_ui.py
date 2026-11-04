@@ -384,7 +384,7 @@ SETTINGS_LABELS = {
     ),
     "enable_macro_top_escape_defense": (
         "🧭 宏觀逃頂前瞻防禦",
-        "是否啟用逃頂綜合評分達最高警戒時的主動衛星減碼防禦 (Dynamic Rollover Scenario 6)",
+        "逃頂評分達 WATCH 以上時推播 SPY 保護性 Put 建議（情境 6，不調整持倉）",
         None,
     ),
     "polymarket_threshold": (
@@ -401,11 +401,6 @@ SETTINGS_LABELS = {
         "🌊 Polymarket 滑價門檻",
         "Polymarket 巨鯨判定目標滑價百分比 (0.1% - 10.0%)",
         "輸入 0.1 - 10.0 之間的百分比",
-    ),
-    "escape_window": (
-        "📅 宏觀逃頂窗口 (起~訖)",
-        "設定自訂逃頂窗口 (MM-DD ~ MM-DD，如 09-15 ~ 09-30)",
-        "09-15 ~ 09-30",
     ),
     "trading_strategy": (
         "📐 交易策略",
@@ -479,59 +474,6 @@ class AccountSettingsModal(discord.ui.Modal):
 
     async def on_submit(self, interaction: discord.Interaction) -> Any:
         value_str = self.input_field.value.strip()
-
-        if self.key == "escape_window":
-            import re
-
-            m = re.search(
-                r"(\d{1,2})-(\d{1,2})\s*[\~\,\-至到]\s*(\d{1,2})-(\d{1,2})",
-                value_str,
-            )
-            if not m:
-                await interaction.response.send_message(
-                    embed=create_error_embed(
-                        "逃頂窗口格式錯誤，請使用 MM-DD ~ MM-DD 格式 (例如 09-15 ~ 09-30)",
-                        title="輸入錯誤",
-                    ),
-                    ephemeral=True,
-                )
-                return
-            sm, sd, em, ed = map(int, m.groups())
-            if not (
-                1 <= sm <= 12 and 1 <= sd <= 31 and 1 <= em <= 12 and 1 <= ed <= 31
-            ):
-                await interaction.response.send_message(
-                    embed=create_error_embed(
-                        "月份 (1-12) 或日期 (1-31) 超出有效範圍",
-                        title="驗證失敗",
-                    ),
-                    ephemeral=True,
-                )
-                return
-            start_str = f"{sm:02d}-{sd:02d}"
-            end_str = f"{em:02d}-{ed:02d}"
-            await asyncio.to_thread(
-                database.upsert_user_config,
-                self.user_id,
-                escape_window_start=start_str,
-                escape_window_end=end_str,
-            )
-            if (
-                self.view is not None
-                and hasattr(self.view, "refresh_items")
-                and hasattr(self.view, "build_embed")
-            ):
-                getattr(self.view, "refresh_items")()
-                embed = getattr(self.view, "build_embed")()
-                await interaction.response.edit_message(embed=embed, view=self.view)
-            else:
-                await interaction.response.send_message(
-                    embed=create_info_embed(
-                        title="系統資訊", message="✅ 逃頂窗口已成功更新！"
-                    ),
-                    ephemeral=True,
-                )
-            return
 
         if self.key in ("withdrawal_anchor_month", "withdrawal_months"):
             from database.user_settings import (
@@ -700,8 +642,6 @@ class AccountSettingsView(discord.ui.View):
                 val_display = f"{raw_val}%"
             elif key == "tax_reserve_rate":
                 val_display = f"{raw_val:.1%}"
-            elif key == "escape_window":
-                val_display = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
             elif key == "trading_strategy":
                 val_display = TRADING_STRATEGY_DISPLAY.get(str(raw_val), str(raw_val))
             elif key == "risk_appetite":
@@ -781,9 +721,7 @@ class AccountSettingsView(discord.ui.View):
         else:
             # 針對數值/字串類型，彈出 Modal 視窗
             modal_val: Any
-            if key == "escape_window":
-                modal_val = f"{ctx.escape_window_start} ~ {ctx.escape_window_end}"
-            elif key in ("withdrawal_anchor_month", "withdrawal_months"):
+            if key in ("withdrawal_anchor_month", "withdrawal_months"):
                 modal_val = getattr(ctx, key, None) or ""
             else:
                 modal_val = getattr(ctx, key, 0.0)
@@ -805,7 +743,6 @@ class AccountSettingsView(discord.ui.View):
         basic_settings = [
             f"💰 **總資金**: `${ctx.capital:,.2f}` *(自動計算)*",
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
-            f"📅 **宏觀逃頂窗口**: `{ctx.escape_window_start} ~ {ctx.escape_window_end}`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
             f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",

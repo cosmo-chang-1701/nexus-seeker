@@ -53,11 +53,18 @@ def build_pre_market_briefing_embed(
     # 總經數據缺值（None／<=0）時不得宣稱「總經平穩」，標題改標降級
     dxy = _positive_float_or_none(macro_data.get("dxy"))
     tnx = _positive_float_or_none(macro_data.get("tnx"))
+    # 2Y／利差來自已儲存的 FRED 觀測，缺值僅顯示 `--`，不影響降級判定
     us2y = _positive_float_or_none(macro_data.get("us2y"))
+    spread = _to_float_or_none(macro_data.get("curve_spread"))
+    from market_analysis.analyst_runners.macro_runner import format_obs_date
+
+    us2y_md = format_obs_date(macro_data.get("us2y_date")) if us2y is not None else ""
+    curve_md = format_obs_date(macro_data.get("curve_date"))
+    us2y_label = f"US2Y {us2y_md} 2Y" if us2y_md else "US2Y 2Y 公債"
     vix = _positive_float_or_none(macro_data.get("vix"))
     tnx_change = _to_float_or_none(macro_data.get("tnx_change_bps"))
     vix_change = _to_float_or_none(macro_data.get("vix_change"))
-    macro_degraded = dxy is None or tnx is None or us2y is None or vix is None
+    macro_degraded = dxy is None or tnx is None or vix is None
     if macro_degraded:
         degraded_tag = "[盤前數據未更新/降級模式]"
         if status_suffix == " [✅ 總經平穩・無即期財報]":
@@ -74,8 +81,6 @@ def build_pre_market_briefing_embed(
     embed.description = None
 
     # 1. 巨觀數據指標 ANSI 控制台
-    spread = tnx - us2y if tnx is not None and us2y is not None else None
-
     if vix is None:
         vix_emoji = "--"
     else:
@@ -83,7 +88,7 @@ def build_pre_market_briefing_embed(
 
     lines = ["```ansi"]
     headers = ["指標", "數值", "變動 / 備註"]
-    widths = [14, 8, 14]
+    widths = [14, 8, 18]
     lines.append(
         " | ".join(
             _pad_string(h, w, "left" if i == 0 else "right")
@@ -98,9 +103,13 @@ def build_pre_market_briefing_embed(
     lines.append(
         f"{_pad_string('TNX 10Y 公債', widths[0])} | {_pad_string(fmt_or_dash(tnx, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(fmt_or_dash(tnx_change, '+.1f', suffix=' bps'), widths[2], 'right')}"
     )
-    spread_note = "利差 " + fmt_or_dash(spread, "+.2f", suffix="%", placeholder="--%")
+    spread_note = (
+        (f"{curve_md} " if curve_md else "")
+        + "利差 "
+        + fmt_or_dash(spread, "+.2f", suffix="%", placeholder="--%")
+    )
     lines.append(
-        f"{_pad_string('US2Y 2Y 公債', widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(spread_note, widths[2], 'right')}"
+        f"{_pad_string(us2y_label, widths[0])} | {_pad_string(fmt_or_dash(us2y, '.2f', suffix='%', placeholder='--%'), widths[1], 'right')} | {_pad_string(spread_note, widths[2], 'right')}"
     )
     if vix is None:
         vix_color_start = "\u001b[1;30m"
@@ -151,18 +160,32 @@ def build_pre_market_briefing_embed(
         assert vix is not None and tnx is not None and dxy is not None
         vix_chg = fmt_or_dash(vix_change, "+.2f")
         if vix < 15.0:
-            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 低波動沉睡區間，注意權利金較薄"
+            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 低於 15，注意權利金較薄"
         elif vix <= 20.0:
-            vol_status = f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 常態健康位階，未見異常避險情緒"
+            vol_status = (
+                f"\u001b[1;32mVIX {vix:.2f} ({vix_chg})\u001b[0m 介於 15–20 常態區間"
+            )
         else:
-            vol_status = f"\u001b[1;33mVIX {vix:.2f} ({vix_chg})\u001b[0m 位階偏高但平穩，維持正常戒備"
+            vol_status = (
+                f"\u001b[1;33mVIX {vix:.2f} ({vix_chg})\u001b[0m 高於 20，位階偏高"
+            )
 
-        bond_status = f"\u001b[1;36m10Y {tnx:.2f}% ({fmt_or_dash(tnx_change, '+.1f', suffix=' bps')})\u001b[0m 殖利率平穩 (利差 {fmt_or_dash(spread, '+.2f', suffix='%', placeholder='--%')})"
-        fx_status = f"\u001b[1;37mDXY {dxy:.2f}\u001b[0m 美元走勢溫和，跨國流動性充裕"
+        if spread is None:
+            spread_txt = (
+                "10Y−2Y 利差 2Y 無資料"
+                if us2y is None
+                else "利差無資料（10Y 未入庫或與 2Y 無同日資料）"
+            )
+        else:
+            on = f"，{curve_md}" if curve_md else ""
+            spread_txt = f"10Y−2Y 利差 {spread:+.2f}%{on}"
+        bond_status = f"\u001b[1;36m10Y {tnx:.2f}% ({fmt_or_dash(tnx_change, '+.1f', suffix=' bps')})\u001b[0m {spread_txt}"
+        fx_class = "≤ 103 溫和" if dxy <= 103.0 else "103–105 偏強"
+        fx_status = f"\u001b[1;37mDXY {dxy:.2f}\u001b[0m {fx_class}"
         guide_status = (
-            "\u001b[1;32m指標全數合規\u001b[0m，維持常態部位與安全邊際"
+            "\u001b[1;32m未觸發總經警示\u001b[0m，維持既有持有計畫；權利金較薄，留意合約安全邊際"
             if vix < 15.0
-            else "\u001b[1;32m指標全數合規\u001b[0m，維持常態部位與標準網格"
+            else "\u001b[1;32m未觸發總經警示\u001b[0m，維持既有持有計畫"
         )
 
         status_lines = [

@@ -1361,9 +1361,9 @@ def evaluate_escape_window_regime(
     wti: float | None = None,
     vts_ratio: float | None = None,
     is_negative_gamma: bool | None = False,
-) -> tuple[int, int, str, int, str, str]:
+) -> tuple[int, int, str, str, str]:
     """
-    評估四因子宏觀流動性矩陣與逃頂窗口狀態。
+    評估四因子宏觀流動性矩陣，回傳流動性狀態（收縮／寬鬆／均衡）。
 
     Args:
         prob: FedWatch 鷹派傾向強度分數 (0.05~0.95，壓縮後的加息/降息傾向指標，非嚴格機率總和)
@@ -1374,12 +1374,12 @@ def evaluate_escape_window_regime(
             （如大盤 GEX 快取過期），該因子不計分
 
     任一因子輸入未知 (None) 時，該因子不計入收縮或寬鬆分數——不再以 CPI 0、
-    WTI 75、VTS 0.88 之類偏寬鬆的常數補值，以免把「資料缺失」算成寬鬆而延後
-    逃頂窗口。
+    WTI 75、VTS 0.88 之類偏寬鬆的常數補值，以免把「資料缺失」算成寬鬆。
 
     Returns:
-        tuple[int, int, str, int, str, str]:
-            (tightening_score, easing_score, direction, shift_days, tier_title, short_status_desc)
+        tuple[int, int, str, str, str]:
+            (tightening_score, easing_score, direction, tier_title, short_status_desc)
+            direction ∈ {"收縮", "寬鬆", "均衡"}；不再產生任何天數位移。
     """
 
     def _known(val: Any, positive: bool = False) -> float | None:
@@ -1435,8 +1435,7 @@ def evaluate_escape_window_regime(
 
     # 三階矩陣狀態評估
     if tightening_score >= 2 or (is_hawkish and is_negative_gamma is True):
-        direction = "前移"
-        shift_days = 8 if tightening_score >= 3 else 5
+        direction = "收縮"
         tier_title = "🚨 收縮警戒 (Tightening Contraction)"
 
         # 歸因：每個計入緊縮分的因子各一個標籤，門檻與上方計分完全一致，因此
@@ -1459,26 +1458,20 @@ def evaluate_escape_window_regime(
             drivers.append("結構承壓")
 
         reason = "+".join(drivers) if drivers else "宏觀承壓"
-        short_status_desc = f"⚠️ 前移 {shift_days} 天 ({reason})"
+        short_status_desc = f"⚠️ 收縮 ({reason})"
     elif is_dovish and easing_score >= 2 and tightening_score == 0:
-        direction = "後推"
-        shift_days = 5
+        direction = "寬鬆"
         tier_title = "🟢 寬鬆擴張 (Liquidity Expansion)"
-        short_status_desc = "🟢 後推 5 天 (流動性擴張)"
+        short_status_desc = "🟢 寬鬆擴張 (流動性擴張)"
     else:
-        direction = "維持"
-        shift_days = 0
+        direction = "均衡"
         tier_title = "🟡 中性平衡 (Neutral Balance)"
-        if is_negative_gamma is False and is_hawkish:
-            short_status_desc = "🟢 正常窗口 (正Gamma護航中)"
-        else:
-            short_status_desc = "🟢 正常窗口 (均衡定價)"
+        short_status_desc = "🟢 均衡"
 
     return (
         tightening_score,
         easing_score,
         direction,
-        shift_days,
         tier_title,
         short_status_desc,
     )
@@ -1597,7 +1590,7 @@ def evaluate_macro_top_escape_score(
         score += 1
         f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
     else:
-        f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
+        f4_val = "\u001b[1;32m🟢 未達踩踏條件\u001b[0m"
     factor_breakdown.append(("大盤微觀結構 (SPY GEX)", f4_val))
 
     # Factor 5 (可選): 衛星持倉亢奮廣度 — 由呼叫端聚合 Scenario 3 的單一標的

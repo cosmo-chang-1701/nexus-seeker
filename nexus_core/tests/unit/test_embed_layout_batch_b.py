@@ -437,12 +437,8 @@ def test_whale_alert_description_split_into_emoji_fields() -> None:
 
 def test_fomc_escape_window_fields_not_inline() -> None:
     embed = create_fomc_escape_window_embed(
-        prob=0.4,
-        direction="延後",
-        shift_days=3,
-        adjusted_start="2026-11-01",
-        adjusted_end="2026-11-10",
+        direction="寬鬆",
         reason="r",
-        tactical_directive="減碼",
+        tactical_directive="維持持有",
     )
     assert all(not f.inline for f in embed.fields)
