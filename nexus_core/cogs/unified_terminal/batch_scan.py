@@ -78,7 +78,7 @@ class BatchScanMixin:
     async def _run_unified_scan(self, state: dict, user_id: int) -> ScanOutcome:
         """收集標的、抓取雷達資料、套用量化過濾並（於背景執行緒）建構分頁 Embed。
 
-        首次掃描與「更新逾 1 小時標的」按鈕的重新掃描共用此路徑。呼叫端需自行處於
+        首次掃描與「更新逾 30 分鐘標的」按鈕的重新掃描共用此路徑。呼叫端需自行處於
         互動請求（interactive）情境內；例外交由呼叫端處理。
         """
         scan_value = state.get("scope", "WATCHLIST")

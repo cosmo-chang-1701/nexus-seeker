@@ -1,4 +1,4 @@
-"""批次量化雷達：更新逾 1 小時標的按鈕、進階過濾修正、失敗標的與返回面板還原。"""
+"""批次量化雷達：更新逾 30 分鐘標的按鈕、進階過濾修正、失敗標的與返回面板還原。"""
 
 import threading
 from typing import Any
@@ -13,6 +13,7 @@ from cogs.unified_terminal.batch_scan_view import (
     BatchScanPaginatedView,
     BatchScanRefreshButton,
     BatchScanWarningButton,
+    _is_stale_result,
 )
 from cogs.unified_terminal.cog import UnifiedTerminalCog
 from cogs.unified_terminal.radar_view import UnifiedRadarView
@@ -83,16 +84,33 @@ def _refresh_btn(view: Any) -> Any:
 def test_refresh_button_counts_stale() -> None:
     view = _pager([_res("A", None), _res("B", 7200), _res("C", 600)])
     btn = _refresh_btn(view)
-    assert btn.label == "🔄 更新逾 1 小時標的 (2)"
+    assert btn.label == "🔄 更新逾 30 分鐘標的 (2)"
     assert btn.disabled is False
     assert btn.row == 1
 
 
 def test_refresh_button_disabled_when_all_fresh() -> None:
-    view = _pager([_res("A", 10), _res("B", RADAR_REFRESH_STALE_SECONDS)])
+    view = _pager([_res("A", 10), _res("B", RADAR_REFRESH_STALE_SECONDS - 1)])
     btn = _refresh_btn(view)
     assert btn.disabled is True
-    assert btn.label == "✅ 資料皆在 1 小時內"
+    assert btn.label == "✅ 資料皆在 30 分鐘內"
+
+
+def test_stale_boundary_is_stale_result() -> None:
+    """與表格 🕓 規則一致：age >= 門檻或 None 為過期，門檻前 1 秒不是。"""
+    assert _is_stale_result(_res("A", RADAR_REFRESH_STALE_SECONDS - 1)) is False
+    assert _is_stale_result(_res("A", RADAR_REFRESH_STALE_SECONDS)) is True
+    assert _is_stale_result(_res("A", None)) is True
+
+
+def test_stale_boundary_button_state() -> None:
+    fresh = _refresh_btn(_pager([_res("A", RADAR_REFRESH_STALE_SECONDS - 1)]))
+    assert fresh.disabled is True
+    at = _refresh_btn(_pager([_res("A", RADAR_REFRESH_STALE_SECONDS)]))
+    assert at.disabled is False
+    assert at.label == "🔄 更新逾 30 分鐘標的 (1)"
+    none = _refresh_btn(_pager([_res("A", None)]))
+    assert none.disabled is False
 
 
 def test_no_refresh_button_without_scan_results() -> None:
@@ -170,7 +188,7 @@ async def test_slow_fetch_failure_still_rescans_and_counts_stale() -> None:
     slow.assert_awaited_once()
     it.followup.send.assert_not_called()
     new_view = it.edit_original_response.await_args.kwargs["view"]
-    assert _refresh_btn(new_view).label == "🔄 更新逾 1 小時標的 (3)"
+    assert _refresh_btn(new_view).label == "🔄 更新逾 30 分鐘標的 (3)"
     assert _refresh_btn(new_view).disabled is False
 
 
