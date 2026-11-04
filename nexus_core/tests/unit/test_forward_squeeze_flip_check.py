@@ -283,7 +283,10 @@ def test_events_after_last_price_date_not_wrongly_deduped() -> None:
 
 
 # ----------------------------------------------------------------- 影子否決分組
-_CONTRACT_KEYS = "sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any"
+_CONTRACT_KEYS = (
+    "sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, "
+    "sv_f_hy_lvl, sv_f_hy_chg"
+)
 
 
 def _shadow_setup(

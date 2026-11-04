@@ -171,6 +171,20 @@ async def _compute_shadow(
         from market_time import ny_tz
 
         cal_ok, mev_h = await shadow_vetoes.nearest_macro_event_tte_hours()
+        # 信用利差僅供紀錄：逾時／失敗只讓信用欄位為 None；shield 讓背景刷新繼續寫入快取
+        credit: Optional[Mapping[str, Any]] = None
+        try:
+            import asyncio
+
+            from services.credit_spread_service import get_credit_spreads
+
+            credit = await asyncio.wait_for(
+                asyncio.shield(get_credit_spreads()),
+                timeout=shadow_vetoes.SHADOW_CREDIT_TIMEOUT_SECONDS,
+            )
+        except Exception as ce:
+            logger.debug(f"[EntryAdvisor] 信用利差讀取失敗／逾時（略過）: {ce}")
+            credit = None
         rd: Mapping[str, Any] = radar or {}
         return shadow_vetoes.compute_shadow_vetoes(
             spot,
@@ -181,6 +195,7 @@ async def _compute_shadow(
             mev_h,
             cal_ok,
             datetime.now(ny_tz).date(),
+            credit_spreads=credit,
         )
     except Exception as e:
         logger.debug(f"[EntryAdvisor] 影子否決計算失敗（略過）: {e}")
