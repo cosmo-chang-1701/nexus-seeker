@@ -150,12 +150,13 @@ $$\text{Payout} = \begin{cases}
 
 ### 2.7 /market 面板呈現層標示（僅呈現，不接任何閘門）
 
-以下四項只改 `build_market_macro_overview_embed()` 的文字，`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動：
+以下五項只改 `build_market_macro_overview_embed()` 的文字，`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動：
 
 - **零 Gamma 踩踏三態**：以 SPY 現價與 SPY Gamma Flip（與閘門同基準，避開 SPX/SPY 10 倍基差）計算緩衝 $buf = (S_{SPY} - Flip_{SPY}) / Flip_{SPY} \times 100$。判定順序：(1) `short_gamma_critical` 成立 → 🚨 CRITICAL（既有）；(2) $buf < 0$ → 🟡 負 Gamma 區（低於 Flip），註明 VIX／VTS 未達危機門檻、網格維持；(3) $0 \le buf <$ `_FLIP_KNIFE_EDGE_PCT`（0.5%）→ 🟡 臨界，盤中轉負即踩踏；(4) 其餘 🟢 NORMAL。Flip 或 SPY 現價缺值、或 GEX 快取過期時不算緩衝，維持原顯示。GEX Flip 行另附 `(SPY 緩衝 ±x.xx%)`。2026-10-09 實跑稽查：SPY 773.93／Flip 774.17（緩衝 −0.03%），SPX 7765.36／Flip 線 7767.77，兩個尺度一致、快取無過期，未重現 −520 點。現行程式碼下基差結構上不可能造成 520 點（`unified_terminal/utils.py` 在 SPX/SPY 比值落於 [9.8, 10.3] 時以該比值換算 Flip 線，兩尺度的百分比恆等）；可能是不同時點的快照，或 edge Flip 高於現價且落在離群閘門 20% 上限以內的雜訊（520 點約為 SPX 的 6.7%）。比值超出該區間時，Flip 行不附 SPY 緩衝後綴。🟡 負 Gamma 區文案只列出實際未成立的條件（VIX ≤ 20、VTS 未倒掛／缺值時依 VIX > 25）；🟡 狀態的邊框為警示色。
 - **CP−T-Bill 利差（TED 代理）**：edge 計算的是 $DCPF3M - DTB3$（金融商業本票減國庫券），是融資成本利差，**不反映二級市場訂單簿深度**，故使用者可見標籤由「TED Spread (流動性指標)」改為「CP−T-Bill 利差 (TED 代理)」。kv key `macro_ted_spread` 與 $0.5$ 警戒判定不變。
 - **RRP 小基數**：現值與 30 天前（$past = RRP / (1 + \Delta\%/100)$）兩端皆低於 `RRP_MATERIAL_BALANCE_BILLIONS`（\$20B）時，30 日變動百分比不具意義，面板改顯示絕對變動 `(30天 +x.xB，小基數不計%)`（$past = RRP / (1 + \Delta\%/100)$）；$\Delta\% \le -100$ 時無法反推 $past$，仍印百分比。
 - **低波自滿（參考級）**：VIX < `_COMPLACENCY_VIX_MAX`（20，與 short_gamma_critical 的 VIX > 20 閘門對齊；原 16 在 VIX 16.68 配 10Y 5.146%、WTI \$98 時漏報）且下列任一成立時，於風控面板末端附加一行：10Y ≥ `_COMPLACENCY_US10Y`（5.0%）、WTI ≥ `_COMPLACENCY_WTI`（\$90）、FedWatch 升息機率 ≥ `_COMPLACENCY_HIKE_PROB_PCT`（15%，資料過期、缺值或備援值略過）。四個常數皆為 PRE_CALIBRATION／僅呈現。**盤前延後**：美股交易日 09:30 ET 開盤前，`^VIX` 仍是前日收盤，而 10Y／WTI／FedWatch 已重新定價，此時條件成立改印「⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀」，不印 ⚠ 判定；週末、假日與 09:30 起維持原判定。
+- **信用利差（HY／IG OAS，參考級）**：「📈 流動性與總經指標」於「聯準會資產負債表」下方新增兩列：高收益債利差（FRED `BAMLH0A0HYM2`）與投資級債利差（FRED `BAMLC0A0CM`，ICE BofA 選擇權調整利差），單位 bps（FRED 百分比值 × 100，取整），格式如 `343 bps (1M +29) 11/02`。1M 變動 = 最新觀測 − 觀測日 ≤ 最新觀測日 − 30 天的最近一筆（無此筆則省略 `(1M …)`）；末尾為觀測日 MM/DD。著色（`_HY_OAS_*`／`_IG_OAS_*`，PRE_CALIBRATION／僅呈現，不接任何閘門）：HY < 400 綠、400–499 黃、≥ 500 紅；IG < 150 綠、150–199 黃、≥ 200 紅。觀測日距今逾 `_CREDIT_SPREAD_STALE_DAYS`（5 日曆天，PRE_CALIBRATION）加黃色 `[逾 N 天]`。FRED 約落後 1 個營業日，故一律顯示觀測日。資料由 `services/credit_spread_service.py` 經 `fred` 閘門抓取，kv_cache 鍵 `macro_credit_spreads`，快取 4 小時、失敗退避 15 分鐘、單次逾時 8 秒；任何失敗沿用舊值，缺值該列顯示「獲取數據失敗」，不影響 /market 其他欄位。`recession_warning`、`short_gamma_critical`、安全提領紅線與逃頂窗口判定完全不讀這兩個值。
 
 ---
 

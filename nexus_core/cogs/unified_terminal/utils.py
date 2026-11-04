@@ -10,6 +10,7 @@ from market_analysis.sentiment.skew_taxonomy import (
     POLYMARKET_BULLISH_PCT,
     POLYMARKET_MIN_POOL_USD,
 )
+from services.credit_spread_service import get_credit_spreads
 from services.llm_service import is_memory_safe
 from services.market_data_service import BoundedCache
 
@@ -479,6 +480,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         is_negative_gamma=is_negative_gamma_spy,
     )
 
+    # 信用利差僅供面板呈現；任何失敗都不得影響 /market
+    try:
+        credit_spreads: dict[str, Any] = await get_credit_spreads()
+    except Exception as e:
+        logger.warning(f"信用利差取得失敗，面板顯示失敗標記: {e!r}")
+        credit_spreads = {"hy": None, "ig": None}
+
     result_data: dict[str, Any] = {
         "spx": spx,
         "spy_spot": spy_spot,
@@ -490,6 +498,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "wti": wti,
         "rrp": rrp,
         "fed_balance": fed_balance,
+        "credit_spreads": credit_spreads,
         "cpi_nfp_calendar": cpi_nfp_calendar,
         "fear_greed": fear_greed,
         "gamma_flip_line": gamma_flip_line,

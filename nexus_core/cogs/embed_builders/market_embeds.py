@@ -2256,6 +2256,45 @@ def _complacency_note(
     return f" └─ ⚠ 低波自滿（參考）：VIX {vix_f:.1f} 未反映 " + "／".join(parts)
 
 
+# PRE_CALIBRATION／僅呈現：信用利差（ICE BofA OAS，bps）著色門檻，不接任何閘門。
+_HY_OAS_YELLOW_BPS = 400  # 高收益債利差：黃色下限
+_HY_OAS_RED_BPS = 500  # 高收益債利差：紅色下限
+_IG_OAS_YELLOW_BPS = 150  # 投資級債利差：黃色下限
+_IG_OAS_RED_BPS = 200  # 投資級債利差：紅色下限
+_CREDIT_SPREAD_STALE_DAYS = 5  # 觀測日距今超過此日曆天數即標示逾期
+
+
+def _format_credit_spread(
+    label: str, side: Any, yellow_bps: int, red_bps: int, today: Any
+) -> str:
+    """單行信用利差；缺值（含格式異常）顯示獲取數據失敗。僅呈現。"""
+    fail = f" ├─ {label}: \u001b[1;31m獲取數據失敗\u001b[0m"
+    if not isinstance(side, dict):
+        return fail
+    try:
+        bps = int(side["bps"])
+        obs = datetime.strptime(str(side["obs_date"]), "%Y-%m-%d").date()
+    except (KeyError, TypeError, ValueError):
+        return fail
+    if bps >= red_bps:
+        color = "\u001b[1;31m"
+    elif bps >= yellow_bps:
+        color = "\u001b[1;33m"
+    else:
+        color = "\u001b[1;32m"
+    change = side.get("change_1m_bps")
+    change_str = f" (1M {int(change):+d})" if isinstance(change, (int, float)) else ""
+    stale_str = (
+        f" \u001b[1;33m[逾 {(today - obs).days} 天]\u001b[0m"
+        if (today - obs).days > _CREDIT_SPREAD_STALE_DAYS
+        else ""
+    )
+    return (
+        f" ├─ {label}: {color}{bps} bps\u001b[0m{change_str} "
+        f"{obs.strftime('%m/%d')}{stale_str}"
+    )
+
+
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     """
     建立美股總體經濟與大盤風險防禦指標 (Macro & Risk Dashboard) Embed。
@@ -2575,10 +2614,27 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
 
+    raw_credit = macro_data.get("credit_spreads")
+    credit_spreads: dict[str, Any] = raw_credit if isinstance(raw_credit, dict) else {}
+
     macro_lines = [
         f" ├─ WTI 原油價格: {wti_val_str}",
         f" ├─ 聯準會逆回購 (RRP): {rrp_val_str}",
         f" ├─ 聯準會資產負債表: {fed_bal_str}",
+        _format_credit_spread(
+            "高收益債利差 (HY OAS)",
+            credit_spreads.get("hy"),
+            _HY_OAS_YELLOW_BPS,
+            _HY_OAS_RED_BPS,
+            _now_et().date(),
+        ),
+        _format_credit_spread(
+            "投資級債利差 (IG OAS)",
+            credit_spreads.get("ig"),
+            _IG_OAS_YELLOW_BPS,
+            _IG_OAS_RED_BPS,
+            _now_et().date(),
+        ),
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",

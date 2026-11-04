@@ -90,3 +90,15 @@ async def test_ratio_not_written_when_one_side_from_kv_fallback() -> None:
 async def test_out_of_range_live_ratio_not_written() -> None:
     _, save = await _run({"^SPX": {"c": 7000.0}, "SPY": {"c": 771.0}}, {})
     assert "macro_spx_spy_ratio" not in _saved_keys(save)
+
+
+@pytest.fixture(autouse=True)
+def _no_credit_spread_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """信用利差抓取會連 FRED；此檔不測它，一律以空結果取代以避免任何網路呼叫。"""
+    import cogs.unified_terminal.utils as _ut
+
+    monkeypatch.setattr(
+        _ut,
+        "get_credit_spreads",
+        AsyncMock(return_value={"hy": None, "ig": None}),
+    )
