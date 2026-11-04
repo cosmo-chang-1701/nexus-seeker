@@ -68,7 +68,7 @@ $$
 若 $\text{Spot} \le 0$ 且 $\mathcal{Z}_{\text{filtered}} \neq \emptyset$，則回傳第一筆候選 $\mathcal{Z}_{\text{filtered}}[0]$。
 
 ### 2.2 大盤 SPY Gamma Flip 合理性閘門（非對稱）
-大盤 Flip 經過 edge 抓取、KV 快取、last-known-good 快取三層，任何一層的錯誤值都會直接決定 `SHORT_GAMMA_CRITICAL` 與逃頂窗口。定義偏離率 $d = (\text{Flip} - \text{Spot}) / \text{Spot}$（同一尺度：SPY 對 SPY、SPX 翻轉線對 SPX），`is_macro_gamma_flip_outlier(flip, spot)` 判定：
+大盤 Flip 經過 edge 抓取、KV 快取、last-known-good 快取三層，任何一層的錯誤值都會直接決定 `SHORT_GAMMA_CRITICAL` 與流動性狀態／逃頂評分。定義偏離率 $d = (\text{Flip} - \text{Spot}) / \text{Spot}$（同一尺度：SPY 對 SPY、SPX 翻轉線對 SPX），`is_macro_gamma_flip_outlier(flip, spot)` 判定：
 $$
 \text{Outlier} = \begin{cases}
 d > \text{MACRO\_GEX\_FLIP\_MAX\_ABOVE\_SPOT\_PCT} = 0.20, & d \ge 0 \quad (\text{Flip 在現價上方：short gamma 方向}) \\

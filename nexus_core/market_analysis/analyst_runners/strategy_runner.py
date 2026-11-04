@@ -1,4 +1,4 @@
-"""Next-day strategy and FOMC escape-window analysis runners."""
+"""Next-day strategy and macro escape (liquidity state + top-escape score) runners."""
 
 from __future__ import annotations
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 import asyncio
 import logging
 import math
-from datetime import date, datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import discord
@@ -21,15 +21,6 @@ logger = logging.getLogger(__name__)
 def _get_tw_time_str() -> str:
     now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
     return now_tw.strftime("[%H:%M UTC+8]")
-
-
-def _get_period_label(day: int) -> str:
-    if day <= 10:
-        return "上旬"
-    elif day <= 20:
-        return "中旬"
-    else:
-        return "下旬"
 
 
 async def run_next_day_strategy(fetch_macro_fn: Any) -> str:
@@ -99,73 +90,13 @@ async def run_next_day_strategy(fetch_macro_fn: Any) -> str:
     return report
 
 
-def _shift_business_days(start_date: date, num_days: int) -> date:
-    """Shift date by a number of business days (positive or negative)."""
-    if num_days == 0:
-        return start_date
-    current = start_date
-    step = 1 if num_days > 0 else -1
-    remaining = abs(num_days)
-    while remaining > 0:
-        current += timedelta(days=step)
-        if current.weekday() < 5:  # Monday to Friday (0-4)
-            remaining -= 1
-    return current
-
-
-def _find_next_window_month(cur_month: int) -> int:
-    """Find the next cyclical liquidity/OpEx month (Mar, Jun, Sep, Dec)."""
-    quarter_months = [3, 6, 9, 12]
-    for qm in quarter_months:
-        if qm >= cur_month:
-            return qm
-    return 3  # next year March
-
-
-def _resolve_escape_window(
-    start_setting: str,
-    end_setting: str,
-    ref_date: date,
-) -> tuple[date, date, bool, str]:
-    """Resolve escape window dates, auto-rolling to next quarterly cycle if expired."""
-    try:
-        start_m, start_d = map(int, start_setting.split("-"))
-        end_m, end_d = map(int, end_setting.split("-"))
-    except Exception:
-        start_m, start_d = 7, 15
-        end_m, end_d = 7, 31
-
-    cur_year = ref_date.year
-    orig_label = (
-        f"{start_m}月{_get_period_label(start_d)}至{end_m}月{_get_period_label(end_d)}"
-    )
-
-    # Determine if current setting is expired (more than 7 days past end date)
-    def _safe_date(year: int, month: int, day: int) -> date:
-        import calendar
-
-        max_day = calendar.monthrange(year, month)[1]
-        return date(year, month, min(day, max_day))
-
-    user_start_date = _safe_date(cur_year, start_m, start_d)
-    user_end_date = _safe_date(cur_year, end_m, end_d)
-
-    was_auto_rolled = False
-    if ref_date > user_end_date + timedelta(days=7):
-        was_auto_rolled = True
-        rolled_month = _find_next_window_month(ref_date.month)
-        roll_year = cur_year if rolled_month >= ref_date.month else cur_year + 1
-        # Maintain user day offset preferences (e.g. 15th to end of month)
-        user_start_date = _safe_date(roll_year, rolled_month, start_d)
-        user_end_date = _safe_date(roll_year, rolled_month, end_d)
-
-    return user_start_date, user_end_date, was_auto_rolled, orig_label
-
-
 async def run_fomc_escape_window_analysis(
     user_id: int,
 ) -> Optional[discord.Embed]:
-    """Dynamically compute Multi-Factor Macro Liquidity Escape Matrix and return a styled Embed."""
+    """計算宏觀流動性狀態與逃頂評分，回傳盤前簡報 Embed。
+
+    與進場閘門共用同一套輸入（get_market_regime / VTS / Fear & Greed / FedWatch）。
+    """
 
     # 1. 取得 FedWatch 概率（同步 SQLite 讀取移出 event loop）
     # 過期時 prob=None、prob_stale=True（與進場閘門相同的 fail-closed 語意，簡報與
@@ -194,19 +125,11 @@ async def run_fomc_escape_window_analysis(
     else:
         prob_pct_str = "資料過期" if prob_stale else "暫無數據"
 
-    # 2. 載入使用者自訂逃頂窗口與自動滾動判定
+    # 2. 載入使用者設定（僅用於決定逃頂指引是否提示口數推播；同步 SQLite 讀取移出 event loop）
     from database.user_settings import get_full_user_context
 
-    ctx = get_full_user_context(user_id)
-    start_setting = ctx.escape_window_start if ctx else "07-15"
-    end_setting = ctx.escape_window_end if ctx else "07-31"
-
-    now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-    ref_date = now_tw.date()
-
-    start_date, end_date, was_auto_rolled, orig_label = _resolve_escape_window(
-        start_setting, end_setting, ref_date
-    )
+    ctx = await asyncio.to_thread(get_full_user_context, user_id)
+    defense_enabled = bool(ctx is not None and ctx.enable_macro_top_escape_defense)
 
     # 3. 收集四大宏觀因子
     from database.cache import get_kv_cache
@@ -341,12 +264,26 @@ async def run_fomc_escape_window_analysis(
         f3_val = f"\u001b[1;33m🟡 期限正常 (VTS: {vts_ratio:.3f})\u001b[0m"
     factors_summary.append(("恐慌期限結構 (VIX Term)", f3_val))
 
-    # Factor 4: 大盤 Gamma 翻轉線與微觀結構
-    is_negative_gamma = bool(get_kv_cache("macro_short_gamma_critical"))
-    if is_negative_gamma:
-        f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏加速區\u001b[0m"
+    # Factor 4: 大盤負 Gamma（與進場閘門 compute_macro_escape_tier 同一套推導：
+    # get_market_regime()；UNKNOWN 視為未知，不計分）
+    is_negative_gamma: Optional[bool] = None
+    try:
+        from market_analysis.index_microstructure import get_market_regime
+
+        regime = await get_market_regime()
+        is_negative_gamma = (
+            None
+            if regime == "UNKNOWN"
+            else regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS")
+        )
+    except Exception as e:
+        logger.warning(f"取得大盤 Market Regime 失敗: {e}")
+    if is_negative_gamma is None:
+        f4_val = "⚪ 未知（不計分）"
+    elif is_negative_gamma:
+        f4_val = "\u001b[1;31m🚨 負 Gamma 踩踏\u001b[0m"
     else:
-        f4_val = "\u001b[1;32m🟢 正 Gamma 護航區\u001b[0m"
+        f4_val = "\u001b[1;32m🟢 未達踩踏條件\u001b[0m"
     factors_summary.append(("大盤微觀結構 (SPY GEX)", f4_val))
 
     # 4. 三階矩陣狀態評估 (使用統一的宏觀流動性矩陣引擎)
@@ -356,9 +293,8 @@ async def run_fomc_escape_window_analysis(
         tightening_score,
         easing_score,
         direction,
-        shift_days,
         tier_title,
-        _,
+        status_desc,
     ) = evaluate_escape_window_regime(
         prob=prob,
         cpi_dev=cpi_dev,
@@ -390,7 +326,7 @@ async def run_fomc_escape_window_analysis(
 
     (
         top_escape_score,
-        _top_escape_tier_code,
+        top_escape_tier_code,
         top_escape_tier_title,
         top_escape_factors,
     ) = evaluate_macro_top_escape_score(
@@ -401,63 +337,55 @@ async def run_fomc_escape_window_analysis(
         prob_stale=prob_stale,
     )
 
-    if direction == "前移":
+    # 逃頂指引：僅依逃頂評分分級；唯一動作是 SPY 保護性 Put（情境 6）
+    put_hint = (
+        "具體口數見盤中情境 6 推播"
+        if defense_enabled
+        else "可於 /settings 開啟「宏觀逃頂前瞻防禦」以收到口數建議"
+    )
+    if top_escape_tier_code == "NORMAL":
+        tactical_directive = "🟢 **維持持有**：逃頂評分常態，無需額外避險。"
+    elif top_escape_tier_code == "WATCH":
         tactical_directive = (
-            "🚨 **提前防禦撤退**：宏觀流動性收緊與估值回殺風險加劇，多頭反彈窗口受限，"
-            "建議於窗口初段逢高分批減倉、收緊防守停損線並全面封鎖裸賣策略。"
+            "🟡 **前哨**：考慮 SPY 保護性 Put（情境 6，對沖約 30% Beta 加權 Delta，"
+            f"保留上檔）；{put_hint}。"
         )
-        reason = (
-            f"宏觀流動性矩陣偵測到 {tightening_score} 項緊縮特徵（如 FedWatch 鷹派傾向分數達 {prob_pct_str} 或通膨/結構承壓）。"
-            f"為防範估值回殺與流動性衰竭，系統自動將自訂反彈逃頂窗口前移 {shift_days} 個交易日，提示需提前啟動防禦部署。"
-        )
-        adj_start_date = _shift_business_days(start_date, -shift_days)
-        adj_end_date = _shift_business_days(end_date, -shift_days)
-
-    elif direction == "後推":
+    elif top_escape_tier_code == "ELEVATED":
         tactical_directive = (
-            "🟢 **延後抱牢反彈**：寬鬆流動性預期與正 Gamma 結構護航，多頭動能延續性強，"
-            "建議延後撤退時機、讓利潤奔馳，可適度提高風險偏好。"
+            "🟠 **警戒升高**：考慮 SPY 保護性 Put（情境 6，對沖約 30% Beta 加權 Delta，"
+            f"保留上檔）；{put_hint}。"
         )
-        reason = (
-            f"宏觀流動性矩陣呈現寬鬆擴張格局（FedWatch 鷹派傾向分數僅 {prob_pct_str}、通膨放緩且大盤結構健康）。"
-            f"系統自動將自訂反彈逃頂窗口後推 {shift_days} 個交易日，建議延後多頭撤退時機、充分享受流動性溢價。"
+    elif top_escape_tier_code == "CRITICAL":
+        tactical_directive = (
+            "🔴 **確認級**：考慮 SPY 保護性 Put（情境 6，對沖約 30% Beta 加權 Delta，"
+            f"保留上檔）；{put_hint}。"
         )
-        adj_start_date = _shift_business_days(start_date, shift_days)
-        adj_end_date = _shift_business_days(end_date, shift_days)
-
     else:
-        tactical_directive = (
-            "🟡 **正常波段護航**：各項宏觀流動性因子處於均衡區間，"
-            "建議按原定計畫嚴守關鍵支撐與壓力關卡，執行標準網格防禦。"
-        )
-        reason = (
-            f"當前 FedWatch 鷹派傾向分數 ({prob_pct_str}) 與各項總經流動性因子處於常態均衡區間。"
-            "系統評估反彈逃頂窗口維持原訂日程 (偏移 0 天)，建議持續監控大盤結構變化。"
-        )
-        adj_start_date = start_date
-        adj_end_date = end_date
+        tactical_directive = "⚪ 資料不足，無法判定逃頂分級。"
 
-    adjusted_start = f"{adj_start_date.month}月{_get_period_label(adj_start_date.day)} ({adj_start_date.strftime('%m-%d')})"
-    adjusted_end = f"{adj_end_date.month}月{_get_period_label(adj_end_date.day)} ({adj_end_date.strftime('%m-%d')})"
+    gamma_label = (
+        "未知（不計分）"
+        if is_negative_gamma is None
+        else ("負 Gamma 踩踏" if is_negative_gamma else "未達踩踏條件")
+    )
+    reason = (
+        f"流動性狀態：{direction}（收縮 {tightening_score} 項／寬鬆 {easing_score} 項；{status_desc}）。"
+        f"FedWatch 鷹派傾向分數 {prob_pct_str}，大盤 Gamma：{gamma_label}。"
+        f"逃頂評分：{top_escape_tier_title}（綜合 {top_escape_score} 分）。"
+    )
 
     from cogs.embed_builder import create_fomc_escape_window_embed
 
     return create_fomc_escape_window_embed(
-        prob=prob,
-        prob_stale=prob_stale,
         direction=direction,
-        shift_days=shift_days,
-        adjusted_start=adjusted_start,
-        adjusted_end=adjusted_end,
         reason=reason,
         is_fallback=is_fallback,
         tier_title=tier_title,
         tactical_directive=tactical_directive,
         factors_summary=factors_summary,
-        was_auto_rolled=was_auto_rolled,
-        original_window_label=orig_label,
         top_escape_score=top_escape_score,
         top_escape_tier=top_escape_tier_title,
         top_escape_factors=top_escape_factors,
         fedwatch_source=fedwatch_details.get("source"),
+        prob_stale=prob_stale,
     )

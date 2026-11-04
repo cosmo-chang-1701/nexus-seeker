@@ -319,7 +319,7 @@ async def test_calendar_command_high_rate(  # type: ignore
 
     assert "🗓️ 總經與財報事件日曆" in embed.title
     assert embed.color == discord.Color(0xE74C3C)
-    assert any("逃頂窗口已動態前移" in f.value for f in embed.fields)
+    assert any("利率維持高位" in f.value for f in embed.fields)
     assert any("FOMC" in f.value for f in embed.fields)
     assert any("AAPL" in f.value for f in embed.fields)
 
@@ -362,4 +362,4 @@ async def test_calendar_command_rate_cut(  # type: ignore
     embed = call_args["embed"]
 
     assert embed.color == discord.Color(0x3498DB)
-    assert any("逃頂窗口已後推 5 天" in f.value for f in embed.fields)
+    assert any("市場預期降息" in f.value for f in embed.fields)

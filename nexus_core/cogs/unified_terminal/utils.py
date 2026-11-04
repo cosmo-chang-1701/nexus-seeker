@@ -265,7 +265,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         spy_gamma_flip = None
         gamma_flip_line = None
 
-    # 大盤 GEX 快取超過時效：數值仍顯示，但不納入零 Gamma 與逃頂窗口判定
+    # 大盤 GEX 快取超過時效：數值仍顯示，但不納入零 Gamma 與流動性狀態判定
     # （與 get_market_regime() 的 MACRO_GEX_STALE_MAX_AGE_SECONDS 一致）。
     # 此處不重抓：GEX 走 edge Playwright 爬蟲，edge 失效時每次渲染都會白等。
     gex_cache_age = kv_ages.get("macro_spy_gamma_flip")
@@ -395,7 +395,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         vts_val = None
     vts_cache_age = kv_ages.get("macro_vts_ratio")
     if vts_cache_age is not None and vts_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS:
-        # 過期的期限結構視為未知：backwardation 改依 VIX 判定、逃頂窗口不計分
+        # 過期的期限結構視為未知：backwardation 改依 VIX 判定、流動性狀態不計分
         vts_val = None
 
     vix_val_safe = float(vix) if vix is not None else 18.0
@@ -462,14 +462,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         else get_kv_cache("macro_cpi_deviation")
     )
 
-    # 多因子宏觀逃頂窗口狀態判定
+    # 多因子宏觀流動性狀態判定
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
     (
         tightening_score,
         easing_score,
         escape_dir,
-        escape_shift,
         escape_tier,
         escape_win_status,
     ) = evaluate_escape_window_regime(
@@ -518,14 +517,13 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "cpi_is_fallback": cpi_is_fallback,
         "escape_win_status": escape_win_status,
         "escape_window_direction": escape_dir,
-        "escape_window_shift_days": escape_shift,
         "escape_window_tier": escape_tier,
         "is_degraded": is_degraded,
         "served_stale_cache": False,
         "gex_is_fallback": gex_is_fallback,
         "gex_is_expired": gex_is_expired,
         "gex_cache_age_seconds": gex_cache_age,
-        # 面板實際用於逃頂窗口與 backwardation 判定的 VTS（逾時效為 None）
+        # 面板實際用於流動性狀態與 backwardation 判定的 VTS（逾時效為 None）
         "vts_ratio": vts_val,
         "core_is_expired": core_is_expired,
         "core_cache_age_seconds": core_cache_age,
