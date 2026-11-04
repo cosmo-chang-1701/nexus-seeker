@@ -1619,7 +1619,8 @@ def test_build_radar_scan_embed_marks_stale_max_pain_with_freshness_prefix() -> 
     text = get_embed_text(embeds[0])
     assert "🕓" in text
     assert "STALESYM" in text
-    assert "本列數據" in text
+    assert "資料時效" in text
+    assert "非即時" in text
 
 
 def test_build_radar_scan_embed_marks_volume_degraded_max_pain() -> None:
@@ -1715,7 +1716,7 @@ def test_build_radar_scan_embed_marks_premarket_stale_gex_as_benign() -> None:
     text = get_embed_text(embeds[0])
     assert "🌙" in text
     assert "PMSYM" in text
-    assert "盤前/前日收盤" in text
+    assert "盤前沿用前日收盤快照" in text
     assert "請謹慎採信灰階建議" not in text
 
 
@@ -1783,7 +1784,8 @@ def test_build_radar_scan_embed_no_freshness_marker_when_data_is_fresh() -> None
     embeds = build_radar_scan_embed(scan_results, "ALL", 12345)
     text = get_embed_text(embeds[0])
     assert "🕓 FRESHSYM" not in text
-    assert "本列數據" not in text
+    assert "資料時效" not in text
+    assert "非即時" not in text
 
 
 def test_build_radar_scan_embed_renders_field_formulas_consistently() -> None:
