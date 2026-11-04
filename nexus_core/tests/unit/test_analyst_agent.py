@@ -803,7 +803,10 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
 
     # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
     with (
-        patch("sqlite3.connect") as mock_conn,
+        patch(
+            "database.cache.get_fedwatch_probability_fresh",
+            return_value=(0.85, False),
+        ),
         patch("database.user_settings.get_full_user_context", return_value=user_ctx),
         patch(
             "cogs.embed_builder.create_fomc_escape_window_embed"
@@ -820,9 +823,6 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
             return_value={"vts_ratio": 1.05, "vts_state": "Backwardation"},
         ),
     ):
-        mock_cursor = mock_conn.return_value.cursor.return_value
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
-
         await agent.run_fomc_escape_window_analysis(12345)
 
         mock_create_embed.assert_called_once()
@@ -834,7 +834,10 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
 
     # Case 2: Dovish / Expansion (prob = 0.35 <= 0.40, cool inflation, positive gamma)
     with (
-        patch("sqlite3.connect") as mock_conn,
+        patch(
+            "database.cache.get_fedwatch_probability_fresh",
+            return_value=(0.35, False),
+        ),
         patch("database.user_settings.get_full_user_context", return_value=user_ctx),
         patch(
             "cogs.embed_builder.create_fomc_escape_window_embed"
@@ -858,9 +861,6 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
             return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
         ),
     ):
-        mock_cursor = mock_conn.return_value.cursor.return_value
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.35}
-
         await agent.run_fomc_escape_window_analysis(12345)
 
         mock_create_embed.assert_called_once()
@@ -871,7 +871,10 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
 
     # Case 3: Neutral Balance (prob = 0.55)
     with (
-        patch("sqlite3.connect") as mock_conn,
+        patch(
+            "database.cache.get_fedwatch_probability_fresh",
+            return_value=(0.55, False),
+        ),
         patch("database.user_settings.get_full_user_context", return_value=user_ctx),
         patch(
             "cogs.embed_builder.create_fomc_escape_window_embed"
@@ -888,9 +891,6 @@ async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
             return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
         ),
     ):
-        mock_cursor = mock_conn.return_value.cursor.return_value
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.55}
-
         await agent.run_fomc_escape_window_analysis(12345)
 
         mock_create_embed.assert_called_once()

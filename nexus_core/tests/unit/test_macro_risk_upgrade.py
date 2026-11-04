@@ -1318,7 +1318,7 @@ def test_calendar_service_fedwatch_lookup() -> None:
         assert details.get("meeting_date") == "09/16"
         assert details.get("prob_maintain") == 65.0
 
-    # Case 2: kv_cache miss, fallback to SQLite
+    # Case 2: kv_cache 完全無值（冷啟動）-> 未知 (None, True, False)，不查日曆表、不捏造 0.50
     with (
         patch("database.cache.get_kv_cache", return_value=None),
         patch(
@@ -1326,14 +1326,11 @@ def test_calendar_service_fedwatch_lookup() -> None:
         ),
         patch("sqlite3.connect") as mock_conn,
     ):
-        mock_cursor = MagicMock()
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.85}
-        mock_conn.return_value.cursor.return_value = mock_cursor
-        prob, is_fallback, _stale = calendar_service.get_latest_fedwatch_probability()
-        assert prob == 0.85
-        assert is_fallback is True
+        result = calendar_service.get_latest_fedwatch_probability()
+        assert result == (None, True, False)
+        mock_conn.assert_not_called()  # 沒有查 economic_calendar_events
 
-    # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 自動觸發防禦並轉為 fallback
+    # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 視為未知，不以備援值替代
     with patch("database.cache.get_kv_cache") as mock_kv, patch(
         "database.cache.get_fedwatch_probability_fresh", return_value=(1.0, False)
     ):
@@ -1343,10 +1340,12 @@ def test_calendar_service_fedwatch_lookup() -> None:
             else (0 if k == "macro_fedwatch_is_fallback" else None)
         )
         prob, is_fallback, _stale = calendar_service.get_latest_fedwatch_probability()
+        assert prob is None
         assert is_fallback is True
         p, is_fb, details, _stale = calendar_service.get_latest_fedwatch_info()
+        assert p is None
         assert is_fb is True
-        assert details.get("prob_hike") == 0.0
+        assert details == {}
 
 
 @pytest.mark.asyncio

@@ -249,13 +249,13 @@ class AnalystAgent(commands.Cog):
             )
             await notify(self.bot, uid, "briefing_pre_market", embed=embed)
 
-            # FOMC 逃頂窗口
+            # 宏觀逃頂簡報
             try:
                 fomc_embed = await self.run_fomc_escape_window_analysis(uid)
                 if fomc_embed:
                     await notify(self.bot, uid, "briefing_pre_market", embed=fomc_embed)
             except Exception as e:
-                logger.error(f"推送宏觀逃頂窗口 Embed 失敗: {e}")
+                logger.error(f"推送宏觀逃頂簡報 Embed 失敗: {e}")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Post-market intelligence
