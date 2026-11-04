@@ -1,5 +1,6 @@
 """擠壓進場影子否決：原始值與旗標只寫前向紀錄，不得影響判定（欄位契約見規格）。"""
 
+import asyncio
 import json
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -644,8 +645,6 @@ async def test_credit_passed_into_shadow_record() -> None:
 
 @pytest.mark.asyncio
 async def test_credit_timeout_keeps_other_shadow_fields() -> None:
-    import asyncio
-
     async def slow() -> dict[str, Any]:
         await asyncio.sleep(1.0)
         return _credit(421, 61, "2026-11-02")
@@ -671,3 +670,52 @@ async def test_credit_exception_keeps_other_shadow_fields() -> None:
     feats = _features(rec._BUFFER[0])
     assert feats["sv_cw"] == 104.0
     assert all(feats[k] is None for k in _CREDIT_KEYS)
+
+
+def test_credit_future_obs_date_flags_none_but_raw_kept() -> None:
+    out = _calc_credit(_credit(420, 60, "2026-11-06"))
+    assert out["sv_hy_age_d"] == -2
+    assert out["sv_hy_oas"] == 420 and out["sv_hy_chg1m"] == 60
+    assert out["sv_f_hy_lvl"] is None and out["sv_f_hy_chg"] is None
+
+
+def test_credit_same_day_obs_date_still_flags() -> None:
+    out = _calc_credit(_credit(420, 60, "2026-11-04"))
+    assert out["sv_hy_age_d"] == 0
+    assert out["sv_f_hy_lvl"] is True and out["sv_f_hy_chg"] is True
+
+
+def test_shadow_vetoes_keys_follow_shadow_keys_order() -> None:
+    assert list(_calc_credit(_credit(420, 60, "2026-11-02")).keys()) == list(
+        sv.SHADOW_KEYS
+    )
+    assert list(_calc_credit(None).keys()) == list(sv.SHADOW_KEYS)
+
+
+@pytest.mark.asyncio
+async def test_credit_task_strongly_referenced_until_done() -> None:
+    from market_analysis.intraday_pipeline import entry_advisor
+
+    async def slow() -> dict[str, Any]:
+        await asyncio.sleep(0.2)
+        return _credit(421, 61, "2026-11-02")
+
+    tasks = entry_advisor._BACKGROUND_CREDIT_TASKS
+    tasks.clear()
+    with (
+        patch(_NAV, AsyncMock(return_value=(True, 3.0))),
+        patch(_CREDIT, slow),
+        patch.object(sv, "SHADOW_CREDIT_TIMEOUT_SECONDS", 0.01),
+    ):
+        await _run_squeeze(_RADAR_FULL, active=True)
+    try:
+        assert len(tasks) == 1
+        (task,) = tuple(tasks)
+        assert not task.done()
+        await task
+        await asyncio.sleep(0)  # 讓 done callback 執行
+        assert len(tasks) == 0
+    finally:
+        for t in tuple(tasks):
+            t.cancel()
+        tasks.clear()

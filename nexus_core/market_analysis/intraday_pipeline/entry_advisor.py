@@ -21,6 +21,7 @@
 * 任何例外一律 fail-safe 回傳 `passed=False`（不進場），且失敗結果不進快取。
 """
 
+import asyncio
 import logging
 from typing import Any, Dict, Literal, Mapping, NamedTuple, Optional
 
@@ -28,6 +29,9 @@ from market_analysis.evaluation_recorder import current_bar_ts
 from services.bounded_cache import BoundedCache
 
 logger = logging.getLogger(__name__)
+
+# 信用利差背景任務的強參考：shield 內層 task 事件迴圈只持弱參考，逾時後無人持有會被 GC
+_BACKGROUND_CREDIT_TASKS: set[asyncio.Task[Any]] = set()
 
 # 15 分鐘雷達共享快取 (bot._latest_radar_data_cache) 的保鮮窗。與
 # cogs/trading/portfolio_monitor.py 的 300 秒判定同值：超過即視為過期、改走
@@ -171,15 +175,17 @@ async def _compute_shadow(
         from market_time import ny_tz
 
         cal_ok, mev_h = await shadow_vetoes.nearest_macro_event_tte_hours()
-        # 信用利差僅供紀錄：逾時／失敗只讓信用欄位為 None；shield 讓背景刷新繼續寫入快取
+        # 信用利差僅供紀錄：逾時／失敗只讓信用欄位為 None；shield 讓背景刷新繼續寫入快取，
+        # 並以模組層集合持有 task 強參考（done 後自動移除），避免逾時後被 GC 中斷
         credit: Optional[Mapping[str, Any]] = None
         try:
-            import asyncio
-
             from services.credit_spread_service import get_credit_spreads
 
+            credit_task = asyncio.create_task(get_credit_spreads())
+            _BACKGROUND_CREDIT_TASKS.add(credit_task)
+            credit_task.add_done_callback(_BACKGROUND_CREDIT_TASKS.discard)
             credit = await asyncio.wait_for(
-                asyncio.shield(get_credit_spreads()),
+                asyncio.shield(credit_task),
                 timeout=shadow_vetoes.SHADOW_CREDIT_TIMEOUT_SECONDS,
             )
         except Exception as ce:
