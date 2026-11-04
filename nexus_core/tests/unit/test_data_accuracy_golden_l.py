@@ -292,29 +292,29 @@ async def test_l12_zero_or_negative_sahm_is_a_valid_reading() -> None:
 
 
 # ===========================================================================
-# 逃頂窗口四因子矩陣：未知因子不計分 (不以 CPI 0 / WTI 75 / VTS 0.88 補值)
+# 流動性狀態四因子矩陣：未知因子不計分 (不以 CPI 0 / WTI 75 / VTS 0.88 補值)
 # ===========================================================================
 def test_escape_window_unknown_factors_score_nothing() -> None:
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
     # CPI / WTI / VTS 未知、正 Gamma
-    t, e, direction, shift, _tier, _status = evaluate_escape_window_regime(
+    t, e, direction, _tier, _status = evaluate_escape_window_regime(
         prob=0.30, cpi_dev=None, wti=None, vts_ratio=None, is_negative_gamma=False
     )
     # Factor 1 鴿派 +1、Factor 4 正 Gamma +1 → 寬鬆 2 分 (舊版 4 分)
     assert (t, e) == (0, 2)
-    assert direction == "後推"
+    assert direction == "寬鬆"
 
 
 def test_escape_window_one_known_hot_input_still_tightens() -> None:
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
-    # CPI 未知但 WTI 90 > 85 → Factor 2 收縮 +1；VTS 1.05 → +1 → 收縮 2 分前移
-    t, e, direction, shift, _tier, _status = evaluate_escape_window_regime(
+    # CPI 未知但 WTI 90 > 85 → Factor 2 收縮 +1；VTS 1.05 → +1 → 收縮 2 分
+    t, e, direction, _tier, _status = evaluate_escape_window_regime(
         prob=None, cpi_dev=None, wti=90.0, vts_ratio=1.05, is_negative_gamma=False
     )
     assert (t, e) == (2, 1)
-    assert direction == "前移" and shift == 5
+    assert direction == "收縮"
 
 
 def test_escape_window_cpi_unknown_does_not_count_as_easing() -> None:

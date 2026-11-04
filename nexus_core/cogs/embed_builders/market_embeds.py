@@ -2581,22 +2581,22 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             try:
                 fw_val = float(fedwatch_prob)
                 if fw_val > 0.70:
-                    escape_win_status = "\u001b[1;31m⚠️ 前移 5 天 (高利率防護)\u001b[0m"
+                    escape_win_status = "\u001b[1;31m⚠️ 收縮 (高利率)\u001b[0m"
                 elif fw_val <= 0.40:
-                    escape_win_status = "\u001b[1;32m🟢 後推 5 天 (流動性擴張)\u001b[0m"
+                    escape_win_status = "\u001b[1;32m🟢 寬鬆擴張 (流動性擴張)\u001b[0m"
                 else:
-                    escape_win_status = "\u001b[1;32m🟢 正常窗口 (均衡定價)\u001b[0m"
+                    escape_win_status = "\u001b[1;32m🟢 均衡\u001b[0m"
             except (ValueError, TypeError):
-                escape_win_status = "正常窗口"
+                escape_win_status = "均衡"
         else:
-            escape_win_status = "正常窗口"
+            escape_win_status = "均衡"
 
     escape_str = str(escape_win_status)
     if "\u001b[" in escape_str:
         escape_win_display = escape_str
-    elif "前移" in escape_str or "收縮" in escape_str:
+    elif "收縮" in escape_str:
         escape_win_display = f"\u001b[1;31m{escape_str}\u001b[0m"
-    elif "後推" in escape_str or "寬鬆" in escape_str:
+    elif "寬鬆" in escape_str:
         escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
     else:
         escape_win_display = f"\u001b[1;32m{escape_str}\u001b[0m"
@@ -2639,7 +2639,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     risk_lines = [
         f" ├─ 零 Gamma 踩踏: {short_gamma_status}",
         f" ├─ 經濟衰退警告: {recession_status}",
-        f" ├─ 利率逃頂窗口: {escape_win_display}",
+        f" ├─ 流動性狀態: {escape_win_display}",
         f" └─ 安全提領紅線: \u001b[1;31m${payout_threshold:,.0f}\u001b[0m",
     ]
     complacency_note = _complacency_note(macro_data, vix, us10y, wti)
@@ -2796,13 +2796,13 @@ def build_calendar_embed(
     if rate_high:
         embed.add_field(
             name="⚠️ 總經防護聯動 (Macro Defense)",
-            value="`[風險預警] 利率維持高位，逃頂窗口已動態前移 5 個交易日`",
+            value="`[風險預警] 利率維持高位（FedWatch 鷹派傾向）`",
             inline=False,
         )
     elif rate_cut:
         embed.add_field(
             name="🟢 總經防護聯動 (Macro Defense)",
-            value="`[動態調整] 預期降息，逃頂窗口已後推 5 天，風險偏好增強`",
+            value="`[動態調整] 市場預期降息`",
             inline=False,
         )
 

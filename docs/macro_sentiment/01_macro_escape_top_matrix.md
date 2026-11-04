@@ -7,14 +7,14 @@
 ### 1.1 核心哲學
 在現代美股選擇權市場中，做市商（Market Makers）的流動性供應與 Gamma 曝險水位，根本性地受到總體經濟貨幣政策與資金利率定價的制約。傳統技術分析的擇時指標（例如均線死叉或超買振盪器指標）屬於落後指標，當個股價格確認向下破位時，做市商往往早已因流動性退潮而撤除流動性買單，引發買賣價差（Bid-Ask Spread）擴大與滑價衝擊。
 
-Nexus Seeker 確立**「宏觀流動性引導窗口平移，微觀微結構確認踩踏臨界」**之核心哲學，建構兩套互為表裡的宏觀防禦引擎：
-1. **即時流動性窗口平移矩陣（Escape Window Regime Matrix）**：監控 FOMC 聯準會利率期貨、通膨/能源（CPI/WTI）、VIX 期限結構與大盤 Net GEX，動態計算轉倉與防禦窗口的平移天數（前移收縮 vs 後推擴張）。
+Nexus Seeker 確立**「宏觀流動性狀態引導風險判讀，微觀微結構確認踩踏臨界」**之核心哲學，建構兩套互為表裡的宏觀防禦引擎：
+1. **即時流動性狀態矩陣（Escape Window Regime Matrix，函式名 `evaluate_escape_window_regime` 沿用）**：監控 FOMC 聯準會利率期貨、通膨/能源（CPI/WTI）、VIX 期限結構與大盤 Net GEX，輸出流動性狀態（收縮／寬鬆／均衡）。系統採 Buy & Hold 為主、以顧問角色提示風險，不再產生任何轉倉／防禦窗口的平移天數，使用者自訂的「逃頂窗口」已退役（見 §2.8）。
 2. **五因子複合逃頂評分階梯（Macro Top-Escape Score）**：疊加極端市場情緒（CNN Fear & Greed 指數）與使用者衛星持倉的亢奮廣度（Euphoria Breadth），形成多頭極致過熱的領先量化預警階梯，依 WATCH／ELEVATED／CRITICAL 三級分別聯動動態轉倉引擎之情境 6（Scenario 6）採取動作——一律建議買保護性 Put 保留上檔，不減碼（見 §2.5）。
 
 ### 1.2 適用市場環境與制度角色
-- **牛市末期極度亢奮**：當市場指數屢創新高、零售情緒陷入極度貪婪，但利率期貨已悄然隱含鷹派緊縮、或 VIX 期限結構出現倒掛時，系統提前收緊持倉窗口。
-- **降息預期落空與流動性再定價**：在 FOMC 會議前夕，若利率定價發生劇烈階梯位移，系統主動提前逃頂防禦窗口，防範流動性踩踏。
-- **大盤負 Gamma 踩踏加速區間**：當大盤微觀結構跌入負 Gamma 區間時，做市商將由「逢低買進逆向穩定」轉為「順向追殺放量對沖」，系統將緊縮閥門調至最高警戒。
+- **牛市末期極度亢奮**：當市場指數屢創新高、零售情緒陷入極度貪婪，但利率期貨已悄然隱含鷹派緊縮、或 VIX 期限結構出現倒掛時，流動性狀態轉為收縮，逃頂評分同步抬升。
+- **降息預期落空與流動性再定價**：在 FOMC 會議前夕，若利率定價發生劇烈階梯位移，流動性狀態轉為收縮，逃頂評分抬升時僅建議 SPY 保護性 Put（情境 6），不減碼。
+- **大盤負 Gamma 踩踏加速區間**：當大盤微觀結構跌入負 Gamma 區間時，做市商將由「逢低買進逆向穩定」轉為「順向追殺放量對沖」，流動性狀態與逃頂評分皆計入緊縮。
 
 ---
 
@@ -68,7 +68,7 @@ $$prob = \begin{cases}
 \operatorname{clamp}\left(0.05, 0.95, \frac{50.0 + (P_{\text{hike}} - P_{\text{cut}}) / 2.0}{100.0}\right) & \text{其餘中性維持或分歧情境}
 \end{cases}$$
 
-### 2.3 四因子宏觀流動性矩陣與窗口平移推導
+### 2.3 四因子宏觀流動性狀態矩陣
 `evaluate_escape_window_regime` 整合四項宏觀總經與微觀結構因子：
 1. **因子 1：FedWatch 利率定價**
    $$\text{緊縮評分 } T_1 = \mathbb{I}(prob > 0.70), \quad \text{寬鬆評分 } E_1 = \mathbb{I}(prob \le 0.40)$$
@@ -80,21 +80,22 @@ $$prob = \begin{cases}
 4. **因子 4：大盤微觀結構 Net GEX 狀態**
    $$\text{緊縮評分 } T_4 = \mathbb{I}(is\_negative\_gamma = \text{True}), \quad \text{寬鬆評分 } E_4 = \mathbb{I}(is\_negative\_gamma = \text{False})$$
 
-   `/market` 面板（`cogs/unified_terminal/utils.py`）的 $is\_negative\_gamma$ 以 SPY 現價對 SPY Gamma Flip 判定；Flip 快取逾 3 天時傳入 `None`（面板仍顯示 Flip 並標示「N 天前快取・不納入判定」）。VTS 快取逾 3 天同樣視為 `None`。
+   `/market` 面板（`cogs/unified_terminal/utils.py`，列名「流動性狀態」）的 $is\_negative\_gamma$ 以 SPY 現價對 SPY Gamma Flip 判定；Flip 快取逾 3 天時傳入 `None`（面板仍顯示 Flip 並標示「N 天前快取・不納入判定」）。VTS 快取逾 3 天同樣視為 `None`。
 
    **離群 Flip 同樣傳 `None` 或自癒**：Flip 相對現價落在大盤合理性區間外（高於現價 $> 20\%$ 或低於現價 $> 8\%$，`is_macro_gamma_flip_outlier`，規格見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §2.2）時，面板先丟棄 KV 值並走自癒（重抓大盤端點，仍缺值或離群再以 SPY 個股期權鏈估算）；自癒成功即以新值判定，失敗才傳入 `None`。`get_market_regime()` 與 last-known-good 快取套用同一判定。上方容許 20% 是為了在崩跌（Flip 遠高於現價的真負 Gamma）時保留訊號。
 
-**未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗、`is_negative_gamma` 因 Gamma Flip 缺值或大盤 GEX 快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）而無法判定）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被算成寬鬆而延後逃頂窗口。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
+**未知輸入不計分**：任一因子的輸入未知（`None`，例如 CPI 偏差未公布、WTI／VTS 抓取失敗、`is_negative_gamma` 因 Gamma Flip 缺值或大盤 GEX 快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）而無法判定）時，該因子的 $T_i = E_i = 0$——不再以 $cpi\_dev = 0$、$wti = 75$、$VTS = 0.88$ 之類偏寬鬆的常數補值，否則「資料缺失」會被誤判為寬鬆。因子 2 只要任一已知值超標即計緊縮，必須 CPI 與 WTI 皆已知且平穩才計寬鬆；$prob$ 未知時 $prob > 0.70$ 與 $prob \le 0.40$ 皆不成立。
 
-加總總緊縮分 $T = \sum_{i=1}^4 T_i$ 與總寬鬆分 $E = \sum_{i=1}^4 E_i$。窗口位移天數 $\Delta D_{shift}$ 與狀態分級遵循：
-$$\Delta D_{shift} = \begin{cases}
--8 \text{ 天 (前移)} & \text{若 } T \ge 3 \\
--5 \text{ 天 (前移)} & \text{若 } T = 2 \lor (prob > 0.70 \land is\_negative\_gamma) \\
-+5 \text{ 天 (後推)} & \text{若 } prob \le 0.40 \land E \ge 2 \land T = 0 \\
-0 \text{ 天 (維持)} & \text{其餘中性平衡情況}
+加總總緊縮分 $T = \sum_{i=1}^4 T_i$ 與總寬鬆分 $E = \sum_{i=1}^4 E_i$。流動性狀態（不再含任何天數位移）遵循：
+$$\text{State} = \begin{cases}
+\text{收縮} & \text{若 } T \ge 2 \lor (prob > 0.70 \land is\_negative\_gamma) \\
+\text{寬鬆} & \text{若 } prob \le 0.40 \land E \ge 2 \land T = 0 \\
+\text{均衡} & \text{其餘情況}
 \end{cases}$$
 
-**前移歸因標籤**：前移時狀態文字為「⚠️ 前移 N 天 (標籤₁+標籤₂+…)」，每個計入 $T_i = 1$ 的因子各一個標籤，判定門檻與上方計分**完全相同**，因此標籤數恆等於 $T$，全數列出不截斷（$T \ge 3$ 時不會擠掉第三個因子）：
+函式回傳 `(tightening_score, easing_score, direction, tier_title, status_desc)`，`direction ∈ {"收縮","寬鬆","均衡"}`；舊版 `shift_days`（±5／8 天）與「前移／後推／維持」字樣已移除，`T`／`E` 計分與門檻完全不變。
+
+**收縮歸因標籤**：收縮時狀態文字為「⚠️ 收縮 (標籤₁+標籤₂+…)」（寬鬆為「🟢 寬鬆擴張 (流動性擴張)」，均衡為「🟢 均衡」），每個計入 $T_i = 1$ 的因子各一個標籤，判定門檻與上方計分**完全相同**，因此標籤數恆等於 $T$，全數列出不截斷（$T \ge 3$ 時不會擠掉第三個因子）：
 
 | 因子 | 計分條件 | 標籤 |
 | :--- | :--- | :--- |
@@ -105,7 +106,7 @@ $$\Delta D_{shift} = \begin{cases}
 | $T_3$ | $VTS \ge 1.0$ | 波動倒掛 |
 | $T_4$ | $is\_negative\_gamma = \text{True}$ | 結構承壓 |
 
-CPI 與 WTI 同屬因子 2，只占一個標籤。面板著色：含「前移」為紅色，其餘（後推、正常窗口）為綠色；`evaluate_escape_window_regime` 不會產生「未知／資料不足」文字。
+CPI 與 WTI 同屬因子 2，只占一個標籤。面板著色：含「收縮」為紅色，其餘（寬鬆、均衡）為綠色；`evaluate_escape_window_regime` 不會產生「未知／資料不足」文字。
 
 ### 2.4 五因子複合逃頂評分階梯 (Macro Top-Escape Score)
 `evaluate_macro_top_escape_score` 計算逃頂綜合評分 $S_{esc} \in [0, 5]$，融合持倉端微觀過熱廣度：
@@ -156,7 +157,16 @@ $$\text{Payout} = \begin{cases}
 - **CP−T-Bill 利差（TED 代理）**：edge 計算的是 $DCPF3M - DTB3$（金融商業本票減國庫券），是融資成本利差，**不反映二級市場訂單簿深度**，故使用者可見標籤由「TED Spread (流動性指標)」改為「CP−T-Bill 利差 (TED 代理)」。kv key `macro_ted_spread` 與 $0.5$ 警戒判定不變。
 - **RRP 小基數**：現值與 30 天前（$past = RRP / (1 + \Delta\%/100)$）兩端皆低於 `RRP_MATERIAL_BALANCE_BILLIONS`（\$20B）時，30 日變動百分比不具意義，面板改顯示絕對變動 `(30天 +x.xB，小基數不計%)`（$past = RRP / (1 + \Delta\%/100)$）；$\Delta\% \le -100$ 時無法反推 $past$，仍印百分比。
 - **低波自滿（參考級）**：VIX < `_COMPLACENCY_VIX_MAX`（20，與 short_gamma_critical 的 VIX > 20 閘門對齊；原 16 在 VIX 16.68 配 10Y 5.146%、WTI \$98 時漏報）且下列任一成立時，於風控面板末端附加一行：10Y ≥ `_COMPLACENCY_US10Y`（5.0%）、WTI ≥ `_COMPLACENCY_WTI`（\$90）、FedWatch 升息機率 ≥ `_COMPLACENCY_HIKE_PROB_PCT`（15%，資料過期、缺值或備援值略過）。四個常數皆為 PRE_CALIBRATION／僅呈現。**盤前延後**：美股交易日 09:30 ET 開盤前，`^VIX` 仍是前日收盤，而 10Y／WTI／FedWatch 已重新定價，此時條件成立改印「⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀」，不印 ⚠ 判定；週末、假日與 09:30 起維持原判定。
-- **信用利差（HY／IG OAS，參考級）**：「📈 流動性與總經指標」於「聯準會資產負債表」下方新增兩列：高收益債利差（FRED `BAMLH0A0HYM2`）與投資級債利差（FRED `BAMLC0A0CM`，ICE BofA 選擇權調整利差），單位 bps（FRED 百分比值 × 100，取整），格式如 `343 bps (1M +29) 11/02`。1M 變動 = 最新觀測 − 觀測日 ≤ 最新觀測日 − 30 天的最近一筆（無此筆則省略 `(1M …)`）；末尾為觀測日 MM/DD。著色（`_HY_OAS_*`／`_IG_OAS_*`，PRE_CALIBRATION／僅呈現，不接任何閘門；另供擠壓進場影子否決前向紀錄（architecture/05 §5.18）讀取，不參與判定）：HY < 400 綠、400–499 黃、≥ 500 紅；IG < 150 綠、150–199 黃、≥ 200 紅。觀測日距今逾 `_CREDIT_SPREAD_STALE_DAYS`（5 日曆天，PRE_CALIBRATION）加黃色 `[逾 N 天]`。FRED 約落後 1 個營業日，故一律顯示觀測日。資料由 `services/credit_spread_service.py` 經 `fred` 閘門抓取，kv_cache 鍵 `macro_credit_spreads`，快取 4 小時、失敗退避 15 分鐘、單次逾時 8 秒；任何失敗沿用舊值，缺值該列顯示「獲取數據失敗」，不影響 /market 其他欄位。`recession_warning`、`short_gamma_critical`、安全提領紅線與逃頂窗口判定完全不讀這兩個值。
+- **信用利差（HY／IG OAS，參考級）**：「📈 流動性與總經指標」於「聯準會資產負債表」下方新增兩列：高收益債利差（FRED `BAMLH0A0HYM2`）與投資級債利差（FRED `BAMLC0A0CM`，ICE BofA 選擇權調整利差），單位 bps（FRED 百分比值 × 100，取整），格式如 `343 bps (1M +29) 11/02`。1M 變動 = 最新觀測 − 觀測日 ≤ 最新觀測日 − 30 天的最近一筆（無此筆則省略 `(1M …)`）；末尾為觀測日 MM/DD。著色（`_HY_OAS_*`／`_IG_OAS_*`，PRE_CALIBRATION／僅呈現，不接任何閘門；另供擠壓進場影子否決前向紀錄（architecture/05 §5.18）讀取，不參與判定）：HY < 400 綠、400–499 黃、≥ 500 紅；IG < 150 綠、150–199 黃、≥ 200 紅。觀測日距今逾 `_CREDIT_SPREAD_STALE_DAYS`（5 日曆天，PRE_CALIBRATION）加黃色 `[逾 N 天]`。FRED 約落後 1 個營業日，故一律顯示觀測日。資料由 `services/credit_spread_service.py` 經 `fred` 閘門抓取，kv_cache 鍵 `macro_credit_spreads`，快取 4 小時、失敗退避 15 分鐘、單次逾時 8 秒；任何失敗沿用舊值，缺值該列顯示「獲取數據失敗」，不影響 /market 其他欄位。`recession_warning`、`short_gamma_critical`、安全提領紅線與流動性狀態判定完全不讀這兩個值。
+
+### 2.8 09:00 ET 盤前「宏觀逃頂」簡報 Embed
+
+第二則 09:00 ET 盤前 DM（`🧭 宏觀逃頂：總經流動性狀態與逃頂評分 (Macro Escape Matrix)`，`AnalystAgent.run_fomc_escape_window_analysis` → `strategy_runner.run_fomc_escape_window_analysis`）只呈現兩件事：§2.3 的流動性狀態與 §2.4 的逃頂綜合評分，並依逃頂分級給出單一動作指引。
+
+- **因子 4 與進場閘門同源**：大盤負 Gamma 取自 `get_market_regime()`，推導與 `squeeze_entry/vetoes.py`（`compute_macro_escape_tier`）、`macro_top_escape_defense.py` 完全相同：`UNKNOWN` → `None`（⚪ 未知（不計分），不計入緊縮也不計入寬鬆）；`SHORT_GAMMA_CRITICAL`／`SYSTEMIC_LIQUIDITY_CRISIS` → `True`（🚨 負 Gamma 踩踏）；其餘 → `False`（🟢 未達踩踏條件，**不稱為「正 Gamma」**）。同一組輸入下，簡報的逃頂 tier 必等於擠壓進場閘門算出的 tier（`tests/unit/test_escape_briefing_regime.py` 以同一組 mock 輸入斷言）。舊版讀取無任何寫入者的 KV 鍵 `macro_short_gamma_critical`（恆為 False）已移除。
+- **指引依逃頂分級**：NORMAL → 維持持有（無需額外避險）；WATCH／ELEVATED／CRITICAL → 考慮 SPY 保護性 Put（情境 6，對沖約 30% Beta 加權 Delta，保留上檔），措辭依分級升高（前哨／警戒升高／確認級）但動作相同；使用者已開啟 `enable_macro_top_escape_defense` 時附「具體口數見盤中情境 6 推播」，未開啟則提示「可於 /settings 開啟「宏觀逃頂前瞻防禦」以收到口數建議」；UNKNOWN → 資料不足，無法判定逃頂分級。指引不含任何減倉、撤退、網格或裸賣建議。
+- **逃頂窗口已退役**：使用者自訂的「逃頂窗口（起~訖）」與 ±5／8 個交易日位移在程式中沒有任何消費端，且與 Buy & Hold 設計牴觸，已自簡報、`/market`（列名改為「流動性狀態」）、`/calendar`（「總經防護聯動」只陳述狀態）與 `/settings` 移除。DB 欄位 `escape_window_start`／`escape_window_end`、migration v048 與 `UserContext` 對應欄位**保留但不再使用**，既有使用者已存的值不受影響。
+- **Embed 顏色**：收縮紅、寬鬆綠、均衡金；標題後綴 `[歷史快取/備援]`／`[資料過期]` 不變。
 
 ---
 
@@ -175,10 +185,10 @@ flowchart TD
     FallbackState --> EscapeRegime["評估四因子流動性矩陣<br/>evaluate_escape_window_regime"]
     CalculateProb --> EscapeRegime
 
-    EscapeRegime --> WindowShift{矩陣狀態評估}
-    WindowShift -- "T >= 2 或 (prob>0.7 且 負Gamma)" --> ShiftEarly[🚨 收縮警戒: 逃頂窗口前移 5~8 天]
-    WindowShift -- "prob<=0.4 且 E>=2 且 T==0" --> ShiftLate[🟢 寬鬆擴張: 逃頂窗口後推 5 天]
-    WindowShift -- 其他中性條件 --> ShiftNeutral[🟡 中性平衡: 窗口維持 0 天]
+    EscapeRegime --> LiqState{矩陣狀態評估}
+    LiqState -- "T >= 2 或 (prob>0.7 且 負Gamma)" --> ShiftEarly[🚨 收縮警戒: 流動性狀態=收縮]
+    LiqState -- "prob<=0.4 且 E>=2 且 T==0" --> ShiftLate[🟢 寬鬆擴張: 流動性狀態=寬鬆]
+    LiqState -- 其他中性條件 --> ShiftNeutral[🟡 中性平衡: 流動性狀態=均衡]
 
     ShiftEarly --> TopEscapeScore["計算五因子複合逃頂評分<br/>evaluate_macro_top_escape_score"]
     ShiftLate --> TopEscapeScore
@@ -272,13 +282,17 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/index_microstructure.py`
-  - `evaluate_escape_window_regime`: 四因子宏觀流動性矩陣與窗口位移計算
+  - `evaluate_escape_window_regime`: 四因子宏觀流動性狀態矩陣（收縮／寬鬆／均衡，不含天數位移）
   - `evaluate_macro_top_escape_score`: 五因子複合逃頂評分階梯
   - `is_macro_gamma_flip_outlier`: 因子 4 大盤 Gamma Flip 合理性閘門
 - `nexus_core/market_analysis/trading_orchestration.py`
   - `get_safety_payout_threshold`: 安全提領紅線（§2.6）
 - `nexus_core/cogs/unified_terminal/utils.py`
-  - `get_macro_overview_data`: `/market` 面板四因子輸入組裝、離群 Flip 自癒
+  - `get_macro_overview_data`: `/market` 面板四因子輸入組裝、離群 Flip 自癒（輸出 `escape_win_status`／`escape_window_direction`／`escape_window_tier`，鍵名沿用、值為流動性狀態；`escape_window_shift_days` 已移除）
+- `nexus_core/market_analysis/analyst_runners/strategy_runner.py`
+  - `run_fomc_escape_window_analysis`: 09:00 ET 盤前「宏觀逃頂」簡報（§2.8）
+- `nexus_core/cogs/embed_builders/scan_embeds/macro_and_fomc.py`
+  - `create_fomc_escape_window_embed`: 簡報 Embed 版面（函式名沿用）
 - `nexus_edge_scraper/local_api/macro.py`
   - `scrape_fedwatch`: CME 30 天期聯邦基金期貨（ZQ）反推及階梯定價演算法
 - `nexus_core/services/calendar_service.py`

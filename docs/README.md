@@ -193,7 +193,7 @@ flowchart TB
 
 | 序號 | 技術規格書檔案 | 核心主題與量化突破 | 關鍵量化門檻與約束 | 核心對應程式碼 |
 |:---|:---|:---|:---|:---|
-| 22 | [`01_macro_escape_top_matrix.md`](macro_sentiment/01_macro_escape_top_matrix.md) | 宏觀逃頂推演矩陣與流動性退潮防禦 | CME ZQ 30 天期聯邦基金期貨反推, 利率倒掛壓縮模型, 情境 6 逃頂 25% BOXX 輪動 | `nexus_edge_scraper/local_api/macro.py` |
+| 22 | [`01_macro_escape_top_matrix.md`](macro_sentiment/01_macro_escape_top_matrix.md) | 宏觀逃頂推演矩陣與流動性退潮防禦 | CME ZQ 30 天期聯邦基金期貨反推, 利率倒掛壓縮模型, 情境 6 逃頂 SPY 保護性 Put | `nexus_edge_scraper/local_api/macro.py` |
 | 23 | [`02_sec_filing_moat_scanner.md`](macro_sentiment/02_sec_filing_moat_scanner.md) | SEC 財報護城河自動掃描器與嚴格排除條款 | 每日 08:00 ET 持倉掃描, RAM > 85% 防護, 5 大主題關鍵字錨點, 14 天事件靜默期 | `cogs/trading/fundamental_filing_monitor.py` |
 | 24 | [`03_wti_crude_oil_monitor.md`](macro_sentiment/03_wti_crude_oil_monitor.md) | WTI 原油期貨 24/7 監控與板塊衝擊矩陣 | 24/7 半小時 48 時點對齊, 00:00–06:00 ET 靜默保護, 階梯油價風險權重 $w_{\text{oil}}$ | `cogs/trading/wti_monitor.py` |
 | 25 | [`04_polymarket_vwbp_sentiment_radar.md`](macro_sentiment/04_polymarket_vwbp_sentiment_radar.md) | Polymarket VWBP 加權勝率與雙頁籤輿情共振雷達 | 13 組看跌語義反轉, 保底名義流動性加權 VWBP, 雙頁籤就地切換與四維共振雷達 | `cogs/unified_terminal/utils.py` |

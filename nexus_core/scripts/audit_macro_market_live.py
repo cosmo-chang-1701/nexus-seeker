@@ -588,7 +588,6 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
     recession_warning = macro_data.get("recession_warning")
     escape_win_status = macro_data.get("escape_win_status")
     escape_dir = macro_data.get("escape_window_direction")
-    escape_shift = macro_data.get("escape_window_shift_days")
     escape_tier = macro_data.get("escape_window_tier")
     payout_threshold = macro_data.get("payout_threshold")
 
@@ -662,7 +661,6 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
             "expected_recession": expected_recession,
             "escape_win_status": escape_win_status,
             "escape_window_direction": escape_dir,
-            "escape_window_shift_days": escape_shift,
             "escape_window_tier": escape_tier,
             "payout_threshold": payout_threshold,
         },

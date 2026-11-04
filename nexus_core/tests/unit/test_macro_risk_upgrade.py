@@ -1087,7 +1087,6 @@ def test_market_macro_overview_degradation_warning_wording() -> None:
         "fedwatch_details": {},
         "escape_win_status": "NEUTRAL",
         "escape_window_direction": "NONE",
-        "escape_window_shift_days": 0,
         "escape_window_tier": "NONE",
         "is_degraded": True,
         "gex_is_fallback": True,
@@ -1151,7 +1150,7 @@ def test_putwall_crisis_textual_martial_law() -> None:
 
 
 def test_fedwatch_market_overview_embed_formatting() -> None:
-    """測試 FedWatch 在 /market 總經 Embed 中的 ANSI 面板呈現與逃頂窗口聯動"""
+    """測試 FedWatch 在 /market 總經 Embed 中的 ANSI 面板呈現與流動性狀態聯動"""
     from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
 
     # Case 1: 鷹派加息 (加息 >= 50%)，帶有詳細期貨拆解
@@ -1180,7 +1179,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
             "prob_cut": 1.4,
             "decision": "hike",
         },
-        "escape_win_status": "🟢 正常窗口 (正Gamma護航中)",
+        "escape_win_status": "🟢 均衡",
     }
     embed_hawkish = build_market_macro_overview_embed(macro_data_hawkish)
     # Check fields
@@ -1196,11 +1195,8 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         "(09/16) 鷹派加息 (加息 59.1% / 維持 40.4% / 降息 1.4%)"
         in fields_dict["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
-    assert "利率逃頂窗口" in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
-    assert (
-        "🟢 正常窗口 (正Gamma護航中)"
-        in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
-    )
+    assert "流動性狀態" in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
+    assert "🟢 均衡" in fields_dict["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
 
     # 驗證面板內部無重複標題與多餘虛線
     for f_val in fields_dict.values():
@@ -1221,7 +1217,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
             "prob_cut": 75.0,
             "decision": "cut",
         },
-        "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
+        "escape_win_status": "🟢 寬鬆擴張 (流動性擴張)",
     }
     embed_dovish = build_market_macro_overview_embed(macro_data_dovish)
     fields_dovish: dict[str, str] = {
@@ -1232,7 +1228,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
         in fields_dovish["📈 流動性與總經指標 (Liquidity & Macro)"]
     )
     assert (
-        "後推 5 天 (流動性擴張)"
+        "寬鬆擴張 (流動性擴張)"
         in fields_dovish["🛡️ 聯動風控引擎狀態 (Risk Engine Status)"]
     )
 
@@ -1248,7 +1244,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
             "prob_cut": 25.0,
             "decision": "maintain",
         },
-        "escape_win_status": "🟢 正常窗口 (均衡定價)",
+        "escape_win_status": "🟢 均衡",
     }
     embed_maintain = build_market_macro_overview_embed(macro_data_maintain)
     fields_maintain: dict[str, str] = {
@@ -1276,7 +1272,7 @@ def test_fedwatch_market_overview_embed_formatting() -> None:
             "ladder_saturated": True,
             "decision": "cut",
         },
-        "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
+        "escape_win_status": "🟢 寬鬆擴張 (流動性擴張)",
     }
     embed_ladder_saturated = build_market_macro_overview_embed(
         macro_data_ladder_saturated
@@ -1616,52 +1612,49 @@ async def test_calendar_service_cpi_deviation_ensures_previous_month_cached() ->
 
 
 def test_evaluate_escape_window_regime_matrix() -> None:
-    """測試多因子逃頂窗口矩陣評估邏輯 (四因子)"""
+    """測試多因子流動性狀態矩陣評估邏輯 (四因子)"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
-    # 1. 鷹派利率 + 負 Gamma -> 前移收縮警戒
-    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+    # 1. 鷹派利率 + 負 Gamma -> 收縮警戒
+    t_score, e_score, direction, tier, status = evaluate_escape_window_regime(
         prob=0.99,
         cpi_dev=0.0,
         wti=75.0,
         vts_ratio=0.88,
         is_negative_gamma=True,
     )
-    assert direction == "前移"
-    assert shift >= 5
+    assert direction == "收縮"
     assert "收縮警戒" in tier
-    assert "⚠️ 前移" in status
+    assert "⚠️ 收縮" in status
 
-    # 2. 鷹派利率 + 正 Gamma 護航 + 通膨穩定 -> 正常窗口
-    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+    # 2. 鷹派利率 + 正 Gamma 護航 + 通膨穩定 -> 均衡
+    t_score, e_score, direction, tier, status = evaluate_escape_window_regime(
         prob=0.99,
         cpi_dev=-0.05,
         wti=72.0,
         vts_ratio=0.85,
         is_negative_gamma=False,
     )
-    assert direction == "維持"
-    assert shift == 0
+    assert direction == "均衡"
     assert "中性平衡" in tier
-    assert "🟢 正常窗口 (正Gamma護航中)" == status
+    assert "🟢 均衡" == status
 
-    # 3. 寬鬆降息 + 正價差 -> 後推擴張
-    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+    # 3. 寬鬆降息 + 正價差 -> 寬鬆擴張
+    t_score, e_score, direction, tier, status = evaluate_escape_window_regime(
         prob=0.25,
         cpi_dev=-0.1,
         wti=70.0,
         vts_ratio=0.82,
         is_negative_gamma=False,
     )
-    assert direction == "後推"
-    assert shift == 5
+    assert direction == "寬鬆"
     assert "寬鬆擴張" in tier
-    assert "🟢 後推 5 天" in status
+    assert "🟢 寬鬆擴張" in status
 
 
 def test_evaluate_escape_window_regime_unknown_gamma_is_not_scored() -> None:
     """Gamma Flip 未知 (None，例如大盤 GEX 快取過期) 時不計入收縮也不計入寬鬆。
-    回歸：2026-10 GEX 快取停在 24 天前，舊 Flip 被判成負 Gamma，把窗口誤推為前移。"""
+    回歸：2026-10 GEX 快取停在 24 天前，舊 Flip 被判成負 Gamma，把流動性狀態誤判為收縮。"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
     common: dict[str, Any] = {
@@ -1670,18 +1663,17 @@ def test_evaluate_escape_window_regime_unknown_gamma_is_not_scored() -> None:
         "wti": 92.57,
         "vts_ratio": 0.888,
     }
-    t_unknown, e_unknown, direction, shift, *_ = evaluate_escape_window_regime(
+    t_unknown, e_unknown, direction, *_ = evaluate_escape_window_regime(
         **common, is_negative_gamma=None
     )
     assert (t_unknown, e_unknown) == (1, 1)
-    assert direction == "維持"
-    assert shift == 0
+    assert direction == "均衡"
 
     t_neg, e_neg, direction_neg, *_ = evaluate_escape_window_regime(
         **common, is_negative_gamma=True
     )
     assert (t_neg, e_neg) == (2, 1)
-    assert direction_neg == "前移"
+    assert direction_neg == "收縮"
 
     t_pos, e_pos, *_ = evaluate_escape_window_regime(**common, is_negative_gamma=False)
     assert (t_pos, e_pos) == (1, 2)
@@ -1773,8 +1765,8 @@ async def test_macro_overview_expired_caches_are_not_used_as_live() -> None:
     assert data["gex_is_expired"] is True
     assert data["spy_gamma_flip"] == 769.98  # 仍顯示
     assert data["short_gamma_critical"] is False
-    # 舊 Flip (769.98 > SPY 763.99) 不得再把窗口判成「前移」
-    assert data["escape_window_direction"] == "維持"
+    # 舊 Flip (769.98 > SPY 763.99) 不得再把流動性狀態判成「收縮」
+    assert data["escape_window_direction"] == "均衡"
     assert data["fear_greed"] == 28.0
     assert data["rrp_change_30d"] == 10.4
     assert data["core_is_expired"] is False
@@ -1845,7 +1837,7 @@ async def test_macro_overview_fresh_caches_skip_core_refetch() -> None:
     assert data["gex_is_expired"] is False
     assert data["core_is_expired"] is False
     # 新鮮的 Flip 769.98 > SPY 763.99 → 負 Gamma 計入收縮 (WTI>85 + 負 Gamma = 2)
-    assert data["escape_window_direction"] == "前移"
+    assert data["escape_window_direction"] == "收縮"
 
 
 @pytest.mark.asyncio
@@ -1953,32 +1945,30 @@ def test_evaluate_macro_top_escape_score_matrix() -> None:
 
 
 def test_evaluate_escape_window_regime_none_prob_safe() -> None:
-    """測試逃頂窗口在 prob 為 None 或非數值時具備防禦性中性回退，不拋出 TypeError"""
+    """測試流動性狀態在 prob 為 None 或非數值時具備防禦性中性回退，不拋出 TypeError"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
     # Case 1: prob is None
-    t_score, e_score, direction, shift, tier, status = evaluate_escape_window_regime(
+    t_score, e_score, direction, tier, status = evaluate_escape_window_regime(
         prob=None,
         cpi_dev=0.0,
         wti=75.0,
         vts_ratio=0.88,
         is_negative_gamma=False,
     )
-    assert direction == "維持"
-    assert shift == 0
+    assert direction == "均衡"
     assert "中性平衡" in tier
-    assert "🟢 正常窗口 (均衡定價)" == status
+    assert "🟢 均衡" == status
 
     # Case 2: prob is malformed
-    t_score2, e_score2, dir2, shift2, tier2, status2 = evaluate_escape_window_regime(
+    t_score2, e_score2, dir2, tier2, status2 = evaluate_escape_window_regime(
         prob="invalid_prob",  # type: ignore[arg-type]
         cpi_dev=0.0,
         wti=75.0,
         vts_ratio=0.88,
         is_negative_gamma=False,
     )
-    assert dir2 == "維持"
-    assert shift2 == 0
+    assert dir2 == "均衡"
 
 
 # ---------------------------------------------------------------------------
@@ -2567,42 +2557,42 @@ def test_interpolate_gamma_flip_zero_invalid_returns_zero(
 
 
 def test_dynamic_escape_window_drivers() -> None:
-    """測試逃頂窗口收縮歸因動態驅動因子 (油價、通膨、期限結構倒掛、負Gamma、高利率)。"""
+    """測試流動性狀態收縮歸因動態驅動因子 (油價、通膨、期限結構倒掛、負Gamma、高利率)。"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
     # Case 1: WTI 高油價 (90.0) + 負 Gamma (True)，利率中性 (prob=0.55) -> (高油價+結構承壓)
-    t_score, _, direction, shift, tier, status = evaluate_escape_window_regime(
+    t_score, _, direction, tier, status = evaluate_escape_window_regime(
         prob=0.55,
         cpi_dev=0.0,
         wti=90.0,
         vts_ratio=0.85,
         is_negative_gamma=True,
     )
-    assert direction == "前移"
+    assert direction == "收縮"
     assert "收縮警戒" in tier
     assert "高油價+結構承壓" in status
     assert "高利率" not in status
 
     # Case 2: 鷹派利率 (prob=0.90) + 通膨升溫 (cpi_dev=0.4) -> (高利率+通膨升溫)
-    t_score, _, direction, shift, tier, status = evaluate_escape_window_regime(
+    t_score, _, direction, tier, status = evaluate_escape_window_regime(
         prob=0.90,
         cpi_dev=0.4,
         wti=75.0,
         vts_ratio=0.85,
         is_negative_gamma=False,
     )
-    assert direction == "前移"
+    assert direction == "收縮"
     assert "高利率+通膨升溫" in status
 
     # Case 3: 波動倒掛 (vts_ratio=1.1) + 負 Gamma (True)，利率溫和 (prob=0.50) -> (波動倒掛+結構承壓)
-    t_score, _, direction, shift, tier, status = evaluate_escape_window_regime(
+    t_score, _, direction, tier, status = evaluate_escape_window_regime(
         prob=0.50,
         cpi_dev=0.0,
         wti=75.0,
         vts_ratio=1.1,
         is_negative_gamma=True,
     )
-    assert direction == "前移"
+    assert direction == "收縮"
     assert "波動倒掛+結構承壓" in status
 
 
@@ -2793,16 +2783,16 @@ def test_safety_payout_threshold_rrp_material_balance() -> None:
 
 
 def test_market_embed_escape_window_ansi_coloring() -> None:
-    """測試 build_market_macro_overview_embed 的逃頂窗口 ANSI 色碼包裝。"""
+    """測試 build_market_macro_overview_embed 的流動性狀態 ANSI 色碼包裝。"""
     from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
 
-    # Case 1: 前移收縮警戒 -> 紅色 \u001b[1;31m
+    # Case 1: 收縮警戒 -> 紅色 \u001b[1;31m
     macro_data_contract: dict[str, Any] = {
         "spx": 7800.0,
         "vix": 16.0,
         "us10y": 4.5,
         "gamma_flip_line": 7750.0,
-        "escape_win_status": "⚠️ 前移 5 天 (高油價+結構承壓)",
+        "escape_win_status": "⚠️ 收縮 (高油價+結構承壓)",
         "payout_threshold": 13000.0,
     }
     embed_contract = build_market_macro_overview_embed(macro_data_contract)
@@ -2811,15 +2801,15 @@ def test_market_embed_escape_window_ansi_coloring() -> None:
         for f in embed_contract.fields
         if f.name and "聯動風控引擎狀態" in f.name
     )
-    assert "\u001b[1;31m⚠️ 前移 5 天 (高油價+結構承壓)\u001b[0m" in risk_field
+    assert "\u001b[1;31m⚠️ 收縮 (高油價+結構承壓)\u001b[0m" in risk_field
 
-    # Case 2: 後推寬鬆擴張 -> 綠色 \u001b[1;32m
+    # Case 2: 寬鬆擴張 -> 綠色 \u001b[1;32m
     macro_data_expand: dict[str, Any] = {
         "spx": 7800.0,
         "vix": 16.0,
         "us10y": 4.5,
         "gamma_flip_line": 7750.0,
-        "escape_win_status": "🟢 後推 5 天 (流動性擴張)",
+        "escape_win_status": "🟢 寬鬆擴張 (流動性擴張)",
         "payout_threshold": 13000.0,
     }
     embed_expand = build_market_macro_overview_embed(macro_data_expand)
@@ -2828,7 +2818,7 @@ def test_market_embed_escape_window_ansi_coloring() -> None:
         for f in embed_expand.fields
         if f.name and "聯動風控引擎狀態" in f.name
     )
-    assert "\u001b[1;32m🟢 後推 5 天 (流動性擴張)\u001b[0m" in risk_field_expand
+    assert "\u001b[1;32m🟢 寬鬆擴張 (流動性擴張)\u001b[0m" in risk_field_expand
 
 
 @pytest.mark.asyncio
@@ -2975,12 +2965,12 @@ def test_safety_payout_threshold_rrp_string_type_safety() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "ansi"),
     [
-        # 中性平衡 -> evaluate_escape_window_regime 實際輸出「🟢 正常窗口 (...)」-> 綠色
+        # 中性平衡 -> evaluate_escape_window_regime 實際輸出「🟢 均衡」-> 綠色
         (
             {"prob": 0.55, "cpi_dev": 0.0, "wti": 75.0, "vts_ratio": 0.95},
             "\u001b[1;32m",
         ),
-        # 前移 -> 紅色
+        # 收縮 -> 紅色
         (
             {
                 "prob": 0.90,
@@ -2991,7 +2981,7 @@ def test_safety_payout_threshold_rrp_string_type_safety() -> None:
             },
             "\u001b[1;31m",
         ),
-        # 後推 -> 綠色
+        # 寬鬆 -> 綠色
         (
             {
                 "prob": 0.30,
@@ -3272,11 +3262,11 @@ def test_escape_window_attribution_matches_scoring_thresholds() -> None:
     """歸因門檻與計分一致：cpi_dev 0.2（> 0.1）會計分，也必須出現在歸因。"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
-    t_score, _, direction, _, _, status = evaluate_escape_window_regime(
+    t_score, _, direction, _, status = evaluate_escape_window_regime(
         prob=0.90, cpi_dev=0.2, wti=75.0, vts_ratio=0.85, is_negative_gamma=False
     )
     assert t_score == 2
-    assert direction == "前移"
+    assert direction == "收縮"
     assert "(高利率+通膨升溫)" in status
 
 
@@ -3284,14 +3274,13 @@ def test_escape_window_attribution_lists_all_factors_when_t_ge_3() -> None:
     """T ≥ 3 時列出全部觸發因子；CPI 與 WTI 同屬因子 2，合併為一個標籤。"""
     from market_analysis.index_microstructure import evaluate_escape_window_regime
 
-    t_score, _, _, shift, _, status = evaluate_escape_window_regime(
+    t_score, _, _, _, status = evaluate_escape_window_regime(
         prob=0.90, cpi_dev=0.4, wti=95.0, vts_ratio=1.1, is_negative_gamma=True
     )
     assert t_score == 4
-    assert shift == 8
     assert "(高利率+通膨油價雙升+波動倒掛+結構承壓)" in status
 
-    t_score, _, _, _, _, status = evaluate_escape_window_regime(
+    t_score, _, _, _, status = evaluate_escape_window_regime(
         prob=0.55, cpi_dev=0.0, wti=95.0, vts_ratio=1.1, is_negative_gamma=True
     )
     assert t_score == 3

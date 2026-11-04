@@ -1,7 +1,7 @@
 from typing import Any
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 import pandas as pd
 import sys
@@ -793,19 +793,13 @@ async def test_post_market_intelligence_dispatch_memory_gate_triggered() -> None
 
 
 @pytest.mark.asyncio
-async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
+async def test_run_fomc_escape_window_analysis_liquidity_state() -> None:
     bot = MagicMock()
     with patch("discord.ext.tasks.Loop.start"):
         agent = AnalystAgent(bot)
 
-    now_tw = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
-    ref_date = now_tw.date()
-    cur_month = ref_date.month
-
-    # Mock user context with custom dynamic window
     user_ctx = MagicMock()
-    user_ctx.escape_window_start = f"{cur_month:02d}-15"
-    user_ctx.escape_window_end = f"{cur_month:02d}-28"
+    user_ctx.enable_macro_top_escape_defense = False
 
     # Case 1: Hawkish / Tightening (prob = 0.85 > 0.70, negative gamma critical)
     with (
@@ -814,9 +808,11 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
         patch(
             "cogs.embed_builder.create_fomc_escape_window_embed"
         ) as mock_create_embed,
+        patch("database.cache.get_kv_cache", return_value=None),
         patch(
-            "database.cache.get_kv_cache",
-            side_effect=lambda k: 1 if k == "macro_short_gamma_critical" else None,
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="SHORT_GAMMA_CRITICAL",
         ),
         patch(
             "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
@@ -831,11 +827,10 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
 
         mock_create_embed.assert_called_once()
         kwargs = mock_create_embed.call_args.kwargs
-        assert kwargs["direction"] == "前移"
+        assert kwargs["direction"] == "收縮"
         assert "🚨 收縮警戒" in kwargs["tier_title"]
-        assert f"{cur_month}月" in kwargs["adjusted_start"]
-        assert kwargs["shift_days"] in [5, 8]
-        assert "前移" in kwargs["reason"]
+        assert "收縮" in kwargs["reason"]
+        assert "shift_days" not in kwargs and "adjusted_start" not in kwargs
 
     # Case 2: Dovish / Expansion (prob = 0.35 <= 0.40, cool inflation, positive gamma)
     with (
@@ -853,6 +848,11 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
             ),
         ),
         patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
             "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
             new_callable=AsyncMock,
             return_value={"vts_ratio": 0.82, "vts_state": "Contango"},
@@ -865,10 +865,9 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
 
         mock_create_embed.assert_called_once()
         kwargs = mock_create_embed.call_args.kwargs
-        assert kwargs["direction"] == "後推"
+        assert kwargs["direction"] == "寬鬆"
         assert "🟢 寬鬆擴張" in kwargs["tier_title"]
-        assert kwargs["shift_days"] == 5
-        assert "後推" in kwargs["reason"]
+        assert "寬鬆" in kwargs["reason"]
 
     # Case 3: Neutral Balance (prob = 0.55)
     with (
@@ -878,6 +877,11 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
             "cogs.embed_builder.create_fomc_escape_window_embed"
         ) as mock_create_embed,
         patch("database.cache.get_kv_cache", return_value=None),
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
         patch(
             "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
             new_callable=AsyncMock,
@@ -891,44 +895,8 @@ async def test_run_fomc_escape_window_analysis_dynamic_period_labels() -> None:
 
         mock_create_embed.assert_called_once()
         kwargs = mock_create_embed.call_args.kwargs
-        assert kwargs["direction"] == "維持"
-        assert kwargs["shift_days"] == 0
+        assert kwargs["direction"] == "均衡"
         assert "🟡 中性平衡" in kwargs["tier_title"]
-
-    # Case 4: Expired setting auto-rollover
-    expired_ctx = MagicMock()
-    if cur_month > 1:
-        past_month = cur_month - 1
-        expired_ctx.escape_window_start = f"{past_month:02d}-01"
-        expired_ctx.escape_window_end = f"{past_month:02d}-05"
-    else:
-        if ref_date.day > 8:
-            expired_ctx.escape_window_start = "01-01"
-            expired_ctx.escape_window_end = "01-02"
-        else:
-            expired_ctx.escape_window_start = "11-01"
-            expired_ctx.escape_window_end = "11-05"
-    with (
-        patch("sqlite3.connect") as mock_conn,
-        patch("database.user_settings.get_full_user_context", return_value=expired_ctx),
-        patch(
-            "cogs.embed_builder.create_fomc_escape_window_embed"
-        ) as mock_create_embed,
-        patch("database.cache.get_kv_cache", return_value=None),
-        patch(
-            "market_analysis.analyst_runners.strategy_runner.get_vix_term_structure",
-            new_callable=AsyncMock,
-            return_value={"vts_ratio": 0.92, "vts_state": "Contango"},
-        ),
-    ):
-        mock_cursor = mock_conn.return_value.cursor.return_value
-        mock_cursor.fetchone.return_value = {"fedwatch_probability": 0.50}
-
-        await agent.run_fomc_escape_window_analysis(12345)
-
-        mock_create_embed.assert_called_once()
-        kwargs = mock_create_embed.call_args.kwargs
-        assert kwargs["was_auto_rolled"] is True
 
 
 def test_get_all_portfolio_includes_holdings() -> None:

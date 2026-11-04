@@ -244,15 +244,12 @@ def test_macro_scan_full_data_healthy() -> None:
 
 def test_fomc_prob_stale_title_suffix() -> None:
     kwargs: dict[str, Any] = dict(
-        direction="持平",
-        shift_days=0,
-        adjusted_start="a",
-        adjusted_end="b",
+        direction="均衡",
         reason="r",
     )
-    stale = create_fomc_escape_window_embed(None, prob_stale=True, **kwargs)
+    stale = create_fomc_escape_window_embed(prob_stale=True, **kwargs)
     assert "[資料過期]" in (stale.title or "")
-    fresh = create_fomc_escape_window_embed(0.5, **kwargs)
+    fresh = create_fomc_escape_window_embed(**kwargs)
     assert "[資料過期]" not in (fresh.title or "")
 
 

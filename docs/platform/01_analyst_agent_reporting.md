@@ -27,6 +27,8 @@ Analyst Agent 是與「Watchlist 30 分鐘深度心跳」（見 [`../architectur
   - **文字原則**：僅陳述已檢查的事實與風險（例如「高 Beta／高估值成長股波動可能放大」），**不得建議減碼、降低曝險或轉進防禦型資產**（使用者為長期持有，系統僅提供顧問資訊）；狀態文字只描述實際檢查過的數值（VIX 分級、10Y 水位與 bp 變動、利差與觀測日或「2Y 無資料」、DXY ≤ 103 溫和／103–105 偏強），指引為「未觸發總經警示，維持既有持有計畫」。利差缺值有兩種寫法：2Y 本身缺值寫「2Y 無資料」；2Y 有值但利差缺值寫「利差無資料（10Y 未入庫或與 2Y 無同日資料）」。2Y 觀測日標在表格列標籤 `US2Y MM/DD 2Y`，利差備註標的是利差的觀測日 `curve_date`（兩者可不同日）。
   - **降級規則**：標題 `[盤前數據未更新/降級模式]`（孤兒 `create_macro_scan_embed` 為 `[降級模式]`）只由 `dxy`、`tnx`、`vix` 缺值觸發；僅 2Y／利差缺失時只在該列顯示 `--`，不降級、也不改變宏觀狀態判讀。
 
+- **第二則 DM：宏觀逃頂簡報**：同一個 `dispatch_pre_market_briefing()` 對每位使用者另送 `🧭 宏觀逃頂：總經流動性狀態與逃頂評分 (Macro Escape Matrix)`（`strategy_runner.run_fomc_escape_window_analysis` → `create_fomc_escape_window_embed`，通知類型 `briefing_pre_market`）。內容為四因子流動性狀態（收縮／寬鬆／均衡，因子 4 取自 `get_market_regime()`，與進場閘門同源）與逃頂綜合評分，並依逃頂分級給單一動作指引（NORMAL 維持持有；WATCH／ELEVATED／CRITICAL 考慮 SPY 保護性 Put；UNKNOWN 資料不足）。不再有「逃頂窗口」與位移天數，也不含任何減倉建議；規格見 [`../macro_sentiment/01_macro_escape_top_matrix.md`](../macro_sentiment/01_macro_escape_top_matrix.md) §2.8。
+
 ### 2.2 孤兒路徑（未接入生產排程，僅供測試）
 `market_analysis/analyst_runners/earnings_runner.py::run_premarket_earnings()` 實作了一套更重量級的管線（標的分析數上限 10 檔、`days_left <= 2` 深/淺掃描分流、透過 `SentimentEngine.calculate_pcr` 計算 PCR、公司檔案解析、LLM 上下文剪裁、`asyncio.Semaphore(3)` 速率限制），輸出獨立的 `create_earnings_report_embed()`（`📊 Nexus Seeker 盤前財報與估值調整`）。`AnalystAgent.run_premarket_earnings` 只是它的一層薄包裝，但**目前排程、slash command 或任何 `dispatch_*` 方法都沒有呼叫它**——只有 `tests/unit/test_analyst_agent.py` 會執行到。應視為未接線的遺留程式碼，而非生產環境實際的財報雷達行為，除非未來重新接回某條實際的派送路徑。
 
