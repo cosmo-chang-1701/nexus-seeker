@@ -6,6 +6,7 @@ docs/architecture/05 §5.17／§5.18 採「呈現先行、前向紀錄」：把�
 日後以 forward-report 判斷哪些值得接進判定。
 
 欄位契約（鍵名逐字固定，報表端依此讀取）見 `compute_shadow_vetoes` 的回傳。
+另紀錄信用利差原始值（HY／IG OAS）與兩個旗標，旗標不併入 `sv_any`（保持既有口徑可比）。
 """
 
 import logging
@@ -32,6 +33,14 @@ SHADOW_MAX_STOP_PCT = 10.0
 SHADOW_MACRO_EVENT_HOURS = 48.0
 # PRE_CALIBRATION／僅紀錄，不參與判定：高影響總經事件公布後 N 小時內視為事件窗
 SHADOW_MACRO_POST_HOURS = 2.0
+# PRE_CALIBRATION／僅紀錄，不參與判定：HY OAS ≥ N bps 視為信用利差偏寬（對齊 /market 黃色下限）
+SHADOW_HY_OAS_BPS = 400
+# PRE_CALIBRATION／僅紀錄，不參與判定：HY OAS 1 個月變動 ≥ +N bps 視為利差快速擴大
+SHADOW_HY_CHG1M_BPS = 50
+# PRE_CALIBRATION／僅紀錄，不參與判定：觀測日距 today 超過 N 個日曆天視為無資料（旗標為 None）
+SHADOW_CREDIT_STALE_DAYS = 5
+# PRE_CALIBRATION／僅紀錄，不參與判定：等待 get_credit_spreads() 的秒數上限（非判定門檻）
+SHADOW_CREDIT_TIMEOUT_SECONDS = 1.5
 
 # 停損緩衝：PutWall 下方 0.5 × ATR（與契約 sv_rr 定義一致）
 _WALL_STOP_ATR_MULT = 0.5
@@ -57,6 +66,12 @@ SHADOW_KEYS: tuple[str, ...] = (
     "sv_f_wide",
     "sv_f_mev",
     "sv_any",
+    "sv_hy_oas",
+    "sv_hy_chg1m",
+    "sv_hy_age_d",
+    "sv_ig_oas",
+    "sv_f_hy_lvl",
+    "sv_f_hy_chg",
 )
 
 _FLAG_KEYS: tuple[str, ...] = (
@@ -68,6 +83,9 @@ _FLAG_KEYS: tuple[str, ...] = (
     "sv_f_mev",
 )
 
+# 信用利差旗標：只紀錄，不納入 sv_any
+_CREDIT_FLAG_KEYS: tuple[str, ...] = ("sv_f_hy_lvl", "sv_f_hy_chg")
+
 
 def _fnum(value: Any) -> Optional[float]:
     """只過濾非數值／非有限值；0.0 保留（不可用 evaluation_recorder._num）。"""
@@ -78,6 +96,41 @@ def _fnum(value: Any) -> Optional[float]:
     except (TypeError, ValueError):
         return None
     return f if math.isfinite(f) else None
+
+
+def _bps(value: Any) -> Optional[int]:
+    """bps 轉整數；非有限數值／bool／非數字為 None，0 保留。"""
+    f = _fnum(value)
+    return None if f is None else int(round(f))
+
+
+def _credit_fields(credit: Any, today: date) -> dict[str, Any]:
+    """信用利差四個原始值與兩旗標；原始值不論是否過期都照記，過期只讓旗標為 None。"""
+    out: dict[str, Any] = {k: None for k in _CREDIT_FLAG_KEYS}
+    out.update(sv_hy_oas=None, sv_hy_chg1m=None, sv_hy_age_d=None, sv_ig_oas=None)
+    if not isinstance(credit, Mapping):
+        return out
+    hy = credit.get("hy")
+    ig = credit.get("ig")
+    if isinstance(ig, Mapping):
+        out["sv_ig_oas"] = _bps(ig.get("bps"))
+    if not isinstance(hy, Mapping):
+        return out
+    out["sv_hy_oas"] = _bps(hy.get("bps"))
+    out["sv_hy_chg1m"] = _bps(hy.get("change_1m_bps"))
+    try:
+        obs = datetime.strptime(str(hy.get("obs_date"))[:10], "%Y-%m-%d").date()
+        out["sv_hy_age_d"] = (today - obs).days
+    except ValueError:
+        out["sv_hy_age_d"] = None
+    age = out["sv_hy_age_d"]
+    if age is None or age > SHADOW_CREDIT_STALE_DAYS:
+        return out
+    if out["sv_hy_oas"] is not None:
+        out["sv_f_hy_lvl"] = out["sv_hy_oas"] >= SHADOW_HY_OAS_BPS
+    if out["sv_hy_chg1m"] is not None:
+        out["sv_f_hy_chg"] = out["sv_hy_chg1m"] >= SHADOW_HY_CHG1M_BPS
+    return out
 
 
 def _round(value: Optional[float], digits: int) -> Optional[float]:
@@ -141,6 +194,8 @@ def compute_shadow_vetoes(
     macro_event_tte_h: Optional[float],
     macro_calendar_ok: bool,
     today: date,
+    *,
+    credit_spreads: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
     """純函式：回傳全部 `sv_*` 鍵；缺輸入為 None。僅供紀錄，不得用於判定。"""
     r: Mapping[str, Any] = radar if isinstance(radar, Mapping) else {}
@@ -284,4 +339,5 @@ def compute_shadow_vetoes(
         out["sv_any"] = False
     else:
         out["sv_any"] = None
+    out.update(_credit_fields(credit_spreads, today))
     return out

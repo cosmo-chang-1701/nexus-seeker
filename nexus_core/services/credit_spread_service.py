@@ -1,6 +1,7 @@
 """信用利差（ICE BofA OAS）：FRED 抓取＋kv_cache 快取，僅供 /market 面板呈現。
 
-不接任何閘門／決策；任何失敗皆吞下並回舊值，`get_credit_spreads()` 永不拋例外。
+另供擠壓進場「影子否決」前向紀錄讀取（market_analysis/squeeze_entry/shadow_vetoes.py，
+僅紀錄、不參與判定）。不接任何閘門／決策；任何失敗皆吞下並回舊值，`get_credit_spreads()` 永不拋例外。
 """
 
 from __future__ import annotations

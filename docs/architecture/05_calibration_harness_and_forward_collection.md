@@ -145,7 +145,10 @@ flowchart TD
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時顯示「樣本不足（交易日數 n／20）」，不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
-| `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SHADOW_HY_OAS_BPS` / `SHADOW_HY_CHG1M_BPS` | `400` / `50` | 影子旗標 `sv_f_hy_lvl`／`sv_f_hy_chg`：HY OAS ≥ 400 bps、1M 變動 ≥ +50 bps；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_CREDIT_STALE_DAYS` | `5` | 信用利差觀測日距 today 超過此日曆天數時，兩個信用旗標為 `null`（原始值照記）；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `SHADOW_CREDIT_TIMEOUT_SECONDS` | `1.5` | `_compute_shadow` 等待 `get_credit_spreads()` 的秒數上限，逾時信用欄位為 `null`；非判定門檻，僅紀錄（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
 
 ---
 
@@ -658,9 +661,13 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 | `sv_f_rr` | `sv_rr < 2.0`（牆位盈虧比：目標 `min(CallWall, 泥淖)`，停損 `PutWall − 0.5×ATR₁D`）；無資料時 `null` | `SHADOW_MIN_RR = 2.0` |
 | `sv_f_wide` | `sv_stop_pct > 10.0` 或 `sv_wstop_pct > 10.0`；兩者皆無資料時 `null` | `SHADOW_MAX_STOP_PCT = 10.0` |
 | `sv_f_mev` | 高影響總經事件 `−2 ≤ sv_mev_h ≤ 48`（事件前 48 小時＋公布後 2 小時，與既有 `has_macro_guard` 一致；`sv_mev_h` 以事件 ISO 時間與當下重算，不用凍結的 `tte_hours`）；日曆成功且無事件為 `false`，日曆失敗為 `null` | `SHADOW_MACRO_EVENT_HOURS = 48.0`、`SHADOW_MACRO_POST_HOURS = 2.0` |
-| `sv_any` | 上述六旗標任一為 `true` → `true`；全為 `false` → `false`；否則（無 `true` 但有 `null`）→ `null` | — |
+| `sv_any` | 上述六旗標任一為 `true` → `true`；全為 `false` → `false`；否則（無 `true` 但有 `null`）→ `null`；**不含信用利差旗標** | — |
+| `sv_f_hy_lvl` | `sv_hy_oas ≥ 400`（對齊 /market 高收益債利差黃色下限）；HY 缺值、`sv_hy_age_d` 為 `null` 或 `> 5` 時 `null` | `SHADOW_HY_OAS_BPS = 400`、`SHADOW_CREDIT_STALE_DAYS = 5` |
+| `sv_f_hy_chg` | `sv_hy_chg1m ≥ 50`（HY OAS 1M 變動 ≥ +50 bps）；1M 變動缺值、`sv_hy_age_d` 為 `null` 或 `> 5` 時 `null` | `SHADOW_HY_CHG1M_BPS = 50`、`SHADOW_CREDIT_STALE_DAYS = 5` |
 
-原始值鍵（`sv_cw`、`sv_cw_atr`、`sv_sw`、`sv_sw_atr`、`sv_pw`、`sv_rr`、`sv_wstop_pct`、`sv_stop_pct`、`sv_mp_dist`、`sv_mp_dte`、`sv_ngex`、`sv_mev_h`、`sv_gex_stale`）一併寫入供離線重算；`sv_*` 數值不得經過 `evaluation_recorder._num()`（它把 `0.0` 轉成 `None`，會讓 DTE=0、偏離 0.0%、tte 0.0h 消失）。
+原始值鍵（`sv_cw`、`sv_cw_atr`、`sv_sw`、`sv_sw_atr`、`sv_pw`、`sv_rr`、`sv_wstop_pct`、`sv_stop_pct`、`sv_mp_dist`、`sv_mp_dte`、`sv_ngex`、`sv_mev_h`、`sv_gex_stale`，以及信用利差的 `sv_hy_oas`、`sv_hy_chg1m`、`sv_hy_age_d`、`sv_ig_oas`）一併寫入供離線重算；信用利差原始值（整數 bps，0 保留）不論是否過期都照記，過期只讓旗標為 `null`；`sv_hy_age_d` 為 `today − 觀測日` 的日曆天數（觀測日解析失敗為 `null`）；IG 只記原始值、無旗標；`sv_*` 數值不得經過 `evaluation_recorder._num()`（它把 `0.0` 轉成 `None`，會讓 DTE=0、偏離 0.0%、tte 0.0h 消失）。
+
+**信用利差旗標為何不併入 `sv_any`**：`sv_any` 的口徑維持原六旗標，使新舊樣本可比；`sv_f_hy_lvl`／`sv_f_hy_chg` 於報表中各自獨立分組。資料來源為 `services/credit_spread_service.get_credit_spreads()`（FRED，約落後 1 個營業日；觀測日距今 > 5 日曆天旗標為 `null`）。`_compute_shadow` 以 `asyncio.wait_for(asyncio.shield(...), timeout=SHADOW_CREDIT_TIMEOUT_SECONDS)` 取值（`/x` 與自選雷達的評估路徑 inline await，快取過期時 FRED 抓取最長 8 秒，不得讓使用者等）；逾時或任何例外只讓信用欄位為 `null`，其餘 `sv_*` 照記，背景刷新由 `shield` 繼續完成並寫入快取。僅紀錄，不參與任何判定。
 
 **報表**：`calibration forward-report` 的「擠壓乾跑翻轉檢核」每個來源區塊（主結果 `WATCHLIST_ADVISOR`、全部來源參考）末尾新增「影子否決分組（僅參考，判定不動）」。對每個旗標，只取 20 日報酬已可得的獨立事件，分「成立」與「放行」兩組（旗標為 `null` 者計入「無資料」、不進任一組），以事件日期分群 bootstrap 比較「成立組 − 放行組」的 20 日報酬差。舊快照沒有 `features_json` 欄時，所有旗標視為無資料、判讀「樣本不足」，報表照常產出；價格不可得時顯示「價格不可得」。
 

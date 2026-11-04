@@ -31,6 +31,16 @@ def _no_real_macro_calendar() -> Iterator[None]:
         yield
 
 
+@pytest.fixture(autouse=True)
+def _no_real_credit_spreads() -> Iterator[None]:
+    """影子否決的信用利差抓取一律 mock，測試不碰 FRED。"""
+    with patch(
+        "services.credit_spread_service.get_credit_spreads",
+        AsyncMock(return_value={"hy": None, "ig": None}),
+    ):
+        yield
+
+
 def _features(row: dict[str, Any]) -> dict[str, Any]:
     feats = row["features_json"]
     parsed: dict[str, Any] = (
