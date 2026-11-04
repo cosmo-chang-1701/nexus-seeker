@@ -91,6 +91,8 @@ $$
 
 ## 3. 決策邏輯與狀態機 / 流程圖
 
+**快速偵測路徑（15m K 收盤對齊）**：除了 :10/:40 深度心跳，`IntradayScanPipeline._run_wall_break_fast_loop` 在 :03/:18/:33/:48 ET 以深度心跳快取的 `WatchlistEvaluation`（年齡上限 40 分鐘，更舊代表深度心跳被跳過、GEX 快照不可信，改由下一次深度掃描的最近 2 根 K 棒補偵測）重跑偵測，把 15m K 收盤後的延遲由 10–25 分鐘壓到約 3 分鐘。快速路徑使用 `WallBreakMonitor(detect_only=True)`：**不寫今日錨點、不做 T+1 結算**（兩者只屬於深度心跳，今日牆以當日最後一次深度掃描為準），不新增任何期權鏈／GEX 抓取（僅在預檢觸及錨點牆時才與深度路徑一樣抓 15m K 線），判定門檻不變。深度掃描進行中時快速路徑略過。兩條路徑可能偵測同一事件，但 `wall_break_events` 的 `UNIQUE(symbol, trade_date, direction, trigger_kind)` 與 `INSERT OR IGNORE` 保證只有真正新增者進入推播，不會重複。獨立開關 `WALL_BREAK_FAST_PASS_ENABLED`。
+
 ```mermaid
 flowchart TD
     Scan([IntradayScanPipeline 每 30 分鐘 :10/:40 ET]) --> Fresh{edge GEX 新鮮且至少一面牆大於 0?}
@@ -166,6 +168,9 @@ flowchart TD
 | `wall_anchor` 保留期 | 14 日 | 03:00 ET 維護 `purge_stale_wall_break()` | `nexus_core/database/wall_break.py` |
 | `wall_break_events` 保留期 | 180 日 | 同上 | `nexus_core/database/wall_break.py` |
 | `WALL_BREAK_ALERT_ENABLED` | 預設 `true` | 環境變數；僅抑制推播 | `nexus_core/config.py` |
+| `WALL_BREAK_FAST_PASS_ENABLED` | 預設 `true` | 環境變數；僅關閉 :03/:18/:33/:48 快速偵測，深度心跳偵測不受影響 | `nexus_core/config.py` |
+| `_WALL_BREAK_FAST_SLOT_MINUTES` | `(3, 18, 33, 48)` | 快速偵測時槽（15m K 收盤後約 3 分鐘；偵測延遲由 10–25 分鐘降至約 3 分鐘） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` |
+| `_FAST_EVAL_MAX_AGE_SECONDS` | `2400` (40 分鐘) | 快速路徑可用的深度評估快取最大年齡 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py` |
 | 去重鍵前綴 | `wall_break_` | 已登記於每日去重清理白名單 | `nexus_core/database/cache.py` |
 
 ---

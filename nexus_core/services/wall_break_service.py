@@ -132,7 +132,11 @@ def _oi_at(chain: Any, direction: str, strike: float) -> Optional[float]:
 
 
 class WallBreakMonitor:
-    def __init__(self) -> None:
+    def __init__(self, detect_only: bool = False) -> None:
+        # detect_only：15m K 收盤快速偵測路徑專用。只做「前一交易日錨點 vs 最近
+        # 已確認 K 棒」的偵測，不寫今日錨點（今日牆以當日最後一次深度掃描為準）、
+        # 也不做 T+1 結算（兩者皆只屬於深度心跳）。
+        self._detect_only = detect_only
         self._cycle_cache: dict[str, WallBreakOutcome] = {}
 
     def begin_cycle(self) -> None:
@@ -179,15 +183,15 @@ class WallBreakMonitor:
             gex_fresh and now_et.hour * 60 + now_et.minute >= _SETTLE_MIN_MINUTES
         )
 
-        # 3. 錨點 upsert
-        if gex_fresh:
+        # 3. 錨點 upsert（快速偵測路徑不寫）
+        if gex_fresh and not self._detect_only:
             try:
                 await upsert_wall_anchor(sym, today, call_wall, put_wall, gex_expiry)
             except Exception as e:
                 logger.warning(f"[{sym}] 牆錨點寫入失敗: {e}")
 
-        # 4. T+1 結算
-        if settle_window:
+        # 4. T+1 結算（快速偵測路徑不做）
+        if settle_window and not self._detect_only:
             try:
                 await self._settle_t1(
                     sym,

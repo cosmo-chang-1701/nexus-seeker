@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 # 為什麼：避開 :00/:15/:30/:45 巡邏與 :02/:17/:32/:47 價量監測的尖峰，
 # 且 :10/:40 時 edge 期權快照（約 30 分鐘一換）與 15m/30m K 棒皆已定案。
 _PIPELINE_SLOT_MINUTES: tuple[int, ...] = (10, 40)
+# GEX 牆突破快速偵測時槽 (每小時 :03/:18/:33/:48 ET)。
+# 為什麼：15m K 棒收盤後約 1–2 分鐘 Yahoo 才定案；:02 為價量監測、:05 為持倉監控、
+# :10/:40 為深度心跳，故選 :03 錯開尖峰，把偵測延遲壓到約 3 分鐘。
+_WALL_BREAK_FAST_SLOT_MINUTES: tuple[int, ...] = (3, 18, 33, 48)
+# 快速路徑可用的深度評估最大年齡：深度心跳週期 30 分鐘＋餘裕。更舊代表深度心跳
+# 被跳過，GEX 快照不可信，交給下一次深度掃描的最近 2 根 K 棒補偵測。
+_FAST_EVAL_MAX_AGE_SECONDS = 40 * 60
+
 # 最短睡眠秒數：避免剛跑完仍落在同一個時間點分鐘內而重複執行。
 _MIN_SLOT_SLEEP_SECONDS = 60.0
 
@@ -80,12 +88,18 @@ class IntradayScanPipeline:
         from services.wall_break_service import WallBreakMonitor
 
         self._wall_break_monitor = WallBreakMonitor()
+        # 快速偵測路徑：detect_only 監控器不寫錨點、不做 T+1；評估快取取自深度心跳。
+        self._wall_break_fast_monitor = WallBreakMonitor(detect_only=True)
+        self._latest_evals: dict[str, tuple[datetime, WatchlistEvaluation]] = {}
+        self._deep_cycle_running = False
+        self._fast_task: Optional[asyncio.Task] = None
 
     def start(self) -> None:
         """啟動異步監控管道"""
         if not self.is_running:
             self.is_running = True
             self._task = asyncio.create_task(self._run_loop())
+            self._fast_task = asyncio.create_task(self._run_wall_break_fast_loop())
             logger.info("✅ IntradayScanPipeline 異步掃描管道啟動。")
 
     def stop(self) -> None:
@@ -94,6 +108,8 @@ class IntradayScanPipeline:
         if self._task:
             self._task.cancel()
             logger.info("🛑 IntradayScanPipeline 異步掃描管道停止。")
+        if self._fast_task:
+            self._fast_task.cancel()
 
     async def evaluate_watchlist_symbol(
         self, symbol: str
@@ -629,6 +645,7 @@ class IntradayScanPipeline:
         user_id: int,
         ticker: str,
         watchlist_eval: Optional[WatchlistEvaluation],
+        monitor: Optional[Any] = None,
     ) -> None:
         """GEX 牆突破／跌破推播（通道 alpha_wall_break）。
 
@@ -639,9 +656,8 @@ class IntradayScanPipeline:
         try:
             import config
 
-            outcome = await self._wall_break_monitor.process_symbol(
-                ticker, watchlist_eval
-            )
+            active_monitor = monitor or self._wall_break_monitor
+            outcome = await active_monitor.process_symbol(ticker, watchlist_eval)
             if not config.WALL_BREAK_ALERT_ENABLED:
                 return
             if not outcome.intraday and not outcome.t1:
@@ -714,6 +730,82 @@ class IntradayScanPipeline:
                     logger.warning(f"[{sym}] 牆突破 T+1 推播失敗 (uid={user_id}): {e}")
         except Exception as e:
             logger.warning(f"[{ticker}] 牆突破派發失敗 (uid={user_id}): {e}")
+
+    async def _run_wall_break_fast_pass(self) -> None:
+        """單輪快速偵測：用深度心跳快取的評估，僅重跑牆突破偵測（不新增期權鏈抓取）。
+
+        兩路徑可能偵測同一事件，但 wall_break_events 的 UNIQUE 鍵＋INSERT OR IGNORE
+        保證只有新增者進入 outcome.intraday，因此不會重複推播。
+        """
+        import config
+
+        if not config.WALL_BREAK_FAST_PASS_ENABLED:
+            return
+        if not getattr(self.bot, "_is_leader_instance", True):
+            return
+        if not is_market_open():
+            return
+        from services.llm_service import is_memory_safe
+
+        if not is_memory_safe():
+            logger.warning("[WallBreak FastPass] 記憶體水位過高，跳過本輪快速偵測。")
+            return
+        if self._deep_cycle_running:
+            logger.info("[WallBreak FastPass] 深度掃描進行中，跳過本輪快速偵測。")
+            return
+
+        import database
+
+        monitor = self._wall_break_fast_monitor
+        monitor.begin_cycle()
+        try:
+            rows = await asyncio.to_thread(database.get_all_watchlist)
+            users_by_symbol: Dict[str, list] = {}
+            for uid, symbol, _meta in rows:
+                users_by_symbol.setdefault(str(symbol).upper(), []).append(uid)
+
+            now = datetime.now(ny_tz)
+            for sym, uids in users_by_symbol.items():
+                try:
+                    cached = self._latest_evals.get(sym)
+                    if cached is None:
+                        continue
+                    ts, ev = cached
+                    if (now - ts).total_seconds() > _FAST_EVAL_MAX_AGE_SECONDS:
+                        continue
+                    for uid in uids:
+                        await self._dispatch_wall_break_alerts(
+                            uid, sym, ev, monitor=monitor
+                        )
+                except Exception as e:
+                    logger.warning(f"[{sym}] 牆突破快速偵測失敗: {e}")
+        except Exception as e:
+            logger.warning(f"[WallBreak FastPass] 本輪失敗: {e}")
+        finally:
+            try:
+                from services.notification_dispatch_recorder import (
+                    flush_dispatch_records,
+                )
+
+                await flush_dispatch_records()
+            except Exception as e:
+                logger.warning(f"[WallBreak FastPass] flush 失敗: {e}")
+
+    async def _run_wall_break_fast_loop(self) -> None:
+        while self.is_running:
+            try:
+                await asyncio.sleep(
+                    _seconds_until_next_slot(
+                        datetime.now(ny_tz),
+                        slot_minutes=_WALL_BREAK_FAST_SLOT_MINUTES,
+                    )
+                )
+                await self._run_wall_break_fast_pass()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"❌ WallBreak 快速偵測迴圈錯誤: {e}", exc_info=True)
+                await asyncio.sleep(60)
 
     async def _run_loop(self) -> None:
         while self.is_running:
@@ -790,6 +882,7 @@ class IntradayScanPipeline:
 
                 self._last_scan_started = datetime.now(ny_tz)
                 self._wall_break_monitor.begin_cycle()
+                self._deep_cycle_running = True
                 logger.info(
                     f"🤖 [Intraday Pipeline] 開盤心跳監測觸發。當前時段: {phase}"
                 )
@@ -821,6 +914,11 @@ class IntradayScanPipeline:
                             watchlist_eval = await self.evaluate_watchlist_symbol(
                                 ticker
                             )
+                            if watchlist_eval is not None:
+                                self._latest_evals[ticker.upper()] = (
+                                    datetime.now(ny_tz),
+                                    watchlist_eval,
+                                )
                             if (
                                 watchlist_eval is not None
                                 and watchlist_eval.tactical.alert_level != "green"
@@ -883,7 +981,8 @@ class IntradayScanPipeline:
 
                 await flush_dispatch_records()
 
-                # 4. 睡眠至下一個 :10/:40 時間點
+                # 4. 睡眠至下一個 :10/:40 時間點（睡眠期間快速偵測可用快取）
+                self._deep_cycle_running = False
                 await asyncio.sleep(
                     _seconds_until_next_slot(
                         datetime.now(ny_tz), last_scan_start=self._last_scan_started
@@ -895,3 +994,5 @@ class IntradayScanPipeline:
             except Exception as e:
                 logger.error(f"❌ IntradayScanPipeline 發生錯誤: {e}", exc_info=True)
                 await asyncio.sleep(60)
+            finally:
+                self._deep_cycle_running = False

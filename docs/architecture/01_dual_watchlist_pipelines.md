@@ -9,7 +9,7 @@
 ### 1.1 核心哲學
 在多租戶的即時金融量化監控系統中，交易員對自選標的的資訊需求可分為兩大維度：
 1. **高頻率的廣度快照（Breadth Snapshot）**：全體自選股之 Greeks 牆體、最大痛點、Skew 偏斜與主力 UOA 的批次面板。**現已改為按需查詢**：由 `/x` 經 `RadarDataMixin._fetch_sym_radar_data_slow()` 抓取、`build_radar_scan_embed()` 分頁渲染，不再每 15 分鐘主動推播。
-2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合（Gamma Squeeze SPEAR 攻擊訊號已於 2026-10-17 退役）。由 30 分鐘深度心跳管線主動推播；同一管線亦對自選標的執行 GEX 牆突破／跌破偵測，以獨立頻道 `alpha_wall_break` 推播（見 [`../microstructure/07_wall_break_verification.md`](../microstructure/07_wall_break_verification.md)）。
+2. **低頻率、高深度的戰術操盤藍圖（In-Depth Tactical Plan）**：15 分鐘微觀結構、動態買賣點、1.5 倍 ATR 防洗盤緩衝、選擇權具體到期日履約價組合（Gamma Squeeze SPEAR 攻擊訊號已於 2026-10-17 退役）。由 30 分鐘深度心跳管線主動推播；同一管線亦對自選標的執行 GEX 牆突破／跌破偵測，以獨立頻道 `alpha_wall_break` 推播（見 [`../microstructure/07_wall_break_verification.md`](../microstructure/07_wall_break_verification.md)）；牆突破另有對齊 15m K 收盤的 :03/:18/:33/:48 快速偵測路徑，沿用深度心跳快取的評估。
 
 重度量化計算與定時迴圈必須物理隔離，否則會阻塞其他盤中任務並因 API 併發過載觸發外部數據源（Finnhub, yfinance）之限流封鎖。因此 30 分鐘管線是獨立的 `asyncio.Task`，不掛在 15 分鐘 `tasks.loop` 之下，並受 `is_memory_safe()`（85% RAM+Swap）閘門約束。
 
