@@ -455,7 +455,8 @@ HOLD_EXIT_TIERS: frozenset[str] = frozenset(
 
 
 # 現金等價標的：出場分層對其無意義，且會支配前向樣本，故不記錄。
-# 刻意為 wall_break_service／signal_calculator 排除清單的超集。
+# 刻意為 wall_break_service／signal_calculator 排除清單的超集，
+# 並與 calibration/forward_log.py 的 `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` 保持相同內容。
 _EXIT_RECORD_EXCLUDED_SYMBOLS: frozenset[str] = frozenset(
     {"BOXX", "BIL", "SHV", "SGOV"}
 )
