@@ -354,3 +354,109 @@ def test_no_production_max_tokens_kwarg() -> None:
             ):
                 offenders.append(f"{path}:{node.lineno}")
     assert offenders == []
+
+
+async def _assert_worst_case(side_effect: list[Any], first_stripped: int) -> None:
+    from openai import RateLimitError
+
+    from services import rate_gate
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=side_effect,
+    ) as m_create:
+        with pytest.raises(RateLimitError):
+            await llm_create(model="m", temperature=0.0)
+    assert m_create.await_count == 3
+    calls = m_create.await_args_list
+    assert "temperature" in calls[0].kwargs
+    for call in calls[first_stripped:]:
+        assert "temperature" not in call.kwargs
+    assert rate_gate.get_gate("llm").in_flight() == 0
+
+
+async def test_llm_worst_case_three_calls_temp_first() -> None:
+    await _assert_worst_case(
+        [
+            _bad_request("temperature is not supported"),
+            _rate_limit_error(),
+            _rate_limit_error(),
+            "never",
+        ],
+        1,
+    )
+
+
+async def test_llm_worst_case_three_calls_temp_second() -> None:
+    await _assert_worst_case(
+        [
+            _rate_limit_error(),
+            _bad_request("temperature is not supported"),
+            _rate_limit_error(),
+            "never",
+        ],
+        2,
+    )
+
+
+async def test_llm_worst_case_second_temperature_error_not_retried() -> None:
+    from openai import BadRequestError
+
+    from services.llm_service import llm_create
+
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        new_callable=AsyncMock,
+        side_effect=[
+            _bad_request("temperature unsupported"),
+            _bad_request("temperature unsupported"),
+            "never",
+        ],
+    ) as m_create:
+        with pytest.raises(BadRequestError):
+            await llm_create(model="m", temperature=0.0)
+    assert m_create.await_count == 2
+
+
+async def test_llm_concurrent_temperature_warning_logged_once(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from services.llm_service import llm_create
+
+    in_flight = 0
+    release = asyncio.Event()
+    seen_kwargs: list[dict[str, Any]] = []
+
+    async def _create(**kw: Any) -> str:
+        nonlocal in_flight
+        seen_kwargs.append(kw)
+        if "temperature" in kw:
+            in_flight += 1
+            await release.wait()
+            raise _bad_request("temperature is not supported")
+        return "ok"
+
+    caplog.set_level("WARNING")
+    with patch(
+        "services.llm_service.client.chat.completions.create",
+        side_effect=_create,
+    ):
+        tasks = [
+            asyncio.create_task(llm_create(model="m", temperature=0.0))
+            for _ in range(2)
+        ]
+        for _ in range(10):
+            await asyncio.sleep(0)
+        assert in_flight == 2
+        release.set()
+        assert await asyncio.gather(*tasks) == ["ok", "ok"]
+    warnings = [
+        r
+        for r in caplog.records
+        if r.levelname == "WARNING" and "temperature" in r.getMessage()
+    ]
+    assert len(warnings) == 1
+    retried = [kw for kw in seen_kwargs if "temperature" not in kw]
+    assert len(retried) == 2

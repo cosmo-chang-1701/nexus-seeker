@@ -99,7 +99,9 @@ async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
     - `APITimeoutError`（`APIConnectionError` 的子類）不重試：逾時已佔用 120 秒。
     - 送出前以 `_normalize_llm_kwargs` 正規化參數（max_tokens → max_completion_tokens）。
     - `BadRequestError` 訊息含 temperature 且本次帶有 temperature：記住「不支援」旗標，
-      立即去除 temperature 重送一次（不計入暫時性重試）；其他 400 原樣拋出。
+      立即去除 temperature 重送一次（不計入暫時性重試，故單一請求最壞 3 次呼叫）；
+      WARNING 僅在旗標首次翻轉時記錄一次（併發中的請求各自仍會去除 temperature 重送）；
+      其他 400 原樣拋出。
     """
     global _temperature_unsupported
     gate = get_gate("llm")
@@ -131,10 +133,12 @@ async def _gated_llm_call(kind: str, _client: Any = None, **kwargs: Any) -> Any:
                     and "temperature" in call_kwargs
                 ):
                     temp_retried = True
-                    _temperature_unsupported = True
-                    logger.warning(
-                        "LLM 模型不支援自訂 temperature，之後的請求改用預設值"
-                    )
+                    # check-and-set 之間無 await，asyncio 下為原子；僅首次翻轉才記錄
+                    if not _temperature_unsupported:
+                        _temperature_unsupported = True
+                        logger.warning(
+                            "LLM 模型不支援自訂 temperature，之後的請求改用預設值"
+                        )
                     continue
                 raise
             except RateLimitError as e:
