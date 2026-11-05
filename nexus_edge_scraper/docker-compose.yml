@@ -4,7 +4,8 @@ services:
     build: .
     container_name: nexus-seeker-edge-api
     ports:
-      - "8000:8000"
+      # cloudflared 走 compose 內部網路連線；主機埠僅供本機除錯，只綁 loopback
+      - "127.0.0.1:8000:8000"
     restart: unless-stopped
     mem_limit: 2g
     volumes:
@@ -12,6 +13,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - REDDIT_USER_AGENT=${REDDIT_USER_AGENT}
+      - EDGE_API_TOKEN=${EDGE_API_TOKEN:-}
       - GEX_HISTORY_ENABLED=${GEX_HISTORY_ENABLED:-true}
       - GEX_HISTORY_RETENTION_DAYS=${GEX_HISTORY_RETENTION_DAYS:-180}
 
