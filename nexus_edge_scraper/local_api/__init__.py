@@ -3,6 +3,7 @@
 公開 import path 維持 `local_api`（`from local_api import app` 與
 `uvicorn local_api:app` 皆繼續運作）。路由依領域拆分為子模組：
 
+- `auth`            ：X-Edge-Token 共享金鑰驗證（app 層 dependency，涵蓋所有路由）
 - `reddit`         ：Reddit RSS 抓取（版塊清單 / 個股關鍵字搜尋）
 - `macro`           ：總經 GEX/流動性/FedWatch Playwright 抓取、個股 GEX 端點
                        （`async_playwright`、`scrape_symbol_gex_core` 皆於本模組
@@ -23,11 +24,11 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from bs4 import XMLParsedAsHTMLWarning
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
 import scheduler
 
-from . import cache_and_sync, fundamental, macro, macro_calendar, reddit
+from . import auth, cache_and_sync, fundamental, macro, macro_calendar, reddit
 from .json_safe import NaNSafeJSONResponse
 
 # Suppress BS4 XML warning for SEC filings
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    auth.log_auth_mode()
     scheduler.start()
     try:
         yield
@@ -45,7 +47,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         scheduler.stop()
 
 
-app = FastAPI(lifespan=lifespan, default_response_class=NaNSafeJSONResponse)
+app = FastAPI(
+    lifespan=lifespan,
+    default_response_class=NaNSafeJSONResponse,
+    dependencies=[Depends(auth.require_edge_token)],
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
+auth.register_auth_handlers(app)
 
 app.include_router(reddit.router)
 app.include_router(macro.router)
