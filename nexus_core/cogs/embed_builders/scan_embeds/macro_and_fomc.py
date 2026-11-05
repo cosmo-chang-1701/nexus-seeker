@@ -168,8 +168,10 @@ def create_fomc_escape_window_embed(
         for name, val in factors_summary:
             lines.append(f" ├─ {name}: {val}")
         lines[-1] = lines[-1].replace("├─", "└─")
-        lines.append("")
-        lines.append(" " + fedwatch_source_note(fedwatch_source))
+        source_note = fedwatch_source_note(fedwatch_source)
+        if source_note:
+            lines.append("")
+            lines.append(" " + source_note)
         panel = "```ansi\n" + "\n".join(lines) + "\n```"
         embed.add_field(
             name="📊 多因子監測結果",

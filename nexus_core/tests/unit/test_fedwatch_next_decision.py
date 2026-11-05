@@ -148,7 +148,8 @@ def test_fallback_details_are_internally_consistent(
     [
         ("CME 30-Day Fed Funds Futures (ZQ)", "(ZQ) 反推", "Atlanta Fed"),
         ("fallback", "備援估算", "Atlanta Fed"),
-        (None, "備援估算", "Atlanta Fed"),
+        (None, "", "備援估算"),
+        ("", "", "備援估算"),
     ],
 )
 def test_fedwatch_source_note_reflects_actual_source(
@@ -159,6 +160,63 @@ def test_fedwatch_source_note_reflects_actual_source(
     note = fedwatch_source_note(source)
     assert expected in note
     assert unexpected not in note
+    if not source:
+        assert note == ""
+
+
+@pytest.mark.parametrize("extra", [{}, {"fedwatch_is_stale": True}])
+def test_market_overview_no_fedwatch_note_when_no_data(
+    extra: dict[str, Any],
+) -> None:
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    embed = build_market_macro_overview_embed(
+        {"fedwatch_probability": None, "fedwatch_details": {}, **extra}
+    )
+    for f in embed.fields:
+        v = str(f.value)
+        assert "備援估算" not in v
+        assert "FedWatch 資料源" not in v
+        assert "\n\n```" not in v and "\n \n```" not in v
+
+
+def test_market_overview_no_fedwatch_note_fallback_still_shown() -> None:
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+
+    embed = build_market_macro_overview_embed(
+        {
+            "fedwatch_probability": 0.6,
+            "fedwatch_is_fallback": True,
+            "fedwatch_details": {
+                "prob_maintain": 80.0,
+                "prob_hike": 20.0,
+                "prob_cut": 0.0,
+                "decision": "maintain",
+                "source": "fallback",
+            },
+        }
+    )
+    text = "\n".join(str(f.value) for f in embed.fields)
+    assert "備援估算" in text
+
+
+@pytest.mark.parametrize(("source", "shown"), [(None, False), ("fallback", True)])
+def test_escape_window_no_fedwatch_note_by_source(
+    source: str | None, shown: bool
+) -> None:
+    from cogs.embed_builders.scan_embeds.macro_and_fomc import (
+        create_fomc_escape_window_embed,
+    )
+
+    embed = create_fomc_escape_window_embed(
+        "均衡",
+        "測試",
+        factors_summary=[("A", "1"), ("B", "2")],
+        fedwatch_source=source,
+    )
+    text = "\n".join(str(f.value) for f in embed.fields)
+    assert ("FedWatch 資料源" in text) is shown
+    assert "\n\n```" not in text and "\n \n```" not in text
 
 
 def test_market_overview_embed_uses_actual_fedwatch_source() -> None:
