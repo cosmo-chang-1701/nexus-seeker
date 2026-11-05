@@ -1301,8 +1301,11 @@ def chunk_embeds(
 
 def fedwatch_source_note(source: Any) -> str:
     """依 FedWatch 明細的 `source` 欄位產生資料源說明（edge 端 Primary 為 CBOT ZQ
-    期貨反推，失敗時為靜態備援估算）。"""
-    src = str(source or "")
+    期貨反推，失敗時為靜態備援估算）。無資料來源（冷啟動或資料過期，未顯示
+    FedWatch 數字）時回傳空字串，呼叫端不應附註。"""
+    src = str(source or "").strip()
+    if not src:
+        return ""
     if "ZQ" in src:
         return (
             "⚠️ FedWatch 資料源: CBOT 30 天期聯邦基金期貨 (ZQ) 反推，"

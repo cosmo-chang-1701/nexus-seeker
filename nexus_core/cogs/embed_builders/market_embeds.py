@@ -2711,9 +2711,11 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             "快取（即時抓取失敗）\u001b[0m",
             "",
         ]
-    macro_lines += [
-        " " + fedwatch_source_note(fedwatch_details.get("source")),
-    ]
+    source_note = fedwatch_source_note(fedwatch_details.get("source"))
+    if source_note:
+        macro_lines.append(" " + source_note)
+    elif macro_lines and macro_lines[-1] == "":
+        macro_lines.pop()
     macro_panel = "```ansi\n" + "\n".join(macro_lines) + "\n```"
 
     calendar_panel = f"```\n └─ {cpi_nfp_calendar}\n```"
