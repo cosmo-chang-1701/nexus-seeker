@@ -16,7 +16,7 @@ Nexus Seeker 確立了**「雙服務微服務解耦（Dual-Service Microservices
 | 服務模組 | 運行環境與技術棧 | 核心職責與邊界約束 | 外部連線暴露方式 |
 | :--- | :--- | :--- | :--- |
 | **`nexus_core`** | Python 3.12, `discord.py`, SQLite | 運行主 Discord Bot、Slash 指令互動、量化風險與 Greeks 運算引擎、九大動態轉倉狀態機、持久化私訊佇列（`queue_dm`） | 不對公網開放任何傳入端口；透過 Client 連線 Discord Gateway 與 Tunnel |
-| **`nexus_edge_scraper`** | FastAPI, Playwright (Chromium) | 爬取動態渲染網頁（CME FedWatch、TradingView 總經日曆、Reddit RSS）、執行 SEC EDGAR 結構化段落擷取、作為 Yahoo Finance 代理節點 | 透過 Cloudflare Tunnel (`TUNNEL_URL`) 進行受保護的端點暴露 |
+| **`nexus_edge_scraper`** | FastAPI, Playwright (Chromium) | 爬取動態渲染網頁（CME FedWatch、TradingView 總經日曆、Reddit RSS）、執行 SEC EDGAR 結構化段落擷取、作為 Yahoo Finance 代理節點 | 透過 Cloudflare Tunnel (`TUNNEL_URL`) 對外暴露；所有端點須通過 `X-Edge-Token` 與 Cloudflare Access 雙層驗證（見 §5.4），Tunnel 本身不提供驗證 |
 
 ---
 
@@ -116,7 +116,11 @@ flowchart TD
 | `_OPTION_EXPIRIES_CACHE_TTL` | `1800.0` 秒 (30 分鐘) | 期權到期日清單之記憶體快取存活時間 | `nexus_core/services/market_data_service/options.py:23` |
 | `yahoo_slot()`／`get_gate("yahoo")` | 窗口 60/60s（互動保留 30，背景 ≤ 30/分）、併發 7（背景 2）；冷卻 60→900 秒 | Yahoo 統一預算與全域 429 冷卻（閘門規格見 [`07_outbound_rate_gate.md`](07_outbound_rate_gate.md)） | `nexus_core/services/rate_gate.py`、`nexus_core/services/market_data_service/_core.py` |
 | `_HISTORY_SEMAPHORE` | `BoundedSemaphore(2)` | edge `/history` 同時 `ticker.history` 上限 | `nexus_edge_scraper/yf_api.py` |
-| `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 安全穿透端點網址 | `nexus_core/config.py` |
+| `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 對外端點網址（Tunnel 本身不驗證身分，存取控制見 §5.4） | `nexus_core/config.py` |
+| `EDGE_API_TOKEN`（edge 端） | 環境變數；未設定或空白即 fail-open | edge 比對請求標頭 `X-Edge-Token`（`secrets.compare_digest`），不符回 HTTP 401；啟動時 WARNING | `nexus_edge_scraper/local_api/auth.py` |
+| `EDGE_API_TOKEN`（core 端） | 環境變數；未設定則不送 `X-Edge-Token` | `edge_auth_headers()` 將其注入每個 edge 請求；core 與 edge 須為同一值 | `nexus_core/services/edge_auth.py`、`nexus_core/config.py` |
+| `X-Edge-Token` | HTTP 請求標頭 | edge 每個路由的 `require_edge_token` 依賴所驗證的應用層權杖 | `nexus_edge_scraper/local_api/auth.py` |
+| `CF_ACCESS_CLIENT_ID` ／ `CF_ACCESS_CLIENT_SECRET` | 環境變數；必須兩者同時設定 | core 以 `CF-Access-Client-Id`／`CF-Access-Client-Secret` 標頭通過 Cloudflare Access service token；缺一則不送 | `nexus_core/services/edge_auth.py`、`nexus_core/config.py` |
 | `MAX_RETRY_COUNT` | `1` 次 (`_retry_once`) | 外部請求失敗時的快速重試次數（避免阻塞過久） | `nexus_core/services/market_data_service/_utils.py` |
 | `PRIORITY_SYNC_INTERVAL` | 15 分鐘（隨盤中巡邏同步） | 持倉標的 Priority 清單同步頻率（`_sync_edge_watchlist`，未設 `TUNNEL_URL` 不同步） | `nexus_core/cogs/trading/scheduler.py:28` |
 | `GEX_HISTORY_ENABLED` | `true`（環境變數） | 是否寫入 GEX 快照歷史 | `nexus_edge_scraper/database.py` |
@@ -145,6 +149,23 @@ flowchart TD
 ### 5.3 異步連線池洩漏防護
 - 呼叫邊緣服務時，一律透過 `async with get_edge_client() as client:` 語法管理 `httpx.AsyncClient` 實例，確保在請求逾時或拋出例外時，底層 TCP Socket 連線能被及時釋放，防止 VPS 出現連線洩漏（Socket Leak）。
 
+### 5.4 邊緣存取控制（雙層驗證）
+邊緣服務以兩層機制擋下未授權請求，兩層皆通過才會進入業務路由：
+1. **應用層 `X-Edge-Token`**：edge 每個路由都掛載 `require_edge_token` 依賴（`nexus_edge_scraper/local_api/auth.py`）。請求標頭 `X-Edge-Token` 必須等於環境變數 `EDGE_API_TOKEN`，比對採 `secrets.compare_digest`；缺漏或不符回 HTTP 401，回應形狀為 `{"status": "unauthorized", ...}`。
+2. **Cloudflare Access service token**：請求在 Cloudflare 邊緣即被攔截，core 以 `CF-Access-Client-Id`／`CF-Access-Client-Secret` 標頭通過；未通過時由 Cloudflare 回 401／403，請求不會抵達 edge。
+
+**Fail-open 規則**：`EDGE_API_TOKEN` 未設定或為空白時，edge 不做驗證，僅於啟動時記錄 WARNING，行為與導入前相同。這是滾動部署的過渡狀態，不代表服務已受保護。
+
+**邊緣 API 文件關閉**：`/docs`、`/redoc`、`/openapi.json` 已停用，外部無法由此取得路由結構。compose 中 edge 的主機埠僅綁定 `127.0.0.1:8000`，對外入口只剩 Tunnel。
+
+**core 端集中注入**（`nexus_core/services/edge_auth.py`）：
+- `edge_auth_headers()` 加入 `X-Edge-Token`（取自 `EDGE_API_TOKEN`）；當 `CF_ACCESS_CLIENT_ID` 與 `CF_ACCESS_CLIENT_SECRET` 皆設定時，再加入兩個 Cloudflare Access 標頭。
+- `edge_client_kwargs()` 套用於每一個 edge `httpx.AsyncClient`。
+- edge 回 401／403 時，core 記為 ERROR（同類訊息節流 600 秒），且與既有行為相同降級。由於降級目標是資料中心 IP 直連（常被封鎖），此 ERROR 紀錄是判斷「token 不一致」的主要線索。
+- AST 不變式測試 `nexus_core/tests/unit/test_edge_auth_centralization.py` 強制每個 edge 呼叫點都經由上述 helper，新增呼叫點若漏掉標頭會使測試失敗。
+
+**部署順序**：必須先設定 core、再設定 edge，最後才啟用 Cloudflare Access；反向會使 core 收到 401／403 而退回直連。詳細步驟、驗證方法與回滾順序見 [README 第 5 節](../../README.md)。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯
@@ -166,4 +187,8 @@ flowchart TD
 - `nexus_edge_scraper/local_api/`
   - 邊緣 FastAPI 微服務實作端點（Yahoo Finance 代理與數據快照維護）
 - `nexus_core/config.py`
-  - `TUNNEL_URL` 配置管理
+  - `TUNNEL_URL`、`EDGE_API_TOKEN`、`CF_ACCESS_CLIENT_ID`／`CF_ACCESS_CLIENT_SECRET` 配置管理
+- `nexus_core/services/edge_auth.py`
+  - `edge_auth_headers`／`edge_client_kwargs`: 集中注入 edge 認證標頭，401／403 ERROR 紀錄與節流
+- `nexus_edge_scraper/local_api/auth.py`
+  - `require_edge_token`: edge 全路由共用的 `X-Edge-Token` 依賴（fail-open 與 401 形狀）

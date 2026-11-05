@@ -189,6 +189,7 @@ nexus-seeker/
 - Discord Bot Token
 - Finnhub API Key
 - Cloudflare Tunnel Token（邊緣爬蟲用）
+- 邊緣存取權杖 `EDGE_API_TOKEN`（建議；兩端共用，設定順序見第 5 節）
 
 ### 2. 啟動 `nexus_edge_scraper`
 ```bash
@@ -218,6 +219,55 @@ docker compose up -d --build
 3. `/add_watch`：加入自選標的（可一次加入多檔）。
 4. `/notif_settings`：套用「🧭 B&H 防守」情境，再依需要微調。
 
+### 5. 邊緣存取控制與 Cloudflare Access
+邊緣服務的 API 需同時通過兩層驗證：應用層 `X-Edge-Token`（由 `EDGE_API_TOKEN` 設定）與 Cloudflare Access service token（由 `CF_ACCESS_CLIENT_ID`／`CF_ACCESS_CLIENT_SECRET` 設定）。機制說明見 [`docs/architecture/03_dual_service_and_proxy.md`](docs/architecture/03_dual_service_and_proxy.md) §5.4。
+
+#### 滾動順序（不可顛倒）
+1. **兩端皆留空部署新版本**：行為與舊版相同。
+2. **先設定 core**：產生權杖 `python3 -c "import secrets; print(secrets.token_urlsafe(32))"`，將 `EDGE_API_TOKEN` 交給 core。此時 edge 仍為 fail-open，會忽略該標頭。
+   - 正式環境（Docker Swarm，見 `.github/workflows/deploy.yml`）：映像不含 `.env`，設定只來自 Swarm secrets。在 GitHub repository secrets 新增 `EDGE_API_TOKEN`，再重新部署 core（推送 `v*` tag 或重跑 deploy workflow）。**編輯 `.env` 對正式環境無效。**
+   - 本機／compose：在 `nexus_core/.env` 設定 `EDGE_API_TOKEN` 後重啟 core。
+3. **再設定 edge**：在 edge 設定相同的 `EDGE_API_TOKEN` 並重啟，開始強制驗證。
+4. **最後設定 Cloudflare Access**：建立 service token，將 `CF_ACCESS_CLIENT_ID`／`CF_ACCESS_CLIENT_SECRET` 以步驟 2 相同方式交給 core（正式環境為 GitHub secrets 加重新部署；本機為 `.env`），**之後**才建立 Access application 與 Service Auth policy。
+
+**為何是這個順序**：若 edge 先強制驗證而 core 尚未持有權杖，core 會收到 401，依既有降級邏輯改走本地 yfinance 直連；而資料中心 IP 正是被封鎖的來源，直連容易失敗。Access 也是同理：先啟用 policy 而 core 尚無 Client ID／Secret，請求會在 Cloudflare 被拒。
+
+**回滾順序（與上相反）**：先停用 Cloudflare Access policy → 清空 edge 的 `EDGE_API_TOKEN` 並重啟 edge → 最後才視需要清除 core 的權杖。
+
+#### 驗證
+將 `edge.example.com` 換成實際的 edge hostname，權杖以環境變數帶入：
+
+```bash
+# 1. 無任何驗證標頭：預期 401 或 403
+curl -s -o /dev/null -w "%{http_code}\n" https://edge.example.com/api/v1/health/sys
+
+# 2. 只有 X-Edge-Token（尚未設定 Access）：預期 200
+curl -s -o /dev/null -w "%{http_code}\n" -H "X-Edge-Token: $EDGE_API_TOKEN" https://edge.example.com/api/v1/health/sys
+
+# 3. 兩層皆帶上：預期 200
+curl -s -o /dev/null -w "%{http_code}\n" \
+  -H "X-Edge-Token: $EDGE_API_TOKEN" \
+  -H "CF-Access-Client-Id: $CF_ACCESS_CLIENT_ID" \
+  -H "CF-Access-Client-Secret: $CF_ACCESS_CLIENT_SECRET" \
+  https://edge.example.com/api/v1/health/sys
+```
+
+此外確認：core `/system` 面板可看到 edge 狀態；core log 中沒有 `edge_auth` ERROR。
+
+#### Cloudflare Access 設定（Zero Trust 儀表板）
+1. **建立 service token**：Access → Service credentials → Service Tokens → Create，名稱 `nexus-core`，有效期限可選一年。記下到期日並於到期前輪替。Client ID 與 Client Secret 只會顯示一次，請寫入 core 的設定（見上方步驟 4）。
+2. **建立 Application**：Access → Applications → Add → Self-hosted。Application domain 填 edge 的 hostname，path 留空（整個 host）。Session duration 對 service token 無影響。
+3. **建立 policy**：Action 選 **Service Auth**，Include → Service Token → `nexus-core`。**不要**新增 "Allow everyone" 類型的 policy。若需以瀏覽器除錯，可另加一條只允許擁有者 email 的 Allow policy（選用，非必要）。
+4. **啟用「對 Service Auth policy 回傳 401」**：在 application 設定中開啟此選項，而非導向登入頁。理由：core 的 httpx client 使用 `follow_redirects=True`，若收到登入頁重導向，最後會拿到 200 的 HTML，JSON 解析失敗，難以判讀；開啟後會得到清楚的 401。
+5. **Tunnel public hostname**：只指向 edge 的 hostname。compose 部署填 `http://nexus-edge-api:8000`，原生部署填 `http://localhost:8000`。**不要**設定 catch-all 規則。
+6. **建議使用新的 hostname**：舊的 hostname 曾提交到本公開 repo（已由 core 相關 PR 移除，但仍存在於 git 歷史中）。建議為 Tunnel 建立新的 hostname，並更新 core 的 `TUNNEL_URL`。
+
+#### 其他注意事項
+- **原生（非 Docker）執行 edge**（例如 macOS）：uvicorn 請使用 `--host 127.0.0.1`，使埠號無法由區網存取；cloudflared 連線至 localhost 即可。
+- **選用加固**（非必要）：
+  - 將 `cloudflare/cloudflared` 映像固定為特定版本號，不使用 `latest`。
+  - WAF rate-limiting 規則只在回應為**非 429** 狀態（例如 403 或 503）時設定。理由：core 的 `edge_get_yahoo`（`nexus_core/services/market_data_service/_core.py:220-224`）會把 edge 回傳的任何 429 視為 Yahoo 429，進而啟動全域 Yahoo 冷卻（60→900 秒），連直連也會被擋。若 edge 回 429，core 會誤判為 Yahoo 限流。
+
 ---
 
 ## ⚙️ 環境變數
@@ -229,6 +279,9 @@ docker compose up -d --build
 | `DISCORD_ADMIN_USER_ID` | ✅ | 管理員 Discord 帳號 ID（允許使用 admin 指令） |
 | `FINNHUB_API_KEY` | 建議 | Finnhub 數據源 API Key |
 | `TUNNEL_URL` | ✅ | Edge Scraper 的公開 API URL |
+| `EDGE_API_TOKEN` | 建議 | 應用層權杖，須與 edge 相同；未設定時 core 不送 `X-Edge-Token`，edge 將 fail-open（見第 5 節） |
+| `CF_ACCESS_CLIENT_ID` | 選用 | Cloudflare Access service token 的 Client ID；須與 Secret 同時設定 |
+| `CF_ACCESS_CLIENT_SECRET` | 選用 | Cloudflare Access service token 的 Client Secret（儀表板只顯示一次） |
 | `LLM_API_BASE` | 選用 | OpenAI 相容的 LLM API 網址 |
 | `LLM_MODEL_NAME` | 選用 | LLM 模型名稱 |
 | `API_KEY` | 選用 | LLM 驗證金鑰 |
@@ -238,6 +291,7 @@ docker compose up -d --build
 | 變數名稱 | 必填 | 說明 |
 |---|---|---|
 | `CF_TUNNEL_TOKEN` | ✅ | Cloudflare Tunnel token |
+| `EDGE_API_TOKEN` | 建議 | 與 core 相同的值；未設定時不驗證（fail-open），啟動會記錄 WARNING |
 
 ---
 
