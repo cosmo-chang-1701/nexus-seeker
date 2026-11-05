@@ -14,6 +14,7 @@ async def sys_health_impl(bot: Any, interaction: discord.Interaction) -> Any:
     import httpx
     from services import market_data_service
     import config
+    from services.edge_auth import edge_client_kwargs
 
     # 1. 取得主節點 (Droplet) 系統資源
     import platform
@@ -31,7 +32,7 @@ async def sys_health_impl(bot: Any, interaction: discord.Interaction) -> Any:
     tunnel_url = getattr(config, "TUNNEL_URL", "")
     if tunnel_url:
         try:
-            async with httpx.AsyncClient(timeout=3.0) as client:
+            async with httpx.AsyncClient(timeout=3.0, **edge_client_kwargs()) as client:
                 res = await client.get(f"{tunnel_url.rstrip('/')}/api/v1/health/sys")
                 if res.status_code == 200:
                     edge_data = res.json()

@@ -52,7 +52,14 @@ class EdgeHistorySource:
     def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
         import httpx
 
-        resp = httpx.get(f"{self.base_url}{path}", params=params, timeout=30.0)
+        from services.edge_auth import edge_auth_headers
+
+        resp = httpx.get(
+            f"{self.base_url}{path}",
+            params=params,
+            timeout=30.0,
+            headers=edge_auth_headers(),
+        )
         resp.raise_for_status()
         body = resp.json()
         if body.get("status") != "success":

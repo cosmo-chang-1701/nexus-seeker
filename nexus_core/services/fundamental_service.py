@@ -3,6 +3,7 @@ import logging
 from typing import Optional, Dict, Any
 
 import config
+from services.edge_auth import edge_client_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,9 @@ async def get_fundamental_context(
         cached_accession = cached_data.get("accession_number")
         if cached_accession:
             try:
-                async with httpx.AsyncClient(timeout=10.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=10.0, **edge_client_kwargs()
+                ) as client:
                     meta_res = await client.get(
                         f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}/metadata"
                     )
@@ -87,7 +90,7 @@ async def get_fundamental_context(
 
     try:
         logger.info(f"[{symbol}] 啟動邊緣運算呼叫，透過 Tunnel 抓取基本面財報全文...")
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, **edge_client_kwargs()) as client:
             req_url = f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}"
             if accession_number:
                 req_url += f"?accession_number={accession_number}"
@@ -138,7 +141,7 @@ async def get_fundamental_reports_list(
 
     tunnel_url = config.TUNNEL_URL
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, **edge_client_kwargs()) as client:
             res = await client.get(
                 f"{tunnel_url}/api/v1/scrape/fundamental/{symbol}/list"
             )

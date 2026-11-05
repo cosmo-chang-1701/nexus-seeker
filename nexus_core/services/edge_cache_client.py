@@ -21,6 +21,7 @@ import logging
 import httpx
 
 import config
+from services.edge_auth import edge_client_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +45,9 @@ async def sync_watchlist_symbols(
     if not base_url or (not symbols and not priority_symbols):
         return
     try:
-        async with httpx.AsyncClient(timeout=_SYNC_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=_SYNC_TIMEOUT_SECONDS, **edge_client_kwargs()
+        ) as client:
             await client.post(
                 f"{base_url}/api/v1/watchlist/sync",
                 json={"symbols": symbols, "priority_symbols": priority_symbols},
@@ -60,7 +63,9 @@ async def get_cached_gex(symbol: str) -> Optional[dict[str, Any]]:
     if not base_url:
         return None
     try:
-        async with httpx.AsyncClient(timeout=_READ_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=_READ_TIMEOUT_SECONDS, **edge_client_kwargs()
+        ) as client:
             res = await client.get(f"{base_url}/api/v1/cache/gex/{symbol}")
             if res.status_code == 200:
                 data = res.json()
@@ -87,7 +92,9 @@ async def get_cached_option_chain(
         return None
     try:
         params = {"expiry": expiry} if expiry else None
-        async with httpx.AsyncClient(timeout=_READ_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=_READ_TIMEOUT_SECONDS, **edge_client_kwargs()
+        ) as client:
             res = await client.get(
                 f"{base_url}/api/v1/cache/options/{symbol}/chain", params=params
             )
@@ -123,7 +130,9 @@ async def get_gex_history(
     rows: list[dict[str, Any]] = []
     cursor = since
     try:
-        async with httpx.AsyncClient(timeout=_SYNC_TIMEOUT_SECONDS) as client:
+        async with httpx.AsyncClient(
+            timeout=_SYNC_TIMEOUT_SECONDS, **edge_client_kwargs()
+        ) as client:
             for _ in range(max_pages):
                 params: dict[str, Any] = {"limit": 500}
                 if cursor:

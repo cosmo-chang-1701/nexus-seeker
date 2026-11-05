@@ -5,6 +5,7 @@ import logging
 from typing import Optional
 
 import config
+from services.edge_auth import edge_client_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,9 @@ async def get_reddit_details(
             # edge 端與 Reddit 的請求節奏，避免固定節奏被限流特徵辨識。
             await asyncio.sleep(random.uniform(0.5, 1.5))
 
-            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=45.0, follow_redirects=True, **edge_client_kwargs()
+            ) as client:
                 req_url = f"{base_url}/api/v1/scrape/reddit/{symbol}?limit={limit}&custom_query={query_encoded}"
 
                 res = await client.get(req_url)
@@ -126,7 +129,9 @@ async def get_reddit_context_batch(
         async with _reddit_sem:
             await asyncio.sleep(random.uniform(0.5, 1.5))
 
-            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                timeout=45.0, follow_redirects=True, **edge_client_kwargs()
+            ) as client:
                 req_url = f"{base_url}/api/v1/scrape/reddit/feed?limit=100"
                 res = await client.get(req_url)
                 res.raise_for_status()

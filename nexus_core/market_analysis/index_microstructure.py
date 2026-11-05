@@ -14,6 +14,7 @@ from market_analysis.gex_wall_depth import (  # noqa: F401
 )
 
 from services.bounded_cache import BoundedCache
+from services.edge_auth import edge_client_kwargs
 
 logger = logging.getLogger(__name__)
 
@@ -172,7 +173,7 @@ async def fetch_gex_metrics(allow_empty: bool = False) -> Dict[str, float]:
         await save_kv_cache("macro_gex_is_fallback", 1)
         return await _last_known_good_or_fallback()
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, **edge_client_kwargs()) as client:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/gex")
             if res.status_code == 200:
                 data = res.json()
@@ -509,7 +510,7 @@ async def fetch_liquidity_metrics() -> dict:
         await save_kv_cache("macro_liquidity_is_fallback", 1)
         return {**fallback, "_is_fallback": True}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, **edge_client_kwargs()) as client:
             res = await client.get(f"{config.TUNNEL_URL}/api/v1/scrape/macro/liquidity")
             if res.status_code == 200:
                 data = res.json()
@@ -576,7 +577,7 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
         await save_kv_cache("macro_core_is_fallback", 1)
         return {**fallback, "_is_fallback": True}
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, **edge_client_kwargs()) as client:
             res = await client.get(
                 f"{config.TUNNEL_URL}/api/v1/scrape/macro/core_metrics"
             )
@@ -639,7 +640,9 @@ async def _scrape_symbol_gex_raw(
 
     try:
         base_url = config.TUNNEL_URL.rstrip("/")
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=15.0, follow_redirects=True, **edge_client_kwargs()
+        ) as client:
             res = await client.get(f"{base_url}/api/v1/scrape/options/{symbol}/gex")
             if res.status_code == 200:
                 data = res.json()
