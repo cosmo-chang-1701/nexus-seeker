@@ -8,7 +8,7 @@ from typing import Sequence
 
 import discord
 
-from cogs.embed_builders._ansi_utils import _visual_truncate
+from cogs.embed_builders._ansi_utils import _visual_len, _visual_truncate
 from cogs.embed_builders._core import NexusEmbed
 from market_analysis.wall_break import (
     RETEST_STOP_PCT_MAX,
@@ -44,11 +44,18 @@ def _val(text: str) -> str:
     return f"\u001b[1;37m{text}{_RESET}"
 
 
+def _truncate_detail(text: str) -> str:
+    """超過顯示寬度上限時截斷並補「…」，結果寬度不超過上限。"""
+    if _visual_len(text) <= _DETAIL_MAX_VLEN:
+        return text
+    return _visual_truncate(text, _DETAIL_MAX_VLEN - _visual_len("…")) + "…"
+
+
 def _gate_lines(gates: Sequence[GateResult]) -> list[str]:
     return [
         f"{_ICON[g.status]} {g.label}："
         f"\u001b[{_STATUS_ANSI[g.status]}m"
-        f"{_visual_truncate(g.detail, _DETAIL_MAX_VLEN)}{_RESET}"
+        f"{_truncate_detail(g.detail)}{_RESET}"
         for g in gates
     ]
 

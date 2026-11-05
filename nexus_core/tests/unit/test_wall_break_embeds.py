@@ -3,7 +3,9 @@ from datetime import datetime
 from typing import Any
 
 import pytest
+from cogs.embed_builders._ansi_utils import _visual_len
 from cogs.embed_builders.wall_break_embeds import (
+    _gate_lines,
     create_wall_break_embed,
     create_wall_break_t1_embed,
 )
@@ -113,6 +115,10 @@ def _squash(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def _squash_keep(text: str) -> str:
+    return re.sub(r"\u001b\[[0-9;]*m", "", text).strip()
+
+
 def _build(kind: str, direction: Any, gates: Any = GATES) -> Any:
     wall = 410.0 if direction == "BREAKOUT" else 380.0
     if kind == "intraday":
@@ -129,7 +135,16 @@ def _build(kind: str, direction: Any, gates: Any = GATES) -> Any:
 @pytest.mark.parametrize("direction", ["BREAKOUT", "BREAKDOWN"])
 def test_nexus_embed_layout(kind: str, direction: str) -> None:
     long_gates = tuple(
-        GateResult(f"g{i}", f"關卡{i}", "PASS", "長" * 200) for i in range(6)
+        GateResult(key, label, "PASS", "長" * 200)
+        for key, label in (
+            ("penetration", "穿透幅度"),
+            ("body", "K 棒實體"),
+            ("rvol", "相對量能"),
+            ("day_volume", "全日量推估"),
+            ("flow", "選擇權流向"),
+            ("skew", "偏斜百分位"),
+            ("local_gex", "舊牆淨 GEX"),
+        )
     )
     for gates in (GATES, long_gates):
         e = _build(kind, direction, gates)
@@ -147,12 +162,17 @@ def test_nexus_embed_layout(kind: str, direction: str) -> None:
             assert v.count("```") % 2 == 0
             assert "├─" in v or "└─" in v
         assert all(len(str(f.value)) <= 1024 for f in e.fields)
+        lines = [ln for ln in gate.splitlines() if "：" in ln]
+        details = [_squash_keep(ln).split("：", 1)[1] for ln in lines]
+        if gates is long_gates:
+            assert len(details) == 7
+            assert all(x.endswith("…") and _visual_len(x) <= 70 for x in details)
+        else:
+            assert all("…" not in x for x in details)
         old = _OLD_BREAKOUT if direction == "BREAKOUT" else _OLD_BREAKDOWN
         if direction == "BREAKDOWN":
             assert "CallWall $410.00" not in directive
         expect = (_CANDIDATE if kind == "intraday" else "") + old
-        if direction == "BREAKDOWN":
-            expect = (_CANDIDATE if kind == "intraday" else "") + old
         assert _squash(directive) == _squash(expect)
         assert (_CANDIDATE in directive) == (kind == "intraday")
 
@@ -184,3 +204,16 @@ def test_naming_rule() -> None:
         ),
     ):
         assert "真突破" not in texts(e) and "真跌破" not in texts(e)
+
+
+def test_gate_detail_ellipsis_truncation() -> None:
+    def detail(text: str) -> str:
+        line = _gate_lines([GateResult("g", "標籤", "PASS", text)])[0]
+        return _squash_keep(line).split("標籤：", 1)[1]
+
+    assert detail("長" * 35) == "長" * 35
+    assert detail("short") == "short"
+    for n in (36, 200):
+        r = detail("長" * n)
+        assert r.endswith("…")
+        assert _visual_len(r) <= 70
