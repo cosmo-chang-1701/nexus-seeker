@@ -61,6 +61,11 @@ LLM_API_BASE = get_env_or_secret("LLM_API_BASE", None)
 LLM_MODEL_NAME = get_env_or_secret("LLM_MODEL_NAME", None)
 API_KEY = get_env_or_secret("API_KEY", None)
 TUNNEL_URL = get_env_or_secret("TUNNEL_URL", "")
+# edge 存取驗證：X-Edge-Token 標頭值，須與 edge 的 EDGE_API_TOKEN 相同（空字串＝不帶）
+EDGE_API_TOKEN = get_env_or_secret("EDGE_API_TOKEN", "")
+# Cloudflare Access 服務權杖（選填；兩者皆有值才會帶標頭）
+CF_ACCESS_CLIENT_ID = get_env_or_secret("CF_ACCESS_CLIENT_ID", "")
+CF_ACCESS_CLIENT_SECRET = get_env_or_secret("CF_ACCESS_CLIENT_SECRET", "")
 FINNHUB_API_KEY = get_env_or_secret("FINNHUB_API_KEY", "")
 
 # 記憶體與 Swap 緊急警報門檻 (百分比)

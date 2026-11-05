@@ -91,6 +91,8 @@ def get_edge_client() -> Any:
     """取得當前 event loop 的共用 Edge Scraper HTTP 連線池 (Keep-Alive)。"""
     import httpx
 
+    from services.edge_auth import edge_client_kwargs
+
     loop = asyncio.get_running_loop()
     client = _edge_clients_by_loop.get(loop)
     if client is None or getattr(client, "is_closed", False):
@@ -98,6 +100,7 @@ def get_edge_client() -> Any:
             timeout=httpx.Timeout(20.0, connect=5.0),
             limits=httpx.Limits(max_keepalive_connections=20, max_connections=50),
             follow_redirects=True,
+            **edge_client_kwargs(),
         )
         _edge_clients_by_loop[loop] = client
     return _EdgeClientContext(client)

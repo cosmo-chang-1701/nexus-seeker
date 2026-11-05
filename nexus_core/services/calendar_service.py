@@ -13,6 +13,7 @@ from database.calendar_cache import (
     save_earnings_cache,
 )
 from services import market_data_service
+from services.edge_auth import edge_client_kwargs
 from services.market_data_service import BoundedCache
 
 
@@ -249,7 +250,9 @@ class CalendarService:
         high_impact: list[dict[str, Any]] = []
         api_success = False
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(
+                timeout=30.0, **edge_client_kwargs()
+            ) as client:
                 res = await client.get(url)
                 if res.status_code == 200:
                     events = res.json()
@@ -642,7 +645,9 @@ class CalendarService:
             return False
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(
+                timeout=15.0, **edge_client_kwargs()
+            ) as client:
                 res = await client.get(
                     f"{config.TUNNEL_URL}/api/v1/scrape/macro/fedwatch"
                 )

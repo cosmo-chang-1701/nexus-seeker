@@ -11,6 +11,7 @@ import os
 from datetime import datetime, timezone
 
 from cogs.embed_builder import create_memory_alert_embed
+from services.edge_auth import edge_client_kwargs
 from services.llm_service import is_memory_safe
 
 logger = logging.getLogger(__name__)
@@ -243,7 +244,9 @@ class MemoryManager:
             import httpx
 
             try:
-                async with httpx.AsyncClient(timeout=3.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=3.0, **edge_client_kwargs()
+                ) as client:
                     res = await client.get(
                         f"{tunnel_url.rstrip('/')}/api/v1/health/sys"
                     )

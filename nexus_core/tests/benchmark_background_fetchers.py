@@ -51,6 +51,7 @@ from services import (
     market_data_service,
     reddit_service,
 )
+from services.edge_auth import edge_client_kwargs
 
 
 class BenchmarkResult:
@@ -129,7 +130,7 @@ class BenchmarkSuite:
             ("GET", "/api/v1/scrape/yf/options/AAPL/expiries", None),
         ]
 
-        async with httpx.AsyncClient(timeout=45.0) as client:
+        async with httpx.AsyncClient(timeout=45.0, **edge_client_kwargs()) as client:
             for method, path, json_body in endpoints:
                 url = f"{self.tunnel_url}{path}"
                 t0 = time.perf_counter()
@@ -913,7 +914,10 @@ class BenchmarkSuite:
 
 
 async def main() -> None:
-    tunnel_url = os.getenv("TUNNEL_URL", "https://reddit-api.semantic-cosmos.com")
+    tunnel_url = os.getenv("TUNNEL_URL", "")
+    if not tunnel_url:
+        print("❌ 未設定 TUNNEL_URL 環境變數，無法執行基準測試。請先設定 edge 的網址。")
+        sys.exit(1)
     print("🌌 Nexus Seeker Background Data Fetching Benchmark Runner")
     print(f"🎯 Target TUNNEL_URL: {tunnel_url}")
     print(f"🕒 Start Time (UTC): {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime())}\n")
