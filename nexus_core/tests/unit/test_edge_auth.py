@@ -17,7 +17,12 @@ _CF_SECRET = "cf-secret-SECRET-789"
 
 
 @pytest.fixture(autouse=True)
-def _reset_state() -> Any:
+def _reset_state(monkeypatch: pytest.MonkeyPatch) -> Any:
+    # 預設把三個驗證設定清空，避免開發機 .env 的真實值污染測試；
+    # 各測試內部的 patch(...) 仍會覆寫這些預設值
+    monkeypatch.setattr("config.EDGE_API_TOKEN", "")
+    monkeypatch.setattr("config.CF_ACCESS_CLIENT_ID", "")
+    monkeypatch.setattr("config.CF_ACCESS_CLIENT_SECRET", "")
     edge_auth._last_rejection_log.clear()
     edge_auth._partial_cf_warned = False
     yield
