@@ -108,3 +108,49 @@ def test_net_gex_support_zone_branch_not_output() -> None:
     text = _text(d)
     assert "實為助跌區" in text
     assert "日線參考" not in text
+
+
+def test_put_wall_weak_without_net_support_hides_daily_ref() -> None:
+    """助跌區：PutWall 淨 GEX 為負且現價下方無正淨 GEX 支撐 → 不輸出日線參考。"""
+    d = {
+        "symbol": "NVDA",
+        "price": 168.89,
+        "atr_1d": 5.0,
+        "atr_15m": 1.0,
+        "gex_profile_data": {
+            "spot": 168.89,
+            "put_wall": 165.0,
+            "gex_profile": {
+                "160.0": -1_000_000.0,
+                "165.0": -7_300_000.0,
+                "170.0": -500_000.0,
+                "180.0": 5_000_000.0,
+            },
+        },
+    }
+    text = _text(d)
+    assert "實為助跌區" in text
+    assert "日線參考" not in text
+
+
+def test_paper_wall_without_net_support_hides_daily_ref() -> None:
+    """紙牆：PutWall 淨 GEX 為正但低於薄牆門檻，且無其他支撐 → 不輸出日線參考。"""
+    d = {
+        "symbol": "NVDA",
+        "price": 168.89,
+        "atr_1d": 5.0,
+        "atr_15m": 1.0,
+        "gex_profile_data": {
+            "spot": 168.89,
+            "put_wall": 165.0,
+            "gex_profile": {
+                "160.0": -1_000_000.0,
+                "165.0": 1_000.0,
+                "170.0": -500_000.0,
+                "180.0": 5_000_000.0,
+            },
+        },
+    }
+    text = _text(d)
+    assert "紙牆" in text
+    assert "日線參考" not in text
