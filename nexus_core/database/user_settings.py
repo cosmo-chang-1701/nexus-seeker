@@ -388,6 +388,36 @@ def any_user_local_tunnel_enabled() -> bool:
     return bool(getattr(config, "TUNNEL_URL", ""))
 
 
+def _sum_user_greeks(
+    cursor: sqlite3.Cursor, user_id: int
+) -> tuple[float, float, float, float]:
+    """單一使用者 TRADE／HOLDING 部位的 (delta, theta, gamma, vanna) 加總。
+
+    沿用呼叫端的連線與 cursor。無部位時 SUM 為 NULL，一律以 0.0 取代。
+    metadata.theta 由 refresh_portfolio_greeks 以 py_vollib 的 analytical theta
+    (已是每日值) × 口數 × 100 寫入，本身就是每部位每日 Theta 美元值，不可再除以 365。
+    """
+    cursor.execute(
+        """
+        SELECT
+            SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)),
+            SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)),
+            SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)),
+            SUM(COALESCE(CAST(json_extract(metadata, '$.vanna') AS REAL), 0.0))
+        FROM assets
+        WHERE user_id = ? AND context_type IN ('TRADE', 'HOLDING')
+        """,
+        (user_id,),
+    )
+    g = cursor.fetchone()
+    return (
+        float(g[0] or 0.0),
+        float(g[1] or 0.0),
+        float(g[2] or 0.0),
+        float(g[3] or 0.0),
+    )
+
+
 def get_full_user_context(user_id: int) -> UserContext:
     """
     帳戶上下文提供者 (User Context Provider)：
@@ -400,63 +430,29 @@ def get_full_user_context(user_id: int) -> UserContext:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # 🚀 [Unified Asset Lifecycle] 從新的 assets 表聚合 Greeks
-        sql = """
-            SELECT
-                u.*,
-                g.sum_delta, g.sum_theta, g.sum_gamma, g.sum_vanna
-            FROM user_settings u
-            LEFT JOIN (
-                SELECT
-                    user_id,
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)) as sum_delta,
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)) as sum_theta,
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)) as sum_gamma,
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.vanna') AS REAL), 0.0)) as sum_vanna
-                FROM assets
-                WHERE context_type IN ('TRADE', 'HOLDING')
-                GROUP BY user_id
-            ) g ON u.user_id = g.user_id
-            WHERE u.user_id = ?
-        """
-        cursor.execute(sql, (user_id,))
+        cursor.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
         user_row = cursor.fetchone()
 
+        # 🚀 [Unified Asset Lifecycle] 從 assets 表聚合 Greeks（兩條路徑共用）
+        sum_delta, sum_theta, sum_gamma, sum_vanna = _sum_user_greeks(cursor, user_id)
+
         if not user_row:
-            # 尚未儲存過帳戶設定的使用者：Greeks 仍須取自 assets（唯讀聚合），
+            # 尚未儲存過帳戶設定的使用者：Greeks 仍取自 assets（唯讀聚合），
             # 其餘欄位維持 dataclass 預設值。
-            cursor.execute(
-                """
-                SELECT
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.weighted_delta') AS REAL), 0.0)),
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.theta') AS REAL), 0.0)),
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.gamma') AS REAL), 0.0)),
-                    SUM(COALESCE(CAST(json_extract(metadata, '$.vanna') AS REAL), 0.0))
-                FROM assets
-                WHERE user_id = ? AND context_type IN ('TRADE', 'HOLDING')
-                """,
-                (user_id,),
-            )
-            g = cursor.fetchone()
             capital = calculate_auto_capital(user_id, conn)
             return UserContext(
                 user_id,
                 capital,
                 15.0,
-                float(g[0] or 0.0),
-                float(g[1] or 0.0),
-                float(g[2] or 0.0),
-                float(g[3] or 0.0),
+                sum_delta,
+                sum_theta,
+                sum_gamma,
+                sum_vanna,
             )
 
-        # 提取 Greeks。DB 內 metadata.theta 由 refresh_portfolio_greeks 以
-        # py_vollib 的 analytical theta (已是每日值) × 口數 × 100 寫入，本身就是
-        # 每部位每日 Theta 美元值，不可再除以 365。
-        sum_delta = user_row["sum_delta"] if user_row["sum_delta"] is not None else 0.0
-        sum_theta = user_row["sum_theta"] if user_row["sum_theta"] is not None else 0.0
-        sum_gamma = user_row["sum_gamma"] if user_row["sum_gamma"] is not None else 0.0
-        sum_vanna = user_row["sum_vanna"] if user_row["sum_vanna"] is not None else 0.0
-
+        # metadata.theta 由 refresh_portfolio_greeks 以 py_vollib 的 analytical theta
+        # (已是每日值) × 口數 × 100 寫入，本身就是每部位每日 Theta 美元值，
+        # 不可再除以 365（見 _sum_user_greeks）。
         # 處理基本設定與空值
         capital = calculate_auto_capital(user_id, conn)
         risk_limit = (

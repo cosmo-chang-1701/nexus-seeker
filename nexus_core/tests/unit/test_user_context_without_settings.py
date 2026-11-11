@@ -75,3 +75,28 @@ def test_get_all_user_ids_includes_assets_only_user(
 ) -> None:
     _seed_assets(db_conn, uid=777)
     assert 777 in database.get_all_user_ids()
+
+
+@pytest.mark.parametrize("with_settings", [False, True])
+def test_greeks_ignore_other_users_and_other_context_types(
+    db_conn: sqlite3.Connection, with_settings: bool
+) -> None:
+    """他人的 TRADE/HOLDING 與本人非 TRADE/HOLDING 的列不得混入加總（兩條路徑皆然）。"""
+    _seed_assets(db_conn)  # 本人：HOLDING + TRADE + 一筆 WATCH（delta 999）
+    other = {"weighted_delta": 5000.0, "theta": 50.0, "gamma": 7.0, "vanna": 9.0}
+    cur = db_conn.cursor()
+    for ctx_type in ("TRADE", "HOLDING"):
+        cur.execute(
+            "INSERT INTO assets (user_id, symbol, context_type, metadata) "
+            "VALUES (?, ?, ?, ?)",
+            (UID + 1, "NVDA", ctx_type, json.dumps(other)),
+        )
+    cur.execute(
+        "INSERT INTO assets (user_id, symbol, context_type, metadata) "
+        "VALUES (?, ?, ?, ?)",
+        (UID, "AMD", "WATCH", json.dumps(other)),
+    )
+    if with_settings:
+        cur.execute("INSERT INTO user_settings (user_id) VALUES (?)", (UID,))
+    db_conn.commit()
+    _assert_greeks(database.get_full_user_context(UID))
