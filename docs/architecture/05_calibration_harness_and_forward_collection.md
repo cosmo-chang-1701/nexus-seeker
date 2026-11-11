@@ -690,7 +690,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 ### 5.19 體制停損 κ 離線比較（`regime-stop-report`）
 
-**目的**：回答「持有於 GEX 錨點之上的部位，依體制調整停損墊片 κ（$\text{stop} = \text{anchor} - \kappa \times ATR_{15m}$）是否優於現行固定 $\kappa = 0.5$」。假說（未合併的規格 `08_factor_covariance_and_regime_stop_pipeline.md` §2.4／§3.2）為 Long Gamma $\kappa = 1.75$、Short Gamma $\kappa = 0.40$、財報／重大總經事件前後 48 小時 $\kappa = 0$。本命令只產出報告，**不修改任何正式參數**（現行常數 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT = 0.5`）。
+**目的**：回答「持有於 GEX 錨點之上的部位，依體制調整停損墊片 κ（$\text{stop} = \text{anchor} - \kappa \times ATR_{15m}$）是否優於現行固定 $\kappa = 0.5$」。假說（已放棄的規格提案 `08_factor_covariance_and_regime_stop_pipeline.md` §2.4／§3.2，未合併）為 Long Gamma $\kappa = 1.75$、Short Gamma $\kappa = 0.40$、財報／重大總經事件前 48 小時 $\kappa = 0$。本命令只產出報告，**不修改任何正式參數**（現行常數 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT = 0.5`）。
 
 **資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。
 
@@ -703,7 +703,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 | `LONG_GAMMA` | 其餘 |
 | `UNKNOWN` | 無 GEX 資料，不納入各分組，只計數 |
 
-重大總經關鍵字：`FOMC`、`Interest Rate`、`利率決策`、`CPI`、`Inflation Rate`、`Non Farm`／`Nonfarm`／`Non-Farm`、`非農`（不分大小寫子字串），排除含 `Minutes`、`Revision` 者。這與未合併規格的 `Non-Farm`／`NFP` 寫法不同：實際日曆以 `Non Farm Payrolls` 與 `非農就業人數` 命名，照規格寫法會漏掉。
+重大總經關鍵字：`FOMC`、`Interest Rate`、`利率決策`、`CPI`、`Inflation Rate`、`Non Farm`／`Nonfarm`／`Non-Farm`、`非農`（不分大小寫子字串），排除含 `Minutes`、`Revision` 者。這與該規格提案的 `Non-Farm`／`NFP` 寫法不同：實際日曆以 `Non Farm Payrolls` 與 `非農就業人數` 命名，照規格寫法會漏掉。
 
 **錨點與模擬**：錨點為 `_resolve_canonical_anchor_base(support_strike, put_wall, call_wall, 0, 0, spot)`（edge 歷史沒有 Gamma Flip／HVN）。無結構錨點（退回現價）、錨點不低於現價、`atr_1d <= 0` 的快照排除並分別計數。$ATR_{15m} = ATR_{1D}/\sqrt{26}$。對 $\kappa \in \{0, 0.4, 0.5, 1, 1.75, 3\}$ 與觀察期 5、10 個交易日，逐日走快照日**之後**的日線：開盤價 $\le$ stop 以開盤價成交（跳空）；否則最低價 $\le$ stop 以 stop 成交；都沒觸發則以最後收盤出場。持有報酬為最後收盤 ÷ 現價 − 1；`超額` = 出場報酬 − 持有報酬。未走完整段觀察期的快照不標註（無前視、無部分路徑）。
 
@@ -717,6 +717,8 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 - 連續交易日的觀察期互相重疊，日期叢集 CI 只能部分修正自相關。
 
 **執行**：`python -m calibration regime-stop-report --snapshot-db /app/.calibration_cache/snapshot.db`（容器內執行參數見 `AGENTS.md` 的 Testing 段落；可加 `--edge-db`、`--universe`）。缺 `--snapshot-db` 時輸出中文訊息並以代碼 2 結束。
+
+**首跑（2026-11-11，edge 72 檔、2026-09-17～11-10；5 日觀察期 1230 件、10 日 1067 件）**：各分組皆為 κ 越小（停損越緊）越佳，排序不隨體制改變。Long Gamma 的規格 κ 1.75 對現行 0.5 成對差 −0.28%（CI [−0.66, 0.06]），方向與假說相反且不顯著；Short Gamma 的 0.4 對 0.5 為 +0.04%（CI [0.03, 0.07]），顯著但經濟意義可忽略；事件組交易日數 15／11，不判讀。結論：依體制調整 κ 沒有實益，**維持現行 0.5×ATR₁₅ₘ**，不實作體制停損管線。此期間含大跌（持有 CVaR10 約 −24%），停損整體優於續抱屬樣本期特有，且未計停損後回補，不得據此收緊停損。SPY 已於 2026-11-11 加入自選，待 edge 累積 SPY GEX 歷史後可補驗總經腿。
 
 ## 6. 核心程式碼檔案路徑關聯
 
