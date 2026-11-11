@@ -12,7 +12,7 @@
 - **`force_refresh=True` 為必要條件**：`get_history_df` 預設快取結果 6 小時（`_HISTORY_CACHE_TTL`），若不強制刷新，15 分鐘節奏的呼叫方可能拿到過期／不完整的 K 棒。這是刻意與 `market_analysis/dynamic_rollover/opportunity_cost.py::_confirm_entry_signal` 分歧的設計——後者同樣使用 `interval="15m"`，但**不**繞過快取、也**不**檢查 K 棒是否已收盤，新的盤中 K 棒邏輯不應照抄該模式。
 - **已收盤 K 棒偵測**：yfinance 的 15m K 棒索引是該 K 棒的*起始*時間。唯有 `bar_start + 15min <= now (ET)` 時才視為「已收盤」，否則引擎退回倒數第二根 K 棒，避免仍在形成中的 K 棒即時價觸發誤判警報。這與 `market_analysis/gamma_cliff_confirmation.py::is_gamma_cliff_confirmed` 不同——後者儘管命名為「15分鐘」，實際操作的是 1 分鐘 K 棒，並非真正的 15m K 棒。
 - **`trim_to_confirmed_15m_bars(df)` 是唯一的截斷定義來源**，抽取出來讓 `get_confirmed_15m_bar` 與 `dynamic_rollover` 左側進場閘門／盤勢分類器無法互相漂移。它回傳截斷至最後一根已收盤 K 棒的資料框（若剩餘 K 棒數不足以計算 20 根均量基準，或索引非 datetime 型別，則回傳 `None`——寧可失效也不假設「已收盤」）。對於*縮量*類條件（如左側進場閘門的縮量窒息 `volume <= 0.7× avg`）尤其危險：一根才進行 2 分鐘的 K 棒只累積了一小部分成交量，若誤用未收盤 K 棒，該子條件在大多數時間都會被誤判為真。
-- **放量門檻**：比較已收盤 K 棒的成交量與前 20 根 K 棒（`_VOLUME_LOOKBACK_BARS`）的均量，呼應 `opportunity_cost.py` 進場確認邏輯已使用的 20 根回看窗（該路徑使用 1.2 倍門檻，本功能預設使用者可調整的 1.5 倍門檻）。
+- **放量門檻**：比較已收盤 K 棒的成交量與「前幾個交易日同一時段」K 棒的均量（`tod_avg_volume`，由 `volume_base()` 選取）；同時段樣本不足（或串流路徑無此值）時退回前 20 根 K 棒（`_VOLUME_LOOKBACK_BARS`）的均量，20 根回看窗呼應 `opportunity_cost.py` 進場確認邏輯已使用的 20 根回看窗（該路徑使用 1.2 倍門檻，本功能預設使用者可調整的 1.5 倍門檻）。
 
 ### 2.1 資料來源分派（yfinance／Alpaca 串流）
 
@@ -29,7 +29,7 @@
 
 20 根滾動均量跨越日內 U 型量能曲線：開盤 09:30 與收盤 15:45 兩根含競價量，對以午盤為主的前 20 根必然「放量」。2026-10-01 MU 15:45 K 棒實測：20 根均量 1,202,233 股 → 量比 $2.45\times$；前 4 日同時段均量約 1,582,624 股 → 同時段量比 $1.86\times$。
 
-- `Confirmed15mBar` 新增 `tod_avg_volume`／`tod_sample_count`：yfinance 路徑以 `compute_time_of_day_avg_volume()` 計算確認根在前幾個交易日**同一時段**的均量（5d 週期最多 4 個樣本，少於 `_TOD_MIN_SAMPLES` = 3 為 `None`）。串流路徑不提供。**價量警報的觸發判定不變**，仍用 20 根均量。
+- `Confirmed15mBar` 新增 `tod_avg_volume`／`tod_sample_count`：yfinance 路徑以 `compute_time_of_day_avg_volume()` 計算確認根在前幾個交易日**同一時段**的均量（5d 週期最多 4 個樣本，少於 `_TOD_MIN_SAMPLES` = 3 為 `None`）。串流路徑不提供。**價量警報的觸發判定與推播 embed 的量能行以同時段均量為基準**（`volume_base()`，無同時段基準時退回 20 根均量並標示「20根均量」），避免 09:30／15:45 競價量對前 20 根必然放量而恆觸發。
 - `/x` 的「即時量比」行並列 20 根量比與同時段量比，狀態（「🟢 放量 >= 1.5x」／「❌ 缺乏放量代償」）優先以同時段量比判定（採同時段基準時狀態括號前綴為「同時段:」，無同時段基準時為「狀態:」，讀者不會把狀態誤當成對左側 20 根量比的判定；括號標示實際採用的統計：中位數，缺失時退回平均；樣本 < 3 標「樣本少」；統計由 `compute_time_of_day_volume_stats()` 單一函式產出，排程行為不變）；無同時段基準且確認根為 09:30／15:45 時附註「開盤／收盤競價時段，量比天然偏高」。狀態文案不再寫「放量突破」——量比只代表量能，不代表價位突破。
 - 盤前／休市時最近一根已收盤 K 棒與 Session VWAP（yfinance `period=1d`）都屬於前一交易日，`/x` 分別標註「@MM-DD HH:MM [前一交易日]」與「[前一交易日 MM-DD]」。
 - 15m ATR 由 `pandas_ta.atr()` 預設 `mamode="rma"` 計算，即 Wilder 平滑，標籤為「15m ATR (Wilder 14)」（舊標籤誤寫 EMA14；同一資料 EMA 版本約高 3%）。
@@ -41,7 +41,7 @@
 - `direction = "above"` → `Close >= target_price`（突破）
 - `direction = "below"` → `Close <= target_price`（跌破）
 - **雙模支援**：
-  - **價量突破模式（`volume_multiplier > 0`，預設 1.5x）**：要求當根 15 分鐘收盤價達標且成交量大於前 20 根均量的倍數，防止假突破／雜訊。
+  - **價量突破模式（`volume_multiplier > 0`，預設 1.5x）**：要求當根 15 分鐘收盤價達標且成交量大於同時段均量（缺失時為前 20 根均量）的倍數，防止假突破／雜訊。
   - **純價格警報模式（`volume_multiplier = 0`）**：若將 `volume_multiplier` 設為 `0`，量能檢查條件將無條件通過（`volume_condition = True`），轉為單純的實體 K 線價格觸及／破位警報。
 
 ## 4. 每使用者監控設定（`database/price_volume_watch.py`，遷移 `v063`）
@@ -52,7 +52,7 @@
 
 - `@tasks.loop(minutes=15)`，受 `market_time.is_market_open()` 閘門控制（與 WTI 的 24/7 節奏不同，因為股票盤中 K 棒在非交易時段沒有意義）。
 - 先依標的分組所有已註冊監控，每個唯一標的每輪只抓取一次已收盤 K 棒，即使多位使用者監控同一標的。
-- **KV Cache 防重複發送**：`price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` —— 每位使用者、每個標的、每天最多一則警報（與 WTI 的每日防重複鍵值相同模式）。
+- **KV Cache 防重複發送**：`price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` —— `YYYYMMDD` 取自 K 棒自身的交易日（`bar.bar_time`）而非執行當天——每位使用者、每個標的、每根 K 棒最多一則警報；09:32 評估到的前一交易日 15:45 收盤棒使用前一日的鍵，不會佔用當日鍵而擋掉當日盤中突破。
 
 ## 6. 互動指令與 `/notif_settings`
 
