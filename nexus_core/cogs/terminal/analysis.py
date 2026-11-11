@@ -152,16 +152,6 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
                 warnings=[USER_CONTEXT_LOAD_FAILED_WARNING],
             )
             result["nro_warnings"] = opt_res.warnings
-            result.update(
-                {
-                    "projected_exposure_pct": 0.0,
-                    "safe_qty": 0,
-                    "hedge_spy": 0.0,
-                    "spy_price": spy_price,
-                    "risk_limit": user_context.risk_limit,
-                }
-            )
-            embeds_to_send.append(create_scan_embed(result, user_context.capital))
         else:
             available_collateral, collateral_warning = await load_available_collateral(
                 user_id, float(getattr(user_context, "cash_reserve", 0.0) or 0.0)
@@ -199,20 +189,18 @@ async def manual_scan_impl(interaction: discord.Interaction, symbol: str) -> Any
                 opt_res.warnings.append("SPY 現價資料不足：不提供建議口數")
             if opt_res.warnings:
                 result["nro_warnings"] = opt_res.warnings
-            safe_qty = opt_res.suggested_contracts
-            hedge_spy = opt_res.suggested_hedge_spy
-            projected_exposure_pct = opt_res.exposure_pct
 
-            result.update(
-                {
-                    "projected_exposure_pct": round(projected_exposure_pct, 2),
-                    "safe_qty": safe_qty,
-                    "hedge_spy": hedge_spy,
-                    "spy_price": spy_price,
-                    "risk_limit": user_context.risk_limit,
-                }
-            )
-            embeds_to_send.append(create_scan_embed(result, user_context.capital))
+        # 兩個分支共用：以 opt_res 寫回倉位欄位並產生 scan embed。
+        result.update(
+            {
+                "projected_exposure_pct": round(opt_res.exposure_pct, 2),
+                "safe_qty": opt_res.suggested_contracts,
+                "hedge_spy": opt_res.suggested_hedge_spy,
+                "spy_price": spy_price,
+                "risk_limit": user_context.risk_limit,
+            }
+        )
+        embeds_to_send.append(create_scan_embed(result, user_context.capital))
 
     if psq_result:
         result["price"] = df_hist_1d["Close"].iloc[-1] if not df_hist_1d.empty else 0.0
