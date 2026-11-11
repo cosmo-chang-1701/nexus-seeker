@@ -203,3 +203,59 @@ async def test_force_live_empty_falls_back_to_edge() -> None:
     ):
         res = await fetch_symbol_gex_metrics("NVDA", force_live=True)
     _assert_stale(res, 168.0, 10)
+
+
+def _legacy_data(tag: float) -> dict:
+    d = _snap(tag)
+    d["_is_stale_cache"] = True
+    return d
+
+
+@pytest.mark.asyncio
+async def test_legacy_restamped_kv_force_live_prefers_edge() -> None:
+    kv = {
+        "data": _legacy_data(214.0),
+        "timestamp": time.time() - 0.5 * HOUR,
+        "data_timestamp": time.time() - 0.5 * HOUR,
+    }
+    with (
+        _env(_client(body=_EMPTY_LIVE), _edge(168.0, 11)),
+        patch("database.cache.get_kv_cache", return_value=kv),
+    ):
+        res = await fetch_symbol_gex_metrics("NVDA", force_live=True)
+    _assert_stale(res, 168.0, 11)
+
+
+@pytest.mark.asyncio
+async def test_legacy_restamped_kv_nonforce_not_fresh_shortcut() -> None:
+    kv = {
+        "data": _legacy_data(214.0),
+        "timestamp": time.time() - 5 * 60,
+        "data_timestamp": time.time() - 5 * 60,
+    }
+    with (
+        _env(_client(body=_EMPTY_LIVE), None),
+        patch("database.cache.get_kv_cache", return_value=kv),
+        patch("asyncio.create_task") as ct,
+    ):
+        res = await fetch_symbol_gex_metrics("NVDA")
+        for call in ct.call_args_list:
+            call.args[0].close()
+    assert res.get("spot") != 214.0
+    assert res["gex_profile"] == {}
+
+
+@pytest.mark.asyncio
+async def test_legacy_guard_normal_fresh_kv_still_returned() -> None:
+    data = _snap(200.0)
+    kv = {
+        "data": data,
+        "timestamp": time.time() - 5 * 60,
+        "data_timestamp": time.time() - 5 * 60,
+    }
+    with (
+        _env(_client(body=_EMPTY_LIVE), None),
+        patch("database.cache.get_kv_cache", return_value=kv),
+    ):
+        res = await fetch_symbol_gex_metrics("NVDA")
+    assert res == data
