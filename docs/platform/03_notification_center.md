@@ -23,7 +23,7 @@
 以 key-value 風格的 `user_notification_settings` 表管理個別開關（複合主鍵 `(user_id, notification_key)`，支援無限 schema-less 擴充）。頻道的 key、模組、標籤與屬性只在 `database/notification_channels.py` 的 `CHANNELS` 註冊表定義，`ALL_NOTIFICATION_KEYS`／`DEFAULT_NOTIFICATION_SETTINGS`／`PRESET_PROFILES`／`TRADING_MODULES` 皆由此衍生。
 
 #### 2.2.1 分類準則：依對 B&H 投組報酬分佈的影響分組
-使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 29 個頻道）：
+使用者主策略為 Buy & Hold，評估以**索提諾比率為主**、MDD 與 VaR／CVaR 為輔（見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。Sortino 只懲罰低於 MAR 的報酬、不懲罰上行波動，因此頻道依其 `risk_role` 分為 5 種作用、6 個模組（共 30 個頻道）：
 
 | 模組 | `risk_role` | 頻道 | 內容 |
 |---|---|---|---|
@@ -36,6 +36,7 @@
 | | | `defense_gamma_fragility` | 持倉淨 Gamma < −20、IV 優勢掃描的高 IV 事件風險警告（`is_high_risk_vol`） |
 | | | `risk_portfolio_downside` | 投組下行風險：距一年高點回撤跨越 −10%／−15%／−20% 階梯（盤中與收盤檢查），或 1 日 CVaR95 超出 `risk_limit` 推導的預算／尾部體制轉換（收盤檢查）。去重前綴 `downside_dd_`／`downside_cvar_`；推播未送達時武裝狀態不前進（`services/downside_risk_service.py`） |
 | | | `risk_withdrawal_runway` | 提領跑道（收盤檢查）：壓力跑道跌破 3／2／1 年門檻（回升至門檻 + 0.5 年才重新武裝；NAV 快照過期時不推播），以及提領前置提醒（前一個月 15 日起）與提領月份首個交易日的提領額與賣出清單。去重前綴 `runway_warn_`／`runway_remind_`；狀態鍵 `runway_state_` 不列入去重清理，推播未送達時狀態不前進（`services/withdrawal_runway_service.py`，見 [`../risk_portfolio/05_financial_runway_and_liquidity.md`](../risk_portfolio/05_financial_runway_and_liquidity.md)） |
+| | | `risk_allocation_drift` | 配置偏離提醒（收盤檢查）：股票占比偏離宣告目標 `target_equity_pct` ≥ 5 pp 時，於首次超標當天與仍超標時每月第一次執行推播（固定比例、不擇時，總經狀態僅作註記；有提領設定時扣除下次提領預留，缺當日跑道快照則略過）。去重前綴 `alloc_drift_remind_`；狀態鍵 `alloc_drift_state_` 不列入去重清理，推播未送達時狀態不前進（`services/allocation_drift_service.py`，見 [`../strategies/09_static_allocation_rebalance.md`](../strategies/09_static_allocation_rebalance.md) §7） |
 | 🚀 上行捕捉 | `UPSIDE_CAPTURE` | `advisory_entry_signal` | 自選標的進場顧問（六重鐵律通過時推播進場價／停損／目標） |
 | | | `entry_pyramid_add` | `PYRAMID_ADD`、`TRANSITION_ENGINE`（停損上推／一次性加碼）、`CORE_DEPLOYMENT` |
 | | | `alpha_short_entry` | `SHORT_ENTRY` 做空進場（校準中，歸雜訊；另受 `SHORT_ENTRY_DRY_RUN` 控制） |
@@ -74,7 +75,7 @@
 - `🎯 精準交易`（`focus`）：只關閉 `noise` 頻道。
 - `🔕 盤中靜音`（`mute_intraday`）：關閉 `noise` 與 `cadence == INTRADAY` 的頻道。
 - `🛡️ 戰備全開`（`all_on`）；`all_off` 僅供程式呼叫。
-- **左尾防護 9 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
+- **左尾防護 10 個頻道皆 `preset_immune`**：任何預設情境（含 `all_off`）都不會關閉，只能逐項手動關。
 - `focus`／`mute_intraday` 對既有頻道的結果與重整前逐 key 相同，唯一差異是 `system_lifecycle`（重整後歸雜訊）；`test_notification_toggles.py::test_presets_preserve_legacy_behaviour` 逐一列明。
 
 #### 2.2.4 遷移 `v081_split_notification_channels`

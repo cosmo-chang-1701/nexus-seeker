@@ -45,6 +45,7 @@ NotificationKey = Literal[
     "defense_gamma_fragility",
     "risk_portfolio_downside",
     "risk_withdrawal_runway",
+    "risk_allocation_drift",
     # 🚀 上行捕捉
     "advisory_entry_signal",
     "entry_pyramid_add",
@@ -243,6 +244,16 @@ CHANNELS: tuple[NotificationChannel, ...] = (
         "risk_withdrawal_runway",
         "left_tail",
         "🏦 提領跑道 (壓力跑道跌破 3/2/1 年、提領前置與當日賣出清單)",
+        "LEFT_TAIL",
+        "DAILY",
+        preset_immune=True,
+    ),
+    # 配置偏離提醒（股票占比偏離宣告目標 ≥ 5pp：首次超過當天與每月首次）：
+    # 固定比例、不擇時（services/allocation_drift_service.py）。全新頻道、無母頻道，預設開啟。
+    NotificationChannel(
+        "risk_allocation_drift",
+        "left_tail",
+        "⚖️ 配置偏離提醒 (股票／BOXX 偏離目標 ≥ 5pp：首次超過當天與每月首次)",
         "LEFT_TAIL",
         "DAILY",
         preset_immune=True,
