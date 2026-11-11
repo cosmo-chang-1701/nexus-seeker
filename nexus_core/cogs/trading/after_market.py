@@ -95,6 +95,15 @@ class AfterMarketCog(commands.Cog):
         except Exception as e:
             logger.error(f"提領跑道快照計算失敗: {e}")
 
+        # 配置偏離提醒：順序：須在提領跑道快照之後（扣除下次提領預留需讀當日跑道快照）；
+        # 固定比例、不擇時（services/allocation_drift_service.py）
+        try:
+            from services.allocation_drift_service import run_allocation_drift_job
+
+            await run_allocation_drift_job(self.bot, today)
+        except Exception as e:
+            logger.error(f"配置偏離提醒檢查失敗: {e}")
+
     @dynamic_after_market_report.before_loop
     async def before_dynamic_after_market_report(self) -> None:
         await self.bot.wait_until_ready()
