@@ -1,3 +1,4 @@
+import math
 from datetime import datetime
 from typing import Any, List, Optional, Sequence
 import sqlite3
@@ -52,6 +53,8 @@ class UserContext:
     withdrawal_anchor_month: Optional[str] = None  # 通膨調整基準月 YYYY-MM
     withdrawal_months: str = "1,7"  # 每年提領月份
     withdrawal_target_weights: Optional[str] = None  # JSON；None = 現有持股等權
+    # 宣告的股票占比 0–100，其餘為 BOXX＋現金；-1 = 未啟用
+    target_equity_pct: float = -1.0
     # True = 讀取帳戶資料失敗，其餘欄位僅為佔位值，呼叫端須 fail closed
     load_failed: bool = False
 
@@ -143,6 +146,7 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
             "withdrawal_anchor_month",
             "withdrawal_months",
             "withdrawal_target_weights",
+            "target_equity_pct",
         }
         update_pairs = []
         values = []
@@ -180,6 +184,14 @@ def upsert_user_config(user_id: int, **kwargs) -> bool:  # type: ignore
                     # 不直接匯入以避免循環相依)。未知值一律回退 DEFENSIVE。
                     value = value if value in _VALID_RISK_APPETITES else "DEFENSIVE"
 
+                elif key == "target_equity_pct":
+                    # < 0 → -1.0（未啟用）；0 是合法目標（全數 BOXX）；> 100 夾到 100
+                    # NaN 會被 SQLite 存成 NULL 並被讀回 -1.0，等於靜默關閉；
+                    # 因此 NaN 一律視為無效輸入，略過此欄位、保留原值
+                    num = float(value)
+                    if math.isnan(num):
+                        continue
+                    value = -1.0 if num < 0 else min(num, 100.0)
                 elif key == "withdrawal_anchor_month":
                     value = _normalize_anchor_month(value)
                     if value is None:
@@ -493,6 +505,7 @@ def get_full_user_context(user_id: int) -> UserContext:
             withdrawal_anchor_month=_get_val("withdrawal_anchor_month", None),
             withdrawal_months=_get_val("withdrawal_months", "1,7"),
             withdrawal_target_weights=_get_val("withdrawal_target_weights", None),
+            target_equity_pct=float(_get_val("target_equity_pct", -1.0)),
         )
 
     except Exception as e:

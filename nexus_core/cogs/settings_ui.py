@@ -1,3 +1,4 @@
+import math
 import asyncio
 from typing import Any
 import discord
@@ -412,6 +413,11 @@ SETTINGS_LABELS = {
         "選擇動態轉倉引擎的 TP1 執行比例與衛星預算上限 (防禦/進攻)",
         None,
     ),
+    "target_equity_pct": (
+        "⚖️ 目標股票比例",
+        "宣告的股票占比 % (其餘為 BOXX＋現金；用於配置偏離提醒)",
+        "輸入 0-100，-1 = 關閉",
+    ),
 }
 
 # 交易策略模式 (trading_strategy) 中文顯示對照與說明 —— DB 內部一律儲存英文
@@ -550,6 +556,18 @@ class AccountSettingsModal(discord.ui.Modal):
                     ephemeral=True,
                 )
                 return
+        elif self.key == "target_equity_pct":
+            if math.isnan(val) or val > 100:
+                await interaction.response.send_message(
+                    embed=create_error_embed(
+                        "目標股票比例需介於 0 至 100 之間（輸入 -1 關閉）",
+                        title="驗證失敗",
+                    ),
+                    ephemeral=True,
+                )
+                return
+            if val < 0:
+                val = -1.0
         elif self.key == "polymarket_slippage":
             if not (0.1 <= val <= 10.0):
                 await interaction.response.send_message(
@@ -638,6 +656,8 @@ class AccountSettingsView(discord.ui.View):
                 val_display = f"${raw_val:,.0f}" if raw_val > 0 else "關閉/未設定"  # type: ignore
             elif key in ["withdrawal_anchor_month", "withdrawal_months"]:
                 val_display = str(raw_val) if raw_val else "未設定"
+            elif key == "target_equity_pct":
+                val_display = f"{raw_val:.0f}%" if raw_val >= 0 else "未啟用"  # type: ignore
             elif key == "polymarket_slippage":
                 val_display = f"{raw_val}%"
             elif key == "tax_reserve_rate":
@@ -760,6 +780,12 @@ class AccountSettingsView(discord.ui.View):
             f"💸 **每月支出預算 (期權熔斷用)**: `${ctx.monthly_expense:,.0f}`",
             f"🏦 **稅務預留比例**: `{ctx.tax_reserve_rate:.1%}`",
             f"💰 **現金儲備金額**: `${ctx.cash_reserve:,.0f}`",
+            "⚖️ **目標股票比例**: "
+            + (
+                f"`{ctx.target_equity_pct:.0f}%`"
+                if ctx.target_equity_pct >= 0
+                else "`未啟用`"
+            ),
         ]
 
         return create_account_settings_embed(

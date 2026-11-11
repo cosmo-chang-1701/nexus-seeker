@@ -10,7 +10,7 @@
 ### 1.2 系統的角色
 - 不再產生進出場、換股、停利建議。
 - 只負責兩件事：**再平衡提醒**（到期或偏離門檻時），以及**真正的左尾警訊**（SEC 論點破滅、帳戶層級回撤與 CVaR，見 [`../risk_portfolio/07_downside_risk_sortino_var_cvar.md`](../risk_portfolio/07_downside_risk_sortino_var_cvar.md)）。
-- 本文件目前只有離線回測；接入 production 前需另行規劃並經使用者同意。
+- 本文件的回測與總經三態切換僅限離線；production 只上線「配置偏離提醒」（2026-11-11 經使用者同意，見 §7）：固定比例、不擇時，總經三態切換仍未接入。
 
 ### 1.3 適用與不適用
 - 適用：長期持有、能接受「回撤大致與股票比例成正比」的投資人。
@@ -264,3 +264,40 @@ MDD ≤ 25% 的最大 X：主版本 40%、變體 50%，但同樣回撤下「一�
 - `nexus_core/scripts/run_macro_switch_backtest.py`：三態主版本／變體 vs B&H 100% 科技池與靜態 40%／60%、各狀態時間占比與每年非科技天數、每段防守區段的進入時跌幅與區段內報酬、2020 急跌各指標亮起時點、2022 是否進入 BOXX、取捨分析（X 格點與對等靜態配置）、敏感度、及格判定；報告輸出到 gitignored 的 `reports/macro_switch/`。
 - `nexus_core/tests/unit/test_macro_regime.py`：FRED 缺值解析、Sahm 公布延遲與非交易日順延、利差與升息警訊的次日可用、三態警訊計數、5 日確認與無前視、目標配置與股票比例 X、狀態改變次日完整再平衡、年度再平衡沿用當下狀態、兩種換倉模式互斥、常數序列與無序列逐位元一致、股票內切換時 BOXX 不動與成本。
 - `nexus_core/tests/unit/test_static_allocation_backtest.py`：再平衡時點、偏離門檻邊界、成本、與等權對照組逐位元一致、point-in-time 加入、BOXX 計息、回撤恢復時間。
+- `nexus_core/market_analysis/allocation_drift.py`：配置偏離的純邏輯葉模組（`compute_breakdown()`、`reserve_amount()`、`is_outside()`、`reminder_due()`、`next_state()`）。
+- `nexus_core/services/allocation_drift_service.py`：`run_allocation_drift_job()`，16:15 ET 讀 NAV 快照、持倉與提領跑道快照並推播（§7）。
+- `nexus_core/cogs/embed_builders/alert_embeds/allocation_alerts.py`：`create_allocation_drift_embed()`。
+- `nexus_core/tests/unit/test_allocation_drift.py`、`nexus_core/tests/unit/test_allocation_drift_service.py`：純邏輯與服務（CROSSING／MONTHLY、fail closed、預留、頻道關閉不推進狀態、排程順序）。
+
+---
+
+## 7. Production：配置偏離提醒
+
+2026-11-11 經使用者同意上線。固定比例、不擇時：只提醒、不代為下單，總經狀態僅作註記。
+
+**規則**：NYSE 交易日 16:15 ET（`dynamic_after_market_report`，排在提領跑道快照之後），對每位 `target_equity_pct ≥ 0` 的使用者比較實際股票占比與宣告目標；偏離 ≥ 5 pp（門檻含等號）時，經 `risk_allocation_drift` 頻道推播「配置偏離提醒」。
+
+**公式**（`market_analysis/allocation_drift.py`）：
+
+- 股票市值 $E$：多頭現股（$qty > 0$、不含 BOXX）的 數量 × 當日收盤價。
+- 防守桶 $D$：BOXX 市值 + $\max(\text{現金}, 0)$。空頭與選擇權不計入任何一桶。
+- 預留 $R$：提領月份的前一個月 1 日起（含）到提領日前一天，$R = $ 下次提領金額（夾在 $[0, D]$）；其餘時間 $R = 0$。
+- 可配置資金 $I = E + D - R$（$I \le 0$ 時不評估）。
+- 股票占比 $e = E / I \times 100$；偏離 $= e - E^{*}$（百分點，$E^{*}$ 為目標）。
+- 建議金額 $= E^{*}/100 \cdot I - E$：正值自 BOXX／現金移入股票，負值自股票移到 BOXX。
+
+**推播時機**：
+
+- `CROSSING`：第一天超標當天；目標改變而仍超標，視為新的一次超標。
+- `MONTHLY`：仍超標時，每個新日曆月的第一次執行再推一次。
+- 回到門檻內不推播，只把狀態改為未超標。
+
+**Fail closed（不推播、狀態不變）**：使用者設定讀取失敗；最新 NAV 快照不是當日；有設定提領但沒有當日的提領跑道快照（缺預留會把即將提領的錢誤算成偏離）；多頭持股缺收盤價（含 BOXX）；可配置資金 ≤ 0。
+
+**狀態與去重**：狀態存 `kv_cache` 鍵 `alloc_drift_state_{uid}`（`outside`／`last_sent`／`target_pct`），此前綴不列入每日去重清理、跨日保留；每日去重鍵 `alloc_drift_remind_{uid}_{YYYYMMDD}` 已登記於 `_KV_CACHE_DEDUP_KEY_PREFIXES`。狀態只在回到門檻內或推播送達後推進，頻道關閉或未送達時下次補送。
+
+**設定**：`/settings` 的 `target_equity_pct`（0–100 為目標股票占比，−1 = 停用）。停用時若狀態仍為超標，會清除該旗標，日後重新啟用算新的一次超標。
+
+**總經註記**：提醒中顯示當日確認的總經狀態（GOOD／CAUTION／WORST／無資料），固定比例不依總經調整，不影響是否推播。
+
+**範圍外**：股票內部（科技池／VOO）再平衡、分批回場、期權與空頭部位的配置。

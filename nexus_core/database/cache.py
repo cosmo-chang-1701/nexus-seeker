@@ -38,6 +38,7 @@ _KV_CACHE_DEDUP_KEY_PREFIXES: tuple[str, ...] = (
     "downside_cvar_",
     "runway_warn_",
     "runway_remind_",
+    "alloc_drift_remind_",
     "governance_flag_",
     "wall_break_",
 )

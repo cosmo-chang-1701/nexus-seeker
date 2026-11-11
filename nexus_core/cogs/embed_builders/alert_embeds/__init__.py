@@ -11,6 +11,7 @@
 - market_signal_alerts.py：WTI 原油與個股價量突破警報
 - downside_alerts.py：投組下行風險警報與 Sortino / MDD / CVaR 快照欄位
 - withdrawal_alerts.py：提領跑道警示與提領提醒（賣出清單）
+- allocation_alerts.py：配置偏離提醒（create_allocation_drift_embed）
 - execution_decision.py：NRO 執行決策矩陣（create_execution_decision_embed）
 """
 
@@ -48,6 +49,9 @@ from cogs.embed_builders.alert_embeds.withdrawal_alerts import (
     create_runway_warning_embed,
     create_withdrawal_reminder_embed,
 )
+from cogs.embed_builders.alert_embeds.allocation_alerts import (
+    create_allocation_drift_embed,
+)
 from cogs.embed_builders.alert_embeds.market_signal_alerts import (
     create_wti_alert_embed,
     create_price_volume_alert_embed,
@@ -79,5 +83,6 @@ __all__ = [
     "create_portfolio_downside_alert_embed",
     "create_runway_warning_embed",
     "create_withdrawal_reminder_embed",
+    "create_allocation_drift_embed",
     "create_execution_decision_embed",
 ]
