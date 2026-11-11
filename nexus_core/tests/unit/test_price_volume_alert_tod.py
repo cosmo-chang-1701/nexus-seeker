@@ -118,3 +118,25 @@ def test_embed_shows_same_slot_label() -> None:
     embed2 = create_price_volume_alert_embed(watch, _bar(3000.0, 1000.0))
     value2 = next(str(f.value) for f in embed2.fields if f.name == "🎯 觸發事件")
     assert "20根均量" in value2
+
+
+def test_simplenamespace_without_tod_falls_back_and_renders_dash() -> None:
+    from types import SimpleNamespace
+
+    ns: Any = SimpleNamespace(
+        volume=500.0,
+        avg_volume=0.0,
+        close=110.0,
+        bar_time=datetime(2026, 11, 10, 10, 0),
+    )
+    assert volume_base(ns) == (0.0, "20 根")
+    watch = PriceVolumeWatch(
+        user_id=1,
+        symbol="AAPL",
+        target_price=100.0,
+        direction=WatchDirection.ABOVE,
+        volume_multiplier=1.5,
+    )
+    embed = create_price_volume_alert_embed(watch, ns)
+    value = next(str(f.value) for f in embed.fields if f.name == "🎯 觸發事件")
+    assert "--x" in value

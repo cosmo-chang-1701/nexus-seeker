@@ -283,8 +283,10 @@ def volume_base(bar: Confirmed15mBar) -> tuple[float, str]:
     為什麼：開盤 09:30 與收盤 15:45 兩根含競價量，對前 20 根必然放量；
     同時段基準才能分辨真正的異常放量。回傳 (基準量, 標籤)。
     """
-    if bar.tod_avg_volume is not None and bar.tod_avg_volume > 0:
-        return bar.tod_avg_volume, "同時段"
+    # 防禦式讀取：部分呼叫端（測試替身）傳入的物件可能沒有 tod_avg_volume 欄位
+    tod = getattr(bar, "tod_avg_volume", None)
+    if tod is not None and tod > 0:
+        return tod, "同時段"
     return bar.avg_volume, "20 根"
 
 
