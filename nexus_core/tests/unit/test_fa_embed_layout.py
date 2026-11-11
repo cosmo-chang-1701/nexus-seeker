@@ -12,6 +12,7 @@ import discord
 import pytest
 from cogs import fundamental_terminal as ft
 from cogs.embed_builders.fundamental_embeds import (
+    _fit_ansi_block,
     ansi_bold,
     build_fa_terminal_embed,
     build_governance_flag_embed,
@@ -66,7 +67,7 @@ def test_every_field_is_wrapped_in_ansi_block() -> None:
         "```ansi\n• 體制: \u001b[1mEASY\u001b[0m\n```"
     )
     assert payload["fields"][1]["value"] == "```ansi\n無資料\n```"
-    assert "​" not in json.dumps(payload, ensure_ascii=False)
+    assert "\u200b" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_title_and_description_follow_layout_rules() -> None:
@@ -110,6 +111,33 @@ def test_single_overlong_line_is_cut_without_ansi_residue() -> None:
     assert value.startswith(_FENCE_OPEN) and value.endswith(_FENCE_CLOSE)
     assert "\u001b" not in value
     assert value.count("```") == 2
+
+
+def test_fit_ansi_block_multiline_overlong_first_line_adds_omission_suffix() -> None:
+    plain = "很長" * 200
+    # ANSI 跳脫序列正好落在截斷點之前，若未先清除會殘留在輸出中
+    first = plain[:270] + "\u001b[1m" + plain[270:] + "\u001b[0m"
+    content = "\n".join([first, "第二行", "第三行"])
+    cap = 300
+    result = _fit_ansi_block(content, cap)
+    assert len(result) <= cap
+    assert result.startswith(_FENCE_OPEN) and result.endswith(_FENCE_CLOSE)
+    lines = result.split("\n")
+    # ```ansi ／ 截短的首行 ／ 省略行 ／ ```
+    assert len(lines) == 4
+    assert lines[1].endswith("…")
+    assert "\u001b" not in result
+    assert lines[1] == plain[:277] + "…"
+    assert lines[2] == "…（餘 2 行略）"
+    assert lines[3] == "```"
+
+
+def test_fit_ansi_block_single_overlong_line_has_no_suffix() -> None:
+    result = _fit_ansi_block("很長" * 400, 300)
+    assert len(result) <= 300
+    assert result.startswith(_FENCE_OPEN) and result.endswith(_FENCE_CLOSE)
+    assert "行略" not in result
+    assert result.endswith("…\n```")
 
 
 def test_short_fields_are_not_touched_when_others_are_trimmed() -> None:
@@ -293,7 +321,7 @@ def test_governance_embed_colors_and_ansi_fields() -> None:
     assert snippet["value"].startswith(_FENCE_OPEN)
     assert snippet["value"].endswith(_FENCE_CLOSE)
     assert not advice["value"].startswith("```")
-    assert "​" not in json.dumps(payload, ensure_ascii=False)
+    assert "\u200b" not in json.dumps(payload, ensure_ascii=False)
 
 
 def test_governance_snippet_with_backticks_does_not_break_fence() -> None:
@@ -310,7 +338,7 @@ def test_source_scan_has_no_markdown_arrows_or_padding() -> None:
     embeds_src = (root / "cogs/embed_builders/fundamental_embeds.py").read_text(
         encoding="utf-8"
     )
-    assert "\\u200b" not in embeds_src and "​" not in embeds_src
+    assert "\\u200b" not in embeds_src and "\u200b" not in embeds_src
 
     import ast
 
