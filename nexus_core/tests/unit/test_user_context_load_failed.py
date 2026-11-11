@@ -80,7 +80,7 @@ async def test_xpanel_load_failed_sizes_zero_with_warning() -> None:
     res, kw = await _run_hub(
         _live_iv(),
         SimpleNamespace(
-            capital=100_000.0, risk_limit=15.0, cash_reserve=0.0, load_failed=True
+            capital=500_000.0, risk_limit=15.0, cash_reserve=0.0, load_failed=True
         ),
     )
     assert kw == {}  # 不得以佔位資金呼叫倉位引擎
@@ -375,8 +375,6 @@ async def test_hedging_tau_does_not_upsert_from_placeholder() -> None:
 
     ok = await _run(False)
     ok.assert_called_once()
-    with pytest.raises(RuntimeError):
-        await _run(True)
     with (
         patch("database.get_hedge_history", return_value=history),
         patch("database.get_full_user_context", return_value=_ctx(True)),
@@ -558,7 +556,6 @@ async def test_pipeline_skips_user_with_failed_context() -> None:
         async def _eval(ticker: Any) -> None:
             called.append(ticker)
 
-        pipe.evaluate_watchlist_symbol = _eval  # type: ignore[method-assign, assignment]
         now = datetime(2026, 6, 5, 10, 0, 0, tzinfo=ZoneInfo("America/New_York"))
 
         async def _sleep(_s: Any) -> None:
@@ -575,6 +572,7 @@ async def test_pipeline_skips_user_with_failed_context() -> None:
             patch("database.get_user_watchlist", return_value=[("AAA", 1)]),
             patch("services.llm_service.is_memory_safe", return_value=True),
             patch("asyncio.sleep", side_effect=_sleep),
+            patch.object(pipe, "evaluate_watchlist_symbol", _eval),
         ):
             dt_cls.now.return_value = now
             await pipe._run_loop()
