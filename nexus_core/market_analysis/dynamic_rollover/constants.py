@@ -170,8 +170,9 @@ _HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，TP 輪動目標的�
 _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD: int = 1  # dte <= 此值時，無論停損是否
 # 觸發，一律強制結算保護 (LIQUIDATE 100%，轉倉至同標的次月主力合約)，取代舊版
 # 「擴大停損空間 + 口數縮放」的漸進式風險平價機制。
-# 「次月主力合約」文案敘述用的效期窗口，沿用 opportunity_cost.py 既有
-# find_best_contract(..., 21, 45) 與 Covered Call 效期窗口的慣例。
+# 「次月主力合約」文案敘述用的效期窗口。下限 22 而非 21：賣方部位 DTE <= 21 會觸發
+# risk_engine.evaluate_defense_status／ghost_trader 的平倉規則，轉倉目標須避開
+# (與 strategy/indicators.py::SHORT_OPTION_MIN_ENTRY_DTE 一致)。
 _FORCED_SETTLEMENT_ROLL_MIN_DTE: int = 22
 _FORCED_SETTLEMENT_ROLL_MAX_DTE: int = 45
 
