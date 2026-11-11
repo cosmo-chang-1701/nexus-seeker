@@ -182,7 +182,8 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE tracked_symbols ADD COLUMN is_priority INTEGER NOT NULL DEFAULT 0"
             )
-        # gex_snapshot 後補的 expiry 欄位（最常見到期日），舊列在下次輪詢前為 NULL。
+        # gex_snapshot 後補的 expiry 欄位（最常見到期日）。為 NULL 的情況：舊列（下次輪詢前）、
+        # 抓取或解析失敗的 FALLBACK_GEX、無法判定到期日的合約；upsert 會以 NULL 覆寫既有值。
         gex_cols = {
             row["name"] for row in conn.execute("PRAGMA table_info(gex_snapshot)")
         }

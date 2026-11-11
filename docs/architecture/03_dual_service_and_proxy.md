@@ -59,7 +59,7 @@ $$S_{\text{priority}} = \left\{ \text{sym} \mid \text{sym} \in \text{database.ge
 $$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{delay, normal}} \approx 30 \text{ 分鐘}$$
 
 ### 2.4 GEX 快照歷史 (前向蒐集)
-`gex_snapshot` 是 upsert、只保留每個標的的最新值（含 GEX `expiry`，即最常見到期日；`GET /api/v1/cache/gex/{symbol}` 會一併回傳，遷移前寫入的舊列 `expiry = NULL`，直到下次輪詢才補上），使 GEX 相關門檻無法回測。邊緣節點在**同一交易內**另寫入 `gex_snapshot_history`，以 15 分鐘分桶、每桶只留第一筆：
+`gex_snapshot` 是 upsert、只保留每個標的的最新值，使 GEX 相關門檻無法回測。快照同時含 GEX `expiry`（最常見到期日），`GET /api/v1/cache/gex/{symbol}` 會一併回傳；`expiry` 為 NULL 的情況包括：遷移前寫入的舊列（直到下次輪詢才補上）、抓取或解析失敗時寫入的 fallback 結果，以及無法判定到期日的合約。`gex_snapshot_history` 沒有 `expiry` 欄位，因此歷史資料中無法辨識到期日換月（roll-over）。邊緣節點在**同一交易內**另寫入 `gex_snapshot_history`，以 15 分鐘分桶、每桶只留第一筆：
 
 $$\text{bucket\_ts} = \Big\lfloor \frac{t_{\text{UTC}}}{15\text{ 分鐘}} \Big\rfloor \times 15\text{ 分鐘}, \qquad \text{PK} = (\text{symbol}, \text{bucket\_ts}), \quad \text{INSERT OR IGNORE}$$
 
@@ -188,7 +188,7 @@ flowchart TD
   - `sync_watchlist_symbols`: 同步自選與 Priority 持倉清單至邊緣節點
   - `get_gex_history`: 分頁讀取 GEX 快照歷史（僅供離線校準工具，bot 執行期不呼叫）
 - `nexus_edge_scraper/database.py`
-  - `save_gex_snapshot`（同交易寫入歷史；快照含 `expiry` 欄位，舊列於下次輪詢前為 NULL）、`get_gex_history`、`prune_gex_history`
+  - `save_gex_snapshot`（同交易寫入歷史；快照含 `expiry` 欄位；為 NULL 的情況包括舊列（下次輪詢前）、抓取或解析失敗的 fallback 結果，以及無法判定到期日；歷史表無 `expiry`）、`get_gex_history`、`prune_gex_history`
 - `nexus_edge_scraper/scheduler.py`
   - `_maybe_prune_gex_history`: 每個美東日期最多一次的保留期清理
 - `nexus_edge_scraper/local_api/cache_and_sync.py`
