@@ -45,6 +45,9 @@ _GEX_HISTORY_BUCKET_MINUTES = 15
 _GEX_HISTORY_STRIKE_BAND = 0.25
 _GEX_HISTORY_MAX_LIMIT = 500
 
+# OI 就緒度紀錄保留天數（只為量測 OI 重置／恢復時點，不需長期保存）。
+OI_READINESS_RETENTION_DAYS = 14
+
 
 def gex_history_bucket(now: Optional[datetime] = None) -> str:
     """UTC 時間向下取整至 15 分鐘的 ISO 字串 (歷史表主鍵之一)。"""
@@ -141,6 +144,23 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_em_hist_trade_date
                 ON em_snapshot_history(trade_date);
+
+            -- OI 就緒度紀錄：Yahoo 期權鏈 openInterest>0 的列數占比，用來量測
+            -- 收盤後 OI 何時重置、開盤前後何時恢復。captured_at 為 UTC。
+            CREATE TABLE IF NOT EXISTS option_oi_readiness (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                captured_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                symbol TEXT NOT NULL,
+                expiry TEXT,
+                rows INTEGER NOT NULL,
+                oi_rows INTEGER NOT NULL,
+                bid_rows INTEGER NOT NULL,
+                volume_sum INTEGER NOT NULL,
+                source TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_oi_readiness_captured
+                ON option_oi_readiness(captured_at);
 
             CREATE TABLE IF NOT EXISTS option_chain_snapshot (
                 symbol TEXT NOT NULL,
@@ -452,6 +472,74 @@ def prune_em_history(retention_days: int = GEX_HISTORY_RETENTION_DAYS) -> int:
     try:
         cursor = conn.execute(
             "DELETE FROM em_snapshot_history WHERE captured_at < datetime('now', ?)",
+            (f"-{int(retention_days)} days",),
+        )
+        conn.commit()
+        return cursor.rowcount
+    finally:
+        conn.close()
+
+
+def save_oi_readiness(
+    symbol: str,
+    expiry: Optional[str],
+    rows: int,
+    oi_rows: int,
+    bid_rows: int,
+    volume_sum: int,
+    source: str,
+    captured_at: Optional[str] = None,
+) -> None:
+    """寫入一筆 OI 就緒度紀錄。captured_at 為 UTC 'YYYY-MM-DD HH:MM:SS'，
+    省略時用資料庫當下時間。"""
+    conn = _get_connection()
+    try:
+        conn.execute(
+            """
+            INSERT INTO option_oi_readiness
+                (captured_at, symbol, expiry, rows, oi_rows, bid_rows, volume_sum, source)
+            VALUES (COALESCE(?, CURRENT_TIMESTAMP), ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                captured_at,
+                symbol.upper(),
+                expiry,
+                int(rows),
+                int(oi_rows),
+                int(bid_rows),
+                int(volume_sum),
+                source,
+            ),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def get_oi_readiness(days: int = 7) -> list[dict[str, Any]]:
+    """依時間升冪讀取最近 days 天的 OI 就緒度紀錄。"""
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            """
+            SELECT captured_at, symbol, expiry, rows, oi_rows, bid_rows,
+                   volume_sum, source
+            FROM option_oi_readiness
+            WHERE captured_at >= datetime('now', ?)
+            ORDER BY captured_at ASC, id ASC
+            """,
+            (f"-{int(days)} days",),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
+def prune_oi_readiness(retention_days: int = OI_READINESS_RETENTION_DAYS) -> int:
+    conn = _get_connection()
+    try:
+        cursor = conn.execute(
+            "DELETE FROM option_oi_readiness WHERE captured_at < datetime('now', ?)",
             (f"-{int(retention_days)} days",),
         )
         conn.commit()

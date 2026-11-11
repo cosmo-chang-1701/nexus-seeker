@@ -67,6 +67,16 @@ $$\text{bucket\_ts} = \Big\lfloor \frac{t_{\text{UTC}}}{15\text{ 分鐘}} \Big\r
 
 ⚠️ 邊緣服務是選用元件；離線時 core 即時計算 GEX、不會有歷史累積。因此 core 的 `regime_evaluation_log`（記錄每次評估**實際使用**的 GEX 數值）才是校準的主要資料源，本表只是補充（見 [`05_calibration_harness_and_forward_collection.md`](05_calibration_harness_and_forward_collection.md)）。
 
+### 2.5 OI 就緒度紀錄 (option_oi_readiness)
+Yahoo 期權鏈在收盤後至開盤前會重置 `openInterest`（隔夜實測約 99% 的列為 0，盤中則 88–93% 為正），而 core 以「OI>0 列數占比 < 10%」判定 OI 未就緒。為了知道實際的重置與恢復時點，邊緣節點把每次抓到的最近到期日期權鏈統計成一筆 `option_oi_readiness`（列數、OI>0 列數、bid>0 列數、成交量總和）：
+
+- 來源 `poll`：盤中每次輪詢 `_poll_symbol` 抓鏈後順手記錄（獨立 try/except，失敗不影響原本的快取寫入）。
+- 來源 `probe`：非盤中的平日，每 15 分鐘最多一次、最多 4 檔（priority 優先），只打期權鏈 HTTP 請求、不啟動瀏覽器。
+- 保留 14 天，隨每日清理一併刪除。
+- 讀取：`GET /api/v1/cache/oi-readiness?days=7`（1–14），回傳 `rows`（含美東時間 `captured_at_et` 與 `oi_share`）與每個 (美東日期, 標的) 的 `summary`（`first_ready_et`、`first_unready_after_close_et`、`min_share`、`max_share`）。
+
+本表僅供量測，不改動任何閘門。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
