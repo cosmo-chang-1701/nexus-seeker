@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|regime-stop-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam|fetch-fred}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|regime-stop-report|advisor-ytd-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam|fetch-fred}"""
 
 import argparse
 import asyncio
@@ -27,6 +27,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
             "micro-snapshot",
             "micro-report",
             "regime-stop-report",
+            "advisor-ytd-report",
             "skew-proxy",
             "notif-report",
             "macro-forward-report",
@@ -60,7 +61,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         "--snapshot-db",
         default=None,
         help=(
-            "forward-report / notif-report / macro-forward-report / fundamental-forward-report：以唯讀模式讀取複製來的 production 快照；"
+            "forward-report / notif-report / macro-forward-report / fundamental-forward-report / advisor-ytd-report：以唯讀模式讀取複製來的 production 快照；"
             "未指定時用 NEXUS_DB_NAME"
         ),
     )
@@ -73,6 +74,16 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         "--end",
         default="2025-12-31",
         help="fetch-alpaca-1h / alpaca-seam：結束日 (ISO)",
+    )
+    parser.add_argument(
+        "--ytd-start",
+        default="2026-01-02",
+        help="advisor-ytd-report：期間起日 (ISO)",
+    )
+    parser.add_argument(
+        "--ytd-end",
+        default="",
+        help="advisor-ytd-report：期間迄日 (ISO)；留空＝面板最後一個交易日",
     )
     parser.add_argument(
         "--any-time",
@@ -120,6 +131,8 @@ async def _main(args: argparse.Namespace) -> int:
         return await _run_study(args, cfg)
     if args.command in ("fetch-alpaca-1h", "alpaca-seam"):
         return await _run_alpaca(args, cfg)
+    if args.command == "advisor-ytd-report":
+        return await _run_advisor_ytd(args, cfg)
     if args.command == "notif-report":
         from calibration.notif_report import (
             DEFAULT_SEED,
@@ -257,6 +270,56 @@ async def _squeeze_flip_check(
         return build_squeeze_flip_check(rows, closes, cfg)
     except Exception as e:
         return {"status": f"擠壓檢核計算失敗: {e}"}
+
+
+async def _run_advisor_ytd(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
+    """MQA 年初至今離線報告。非 --offline 時先補抓日線與財報日；只寫快取與報告，不寫 DB。"""
+    from calibration.advisor_ytd_report import (
+        FETCH_FROM,
+        build_advisor_ytd_report,
+        fetch_earnings,
+        fetch_symbols,
+        missing_daily_cache,
+    )
+    from calibration.daily_panel import fetch_daily
+    from calibration.regime_momentum_backtest import DEFAULT_UNIVERSE
+    from calibration.report import write_study_report
+
+    universe = (
+        tuple(s.strip().upper() for s in args.universe.split(",") if s.strip())
+        if args.universe
+        else DEFAULT_UNIVERSE
+    )
+    store = DataStore(cfg.cache_dir)
+    if cfg.offline:
+        missing = missing_daily_cache(store, universe)
+        if missing:
+            print(
+                "--offline 但日線快取不足，缺少：" + "、".join(missing) + "。"
+                "請先不帶 --offline 執行以抓取資料。",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        await fetch_daily(store, fetch_symbols(universe), fetch_from=FETCH_FROM)
+        await fetch_earnings(universe, Path(cfg.cache_dir))
+    try:
+        result, markdown = build_advisor_ytd_report(
+            store,
+            ytd_start=args.ytd_start,
+            ytd_end=args.ytd_end,
+            cache_dir=Path(cfg.cache_dir),
+            snapshot_db=Path(args.snapshot_db) if args.snapshot_db else None,
+            universe=universe,
+        )
+    except ValueError as e:
+        print(f"無法產生報告：{e}", file=sys.stderr)
+        return 2
+    target = write_study_report(
+        Path(cfg.out_dir), "advisor-ytd-report", result, markdown
+    )
+    print(f"報告已輸出：{target.parent}")
+    return 0
 
 
 async def _run_alpaca(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
