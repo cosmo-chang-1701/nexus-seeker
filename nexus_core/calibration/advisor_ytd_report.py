@@ -13,7 +13,6 @@ import asyncio
 import json
 import math
 import random
-import sqlite3
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import asdict, replace
 from datetime import date, datetime, timezone
@@ -215,8 +214,10 @@ def missing_daily_cache(store: DataStore, universe: Sequence[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _connect_ro(path: Path) -> sqlite3.Connection:
-    return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+def _connect_ro(path: Path) -> Any:
+    from database.connection import connect_external_readonly
+
+    return connect_external_readonly(str(path))
 
 
 def load_account_nav(db_path: Path) -> pd.Series:
