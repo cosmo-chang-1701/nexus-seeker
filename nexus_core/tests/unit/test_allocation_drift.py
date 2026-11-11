@@ -59,7 +59,7 @@ def test_target_40_with_60_stock() -> None:
     assert b.move_amount == pytest.approx(-20)
 
 
-def test_shorts_options_and_boxx_not_equity() -> None:
+def test_shorts_and_boxx_not_equity() -> None:
     b = _bd(
         {"AAPL": 10, "TSLA": -5, "BOXX": 10},
         {"AAPL": 10.0, "TSLA": 100.0, "BOXX": 100.0},
@@ -181,8 +181,25 @@ def test_module_is_pure_stdlib() -> None:
     for node in ast.walk(ast.parse(src)):
         if isinstance(node, ast.Import):
             names.update(a.name.split(".")[0] for a in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            assert node.level == 0, "不得使用相對匯入"
+            if node.module:
+                names.add(node.module.split(".")[0])
     assert names
     for n in names:
         assert n == "__future__" or n in sys.stdlib_module_names, n
+
+
+def test_parse_state_rejects_basic_iso_date() -> None:
+    assert ad.parse_state({"outside": True, "last_sent": "20261111"}) is None
+    ok = ad.parse_state({"outside": True, "last_sent": "2026-11-11"})
+    assert ok is not None and ok.last_sent == "2026-11-11"
+
+
+@pytest.mark.parametrize("cash,reserve", [(float("nan"), 0.0), (0.0, float("nan"))])
+def test_compute_breakdown_non_finite_cash_or_reserve_is_none(
+    cash: float, reserve: float
+) -> None:
+    assert (
+        ad.compute_breakdown({"AAPL": 10}, {"AAPL": 10.0}, cash, 50.0, reserve) is None
+    )

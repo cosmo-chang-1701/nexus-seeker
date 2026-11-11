@@ -1,7 +1,7 @@
 """target_equity_pct（宣告股票占比）設定：遷移、持久化與 /settings 面板。"""
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -145,8 +145,13 @@ async def test_modal_rejects_nan(db_conn: Any) -> None:
     modal = _modal(uid, AccountSettingsView(uid))
     modal.input_field._value = "nan"
     interaction = AsyncMock()
-    await modal.on_submit(interaction)
+    with patch("cogs.settings_ui.database.upsert_user_config") as upsert:
+        await modal.on_submit(interaction)
+    # 釘住 modal 自身的 NaN 防線（資料層也會擋 NaN，不能只看最終值）
+    upsert.assert_not_called()
     interaction.response.send_message.assert_called_once()
+    embed = interaction.response.send_message.call_args.kwargs["embed"]
+    assert "目標股票比例需介於 0 至 100 之間" in str(embed.description)
     assert database.get_full_user_context(uid).target_equity_pct == 40.0
     assert _raw_target(db_conn, uid) == 40.0
 
