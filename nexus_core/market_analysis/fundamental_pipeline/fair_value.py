@@ -53,7 +53,9 @@ MODERATE_DISCOUNT_MOS: float = 0.10
 FAIR_VALUE_MOS_BAND: float = 0.10
 
 # 輸入缺值時套用的預設值（套用時必須寫入 flags 並於 /fa 呈現）
-DEFAULT_US10Y_PCT: float = 4.25  # 流動性體制尚無 10 年債殖利率時
+DEFAULT_US10Y_PCT: float = (
+    4.25  # 流動性體制所有列皆無 10 年債殖利率時（估值已回退取最近一筆非 NULL 的 us10y）
+)
 DEFAULT_GROWTH_EST: float = 0.05  # 營收與前瞻成長率皆缺時的 g_est
 # 前瞻 EPS 隱含成長率可採信區間（超出視為共識／GAAP 口徑或 ADR 幣別不符）；暫定值，未經校準
 G_EST_FORWARD_MIN: float = -0.50

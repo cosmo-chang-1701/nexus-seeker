@@ -143,7 +143,7 @@ flowchart TD
 | `retention_days` / `no_data_days` | `365` / `30` | 評估紀錄與 NO_DATA 標註保留期 | `nexus_core/database/regime_evaluation_log.py` |
 | `FORWARD_MIN_ROWS` | `100` | 前向報告每決策類「資料累積中」門檻 | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
-| `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時顯示「樣本不足（交易日數 n／20）」，不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時 G.2 顯示「樣本不足（交易日數 n／20）」、影子否決僅顯示「樣本不足」，皆不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_HY_OAS_BPS` / `SHADOW_HY_CHG1M_BPS` | `400` / `50` | 影子旗標 `sv_f_hy_lvl`／`sv_f_hy_chg`：HY OAS ≥ 400 bps、1M 變動 ≥ +50 bps；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
@@ -278,7 +278,7 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 3. 日線事件研究（[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) §3.2）已顯示 W／3D／D 層級**沒有**顯著擇時優勢；盤中時間框架（65m／15m／5m）只能靠前向紀錄證明。若前向結果同樣 $|t| < 2$，推播的價值僅止於「把使用者自己的判斷規則自動化、省去看盤」，翻轉與否由使用者決定，不得宣稱有 alpha。
 4. 抽查至少 3 檔標的的 W／3D／65m K 棒與 TradingView 一致（切分規則已依 TradingView Bar alignment 實作，此項只防資料源差異）。
 
-G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個不同事件日（`SQUEEZE_MIN_DATES`）才判讀 t 值：事件日過少時日期叢集 bootstrap 退化，信賴區間與 t 值失去意義。不足時報表仍列出超額與 CI 供描述，但 `t_stat`、`g2_passed` 皆為空值，G.2 顯示「樣本不足（交易日數 n／20）」，G.3 顯示「交易日數不足，不判讀 t 值」，不輸出「達標」或「達統計顯著」。
+G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個不同事件日（`SQUEEZE_MIN_DATES`）才判讀 t 值：事件日過少時日期叢集 bootstrap 退化，信賴區間與 t 值失去意義。不足時報表仍列出超額與 CI 供描述，但 `t_stat`、`g2_passed` 皆為空值，G.2 顯示「樣本不足（交易日數 n／20）」，G.3 顯示「交易日數不足（n／20），不判讀 t 值」，不輸出「達標」或「達統計顯著」。
 
 第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 

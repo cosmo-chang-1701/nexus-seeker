@@ -182,6 +182,7 @@ def resolve_anchor(
         0.0,
         spot,
     )
+    # _resolve_canonical_anchor_base 在無任何結構錨點時回傳 spot 作為「無結構」哨兵值
     if anchor == spot:
         return None, "無結構錨點"
     if anchor >= spot:
