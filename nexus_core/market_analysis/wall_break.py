@@ -320,6 +320,7 @@ def _uoa_side(u: Mapping[str, Any]) -> Optional[Literal["BTO", "STO"]]:
 
 
 def _uoa_type(u: Mapping[str, Any]) -> str:
+    """回傳 UOA 列的 `type` 欄位（轉大寫，如 CALL／PUT）；缺值時為空字串。"""
     return str(u.get("type") or "").upper()
 
 

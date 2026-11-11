@@ -64,11 +64,11 @@ $$
 | 關卡 | BREAKOUT | BREAKDOWN |
 |:---|:---|:---|
 | `body` | 陽線實體 | 陰線實體 |
-| `flow`（UOA） | 方向由 UOA `action` 標籤以子字串辨識 BTO／STO（如 `買入開倉 (BTO - Ask)`），MIDPOINT 等無方向者忽略；收盤上方有高信心 OTM `STO CALL` → FAIL（封頂）；否則有 `BTO CALL` → PASS；否則 UNKNOWN | 收盤下方有 OTM `STO PUT` → FAIL（承接）；否則有非 Whale_Hedge 的 `BTO PUT` → PASS；否則 UNKNOWN |
+| `flow`（UOA） | 收盤上方有高信心 OTM `STO CALL` → FAIL（封頂）；否則有 `BTO CALL` → PASS；否則 UNKNOWN | 收盤下方有 OTM `STO PUT` → FAIL（承接）；否則有非 Whale_Hedge 的 `BTO PUT` → PASS；否則 UNKNOWN |
 | `skew`（$\text{IV}_{\text{OTM Put}} - \text{IV}_{\text{OTM Call}}$ 的百分位 $p$） | $p \le 50$ PASS；$p > 80$ FAIL；其餘 UNKNOWN | $p > 80$ PASS；$p \le 50$ FAIL；其餘 UNKNOWN |
 | `local_gex`（舊牆處淨 GEX） | $> 0$ PASS | $< 0$ PASS（助跌）；$\ge 0$ FAIL（正 GEX 托盤） |
 
-價差的賣出腿（除非為收權利金結構）與跨式腿不計入 `flow`；已被穿越的價位亦排除。備援（過期）的 Skew 一律 UNKNOWN。
+`flow` 的方向（兩個方向皆適用）由 UOA `action` 標籤以子字串辨識 BTO／STO（如 `買入開倉 (BTO - Ask)`），MIDPOINT 等無方向者忽略。價差的賣出腿（除非為收權利金結構）與跨式腿不計入 `flow`；已被穿越的價位亦排除。備援（過期）的 Skew 一律 UNKNOWN。
 
 ### 2.6 T+1 確認
 
@@ -81,7 +81,9 @@ GEX 遲滯（僅 BREAKOUT）：
 $$
 \text{GEX}(w_{\text{new}}) \ge 1.10 \times \max\big(\text{GEX}(w_{\text{old}}),\ 0\big) \quad \text{且} \quad \text{GEX}(w_{\text{new}}) > 0
 $$
-`hold`：T+1 現價仍位於舊牆之外。若兩日 GEX 到期日不同或任一日不明，遲滯判為 UNKNOWN（edge 快取須重新部署後才帶 `expiry`；edge 的 GEX 只涵蓋最近到期日，週選換月會使牆機械式位移）。
+若兩日 GEX 到期日不同或任一日不明，遲滯判為 UNKNOWN（edge 的 GEX 只涵蓋最近到期日，週選換月會使牆機械式位移）。
+
+`hold`：T+1 現價仍位於舊牆之外。
 
 最終判定：盤中 FAKE 維持 FAKE；其餘對各檢核取三值 AND：False → FAKE（翻假）、True → CONFIRMED、Unknown → UNDETERMINED。
 
@@ -188,7 +190,7 @@ flowchart TD
 ### 5.2 UOA 方向信心與到期日換月
 
 - UOA 方向由最後成交價相對 NBBO 快照推斷，數分鐘內可能翻轉。低信心成交已標為 `MIDPOINT`，因此「沒有符合條件的 UOA」判為 UNKNOWN，而非失敗。
-- 兩日 GEX 到期日不同或任一日不明時，遲滯判為 UNKNOWN（edge 快取須重新部署後才帶 `expiry`）；ΔOI 對事件日到期日重讀，已過期則為 UNKNOWN。
+- 兩日 GEX 到期日不同或任一日不明時，遲滯判為 UNKNOWN；ΔOI 對事件日到期日重讀，已過期則為 UNKNOWN。
 - **不做牆位移徙檢核**：edge 的 CallWall 只取現價上方、PutWall 只取現價下方，所以「新牆移到舊牆之外」只要 `hold` 通過就必然成立，屬恆真式，刻意省略。
 
 ### 5.3 推播、去重與熔斷

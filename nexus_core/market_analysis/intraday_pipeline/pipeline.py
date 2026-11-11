@@ -765,6 +765,14 @@ class IntradayScanPipeline:
                 users_by_symbol.setdefault(str(symbol).upper(), []).append(uid)
 
             now = datetime.now(ny_tz)
+            # 清理評估快取：已不在任何自選清單、或已逾期的項目（本來就會被跳過）。
+            for stale_sym in [
+                s
+                for s, (ts, _ev) in self._latest_evals.items()
+                if s not in users_by_symbol
+                or (now - ts).total_seconds() > _FAST_EVAL_MAX_AGE_SECONDS
+            ]:
+                self._latest_evals.pop(stale_sym, None)
             for sym, uids in users_by_symbol.items():
                 try:
                     cached = self._latest_evals.get(sym)
