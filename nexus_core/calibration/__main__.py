@@ -1,4 +1,4 @@
-"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam|fetch-fred}"""
+"""python -m calibration {fetch|run|forward-report|all|micro-snapshot|micro-report|regime-stop-report|skew-proxy|notif-report|macro-forward-report|fetch-alpaca-1h|alpaca-seam|fetch-fred}"""
 
 import argparse
 import asyncio
@@ -26,6 +26,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
             "all",
             "micro-snapshot",
             "micro-report",
+            "regime-stop-report",
             "skew-proxy",
             "notif-report",
             "macro-forward-report",
@@ -110,7 +111,12 @@ async def _main(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 2
-    if args.command in ("micro-snapshot", "micro-report", "skew-proxy"):
+    if args.command in (
+        "micro-snapshot",
+        "micro-report",
+        "regime-stop-report",
+        "skew-proxy",
+    ):
         return await _run_study(args, cfg)
     if args.command in ("fetch-alpaca-1h", "alpaca-seam"):
         return await _run_alpaca(args, cfg)
@@ -296,6 +302,33 @@ async def _run_alpaca(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
     return 0
 
 
+def _load_edge_snapshots(
+    args: argparse.Namespace,
+) -> tuple[Optional[list[dict[str, Any]]], int]:
+    """建立 edge 歷史快照；回傳 (快照, 結束碼)，結束碼非 0 表示應中止。"""
+    from calibration.edge_history import EdgeHistorySource, build_edge_snapshots
+
+    if args.edge_db:
+        source = EdgeHistorySource(db_path=Path(args.edge_db))
+    else:
+        from config import TUNNEL_URL
+
+        if not TUNNEL_URL:
+            print(
+                "未設定 TUNNEL_URL：請提供 --edge-db <edge_cache.db>，"
+                "或改用 --source snapshot",
+                file=sys.stderr,
+            )
+            return None, 2
+        source = EdgeHistorySource(base_url=str(TUNNEL_URL))
+    edge_symbols: list[str] | None = (
+        [s.strip().upper() for s in args.universe.split(",") if s.strip()]
+        if args.universe
+        else None
+    )
+    return build_edge_snapshots(source, edge_symbols), 0
+
+
 async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
     """微結構 (D-03/D-04) 與 Skew 代理研究。只寫快取與報告，不寫 DB。"""
     if args.command == "micro-snapshot":
@@ -317,32 +350,28 @@ async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
         print(f"快照已寫入：{target}")
         return 0
 
-    if args.command == "micro-report":
+    if args.command == "regime-stop-report":
+        from calibration.regime_stop_report import run_regime_stop_report
+
+        if not args.snapshot_db:
+            print(
+                "regime-stop-report 需要 --snapshot-db <snapshot.db>（事件表來源）",
+                file=sys.stderr,
+            )
+            return 2
+        edge_snaps, rc = _load_edge_snapshots(args)
+        if rc or edge_snaps is None:
+            return rc or 2
+        result = run_regime_stop_report(edge_snaps, Path(args.snapshot_db))
+        result["source"] = "edge"
+    elif args.command == "micro-report":
         from calibration.microstructure import build_micro_report
 
         snapshots = None
         if args.source == "edge":
-            from calibration.edge_history import EdgeHistorySource, build_edge_snapshots
-
-            if args.edge_db:
-                source = EdgeHistorySource(db_path=Path(args.edge_db))
-            else:
-                from config import TUNNEL_URL
-
-                if not TUNNEL_URL:
-                    print(
-                        "未設定 TUNNEL_URL：請提供 --edge-db <edge_cache.db>，"
-                        "或改用 --source snapshot",
-                        file=sys.stderr,
-                    )
-                    return 2
-                source = EdgeHistorySource(base_url=str(TUNNEL_URL))
-            edge_symbols: list[str] | None = (
-                [s.strip().upper() for s in args.universe.split(",") if s.strip()]
-                if args.universe
-                else None
-            )
-            snapshots = build_edge_snapshots(source, edge_symbols)
+            snapshots, rc = _load_edge_snapshots(args)
+            if rc:
+                return rc
         result = build_micro_report(Path(cfg.cache_dir), snapshots=snapshots)
         result["source"] = args.source
     else:

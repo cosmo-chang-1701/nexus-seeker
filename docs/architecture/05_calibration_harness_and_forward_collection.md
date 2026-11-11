@@ -688,14 +688,45 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **日曆限制**：總經日曆只從今天起抓，`sv_f_mev` 只涵蓋今日起的事件；公布後 48 小時那半段沒有資料，刻意不判。
 
+### 5.19 體制停損 κ 離線比較（`regime-stop-report`）
+
+**目的**：回答「持有於 GEX 錨點之上的部位，依體制調整停損墊片 κ（$\text{stop} = \text{anchor} - \kappa \times ATR_{15m}$）是否優於現行固定 $\kappa = 0.5$」。假說（未合併的規格 `08_factor_covariance_and_regime_stop_pipeline.md` §2.4／§3.2）為 Long Gamma $\kappa = 1.75$、Short Gamma $\kappa = 0.40$、財報／重大總經事件前後 48 小時 $\kappa = 0$。本命令只產出報告，**不修改任何正式參數**（現行常數 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT = 0.5`）。
+
+**資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。
+
+**體制定義**（快照日收盤後起算）：
+
+| 體制 | 條件 |
+| :--- | :--- |
+| `EVENT_RISK` | 該標的財報或重大總經事件落在收盤後 $0 < \Delta \le 48$ 小時 |
+| `SHORT_GAMMA` | 個股淨 GEX $\le 0$（原因 `個股淨GEX<=0`），或 PutWall 處淨 GEX $< 0$（原因 `PutWall處淨GEX<0`）；兩種原因分開列出，因 micro-report 曾發現 PutWall 淨 GEX $< 0$ 的牆守住率反而較高 |
+| `LONG_GAMMA` | 其餘 |
+| `UNKNOWN` | 無 GEX 資料，不納入各分組，只計數 |
+
+重大總經關鍵字：`FOMC`、`Interest Rate`、`利率決策`、`CPI`、`Inflation Rate`、`Non Farm`／`Nonfarm`／`Non-Farm`、`非農`（不分大小寫子字串），排除含 `Minutes`、`Revision` 者。這與未合併規格的 `Non-Farm`／`NFP` 寫法不同：實際日曆以 `Non Farm Payrolls` 與 `非農就業人數` 命名，照規格寫法會漏掉。
+
+**錨點與模擬**：錨點為 `_resolve_canonical_anchor_base(support_strike, put_wall, call_wall, 0, 0, spot)`（edge 歷史沒有 Gamma Flip／HVN）。無結構錨點（退回現價）、錨點不低於現價、`atr_1d <= 0` 的快照排除並分別計數。$ATR_{15m} = ATR_{1D}/\sqrt{26}$。對 $\kappa \in \{0, 0.4, 0.5, 1, 1.75, 3\}$ 與觀察期 5、10 個交易日，逐日走快照日**之後**的日線：開盤價 $\le$ stop 以開盤價成交（跳空）；否則最低價 $\le$ stop 以 stop 成交；都沒觸發則以最後收盤出場。持有報酬為最後收盤 ÷ 現價 − 1；`超額` = 出場報酬 − 持有報酬。未走完整段觀察期的快照不標註（無前視、無部分路徑）。
+
+**指標**（每觀察期 × 分組 × κ；統計鍵沿用 `_rate_stats`／`_mean_stats`，依日期叢集 bootstrap）：`觸發率`、`停損相對持有超額`、`掃損率`（觸發事件中超額 $< 0$ 的比例）、`CVaR10_出場`／`CVaR10_持有`（最差 10% 的平均報酬）、`停損距離%`。每個體制分組另有 `規格κ對現行κ` 成對比較（同一事件規格 κ 出場報酬減 0.5 出場報酬的平均與 CI）。
+
+**判讀規則**：可標註日期 $< 20$ 或件數 $< 30$ 輸出「樣本不足，不判讀，維持現行 0.5×ATR15m」；CI 下界 $> 0$ 為「規格κ優於現行（仍不得直接改閘門，需前向驗證）」；CI 上界 $< 0$ 為「規格κ劣於現行」；其餘「無顯著差異，維持現行」。`全部` 分組與 `UNKNOWN` 不做成對比較。
+
+**限制**：
+- **沒有 SPY Gamma Flip 歷史**（edge 不追蹤 SPY，`regime_evaluation_log.macro_regime` 全為 NULL），規格中「SPY 低於 Flip 即 Short Gamma」的總經腿無法檢驗，報告備註明確揭露。
+- 錨點不含 Flip／HVN；以日線近似盤中 1m／15m 觸發；ATR15m 為折算值；未計滑價。
+- 連續交易日的觀察期互相重疊，日期叢集 CI 只能部分修正自相關。
+
+**執行**：`python -m calibration regime-stop-report --snapshot-db /app/.calibration_cache/snapshot.db`（容器內執行參數見 `AGENTS.md` 的 Testing 段落；可加 `--edge-db`、`--universe`）。缺 `--snapshot-db` 時輸出中文訊息並以代碼 2 結束。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | skew-proxy | notif-report | macro-forward-report | fetch-alpaca-1h | alpaca-seam`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | regime-stop-report | skew-proxy | notif-report | macro-forward-report | fetch-alpaca-1h | alpaca-seam`）
   - `nexus_core/calibration/alpaca_history.py`：Alpaca SIP 歷史 1h 線（常規時段聚合、成交量分割調整、區間取代、同根 K 棒資料品質判定）（§5.16）
   - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
   - `nexus_core/calibration/macro_forward_report.py`：總經訊號乾跑前向報告（§5.15）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
+  - `nexus_core/calibration/regime_stop_report.py`：體制停損 κ 離線比較（§5.19）
   - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
   - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
   - `nexus_core/calibration/pipeline.py`：`fetch_all()`、`process_symbol()`、`run_event_study()`
