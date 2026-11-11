@@ -18,6 +18,12 @@ from market_analysis.ivr_strategy_gate import (
 
 logger = logging.getLogger(__name__)
 
+# 賣方 (STO) 出場門檻：risk_engine.evaluate_defense_status 與 ghost_trader 皆在
+# 賣方 DTE <= 21 時建議平倉／轉倉。進場最短 DTE 必須大於此值，
+# 否則建議合約在採納當日即觸發自家出場規則。
+SHORT_OPTION_EXIT_DTE: int = 21
+SHORT_OPTION_MIN_ENTRY_DTE: int = SHORT_OPTION_EXIT_DTE + 1
+
 
 def _calculate_technical_indicators(df: Any):  # type: ignore
     """計算技術指標與波動率位階"""
@@ -83,12 +89,24 @@ def _determine_strategy_signal(indicators: Any, ivr: Optional[float] = None):  #
         if hv_rank < 50:
             return "BTO_CALL", "call", deltas.get("BTO_CALL", 0.50), 30, 60
         else:
-            return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 14, 30
+            return (
+                "STO_PUT",
+                "put",
+                deltas.get("STO_PUT", -0.20),
+                SHORT_OPTION_MIN_ENTRY_DTE,
+                30,
+            )
     elif price < sma20 and 35 <= rsi <= 50 and macd_hist < 0:
         if hv_rank < 50:
             return "BTO_PUT", "put", deltas.get("BTO_PUT", -0.50), 30, 60
         else:
-            return "STO_CALL", "call", deltas.get("STO_CALL", 0.20), 14, 30
+            return (
+                "STO_CALL",
+                "call",
+                deltas.get("STO_CALL", 0.20),
+                SHORT_OPTION_MIN_ENTRY_DTE,
+                30,
+            )
     else:
         return None, None, 0, 0, 0
 

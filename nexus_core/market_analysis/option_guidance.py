@@ -208,6 +208,7 @@ async def build_watchlist_option_plan(
     has_position: bool = False,
 ) -> Optional[WatchlistOptionPlan]:
     from market_analysis.strategy import find_best_contract
+    from market_analysis.strategy.indicators import SHORT_OPTION_MIN_ENTRY_DTE
 
     if _is_mock(metrics) or _is_mock(tactical):
         return None
@@ -265,7 +266,9 @@ async def build_watchlist_option_plan(
         strategy_name = "Covered Call (拋補看漲期權 / 高位收租)"
         premium_type = "credit"
         leg_opt_type = "CALL"
-        primary_leg = await find_best_contract(metrics.symbol, "STO_CALL", 0.20, 21, 45)
+        primary_leg = await find_best_contract(
+            metrics.symbol, "STO_CALL", 0.20, SHORT_OPTION_MIN_ENTRY_DTE, 45
+        )
         primary_action = "SELL"
     else:
         strategy_name = "Cash-Secured Put"
