@@ -515,6 +515,8 @@ def label_wall_holds(
 def _label_symbol(
     snaps: list[dict[str, Any]], hist: Any, horizon_days: int
 ) -> list[dict[str, Any]]:
+    # 盤後或剛收盤時最後一列可能尚未完成（Low/Close 為 NaN），先剔除以免污染標記
+    hist = hist.dropna(subset=["Low", "Close"])
     idx_dates = [ts.date().isoformat() for ts in hist.index]
     out: list[dict[str, Any]] = []
     for s in snaps:

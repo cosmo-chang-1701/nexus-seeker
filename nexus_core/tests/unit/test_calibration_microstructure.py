@@ -448,6 +448,63 @@ def test_label_symbol_scores_each_definition_on_same_window() -> None:
     assert w["淨GEX最近強牆"]["dist_pct"] == pytest.approx(30 / 1100 * 100)
 
 
+def test_label_symbol_drops_incomplete_last_bar() -> None:
+    from calibration.microstructure import _label_symbol, support_definitions
+
+    early = _wall_snap("2026-09-21")
+    late = _wall_snap("2026-09-22")
+    for s in (early, late):
+        s["_defs"] = support_definitions(s)
+    idx = pd.bdate_range("2026-09-21", periods=7)
+    nan = float("nan")
+    hist = pd.DataFrame(
+        {
+            "Low": [1095.0, 1080.0, 1060.0, 1075.0, 1090.0, 1092.0, nan],
+            "Close": [1098.0, 1085.0, 1065.0, 1080.0, 1095.0, 1096.0, nan],
+        },
+        index=idx,
+    )
+    recs = _label_symbol([early, late], hist, horizon_days=5)
+    # late 需要含 NaN 的最後一列才湊滿 5 日 → 不標記；early 完整
+    assert len(recs) == 1
+    assert recs[0]["date"] == "2026-09-21"
+    for w in recs[0]["walls"].values():
+        assert w["tested"] in (True, False)
+    assert recs[0]["_path"]["lows"] == [1080.0, 1060.0, 1075.0, 1090.0, 1092.0]
+    assert recs[0]["_path"]["closes"] == [1085.0, 1065.0, 1080.0, 1095.0, 1096.0]
+
+
+def test_label_symbol_skips_nan_middle_row() -> None:
+    from calibration.microstructure import _label_symbol, support_definitions
+
+    snap = _wall_snap("2026-09-21")
+    snap["_defs"] = support_definitions(snap)
+    idx = pd.bdate_range("2026-09-21", periods=7)
+    nan = float("nan")
+    hist = pd.DataFrame(
+        {
+            "Low": [1095.0, 1080.0, nan, 1075.0, 1090.0, 1092.0, 1093.0],
+            "Close": [1098.0, 1085.0, nan, 1080.0, 1095.0, 1096.0, 1097.0],
+        },
+        index=idx,
+    )
+    (rec,) = _label_symbol([snap], hist, horizon_days=5)
+    assert rec["_path"]["lows"] == [1080.0, 1075.0, 1090.0, 1092.0, 1093.0]
+    assert rec["_path"]["closes"] == [1085.0, 1080.0, 1095.0, 1096.0, 1097.0]
+
+
+def test_label_symbol_all_nan_returns_empty() -> None:
+    from calibration.microstructure import _label_symbol, support_definitions
+
+    snap = _wall_snap("2026-09-21")
+    snap["_defs"] = support_definitions(snap)
+    idx = pd.bdate_range("2026-09-21", periods=6)
+    hist = pd.DataFrame(
+        {"Low": [float("nan")] * 6, "Close": [float("nan")] * 6}, index=idx
+    )
+    assert _label_symbol([snap], hist, horizon_days=5) == []
+
+
 def _labeled(
     day: str, put_held: bool, near_held: bool, put_net: float
 ) -> dict[str, Any]:
