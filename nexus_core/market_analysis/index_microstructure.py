@@ -618,14 +618,29 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
     return {**fallback, "_is_fallback": True}
 
 
-async def _scrape_symbol_gex_raw(
-    symbol: str, stale_cached_data: Optional[dict] = None
-) -> dict:
-    import time
-    from database.cache import save_kv_cache
+# GEX 降級備援的資料年齡上限：4 天 (96 小時)，足以涵蓋含週末的長假期。超過此
+# 上限的快照一律視為不可信，寧可回傳空資料也不顯示舊到失真的牆體與現價。
+_GEX_STALE_FALLBACK_MAX_AGE_SECONDS: float = 4 * 86400
 
-    cache_key = f"gex_metrics_{symbol.upper()}"
-    fallback = {
+
+def _has_valid_gex_profile(data: Any) -> bool:
+    """gex_profile 內至少有一個 |值| > 1e-4 才算有效 (空 dict 或全 0 皆無效)。"""
+    if not isinstance(data, dict):
+        return False
+    prof = data.get("gex_profile", {})
+    if not isinstance(prof, dict) or not prof:
+        return False
+    for v in prof.values():
+        try:
+            if abs(float(v)) > 0.0001:
+                return True
+        except Exception:
+            pass
+    return False
+
+
+def _empty_gex_fallback() -> dict:
+    return {
         "spot": 0.0,
         "net_gex": 0.0,
         "call_wall": 0.0,
@@ -633,10 +648,81 @@ async def _scrape_symbol_gex_raw(
         "gex_profile": {},
     }
 
+
+def _pick_freshest_gex_fallback(
+    candidates: list[tuple[Optional[dict], float]], now_ts: Optional[float] = None
+) -> Optional[dict]:
+    """從 (資料, 資料產生時間) 候選中挑出最新且有效者，回傳其副本並標記
+    _is_stale_cache=True 與 _data_ts。無有效候選，或最新者超過 96 小時上限時
+    回傳 None。絕不修改傳入的 dict。"""
+    now = time.time() if now_ts is None else now_ts
+    best: Optional[tuple[dict, float]] = None
+    for data, data_ts in candidates:
+        if data is None or not _has_valid_gex_profile(data):
+            continue
+        if best is None or data_ts > best[1]:
+            best = (data, data_ts)
+    if best is None:
+        return None
+    if now - best[1] > _GEX_STALE_FALLBACK_MAX_AGE_SECONDS:
+        return None
+    return {**best[0], "_is_stale_cache": True, "_data_ts": float(best[1])}
+
+
+def _edge_gex_candidate(
+    edge_cached: Optional[dict], now_ts: float
+) -> Optional[tuple[dict, float]]:
+    """把 edge 快照 (data + age_seconds) 轉成 (資料, 資料產生時間) 候選。"""
+    if not isinstance(edge_cached, dict):
+        return None
+    data = edge_cached.get("data")
+    age = edge_cached.get("age_seconds")
+    if not isinstance(data, dict) or age is None:
+        return None
+    try:
+        return data, now_ts - float(age)
+    except (TypeError, ValueError):
+        return None
+
+
+async def _scrape_symbol_gex_raw(
+    symbol: str,
+    stale_cached_data: Optional[dict] = None,
+    stale_data_ts: float = 0.0,
+    edge_cached: Optional[dict] = None,
+) -> dict:
+    """即時抓取個股 GEX。只有即時 profile 有效時才寫入 kv；其餘一律從
+    (kv 舊快取, edge 背景快照) 中挑最新且未超過 96 小時者作為降級備援。"""
+    from database.cache import save_kv_cache
+
+    cache_key = f"gex_metrics_{symbol.upper()}"
+
+    async def _fallback_result(use_edge: bool) -> dict:
+        nonlocal edge_cached
+        now_ts = time.time()
+        if use_edge and edge_cached is None:
+            try:
+                from services import edge_cache_client
+
+                edge_cached = await edge_cache_client.get_cached_gex(symbol)
+            except Exception as e:
+                logger.info(f"[{symbol}] 讀取 edge GEX 快照失敗，略過此候選: {e}")
+        candidates: list[tuple[Optional[dict], float]] = [
+            (stale_cached_data, stale_data_ts)
+        ]
+        edge_cand = _edge_gex_candidate(edge_cached, now_ts) if use_edge else None
+        if edge_cand is not None:
+            candidates.append(edge_cand)
+        picked = _pick_freshest_gex_fallback(candidates, now_ts)
+        if picked is not None:
+            logger.warning(
+                f"[{symbol}] 即時 GEX 不可用，使用最新有效快照作為降級備援。"
+            )
+            return picked
+        return _empty_gex_fallback()
+
     if not getattr(config, "TUNNEL_URL", ""):
-        if stale_cached_data is not None:
-            return {**stale_cached_data, "_is_stale_cache": True}
-        return fallback
+        return await _fallback_result(use_edge=False)
 
     try:
         base_url = config.TUNNEL_URL.rstrip("/")
@@ -647,76 +733,46 @@ async def _scrape_symbol_gex_raw(
             if res.status_code == 200:
                 data = res.json()
                 if data.get("status") == "success":
-                    result_data = data.get("data", fallback)
-
-                    # 檢查 API 傳回的 gex_profile 是否為空或全為 0
-                    gex_prof = result_data.get("gex_profile", {})
-                    is_valid_profile = False
-                    if isinstance(gex_prof, dict) and gex_prof:
-                        for v in gex_prof.values():
-                            try:
-                                if abs(float(v)) > 0.0001:
-                                    is_valid_profile = True
-                                    break
-                            except Exception:
-                                pass
-
-                    # 若 API 傳回的 profile 無效 (盤前未刷新)，且我們有舊快取
-                    if not is_valid_profile and stale_cached_data is not None:
-                        stale_prof = stale_cached_data.get("gex_profile", {})
-                        stale_valid = False
-                        if isinstance(stale_prof, dict) and stale_prof:
-                            for v in stale_prof.values():
-                                try:
-                                    if abs(float(v)) > 0.0001:
-                                        stale_valid = True
-                                        break
-                                except Exception:
-                                    pass
-                        if stale_valid:
-                            logger.info(
-                                f"[{symbol}] API 回傳空 GEX 曝險，自動延展並使用上一份有效歷史快取"
+                    result_data = data.get("data", _empty_gex_fallback())
+                    # 即時 profile 有效才當作新鮮資料寫入 kv；空/全 0 (盤前、
+                    # 夜間常見) 不得寫入，否則會被當成新鮮資料或重設舊資料年齡。
+                    if _has_valid_gex_profile(result_data):
+                        try:
+                            now_ts = time.time()
+                            await save_kv_cache(
+                                cache_key,
+                                {
+                                    "data": result_data,
+                                    "timestamp": now_ts,
+                                    "data_timestamp": now_ts,
+                                },
                             )
-                            result_data = stale_cached_data
-                            result_data["_is_stale_cache"] = True
-
-                    try:
-                        now_ts = time.time()
-                        await save_kv_cache(
-                            cache_key,
-                            {
-                                "data": result_data,
-                                "timestamp": now_ts,
-                                "data_timestamp": now_ts,
-                            },
-                        )
-                    except Exception as e:
-                        logger.warning(f"寫入 GEX 快取失敗 ({symbol}): {e}")
-                    return result_data  # type: ignore
+                        except Exception as e:
+                            logger.warning(f"寫入 GEX 快取失敗 ({symbol}): {e}")
+                        return result_data  # type: ignore
+                    logger.info(f"[{symbol}] API 回傳空 GEX 曝險，改用最新有效快照")
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取 {symbol} GEX 數據: {e}")
 
-    if stale_cached_data is not None:
-        logger.warning(f"[{symbol}] API 不可用，回傳過期 GEX 快取資料作為降級備援。")
-        return {**stale_cached_data, "_is_stale_cache": True}
-    return fallback
+    return await _fallback_result(use_edge=True)
 
 
 async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dict:
     """呼叫邊緣爬蟲獲取個股的 Net GEX, Call Wall, Put Wall 與 GEX Profile。
 
-    force_live=True 時完全略過 kv_cache 與 Edge Snapshot 兩層快取，直接
-    進行即時 Playwright scrape（仍透過 SingleFlight 防止併發重複掃描）；若即時
-    抓取失敗仍會優雅降級回退至舊快取而非直接失敗。僅供已透過 Discord defer
-    （不受 3 秒互動逾時限制）的深度分析路徑使用。"""
-    import time
+    force_live=True 時略過「新鮮快取直接回傳」的捷徑，直接進行即時 Playwright
+    scrape（仍透過 SingleFlight 防止併發重複掃描）；即時抓取失敗或回傳空 profile
+    時，降級為 kv 舊快取與 edge 背景快照中最新且有效者（上限 96 小時），並標記
+    _is_stale_cache=True 與 _data_ts。僅供已透過 Discord defer（不受 3 秒互動
+    逾時限制）的深度分析路徑使用。"""
     import asyncio
-    from database.cache import get_kv_cache, save_kv_cache
+    from database.cache import get_kv_cache
     from services.single_flight import SingleFlightManager
     from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
     cache_key = f"gex_metrics_{symbol.upper()}"
     stale_cached_data: dict | None = None
+    stale_data_ts = 0.0
     try:
         cached_obj = await asyncio.to_thread(get_kv_cache, cache_key)
         if cached_obj and isinstance(cached_obj, dict):
@@ -735,11 +791,13 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                     and time.time() - cached_data_ts < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
                 ):
                     return data
-                # 快取已過期（或 force_live 要求略過），保留作為 API 失敗時的降級備援
+                # 快取已過期（或 force_live 要求略過），保留作為降級備援，並記住其真實資料時間
                 stale_cached_data = data
+                stale_data_ts = cached_data_ts
     except Exception as e:
         logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
 
+    edge_cached: Optional[dict] = None
     if not force_live:
         # 優先讀取 edge 背景排程寫入的 GEX 快照（毫秒級 SQLite 讀取），
         # 命中且夠新鮮就直接採用，跳過下方即時 Playwright scrape。
@@ -751,6 +809,8 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             # 與選擇權鏈共用同一顆 edge 背景輪詢器（約 30 分鐘輪完一輪），
             # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
             if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
+                from database.cache import save_kv_cache
+
                 edge_data = edge_cached["data"]
                 now_ts = time.time()
                 data_ts = now_ts - float(edge_age)
@@ -767,7 +827,8 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                     logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
                 return edge_data  # type: ignore
 
-        # 若已有過期快取，立即以過期快取作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程。
+        # 已有 kv 舊快取：立即以 kv 舊快取與過期 edge 快照中最新且未超過
+        # 96 小時者作為 SWR 回傳，並在背景非同步更新，避免阻塞主排程。
         # 觸發背景刷新前先檢查退避窗口，避免上游持續故障時每次呼叫都重新發起嘗試。
         if stale_cached_data is not None:
             now = time.time()
@@ -780,9 +841,17 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                         _scrape_symbol_gex_raw,
                         symbol,
                         stale_cached_data,
+                        stale_data_ts,
+                        edge_cached,
                     )
                 )
-            return {**stale_cached_data, "_is_stale_cache": True}
+            swr_candidates: list[tuple[Optional[dict], float]] = [
+                (stale_cached_data, stale_data_ts)
+            ]
+            edge_cand = _edge_gex_candidate(edge_cached, time.time())
+            if edge_cand is not None:
+                swr_candidates.append(edge_cand)
+            return _pick_freshest_gex_fallback(swr_candidates) or _empty_gex_fallback()
 
     # force_live=True：不使用任何快取捷徑，直接同步等待即時掃描結果。
     # 非 force_live 且無任何歷史快取（冷啟動）：透過 SingleFlight 執行防重疊查詢。
@@ -791,6 +860,8 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
         _scrape_symbol_gex_raw,
         symbol,
         stale_cached_data,
+        stale_data_ts,
+        edge_cached,
     )
 
 
