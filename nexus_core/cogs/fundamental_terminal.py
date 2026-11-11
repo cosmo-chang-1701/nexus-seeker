@@ -382,10 +382,11 @@ class EarningsSurpriseSection:
         if g_summary.verdict == "UNKNOWN" and g_summary.comparison_note:
             verdict_line += f"\n  └─ {g_summary.comparison_note}"
 
+        tone_text = ansi_bold(f"{tone_abs:+.1f}")
         return [
             (
                 f"• 管理層前瞻態度（{guidance.fiscal_period} 財報）: {tone_icon} "
-                f"語意分數 {ansi_bold(f"{tone_abs:+.1f}")} ｜ {delta_str} "
+                f"語意分數 {tone_text} ｜ {delta_str} "
                 f"(指引模型: {guidance.model_version})"
             ),
             verdict_line,
@@ -409,7 +410,9 @@ class EarningsSurpriseSection:
         return f"• 分析師共識 EPS（{snap_date}）: {' ｜ '.join(snap_parts)}"
 
 
-_CHANNEL_SECTION_CHAR_BUDGET = 950  # Discord 欄位上限 1024 字元，保留結尾空行餘裕
+_CHANNEL_SECTION_CHAR_BUDGET = (
+    950  # 1024 字元欄位上限扣除 74 字元：```ansi 圍欄（12）＋省略行（約 15）＋安全餘量
+)
 _CHANNEL_REASON_MAX_CHARS = 60
 _CHANNEL_NO_DATA = "尚無產業鏈檢驗資料（待每日 18:00 ET 排程寫入）"
 
@@ -558,8 +561,9 @@ def _revision_lines(rev_record: RevisionScoreRecord | None) -> list[str]:
     if rev_record.score_30d is None:
         line = f"• 分析師修正動能（{rev_record.trading_date}）: ⚪ 無可比財期 ｜ PEAD: {pead_str}"
     else:
+        score_text = ansi_bold(f"{rev_record.score_30d:+.1f}")
         line = (
-            f"• 分析師修正動能（{rev_record.trading_date}）: {ansi_bold(f"{rev_record.score_30d:+.1f}")} "
+            f"• 分析師修正動能（{rev_record.trading_date}）: {score_text} "
             f"｜ PEAD: {pead_str}"
         )
     out = [line]
@@ -630,9 +634,10 @@ class ValuationEngineSection:
                     method_zh = _VALUATION_METHOD_CAPPED_ZH
                 if FLAG_CYCLICAL_DCF_CAP in flags:
                     method_zh = _VALUATION_METHOD_CYCLICAL_ZH
+                fair_value_text = ansi_bold(f"${fv_record.fair_value:.2f}")
                 lines.append(
                     f"• 公允價值中樞（{fv_record.trading_date}，{method_zh}）: "
-                    f"{ansi_bold(f"${fv_record.fair_value:.2f}")} (DCF: {dcf_str} ｜ 同業倍數: {comps_str})"
+                    f"{fair_value_text} (DCF: {dcf_str} ｜ 同業倍數: {comps_str})"
                 )
                 mos = fv_record.margin_of_safety
                 if mos is None:
@@ -648,9 +653,8 @@ class ValuationEngineSection:
                         val_tag = "⚪ 合理估值區間"
                     else:
                         val_tag = "🔴 明顯溢價"
-                    lines.append(
-                        f"• 安全邊際 (MOS): {ansi_bold(f"{mos:+.2%}")} ({val_tag})"
-                    )
+                    mos_text = ansi_bold(f"{mos:+.2%}")
+                    lines.append(f"• 安全邊際 (MOS): {mos_text} ({val_tag})")
             lines.append(
                 f"• 權益資本成本: {fv_record.discount_rate:.2%} "
                 f"(ERP: {fv_record.equity_risk_premium:.2%})"
