@@ -11,6 +11,7 @@ import discord
 from services import market_data_service, reddit_service
 from services.market_data_service import _sanitize_ticker
 from market_analysis.sentiment_engine import SentimentEngine
+from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
 from market_analysis.psq_engine import analyze_psq
 from market_analysis.atr_utils import (
     compute_atr_14_from_daily_df,
@@ -380,6 +381,8 @@ class SymbolDeepDiveMixin:
             "skew_data": skew_data,
             "pcr_data": pcr_data,
             "uoa_data": uoa_data,
+            # 期權鏈 OI 未就緒（夜間／盤前）旗標；僅供 /x 空狀態文案區分。
+            "uoa_oi_missing": last_chain_oi_missing(symbol),
             "sto_physical_cap_strikes": sto_physical_cap_strikes,
             "max_pain_data": max_pain_data,
             "iv_metrics": iv_metrics,
@@ -542,6 +545,7 @@ class SymbolDeepDiveMixin:
 
         result["pcr"] = pcr_data if pcr_data is not None else {}
         result["uoa"] = uoa_data if uoa_data is not None else []
+        result["uoa_oi_missing"] = data.get("uoa_oi_missing")
         result["sto_physical_cap_strikes"] = (
             sto_physical_cap_strikes if sto_physical_cap_strikes is not None else []
         )

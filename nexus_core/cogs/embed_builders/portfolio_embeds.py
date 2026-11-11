@@ -11,6 +11,7 @@ import math
 import psutil
 
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import List, Dict, Any, Literal, Optional
 
@@ -2337,6 +2338,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 and put_wall_float < effective_c_val
                                 and not fallback_marker
                                 and alt_net_supp <= 0
+                                and not put_wall_weak
                             ):
                                 _daily_stop = (
                                     put_wall_float
@@ -2875,6 +2877,35 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                 is_stale = bool(gex_data.get("_is_stale_cache", False))
                 stale_suffix = " [快取 / API 降級]" if is_stale else ""
+                if is_stale:
+                    # 僅呈現：快照年齡與快照現價／即時價偏離，不影響任何閘門。
+                    _snap_ts = _to_float(gex_data.get("_data_ts"), 0.0)
+                    if _snap_ts > 0:
+                        stale_suffix = format_cache_age_suffix(
+                            max(time.time() - _snap_ts, 0.0),
+                            stale_threshold_seconds=0.0,
+                        )
+                    _snap_spot = _to_float(gex_data.get("spot"), 0.0)
+                    if _snap_spot > 0 and c_val > 0:
+                        _drift_pct = (c_val - _snap_spot) / _snap_spot * 100
+                        if abs(_drift_pct) >= 1.0 and gex_lines:
+                            _atr_pct = 5.0
+                            for _atr_cand in (
+                                _to_float(data.get("atr_1d"), 0.0),
+                                _to_float(data.get("atr_14"), 0.0),
+                            ):
+                                if is_valid_daily_atr(_atr_cand):
+                                    _atr_pct = _atr_cand / c_val * 100
+                                    break
+                            _drift_line = (
+                                f" ⏱ 快照現價 ${_snap_spot:.2f} → 即時 ${c_val:.2f}"
+                                f"（{_drift_pct:+.1f}%）"
+                            )
+                            if abs(_drift_pct) > _atr_pct:
+                                _drift_line += "，牆位／盈虧比僅供參考"
+                            # 置於欄首（程式碼區塊首行之後），避免被欄位切分擠到
+                            # 續欄而不易察覺。
+                            gex_lines.insert(1, _drift_line)
 
                 _add_ansi_field_safely(
                     embed, f"🧲 Gamma 曝險分布 (GEX Profile){stale_suffix}", gex_lines
@@ -2891,6 +2922,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             _gamma_flip_outer = None
             _gex_price_outer = None
             _pin_strike = None
+    else:
+        # 完全無 GEX 輪廓：明示暫缺，不靜默略過。
+        _add_ansi_field_safely(
+            embed,
+            "🧲 Gamma 曝險分布 (GEX Profile)",
+            ["```ansi", "GEX 資料暫缺（期權鏈未刷新且無可用快照）", "```"],
+        )
 
     # 3.8 🌊 動能與擠壓狀態 (Momentum & Squeeze)
     # 以每次 /x 強制重抓的 1y 日線計算（盤中含今日成型中的 K 棒，數值會隨盤中
@@ -3550,12 +3588,22 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 "⚠️ 方向／SWEEP 為 Bid-Ask 啟發式；OI 為前日；📊日累積 ❔未定"
             )
             _add_ansi_field_safely(embed, uoa_field_name, table_lines)
-        except Exception:
-            pass
+        except Exception as _uoa_err:
+            logger.warning(f"UOA 表格渲染失敗: {_uoa_err}")
+            embed.add_field(
+                name=uoa_field_name,
+                value="```ansi\nUOA 表格渲染失敗\n```",
+                inline=False,
+            )
     else:
+        _uoa_empty_text = (
+            "期權鏈未平倉量尚未就緒（夜間／盤前），無法判定異常活動"
+            if data.get("uoa_oi_missing") is True
+            else "目前無顯著異常活動"
+        )
         embed.add_field(
             name=uoa_field_name,
-            value="```ansi\n目前無顯著異常活動\n```",
+            value=f"```ansi\n{_uoa_empty_text}\n```",
             inline=False,
         )
 

@@ -224,3 +224,110 @@ async def test_detect_uoa_paced_ratio_normalizes_by_trading_day_progress() -> No
     assert len(results) >= 1
     for item in results:
         assert item["paced_ratio"] == pytest.approx(item["ratio"] / 0.5)
+
+
+def _oi_chain(rows_total: int, rows_with_oi: int, oi_each: float = 100.0) -> MockChain:
+    rows = [
+        {
+            "strike": 100.0 + i,
+            "volume": 10.0,
+            "openInterest": oi_each if i < rows_with_oi else 0.0,
+            "lastPrice": 1.0,
+            "bid": 0.9,
+            "ask": 1.1,
+            "impliedVolatility": 0.3,
+        }
+        for i in range(rows_total)
+    ]
+    return MockChain(pd.DataFrame(rows), pd.DataFrame([]))
+
+
+async def _run_oi(symbol: str, chain: Any, caps: bool = False) -> None:
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        return_value=["2026-08-28"],
+    ), patch(
+        "services.market_data_service.get_option_chain", return_value=chain
+    ), patch("services.market_data_service.get_quote", return_value={"c": 100.0}):
+        if caps:
+            await detect_uoa_with_physical_caps(symbol)
+        else:
+            await detect_uoa(symbol)
+
+
+@pytest.mark.asyncio
+async def test_oi_missing_all_zero_is_true() -> None:
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    await _run_oi("OIA", _oi_chain(100, 0))
+    assert last_chain_oi_missing("OIA") is True
+
+
+@pytest.mark.asyncio
+async def test_oi_missing_overnight_shape_by_row_share() -> None:
+    """夜間 NVDA 實測：2/165 列有 OI（ΣOI=32）仍判未就緒（不可用 ΣOI==0）。"""
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    await _run_oi("OIB", _oi_chain(165, 2, oi_each=16.0), caps=True)
+    assert last_chain_oi_missing("OIB") is True
+
+
+@pytest.mark.asyncio
+async def test_oi_missing_normal_chain_is_false() -> None:
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    await _run_oi("OIC", _oi_chain(100, 90))
+    assert last_chain_oi_missing("OIC") is False
+
+
+@pytest.mark.asyncio
+async def test_oi_missing_none_when_no_expiries_or_zero_spot() -> None:
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    await _run_oi("OID", _oi_chain(100, 0))
+    assert last_chain_oi_missing("OID") is True
+    with patch("services.market_data_service.get_all_option_expiries", return_value=[]):
+        await detect_uoa("OID")
+    assert last_chain_oi_missing("OID") is None
+
+    await _run_oi("OID", _oi_chain(100, 0), caps=True)
+    assert last_chain_oi_missing("OID") is True
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        return_value=["2026-08-28"],
+    ), patch("services.market_data_service.get_quote", return_value={"c": 0.0}):
+        await detect_uoa_with_physical_caps("OID")
+    assert last_chain_oi_missing("OID") is None
+
+
+@pytest.mark.asyncio
+async def test_oi_missing_reset_to_none_on_exception() -> None:
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    await _run_oi("OIE", _oi_chain(100, 0))
+    assert last_chain_oi_missing("OIE") is True
+    with patch(
+        "services.market_data_service.get_all_option_expiries",
+        side_effect=RuntimeError("boom"),
+    ):
+        assert await detect_uoa("OIE") == []
+    assert last_chain_oi_missing("OIE") is None
+
+    await _run_oi("OIE", _oi_chain(100, 0), caps=True)
+    with patch(
+        "market_analysis.sentiment.uoa_detector.market_time.get_trading_day_elapsed_fraction",
+        side_effect=RuntimeError("boom"),
+    ), patch(
+        "services.market_data_service.get_all_option_expiries",
+        return_value=["2026-08-28"],
+    ), patch(
+        "services.market_data_service.get_option_chain", return_value=_oi_chain(10, 0)
+    ), patch("services.market_data_service.get_quote", return_value={"c": 100.0}):
+        await detect_uoa_with_physical_caps("OIE")
+    assert last_chain_oi_missing("OIE") is None
+
+
+def test_oi_missing_unknown_symbol_is_none() -> None:
+    from market_analysis.sentiment.uoa_detector import last_chain_oi_missing
+
+    assert last_chain_oi_missing("NEVER_SEEN") is None

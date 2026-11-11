@@ -4,7 +4,7 @@ import pandas as pd
 import sqlite3  # noqa: F401
 import asyncio
 from datetime import date, datetime
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from market_analysis.intraday_consistency import sanitize_option_trade_price
 import market_time
 from services import market_data_service
@@ -29,6 +29,39 @@ logger = logging.getLogger(__name__)
 # 只在正規交易時段建錨：盤前現價是前收、期權鏈 volume 仍是前一交易日的量，
 # 若此時建錨，當日盤中所有成交都會被以前收判定價內外。
 _uoa_spot_anchor: BoundedCache = BoundedCache(max_size=2000)
+
+# 夜間／盤前的 Yahoo 期權鏈 OI 與 bid/ask 常為 0，UOA 候選篩選（OI > 0）會得到空清單，
+# 與「真的沒有異常活動」無法區分。以「OI > 0 的列數占比」判定 OI 未就緒
+# （不用 ΣOI：夜間 NVDA 仍可能有零星 OI）。實測 2026-11-11：夜間 NVDA 2/165、
+# TSLA 0/256、MRVL 0/206；日間 90/97、158/179。
+_UOA_OI_READY_MIN_ROW_SHARE = 0.10
+
+# {symbol: bool | None}：最近一次偵測的 OI 未就緒判定；None＝未實際取得期權鏈。
+_chain_oi_missing_cache: BoundedCache = BoundedCache(max_size=500)
+
+
+def last_chain_oi_missing(symbol: str) -> Optional[bool]:
+    """最近一次 UOA 偵測的期權鏈 OI 是否未就緒（True＝未就緒，None＝無法判定）。"""
+    value = _chain_oi_missing_cache.get(symbol)
+    return value if isinstance(value, bool) else None
+
+
+def _record_chain_oi_missing(
+    symbol: str, chain_data: List[Tuple[str, "pd.DataFrame", float]]
+) -> None:
+    """依全部期權鏈的列占比記錄 OI 未就緒狀態。"""
+    total_rows = 0
+    oi_rows = 0
+    for _exp, df, _vol in chain_data:
+        total_rows += len(df)
+        if "openInterest" in df.columns:
+            oi_rows += int((df["openInterest"].fillna(0) > 0).sum())
+    if total_rows <= 0:
+        _chain_oi_missing_cache[symbol] = None
+        return
+    _chain_oi_missing_cache[symbol] = (
+        oi_rows / total_rows
+    ) < _UOA_OI_READY_MIN_ROW_SHARE
 
 
 def _anchor_spot(
@@ -403,7 +436,9 @@ async def detect_uoa(
             symbol, max_expiries, force_live=force_live
         )
         if spot_price <= 0 or not chain_data:
+            _chain_oi_missing_cache[symbol] = None
             return []
+        _record_chain_oi_missing(symbol, chain_data)
 
         uoa_list: List[Dict[str, Any]] = []
         today_dt = datetime.now().date()
@@ -441,6 +476,7 @@ async def detect_uoa(
 
     except Exception as e:
         logger.error(f"[{symbol}] UOA 偵測嚴重失敗: {e}", exc_info=True)
+        _chain_oi_missing_cache[symbol] = None
         return []
 
 
@@ -472,7 +508,9 @@ async def detect_uoa_with_physical_caps(
             symbol, max_expiries, force_live=force_live
         )
         if spot_price <= 0 or not chain_data:
+            _chain_oi_missing_cache[symbol] = None
             return [], []
+        _record_chain_oi_missing(symbol, chain_data)
 
         uoa_list: List[Dict[str, Any]] = []
         physical_cap_strikes: List[Dict[str, Any]] = []
@@ -604,4 +642,5 @@ async def detect_uoa_with_physical_caps(
 
     except Exception as e:
         logger.error(f"[{symbol}] UOA 物理封頂偵測嚴重失敗: {e}", exc_info=True)
+        _chain_oi_missing_cache[symbol] = None
         return [], []
