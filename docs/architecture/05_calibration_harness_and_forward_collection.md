@@ -720,15 +720,59 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **首跑（2026-11-11，edge 72 檔、2026-09-17～11-10；5 日觀察期 1230 件、10 日 1067 件）**：各分組皆為 κ 越小（停損越緊）越佳，排序不隨體制改變。Long Gamma 的規格 κ 1.75 對現行 0.5 成對差 −0.28%（CI [−0.66, 0.06]），方向與假說相反且不顯著；Short Gamma 的 0.4 對 0.5 為 +0.04%（CI [0.03, 0.07]），顯著但經濟意義可忽略；事件組交易日數 15／11，不判讀。結論：依體制調整 κ 沒有實益，**維持現行 0.5×ATR₁₅ₘ**，不實作體制停損管線。此期間含大跌（持有 CVaR10 約 −24%），停損整體優於續抱屬樣本期特有，且未計停損後回補，不得據此收緊停損。SPY 已於 2026-11-11 加入自選，待 edge 累積 SPY GEX 歷史後可補驗總經腿。
 
+### 5.20 MQA 顧問機械化年初至今回測（`advisor-ytd-report`）
+
+**目的**：把外部「總經量化選擇權顧問」(Macro Quant Options Advisor, MQA) 的建議機械化成可重播的日線規則，與專案自己的策略（專案定案規則：100% 股票、一次到位、偏離 ≥ 5 個百分點才再平衡，即 `StaticAllocationParams(equity_share=1.0, tech_share=1.0, rebalance="THRESHOLD")`）放在同一個科技標的池、同一段期間（2026-01-02 → 最後一個收盤）比較，回答「照顧問做是否比專案策略更好」。本命令只產出報告，**不修改任何正式參數**，不寫任何資料庫。
+
+**資料來源**：`DEFAULT_UNIVERSE` ＋ `SPY`、`VOO`、`QQQ`、`BOXX`、`BIL`、`^VIX` 的日線（`daily_panel.fetch_daily(fetch_from="2024-01-01")`；VOO 以 SPY 串接、BOXX 以 BIL 再以固定利率串接，與其他日線回測一致）；各標的財報日（yfinance `get_earnings_dates(limit=12)`，逐檔間隔 1.5–3 秒、任何例外只略過該檔，快取為 `{cache_dir}/earnings/{SYM}.json`；`--offline` 只用快取，無財報日的標的不套用財報封鎖並列於報告的 `財報日缺漏`）；`--snapshot-db`（唯讀）的 帳戶 NAV（以起點 100,000 正規化，只列百分比，不輸出任何絕對金額或持倉）與 `historical_iv`（真實 IV，僅用來驗證 IV 代理）。FOMC 2026 決議日為模組常數：1/28、3/18、4/29、6/17、7/29、9/16、10/28、12/9。
+
+**機械化規則**（全部為凍結的 `AdvisorParams` 欄位；第 D 日收盤的訊號只用 ≤ D 的資料，D+1 開盤執行；選擇權的停利、轉倉、到期與財報出場在當日收盤；逐日收盤計價；閒置現金含 CSP 擔保依 BOXX 指數計息；不放空、不買反向 ETF，`shorts` 計數須為 0）：
+
+| 項目 | 規則 |
+| :--- | :--- |
+| 預算 | 起始日 point-in-time 成員（前一日有收盤、起始日有開盤），單檔預算 $B = NAV_{前收} / N$ |
+| 指標 | RSI14（Wilder）、EMA20、SMA50、RV20（日對數報酬 20 日標準差 × $\sqrt{252}$）；IV 代理 $= \max(RV_{20} + \max(VIX/100 - RV_{20,SPY}, 0), 0.05)$，SPY 選擇權用 $VIX/100$；IVP 為今日 IV 在過去 252 日（含今日）的百分位，不足 126 筆為 NaN（視為低於任何門檻） |
+| 左側第一批 | 無部位且 RSI14 < 30：IVP ≥ 50 且允許選擇權時賣 CSP（名目 $0.15B$），否則買現貨 $0.15B$；記錄 `tier1_ref`＝D 日收盤 |
+| 左側第二批 | 第一批已做、未暫停、收盤 ≤ `tier1_ref` × 0.95：同上選擇，名目 $0.25B$ |
+| 左側上限 | 單檔（左側現貨成本＋CSP 擔保）≤ $0.5B$；全帳戶 ≤ $0.4\,NAV$；超過即跳過並計 `skipped_left_cap` |
+| 時間停損 | 第一批後 15 個交易日收盤仍 < `tier1_ref` → 暫停左側加碼，直到該標的重置 |
+| 硬性停損 | 左側現貨未實現虧損 ≥ 1% NAV → 次日開盤賣出並重置 |
+| 右側進場 | 收盤同時站上 EMA20 與 SMA50：現貨低於目標（$B$ − 該檔 CSP 擔保）的 90% 時補到目標，並標記 `confirmed`（左側持股併入） |
+| 右側出場 | 僅 `confirmed` 標的，連續 2 日收盤同時跌破 EMA20 與 SMA50 → 次日開盤全賣並買回 CC、重置 |
+| 選擇權 | 單腳、Black-Scholes（利率 4%、無股息）、35 日曆日到期、賣出價＝模型價 × 0.97、買回價＝模型價 × 1.03、允許小數口數；CSP 於 Put Delta −0.15 反解連續履約價並鎖定 $K \times qty$ 擔保；CC 於 Delta 0.25，僅對 `confirmed` 標的未被覆蓋的股數（且 `cc_on_right`）與被指派股數 |
+| 停利／轉倉 | 模型價值 ≤ 權利金的 50% 即買回；DTE ≤ 21 且被測試（CSP 現價 < 履約價；CC 現價 > 履約價）時買回並對同口數轉倉到 35 日、同 Delta（現金不足則跳過，每張選擇權只計一次 `roll_skipped`） |
+| 到期 | CSP 價內＝被指派（以履約價買股並立即補一張 CC）；CC 價內＝以履約價被買走；價外則歸零 |
+| FOMC 封鎖 | 決議日開盤不新增現貨買進與空方選擇權（出場不受限），計 `fomc_blocked` |
+| 財報封鎖 | 財報日 E 前 2 個交易日**收盤**買回該標的所有選擇權並（`earnings_exit_spot=True` 時）賣出現貨、重置；自出場日前一個收盤（避免當日開盤進場又於收盤賣出的無謂來回）至 E 收盤不得產生新的進場訊號（出場與停損訊號不受限），E 後第 1 個交易日收盤起才可有訊號，故最早於 E 後第 2 個交易日開盤再進場 |
+| 保護性 Put | 股票市值 ≥ 50% NAV、SPY 收盤 < SPY SMA50 且無避險時，買 SPY Put（35 日、Delta −0.25、權利金預算 0.4% NAV），持有至到期以內含價值結算，同時間最多一組 |
+| 起始狀態 | `CASH`（預設，起始日全現金）或 `INVESTED`（第一個開盤等權買滿 100% NAV，全部 `confirmed`） |
+
+**報告列**（初始資金 10 萬、Sortino MAR 4.5%，每列含 YTD 報酬、Sortino、MDD、VaR95、CVaR95、平均股票曝險、對專案 D 的超額報酬）：`MQA 基準`、`MQA 期初滿倉`、`MQA 財報只平期權`（`earnings_exit_spot=False`）、`MQA 無期權`（選擇權與避險全關）、`MQA 右側不賣 CC`、`專案 D（100% 科技池）`、`專案 80%`（`equity_share=0.8`，80% 股票對照）、對照組 `VOO B&H`／`QQQ B&H`／`BOXX`／`科技池等權`。另有各 MQA 變體的事件計數、選擇權損益拆解（權利金收入、買回、到期結算、避險、期末未平倉市值）與現貨成本累計、IV 代理驗證（與 `historical_iv` 重疊的筆數、proxy/real 中位數、MAE 波動點、Pearson 相關）、與帳戶實際 NAV 同窗（起訖為帳戶 NAV 資料的首末日）的報酬與 MDD、`財報日缺漏`清單。
+
+**限制（報告的「機械化解讀與限制」段落逐項揭露）**：
+- GEX／Put Wall／PCR／Max Pain 沒有歷史資料，未建模。
+- CPI／NFP／PCE 公布前後 4–8 小時鎖定在日線開盤執行下永遠不會觸發，只建模 FOMC 與財報。
+- 基本面失效判斷屬於投資人自己的工作，機械化版本沒有基本面濾網。
+- 允許小數口數：以模擬初始資金 10 萬計，每檔預算僅數千美元，實際上無法對每檔各持有一口 CSP，選擇權損益偏樂觀。
+- 以代理 IV 的 Black-Scholes 定價，無股息、無真實價差與偏斜。
+- 無出入金：全程以時間加權報酬計算；實際帳戶若有出入金，與本表不可直接比較。
+- 單一年度樣本；選股池有存活者偏差與事後偏誤。
+- 現貨市價成交一律計單邊 0.15%（`AdvisorParams.spot_cost_rate`；MQA、專案策略、科技池等權皆同，VOO／QQQ／BOXX 買進持有不計），指派與被買走以履約價成交不計；選擇權另計 3% 價差。
+- 深價內 CC 的轉倉需要買回現金，滿倉帳戶通常無力負擔而被跳過（計入 `roll_skipped`），這是規格「不得為負現金」的後果。
+
+**執行**：`python -m calibration advisor-ytd-report --snapshot-db /app/.calibration_cache/snapshot.db`（容器內執行參數見 `AGENTS.md` 的 Testing 段落；可加 `--ytd-start`（預設 `2026-01-02`）、`--ytd-end`（預設＝面板最後一個交易日）、`--offline`、`--universe`；既有的 `--start`／`--end` 屬於 Alpaca 指令，本命令不使用）。非 `--offline` 時會先補抓日線與財報日。`--offline` 且日線快取缺少選股池、SPY、QQQ 或 ^VIX 時輸出中文訊息並以代碼 2 結束。輸出 `{out_dir}/calibration/advisor-ytd-report_{stamp}/results.json` 與 `report.md`。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - **離線事件研究** (`nexus_core/calibration/`)
-  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | regime-stop-report | skew-proxy | notif-report | macro-forward-report | fetch-alpaca-1h | alpaca-seam`）
+  - `nexus_core/calibration/__main__.py`：CLI（`fetch | run | forward-report | all | micro-snapshot | micro-report | regime-stop-report | advisor-ytd-report | skew-proxy | notif-report | macro-forward-report | fetch-alpaca-1h | alpaca-seam`）
   - `nexus_core/calibration/alpaca_history.py`：Alpaca SIP 歷史 1h 線（常規時段聚合、成交量分割調整、區間取代、同根 K 棒資料品質判定）（§5.16）
   - `nexus_core/calibration/notif_report.py`：通知成效「照做 vs 持有」報告（§5.14）
   - `nexus_core/calibration/macro_forward_report.py`：總經訊號乾跑前向報告（§5.15）
   - `nexus_core/calibration/microstructure.py`：GEX 牆體深度與週 EM 統計、守住率標註（§5.13）
   - `nexus_core/calibration/regime_stop_report.py`：體制停損 κ 離線比較（§5.19）
+  - `nexus_core/calibration/advisor_backtest.py`：MQA 機械化日線回測引擎（BS 定價、指標、事件封鎖、左右側規則）（§5.20）
+  - `nexus_core/calibration/advisor_ytd_report.py`：MQA 年初至今報告（財報日抓取與快取、snapshot 唯讀整合、Markdown）（§5.20）
   - `nexus_core/calibration/edge_history.py`：讀取 edge 的 GEX／EM 歷史並轉成每日快照（§5.13）
   - `nexus_core/calibration/skew_proxy.py`：^SKEW 代理的 Skew 分位門檻研究（§5.13）
   - `nexus_core/calibration/pipeline.py`：`fetch_all()`、`process_symbol()`、`run_event_study()`
