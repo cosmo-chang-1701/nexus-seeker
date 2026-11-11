@@ -135,7 +135,9 @@ def close_virtual_trade(
 
     # PnL 計算
     pnl = (exit_price - trade["entry_price"]) * trade["quantity"] * 100
-    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 與 opened_at 一致使用 UTC：opened_at 由 SQLite CURRENT_TIMESTAMP 寫入 (UTC)，
+    # 若用本地時間 (容器 TZ=America/New_York)，平倉時間會早於開倉時間數小時。
+    now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
     execute_write(
         """
