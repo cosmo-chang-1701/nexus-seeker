@@ -153,6 +153,22 @@ async def test_fast_pass_skips_missing_or_stale_eval() -> None:
     dispatch.assert_not_called()
 
 
+async def test_fast_pass_prunes_unwatched_and_expired_evals() -> None:
+    pipe, dispatch = _pipe([(1, "NVDA", True), (1, "AMD", True)])
+    now = datetime.now(ny_tz)
+    pipe._latest_evals["NVDA"] = (now, _gex_eval())
+    pipe._latest_evals["AMD"] = (
+        now - timedelta(seconds=pl._FAST_EVAL_MAX_AGE_SECONDS + 5),
+        _gex_eval(),
+    )
+    pipe._latest_evals["TSLA"] = (now, _gex_eval())  # 已不在任何自選清單
+    with _patches(pipe):
+        await pipe._run_wall_break_fast_pass()
+    assert set(pipe._latest_evals) == {"NVDA"}
+    assert dispatch.await_count == 1
+    assert dispatch.await_args_list[0].args[1] == "NVDA"
+
+
 async def test_fast_pass_gates_do_not_call_monitor() -> None:
     cases: list[dict[str, Any]] = [
         {"enabled": False},

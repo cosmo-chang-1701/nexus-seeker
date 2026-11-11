@@ -451,7 +451,11 @@ def test_t1_hysteresis_missing_expiry_snapshot_none() -> None:
 
 def test_t1_hysteresis_missing_expiry_both_none() -> None:
     r = evaluate_t1(ev(exp=None), snap(gex_expiry=None))
-    assert chk(r, "hysteresis").status == "UNKNOWN"
+    c = chk(r, "hysteresis")
+    assert c.status == "UNKNOWN" and "到期日不明" in c.detail
+
+
+def test_t1_hysteresis_same_expiry_pass() -> None:
     # 到期日相同時行為不變
     assert chk(evaluate_t1(ev(), snap()), "hysteresis").status == "PASS"
 
