@@ -786,14 +786,19 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                     or cached_obj.get("timestamp")
                     or 0.0
                 )
+                # 舊版程式（#185 前）降級時會把舊資料以「現在」重新蓋章並在 data 內
+                # 落地 _is_stale_cache=True，其信封時間不可信：視為資料時間未知，
+                # 不走新鮮捷徑，也不與 edge 快照比新舊（未知時間會被 96 小時上限排除）。
+                is_legacy_restamped = bool(data.get("_is_stale_cache"))
                 if (
                     not force_live
+                    and not is_legacy_restamped
                     and time.time() - cached_data_ts < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
                 ):
                     return data
                 # 快取已過期（或 force_live 要求略過），保留作為降級備援，並記住其真實資料時間
                 stale_cached_data = data
-                stale_data_ts = cached_data_ts
+                stale_data_ts = 0.0 if is_legacy_restamped else cached_data_ts
     except Exception as e:
         logger.warning(f"讀取 GEX 快取失敗 ({symbol}): {e}")
 
