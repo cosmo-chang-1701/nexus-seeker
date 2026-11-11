@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from calibration.config import CalibrationConfig
+from calibration.forward_log import EXIT_BREAKDOWN_EXCLUDED_SYMBOLS
 from calibration.parameter_registry import ParameterResult
 
 SCHEMA_VERSION = 1
@@ -144,7 +145,7 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
     else:
         extra = f"；{g2['status']}" if g2.get("status") else ""
         if g2.get("g2_passed") is None and g2.get("status"):
-            verdict = extra[1:]
+            verdict = g2["status"]
         else:
             verdict = f"達標：{_flag(g2.get('g2_passed'))}{extra}"
         lines.append(
@@ -353,7 +354,7 @@ def render_markdown(results: dict[str, Any]) -> str:
             if excluded is not None:
                 lines += [
                     "",
-                    f"已排除現金等價標的 (BOXX／BIL／SHV／SGOV) 的 EXIT_* 列 {excluded} 筆，不計入上表。",
+                    f"已排除現金等價標的 ({'／'.join(sorted(EXIT_BREAKDOWN_EXCLUDED_SYMBOLS))}) 的 EXIT_* 列 {excluded} 筆，不計入上表。",
                 ]
     lines += _render_regime_breakdown(forward or {})
     lines += _render_squeeze_flip_check((forward or {}).get("squeeze_flip_check"))

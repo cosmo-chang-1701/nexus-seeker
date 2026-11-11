@@ -17,11 +17,13 @@ from calibration.config import CalibrationConfig
 from calibration.forward_log import (
     EXIT_BREAKDOWN_EXCLUDED_SYMBOLS,
     SQUEEZE_MIN_DATES,
+    _exit_n_dates,
     build_exit_tier_breakdown,
     build_forward_report,
     build_squeeze_flip_check,
 )
 from calibration.report import render_markdown
+from market_analysis import evaluation_recorder
 
 CFG = CalibrationConfig(n_boot=100, seed=7)
 
@@ -98,10 +100,13 @@ def test_g2_few_dates_not_judged() -> None:
 
 def test_g2_enough_dates_judged() -> None:
     rows, closes = _squeeze_fixture(SQUEEZE_MIN_DATES)
-    g2 = build_squeeze_flip_check(rows, closes, CFG)["primary"]["g2"]
+    check = build_squeeze_flip_check(rows, closes, CFG)
+    g2 = check["primary"]["g2"]
     assert g2["n_dates_treat"] == SQUEEZE_MIN_DATES
     assert g2["g2_passed"] is True
+    assert g2["t_stat"] is not None
     assert "status" not in g2 or "交易日數" not in str(g2.get("status"))
+    assert "交易日數不足" not in str(check["primary"].get("g3"))
 
 
 def test_render_squeeze_without_new_keys() -> None:
@@ -116,7 +121,6 @@ def test_render_squeeze_without_new_keys() -> None:
 
 
 def _shadow_rows(n_dates: int) -> tuple[pd.DataFrame, dict[str, Any]]:
-    rows, closes = _squeeze_fixture(0)
     recs: list[dict[str, Any]] = []
     cl: dict[str, list[tuple[date, float]]] = {}
     for g, flag in enumerate((True, False)):
@@ -143,7 +147,7 @@ def test_shadow_requires_date_floor() -> None:
     assert e["verdict"] == "樣本不足"
 
 
-def _exit_row(symbol: str, day: str, outcome_touch: int = 1) -> dict[str, Any]:
+def _exit_row(symbol: str, day: str) -> dict[str, Any]:
     return {
         "evaluator": "EXIT_SL_REGIME_FLIP",
         "symbol": symbol,
@@ -266,3 +270,28 @@ def test_markdown_renders_gamma_flip_materiality() -> None:
             assert "判讀：樣本不足 (測試)" in md
         elif isinstance(value, str):
             assert value in md
+            assert "Gamma Flip 重要性" in md
+        else:
+            assert "Gamma Flip 重要性" not in md
+
+
+def test_excluded_symbols_in_sync_with_recorder() -> None:
+    """報表排除清單須與 evaluation_recorder 的寫入排除清單逐字一致。"""
+    assert set(EXIT_BREAKDOWN_EXCLUDED_SYMBOLS) == set(
+        evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS
+    )
+
+
+def test_exit_n_dates_bar_ts_fallback() -> None:
+    """無 date 欄時改由 bar_ts 推算事件日數 (同日兩筆只算一天)。"""
+    df = pd.DataFrame(
+        {
+            "bar_ts": [
+                "2026-10-01T10:00:00-04:00",
+                "2026-10-01T11:00:00-04:00",
+                "2026-10-02T10:00:00-04:00",
+            ]
+        }
+    )
+    assert _exit_n_dates(df) == 2
+    assert _exit_n_dates(pd.DataFrame({"x": [1]})) is None

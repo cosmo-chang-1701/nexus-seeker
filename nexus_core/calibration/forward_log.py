@@ -497,9 +497,7 @@ def build_exit_tier_breakdown(df: pd.DataFrame) -> list[dict[str, Any]]:
     """
     if df.empty or "evaluator" not in df.columns:
         return []
-    exits = df[df["evaluator"].astype(str).str.startswith("EXIT_")].copy()
-    if exits.empty:
-        return []
+    exits = df[df["evaluator"].astype(str).str.startswith("EXIT_")]
     exits = exits[~_excluded_exit_mask(exits)].copy()
     if exits.empty:
         return []
