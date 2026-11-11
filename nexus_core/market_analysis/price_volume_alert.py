@@ -277,6 +277,17 @@ async def _get_confirmed_15m_bar_yfinance(symbol: str) -> Optional[Confirmed15mB
     )
 
 
+def volume_base(bar: Confirmed15mBar) -> tuple[float, str]:
+    """放量比較基準：優先同時段（前日同一時段）均量，缺失時退回 20 根均量。
+
+    為什麼：開盤 09:30 與收盤 15:45 兩根含競價量，對前 20 根必然放量；
+    同時段基準才能分辨真正的異常放量。回傳 (基準量, 標籤)。
+    """
+    if bar.tod_avg_volume is not None and bar.tod_avg_volume > 0:
+        return bar.tod_avg_volume, "同時段"
+    return bar.avg_volume, "20 根"
+
+
 def evaluate_watch_trigger(
     bar: Confirmed15mBar,
     target_price: float,
@@ -292,9 +303,8 @@ def evaluate_watch_trigger(
     if volume_multiplier <= 0:
         volume_ok = True
     else:
-        volume_ok = (
-            bar.avg_volume > 0 and bar.volume >= bar.avg_volume * volume_multiplier
-        )
+        base, _label = volume_base(bar)
+        volume_ok = base > 0 and bar.volume >= base * volume_multiplier
     return price_ok and volume_ok
 
 
@@ -302,4 +312,5 @@ __all__: list[str] = [
     "Confirmed15mBar",
     "get_confirmed_15m_bar",
     "evaluate_watch_trigger",
+    "volume_base",
 ]

@@ -6,7 +6,7 @@ cogs/trading/price_volume_alert_monitor.py
 
 import asyncio
 import logging
-from datetime import datetime, time
+from datetime import time
 from typing import Any, Dict, List, Optional
 
 from discord.ext import commands, tasks
@@ -100,8 +100,6 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
         for s, bar in fetched_bars:
             bar_cache[s] = bar
 
-        today_str = datetime.now(market_time.ny_tz).strftime("%Y%m%d")
-
         for watch in all_watches:
             bar = bar_cache.get(watch.symbol)
             if bar is None:
@@ -117,9 +115,14 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
             ):
                 continue
 
-            cache_key = f"price_volume_alert_{watch.user_id}_{watch.symbol}_{today_str}"
+            # 去重鍵用 K 棒自身的交易日而非今天：09:32 評估到的是前一交易日 15:45 收盤棒，
+            # 若用今天的日期，會佔用今日鍵而擋掉當日真正的盤中突破；同一根棒也只會發一次。
+            bar_date_str = bar.bar_time.strftime("%Y%m%d")
+            cache_key = (
+                f"price_volume_alert_{watch.user_id}_{watch.symbol}_{bar_date_str}"
+            )
             if database.get_kv_cache(cache_key):
-                continue  # 每日每標的只觸發一次，避免震盪重複洗版
+                continue  # 每個交易日每標的只觸發一次，避免震盪重複洗版
 
             try:
                 embed = create_price_volume_alert_embed(watch, bar)
