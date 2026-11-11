@@ -16,6 +16,11 @@ Playwright/yfinance 抓取的行為。
 的標的不受批次輪替影響，每輪都會被抓取，將它們的延遲上限從 ~30 分鐘壓到
 單一輪詢週期本身（~5 分鐘），其餘一般自選標的仍走原本的批次輪替。
 
+另有 OI 就緒度紀錄（option_oi_readiness）：盤中每次輪詢抓到的最近到期日
+期權鏈順手統計 openInterest>0 的列數占比（source='poll'）；非盤中的平日則每
+15 分鐘用少量標的（上限 4 檔）各打一次 Yahoo 期權鏈 HTTP 請求探測（source=
+'probe'，不啟動瀏覽器），用來量測 Yahoo 收盤後 OI 重置與開盤前後恢復的時點。
+
 刻意不使用完整的 NYSE 假日行事曆 —— 假日多跑幾輪只會產生稍舊但無害的
 快取，不影響正確性，維持 edge 端一貫的輕量風格。
 """
@@ -66,7 +71,12 @@ EM_SNAPSHOT_MIN_DTE = 1
 EM_SNAPSHOT_MAX_DTE = 14
 EM_SNAPSHOT_MAX_EXPIRIES = 6
 
+# OI 就緒度離峰探測：每 15 分鐘最多一次、最多 4 檔，只打期權鏈 HTTP 請求。
+OI_PROBE_INTERVAL_SECONDS = 15 * 60
+OI_PROBE_MAX_SYMBOLS = 4
+
 _task: Optional["asyncio.Task[None]"] = None
+_last_oi_probe_ts: Optional[float] = None
 _poll_cursor = 0
 
 
@@ -90,6 +100,62 @@ def _now_ny() -> datetime:
     from zoneinfo import ZoneInfo
 
     return datetime.now(ZoneInfo("America/New_York"))
+
+
+def _finite_float(value: Any) -> Optional[float]:
+    """轉成有限浮點數；None／字串垃圾／NaN／inf 皆回傳 None。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def summarize_chain_oi(
+    calls: list[dict[str, Any]], puts: list[dict[str, Any]]
+) -> dict[str, int]:
+    """統計期權鏈 OI 就緒度：總列數、openInterest>0 列數、bid>0 列數、成交量總和。"""
+    rows = 0
+    oi_rows = 0
+    bid_rows = 0
+    volume_sum = 0.0
+    for row in list(calls or []) + list(puts or []):
+        if not isinstance(row, dict):
+            continue
+        rows += 1
+        oi = _finite_float(row.get("openInterest"))
+        if oi is not None and oi > 0:
+            oi_rows += 1
+        bid = _finite_float(row.get("bid"))
+        if bid is not None and bid > 0:
+            bid_rows += 1
+        vol = _finite_float(row.get("volume"))
+        if vol is not None:
+            volume_sum += vol
+    return {
+        "rows": rows,
+        "oi_rows": oi_rows,
+        "bid_rows": bid_rows,
+        "volume_sum": int(volume_sum),
+    }
+
+
+async def _record_oi_readiness(symbol: str, chain: dict[str, Any], source: str) -> None:
+    """best-effort 記錄單一期權鏈的 OI 就緒度；失敗只記 warning。"""
+    try:
+        summary = summarize_chain_oi(chain.get("calls", []), chain.get("puts", []))
+        await asyncio.to_thread(
+            database.save_oi_readiness,
+            symbol,
+            chain.get("expiry"),
+            summary["rows"],
+            summary["oi_rows"],
+            summary["bid_rows"],
+            summary["volume_sum"],
+            source,
+        )
+    except Exception as e:
+        logger.warning(f"[{symbol}] OI 就緒度記錄失敗: {e}")
 
 
 def _is_em_snapshot_window(now_ny: Optional[datetime] = None) -> bool:
@@ -257,8 +323,65 @@ async def _poll_symbol(symbol: str, browser: Browser, sem: "asyncio.Semaphore") 
                     chain.get("calls", []),
                     chain.get("puts", []),
                 )
+                await _record_oi_readiness(symbol, chain, "poll")
         except Exception as e:
             logger.warning(f"[{symbol}] 排程 Option Chain 抓取失敗: {e}")
+
+
+async def _probe_symbol(symbol: str, sem: "asyncio.Semaphore") -> int:
+    async with sem:
+        await asyncio.sleep(random.uniform(0.5, 1.5))
+        try:
+            chain = await fetch_nearest_option_chain(symbol)
+        except Exception as e:
+            logger.warning(f"[{symbol}] OI 探測抓取失敗: {e}")
+            return 0
+        if not chain:
+            return 0
+        try:
+            summary = summarize_chain_oi(chain.get("calls", []), chain.get("puts", []))
+            await asyncio.to_thread(
+                database.save_oi_readiness,
+                symbol,
+                chain.get("expiry"),
+                summary["rows"],
+                summary["oi_rows"],
+                summary["bid_rows"],
+                summary["volume_sum"],
+                "probe",
+            )
+            return 1
+        except Exception as e:
+            logger.warning(f"[{symbol}] OI 探測記錄失敗: {e}")
+            return 0
+
+
+async def record_oi_probe_once(now_ny: Optional[datetime] = None) -> int:
+    """非盤中的平日，每 OI_PROBE_INTERVAL_SECONDS 最多一次，對 priority 優先、
+    其餘追蹤標的次之（去重、上限 OI_PROBE_MAX_SYMBOLS 檔）各抓一次最近到期日
+    期權鏈並記錄 OI 就緒度。只打 HTTP、不啟動瀏覽器。回傳寫入筆數。"""
+    global _last_oi_probe_ts
+    now = now_ny or _now_ny()
+    if now.weekday() >= 5 or _is_us_market_hours():
+        return 0
+    mono = time.monotonic()
+    if (
+        _last_oi_probe_ts is not None
+        and mono - _last_oi_probe_ts < OI_PROBE_INTERVAL_SECONDS
+    ):
+        return 0
+    _last_oi_probe_ts = mono
+
+    priority = await asyncio.to_thread(database.get_priority_symbols)
+    others = await asyncio.to_thread(database.get_non_priority_symbols)
+    symbols = list(dict.fromkeys(list(priority) + list(others)))[:OI_PROBE_MAX_SYMBOLS]
+    if not symbols:
+        return 0
+    sem = asyncio.Semaphore(MAX_CONCURRENCY)
+    results = await asyncio.gather(*(_probe_symbol(sym, sem) for sym in symbols))
+    written = sum(results)
+    logger.info(f"[oi_probe] {len(symbols)} 檔標的，寫入 {written} 筆 OI 就緒度")
+    return written
 
 
 def _next_batch(symbols: list[str]) -> list[str]:
@@ -288,10 +411,12 @@ async def _maybe_prune_gex_history() -> None:
     try:
         removed = await asyncio.to_thread(database.prune_gex_history)
         removed_em = await asyncio.to_thread(database.prune_em_history)
+        removed_oi = await asyncio.to_thread(database.prune_oi_readiness)
         _last_history_prune_date = today
-        if removed or removed_em:
+        if removed or removed_em or removed_oi:
             logger.info(
-                f"已清除超過保留期的歷史：GEX 快照 {removed} 筆、EM 快照 {removed_em} 筆"
+                f"已清除超過保留期的歷史：GEX 快照 {removed} 筆、EM 快照 {removed_em} 筆、"
+                f"OI 就緒度 {removed_oi} 筆"
             )
     except Exception as e:
         logger.warning(f"GEX 快照歷史保留期清理失敗: {e}")
@@ -356,8 +481,13 @@ async def _loop() -> None:
         try:
             if _is_us_market_hours():
                 await poll_once()
-            elif _is_em_snapshot_window():
-                await record_em_snapshot_once()
+            else:
+                try:
+                    await record_oi_probe_once()
+                except Exception as e:
+                    logger.warning(f"OI 就緒度探測失敗: {e}")
+                if _is_em_snapshot_window():
+                    await record_em_snapshot_once()
         except Exception as e:
             logger.error(f"背景輪詢迴圈執行失敗: {e}", exc_info=True)
         await asyncio.sleep(

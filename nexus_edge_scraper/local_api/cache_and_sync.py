@@ -145,6 +145,93 @@ async def get_cached_em_history(
         return {"status": "error", "message": str(e)}
 
 
+_OI_READY_THRESHOLD = 0.10
+
+
+def _oi_share(rows: int, oi_rows: int) -> float | None:
+    return round(oi_rows / rows, 3) if rows else None
+
+
+def build_oi_readiness_report(
+    records: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """把 UTC 紀錄轉成美東時間的 rows 與 (美東日期, 標的) 摘要。"""
+    from zoneinfo import ZoneInfo
+
+    ny = ZoneInfo("America/New_York")
+    rows_out: list[dict[str, Any]] = []
+    groups: dict[tuple[str, str], list[tuple[str, dict[str, Any]]]] = {}
+    for rec in records:
+        try:
+            dt = datetime.strptime(rec["captured_at"], "%Y-%m-%d %H:%M:%S")
+        except (KeyError, TypeError, ValueError):
+            continue
+        et = dt.replace(tzinfo=timezone.utc).astimezone(ny)
+        share = _oi_share(int(rec["rows"]), int(rec["oi_rows"]))
+        out = {
+            **rec,
+            "captured_at_et": et.replace(tzinfo=None).isoformat(),
+            "oi_share": share,
+        }
+        rows_out.append(out)
+        groups.setdefault((et.strftime("%Y-%m-%d"), rec["symbol"]), []).append(
+            (et.strftime("%H:%M"), out)
+        )
+
+    summary: list[dict[str, Any]] = []
+    for (date_et, symbol), items in sorted(groups.items()):
+        items.sort(key=lambda it: it[0])
+        first_ready = next(
+            (
+                hm
+                for hm, r in items
+                if r["oi_share"] is not None and r["oi_share"] >= _OI_READY_THRESHOLD
+            ),
+            None,
+        )
+        first_unready = next(
+            (
+                hm
+                for hm, r in items
+                if hm >= "16:00"
+                and (r["oi_share"] is None or r["oi_share"] < _OI_READY_THRESHOLD)
+            ),
+            None,
+        )
+        shares = [r["oi_share"] for _, r in items if r["oi_share"] is not None]
+        summary.append(
+            {
+                "date_et": date_et,
+                "symbol": symbol,
+                "samples": len(items),
+                "first_ready_et": first_ready,
+                "first_unready_after_close_et": first_unready,
+                "min_share": min(shares) if shares else None,
+                "max_share": max(shares) if shares else None,
+            }
+        )
+    return summary, rows_out
+
+
+@router.get("/api/v1/cache/oi-readiness")
+async def get_oi_readiness(days: int = 7) -> dict[str, Any]:
+    """讀取 OI 就緒度紀錄（Yahoo 期權鏈 openInterest>0 列數占比）與每日摘要，
+    用來判讀收盤後 OI 重置與開盤前後恢復的時點。days 夾在 1~14。"""
+    days = max(1, min(int(days), 14))
+    try:
+        records = await asyncio.to_thread(database.get_oi_readiness, days)
+        summary, rows = build_oi_readiness_report(records)
+        return {
+            "days": days,
+            "threshold": _OI_READY_THRESHOLD,
+            "summary": summary,
+            "rows": rows,
+        }
+    except Exception as e:
+        logger.warning(f"讀取 OI 就緒度失敗: {e}")
+        return {"status": "error", "message": str(e)}
+
+
 @router.get("/api/v1/cache/options/{symbol}/chain")
 async def get_cached_option_chain(
     symbol: str, expiry: str | None = None
