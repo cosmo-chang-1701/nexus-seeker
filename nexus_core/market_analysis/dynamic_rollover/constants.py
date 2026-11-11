@@ -42,8 +42,9 @@ _COVERED_CALL_MIN_SHARES: int = 100  # 1 口最低股數門檻
 _COVERED_CALL_MAX_LOTS: int = (
     1  # 使用者明確規格：固定 1 口，未來若放寬為 N 口只需調整此常數
 )
-_COVERED_CALL_MIN_DTE: int = 18
-_COVERED_CALL_MAX_DTE: int = 25
+# 賣方 DTE ≤ 21 會觸發 risk_engine／ghost_trader 平倉，故進場下限須 ≥ 22。
+_COVERED_CALL_MIN_DTE: int = 22
+_COVERED_CALL_MAX_DTE: int = 30
 
 # --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
 # 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
@@ -171,7 +172,7 @@ _HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD: int = 1  # dte <= 此值時，無論�
 # 「擴大停損空間 + 口數縮放」的漸進式風險平價機制。
 # 「次月主力合約」文案敘述用的效期窗口，沿用 opportunity_cost.py 既有
 # find_best_contract(..., 21, 45) 與 Covered Call 效期窗口的慣例。
-_FORCED_SETTLEMENT_ROLL_MIN_DTE: int = 21
+_FORCED_SETTLEMENT_ROLL_MIN_DTE: int = 22
 _FORCED_SETTLEMENT_ROLL_MAX_DTE: int = 45
 
 # --- Covered Call 權利金衰減停利 (covered_call_profit_lock.py) 具名常數 ---

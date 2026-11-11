@@ -27,7 +27,7 @@ Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）以**買入�
 ### 2.1 情境一：Covered Call 增強 (`CORE_DEPLOYMENT`)
 > 原「核心資金超額部署」（超額資金轉入 BOXX 的防禦分支、通過六重鐵律後買入候選標的的機會分支）已刪除：賣出 CORE 贏家做擇時輪動與 B&H 策略相悖。`target_allocation_pct` 設定與持倉頁的超限顯示仍保留。
 
-**Covered Call Overlay**：若 CORE 標的股數 $\ge 100$ 股，大盤處於正常但標的上方受制於負 Gamma 泥淖或 STO Call 封頂（`get_spx_capped_from_above_signal` 為真），系統建議賣出 1 口 DTE 18–25 天的價外 Covered Call：
+**Covered Call Overlay**：若 CORE 標的股數 $\ge 100$ 股，大盤處於正常但標的上方受制於負 Gamma 泥淖或 STO Call 封頂（`get_spx_capped_from_above_signal` 為真），系統建議賣出 1 口 DTE 22–30 天的價外 Covered Call：
 $$
 \text{Strike}_{\text{CoveredCall}} \ge \max(\text{Average Cost}, \; \text{Swamp Strike})
 $$
@@ -191,7 +191,7 @@ stateDiagram-v2
     投資組合資產評估 --> SHORT_ENTRY: SHORT_SIDE/DYNAMIC 使用者且做空六重鐵律通過
     投資組合資產評估 --> PYRAMID_ADD: 右側獲利倉且棘輪停損已鎖定成本之上
 
-    CORE_DEPLOYMENT --> CoveredCall增強: 賣出 1 口 DTE 18-25 天價外 Call
+    CORE_DEPLOYMENT --> CoveredCall增強: 賣出 1 口 DTE 22-30 天價外 Call
 
     MACRO_TOP_ESCAPE_DEFENSE --> 保護性Put: 建議買入 SPY Put（不減碼）
 
@@ -216,7 +216,7 @@ stateDiagram-v2
 flowchart TD
     DTE_Input[期權持倉到期天數: DTE] --> DTE_Check{DTE 階梯判斷}
 
-    DTE_Check -- "DTE <= 1 天" --> ForceSettle["EXPIRATION_SETTLEMENT_ALERT<br/>最高優先級！強制 100% 平倉<br/>轉倉至 21-45 DTE 次月主力合約"]
+    DTE_Check -- "DTE <= 1 天" --> ForceSettle["EXPIRATION_SETTLEMENT_ALERT<br/>最高優先級！強制 100% 平倉<br/>轉倉至 22-45 DTE 次月主力合約"]
 
     DTE_Check -- "1 < DTE < 7 天" --> IntentCheck{意圖類型?}
     IntentCheck -- 新開倉/轉倉意圖 --> Lockout["LOCKOUT_SKIP<br/>封鎖操作！末日合約流動性雜訊"]
