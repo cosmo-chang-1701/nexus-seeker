@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import logging
 from datetime import date
 from types import SimpleNamespace
 from typing import Any, Optional
@@ -136,7 +137,9 @@ async def test_crossing_then_monthly_then_back_inside(db_conn: Any) -> None:
 
 
 @pytest.mark.asyncio
-async def test_disabled_target_and_fail_closed_cases(db_conn: Any) -> None:
+async def test_disabled_target_and_fail_closed_cases(
+    db_conn: Any, caplog: pytest.LogCaptureFixture
+) -> None:
     world, bot = _World(), _bot()
     world.target = -1.0
     await _run(world, bot, DAY1)
@@ -171,8 +174,13 @@ async def test_disabled_target_and_fail_closed_cases(db_conn: Any) -> None:
     world.shares = {"BOXX": 100.0}
 
     world.withdrawal = 1000.0  # 有提領設定但無當日跑道快照
-    await _run(world, bot, NEXT_MONTH)
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger=svc.logger.name):
+        await _run(world, bot, NEXT_MONTH)
     assert bot.queue_dm.await_count == 2 and _state() == before
+    # 缺 snap is None 防線時會 AttributeError 被逐戶 except 吞掉並記 ERROR
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("提領跑道快照非當日" in r.getMessage() for r in caplog.records)
     world.runway = _runway(DAY1, None, 0.0)  # 非當日快照
     await _run(world, bot, NEXT_MONTH)
     assert bot.queue_dm.await_count == 2 and _state() == before

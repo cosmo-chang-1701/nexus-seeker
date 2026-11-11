@@ -1,7 +1,8 @@
 """固定比例配置偏離的純邏輯葉模組（docs/strategies/09_static_allocation_rebalance.md §7）。
 
 規則（2026-11-11 決議）：固定比例、不擇時。
-- 股票占比 = 多頭現股市值 / 可投資額；BOXX 與現金屬於防守桶，空頭與選擇權不計入任何一桶。
+- 股票占比 = 多頭現股市值 / 可投資額；BOXX 與現金屬於防守桶，空頭不計入任何一桶；選擇權由輸入契約排除
+  （stock_shares 只放現股，本模組不判斷選擇權）。
   此處刻意只有「多頭現股」才算股票（qty > 0），不可把 qty > 0 當成全部持倉。
 - 提領前一個月起，下一次提領金額視為預留，從可投資額扣除，不算偏離。
 - 偏離 = 股票占比 − 目標占比（百分點）；|偏離| ≥ 門檻即為超標。
@@ -62,12 +63,12 @@ def compute_breakdown(
     target_pct: float,
     reserve: float = 0.0,
 ) -> Optional[AllocationBreakdown]:
-    """計算股票 / BOXX+現金的配置；可投資額 ≤ 0 回傳 None。"""
+    """計算股票 / BOXX+現金的配置；可投資額 ≤ 0，或現金／預留為非有限值（NaN、inf）時回傳 None。"""
     equity = 0.0
     boxx = 0.0
     missing: list[str] = []
     for symbol, qty in stock_shares.items():
-        if not qty > 0:  # 空頭、零股與 NaN 皆不計入
+        if not qty > 0:  # 空頭、數量為 0 與 NaN 皆不計入
             continue
         price = closes.get(symbol)
         if not _valid_price(price):
@@ -79,6 +80,8 @@ def compute_breakdown(
             boxx += value
         else:
             equity += value
+    if not (math.isfinite(cash) and math.isfinite(reserve)):
+        return None  # fail closed：NaN 會讓 max() 回傳 NaN 而通過 investable 檢查
     cash_v = max(cash, 0.0)
     reserve_v = min(max(reserve, 0.0), boxx + cash_v)
     investable = equity + boxx + cash_v - reserve_v
@@ -139,7 +142,9 @@ def parse_state(raw: Any) -> Optional[DriftState]:
         if not isinstance(last_sent, str):
             return None
         try:
-            date.fromisoformat(last_sent)
+            # 3.11+ 的 fromisoformat 也收 "20261111"；只接受 YYYY-MM-DD
+            if date.fromisoformat(last_sent).isoformat() != last_sent:
+                return None
         except ValueError:
             return None
     target = raw.get("target_pct")
