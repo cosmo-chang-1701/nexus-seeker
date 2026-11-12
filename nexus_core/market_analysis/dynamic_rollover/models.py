@@ -26,6 +26,8 @@ class RolloverScenario(str, Enum):
     # 一次性保證失效——但兩者最終都路由到同一個 action=="OPEN_PYRAMID" 下游
     # 派發分支，必須靠 scenario 欄位區分文案與資料。
     PYRAMID_ADD = "PYRAMID_ADD"
+    # 兩級體制避險 (regime_hedge.py)：投資組合層級的 PSQ／SQQQ／SOXS 對沖計畫。
+    REGIME_HEDGE = "REGIME_HEDGE"
 
 
 class TradingStrategyMode(str, Enum):
@@ -280,6 +282,12 @@ class RolloverInstruction(_RolloverInstructionRequired, total=False):
     """
 
     suggested_strategy: str
+    # 兩級體制避險 (regime_hedge.py) 專屬欄位。hedge_plan 實際型別為
+    # regime_hedge_sizing.HedgePlan，此處用 Any 避免循環 import。
+    hedge_plan: Any
+    hedge_tier: int  # 1 | 2
+    is_preliminary: bool  # 開盤 30 分內／盤外 → 只發預警觀察
+    market_regime: str
     # 進場鐵律條件六依「當下市況」現算的建議合約天期與部位結構 (右側來自
     # opportunity_cost._derive_entry_structure_directive，左側來自 left_side_entry
     # 的 IVR 分流)。刻意獨立成欄位、不覆寫上方 suggested_strategy——後者回答的是
