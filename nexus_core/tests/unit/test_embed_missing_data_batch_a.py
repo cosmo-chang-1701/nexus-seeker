@@ -196,7 +196,8 @@ def test_stress_test_missing_keys_degrade_and_no_safe_verdict() -> None:
     ok = create_stress_test_embed(
         {
             "is_critical": False, "total_deficit": 100.0, "cash_reserve": 500.0,
-            "boxx_shares": 10.0, "boxx_cash": 1000.0, "net_deficit": 1400.0,
+            "cash_equiv_value": 1000.0, "cash_equiv_detail": "BOXX 10 股",
+            "net_deficit": 1400.0,
             "gtc_buy_orders_count": 3,
         }
     )  # fmt: skip

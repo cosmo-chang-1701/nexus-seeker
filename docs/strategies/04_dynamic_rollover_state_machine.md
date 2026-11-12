@@ -54,11 +54,11 @@ $$
 3. **轉倉目的地**：恆為 `CASH`，補足現金缺口、解除掛單資金不足風險；不買入任何反向 ETF，也不轉入 `BOXX`。
    本輪若已有非 `HOLD` 的 `MARGIN_DEFENSE` 指令，`portfolio_monitor` 不再評估 `REGIME_HEDGE`（真實現金赤字時不該同時建議買反向 ETF）。
 4. **`/stress_test` 現金赤字精算來源**：
-   `MARGIN_DEFENSE` 判定式所複用的「掛單現金赤字」並非憑空推估，而是獨立指令 `/stress_test`（`cogs/unified_terminal/cog.py`）對帳戶所有 `GTC` 效期買單做的最壞情境精算：
+   `MARGIN_DEFENSE` 與 `/stress_test`（含 /dash「壓測」按鈕）共用同一套算法，由 `services/gtc_stress_test_service.py` 對帳戶所有 `GTC` 效期買單做最壞情境精算：
    $$\text{Total Cash Deficit} = \sum_{\text{GTC BUY}} (\text{Limit Price} \times \text{Quantity})$$
-   可動用防禦流動性為常規現金儲備加計 BOXX 應急套現額度，其中 BOXX 套現受限於**常規清算上限 180 股**：
-   $$\text{BOXX Cash} = \min(\text{BOXX Shares}, 180) \times \frac{\$21{,}000}{180}$$
-   當 $\text{Total Cash Deficit} > \text{Cash Reserve} + \text{BOXX Cash}$（即淨赤字為負）時判定為 `is_critical`，Embed 會額外標註「危及 \$13,000 實體提領紅線」的關鍵警示，提醒使用者這不只是保證金壓力，更會侵蝕已規劃好的現金提領額度。
+   可動用緩衝為手填現金儲備加計現金等價物（BOXX／BIL／SHV／SGOV）的**即時市值**（無股數上限；任一持有之現金等價物報價缺失時整體降級，不當 0）：
+   $$\text{Buffer} = \text{Cash Reserve} + \sum_{\text{cash equiv.}} |\text{Quantity} \times \text{Price}|$$
+   當 $\text{Total Cash Deficit} > \text{Buffer}$（即淨赤字為負）時判定為 `is_critical`；若使用者已在 /settings 啟用提領跑道，Embed 會額外標註「危及下次預定提領 \$X」（取自跑道快照，快照過期時註明），未啟用則不顯示提領子句。帳戶資料讀取失敗（`load_failed`）時降級顯示，不做判定。
 
 ### 2.5 情境五：賣方期權時間價值停利 (`COVERED_CALL_PROFIT_LOCK`)
 專門管理 Short Call（Covered Call）與 Short Put（CSP）之時間價值衰減收割：
@@ -277,8 +277,6 @@ flowchart TD
 | `_PYRAMID_KELLY_SCALE` / `_PYRAMID_KELLY_CAP` | `0.5` / `0.01` | `PYRAMID_ADD` 凱利分數縮放與上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `PYRAMID_ADD_DRY_RUN` | `true` | `PYRAMID_ADD` 只寫稽核紀錄不推播；翻轉判準見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 F | `nexus_core/config.py` |
 | `REGIME_III_B_DRY_RUN` | `true` | 由 Regime III-B（右側趨勢延續態）確認出的指令只寫稽核紀錄不推播。⚠️ 本閘門以指令的 `entry_regime` 欄位為鍵，**不是** `scenario`——III-B 放寬的是進場判定 | `nexus_core/config.py` |
-| BOXX 常規清算上限 | `180` 股 (換算 $\$21{,}000$) | `/stress_test` 計算 BOXX 應急套現額度之股數硬上限 | `nexus_core/cogs/unified_terminal/cog.py` |
-| 實體提領紅線 | `$13,000` | `/stress_test` 判定 `is_critical` 時額外揭露之提領額度警戒線 | `nexus_core/cogs/embed_builders/scan_embeds/risk_stress_test.py` |
 
 ---
 
@@ -330,5 +328,6 @@ flowchart TD
 - `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_transition_pyramid_embed()`（依 `scenario` 分流 `TRANSITION_ENGINE`／`PYRAMID_ADD` 文案與倉位欄位）
 - `nexus_core/tests/unit/test_pyramid_add.py`：八項條件逐項測試、條件二不變式、次數上限、冷卻、曝險降量、空頭排除、狀態延後提交、端到端整合測試
 - `nexus_core/cogs/trading/portfolio_monitor.py`：十大情境的評估順序、通知頻道分流與 dry-run 閘門
-- `nexus_core/cogs/unified_terminal/cog.py`：`/stress_test` 指令，GTC 掛單現金赤字與 BOXX 應急套現額度精算
+- `nexus_core/services/gtc_stress_test_service.py`：`run_gtc_stress_test()`／`build_stress_test_results()`，GTC 掛單現金赤字與現金等價物即時市值精算（`/stress_test` 指令與 /dash 壓測共用）
+- `nexus_core/cogs/unified_terminal/cog.py`：`/stress_test` 指令入口
 - `nexus_core/cogs/embed_builders/scan_embeds/risk_stress_test.py`：`create_stress_test_embed()`

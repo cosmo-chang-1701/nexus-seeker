@@ -505,21 +505,24 @@ async def test_grid_step_scaling_critical() -> None:
 
 
 def test_boxx_stress_test_math() -> None:
-    # 情境 2：BOXX 水壩極限壓力測試
-    # 輸入：常規現金 = $150，BOXX 持倉 = 213 股（最大套現 $21,000）。SQLite 中有 18 筆 GTC 網格單，若全成交總計需消耗 $22,500。
-    # 預期輸出：計算出總赤字淨值為 -$1,350，且 is_critical 觸發 (大於 BOXX 清算極限)
-    cash_reserve = 150.0
-    boxx_shares = 213.0
-    total_deficit = 22500.0  # 18 筆 GTC 網格單總額
+    # 情境 2：BOXX 水壩壓力測試（緩衝＝現金儲備＋BOXX 即時市值，無股數上限）
+    # 常規現金 $150；GTC 網格單總額 $22,500；BOXX 213 股 @ $98 ≈ $20,874。
+    from services.gtc_stress_test_service import build_stress_test_results
 
-    boxx_cash = min(boxx_shares, 180.0) * (21000.0 / 180.0)
-    assert boxx_cash == 21000.0
-
-    net_deficit = cash_reserve + boxx_cash - total_deficit
-    assert net_deficit == -1350.0
-
-    is_critical = total_deficit > (cash_reserve + boxx_cash)
-    assert is_critical is True
+    orders = [
+        {
+            "validity": "GTC",
+            "side": "BUY",
+            "limit_price": 1250.0,
+            "quantity": 18.0,
+        }
+    ]
+    res = build_stress_test_results(orders, 150.0, [("BOXX", 213.0, 98.0)])
+    assert res["total_deficit"] == 22500.0
+    assert res["gtc_buy_orders_count"] == 1
+    assert res["cash_equiv_value"] == 213.0 * 98.0
+    assert res["net_deficit"] == 150.0 + 213.0 * 98.0 - 22500.0
+    assert res["is_critical"] is True
 
 
 def test_new_cost_basis_math() -> None:

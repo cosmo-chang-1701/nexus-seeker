@@ -155,3 +155,16 @@ def sum_gtc_buy_commitment(orders: Sequence[Mapping[str, Any]]) -> float:
         price = float(o.get("limit_price") or 0.0) or float(o.get("stop_price") or 0.0)
         total += price * float(o.get("quantity") or 0.0)
     return max(0.0, total)
+
+
+def count_gtc_buy_orders(orders: Sequence[Mapping[str, Any]]) -> int:
+    """計算有效 GTC 買單筆數（與 `sum_gtc_buy_commitment` 同一套 validity／side 篩選）。
+
+    價格為 0 或缺失的委託仍計入筆數。
+    """
+    return sum(
+        1
+        for o in orders
+        if "GTC" in str(o.get("validity") or "").upper()
+        and str(o.get("side") or "").upper() == "BUY"
+    )

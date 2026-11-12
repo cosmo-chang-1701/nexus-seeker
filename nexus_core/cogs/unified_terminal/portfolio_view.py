@@ -164,45 +164,9 @@ class PortfolioHubView(discord.ui.View):
         await self._set_loading(interaction)
         embed = None
         try:
-            from database.orders import get_user_active_orders
+            from services.gtc_stress_test_service import run_gtc_stress_test
 
-            orders = get_user_active_orders(self.user_id)
-            total_deficit = 0.0
-            gtc_buy_orders = []
-            for o in orders:
-                validity = o.get("validity", "").upper()
-                side = o.get("side", "").upper()
-                if "GTC" in validity and side == "BUY":
-                    price = o.get("limit_price", 0.0)
-                    if price <= 0.0:
-                        price = o.get("stop_price", 0.0)
-                    qty = o.get("quantity", 0.0)
-                    total_deficit += price * qty
-                    gtc_buy_orders.append(o)
-            ctx = database.get_full_user_context(self.user_id)
-            cash_reserve = ctx.cash_reserve if ctx else 0.0
-
-            from database.holdings import get_user_holdings
-
-            holdings = get_user_holdings(self.user_id)
-            boxx_shares = 0.0
-            for h in holdings:
-                if h.get("symbol", "").upper() == "BOXX":
-                    boxx_shares = h.get("quantity", 0.0)
-                    break
-            boxx_cash = min(boxx_shares, 180.0) * (21000.0 / 180.0)
-            net_deficit = cash_reserve + boxx_cash - total_deficit
-            is_critical = total_deficit > (cash_reserve + boxx_cash)
-
-            results = {
-                "total_deficit": total_deficit,
-                "cash_reserve": cash_reserve,
-                "boxx_shares": boxx_shares,
-                "boxx_cash": boxx_cash,
-                "net_deficit": net_deficit,
-                "is_critical": is_critical,
-                "gtc_buy_orders_count": len(gtc_buy_orders),
-            }
+            results = await run_gtc_stress_test(self.user_id)
             from cogs.embed_builder import create_stress_test_embed
 
             embed = create_stress_test_embed(results)
