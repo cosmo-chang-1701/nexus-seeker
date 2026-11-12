@@ -48,13 +48,13 @@ $$
    - 帳戶面臨保證金壓力（掛單現金赤字 $\text{Deficit} > 0$ 或衛星市值 $>$ 現金儲備）。
 2. **清倉動作**：
    對所有結構破位或主力封殺之脆弱持倉執行 100% `LIQUIDATE`。
-3. **三階轉倉目的地路由**：
+3. **轉倉目的地路由（二階）**：
    - **第一優先（現金赤字）**：轉入 `CASH`，徹底解除券商追繳風險。
-   - **第二優先（反向 ETF 動能確認）**：若無赤字，且對應反向 ETF 通過現貨技術動能檢驗（$\text{RSI}_{14} > 50$、站穩 10MA、日均成交額 $\ge \$5\text{M}$），轉入反向 ETF：
+   - **第二優先（常規防禦）**：若無赤字，一律轉入 `BOXX` 鎖定無風險利息。
+   - **反向 ETF 路由（已停用）**：`_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED = False`（2026-11-12），保留程式供日後恢復。停用原因：使用者原則為「現金即空頭」，且現金儲備極低時，「衛星市值 $>$ 現金儲備」的保證金壓力代理幾乎恆真，會在大盤進入負 Gamma 體制時反覆推播強制轉入反向 ETF。開關設為 `True` 時才恢復下列行為（需對應反向 ETF 通過現貨技術動能檢驗：$\text{RSI}_{14} > 50$、站穩 10MA、日均成交額 $\ge \$5\text{M}$）：
      - 個股雙重確認破位（結構破位 + STO 封頂）：優先啟用 2x 反向（如 NVDA $\to$ `NVD`）。
      - 單一破位：採用 1x 反向（如 NVDA $\to$ `NVDD`）。
      - 大盤指數回退：QQQ $\to$ `SQQQ`，SPY $\to$ `SH`，SMH $\to$ `SOXS`，XLK $\to$ `TECS`。
-   - **第三優先（常規防禦）**：若反向動能未通過，轉入 `BOXX` 鎖定無風險利息。
 4. **`/stress_test` 現金赤字精算來源**：
    `MARGIN_DEFENSE` 判定式所複用的「掛單現金赤字」並非憑空推估，而是獨立指令 `/stress_test`（`cogs/unified_terminal/cog.py`）對帳戶所有 `GTC` 效期買單做的最壞情境精算：
    $$\text{Total Cash Deficit} = \sum_{\text{GTC BUY}} (\text{Limit Price} \times \text{Quantity})$$
@@ -196,8 +196,8 @@ stateDiagram-v2
     MACRO_TOP_ESCAPE_DEFENSE --> 保護性Put: 建議買入 SPY Put（不減碼）
 
     MARGIN_DEFENSE --> CASH現金: 存在現金赤字
-    MARGIN_DEFENSE --> 反向ETF: 動能確認通過 (2x/1x/指數)
-    MARGIN_DEFENSE --> BOXX無風險: 其他情境
+    MARGIN_DEFENSE --> 反向ETF: 已停用（_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED=False）
+    MARGIN_DEFENSE --> BOXX無風險: 無赤字（預設）
 
     TRANSITION_ENGINE --> 升級右側動能倉: 停損上移至保本點 + 授權 PYRAMID 加碼 (一次性)
 
@@ -233,6 +233,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `_COVERED_CALL_MIN_SHARES` | `100` | 賣出 1 口 Covered Call 之最低現貨股數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_EV_SPREAD_MIN_THRESHOLD` | `0.05` ($5\%$) | 多空候選挑選最低期望值差距 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED` | `False` | `MARGIN_DEFENSE` 反向 ETF 路由開關；關閉時無赤字一律轉入 `BOXX`（2026-11-12 停用） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD` | `1` | DTE $\le 1$ 強制結算平倉轉倉 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_HOLDING_DTE_LOCKOUT_THRESHOLD` | `7` | DTE $< 7$ 封鎖新開倉與轉倉部署 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT` | `0.50` ($50\%$) | 賣方權利金衰減達 50% 時 BTC 回補 50% | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
@@ -255,7 +256,7 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-1. **反向 ETF 交易流動性防呆**：
+1. **反向 ETF 交易流動性防呆**（路由已停用，以下僅於 `_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED = True` 時生效）：
    在 `MARGIN_DEFENSE` 路由至反向 ETF 前，必須調用 `confirm_inverse_hedge_spot_momentum()` 驗證日均成交額 $\ge \$5,000,000$ 且技術面偏多。任何流動性不足或歷史數據缺失一律 Fail-Closed 退回無風險的 `BOXX`，防止交易員被困在無量反向商品中。
 2. **末日合約結算與轉倉窗口**：
    當期權部位 $\text{DTE} \le 1$ 時，系統直接短路所有常規指標計算，跳過 15m 實體收盤等待，直接發出 `EXPIRATION_SETTLEMENT_ALERT`，並指示次月合約尋找窗口設定在 $21 \sim 45$ DTE，避免連鎖陷入連續末日合約耗損。
