@@ -487,6 +487,17 @@ def create_holdings_embed(
     # 不會自動套用生效，獨立列於表格外的提示區塊，避免與已實際生效的配置欄位混淆。
     target_alloc_suggestions: List[str] = []
 
+    # 第一輪：計算有報價列的絕對市值合計（配置佔比分母，與再平衡引擎同口徑），
+    # 以及市值取代成本後的預算分母調整量。
+    gross_priced = 0.0
+    cost_to_market_adj = 0.0
+    for h in sorted_holdings:
+        _p = _to_float_or_none(h.get("current_price"))
+        if _p is None or _p <= 0:
+            continue
+        gross_priced += abs(h["quantity"]) * _p
+        cost_to_market_adj += abs(h["quantity"]) * (_p - h["avg_cost"])
+
     for h in sorted_holdings:
         _curr_raw = _to_float_or_none(h.get("current_price"))
         price_missing = _curr_raw is None or _curr_raw <= 0
@@ -497,12 +508,16 @@ def create_holdings_embed(
             missing_quotes += 1
         else:
             pnl = (curr_p - h["avg_cost"]) * h["quantity"]
-            pnl_pct = (curr_p / h["avg_cost"] - 1) if h["avg_cost"] > 0 else 0.0
+            _basis = abs(h["quantity"]) * h["avg_cost"]
+            pnl_pct = pnl / _basis if h["avg_cost"] > 0 and _basis > 0 else 0.0
             total_pnl += pnl
-            total_value += curr_p * h["quantity"]
+            total_value += curr_p * abs(h["quantity"])
 
         sym = h["symbol"]
-        qty = f"{h['quantity']:,.0f}"
+        # 最多 4 位小數，去除尾端 0 與小數點（零股 0.5 不可被四捨五入成 0）
+        qty = f"{h['quantity']:,.4f}".rstrip("0").rstrip(".")
+        if qty in ("-0", ""):
+            qty = "0"
         cost = f"${h['avg_cost']:,.2f}"
         curr_p_fmt = "--" if price_missing else f"${curr_p:,.2f}"
 
@@ -520,11 +535,20 @@ def create_holdings_embed(
         # 目標配置比例時才附加顯示。
         asset_class_label = "CORE" if h.get("asset_class") == "CORE" else "SAT"
         max_alloc = h.get("max_allocation_pct")
-        alloc_str = (
-            f"{asset_class_label} {max_alloc * 100:.0f}%"
-            if max_alloc is not None
-            else asset_class_label
-        )
+        # 當前配置 = |市值| / Σ|有報價市值|；無報價以 -- 表示
+        if price_missing:
+            cur_alloc_str = "--"
+            over_cap = False
+        else:
+            cur_alloc = (
+                abs(h["quantity"]) * curr_p / gross_priced if gross_priced > 0 else 0.0
+            )
+            cur_alloc_str = f"{cur_alloc * 100:.0f}%"
+            over_cap = max_alloc is not None and cur_alloc > max_alloc
+        if max_alloc is not None:
+            alloc_str = f"{asset_class_label} {cur_alloc_str}/{max_alloc * 100:.0f}%"
+        else:
+            alloc_str = f"{asset_class_label} {cur_alloc_str}"
         target_alloc = h.get("target_allocation_pct")
         if target_alloc is not None:
             alloc_str += f"→{target_alloc * 100:.0f}%"
@@ -535,6 +559,8 @@ def create_holdings_embed(
                     f" • {h['symbol']}：建議目標配置 {suggested_target:.0f}%"
                     "（依當前總經市況自動評估，未生效，需自行以 /edit_holding 設定）"
                 )
+        if over_cap:
+            alloc_str = f"\u001b[0;33m{alloc_str}\u001b[0m"
         table_rows.append(
             [
                 sym,
@@ -565,7 +591,9 @@ def create_holdings_embed(
 
     _w, _z = _ANSI_W, _ANSI_0
     _pnl_c = "\u001b[1;32m" if total_pnl >= 0 else "\u001b[1;31m"
-    _ratio = (total_value / total_capital * 100) if total_capital > 0 else 0
+    # total_capital 為成本口徑：將有報價持倉的成本換成市值，分子分母同口徑
+    _budget_mv = total_capital + cost_to_market_adj
+    _ratio = (total_value / _budget_mv * 100) if _budget_mv > 0 else 0
     summary_rows = [
         f"💰 持倉總市值: {_w}${total_value:,.2f}{_z}",
         f"📈 累計未實現損益: {_pnl_c}${total_pnl:,.2f}{_z}",

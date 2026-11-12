@@ -111,6 +111,120 @@ def test_create_holdings_embed() -> None:
     assert "$160.00" in desc_field  # type: ignore
 
 
+def _holdings_text(rows: list[dict[str, Any]], capital: float) -> str:
+    embed = create_holdings_embed(rows, total_capital=capital)
+    return "\n".join(str(f.value) for f in embed.fields)
+
+
+def test_create_holdings_embed_field_math_short_pnl_pct() -> None:
+    """空單虧損百分比方向須與損益一致：-100 @100 現價 110 → -10.0% 紅色。"""
+    text = _holdings_text(
+        [
+            {
+                "symbol": "AAA",
+                "quantity": -100,
+                "avg_cost": 100.0,
+                "current_price": 110.0,
+            }
+        ],
+        10000.0,
+    )
+    assert "\u001b[0;31m-10.0%\u001b[0m" in text
+
+
+def test_create_holdings_embed_field_math_gross_total_value() -> None:
+    """總市值以絕對值加總，空單不與多單互相抵銷。"""
+    text = _holdings_text(
+        [
+            {
+                "symbol": "AAA",
+                "quantity": 10,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+            },
+            {
+                "symbol": "BBB",
+                "quantity": -5,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+            },
+        ],
+        10000.0,
+    )
+    assert "持倉總市值:" in text
+    assert "$1,500.00" in text
+
+
+def test_create_holdings_embed_field_math_budget_ratio_market_basis() -> None:
+    """預算比例分母以市值取代成本，全股票帳戶不會超過 100%。"""
+    text = _holdings_text(
+        [{"symbol": "AAA", "quantity": 100, "avg_cost": 100.0, "current_price": 150.0}],
+        10000.0,
+    )
+    assert "100.0%" in text
+    assert "150.0%" not in text
+
+
+def test_create_holdings_embed_field_math_fractional_qty() -> None:
+    """零股數量不可被四捨五入為 0。"""
+    text = _holdings_text(
+        [
+            {
+                "symbol": "AAA",
+                "quantity": 0.5,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+            },
+            {
+                "symbol": "BBB",
+                "quantity": 1234,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+            },
+        ],
+        10000.0,
+    )
+    assert "0.5" in text
+    assert "1,234" in text
+
+
+def test_create_holdings_embed_field_math_alloc_cell() -> None:
+    """配置欄顯示當前佔比/上限；超限以黃色標示；缺報價顯示 --。"""
+    text = _holdings_text(
+        [
+            {
+                "symbol": "BIG",
+                "quantity": 80,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+                "max_allocation_pct": 0.3,
+            },
+            {
+                "symbol": "SML",
+                "quantity": 20,
+                "avg_cost": 100.0,
+                "current_price": 100.0,
+                "max_allocation_pct": 0.3,
+            },
+            {
+                "symbol": "NOQ",
+                "quantity": 10,
+                "avg_cost": 100.0,
+                "current_price": None,
+                "max_allocation_pct": 0.3,
+            },
+        ],
+        10000.0,
+    )
+    big = next(ln for ln in text.splitlines() if "BIG" in ln)
+    sml = next(ln for ln in text.splitlines() if "SML" in ln)
+    noq = next(ln for ln in text.splitlines() if "NOQ" in ln)
+    assert "\u001b[0;33mSAT 80%/30%\u001b[0m" in big
+    assert "\u001b[0;33m" not in sml
+    assert "SAT 20%/30%" in sml
+    assert "--/30%" in noq
+
+
 def test_create_holdings_embed_shows_target_allocation_suggestion_hint() -> None:
     """target_allocation_pct 未設定但帶有 suggested_target_allocation_pct 時，
     應以獨立提示欄位顯示建議值（僅供參考，不進入配置表格本身，避免與已生效的

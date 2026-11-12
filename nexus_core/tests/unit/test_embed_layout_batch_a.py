@@ -243,7 +243,7 @@ def test_holdings_and_trades_summary_ansi() -> None:
     summ = next(f for f in h.fields if f.name == "🏁 財務摘要")
     assert (summ.value or "").startswith("```ansi") and not summ.inline
     t = _strip(summ.value)
-    assert "$1,100.00" in t and "$100.00" in t and "11.0%" in t
+    assert "$1,100.00" in t and "$100.00" in t and "10.9%" in t
 
     trade = {
         "id": 1, "symbol": "AAA", "opt_type": "put", "strike": 10,
