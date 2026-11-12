@@ -8,12 +8,13 @@
 本引擎只「算」：不寫 DB、不推播、不讀乾跑旗標（由呼叫端接線處理）。
 """
 
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from . import logger
-from ._shared import format_cash_impact
+from ._shared import format_cash_impact, sum_gtc_buy_commitment
 from .constants import _FALLBACK_TARGET_PRICE_ESTIMATE, CORE_DEFENSE_ETF_SYMBOLS
 from .models import RolloverInstruction, RolloverScenario
 from .regime_hedge_sizing import (
@@ -119,6 +120,17 @@ async def evaluate_regime_hedge_impl(
         p.market_value for p in positions if p.symbol in CASH_EQUIVALENT_SYMBOLS
     )
 
+    # 已被 GTC 買單承諾的現金不得再拿去買反向 ETF（現金帳戶無保證金）。
+    from database.orders import get_user_active_orders
+
+    try:
+        orders = get_user_active_orders(user_id)
+    except Exception as e:
+        logger.warning(f"[REGIME_HEDGE] 讀取 GTC 委託失敗，視為無承諾: {e}")
+        orders = []
+    committed = sum_gtc_buy_commitment(orders)
+    available = max(0.0, cash_equivalent_value - committed)
+
     longs = [
         a
         for a in spot_assets
@@ -136,7 +148,7 @@ async def evaluate_regime_hedge_impl(
         if not broken:
             return []
         prices = await _fetch_reference_prices(engine)
-        plan = build_tier1_plan(positions, nav, broken, cash_equivalent_value, prices)
+        plan = build_tier1_plan(positions, nav, broken, available, prices)
         if not plan.legs:
             return []
         tier = 1
@@ -203,7 +215,7 @@ async def evaluate_regime_hedge_impl(
             positions,
             nav,
             liquidate,
-            cash_equivalent_value,
+            available,
             prices,
             earnings_dates,
             today_et,
@@ -219,6 +231,19 @@ async def evaluate_regime_hedge_impl(
         )
         mode_label = "止損轉空" if plan.mode == "STOP_SHORT" else "對沖"
         strategy = f"第二級：{mode_label}（{_describe_legs(plan)}）"
+
+    if committed > 0:
+        # 被 GTC 買單承諾的現金等價物必須留在 BOXX 目標內，避免使用者誤賣。
+        reserved = cash_equivalent_value - available
+        note = (
+            f"已預留 GTC 買單承諾 ${committed:,.0f}（BOXX 目標已含此保留額），"
+            f"可動用現金等價物 ${available:,.0f}"
+        )
+        plan = replace(
+            plan,
+            boxx_target_value=plan.boxx_target_value + reserved,
+            notes=plan.notes + (note,),
+        )
 
     target_core = "/".join(leg.symbol for leg in plan.legs) or "BOXX"
     recovered = plan.liquidate_value + plan.sell_for_funding_value
