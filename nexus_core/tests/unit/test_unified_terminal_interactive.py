@@ -372,6 +372,42 @@ async def test_portfolio_hub_interactions(mock_interaction: Any, mock_bot: Any):
 
 
 @pytest.mark.asyncio
+async def test_portfolio_hub_holdings_parity(mock_interaction: Any, mock_bot: Any):  # type: ignore
+    """/dash 📦 應與 /list_holdings 共用列建構：CORE 分類與建倉日需顯示"""
+    view = PortfolioHubView(user_id=123, bot=mock_bot)
+
+    with patch(
+        "services.asset_manager.AssetManager.get_assets"
+    ) as mock_get_assets, patch(
+        "services.market_data_service.get_quote", new_callable=AsyncMock
+    ) as mock_quote, patch(
+        "database.user_settings.get_full_user_context"
+    ) as mock_user_ctx, patch(
+        "market_analysis.index_microstructure.suggest_target_allocation_pct",
+        new_callable=AsyncMock,
+        return_value=0.5,
+    ):
+        mock_asset = MagicMock()
+        mock_asset.symbol = "VOO"
+        mock_asset.metadata = {
+            "quantity": 10,
+            "avg_cost": 400,
+            "acquired_at": "2024-01-02",
+        }
+        mock_get_assets.return_value = [mock_asset]
+        mock_quote.return_value = {"c": 450}
+        mock_user_ctx.return_value = MagicMock(capital=100000)
+
+        await view.btn_holdings.callback(mock_interaction)
+
+        _, last_kwargs = mock_interaction.edit_original_response.call_args
+        embed = last_kwargs["embed"]
+        text = "".join(f.value for f in embed.fields)
+        assert "CORE" in text
+        assert "2024-01-02" in text
+
+
+@pytest.mark.asyncio
 async def test_pulse_hub_interactions(mock_interaction: Any, mock_bot: Any):  # type: ignore
     """測試 /market 指令互動與讀取狀態"""
     view = PulseHubView(user_id=123, bot=mock_bot)
