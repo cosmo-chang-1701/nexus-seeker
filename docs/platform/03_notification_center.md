@@ -27,7 +27,7 @@
 
 | 模組 | `risk_role` | 頻道 | 內容 |
 |---|---|---|---|
-| 🛡️ 左尾防護 | `LEFT_TAIL`（`preset_immune`） | `defense_margin_call` | 保證金防禦（`MARGIN_DEFENSE`）＋模擬保證金警戒（`MARGIN_API`，v081 前誤歸 `defense_portfolio_risk`） |
+| 🛡️ 左尾防護 | `LEFT_TAIL`（`preset_immune`） | `defense_margin_call` | 保證金防禦（`MARGIN_DEFENSE`）＋兩級體制避險（`REGIME_HEDGE`）＋模擬保證金警戒（`MARGIN_API`，v081 前誤歸 `defense_portfolio_risk`） |
 | | | `defense_fundamental_thesis` | SEC 財報護城河破滅 |
 | | | `defense_macro_tail_risk` | VIX ≥ 30／期限結構倒掛黑天鵝 |
 | | | `defense_event_calendar` | 48 小時內財報／經濟數據事件預警（`services/event_monitor.py`） |
@@ -60,7 +60,7 @@
 #### 2.2.2 動態轉倉指令的頻道對照
 `database/notification_channels.py::resolve_rollover_channel()` 取代 `portfolio_monitor.py` 過去的 if/elif 鏈，優先序：
 
-1. `MARGIN_DEFENSE` → `defense_margin_call`（帳戶生存等級，任何分層都不改道）
+1. `MARGIN_DEFENSE`／`REGIME_HEDGE` → `defense_margin_call`（帳戶生存等級，任何分層都不改道）
 2. 結構失效類 exit tier（`STRUCTURE_BREAK_EXIT_TIERS`：`SL_STRUCTURAL`、`SL_REGIME_FLIP`、`SL_WHALE_PUT`、`SL_WHALE_CALL`、`EXTREME_TICK_BREACH`、`IVR_FAST_EXIT`）→ `defense_structure_break`（含顧問模式的結構失效告知）
 3. 顧問模式其餘告知（目標區）→ `advisory_core_levels`
 4. Covered Call Overlay → `trim_covered_call`

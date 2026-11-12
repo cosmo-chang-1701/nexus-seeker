@@ -109,3 +109,23 @@ def test_structure_break_channel_is_left_tail_and_immune() -> None:
     assert c.risk_role == "LEFT_TAIL"
     assert c.preset_immune
     assert "SL_TRAILING_BREAKEVEN" not in STRUCTURE_BREAK_EXIT_TIERS
+
+
+def test_regime_hedge_routes_to_margin_call_channel() -> None:
+    """兩級體制避險與保證金防禦同為第 1 優先，帶干擾欄位也不改道。"""
+    assert ROLLOVER_SCENARIO_CHANNEL["REGIME_HEDGE"] == "defense_margin_call"
+    assert (
+        resolve_rollover_channel({"scenario": "REGIME_HEDGE", "action": "HEDGE_TIER1"})
+        == "defense_margin_call"
+    )
+    assert (
+        resolve_rollover_channel(
+            {
+                "scenario": "REGIME_HEDGE",
+                "action": "ADVISORY",
+                "exit_tier": "SL_STRUCTURAL",
+                "is_covered_call_overlay": True,
+            }
+        )
+        == "defense_margin_call"
+    )

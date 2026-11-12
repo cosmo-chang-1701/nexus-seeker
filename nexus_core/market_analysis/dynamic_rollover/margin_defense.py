@@ -6,16 +6,9 @@ from ._shared import (
     format_illiquidity_warning,
     resolve_current_value,
 )
-from .constants import (
-    _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED,
-    CORE_DEFENSE_ETF_SYMBOLS,
-)
-from .inverse_hedge import (
-    confirm_inverse_hedge_spot_momentum,
-    get_inverse_symbol,
-    select_inverse_leverage_tier,
-)
+from .constants import CORE_DEFENSE_ETF_SYMBOLS
 from .models import RolloverInstruction, RolloverScenario
+from .regime_hedge_sizing import CASH_EQUIVALENT_SYMBOLS
 
 
 class _MarginDefenseMixin:
@@ -66,8 +59,7 @@ class _MarginDefenseMixin:
         給出一致判定。
 
         回傳 (is_no_edge, is_structural_breakdown, is_whale_sto_block)：後兩者額外
-        暴露給呼叫端，供反向ETF槓桿層級選擇 (select_inverse_leverage_tier) 判斷此次
-        是單一條件觸發還是「雙重確認」的高信心度空頭情境。
+        暴露給呼叫端，供判斷此次是單一條件觸發還是「雙重確認」的高信心度空頭情境。
         """
         (
             is_structural_breakdown,
@@ -106,17 +98,16 @@ async def evaluate_margin_defense_impl(
     邏輯 (4): 槓桿與保證金防禦 (Leverage & Margin Defense)
     觸發條件: 大盤 Regime 進入 SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS
     (大盤宏觀風控紅線亮起：GEX Flip 實質跌破、做市商轉為負 Gamma 踩踏泥淖)，
-    且帳戶偵測到保證金壓力 (重用 /stress_test 的 GTC 現金赤字算法；
-    若無 GTC 買單造成赤字，退化為「SATELLITE 總市值 > 現金儲備」的保守代理)。
+    且「GTC 買單現金赤字 > 現金儲備＋現金等價物」(重用 /stress_test 的 GTC 現金赤字
+    算法；現金等價物＝BOXX/BIL/SHV/SGOV 等 0 Delta 標的，隨時可賣出補足買單資金)。
 
-    動作: 逐一檢查每檔 SATELLITE 持倉是否「結構性無勝率」(結構性破位 或 主力空頭封殺)。
-    無勝率者強制 100% 轉倉：有 GTC 現金赤字時轉 CASH，否則轉 BOXX 鎖定無風險利息 ——
-    因為大盤系統性風險發生時 VOO 本身亦會同向下跌，唯有真正的現金等價物 BOXX 才能
-    提供防禦；反向ETF路由由常數 _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED 控制，
-    預設關閉（2026-11-12 起，現金即空頭）；仍有勝率的持倉維持不動，不強制減倉。
+    此系統為現貨/純現金帳戶模型，沒有券商槓桿或維持保證金，低現金是 100% 持股的
+    常態而非壓力訊號；無 GTC 現金赤字時一律回傳 []（不再以「SATELLITE 總市值 >
+    現金儲備」代理誤報），無赤字下的大盤風險由兩級體制避險處理。
 
-    此系統為現貨/純現金紙上帳戶模型，沒有真實券商槓桿或維持保證金資料，
-    因此以 /stress_test 既有的現金緩衝算法作為保證金壓力代理指標。
+    動作: 有真實赤字時，逐一檢查每檔 SATELLITE 持倉是否「結構性無勝率」(結構性破位
+    或主力空頭封殺)，無勝率者強制 100% 清倉轉 CASH 補足現金缺口；現金等價物本身
+    不參與評估、不會出現在指令中；仍有勝率的持倉維持不動，不強制減倉。
 
     already_flagged_symbols: 已被 Scenario 3 (核心衛星再平衡) 以實際減碼/
     清倉指令標記過的標的集合 (HOLD 與位階告知卡不計入)，會被跳過以避免
@@ -157,30 +148,24 @@ async def evaluate_margin_defense_impl(
         return []
     buffer = user_ctx.cash_reserve if user_ctx else 0.0
 
-    if total_deficit > 0.0:
-        is_margin_critical = total_deficit > buffer
-        deficit_desc = (
-            f"GTC 買單現金赤字 ${total_deficit:,.0f} vs 現金儲備 ${buffer:,.0f}"
-        )
-    else:
-        # 退化代理：無 GTC 買單造成赤字時，以 SATELLITE 總市值 vs 現金儲備
-        # 作為「高波動衛星部位超過安全緩衝」的保守保證金壓力訊號。
-        # 取絕對值：這裡衡量的是「高波動衛星部位佔用了多少資本」，是量值。
-        # 帶號加總會讓空頭衛星部位**降低**測得的曝險，恰好在槓桿最高時抑制
-        # 保證金壓力訊號。
-        satellite_value = sum(
-            abs(float(a.get("current_value", 0.0)))
-            for a in portfolio_assets
-            if a.get("asset_class") == "SATELLITE"
-        )
-        is_margin_critical = satellite_value > buffer
-        deficit_desc = (
-            f"SATELLITE 部位總市值 ${satellite_value:,.0f} vs 現金儲備 ${buffer:,.0f} "
-            "(無 GTC 赤字，採退化代理)"
-        )
-
-    if not is_margin_critical:
+    # 現金帳戶沒有保證金：無 GTC 買單現金赤字 -> 無保證金壓力。
+    if total_deficit <= 0.0:
         return []
+
+    # 緩衝＝手填現金儲備＋現金等價物（BOXX 等 0 Delta，可隨時賣出）市值。
+    cash_reserve = float(user_ctx.cash_reserve) if user_ctx else 0.0
+    cash_equiv_value = sum(
+        abs(float(a.get("current_value", 0.0)))
+        for a in portfolio_assets
+        if str(a.get("symbol", "")).upper() in CASH_EQUIVALENT_SYMBOLS
+    )
+    buffer = cash_reserve + cash_equiv_value
+    if total_deficit <= buffer:
+        return []
+    deficit_desc = (
+        f"GTC 買單現金赤字 ${total_deficit:,.0f} vs 現金儲備＋現金等價物 "
+        f"${buffer:,.0f}（現金 ${cash_reserve:,.0f}＋BOXX 等 ${cash_equiv_value:,.0f}）"
+    )
 
     # --- 逐一檢查所有 SATELLITE 持倉是否結構性無勝率 ---
     instructions: List[RolloverInstruction] = []
@@ -201,6 +186,7 @@ async def evaluate_margin_defense_impl(
 
         if (
             asset.get("asset_class") != "SATELLITE"
+            or symbol in CASH_EQUIVALENT_SYMBOLS
             or symbol in CORE_DEFENSE_ETF_SYMBOLS
             or (symbol, asset_class) in flagged
             or quantity == 0
@@ -209,8 +195,8 @@ async def evaluate_margin_defense_impl(
 
         (
             is_no_edge,
-            is_structural_breakdown,
-            is_whale_sto_block,
+            _is_structural_breakdown,
+            _is_whale_sto_block,
         ) = await engine._evaluate_structural_no_edge(
             symbol=symbol,
             spot=float(asset.get("spot_price", 0.0)),
@@ -236,58 +222,14 @@ async def evaluate_margin_defense_impl(
         ) and quantity < 0
         sell_action = "BTC" if is_short_option else "STC"
 
-        has_actual_deficit = total_deficit > 0.0
-        if has_actual_deficit:
-            target_asset = "CASH"
-            buy_label = "保留現金（補足現金儲備，消除追繳風險）"
-            strategy_desc = f"{sell_action} 100% 部位以保留現金 (消除保證金追繳風險)"
-            # 用詞刻意採強制語氣（平倉/釋放/補足），與本情境 🚨 強制平倉的標題
-            # 危急等級一致，避免與 Scenario 2/3 建議性質的措辭混淆。
-            dest_reason = (
-                "強制平倉釋放資金保留為現金儲備，立即補足保證金缺口以消除追繳風險。"
-            )
-        else:
-            inverse_symbol: Optional[str] = None
-            use_inverse_hedge = False
-            # 開關關閉時完全不查反向ETF對照表、不抓動能行情，直接走 BOXX。
-            if _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED:
-                inverse_symbol = get_inverse_symbol(
-                    symbol,
-                    select_inverse_leverage_tier(
-                        is_structural_breakdown, is_whale_sto_block
-                    ),
-                )
-                if inverse_symbol:
-                    try:
-                        use_inverse_hedge = await confirm_inverse_hedge_spot_momentum(
-                            inverse_symbol
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"反向ETF現貨動能確認發生例外 ({inverse_symbol}): {e}"
-                        )
-
-            if use_inverse_hedge and inverse_symbol:
-                target_asset = inverse_symbol
-                buy_label = f"轉入反向ETF {inverse_symbol}（把握方向性對沖機會）"
-                strategy_desc = (
-                    f"{sell_action} 100% 轉倉至反向ETF {inverse_symbol} "
-                    "(系統性風險+結構性破位雙重確認)"
-                )
-                dest_reason = (
-                    "大盤宏觀風控紅線亮起且個股結構性破位已確認，"
-                    f"反向ETF {inverse_symbol} 自身現貨動能同步確認向上，"
-                    f"強制 {sell_action} 100% 部位轉倉至 {inverse_symbol} "
-                    "把握方向性對沖獲利機會。"
-                )
-            else:
-                target_asset = "BOXX"
-                buy_label = "轉入 BOXX（鎖定無風險利息）"
-                strategy_desc = f"{sell_action} 100% 轉倉 BOXX (鎖定無風險利息)"
-                dest_reason = (
-                    "大盤宏觀風控紅線亮起，VOO 亦會同向下跌無法提供防禦，"
-                    f"強制 {sell_action} 100% 部位轉倉至 BOXX 鎖定無風險利息。"
-                )
+        target_asset = "CASH"
+        buy_label = "保留現金（補足現金儲備，消除追繳風險）"
+        strategy_desc = f"{sell_action} 100% 部位以保留現金 (消除保證金追繳風險)"
+        # 用詞刻意採強制語氣（平倉/釋放/補足），與本情境 🚨 強制平倉的標題
+        # 危急等級一致，避免與 Scenario 2/3 建議性質的措辭混淆。
+        dest_reason = (
+            "強制平倉釋放資金保留為現金儲備，立即補足保證金缺口以消除追繳風險。"
+        )
 
         reason_text = (
             f"🚨 **槓桿與保證金防禦 (Leverage & Margin Defense)**\n"
@@ -339,13 +281,9 @@ async def evaluate_margin_defense_impl(
         recovered_cash = current_value * sell_ratio
         cash_impact = format_cash_impact(recovered_cash)
 
-        # 建議限價：僅在目標為 BOXX 等實際買入標的時才有意義（CASH 為單純平倉保留
-        # 現金，無買入委託，維持 None 讓呼叫端退回 "Market" 泛用字串）。
-        limit_price = (
-            await engine._resolve_target_reference_price(target_asset)
-            if target_asset != "CASH"
-            else None
-        )
+        # 目標恆為 CASH（單純平倉保留現金，無買入委託）：不提供建議限價，
+        # 讓呼叫端退回 "Market" 泛用字串。
+        limit_price = None
 
         instructions.append(
             {

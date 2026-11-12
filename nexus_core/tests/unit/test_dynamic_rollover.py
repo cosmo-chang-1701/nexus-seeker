@@ -1728,6 +1728,121 @@ async def test_evaluate_margin_defense_normal_regime_no_action(
     assert result == []
 
 
+# GTC 買單現金赤字 5,000 (500 * 10)：保證金防禦唯一的觸發來源
+_GTC_DEFICIT_ORDERS: list[dict[str, Any]] = [
+    {"validity": "GTC", "side": "BUY", "limit_price": 500.0, "quantity": 10.0}
+]
+
+_NO_EDGE_UOA: list[dict[str, Any]] = [
+    {
+        "type": "PUT",
+        "action": "BTO",
+        "ratio": 2.0,
+        "notional_value": 600_000.0,
+        "strike": 100.0,
+    }
+]
+
+
+def _no_edge_satellite(symbol: str, value: float) -> dict[str, Any]:
+    return {
+        "symbol": symbol,
+        "asset_class": "SATELLITE",
+        "current_value": value,
+        "quantity": 10.0,
+        "instrument_type": "SPOT",
+        "spot_price": 100.0,
+        "sqz_mom": -5.0,
+        "skew": -0.5,
+        "uoa": _NO_EDGE_UOA,
+    }
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SYSTEMIC_LIQUIDITY_CRISIS",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_margin_defense_no_gtc_deficit_returns_empty_despite_low_cash(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """現金帳戶低現金是 100% 持股常態：無 GTC 赤字時不得以市值代理誤報。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=32.0)
+    portfolio = [_no_edge_satellite("NVDA", 100_000.0)]
+    assert await engine.evaluate_margin_defense(1, portfolio) == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SYSTEMIC_LIQUIDITY_CRISIS",
+)
+@patch(
+    "database.orders.get_user_active_orders",
+    return_value=[
+        {"validity": "GTC", "side": "BUY", "limit_price": 500.0, "quantity": 10.0}
+    ],
+)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_margin_defense_boxx_counts_toward_buffer(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """GTC 赤字 5,000 < 現金 32 + BOXX 20,000 -> BOXX 算進緩衝，不觸發。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=32.0)
+    portfolio = [
+        _no_edge_satellite("NVDA", 5_000.0),
+        {
+            "symbol": "BOXX",
+            "asset_class": "SATELLITE",
+            "current_value": 20_000.0,
+            "quantity": 200.0,
+            "instrument_type": "SPOT",
+            "spot_price": 100.0,
+        },
+    ]
+    assert await engine.evaluate_margin_defense(1, portfolio) == []
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SYSTEMIC_LIQUIDITY_CRISIS",
+)
+@patch(
+    "database.orders.get_user_active_orders",
+    return_value=[
+        {"validity": "GTC", "side": "BUY", "limit_price": 500.0, "quantity": 100.0}
+    ],
+)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_margin_defense_real_deficit_routes_to_cash_skips_boxx(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """GTC 赤字 50,000 > 現金 32 + BOXX 20,000 -> 無勝率 SATELLITE 轉 CASH，BOXX 不出現。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=32.0)
+    boxx_no_edge = _no_edge_satellite("BOXX", 20_000.0)  # 即使訊號無勝率也須跳過
+    portfolio = [_no_edge_satellite("NVDA", 5_000.0), boxx_no_edge]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert [ins["symbol"] for ins in result] == ["NVDA"]
+    assert result[0]["target_core"] == "CASH"
+    assert result[0]["scenario"] == "MARGIN_DEFENSE"
+    assert "現金等價物" in result[0]["reason"]
+
+
 @pytest.mark.asyncio
 @patch(
     "market_analysis.index_microstructure.get_market_regime",
@@ -1758,22 +1873,16 @@ async def test_evaluate_margin_defense_critical_regime_no_margin_pressure(
 
 @pytest.mark.asyncio
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=False,
-)
-@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
+async def test_evaluate_margin_defense_triggers_cash_for_no_edge_holding(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     mock_ctx.return_value = MagicMock(cash_reserve=1000.0)  # 緩衝很小
@@ -1800,262 +1909,26 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
             ],
         },
     ]
-    # SATELLITE 總市值 5000 > 緩衝 1000 -> 保證金壓力觸發
-    # 反向ETF現貨動能未確認 (mock 回傳 False) -> 應退回既有 BOXX 行為
+    # GTC 買單現金赤字 5000 > 緩衝 1000 -> 保證金壓力觸發 -> 轉 CASH
     result = await engine.evaluate_margin_defense(1, portfolio)
     assert len(result) == 1
     assert result[0]["symbol"] == "NVDA"
     assert result[0]["sell_action"] == "STC"
     assert result[0]["action"] == "LIQUIDATE"
     assert result[0]["sell_ratio"] == 1.0
-    assert result[0]["target_core"] == "BOXX"
-    assert "BOXX" in (result[0]["buy_action_label"] or "")
+    assert result[0]["target_core"] == "CASH"
+    assert "保留現金" in (result[0]["buy_action_label"] or "")
     assert result[0]["is_manual_override_required"] is True
     assert result[0]["scenario"] == "MARGIN_DEFENSE"
 
 
 @pytest.mark.asyncio
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.get_inverse_symbol",
-)
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=True,
-)
-@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_margin_defense_defaults_to_boxx_when_inverse_hedge_disabled(
-    mock_ctx: MagicMock,
-    mock_orders: MagicMock,
-    mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
-    mock_get_inverse_symbol: MagicMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """開關預設關閉：即使反向ETF動能確認會通過，也一律轉入 BOXX 且不查反向ETF。"""
-    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "quantity": 10.0,
-            "instrument_type": "SPOT",
-            "spot_price": 100.0,
-            "sqz_mom": -5.0,
-            "skew": -0.5,
-            "put_wall": 0.0,
-            "gamma_flip": 0.0,
-            "uoa": [
-                {
-                    "type": "PUT",
-                    "action": "BTO",
-                    "ratio": 2.0,
-                    "notional_value": 600_000.0,
-                    "strike": 100.0,
-                }
-            ],
-        },
-    ]
-    result = await engine.evaluate_margin_defense(1, portfolio)
-    assert len(result) == 1
-    assert result[0]["target_core"] == "BOXX"
-    assert "BOXX" in (result[0]["buy_action_label"] or "")
-    mock_get_inverse_symbol.assert_not_called()
-    mock_inverse_confirm.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
-    True,
-)
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=True,
-)
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value="SHORT_GAMMA_CRITICAL",
-)
-@patch("database.orders.get_user_active_orders", return_value=[])
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_margin_defense_routes_to_1x_inverse_etf_on_single_confirmation(
-    mock_ctx: MagicMock,
-    mock_orders: MagicMock,
-    mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """僅單一條件觸發 (只有主力空頭封殺，結構性破位未觸發) -> 採用槓桿較低的 1x 商品。"""
-    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "quantity": 10.0,
-            "instrument_type": "SPOT",
-            "spot_price": 100.0,
-            "sqz_mom": -5.0,
-            "skew": -0.5,
-            "put_wall": 0.0,
-            "gamma_flip": 0.0,  # 結構性破位條件不觸發 (無有效 anchor_base)
-            # 觸發主力空頭封殺 (真實 UOA PUT BTO 大單判定)
-            "uoa": [
-                {
-                    "type": "PUT",
-                    "action": "BTO",
-                    "ratio": 2.0,
-                    "notional_value": 600_000.0,
-                    "strike": 100.0,
-                }
-            ],
-        },
-    ]
-    result = await engine.evaluate_margin_defense(1, portfolio)
-    assert len(result) == 1
-    assert result[0]["target_core"] == "NVDD"
-    assert "NVDD" in (result[0]["buy_action_label"] or "")
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
-    True,
-)
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=True,
-)
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value="SHORT_GAMMA_CRITICAL",
-)
-@patch("database.orders.get_user_active_orders", return_value=[])
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_margin_defense_routes_to_2x_inverse_etf_on_double_confirmation(
-    mock_ctx: MagicMock,
-    mock_orders: MagicMock,
-    mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """結構性破位 + 主力空頭封殺「雙重確認」-> 高信心度空頭情境，採用槓桿較高的 2x 商品。"""
-    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
-
-    portfolio = [
-        {
-            "symbol": "NVDA",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "quantity": 10.0,
-            "instrument_type": "SPOT",
-            "spot_price": 90.0,
-            "put_wall": 110.0,  # 現價跌破 put_wall -> 結構性破位 (OPTIONS/SPOT 皆觸發)
-            "gamma_flip": 110.0,
-            "atr_14": 2.0,
-            "price_15m_close": 90.0,
-            "sqz_mom": -5.0,
-            "skew": -0.5,
-            # 同時觸發主力空頭封殺 (真實 UOA PUT BTO 大單判定)
-            "uoa": [
-                {
-                    "type": "PUT",
-                    "action": "BTO",
-                    "ratio": 2.0,
-                    "notional_value": 600_000.0,
-                    "strike": 90.0,
-                }
-            ],
-        },
-    ]
-    with patch(
-        "market_analysis.dynamic_rollover.is_gamma_cliff_confirmed",
-        new_callable=AsyncMock,
-        return_value=True,
-    ):
-        result = await engine.evaluate_margin_defense(1, portfolio)
-    assert len(result) == 1
-    assert result[0]["target_core"] == "NVD"
-    assert "NVD" in (result[0]["buy_action_label"] or "")
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
-    True,
-)
-@patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=True,
-)
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value="SHORT_GAMMA_CRITICAL",
-)
-@patch("database.orders.get_user_active_orders", return_value=[])
-@patch("market_analysis.dynamic_rollover.get_full_user_context")
-async def test_evaluate_margin_defense_falls_back_to_sector_inverse_etf(
-    mock_ctx: MagicMock,
-    mock_orders: MagicMock,
-    mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
-    engine: DynamicRolloverEngine,
-) -> None:
-    """未收錄於 SINGLE_STOCK_INVERSE_MAP 的個股 (如 MU) 應依產業分類
-    (risk_engine.SECTOR_BENCHMARK_MAP: MU -> SMH) 回退至產業反向ETF (SOXS)。"""
-    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
-
-    portfolio = [
-        {
-            "symbol": "MU",
-            "asset_class": "SATELLITE",
-            "current_value": 5000.0,
-            "quantity": 10.0,
-            "instrument_type": "SPOT",
-            "spot_price": 100.0,
-            "sqz_mom": -5.0,
-            "skew": -0.5,
-            "put_wall": 0.0,
-            "gamma_flip": 0.0,
-            "uoa": [
-                {
-                    "type": "PUT",
-                    "action": "BTO",
-                    "ratio": 2.0,
-                    "notional_value": 600_000.0,
-                    "strike": 100.0,
-                }
-            ],
-        },
-    ]
-    result = await engine.evaluate_margin_defense(1, portfolio)
-    assert len(result) == 1
-    assert result[0]["target_core"] == "SOXS"
-
-
-@pytest.mark.asyncio
-@patch(
-    "market_analysis.index_microstructure.get_market_regime",
-    new_callable=AsyncMock,
-    return_value="SHORT_GAMMA_CRITICAL",
-)
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_margin_defense_holding_with_edge_left_untouched(
     mock_ctx: MagicMock,
@@ -2085,22 +1958,16 @@ async def test_evaluate_margin_defense_holding_with_edge_left_untouched(
 
 @pytest.mark.asyncio
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=False,
-)
-@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_margin_defense_checks_every_satellite_holding(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
@@ -2139,7 +2006,7 @@ async def test_evaluate_margin_defense_checks_every_satellite_holding(
     # 逐一檢查每檔 SATELLITE 持倉，而非只挑單一標的
     result = await engine.evaluate_margin_defense(1, portfolio)
     assert {ins["symbol"] for ins in result} == {"NVDA"}
-    assert result[0]["target_core"] == "BOXX"
+    assert result[0]["target_core"] == "CASH"
 
 
 @pytest.mark.asyncio
@@ -2407,7 +2274,7 @@ def test_core_defense_etf_symbols_unified_across_engine() -> None:
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_margin_defense_excludes_vxx_as_core(
     mock_ctx: MagicMock,
@@ -2969,7 +2836,7 @@ def test_net_against_existing_order_no_matching_order_is_noop(
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_margin_defense_skips_already_flagged_symbols(
     mock_ctx: MagicMock,
@@ -3052,11 +2919,6 @@ async def test_evaluate_margin_defense_warns_on_gtc_buy_conflict(
 
 @pytest.mark.asyncio
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=False,
-)
-@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
@@ -3065,7 +2927,6 @@ async def test_evaluate_margin_defense_warns_on_gtc_buy_conflict(
 async def test_evaluate_margin_defense_nets_against_existing_sell_order(
     mock_ctx: MagicMock,
     mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     """#5/#6: 既有 SELL 委託單已足額覆蓋建議賣出量時，降級為 HOLD 而非疊加下單"""
@@ -3094,6 +2955,7 @@ async def test_evaluate_margin_defense_nets_against_existing_sell_order(
     with patch(
         "database.orders.get_user_active_orders",
         return_value=[
+            *_GTC_DEFICIT_ORDERS,
             {
                 "id": 99,
                 "symbol": "NVDA",
@@ -3102,7 +2964,7 @@ async def test_evaluate_margin_defense_nets_against_existing_sell_order(
                 "quantity": 10.0,
                 "stop_price": 90.0,
                 "limit_price": 89.0,
-            }
+            },
         ],
     ):
         result = await engine.evaluate_margin_defense(1, portfolio)
@@ -3326,22 +3188,16 @@ async def test_check_satellite_rebalancing_liquidate_no_warning_when_bid_ask_abs
 
 @pytest.mark.asyncio
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=False,
-)
-@patch(
     "market_analysis.index_microstructure.get_market_regime",
     new_callable=AsyncMock,
     return_value="SHORT_GAMMA_CRITICAL",
 )
-@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
 @patch("market_analysis.dynamic_rollover.get_full_user_context")
 async def test_evaluate_margin_defense_warns_on_illiquid_option_spread(
     mock_ctx: MagicMock,
     mock_orders: MagicMock,
     mock_regime: AsyncMock,
-    mock_inverse_confirm: AsyncMock,
     engine: DynamicRolloverEngine,
 ) -> None:
     """#7: 保證金防禦強制清倉的期權部位若點差過寬，附加流動性警告文字。"""
