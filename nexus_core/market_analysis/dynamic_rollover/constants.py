@@ -184,6 +184,11 @@ _COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT: float = 0.80  # 達此衰減幅度全�
 _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO: float = 0.5  # 局部停利門檻的 BTC 比例
 
 # --- 邏輯 (4) 延伸：保證金防禦第三轉倉目的地 —— 反向ETF對照表 (inverse_hedge.py) ---
+# 反向ETF路由總開關：2026-11-12 使用者決定停用（現金即空頭；現金儲備極低使
+# 「SATELLITE 市值 > 現金儲備」的保證金壓力代理幾乎恆真）。False＝無赤字時一律轉入
+# BOXX；改為 True 才恢復原本的反向ETF路由（程式路徑保留不動）。
+_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED: bool = False
+
 # 個股直接映射清單：僅收錄使用者確認、具備官方單股反向ETF商品的標的，每檔標的視
 # 發行商實際推出的槓桿倍率收錄 "1x"/"2x" 其中一個或兩個 key。
 # ⚠️ 這類商品規模小、成交量薄，且發行商會不定期清算/下市/更名，本表僅為初始骨架，

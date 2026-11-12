@@ -6,7 +6,10 @@ from ._shared import (
     format_illiquidity_warning,
     resolve_current_value,
 )
-from .constants import CORE_DEFENSE_ETF_SYMBOLS
+from .constants import (
+    _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED,
+    CORE_DEFENSE_ETF_SYMBOLS,
+)
 from .inverse_hedge import (
     confirm_inverse_hedge_spot_momentum,
     get_inverse_symbol,
@@ -107,9 +110,10 @@ async def evaluate_margin_defense_impl(
     若無 GTC 買單造成赤字，退化為「SATELLITE 總市值 > 現金儲備」的保守代理)。
 
     動作: 逐一檢查每檔 SATELLITE 持倉是否「結構性無勝率」(結構性破位 或 主力空頭封殺)。
-    無勝率者強制 100% 轉倉至 BOXX 鎖定無風險利息 —— 因為大盤系統性風險發生時
-    VOO 本身亦會同向下跌，唯有真正的現金等價物 BOXX 才能提供防禦；
-    仍有勝率的持倉維持不動，不強制減倉。
+    無勝率者強制 100% 轉倉：有 GTC 現金赤字時轉 CASH，否則轉 BOXX 鎖定無風險利息 ——
+    因為大盤系統性風險發生時 VOO 本身亦會同向下跌，唯有真正的現金等價物 BOXX 才能
+    提供防禦；反向ETF路由由常數 _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED 控制，
+    預設關閉（2026-11-12 起，現金即空頭）；仍有勝率的持倉維持不動，不強制減倉。
 
     此系統為現貨/純現金紙上帳戶模型，沒有真實券商槓桿或維持保證金資料，
     因此以 /stress_test 既有的現金緩衝算法作為保證金壓力代理指標。
@@ -243,21 +247,25 @@ async def evaluate_margin_defense_impl(
                 "強制平倉釋放資金保留為現金儲備，立即補足保證金缺口以消除追繳風險。"
             )
         else:
-            inverse_symbol = get_inverse_symbol(
-                symbol,
-                select_inverse_leverage_tier(
-                    is_structural_breakdown, is_whale_sto_block
-                ),
-            )
+            inverse_symbol: Optional[str] = None
             use_inverse_hedge = False
-            if inverse_symbol:
-                try:
-                    use_inverse_hedge = await confirm_inverse_hedge_spot_momentum(
-                        inverse_symbol
-                    )
-                except Exception as e:
-                    logger.error(f"反向ETF現貨動能確認發生例外 ({inverse_symbol}): {e}")
-                    use_inverse_hedge = False
+            # 開關關閉時完全不查反向ETF對照表、不抓動能行情，直接走 BOXX。
+            if _MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED:
+                inverse_symbol = get_inverse_symbol(
+                    symbol,
+                    select_inverse_leverage_tier(
+                        is_structural_breakdown, is_whale_sto_block
+                    ),
+                )
+                if inverse_symbol:
+                    try:
+                        use_inverse_hedge = await confirm_inverse_hedge_spot_momentum(
+                            inverse_symbol
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"反向ETF現貨動能確認發生例外 ({inverse_symbol}): {e}"
+                        )
 
             if use_inverse_hedge and inverse_symbol:
                 target_asset = inverse_symbol

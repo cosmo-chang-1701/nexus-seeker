@@ -1816,6 +1816,68 @@ async def test_evaluate_margin_defense_triggers_boxx_for_no_edge_holding(
 
 @pytest.mark.asyncio
 @patch(
+    "market_analysis.dynamic_rollover.margin_defense.get_inverse_symbol",
+)
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
+    new_callable=AsyncMock,
+    return_value=True,
+)
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=[])
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_evaluate_margin_defense_defaults_to_boxx_when_inverse_hedge_disabled(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    mock_inverse_confirm: AsyncMock,
+    mock_get_inverse_symbol: MagicMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """開關預設關閉：即使反向ETF動能確認會通過，也一律轉入 BOXX 且不查反向ETF。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+
+    portfolio = [
+        {
+            "symbol": "NVDA",
+            "asset_class": "SATELLITE",
+            "current_value": 5000.0,
+            "quantity": 10.0,
+            "instrument_type": "SPOT",
+            "spot_price": 100.0,
+            "sqz_mom": -5.0,
+            "skew": -0.5,
+            "put_wall": 0.0,
+            "gamma_flip": 0.0,
+            "uoa": [
+                {
+                    "type": "PUT",
+                    "action": "BTO",
+                    "ratio": 2.0,
+                    "notional_value": 600_000.0,
+                    "strike": 100.0,
+                }
+            ],
+        },
+    ]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert len(result) == 1
+    assert result[0]["target_core"] == "BOXX"
+    assert "BOXX" in (result[0]["buy_action_label"] or "")
+    mock_get_inverse_symbol.assert_not_called()
+    mock_inverse_confirm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
+    True,
+)
+@patch(
     "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
     new_callable=AsyncMock,
     return_value=True,
@@ -1868,6 +1930,10 @@ async def test_evaluate_margin_defense_routes_to_1x_inverse_etf_on_single_confir
 
 
 @pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
+    True,
+)
 @patch(
     "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
     new_callable=AsyncMock,
@@ -1928,6 +1994,10 @@ async def test_evaluate_margin_defense_routes_to_2x_inverse_etf_on_double_confir
 
 
 @pytest.mark.asyncio
+@patch(
+    "market_analysis.dynamic_rollover.margin_defense._MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED",
+    True,
+)
 @patch(
     "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
     new_callable=AsyncMock,
