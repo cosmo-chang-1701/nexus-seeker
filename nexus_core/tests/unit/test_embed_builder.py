@@ -4966,9 +4966,9 @@ def test_create_stress_test_embed_ansi_layout() -> None:
         "is_critical": True,
         "total_deficit": 22500.0,
         "cash_reserve": 150.0,
-        "boxx_shares": 213.0,
-        "boxx_cash": 21000.0,
-        "net_deficit": -1350.0,
+        "cash_equiv_value": 20900.0,
+        "cash_equiv_detail": "BOXX 213 股",
+        "net_deficit": -1450.0,
         "gtc_buy_orders_count": 18,
     }
     embed_crit = create_stress_test_embed(critical_data)
@@ -4979,8 +4979,8 @@ def test_create_stress_test_embed_ansi_layout() -> None:
     assert "```ansi" in field_dict["📊 壓測摘要"]
     assert "$22,500.00" in field_dict["📊 壓測摘要"]
     assert (
-        "-$1350.00" in field_dict["📊 壓測摘要"]
-        or "-$1,350.00" in field_dict["📊 壓測摘要"]
+        "-$1450.00" in field_dict["📊 壓測摘要"]
+        or "-$1,450.00" in field_dict["📊 壓測摘要"]
     )
     assert "🔥 CRITICAL WARNING" in field_dict
     assert "```ansi" in field_dict["🔥 CRITICAL WARNING"]
@@ -4990,8 +4990,8 @@ def test_create_stress_test_embed_ansi_layout() -> None:
         "is_critical": False,
         "total_deficit": 5000.0,
         "cash_reserve": 10000.0,
-        "boxx_shares": 100.0,
-        "boxx_cash": 11600.0,
+        "cash_equiv_value": 11600.0,
+        "cash_equiv_detail": "BOXX 100 股",
         "net_deficit": 16600.0,
         "gtc_buy_orders_count": 4,
     }
@@ -5000,6 +5000,37 @@ def test_create_stress_test_embed_ansi_layout() -> None:
     field_dict_safe = {str(f.name): str(f.value or "") for f in embed_safe.fields}
     assert "✅ 系統安全狀態" in field_dict_safe
     assert "```ansi" in field_dict_safe["✅ 系統安全狀態"]
+
+    # 3. 文案不得殘留舊硬編碼；提領子句只在有資料時出現
+    for e in (embed_crit, embed_safe):
+        t = " ".join(f"{f.name} {f.value}" for f in e.fields)
+        assert "180 股" not in t
+        assert "13,000" not in t
+    assert "提領" not in field_dict["🔥 CRITICAL WARNING"]
+    assert "提領紅線" not in field_dict_safe["✅ 系統安全狀態"]
+
+    # 4. 有提領資料：critical 顯示日期與金額；過期加註
+    wd = create_stress_test_embed(
+        {**critical_data, "next_withdrawal": 10000.0,
+         "next_withdrawal_date": "2027-01-04"}
+    )  # fmt: skip
+    wd_text = " ".join(str(f.value) for f in wd.fields)
+    assert "2027-01-04" in wd_text and "$10,000" in wd_text
+    assert "跑道快照過期" not in wd_text
+    stale = create_stress_test_embed(
+        {**critical_data, "next_withdrawal": 10000.0,
+         "next_withdrawal_date": "2027-01-04", "next_withdrawal_stale": True}
+    )  # fmt: skip
+    assert "跑道快照過期" in " ".join(str(f.value) for f in stale.fields)
+
+    # 5. load_failed／缺市值 → 降級且不宣稱充裕
+    lf = create_stress_test_embed({**safe_data, "load_failed": True})
+    assert "[降級模式]" in (lf.title or "")
+    assert "充裕" not in " ".join(str(f.value) for f in lf.fields)
+    assert "讀取失敗" in " ".join(str(f.value) for f in lf.fields)
+    nv = create_stress_test_embed({**safe_data, "cash_equiv_value": None})
+    assert "[降級模式]" in (nv.title or "")
+    assert "充裕" not in " ".join(str(f.value) for f in nv.fields)
 
 
 def test_get_embed_length() -> None:

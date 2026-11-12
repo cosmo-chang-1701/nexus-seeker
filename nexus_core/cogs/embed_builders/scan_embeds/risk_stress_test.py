@@ -13,13 +13,25 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
 
     total_deficit = _to_float_or_none(results.get("total_deficit"))
     cash_reserve = _to_float_or_none(results.get("cash_reserve"))
-    boxx_shares = _to_float_or_none(results.get("boxx_shares"))
-    boxx_cash = _to_float_or_none(results.get("boxx_cash"))
+    equiv_value = _to_float_or_none(results.get("cash_equiv_value"))
+    equiv_detail = str(results.get("cash_equiv_detail") or "")
+    load_failed = results.get("load_failed") is True
+    withdrawal = _to_float_or_none(results.get("next_withdrawal"))
+    if withdrawal is not None and withdrawal <= 0:
+        withdrawal = None
+    withdrawal_date = results.get("next_withdrawal_date")
+    withdrawal_stale = results.get("next_withdrawal_stale") is True
     net_deficit = _to_float_or_none(results.get("net_deficit"))
     order_count = results.get("gtc_buy_orders_count")
 
     # 關鍵數值缺失時無法判定安全與否：降級顯示，且不得宣稱「充裕」
-    degraded = net_deficit is None or total_deficit is None or cash_reserve is None
+    degraded = (
+        load_failed
+        or net_deficit is None
+        or total_deficit is None
+        or cash_reserve is None
+        or equiv_value is None
+    )
     if degraded and not is_critical:
         color = discord.Color.default()
 
@@ -37,6 +49,9 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
         net_deficit_str = (
             f"-${abs(net_deficit):,.2f}" if net_deficit < 0 else f"${net_deficit:,.2f}"
         )
+    equiv_str = fmt_or_dash(equiv_value, ",.2f", prefix="$")
+    if equiv_detail:
+        equiv_str += f" ({equiv_detail})"
     order_count_str = "--" if order_count is None else str(order_count)
 
     summary_lines = [
@@ -44,8 +59,7 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
         f" ├─ 活躍 GTC 網格買單: \u001b[1;36m{order_count_str} 筆\u001b[0m",
         f" ├─ 100% 全數成交所需總美金 (Total Cash Deficit): \u001b[1;33m{fmt_or_dash(total_deficit, ',.2f', prefix='$')}\u001b[0m",
         f" ├─ 常規可用現金 (cash_reserve): \u001b[1;32m{fmt_or_dash(cash_reserve, ',.2f', prefix='$')}\u001b[0m",
-        f" ├─ BOXX 持倉股數: \u001b[1;36m{fmt_or_dash(boxx_shares, '.1f')} 股\u001b[0m (常規清算上限 180 股)",
-        f" ├─ BOXX 最大套現金額: \u001b[1;32m{fmt_or_dash(boxx_cash, ',.2f', prefix='$')}\u001b[0m",
+        f" ├─ 現金等價物 (BOXX/BIL/SHV/SGOV) 市值: \u001b[1;32m{equiv_str}\u001b[0m",
         f" └─ 壓測後淨赤字/淨值: {deficit_color}{net_deficit_str}\u001b[0m",
         "```",
     ]
@@ -55,12 +69,19 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
         inline=False,
     )
 
-    if is_critical:
+    withdrawal_clause = ""
+    if withdrawal is not None:
+        date_part = f"{withdrawal_date} " if withdrawal_date else ""
+        withdrawal_clause = f"，且危及 {date_part}預定提領 ${withdrawal:,.0f}！"
+        if withdrawal_stale:
+            withdrawal_clause += "（跑道快照過期）"
+
+    if is_critical and not load_failed:
         warning_lines = [
             "```ansi",
             " ├─ \u001b[1;31m警告：當前 GTC 網格單潛在赤字已大於可用流動性！\u001b[0m",
             " ├─ 在極端無差別踩踏情境下，若所有掛單 100% 全數成交，將會抽乾 BOXX 水壩",
-            f" ├─ 破壞 +{fmt_or_dash(cash_reserve, ',.0f', prefix='$')} 的安全常規現金水位，且危及 7 月底 $13,000 實體提領紅線！",
+            f" ├─ 破壞 +{fmt_or_dash(cash_reserve, ',.0f', prefix='$')} 的安全常規現金水位{withdrawal_clause or '！'}",
             " └─ 建議立即取消部分 GTC 掛單，或注入額外資金以維持安全邊際。",
             "```",
         ]
@@ -70,15 +91,21 @@ def create_stress_test_embed(results: dict) -> discord.Embed:
             inline=False,
         )
     elif degraded:
+        degraded_msg = (
+            "帳戶資料讀取失敗，無法判定。"
+            if load_failed
+            else "關鍵壓測數值缺失，無法判定壓測結果。"
+        )
         embed.add_field(
             name="⚠️ 資料不足",
-            value="```ansi\n └─ \u001b[1;33m關鍵壓測數值缺失，無法判定是否威脅提領紅線。\u001b[0m\n```",
+            value=f"```ansi\n └─ \u001b[1;33m{degraded_msg}\u001b[0m\n```",
             inline=False,
         )
     else:
+        safe_tail = "，未威脅到預定提領" if withdrawal is not None else ""
         safe_lines = [
             "```ansi",
-            " └─ \u001b[1;32m目前可用現金儲備與 BOXX 備用流動性充裕，足以覆蓋所有活躍 GTC 掛單全數成交之極端情境，未威脅到提領紅線。\u001b[0m",
+            f" └─ \u001b[1;32m目前可用現金儲備與 BOXX 備用流動性充裕，足以覆蓋所有活躍 GTC 掛單全數成交之極端情境{safe_tail}。\u001b[0m",
             "```",
         ]
         embed.add_field(
