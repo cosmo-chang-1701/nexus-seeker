@@ -329,17 +329,21 @@ async def _run_margin(failed: bool) -> list[Any]:
     ]
     with (
         patch(
-            "market_analysis.dynamic_rollover.margin_defense."
-            "confirm_inverse_hedge_spot_momentum",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
-        patch(
             "market_analysis.index_microstructure.get_market_regime",
             new_callable=AsyncMock,
             return_value="SHORT_GAMMA_CRITICAL",
         ),
-        patch("database.orders.get_user_active_orders", return_value=[]),
+        patch(
+            "database.orders.get_user_active_orders",
+            return_value=[
+                {
+                    "validity": "GTC",
+                    "side": "BUY",
+                    "limit_price": 500.0,
+                    "quantity": 10.0,
+                }
+            ],
+        ),
         patch(
             "market_analysis.dynamic_rollover.get_full_user_context",
             return_value=_ctx(failed, cash_reserve=1000.0),

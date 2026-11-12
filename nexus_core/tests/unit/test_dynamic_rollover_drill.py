@@ -145,12 +145,13 @@ async def test_drill_scenario_2c_nvda_structural_breakdown_retreat_to_voo(
     return_value=True,
 )
 @patch(
-    "market_analysis.dynamic_rollover.margin_defense.confirm_inverse_hedge_spot_momentum",
-    new_callable=AsyncMock,
-    return_value=False,
+    "database.orders.get_user_active_orders",
+    return_value=[
+        {"validity": "GTC", "side": "BUY", "limit_price": 500.0, "quantity": 10.0}
+    ],
 )
-async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_boxx(
-    mock_inverse_confirm: AsyncMock,
+async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_cash(
+    mock_orders: MagicMock,
     mock_cliff: AsyncMock,
     mock_user_ctx: MagicMock,
     mock_regime: AsyncMock,
@@ -159,7 +160,7 @@ async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_boxx(
     """
     子情境 2D：
     大盤觸發 SHORT_GAMMA_CRITICAL 負 Gamma 踩踏模式，且帳戶存在保證金赤字壓力。
-    NVDA 經檢查無邊際優勢 (No-Edge)，強制 100% 清倉並轉入純現金等價物 BOXX。
+    NVDA 經檢查無邊際優勢 (No-Edge)，強制 100% 清倉並轉入CASH 補足 GTC 買單現金赤字。
     """
     mock_user_ctx.return_value = MagicMock(
         has_margin_pressure=True,
@@ -197,9 +198,9 @@ async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_boxx(
     assert ins["symbol"] == "NVDA"
     assert ins["action"] == "LIQUIDATE"
     assert ins["sell_ratio"] == 1.0
-    assert ins["target_core"] == "BOXX"
+    assert ins["target_core"] == "CASH"
     assert ins["scenario"] == RolloverScenario.MARGIN_DEFENSE.value
-    assert ins["buy_action_label"] == "轉入 BOXX（鎖定無風險利息）"
+    assert ins["buy_action_label"] == "保留現金（補足現金儲備，消除追繳風險）"
 
     # 驗證 Embed 渲染 (紅色警戒)
     embed = create_dynamic_rollover_embed(
@@ -223,7 +224,6 @@ async def test_drill_scenario_2d_systemic_margin_defense_retreat_to_boxx(
     assert embed.title == "🚨 保證金防禦強制平倉: 槓桿與保證金防禦"
     assert embed.color == discord.Color.red()
     assert "SELL (賣出現貨)" in str(embed.fields[0].value)
-    assert "BOXX" in str(embed.fields[1].value)
-    assert "轉入 BOXX" in str(embed.fields[1].value)
+    assert "保留現金" in str(embed.fields[1].value)
     assert "到期日" not in str(embed.fields[2].value)
     assert "履約價" not in str(embed.fields[2].value)

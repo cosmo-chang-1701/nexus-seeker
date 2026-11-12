@@ -183,12 +183,7 @@ _COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT: float = 0.50  # 達此衰減幅度�
 _COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT: float = 0.80  # 達此衰減幅度全額停利
 _COVERED_CALL_PROFIT_LOCK_PARTIAL_RATIO: float = 0.5  # 局部停利門檻的 BTC 比例
 
-# --- 邏輯 (4) 延伸：保證金防禦第三轉倉目的地 —— 反向ETF對照表 (inverse_hedge.py) ---
-# 反向ETF路由總開關：2026-11-12 使用者決定停用（現金即空頭；現金儲備極低使
-# 「SATELLITE 市值 > 現金儲備」的保證金壓力代理幾乎恆真）。False＝無赤字時一律轉入
-# BOXX；改為 True 才恢復原本的反向ETF路由（程式路徑保留不動）。
-_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED: bool = False
-
+# --- 反向ETF對照表（opportunity_cost.py／calibration/universe.py 使用）---
 # 個股直接映射清單：僅收錄使用者確認、具備官方單股反向ETF商品的標的，每檔標的視
 # 發行商實際推出的槓桿倍率收錄 "1x"/"2x" 其中一個或兩個 key。
 # ⚠️ 這類商品規模小、成交量薄，且發行商會不定期清算/下市/更名，本表僅為初始骨架，
@@ -224,23 +219,6 @@ SECTOR_INVERSE_MAP: dict[str, str] = {
     "XLF": "FAZ",  # Direxion 每日3倍反向金融 ETF (-3x)
     "XLE": "ERY",  # Direxion 每日2倍反向能源 ETF (-2x)
 }
-
-# 個股槓桿倍率動態選擇門檻：is_structural_breakdown 與 is_whale_sto_block 「雙重
-# 確認」同時成立時，視為高信心度空頭情境，優先採用 "2x" 商品（若該標的有收錄）；
-# 僅單一條件成立時，採用槓桿較低的 "1x" 商品，降低槓桿反向ETP的波動耗損風險。
-_INVERSE_HEDGE_HIGH_CONVICTION_LEVERAGE_TIER: str = "2x"
-_INVERSE_HEDGE_DEFAULT_LEVERAGE_TIER: str = "1x"
-
-# 反向ETF現貨動能確認 (inverse_hedge.py::confirm_inverse_hedge_spot_momentum) 具名
-# 門檻：刻意不查詢選擇權鏈，僅用現貨技術面 (RSI + 短期均線 + 成交額流動性) 做最後
-# 一道確認，任何資料不足/例外一律 fail-closed 回傳 False，呼叫端退回既有 BOXX 行為。
-_INVERSE_HEDGE_HISTORY_PERIOD: str = "3mo"  # 取歷史日K的區間長度
-_INVERSE_HEDGE_MA_LOOKBACK: int = 10  # 短期均線回看天數
-_INVERSE_HEDGE_VOLUME_LOOKBACK_BARS: int = 20  # 平均成交額回看天數
-_INVERSE_HEDGE_RSI_BULLISH_THRESHOLD: float = 50.0  # RSI14 需高於此值視為動能偏多
-_INVERSE_HEDGE_MIN_ADV_USD: float = (
-    5_000_000.0  # 最低日均成交額門檻(美元)，避免推薦流動性過薄的反向ETF
-)
 
 # --- 微觀結構出場決策矩陣 (anti_washout.py 決策矩陣) 具名常數 ---
 # 取代舊版 Euphoria 90/10 二分獲利了結與 1.5x ATR Track 1 停損，Scenario 3
