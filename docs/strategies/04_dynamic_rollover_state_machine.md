@@ -8,13 +8,14 @@ Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）以**買入�
 1. `CORE_DEPLOYMENT`：僅保留 CORE 持倉的 Covered Call 增強（原「超額資金部署」的 BOXX 防禦與機會分支已刪除）。
 2. ~~`OPPORTUNITY_COST`~~：**已刪除**（機會成本動能換股）；其進場六重鐵律函式保留給 `SHORT_ENTRY` 與 `SATELLITE_REBALANCE` 的 TP 輪動目標挑選使用。
 3. `SATELLITE_REBALANCE`：衛星部位微觀結構出場與超額風險修剪。
-4. `MARGIN_DEFENSE`：極端系統性危機下的保證金防禦與反向對沖。
+4. `MARGIN_DEFENSE`：極端系統性危機下，真實 GTC 現金赤字超過現金緩衝時的保證金防禦（清倉轉 `CASH`）；不再建議反向 ETF。
 5. `COVERED_CALL_PROFIT_LOCK`：期權賣方時間價值階梯停利與末日指派防衛。
 6. `MACRO_TOP_ESCAPE_DEFENSE`：宏觀逃頂前瞻防禦，僅建議買入 SPY 保護性 Put，不減碼、不轉入 BOXX。
 7. `FUNDAMENTAL_BROKEN`：基本面護城河破滅**告知**（不附清倉指令與按鈕）。
 8. `TRANSITION_ENGINE`：動態調整狀態切換引擎（左側轉右側演化）。
 9. `SHORT_ENTRY`：獨立的做空進場訊號（做空六重鐵律確認後，自帶進場／停損／目標與倉位）。
 10. `PYRAMID_ADD`：右側獲利部位順勢金字塔加碼（可重複觸發，與情境八的一次性 `OPEN_PYRAMID` 觸發源不同）。
+11. `REGIME_HEDGE`：兩級體制避險（組合層級指令，`symbol="PORTFOLIO"`）；第一級 NORMAL 盤 PSQ 局部對沖（預設乾跑）、第二級大盤危機清倉＋SQQQ／SOXS 對沖或止損轉空，見 §2.12。
 
 ⚠️ **進場確認帶方向**：進場六重鐵律回傳 `EntryConfirmation(is_confirmed, reason, direction, …)`。`direction == "SHORT"` 的確認**永遠不會**進入任何買進候選流程；做空確認僅由 `SHORT_ENTRY` 處理。
 
@@ -43,18 +44,15 @@ $$
 超額部分發出 `REDUCE` 減碼指令。
 
 ### 2.4 情境四：槓桿與保證金防禦 (`MARGIN_DEFENSE`)
-1. **雙重危機觸發條件**：
+本系統為**現金帳戶模型**：沒有券商融資或維持保證金，100% 持股下現金趨近零屬常態，而非壓力訊號。因此「衛星市值 $>$ 現金儲備」這類代理判定已刪除，只有**真實的 GTC 掛單現金赤字**才算保證金壓力。
+1. **觸發條件（兩者同時成立）**：
    - 大盤處於 `SHORT_GAMMA_CRITICAL` 或 `SYSTEMIC_LIQUIDITY_CRISIS`。
-   - 帳戶面臨保證金壓力（掛單現金赤字 $\text{Deficit} > 0$ 或衛星市值 $>$ 現金儲備）。
+   - 所有 `GTC` 買單的現金赤字 $\text{Total Cash Deficit} >$ 緩衝，其中緩衝 $=$ 現金儲備 $+$ 現金等價物（`BOXX`／`BIL`／`SHV`／`SGOV`，$\Delta = 0$，可隨時賣出補足買單資金）。
+   無赤字（或赤字未超過緩衝）時一律不產生指令，無赤字下的大盤風險改由 §2.12 兩級體制避險處理。帳戶資料讀取失敗（`load_failed`）時 fail-closed 略過，避免現金佔位 0 造成假警報。
 2. **清倉動作**：
-   對所有結構破位或主力封殺之脆弱持倉執行 100% `LIQUIDATE`。
-3. **轉倉目的地路由（二階）**：
-   - **第一優先（現金赤字）**：轉入 `CASH`，徹底解除券商追繳風險。
-   - **第二優先（常規防禦）**：若無赤字，一律轉入 `BOXX` 鎖定無風險利息。
-   - **反向 ETF 路由（已停用）**：`_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED = False`（2026-11-12），保留程式供日後恢復。停用原因：使用者原則為「現金即空頭」，且現金儲備極低時，「衛星市值 $>$ 現金儲備」的保證金壓力代理幾乎恆真，會在大盤進入負 Gamma 體制時反覆推播強制轉入反向 ETF。開關設為 `True` 時才恢復下列行為（需對應反向 ETF 通過現貨技術動能檢驗：$\text{RSI}_{14} > 50$、站穩 10MA、日均成交額 $\ge \$5\text{M}$）：
-     - 個股雙重確認破位（結構破位 + STO 封頂）：優先啟用 2x 反向（如 NVDA $\to$ `NVD`）。
-     - 單一破位：採用 1x 反向（如 NVDA $\to$ `NVDD`）。
-     - 大盤指數回退：QQQ $\to$ `SQQQ`，SPY $\to$ `SH`，SMH $\to$ `SOXS`，XLK $\to$ `TECS`。
+   對所有結構破位或主力封殺之脆弱 `SATELLITE` 持倉執行 100% `LIQUIDATE`；現金等價物本身不參與評估，仍有勝率的持倉維持不動。
+3. **轉倉目的地**：恆為 `CASH`，補足現金缺口、解除掛單資金不足風險；不買入任何反向 ETF，也不轉入 `BOXX`。
+   本輪若已有非 `HOLD` 的 `MARGIN_DEFENSE` 指令，`portfolio_monitor` 不再評估 `REGIME_HEDGE`（真實現金赤字時不該同時建議買反向 ETF）。
 4. **`/stress_test` 現金赤字精算來源**：
    `MARGIN_DEFENSE` 判定式所複用的「掛單現金赤字」並非憑空推估，而是獨立指令 `/stress_test`（`cogs/unified_terminal/cog.py`）對帳戶所有 `GTC` 效期買單做的最壞情境精算：
    $$\text{Total Cash Deficit} = \sum_{\text{GTC BUY}} (\text{Limit Price} \times \text{Quantity})$$
@@ -171,6 +169,25 @@ $$
 
 **狀態延後提交**：狀態刻意不在引擎內落地——沿用 `transition_engine.py` 既有設計，指令附帶 `dynamic_state_patch = {"pyramid_count": count+1, "last_pyramid_at": <ISO8601 UTC>}` 與 `asset_id`，由 `portfolio_monitor.py` 派發迴圈在確認送達後才呼叫 `set_asset_dynamic_state()` 提交，避免通知開關／dedup／`PYRAMID_ADD_DRY_RUN`（預設 `true`）任一道閘門抑制推播時，加碼額度永久燒掉。
 
+### 2.12 情境十一：兩級體制避險 (`REGIME_HEDGE`)
+取代原 `MARGIN_DEFENSE` 的反向 ETF 路由。引擎每輪至多產生一筆**組合層級**指令（`symbol="PORTFOLIO"`，`action` 為 `HEDGE_TIER1`／`HEDGE_TIER2`），不對應單一標的，故不附一鍵執行按鈕。帳戶為現金帳戶、零融資：多頭現貨市值＋反向 ETF 市值＋現金等價物 $\le$ NAV；買反向 ETF 先用現金等價物，不足才賣多頭現貨。
+1. **觸發與分級**：
+   - **第一級**：大盤 `NORMAL` 且持股現價跌破 PutWall → 買入 `PSQ`（$-1\times$）局部對沖，佔 NAV $10\% \sim 30\%$；**封鎖 SQQQ／SOXS**。第一級未經回測，`REGIME_HEDGE_TIER1_DRY_RUN` 預設 `true`，只寫去重鍵與 log、不推播，累積前向紀錄後由人工決定翻轉。
+   - **第二級**：大盤 `SHORT_GAMMA_CRITICAL` 或 `SYSTEMIC_LIQUIDITY_CRISIS` → 結構無勝率之 `SATELLITE` 持倉清倉，並建立 -3x 反向 ETF。第二級不受乾跑旗標影響。
+2. **板塊配比**：半導體標的 $\to$ `SOXS`，其餘 $\to$ `SQQQ`。
+3. **財報隔離**：持股財報日距今 $0 \sim 2$ 天時，受影響板塊的 -3x 腿 $\times 0.5$，削減部分轉入 `BOXX`。
+4. **等效淨 Delta**：乘數為個股 $+1$、`BOXX` $0$、`PSQ` $-1$、`SQQQ`／`SOXS` $-3$；
+   $$\text{Net Delta \%} = \frac{\sum_i m_i \times \text{Value}_i}{\text{NAV}} \times 100$$
+   守門區間 $-120\% \sim +145\%$：第二級反向部位會縮減至等效淨 Delta 不低於 $-120\%$；計畫仍超出區間時，卡片標示「⚠️ 超出守門區間」（僅警示，不擋指令）。
+5. **模式**：
+   - **對沖模式**（清倉後仍有多頭）：目標淨 Delta $-10\%$（可接受區間 $0 \sim -20\%$）。
+   - **止損轉空**（剩餘多頭低於 NAV 1%）：SQQQ＋SOXS 合計 $\le 40\%$ NAV（$= -120\%$ 淨 Delta），其餘轉 `BOXX`。
+6. **開盤預警**：開盤後 30 分鐘內或盤外，GEX／OI 為前一交易日快取，只發「預警觀察」版（`is_preliminary=True`，不列股數與觸發價）；30 分鐘後才發確定版。
+7. **總經事件凍結**：重大事件（FOMC／利率決策、CPI、NFP／非農就業、PCE 等）前 `MACRO_FREEZE_LOOKAHEAD_HOURS = 8` 小時內，凍結新建 -3x 反向 ETF；總經日曆未知或讀取失敗一律 fail-closed 視為凍結。
+8. **停損單**：一律 `STOP MARKET`（PSQ $-3.5\%$、SQQQ／SOXS $-7\%$），**禁用 `STOP_LIMIT`**（-3x 標的跳空時限價停損單可能不成交）。
+9. **派送與去重**：本輪有非 `HOLD` 的 `MARGIN_DEFENSE` 時不評估；其 `hedge_plan.liquidate_symbols` 併入逃頂防禦的 `already_flagged`。推播走 `defense_margin_call`，去重鍵附加 `_T{tier}_{mode}_{PRELIM|FINAL}`，使同日預警版與確定版各發一次、第二級由 `HEDGE` 轉 `STOP_SHORT` 也會再發。第二級進行中，`SHORT_ENTRY` 以 `suppress_reason="REGIME_HEDGE"` 抑制。
+10. **未回測聲明**：兩級體制避險的比例、區間與停損距離皆未經回測校準；具體公式以 `regime_hedge_sizing.py` 實作為準。
+
 ---
 
 ## 3. 決策邏輯與狀態機 / 流程圖
@@ -183,7 +200,8 @@ stateDiagram-v2
 
     投資組合資產評估 --> CORE_DEPLOYMENT: CORE 持倉 >= 100 股且上方封頂
     投資組合資產評估 --> SATELLITE_REBALANCE: SATELLITE 例行微觀結構出場/超額
-    投資組合資產評估 --> MARGIN_DEFENSE: 大盤負 Gamma 危機 + 保證金壓力
+    投資組合資產評估 --> MARGIN_DEFENSE: 大盤負 Gamma 危機 + GTC 現金赤字 > 現金儲備＋現金等價物
+    投資組合資產評估 --> REGIME_HEDGE: NORMAL 持股跌破 PutWall（第一級）或大盤危機（第二級）；本輪無 MARGIN_DEFENSE
     投資組合資產評估 --> COVERED_CALL_PROFIT_LOCK: 賣方期權時間價值衰減 >= 50%
     投資組合資產評估 --> MACRO_TOP_ESCAPE_DEFENSE: 宏觀逃頂評分達 WATCH 以上
     投資組合資產評估 --> FUNDAMENTAL_BROKEN: 基本面護城河破滅分析確認（僅告知）
@@ -195,20 +213,23 @@ stateDiagram-v2
 
     MACRO_TOP_ESCAPE_DEFENSE --> 保護性Put: 建議買入 SPY Put（不減碼）
 
-    MARGIN_DEFENSE --> CASH現金: 存在現金赤字
-    MARGIN_DEFENSE --> 反向ETF: 已停用（_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED=False）
-    MARGIN_DEFENSE --> BOXX無風險: 無赤字（預設）
+    MARGIN_DEFENSE --> CASH現金: 清倉結構無勝率持倉（目標恆為 CASH）
+
+    REGIME_HEDGE --> 第一級PSQ: NORMAL + 跌破 PutWall（預設乾跑）
+    REGIME_HEDGE --> 第二級: SHORT_GAMMA_CRITICAL / SYSTEMIC_LIQUIDITY_CRISIS
+    第二級 --> 對沖模式: 仍有多頭 → 淨 Delta 目標 -10%
+    第二級 --> 止損轉空: 多頭清空 → SQQQ+SOXS <= 40% NAV
 
     TRANSITION_ENGINE --> 升級右側動能倉: 停損上移至保本點 + 授權 PYRAMID 加碼 (一次性)
 
-    SHORT_ENTRY --> 抑制: 本週期有 MARGIN_DEFENSE 或 VIX >= 35
+    SHORT_ENTRY --> 抑制: 本週期有 MARGIN_DEFENSE、第二級 REGIME_HEDGE 或 VIX >= 35
     SHORT_ENTRY --> 做空訊號: 價位合法且倉位 >= 1 股 (每週期至多 1 筆)
 
     PYRAMID_ADD --> 抑制2["抑制: 逃頂 tier != NORMAL 或已達加碼上限/冷卻中"]
     PYRAMID_ADD --> 加碼訊號: 八項條件皆通過 (可重複觸發至 2 次)
 ```
 
-派送順序（`portfolio_monitor.monitor_real_portfolio_task`）：`SATELLITE_REBALANCE`（含 `TRANSITION_ENGINE` 與 `PYRAMID_ADD` 的per-asset 迴圈內評估）→ `CORE_DEPLOYMENT`（Covered Call Overlay）→ `MARGIN_DEFENSE` → `MACRO_TOP_ESCAPE_DEFENSE` → 賣方停利 → `SHORT_ENTRY`。`SHORT_ENTRY` 走 `alpha_market_signals` 通知頻道與專屬 embed（不掛 `RolloverActionView`，該按鈕試算的是 BUY 股數），受 `SHORT_ENTRY_DRY_RUN` 閘門控制；`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 同走 `defense_option_rollover` 通知頻道，受 `PYRAMID_ADD_DRY_RUN`（預設 `true`）閘門控制。另有一道**跨情境**閘門：由 Regime III-B（右側趨勢延續態，見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §1）確認出的指令受 `REGIME_III_B_DRY_RUN`（預設 `true`）抑制，該閘門依 `instruction["entry_regime"]` 判斷而非 `scenario`。
+派送順序（`portfolio_monitor.monitor_real_portfolio_task`）：`SATELLITE_REBALANCE`（含 `TRANSITION_ENGINE` 與 `PYRAMID_ADD` 的per-asset 迴圈內評估）→ `CORE_DEPLOYMENT`（Covered Call Overlay）→ `MARGIN_DEFENSE` → `REGIME_HEDGE`（僅在本輪無非 `HOLD` 的 `MARGIN_DEFENSE` 時評估；其第二級要清倉的標的併入後續逃頂防禦的 `already_flagged`）→ `MACRO_TOP_ESCAPE_DEFENSE` → 賣方停利 → `SHORT_ENTRY`。`SHORT_ENTRY` 走 `alpha_market_signals` 通知頻道與專屬 embed（不掛 `RolloverActionView`，該按鈕試算的是 BUY 股數），受 `SHORT_ENTRY_DRY_RUN` 閘門控制；`REGIME_HEDGE` 走 `defense_margin_call`（左尾防護）頻道與專屬 embed（`create_regime_hedge_embed`，不掛互動按鈕），第一級受 `REGIME_HEDGE_TIER1_DRY_RUN`（預設 `true`）閘門控制、第二級照常推播；`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 同走 `defense_option_rollover` 通知頻道，受 `PYRAMID_ADD_DRY_RUN`（預設 `true`）閘門控制。另有一道**跨情境**閘門：由 Regime III-B（右側趨勢延續態，見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §1）確認出的指令受 `REGIME_III_B_DRY_RUN`（預設 `true`）抑制，該閘門依 `instruction["entry_regime"]` 判斷而非 `scenario`。
 
 ### 3.2 DTE 三態狀態機決策階梯
 
@@ -233,7 +254,14 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `_COVERED_CALL_MIN_SHARES` | `100` | 賣出 1 口 Covered Call 之最低現貨股數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_EV_SPREAD_MIN_THRESHOLD` | `0.05` ($5\%$) | 多空候選挑選最低期望值差距 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED` | `False` | `MARGIN_DEFENSE` 反向 ETF 路由開關；關閉時無赤字一律轉入 `BOXX`（2026-11-12 停用） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `STOP_SHORT_MAX_INVERSE_PCT` | `40.0` (% NAV) | 止損轉空時 SQQQ＋SOXS 合計上限（$= -120\%$ 淨 Delta），其餘轉 `BOXX` | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `TIER1_PSQ_MIN_PCT` / `TIER1_PSQ_MAX_PCT` | `10.0` / `30.0` (% NAV) | 第一級 PSQ 佔 NAV 區間 | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `NET_DELTA_FLOOR_PCT` / `NET_DELTA_CEILING_PCT` | `-120.0` / `145.0` (% NAV) | 等效淨 Delta 守門區間（第二級縮減 -3x 腿至不低於下限；超出僅於卡片警示） | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `HEDGE_MODE_TARGET_NET_DELTA_PCT` | `-10.0` (% NAV；區間 $0 \sim -20$) | 第二級對沖模式目標淨 Delta | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `EARNINGS_ISOLATION_DAYS` / `EARNINGS_ISOLATION_WEIGHT_FACTOR` | `2` 天 / `0.5` | 財報日距今 0–2 天，受影響板塊 -3x 腿 $\times 0.5$，削減部分轉 `BOXX` | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `STOP_MARKET_PCT` | PSQ `3.5`／SQQQ `7.0`／SOXS `7.0` (%) | 各反向 ETF 的 STOP MARKET 距離（禁用 STOP_LIMIT） | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
+| `MACRO_FREEZE_LOOKAHEAD_HOURS` | `8.0` | 重大總經事件前 8 小時內凍結新建 -3x 反向 ETF | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_timing.py` |
+| `REGIME_HEDGE_TIER1_DRY_RUN` | `true`（環境變數，預設） | 第一級乾跑：只寫去重鍵與 log、不推播；第二級不受影響 | `nexus_core/config.py` |
 | `_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD` | `1` | DTE $\le 1$ 強制結算平倉轉倉 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_HOLDING_DTE_LOCKOUT_THRESHOLD` | `7` | DTE $< 7$ 封鎖新開倉與轉倉部署 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT` | `0.50` ($50\%$) | 賣方權利金衰減達 50% 時 BTC 回補 50% | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
@@ -256,8 +284,7 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-1. **反向 ETF 交易流動性防呆**（路由已停用，以下僅於 `_MARGIN_DEFENSE_INVERSE_HEDGE_ENABLED = True` 時生效）：
-   在 `MARGIN_DEFENSE` 路由至反向 ETF 前，必須調用 `confirm_inverse_hedge_spot_momentum()` 驗證日均成交額 $\ge \$5,000,000$ 且技術面偏多。任何流動性不足或歷史數據缺失一律 Fail-Closed 退回無風險的 `BOXX`，防止交易員被困在無量反向商品中。
+1. **反向 ETF 僅由兩級體制避險建議**：`MARGIN_DEFENSE` 不再路由至反向 ETF；`REGIME_HEDGE` 的第一級只允許 PSQ（封鎖 SQQQ／SOXS），-3x 反向 ETF 僅限第二級，且受總經事件凍結約束，且第二級反向部位受淨 Delta 守門區間縮減（§2.12）。取不到參考價時股數待確認，不以備援估計值下單。
 2. **末日合約結算與轉倉窗口**：
    當期權部位 $\text{DTE} \le 1$ 時，系統直接短路所有常規指標計算，跳過 15m 實體收盤等待，直接發出 `EXPIRATION_SETTLEMENT_ALERT`，並指示次月合約尋找窗口設定在 $21 \sim 45$ DTE，避免連鎖陷入連續末日合約耗損。
 3. **做空確認的下游隔離**：`direction == "SHORT"` 的 `EntryConfirmation` 不得進入任何買進候選流程；做空只走 `SHORT_ENTRY`（`_find_best_short_target`）。
@@ -283,7 +310,7 @@ flowchart TD
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/dynamic_rollover/models.py`：`RolloverScenario`, `RolloverInstruction`
-- `nexus_core/market_analysis/dynamic_rollover/constants.py`：轉倉決策常數、反向 ETF 映射字典
+- `nexus_core/market_analysis/dynamic_rollover/constants.py`：轉倉決策常數
 - `nexus_core/market_analysis/dynamic_rollover/core_deployment.py`：`evaluate_covered_call_overlay()`
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：進場六重鐵律條件函式與 `_find_best_rollover_target`（情境二本體已刪除，僅保留給 `SHORT_ENTRY`／TP 輪動目標使用）
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`check_satellite_rebalancing()`
@@ -292,7 +319,10 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/macro_top_escape_defense.py`：`evaluate_macro_top_escape_defense()`
 - `nexus_core/market_analysis/dynamic_rollover/fundamental_thesis.py`：`analyze_fundamental_thesis()`
 - `nexus_core/market_analysis/dynamic_rollover/transition_engine.py`：`evaluate_transition_for_position()`
-- `nexus_core/market_analysis/dynamic_rollover/inverse_hedge.py`：`resolve_inverse_hedge_target()`, `confirm_inverse_hedge_spot_momentum()`
+- `nexus_core/market_analysis/dynamic_rollover/regime_hedge.py`：`evaluate_regime_hedge_impl()`（情境十一，兩級體制避險）
+- `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py`：避險部位求解（純計算，等效淨 Delta、守門區間、STOP MARKET）
+- `nexus_core/market_analysis/dynamic_rollover/regime_hedge_timing.py`：開盤預警窗口、財報日與總經事件凍結
+- `nexus_core/cogs/embed_builders/regime_hedge_embeds.py`：`create_regime_hedge_embed()`
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`evaluate_option_dte_tier()`
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`evaluate_short_entry_opportunity()`（情境九）
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：做空價位與倉位

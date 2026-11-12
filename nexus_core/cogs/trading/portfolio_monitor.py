@@ -4,7 +4,7 @@ cogs/trading/portfolio_monitor.py
 真實持倉風險動態審計 (每 15 分鐘)：DITM、Gamma Fragility、動態轉倉，以及 VTR 監控。
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 import logging
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -42,6 +42,7 @@ from cogs.embed_builder import (
     create_gamma_fragility_embed,
     create_option_defense_alert_embed,
 )
+from cogs.embed_builders.regime_hedge_embeds import create_regime_hedge_embed
 from cogs.embed_builders.rollover_embeds import (
     create_advisory_levels_embed,
     create_dynamic_rollover_embed,
@@ -55,6 +56,31 @@ from cogs.embed_builders.rollover_embeds import (
 
 ny_tz = ZoneInfo("America/New_York")
 logger = logging.getLogger(__name__)
+
+
+def regime_hedge_dedup_suffix(ins: Mapping[str, Any]) -> str:
+    """REGIME_HEDGE 去重鍵後綴：納入級別／模式／預警或確定版。
+
+    同日預警版與確定版各發一次；第二級由 HEDGE 轉 STOP_SHORT 亦視為新事件。
+    其他情境回傳空字串。
+    """
+    if ins.get("scenario") != "REGIME_HEDGE":
+        return ""
+    plan = ins.get("hedge_plan")
+    tier = getattr(plan, "tier", ins.get("hedge_tier"))
+    mode = getattr(plan, "mode", "NA")
+    phase = "PRELIM" if ins.get("is_preliminary") else "FINAL"
+    return f"_T{tier}_{mode}_{phase}"
+
+
+def is_regime_hedge_tier1_dry_run(ins: Mapping[str, Any]) -> bool:
+    """第一級（NORMAL 盤 PSQ 局部對沖）在旗標開啟時只乾跑；第二級不受影響。"""
+    return (
+        ins.get("scenario") == "REGIME_HEDGE"
+        and ins.get("hedge_tier") == 1
+        and bool(config.REGIME_HEDGE_TIER1_DRY_RUN)
+    )
+
 
 portfolio_scanner_times = [
     time(hour=h, minute=m, tzinfo=ny_tz) for h in range(24) for m in (5, 20, 35, 50)
@@ -1067,6 +1093,40 @@ class PortfolioMonitorCog(commands.Cog):
                         )
                     )
 
+                    # 🚀 兩級體制避險 (REGIME_HEDGE) — 排在保證金防禦之後。
+                    # 本輪有真實現金赤字（MARGIN_DEFENSE 非 HOLD）時不評估，
+                    # 以免同時建議買入反向 ETF。
+                    margin_defense_active = any(
+                        i.get("scenario") == "MARGIN_DEFENSE"
+                        and i.get("action") != "HOLD"
+                        for i in rebalance_instructions
+                    )
+                    regime_hedge_liquidate: set[tuple[str, str]] = set()
+                    if not margin_defense_active:
+                        regime_hedge_ins: List[Any] = []
+                        try:
+                            regime_hedge_ins = (
+                                await self.rollover_engine.evaluate_regime_hedge(
+                                    u_id,
+                                    portfolio_assets,
+                                    already_flagged_symbols=already_flagged,
+                                )
+                            )
+                        except Exception as rh_ex:
+                            # 避險評估失敗視為本輪無建議，不影響其餘情境。
+                            logger.error(
+                                f"[REGIME_HEDGE] 使用者 {u_id} 體制避險評估失敗，"
+                                f"本輪略過: {rh_ex}"
+                            )
+                            regime_hedge_ins = []
+                        rebalance_instructions += regime_hedge_ins
+                        for rh in regime_hedge_ins:
+                            rh_plan = rh.get("hedge_plan")
+                            if rh_plan is not None:
+                                regime_hedge_liquidate.update(
+                                    (sym, "SPOT") for sym in rh_plan.liquidate_symbols
+                                )
+
                     # 🚀 邏輯 (6): 宏觀逃頂前瞻防禦 — 排在各情境的最後一位
                     # (3→1→4→6)。本情境是信心度最低、最具推測性的觸發
                     # (機率性組合評分 vs. 其餘情境已確認的價格/保證金破位)，
@@ -1079,7 +1139,7 @@ class PortfolioMonitorCog(commands.Cog):
                         (ins["symbol"], ins.get("instrument_type", "SPOT"))
                         for ins in rebalance_instructions
                         if ins.get("action") != "HOLD"
-                    }
+                    } | regime_hedge_liquidate
                     rebalance_instructions += (
                         await self.rollover_engine.evaluate_macro_top_escape_defense(
                             u_id,
@@ -1139,18 +1199,24 @@ class PortfolioMonitorCog(commands.Cog):
                                     )
                                 )
                         if short_candidates:
-                            margin_defense_active = any(
-                                i.get("scenario") == "MARGIN_DEFENSE"
-                                and i.get("action") != "HOLD"
+                            # 第二級體制避險（清倉／止損轉空）進行中，不再新開個股空單。
+                            regime_hedge_tier2_active = any(
+                                i.get("scenario") == "REGIME_HEDGE"
+                                and i.get("hedge_tier") == 2
                                 for i in rebalance_instructions
+                            )
+                            short_suppress_reason: Optional[str] = (
+                                "MARGIN_DEFENSE"
+                                if margin_defense_active
+                                else "REGIME_HEDGE"
+                                if regime_hedge_tier2_active
+                                else None
                             )
                             rebalance_instructions += await self.rollover_engine.evaluate_short_entry_opportunity(
                                 u_id,
                                 short_candidates,
                                 vix_spot_for_short,
-                                suppress_reason="MARGIN_DEFENSE"
-                                if margin_defense_active
-                                else None,
+                                suppress_reason=short_suppress_reason,
                             )
 
                     # 情境識別碼 → 人類可讀標籤，僅供標題補充說明；顏色/危險等級判斷
@@ -1165,6 +1231,7 @@ class PortfolioMonitorCog(commands.Cog):
                         "TRANSITION_ENGINE": "動態調整狀態切換引擎",
                         "SHORT_ENTRY": "做空進場訊號",
                         "PYRAMID_ADD": "順勢加碼 (Pyramiding)",
+                        "REGIME_HEDGE": "兩級體制避險",
                     }
 
                     today_str = datetime.now(ny_tz).strftime("%Y%m%d")
@@ -1214,6 +1281,9 @@ class PortfolioMonitorCog(commands.Cog):
                             dedup_key += (
                                 f"_{opt_t}_{ins.get('strike')}_{ins.get('expiry')}"
                             )
+                        # 兩級體制避險：預警版／確定版、第一／二級、HEDGE／STOP_SHORT
+                        # 各自獨立去重。
+                        dedup_key += regime_hedge_dedup_suffix(ins)
                         if database.get_kv_cache(dedup_key):
                             continue
 
@@ -1250,6 +1320,18 @@ class PortfolioMonitorCog(commands.Cog):
                                 reason=ins["reason"],
                                 advisory_plan=ins.get("advisory_plan"),
                                 exit_tier=ins.get("exit_tier"),
+                            )
+                        elif (
+                            scenario == "REGIME_HEDGE"
+                            and ins.get("hedge_plan") is not None
+                        ):
+                            # 兩級體制避險：組合層級指令（symbol=PORTFOLIO），沒有單一
+                            # 標的可一鍵執行，故不設 _view。
+                            embed = create_regime_hedge_embed(
+                                ins["hedge_plan"],
+                                market_regime=str(ins.get("market_regime", "")),
+                                is_preliminary=bool(ins.get("is_preliminary")),
+                                reason=ins["reason"],
                             )
                         elif scenario == "SHORT_ENTRY" and short_plan is not None:
                             # 做空進場訊號：沒有「賣出來源 → 買進目標」的轉倉框架，
@@ -1403,6 +1485,7 @@ class PortfolioMonitorCog(commands.Cog):
                         is_pyramid_add_dry_run = (
                             scenario == "PYRAMID_ADD" and config.PYRAMID_ADD_DRY_RUN
                         )
+                        is_regime_hedge_tier1_dry = is_regime_hedge_tier1_dry_run(ins)
                         # Regime III-B 是**跨情境**的乾跑閘門：它放寬的是進場
                         # 判定，因此以 entry_regime 為鍵，不能比照上面兩道用 scenario。
                         is_regime_iii_b_dry_run = (
@@ -1423,6 +1506,7 @@ class PortfolioMonitorCog(commands.Cog):
                             or is_short_entry_dry_run
                             or is_pyramid_add_dry_run
                             or is_regime_iii_b_dry_run
+                            or is_regime_hedge_tier1_dry
                         ):
                             dry_run_tag = (
                                 "ShortEntry"
@@ -1431,6 +1515,8 @@ class PortfolioMonitorCog(commands.Cog):
                                 if is_pyramid_add_dry_run
                                 else "RegimeIIIB"
                                 if is_regime_iii_b_dry_run
+                                else "RegimeHedgeTier1"
+                                if is_regime_hedge_tier1_dry
                                 else "OptionsRollover"
                             )
                             logger.info(

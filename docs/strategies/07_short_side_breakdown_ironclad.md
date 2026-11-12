@@ -190,7 +190,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     Users["SHORT_SIDE / DYNAMIC 使用者<br/>(含沒有任何持倉者)"] --> Cands["做空候選清單<br/>_find_best_short_target()"]
-    Cands --> Gate1{"本週期有 MARGIN_DEFENSE 指令?"}
+    Cands --> Gate1{"本週期有 MARGIN_DEFENSE 或第二級 REGIME_HEDGE 指令?"}
     Gate1 -- 是 --> Suppress["抑制新開空單"]
     Gate1 -- 否 --> Gate2{"做空 VIX 乘數 = 0?<br/>(VIX >= 35)"}
     Gate2 -- 是 --> Suppress
@@ -271,7 +271,7 @@ flowchart TD
 
 8. **無持倉使用者**：15 分鐘評估迴圈原本只涵蓋有持倉的使用者。`SHORT_SIDE` / `DYNAMIC` 使用者一律併入（單次讀取 `user_settings`），純現金的做空使用者才會被評估。
 
-9. **抑制與上線保護**：本週期若已有 `MARGIN_DEFENSE` 指令即不開新空單；`SHORT_ENTRY_DRY_RUN` 預設開啟，只寫 `rollover_audit_log`。何時可以開啟推播、上線後要觀察哪些數據，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9（含 2026-09 試跑基準：代理事件的做空期望值為負，當時決定維持只記錄）。通知走 `alpha_market_signals`（進場訊號而非持倉防禦；`focus`／`mute_intraday` 預設關閉該頻道）。VIX 以 `get_vix_spot_strict()` 抓取——`get_macro_environment()` 失敗時回傳的 `18.0` 與真實值無從區分，做空需要知道「VIX 未知」才能退回保守乘數 $0.5$。
+9. **抑制與上線保護**：本週期若已有 `MARGIN_DEFENSE` 指令、或第二級 `REGIME_HEDGE`（`suppress_reason="REGIME_HEDGE"`）即不開新空單；`SHORT_ENTRY_DRY_RUN` 預設開啟，只寫 `rollover_audit_log`。何時可以開啟推播、上線後要觀察哪些數據，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.7–§5.9（含 2026-09 試跑基準：代理事件的做空期望值為負，當時決定維持只記錄）。通知走 `alpha_market_signals`（進場訊號而非持倉防禦；`focus`／`mute_intraday` 預設關閉該頻道）。VIX 以 `get_vix_spot_strict()` 抓取——`get_macro_environment()` 失敗時回傳的 `18.0` 與真實值無從區分，做空需要知道「VIX 未知」才能退回保守乘數 $0.5$。
 
 10. **不代為下單**：`SHORT_ENTRY` 是建議。使用者成交後須以**負股數／負口數**登錄，做空鏡像出場矩陣才會接管。
 
