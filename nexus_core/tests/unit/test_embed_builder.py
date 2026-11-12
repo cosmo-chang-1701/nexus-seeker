@@ -248,11 +248,47 @@ def test_create_holdings_embed_shows_target_allocation_suggestion_hint() -> None
         },
     ]
     embed = create_holdings_embed(holdings_data, total_capital=100000.0)
-    hint_fields = [f for f in embed.fields if "核心資金部署建議" in f.name]  # type: ignore
+    hint_fields = [f for f in embed.fields if "CORE 目標配置建議" in f.name]  # type: ignore
     assert len(hint_fields) == 1
     assert "VOO" in hint_fields[0].value  # type: ignore
     assert "50%" in hint_fields[0].value  # type: ignore
     assert "QQQ" not in hint_fields[0].value  # type: ignore
+
+
+def test_create_holdings_embed_core_suggestion_bucket_header() -> None:
+    """帶桶總目標欄位時，提示欄位首行說明 CORE 總目標與已設定合計。"""
+
+    def _row(sym: str, **extra: Any) -> Dict[str, Any]:
+        d: Dict[str, Any] = {
+            "symbol": sym,
+            "quantity": 10,
+            "avg_cost": 400.0,
+            "current_price": 420.0,
+            "asset_class": "CORE",
+        }
+        d.update(extra)
+        return d
+
+    sug: Dict[str, Any] = {
+        "suggested_target_allocation_pct": 15.0,
+        "suggested_core_bucket_pct": 50.0,
+        "suggested_core_set_pct": 20.0,
+    }
+    holdings_data = [
+        _row("VOO", target_allocation_pct=0.2),
+        _row("QQQ", **sug),
+        _row("SPY", **sug),
+    ]
+    embed = create_holdings_embed(holdings_data, total_capital=100000.0)
+    hint_fields = [f for f in embed.fields if "CORE 目標配置建議" in f.name]  # type: ignore
+    assert len(hint_fields) == 1
+    value = hint_fields[0].value
+    assert value is not None
+    assert "總目標 50%" in value
+    assert "已設定 20%" in value
+    assert "QQQ：建議 15%" in value
+    assert "SPY：建議 15%" in value
+    assert not any("Scenario 5" in f.name for f in embed.fields)  # type: ignore
 
 
 def test_create_holdings_embed_shows_acquired_at() -> None:

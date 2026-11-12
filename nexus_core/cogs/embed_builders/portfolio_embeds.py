@@ -483,9 +483,10 @@ def create_holdings_embed(
     missing_quotes = 0
 
     table_rows: List[List[str]] = []
-    # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：僅供參考，
+    # CORE 目標配置總經建議（桶總目標由未設定持倉平分）：僅供參考，
     # 不會自動套用生效，獨立列於表格外的提示區塊，避免與已實際生效的配置欄位混淆。
     target_alloc_suggestions: List[str] = []
+    core_bucket_header: Optional[str] = None
 
     # 第一輪：計算有報價列的絕對市值合計（配置佔比分母，與再平衡引擎同口徑），
     # 以及市值取代成本後的預算分母調整量。
@@ -555,9 +556,33 @@ def create_holdings_embed(
         else:
             suggested_target = h.get("suggested_target_allocation_pct")
             if suggested_target is not None:
+                bucket_pct = h.get("suggested_core_bucket_pct")
+                if core_bucket_header is None and bucket_pct is not None:
+                    set_pct = h.get("suggested_core_set_pct") or 0.0
+                    n_unset = sum(
+                        1
+                        for x in sorted_holdings
+                        if x.get("suggested_target_allocation_pct") is not None
+                        and x.get("target_allocation_pct") is None
+                    )
+                    if set_pct > 0 and suggested_target <= 0:
+                        core_bucket_header = (
+                            f"CORE 總目標 {bucket_pct:.0f}%；"
+                            f"已設定 {set_pct:.0f}% 已達標，未設定持倉建議 0%"
+                        )
+                    elif set_pct > 0:
+                        core_bucket_header = (
+                            f"CORE 總目標 {bucket_pct:.0f}%（依當前總經市況）；"
+                            f"已設定 {set_pct:.0f}%，剩餘由 {n_unset} 檔未設定持倉平分"
+                        )
+                    else:
+                        core_bucket_header = (
+                            f"CORE 總目標 {bucket_pct:.0f}%（依當前總經市況），"
+                            f"由 {n_unset} 檔未設定持倉平分"
+                        )
                 target_alloc_suggestions.append(
-                    f" • {h['symbol']}：建議目標配置 {suggested_target:.0f}%"
-                    "（依當前總經市況自動評估，未生效，需自行以 /edit_holding 設定）"
+                    f" • {h['symbol']}：建議 {suggested_target:.0f}%"
+                    "（未生效，需自行以 /edit_holding 設定）"
                 )
         if over_cap:
             alloc_str = f"\u001b[0;33m{alloc_str}\u001b[0m"
@@ -584,8 +609,11 @@ def create_holdings_embed(
 
     if target_alloc_suggestions:
         embed.add_field(
-            name="💡 核心資金部署建議 (Scenario 5)",
-            value="\n".join(target_alloc_suggestions),
+            name="💡 CORE 目標配置建議（總經參考）",
+            value="\n".join(
+                ([core_bucket_header] if core_bucket_header else [])
+                + target_alloc_suggestions
+            ),
             inline=False,
         )
 

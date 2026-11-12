@@ -278,7 +278,7 @@ async def edit_holding_impl(
 async def build_holdings_display_rows(assets: list[Any]) -> list[dict[str, Any]]:
     """建構現貨持倉清單顯示列（/list_holdings 與 /dash 📦 共用）。
 
-    併發取報價、套用 CORE/SATELLITE 預設與配置上限，並附 Scenario 5 建議值。
+    併發取報價、套用 CORE/SATELLITE 預設與配置上限，並附 CORE 總經目標配置建議（總目標由未設定持倉平分）。
     """
     from market_analysis.dynamic_rollover import CORE_DEFENSE_ETF_SYMBOLS
 
@@ -296,11 +296,13 @@ async def build_holdings_display_rows(assets: list[Any]) -> list[dict[str, Any]]
     )
 
     holdings: list[dict[str, Any]] = []
-    # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：
-    # 僅供顯示參考，不會自動套用生效（target_allocation_pct 是嚴格 opt-in
-    # 閘門，仍須使用者自行透過 /edit_holding 設定才會真正影響部署行為）。
+    # CORE 目標配置總經建議值（0-100，為整個 CORE 桶的總目標）：僅供顯示參考，
+    # 不會自動套用生效；target_allocation_pct 是嚴格 opt-in，須使用者自行透過
+    # /edit_holding 設定，實際影響超限再平衡賣回目標與提領權重（非核心部署）。
     # 同一次呼叫內，跨多個未設定的 CORE 持倉只需評估一次。
     suggested_target_alloc: Optional[float] = None
+    unset_core: list[dict[str, Any]] = []
+    set_sum_pct = 0.0
     for a in assets:
         sym = a.symbol
         quote = quotes_by_symbol.get(sym, {})
@@ -332,8 +334,20 @@ async def build_holdings_display_rows(assets: list[Any]) -> list[dict[str, Any]]
                 )
 
                 suggested_target_alloc = await suggest_target_allocation_pct()
-            h_data["suggested_target_allocation_pct"] = suggested_target_alloc
+            unset_core.append(h_data)
+        elif asset_class == "CORE" and target_alloc is not None:
+            set_sum_pct += float(target_alloc) * 100
         holdings.append(h_data)
+
+    if unset_core and suggested_target_alloc is not None:
+        # 規則同 resolve_target_weights：未設定持倉平分 (桶總目標 - 已設定合計) 的剩餘
+        bucket = float(suggested_target_alloc)
+        per = max(bucket - set_sum_pct, 0.0) / len(unset_core)
+        for h_data in unset_core:
+            cap_pct = float(h_data["max_allocation_pct"]) * 100
+            h_data["suggested_target_allocation_pct"] = min(per, cap_pct)
+            h_data["suggested_core_bucket_pct"] = bucket
+            h_data["suggested_core_set_pct"] = set_sum_pct
 
     return holdings
 

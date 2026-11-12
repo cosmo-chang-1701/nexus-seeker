@@ -174,7 +174,7 @@ async def test_command_list_holdings_shows_target_allocation_suggestion(
 
     mock_interaction.followup.send.assert_called_once()
     args, kwargs = mock_interaction.followup.send.call_args
-    hint_fields = [f for f in kwargs["embed"].fields if "核心資金部署建議" in f.name]
+    hint_fields = [f for f in kwargs["embed"].fields if "CORE 目標配置建議" in f.name]
     assert len(hint_fields) == 1
     assert "VOO" in hint_fields[0].value
     assert "50%" in hint_fields[0].value
