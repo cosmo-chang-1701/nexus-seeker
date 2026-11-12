@@ -1274,6 +1274,7 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "TRANSITION_ENGINE": "動態切換",
     "SHORT_ENTRY": "做空進場",
     "PYRAMID_ADD": "金字塔加碼",
+    "REGIME_HEDGE": "體制避險",
     # 已移除的情境：審計軌跡仍保有舊紀錄，保留短標籤以免撐開固定寬度表格。
     "OPPORTUNITY_COST": "機會成本",
 }

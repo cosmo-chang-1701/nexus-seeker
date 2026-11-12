@@ -120,6 +120,12 @@ SQUEEZE_ENTRY_DRY_RUN = (
 REGIME_III_B_DRY_RUN = (
     get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
 )
+# 兩級體制避險第一級 dry-run (預設開啟)：第一級（NORMAL 盤 PSQ 局部對沖）未經
+# 回測，先乾跑只寫去重鍵與 log、不推播 DM，累積前向紀錄後由人工決定翻轉。
+# 第二級（大盤危機）不受此旗標影響，照常推播。
+REGIME_HEDGE_TIER1_DRY_RUN = (
+    get_env_or_secret("REGIME_HEDGE_TIER1_DRY_RUN", "true").lower() == "true"
+)
 
 # GEX 牆突破／跌破推播開關 (預設開啟)：只關閉推播，錨點與事件的資料蒐集照常進行。
 WALL_BREAK_ALERT_ENABLED = (

@@ -108,6 +108,7 @@ async def test_monitor_real_portfolio_task_no_rollover_dm_when_no_trigger() -> N
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     with (
         patch(
@@ -160,6 +161,7 @@ async def test_monitor_real_portfolio_task_omits_unset_target_allocation_pct() -
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     with (
         patch(
@@ -213,6 +215,7 @@ async def test_monitor_real_portfolio_task_force_live_gex_refresh_overrides_stal
 
     cog.rollover_engine.check_satellite_rebalancing = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     fresh_gex_data = {
         "spot": 250.0,
@@ -290,6 +293,7 @@ async def test_monitor_real_portfolio_task_margin_defense_excludes_scenario3_fla
         return_value=[{"symbol": "NVDA", "action": "REDUCE"}]
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     with (
         patch(
@@ -345,6 +349,7 @@ async def test_monitor_real_portfolio_task_hold_only_flags_do_not_suppress_later
         return_value=[{"symbol": "NVDA", "action": "HOLD"}]
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     with (
         patch(
@@ -830,6 +835,7 @@ async def test_monitor_real_portfolio_task_dispatches_covered_call_overlay_embed
         return_value=[overlay_instruction]
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
 
     overlay_embed = object()
     with (
@@ -885,6 +891,7 @@ def _mock_all_rollover_scenarios(cog: PortfolioMonitorCog) -> None:
         return_value=[]
     )
     cog.rollover_engine.evaluate_margin_defense = AsyncMock(return_value=[])  # type: ignore
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(return_value=[])  # type: ignore
     cog.rollover_engine.evaluate_macro_top_escape_defense = AsyncMock(  # type: ignore
         return_value=[]
     )
@@ -1988,3 +1995,274 @@ async def test_monitor_real_portfolio_task_short_entry_dry_run_audits_without_dm
     ) = await _run_short_entry_cycle(dry_run=True)
     bot.queue_dm.assert_not_awaited()
     mock_audit.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# 兩級體制避險 (REGIME_HEDGE) 接線
+# ---------------------------------------------------------------------------
+
+
+def _regime_hedge_instruction(tier: int) -> dict:
+    mode = "TIER1_PSQ" if tier == 1 else "HEDGE"
+    return {
+        "symbol": "PORTFOLIO",
+        "action": f"HEDGE_TIER{tier}",
+        "sell_ratio": 0.0,
+        "target_core": "PSQ" if tier == 1 else "SQQQ",
+        "reason": "體制避險測試",
+        "scenario": "REGIME_HEDGE",
+        "instrument_type": "SPOT",
+        "hedge_tier": tier,
+        "is_preliminary": False,
+        "market_regime": "NORMAL" if tier == 1 else "SHORT_GAMMA_CRITICAL",
+        "hedge_plan": SimpleNamespace(
+            tier=tier, mode=mode, liquidate_symbols=("NVDA",) if tier == 2 else ()
+        ),
+    }
+
+
+async def _run_regime_hedge_cycle(
+    *,
+    hedge_instructions: list[dict],
+    margin_instructions: list[dict] | None = None,
+    tier1_dry_run: bool = True,
+    with_short_entry: bool = False,
+    hedge_side_effect: Exception | None = None,
+    satellite_instructions: list[dict] | None = None,
+    embed_mocks: dict[str, Any] | None = None,
+) -> tuple[Any, AsyncMock, AsyncMock, Any]:
+    """跑一輪 monitor_real_portfolio_task，回傳 (cog, notify mock, save_kv mock, 逃頂防禦 mock)。"""
+    import time as _time
+
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+    bot._latest_radar_data_cache = {"AAA": {"quote": {"c": 100.0}}}
+    bot._latest_radar_cache_time = _time.time()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+    cog.rollover_engine.evaluate_margin_defense = AsyncMock(  # type: ignore
+        return_value=margin_instructions or []
+    )
+    cog.rollover_engine.evaluate_regime_hedge = AsyncMock(  # type: ignore
+        return_value=hedge_instructions, side_effect=hedge_side_effect
+    )
+    if satellite_instructions is not None:
+        cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+            return_value=satellite_instructions
+        )
+    if with_short_entry:
+        cog.rollover_engine._find_best_short_target = MagicMock(return_value="AAA")  # type: ignore
+        cog.rollover_engine.evaluate_short_entry_opportunity = AsyncMock(  # type: ignore
+            return_value=[]
+        )
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+    notify_mock = AsyncMock(return_value=True)
+    save_kv = AsyncMock()
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch(
+            "database.get_user_ids_by_trading_strategy",
+            return_value=[1] if with_short_entry else [],
+        ),
+        patch(
+            "services.market_data_service.get_vix_spot_strict",
+            new_callable=AsyncMock,
+            return_value=20.0,
+        ),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", save_kv),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+        patch("cogs.trading.portfolio_monitor.notify", notify_mock),
+        patch(
+            "cogs.trading.portfolio_monitor.create_regime_hedge_embed",
+            return_value=SimpleNamespace(),
+        ) as regime_embed_mock,
+        patch(
+            "cogs.trading.portfolio_monitor.create_dynamic_rollover_embed",
+            return_value=SimpleNamespace(),
+        ) as rollover_embed_mock,
+        patch(
+            "cogs.trading.portfolio_monitor.config.REGIME_HEDGE_TIER1_DRY_RUN",
+            tier1_dry_run,
+        ),
+    ):
+        await cog.monitor_real_portfolio_task()
+    if embed_mocks is not None:
+        embed_mocks["regime"] = regime_embed_mock
+        embed_mocks["rollover"] = rollover_embed_mock
+    macro_mock: Any = cog.rollover_engine.evaluate_macro_top_escape_defense
+    return cog, notify_mock, save_kv, macro_mock
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_skipped_when_margin_defense_active() -> None:
+    """本輪有真實保證金赤字（MARGIN_DEFENSE 非 HOLD）時不評估兩級避險。"""
+    margin_ins = [
+        {
+            "symbol": "SPY",
+            "action": "LIQUIDATE",
+            "sell_ratio": 1.0,
+            "target_core": "CASH",
+            "reason": "test",
+            "scenario": "MARGIN_DEFENSE",
+        }
+    ]
+    cog, _notify, _kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(2)],
+        margin_instructions=margin_ins,
+    )
+    cog.rollover_engine.evaluate_margin_defense.assert_awaited_once()
+    cog.rollover_engine.evaluate_regime_hedge.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_evaluated_when_margin_defense_is_hold_only() -> None:
+    """MARGIN_DEFENSE 僅 HOLD（無真實動作）時仍須評估兩級避險，並帶入 already_flagged。"""
+    margin_ins = [
+        {
+            "symbol": "SPY",
+            "action": "HOLD",
+            "sell_ratio": 0.0,
+            "target_core": "CASH",
+            "reason": "test",
+            "scenario": "MARGIN_DEFENSE",
+        }
+    ]
+    cog, _notify, _kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[], margin_instructions=margin_ins
+    )
+    cog.rollover_engine.evaluate_regime_hedge.assert_awaited_once()
+    kwargs = cog.rollover_engine.evaluate_regime_hedge.await_args.kwargs
+    assert "already_flagged_symbols" in kwargs
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_liquidate_symbols_flow_into_macro_top_escape_flagged() -> (
+    None
+):
+    """第二級要清倉的標的須併入逃頂防禦的 already_flagged，避免同輪矛盾指令。"""
+    _cog, _notify, _kv, macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(2)]
+    )
+    macro.assert_awaited_once()
+    flagged = macro.await_args.kwargs["already_flagged_symbols"]
+    assert ("NVDA", "SPOT") in flagged
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_tier1_dry_run_does_not_notify() -> None:
+    """第一級＋預設旗標：不推播，但去重鍵仍寫入。"""
+    _cog, notify_mock, save_kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(1)], tier1_dry_run=True
+    )
+    notify_mock.assert_not_awaited()
+    keys = [c.args[0] for c in save_kv.await_args_list]
+    assert any(
+        k.startswith("rollover_alert_1_PORTFOLIO_SPOT_REGIME_HEDGE_HEDGE_TIER1_")
+        and k.endswith("_T1_TIER1_PSQ_FINAL")
+        for k in keys
+    )
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_tier1_flag_off_notifies() -> None:
+    """旗標關閉後第一級照常推播（確認乾跑閘門確實由旗標控制）。"""
+    _cog, notify_mock, _kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(1)], tier1_dry_run=False
+    )
+    notify_mock.assert_awaited_once()
+    assert notify_mock.await_args is not None
+    assert notify_mock.await_args.args[2] == "defense_margin_call"
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_tier2_notifies_margin_call_channel() -> None:
+    """第二級不受第一級乾跑旗標影響，推播到 defense_margin_call。"""
+    embeds: dict[str, Any] = {}
+    ins = _regime_hedge_instruction(2)
+    _cog, notify_mock, save_kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[ins], tier1_dry_run=True, embed_mocks=embeds
+    )
+    notify_mock.assert_awaited_once()
+    assert notify_mock.await_args is not None
+    assert notify_mock.await_args.args[2] == "defense_margin_call"
+    embeds["regime"].assert_called_once_with(
+        ins["hedge_plan"],
+        market_regime=ins["market_regime"],
+        is_preliminary=False,
+        reason=ins["reason"],
+    )
+    embeds["rollover"].assert_not_called()
+    sent_embed = notify_mock.await_args.kwargs["embed"]
+    assert sent_embed is embeds["regime"].return_value
+    assert not hasattr(sent_embed, "_view")
+    assert any("_T2_HEDGE_FINAL" in c.args[0] for c in save_kv.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_tier2_suppresses_short_entry() -> None:
+    """第二級進行中，SHORT_ENTRY 以 suppress_reason=REGIME_HEDGE 被抑制。"""
+    cog, _notify, _kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(2)], with_short_entry=True
+    )
+    cog.rollover_engine.evaluate_short_entry_opportunity.assert_awaited_once()
+    kwargs = cog.rollover_engine.evaluate_short_entry_opportunity.await_args.kwargs
+    assert kwargs["suppress_reason"] == "REGIME_HEDGE"
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_tier1_does_not_suppress_short_entry() -> None:
+    """第一級（局部對沖）不抑制 SHORT_ENTRY。"""
+    cog, _notify, _kv, _macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[_regime_hedge_instruction(1)], with_short_entry=True
+    )
+    kwargs = cog.rollover_engine.evaluate_short_entry_opportunity.await_args.kwargs
+    assert kwargs["suppress_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_regime_hedge_exception_does_not_break_other_scenarios() -> None:
+    """evaluate_regime_hedge 拋例外：該輪視為無避險建議，其他情境照常處理且不拋出。"""
+    sat_ins = [
+        {
+            "symbol": "NVDA",
+            "action": "REDUCE",
+            "sell_ratio": 0.3,
+            "target_core": "VOO",
+            "reason": "test reason",
+            "scenario": "SATELLITE_REBALANCE",
+        }
+    ]
+    _cog, notify_mock, _kv, macro = await _run_regime_hedge_cycle(
+        hedge_instructions=[],
+        hedge_side_effect=RuntimeError("boom"),
+        satellite_instructions=sat_ins,
+    )
+    notify_mock.assert_awaited_once()
+    macro.assert_awaited_once()
+    assert macro.await_args.kwargs["already_flagged_symbols"] == {("NVDA", "SPOT")}
