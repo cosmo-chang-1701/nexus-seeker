@@ -36,6 +36,7 @@ from .models import (  # noqa: E402
     RolloverScenario,
 )
 from .opportunity_cost import _OpportunityCostMixin  # noqa: E402
+from .regime_hedge import evaluate_regime_hedge_impl  # noqa: E402
 from .short_entry_deployment import ShortCandidateInput, _ShortEntryMixin  # noqa: E402
 from .structural_signals import (  # noqa: E402
     _resolve_canonical_anchor_base,
@@ -175,6 +176,24 @@ class DynamicRolloverEngine(
         邏輯 (4): 槓桿與保證金防禦 (Leverage & Margin Defense)
         """
         return await evaluate_margin_defense_impl(
+            self,
+            get_full_user_context,
+            user_id,
+            portfolio_assets,
+            already_flagged_symbols,
+        )
+
+    async def evaluate_regime_hedge(
+        self,
+        user_id: int,
+        portfolio_assets: List[Dict[str, Any]],
+        already_flagged_symbols: Optional[set] = None,
+    ) -> List[RolloverInstruction]:
+        """
+        兩級體制避險 (Regime Hedge)：NORMAL 個股跌破 PutWall → 第一級 PSQ；
+        大盤危機 → 第二級清倉＋SQQQ/SOXS 對沖或止損轉空。
+        """
+        return await evaluate_regime_hedge_impl(
             self,
             get_full_user_context,
             user_id,

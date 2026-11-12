@@ -508,6 +508,8 @@ ROLLOVER_SCENARIO_CHANNEL: dict[str, NotificationKey] = {
     "TRANSITION_ENGINE": "entry_pyramid_add",
     "SHORT_ENTRY": "alpha_short_entry",
     "PYRAMID_ADD": "entry_pyramid_add",
+    # 兩級體制避險：左尾防護（preset_immune），與保證金防禦同頻道
+    "REGIME_HEDGE": "defense_margin_call",
 }
 
 # 結構失效類出場分層：唯一「結構可能真的壞了」的訊號 → 左尾防護。
@@ -530,14 +532,14 @@ def resolve_rollover_channel(ins: Mapping[str, Any]) -> NotificationKey:
     """依轉倉指令的 scenario / action / exit_tier / overlay 旗標決定通知頻道。
 
     優先序：
-    1. 保證金防禦 → defense_margin_call（帳戶生存等級，任何分層都不改道）
+    1. 保證金防禦／兩級體制避險 → defense_margin_call（帳戶生存等級，任何分層都不改道）
     2. 結構失效類 exit tier（含顧問模式的結構失效告知）→ defense_structure_break
     3. 顧問模式其餘告知（目標區位階）→ advisory_core_levels
     4. Covered Call Overlay（附掛於 CORE_DEPLOYMENT）→ trim_covered_call
     5. 情境對照表；未知情境 → defense_option_rollover
     """
     scenario = str(ins.get("scenario", ""))
-    if scenario == "MARGIN_DEFENSE":
+    if scenario in ("MARGIN_DEFENSE", "REGIME_HEDGE"):
         return "defense_margin_call"
     if ins.get("exit_tier") in STRUCTURE_BREAK_EXIT_TIERS:
         return "defense_structure_break"
