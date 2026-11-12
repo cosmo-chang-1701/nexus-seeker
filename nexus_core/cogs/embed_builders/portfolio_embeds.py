@@ -3951,6 +3951,28 @@ def create_entry_rules_embed(
     six_lines.append("```")
     _add_ansi_field_safely(embed, f"🔐 進場六重鐵律 ({_gate_label})", six_lines)
 
+    # 純呈現：開盤後 30 分鐘前，GEX／OI 為前一交易日快取，提示重算時刻（美東／台灣）。
+    try:
+        import market_time as _mt
+        from zoneinfo import ZoneInfo
+
+        _ready_at = _mt.get_options_chain_recompute_ready_at()
+        if _ready_at is not None:
+            _ready_tw = _ready_at.astimezone(ZoneInfo("Asia/Taipei"))
+            _add_ansi_field_safely(
+                embed,
+                "⏰ 期權鏈開盤重算提醒",
+                [
+                    "```ansi",
+                    " ├─ GEX／OI 為前一交易日快取（OI 盤中不更新）",
+                    f" └─ Gamma Flip／CallWall 盈虧比以 {_ready_at:%m/%d %H:%M} ET"
+                    f"（台灣 {_ready_tw:%m/%d %H:%M}）重算後為準",
+                    "```",
+                ],
+            )
+    except Exception as e:
+        logger.debug("期權鏈開盤重算提醒欄位略過: %s", e)
+
     if structure_directive:
         _add_ansi_field_safely(
             embed,

@@ -176,7 +176,8 @@ flowchart TD
 - `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`
   - `evaluate_entry_advice`: 策略分派、六重鐵律確認、價位計算與跨使用者記憶化
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`
-  - `create_entry_rules_embed`: 進場鐵律 Embed（進場顧問追加「價位建議」欄位；`/x` 頁籤共用）
+  - `create_entry_rules_embed`: 進場鐵律 Embed（進場顧問追加「價位建議」欄位；`/x` 頁籤共用；開盤後 30 分鐘前附加「⏰ 期權鏈開盤重算提醒」，純呈現不改任何判定）
+  - 提醒時刻來自 `market_time.get_options_chain_recompute_ready_at`：盤前快照的 GEX／OI 為前一交易日快取（OI 盤中不更新），以 NYSE 開盤＋30 分鐘重算後的 Gamma Flip／CallWall 盈虧比為準；台灣時間由美東時刻動態換算（夏令 22:00、冬令 23:00），已過該時刻或行事曆查詢失敗時不顯示
 - `nexus_core/market_analysis/signal_calculator.py`
   - `calculate_dynamic_trading_signals`: 動態買賣點與 1.5x ATR 防洗盤緩衝停損計算
 - `nexus_core/market_analysis/option_guidance.py`
