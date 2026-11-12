@@ -85,6 +85,49 @@ def is_market_open() -> Any:
     return market_open <= now_ny <= market_close
 
 
+OPTIONS_CHAIN_RECOMPUTE_DELAY_MINUTES: int = 30
+
+
+def get_options_chain_recompute_ready_at(
+    now: datetime | None = None,
+) -> datetime | None:
+    """回傳「開盤後期權鏈重算數據可作為最終依據」的時刻（美東 aware datetime）。
+
+    盤前快照的 GEX／OI 是前一交易日快取（OI 由 OCC 每日公布一次前一日收盤值，
+    盤中不更新）；開盤 `OPTIONS_CHAIN_RECOMPUTE_DELAY_MINUTES` 分鐘後重算的
+    Gamma Flip／牆位（僅更新現價與 IV）才是進場判斷的最終依據。
+
+    - 今天是交易日且已過「開盤 + 30 分」且未收盤 → None（已可用即時重算數據）。
+    - 今天是交易日且尚未到「開盤 + 30 分」 → 今天的開盤 + 30 分。
+    - 收盤後、週末、假日 → 下一個交易日（最多往後查 14 天）的開盤 + 30 分。
+    - 行事曆查詢例外或找不到交易日 → None（純呈現，不提醒也不阻擋）。
+    """
+    try:
+        now_ny = datetime.now(ny_tz) if now is None else now
+        if now_ny.tzinfo is None:
+            now_ny = now_ny.replace(tzinfo=ny_tz)
+        else:
+            now_ny = now_ny.astimezone(ny_tz)
+
+        delay = timedelta(minutes=OPTIONS_CHAIN_RECOMPUTE_DELAY_MINUTES)
+        schedule = nyse_calendar.schedule(
+            start_date=now_ny.date(),
+            end_date=now_ny.date() + timedelta(days=14),
+        )
+        for _, row in schedule.iterrows():
+            market_open = row["market_open"].tz_convert(ny_tz).to_pydatetime()
+            market_close = row["market_close"].tz_convert(ny_tz).to_pydatetime()
+            ready_at = market_open + delay
+            if now_ny <= market_close:
+                if now_ny >= ready_at:
+                    return None
+                return ready_at  # type: ignore[no-any-return]
+        return None
+    except Exception as e:
+        logger.debug("計算期權鏈開盤重算時刻失敗: %s", e)
+        return None
+
+
 def is_nyse_trading_day(day: date) -> bool:
     """`day`（美東日期）是否為 NYSE 交易日（排除週末與國定休市日；半日市視為交易日）。
 

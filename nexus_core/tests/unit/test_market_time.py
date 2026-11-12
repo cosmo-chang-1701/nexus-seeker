@@ -174,3 +174,90 @@ def test_get_sleep_seconds_past_target_clamps_to_zero() -> None:
         sleep_secs = market_time.get_sleep_seconds(target_ny)
 
     assert sleep_secs == 0.0
+
+
+# ─── get_options_chain_recompute_ready_at ───────────────────────────────────
+
+
+def _recompute_schedule(days: list[tuple[int, int, int]]) -> pd.DataFrame:
+    """以美東 09:30／16:00 建立多日行事曆（依 DST 正確轉 UTC）。"""
+    rows = []
+    for y, m, d in days:
+        o = datetime(y, m, d, 9, 30, tzinfo=market_time.ny_tz)
+        c = datetime(y, m, d, 16, 0, tzinfo=market_time.ny_tz)
+        rows.append(
+            {
+                "market_open": pd.Timestamp(o.astimezone(timezone.utc)),
+                "market_close": pd.Timestamp(c.astimezone(timezone.utc)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _ready_at(now_ny: datetime, days: list[tuple[int, int, int]]) -> datetime | None:
+    with patch.object(
+        market_time.nyse_calendar,
+        "schedule",
+        return_value=_recompute_schedule(days),
+    ):
+        return market_time.get_options_chain_recompute_ready_at(now_ny)
+
+
+def _taipei(dt: datetime) -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return dt.astimezone(ZoneInfo("Asia/Taipei"))
+
+
+def test_options_chain_recompute_ready_at_premarket_returns_today_open_plus_30() -> (
+    None
+):
+    now = datetime(2026, 11, 12, 8, 0, tzinfo=market_time.ny_tz)
+    result = _ready_at(now, [(2026, 11, 12), (2026, 11, 13)])
+    assert result is not None
+    assert (result.month, result.day, result.hour, result.minute) == (11, 12, 10, 0)
+    tw = _taipei(result)
+    assert (tw.day, tw.hour, tw.minute) == (12, 23, 0)
+
+
+def test_options_chain_recompute_ready_at_first_30_minutes_returns_today() -> None:
+    now = datetime(2026, 11, 12, 9, 40, tzinfo=market_time.ny_tz)
+    result = _ready_at(now, [(2026, 11, 12), (2026, 11, 13)])
+    assert result is not None
+    assert (result.day, result.hour, result.minute) == (12, 10, 0)
+
+
+def test_options_chain_recompute_ready_at_during_session_returns_none() -> None:
+    now = datetime(2026, 11, 12, 10, 30, tzinfo=market_time.ny_tz)
+    assert _ready_at(now, [(2026, 11, 12), (2026, 11, 13)]) is None
+
+
+def test_options_chain_recompute_ready_at_after_close_returns_next_session() -> None:
+    now = datetime(2026, 11, 12, 17, 0, tzinfo=market_time.ny_tz)
+    result = _ready_at(now, [(2026, 11, 12), (2026, 11, 13)])
+    assert result is not None
+    assert (result.day, result.hour, result.minute) == (13, 10, 0)
+
+
+def test_options_chain_recompute_ready_at_weekend_returns_monday() -> None:
+    now = datetime(2026, 11, 14, 12, 0, tzinfo=market_time.ny_tz)  # 週六
+    result = _ready_at(now, [(2026, 11, 16), (2026, 11, 17)])
+    assert result is not None
+    assert (result.day, result.hour, result.minute) == (16, 10, 0)
+
+
+def test_options_chain_recompute_ready_at_summer_returns_2200_taipei() -> None:
+    now = datetime(2026, 7, 15, 8, 0, tzinfo=market_time.ny_tz)
+    result = _ready_at(now, [(2026, 7, 15), (2026, 7, 16)])
+    assert result is not None
+    assert (result.hour, result.minute) == (10, 0)
+    tw = _taipei(result)
+    assert (tw.hour, tw.minute) == (22, 0)
+
+
+def test_options_chain_recompute_ready_at_calendar_error_returns_none() -> None:
+    now = datetime(2026, 11, 12, 8, 0, tzinfo=market_time.ny_tz)
+    with patch.object(
+        market_time.nyse_calendar, "schedule", side_effect=RuntimeError("boom")
+    ):
+        assert market_time.get_options_chain_recompute_ready_at(now) is None

@@ -6073,3 +6073,62 @@ def test_vix_tier_colors_belong_to_curated_palette() -> None:
     assert len(CURATED_PALETTE) == 9
     for tier in VIX_LADDER_CONFIG:
         assert tier["color_hex"] in CURATED_PALETTE, tier["name"]
+
+
+def _fixed_ready_at() -> datetime:
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 11, 12, 10, 0, tzinfo=ZoneInfo("America/New_York"))
+
+
+def test_create_entry_rules_embed_shows_open_recompute_reminder() -> None:
+    """開盤 30 分鐘前應附加期權鏈重算提醒，含美東與台灣時間。"""
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    with patch(
+        "market_time.get_options_chain_recompute_ready_at",
+        return_value=_fixed_ready_at(),
+    ):
+        embed = create_entry_rules_embed("NVDA", True, ["條件六✅：ok"])
+
+    field = next((f for f in embed.fields if "期權鏈開盤重算提醒" in str(f.name)), None)
+    assert field is not None
+    value = str(field.value)
+    assert "11/12 10:00 ET" in value
+    assert "台灣 11/12 23:00" in value
+    assert "OI 盤中不更新" in value
+
+
+def test_create_entry_rules_embed_omits_open_recompute_reminder_when_none() -> None:
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    with patch("market_time.get_options_chain_recompute_ready_at", return_value=None):
+        embed = create_entry_rules_embed("NVDA", True, ["條件六✅：ok"])
+
+    assert all("期權鏈開盤重算提醒" not in str(f.name) for f in embed.fields)
+
+
+def test_create_entry_rules_embed_worst_case_with_reminder_within_limit() -> None:
+    from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
+
+    long_reason = "條件一❌：" + "很長的理由說明" * 20
+    with patch(
+        "market_time.get_options_chain_recompute_ready_at",
+        return_value=_fixed_ready_at(),
+    ):
+        embed = create_entry_rules_embed(
+            "NVDA",
+            False,
+            [long_reason] * 6,
+            trading_strategy="DYNAMIC",
+            dynamic_regime="REGIME_III_B_TREND_CONTINUATION",
+            dynamic_regime_reason="理由" * 60,
+            structure_directive="DTE 21-45 波段 ｜ Long Call (ATM/輕度 OTM)",
+            entry_price=123.45,
+            stop_loss=100.0,
+            target=150.0,
+            rr_ratio=2.5,
+        )
+
+    assert any("期權鏈開盤重算提醒" in str(f.name) for f in embed.fields)
+    assert get_embed_length(embed) <= 6000
