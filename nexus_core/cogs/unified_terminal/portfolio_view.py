@@ -119,16 +119,9 @@ class PortfolioHubView(discord.ui.View):
 
             manager = AssetManager()
             assets = manager.get_assets(self.user_id, ContextType.HOLDING)
-            holdings = []
-            for a in assets:
-                quote = await market_data_service.get_quote(a.symbol)
-                h_data = {
-                    "symbol": a.symbol,
-                    "quantity": a.metadata.get("quantity", 0.0),
-                    "avg_cost": a.metadata.get("avg_cost", 0.0),
-                    "current_price": quote.get("c", 0.0) if quote else 0.0,
-                }
-                holdings.append(h_data)
+            from cogs.terminal.holdings import build_holdings_display_rows
+
+            holdings = await build_holdings_display_rows(assets)
             ctx = database.get_full_user_context(self.user_id)
             embed = create_holdings_embed(holdings, ctx.capital)
         except Exception as e:

@@ -275,25 +275,11 @@ async def edit_holding_impl(
         )
 
 
-async def list_holdings_impl(interaction: discord.Interaction) -> Any:
-    await interaction.response.defer(ephemeral=True)
-    user_id = interaction.user.id
+async def build_holdings_display_rows(assets: list[Any]) -> list[dict[str, Any]]:
+    """建構現貨持倉清單顯示列（/list_holdings 與 /dash 📦 共用）。
 
-    from services.asset_manager import AssetManager
-    from models.asset import ContextType
-
-    manager = AssetManager()
-    assets = manager.get_assets(user_id, ContextType.HOLDING)
-
-    if not assets:
-        return await interaction.followup.send(
-            embed=create_info_embed(
-                title="查無資料",
-                message="📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。",
-            ),
-            ephemeral=True,
-        )
-
+    併發取報價、套用 CORE/SATELLITE 預設與配置上限，並附 Scenario 5 建議值。
+    """
     from market_analysis.dynamic_rollover import CORE_DEFENSE_ETF_SYMBOLS
 
     # 併發批次拉取各標的即時報價 (Semaphore(3) 上限，避免逐筆序列 await 拖慢回應)
@@ -309,11 +295,11 @@ async def list_holdings_impl(interaction: discord.Interaction) -> Any:
         await asyncio.gather(*[_fetch_quote(sym) for sym in unique_symbols])
     )
 
-    holdings = []
+    holdings: list[dict[str, Any]] = []
     # 核心資金部署引擎 (Scenario 5) target_allocation_pct 總經自動建議值：
     # 僅供顯示參考，不會自動套用生效（target_allocation_pct 是嚴格 opt-in
     # 閘門，仍須使用者自行透過 /edit_holding 設定才會真正影響部署行為）。
-    # 同一次 /list_holdings 呼叫內，跨多個未設定的 CORE 持倉只需評估一次。
+    # 同一次呼叫內，跨多個未設定的 CORE 持倉只需評估一次。
     suggested_target_alloc: Optional[float] = None
     for a in assets:
         sym = a.symbol
@@ -348,6 +334,30 @@ async def list_holdings_impl(interaction: discord.Interaction) -> Any:
                 suggested_target_alloc = await suggest_target_allocation_pct()
             h_data["suggested_target_allocation_pct"] = suggested_target_alloc
         holdings.append(h_data)
+
+    return holdings
+
+
+async def list_holdings_impl(interaction: discord.Interaction) -> Any:
+    await interaction.response.defer(ephemeral=True)
+    user_id = interaction.user.id
+
+    from services.asset_manager import AssetManager
+    from models.asset import ContextType
+
+    manager = AssetManager()
+    assets = manager.get_assets(user_id, ContextType.HOLDING)
+
+    if not assets:
+        return await interaction.followup.send(
+            embed=create_info_embed(
+                title="查無資料",
+                message="📭 您目前無現貨持倉紀錄。請使用 `/add_holding` 進行登錄。",
+            ),
+            ephemeral=True,
+        )
+
+    holdings = await build_holdings_display_rows(assets)
 
     ctx = get_full_user_context(user_id)
     from cogs.embed_builder import create_holdings_embed
