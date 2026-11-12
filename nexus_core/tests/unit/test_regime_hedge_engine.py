@@ -3,12 +3,16 @@
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from market_analysis.dynamic_rollover import DynamicRolloverEngine
 from market_analysis.dynamic_rollover.regime_hedge_timing import MacroFreezeStatus
 
 _MOD = "market_analysis.dynamic_rollover.regime_hedge"
 _REGIME = "market_analysis.index_microstructure.get_market_regime"
 _CTX = "market_analysis.dynamic_rollover.get_full_user_context"
+
+_ORDERS = "database.orders.get_user_active_orders"
 
 _PRICES = {"PSQ": 30.0, "SQQQ": 10.0, "SOXS": 20.0}
 
@@ -25,6 +29,12 @@ def _asset(symbol: str, value: float, **kw: Any) -> Dict[str, Any]:
     }
     base.update(kw)
     return base
+
+
+def _orders_kw(orders: Any) -> Dict[str, Any]:
+    if isinstance(orders, Exception):
+        return {"side_effect": orders}
+    return {"return_value": orders if orders is not None else []}
 
 
 def _engine() -> DynamicRolloverEngine:
@@ -52,6 +62,7 @@ async def _run(
     preliminary: bool = False,
     flagged: Any = None,
     freeze_error: bool = False,
+    orders: Any = None,
 ) -> List[Any]:
     eng = _engine()
     if callable(no_edge):
@@ -79,6 +90,7 @@ async def _run(
             ),
         ),
         patch(f"{_MOD}.is_preliminary_window", return_value=preliminary),
+        patch(_ORDERS, **_orders_kw(orders)),
     ):
         return await eng.evaluate_regime_hedge(1, assets, flagged)
 
@@ -221,3 +233,64 @@ async def test_core_defense_etf_never_liquidated() -> None:
     out = await _run(assets, "SHORT_GAMMA_CRITICAL", no_edge=True)
     assert "VOO" not in out[0]["hedge_plan"].liquidate_symbols
     assert "AAPL" in out[0]["hedge_plan"].liquidate_symbols
+
+
+def _gtc_buy(amount: float) -> Dict[str, Any]:
+    return {"validity": "GTC", "side": "BUY", "limit_price": amount, "quantity": 1.0}
+
+
+async def test_tier1_gtc_commitment_reduces_funding() -> None:
+    assets = [_asset("NVDA", 50000.0, put_wall=120.0)]
+    base = await _run(assets, "NORMAL", cash=30000.0)
+    assert base[0]["hedge_plan"].sell_for_funding_value == 0.0
+    assert not any("GTC" in n for n in base[0]["hedge_plan"].notes)
+    out = await _run(assets, "NORMAL", cash=30000.0, orders=[_gtc_buy(30000.0)])
+    plan = out[0]["hedge_plan"]
+    assert plan.sell_for_funding_value > 0
+    assert plan.boxx_target_value >= 30000 - 1e-6
+    assert any("已預留 GTC 買單承諾 $30,000" in n for n in plan.notes)
+
+
+async def test_tier2_gtc_commitment_reduces_funding() -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    base = await _run(
+        assets, "SHORT_GAMMA_CRITICAL", cash=20000.0, no_edge=lambda s: s == "NVDA"
+    )
+    out = await _run(
+        assets,
+        "SHORT_GAMMA_CRITICAL",
+        cash=20000.0,
+        no_edge=lambda s: s == "NVDA",
+        orders=[_gtc_buy(20000.0)],
+    )
+    b, plan = base[0]["hedge_plan"], out[0]["hedge_plan"]
+    assert plan.boxx_target_value >= 20000 - 1e-6
+    legs_b = sum(leg.target_value for leg in b.legs)
+    legs_p = sum(leg.target_value for leg in plan.legs)
+    assert b.boxx_target_value + legs_b - b.sell_for_funding_value == pytest.approx(
+        20000 + b.liquidate_value
+    )
+    assert plan.boxx_target_value - 20000 + legs_p - plan.sell_for_funding_value == (
+        pytest.approx(plan.liquidate_value)
+    )
+    assert any("已預留 GTC 買單承諾 $20,000" in n for n in plan.notes)
+    assert not any("GTC" in n for n in b.notes)
+
+
+async def test_gtc_commitment_ignores_non_gtc_and_sell_orders() -> None:
+    assets = [_asset("NVDA", 50000.0, put_wall=120.0)]
+    orders = [
+        {"validity": "DAY", "side": "BUY", "limit_price": 30000.0, "quantity": 1.0},
+        {"validity": "GTC", "side": "SELL", "limit_price": 30000.0, "quantity": 1.0},
+    ]
+    out = await _run(assets, "NORMAL", cash=30000.0, orders=orders)
+    plan = out[0]["hedge_plan"]
+    assert plan.sell_for_funding_value == 0.0
+    assert not any("GTC" in n for n in plan.notes)
+
+
+async def test_gtc_commitment_orders_read_failure_falls_back() -> None:
+    assets = [_asset("NVDA", 50000.0, put_wall=120.0)]
+    out = await _run(assets, "NORMAL", cash=30000.0, orders=RuntimeError("db"))
+    assert len(out) == 1
+    assert not any("GTC" in n for n in out[0]["hedge_plan"].notes)

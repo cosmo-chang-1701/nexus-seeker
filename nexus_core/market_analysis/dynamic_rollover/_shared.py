@@ -1,5 +1,5 @@
 import math
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from market_analysis.option_guidance import is_spread_illiquid
 from market_analysis.room_threshold import resolve_atr_15m
@@ -137,3 +137,21 @@ async def resolve_room_threshold_inputs(
             atr_1d = 0.0
 
     return (put_wall, atr_15m, atr_1d)
+
+
+def sum_gtc_buy_commitment(orders: Sequence[Mapping[str, Any]]) -> float:
+    """加總有效 GTC 買單已承諾的現金（限價優先，否則停損價 × 數量）。
+
+    僅計 validity 含 "GTC" 且 side 為 BUY 的委託；價格或數量缺失／None 視為 0，
+    回傳值不為負。
+    """
+    total = 0.0
+    for o in orders:
+        if (
+            "GTC" not in str(o.get("validity") or "").upper()
+            or str(o.get("side") or "").upper() != "BUY"
+        ):
+            continue
+        price = float(o.get("limit_price") or 0.0) or float(o.get("stop_price") or 0.0)
+        total += price * float(o.get("quantity") or 0.0)
+    return max(0.0, total)

@@ -5,10 +5,19 @@ from ._shared import (
     format_cash_impact,
     format_illiquidity_warning,
     resolve_current_value,
+    sum_gtc_buy_commitment,
 )
 from .constants import CORE_DEFENSE_ETF_SYMBOLS
 from .models import RolloverInstruction, RolloverScenario
 from .regime_hedge_sizing import CASH_EQUIVALENT_SYMBOLS
+
+
+def _is_option_asset(asset: Dict[str, Any]) -> bool:
+    """選擇權部位（instrument_type／asset_type 含 OPT 或 CONTRACT）。"""
+    instrument_type = str(
+        asset.get("instrument_type", asset.get("asset_type", "SPOT"))
+    ).upper()
+    return "OPT" in instrument_type or "CONTRACT" in instrument_type
 
 
 class _MarginDefenseMixin:
@@ -130,14 +139,7 @@ async def evaluate_margin_defense_impl(
         orders = get_user_active_orders(user_id)
     except Exception:
         orders = []
-    total_deficit = 0.0
-    for o in orders:
-        if (
-            "GTC" in str(o.get("validity", "")).upper()
-            and str(o.get("side", "")).upper() == "BUY"
-        ):
-            price = o.get("limit_price", 0.0) or o.get("stop_price", 0.0)
-            total_deficit += price * o.get("quantity", 0.0)
+    total_deficit = sum_gtc_buy_commitment(orders)
 
     user_ctx = get_full_user_context(user_id)
     if getattr(user_ctx, "load_failed", False) is True:
@@ -146,8 +148,6 @@ async def evaluate_margin_defense_impl(
             f"[MARGIN_DEFENSE] 使用者 {user_id} 帳戶資料讀取失敗，略過保證金防禦"
         )
         return []
-    buffer = user_ctx.cash_reserve if user_ctx else 0.0
-
     # 現金帳戶沒有保證金：無 GTC 買單現金赤字 -> 無保證金壓力。
     if total_deficit <= 0.0:
         return []
@@ -158,6 +158,7 @@ async def evaluate_margin_defense_impl(
         abs(float(a.get("current_value", 0.0)))
         for a in portfolio_assets
         if str(a.get("symbol", "")).upper() in CASH_EQUIVALENT_SYMBOLS
+        and not _is_option_asset(a)
     )
     buffer = cash_reserve + cash_equiv_value
     if total_deficit <= buffer:

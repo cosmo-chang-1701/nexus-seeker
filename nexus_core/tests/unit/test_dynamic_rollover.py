@@ -1866,7 +1866,7 @@ async def test_evaluate_margin_defense_critical_regime_no_margin_pressure(
             "quantity": 10.0,
         }
     ]
-    # 現金儲備 100000 遠大於 SATELLITE 總市值 5000 -> 無保證金壓力
+    # 無任何 GTC 買單 -> 無現金赤字 -> 無保證金壓力（現金帳戶低現金為常態）
     result = await engine.evaluate_margin_defense(1, portfolio)
     assert result == []
 
@@ -4343,3 +4343,59 @@ def test_find_best_rollover_target_filters_earnings_pre_event(
 
     best_sym = engine._find_best_rollover_target(user_id=1, exclude_symbols={"AMD"})
     assert best_sym == "VOO"
+
+
+def test_sum_gtc_buy_commitment_mixed_orders() -> None:
+    from market_analysis.dynamic_rollover._shared import sum_gtc_buy_commitment
+
+    orders: list[dict[str, Any]] = [
+        {"validity": "GTC", "side": "BUY", "limit_price": 10.0, "quantity": 5.0},
+        {
+            "validity": "gtc",
+            "side": "buy",
+            "limit_price": 0.0,
+            "stop_price": 20.0,
+            "quantity": 2.0,
+        },
+        {"validity": "DAY", "side": "BUY", "limit_price": 100.0, "quantity": 9.0},
+        {"validity": "GTC", "side": "SELL", "limit_price": 100.0, "quantity": 9.0},
+        {
+            "validity": "GTC",
+            "side": "BUY",
+            "limit_price": None,
+            "stop_price": None,
+            "quantity": 3.0,
+        },
+        {"validity": None, "side": "BUY", "limit_price": 5.0, "quantity": None},
+        {"validity": "GTC", "side": "BUY", "limit_price": 7.0},
+    ]
+    assert sum_gtc_buy_commitment(orders) == 90.0
+    assert sum_gtc_buy_commitment([]) == 0.0
+
+
+@pytest.mark.asyncio
+@patch(
+    "market_analysis.index_microstructure.get_market_regime",
+    new_callable=AsyncMock,
+    return_value="SHORT_GAMMA_CRITICAL",
+)
+@patch("database.orders.get_user_active_orders", return_value=_GTC_DEFICIT_ORDERS)
+@patch("market_analysis.dynamic_rollover.get_full_user_context")
+async def test_margin_defense_boxx_option_not_counted_as_cash_equivalent(
+    mock_ctx: MagicMock,
+    mock_orders: MagicMock,
+    mock_regime: AsyncMock,
+    engine: DynamicRolloverEngine,
+) -> None:
+    """GTC 赤字 5,000 > 現金 1,000；BOXX 選擇權市值 50,000 不得算作現金等價物。"""
+    mock_ctx.return_value = MagicMock(cash_reserve=1000.0)
+    boxx_option = {
+        "symbol": "BOXX",
+        "asset_class": "SATELLITE",
+        "current_value": 50_000.0,
+        "quantity": 1.0,
+        "instrument_type": "OPTION",
+    }
+    portfolio = [_no_edge_satellite("NVDA", 5_000.0), boxx_option]
+    result = await engine.evaluate_margin_defense(1, portfolio)
+    assert [ins["symbol"] for ins in result] == ["NVDA"]
