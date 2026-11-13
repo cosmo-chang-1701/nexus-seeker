@@ -85,6 +85,41 @@ def is_market_open() -> Any:
     return market_open <= now_ny <= market_close
 
 
+# 收盤後評估窗：收盤後 15 分鐘內，最後一根常規盤 15m K 棒（15:45–16:00，半日市
+# 12:45–13:00）才剛定案。價量監測 (:02) 與牆突破快速偵測 (:03) 各恰有一個時槽
+# 落在窗內（16:02／16:03），再下一個時槽（:17／:18）已在窗外，所以收盤棒只會被
+# 評估一次，且不會把盤後時段整個放行。
+POST_CLOSE_EVAL_WINDOW_SECONDS: float = 15 * 60.0
+
+
+def is_within_post_close_window(
+    window_seconds: float = POST_CLOSE_EVAL_WINDOW_SECONDS,
+    now: datetime | None = None,
+) -> bool:
+    """是否處於「NYSE 交易日收盤後 `window_seconds` 秒內」（`close < now <= close + window`）。
+
+    收盤時刻取自 NYSE 行事曆（半日市為 13:00 ET）；週末、國定假日一律 False。
+    恰在收盤時刻回傳 False（仍屬 `is_market_open()` 的範圍）。`now` 為 naive 時
+    視為美東時間，預設為現在。行事曆查詢失敗時 fail-safe 回傳 False（不放行）。
+    """
+    now_ny = _normalize_to_et(now)
+    try:
+        schedule = nyse_calendar.schedule(
+            start_date=now_ny.date(), end_date=now_ny.date()
+        )
+        if schedule.empty:
+            return False
+        market_close = (
+            schedule.iloc[0]["market_close"].tz_convert(ny_tz).to_pydatetime()
+        )
+    except Exception as e:
+        logger.debug("計算收盤後評估窗失敗: %s", e)
+        return False
+    return bool(
+        market_close < now_ny <= market_close + timedelta(seconds=window_seconds)
+    )
+
+
 OPTIONS_CHAIN_RECOMPUTE_DELAY_MINUTES: int = 30
 
 

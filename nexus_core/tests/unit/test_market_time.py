@@ -261,3 +261,50 @@ def test_options_chain_recompute_ready_at_calendar_error_returns_none() -> None:
         market_time.nyse_calendar, "schedule", side_effect=RuntimeError("boom")
     ):
         assert market_time.get_options_chain_recompute_ready_at(now) is None
+
+
+def _et(y: int, mo: int, d: int, h: int, mi: int, s: int = 0) -> datetime:
+    return datetime(y, mo, d, h, mi, s, tzinfo=market_time.ny_tz)
+
+
+def test_post_close_window_boundaries() -> None:
+    """一般交易日（2026-11-11 週三，16:00 收盤）：收盤整點 False、+15 分 True、+15 分 1 秒 False。"""
+    w = 15 * 60.0
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 11, 15, 59))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 0))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 0, 1))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 2))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 3))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 15))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 15, 1))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 11, 16, 18))
+    # naive 視為美東時間
+    assert market_time.is_within_post_close_window(w, datetime(2026, 11, 11, 16, 3))
+
+
+def test_post_close_window_non_trading_day() -> None:
+    """週末與國定假日（感恩節 2026-11-26）一律 False。"""
+    w = 15 * 60.0
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 14, 16, 3))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 15, 16, 3))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 26, 16, 3))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 26, 13, 3))
+
+
+def test_post_close_window_early_close() -> None:
+    """半日市（感恩節翌日 2026-11-27，13:00 收盤）以 13:00 為基準。"""
+    w = 15 * 60.0
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 27, 13, 0))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 27, 13, 3))
+    assert market_time.is_within_post_close_window(w, _et(2026, 11, 27, 13, 15))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 27, 13, 15, 1))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 27, 16, 3))
+    assert not market_time.is_within_post_close_window(w, _et(2026, 11, 27, 12, 50))
+
+
+def test_post_close_window_defaults_to_now() -> None:
+    """省略 now 時取現在時間（以 `market_time.datetime` 替身凍結）。"""
+    with patch("market_time.datetime", _patch_now(_et(2026, 11, 11, 16, 2))):
+        assert market_time.is_within_post_close_window()
+    with patch("market_time.datetime", _patch_now(_et(2026, 11, 11, 16, 20))):
+        assert not market_time.is_within_post_close_window()

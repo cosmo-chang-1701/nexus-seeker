@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, Iterator, Optional
@@ -139,7 +139,7 @@ def env(
     quote: Any = None,
     uoa: Any = BTO_CALL,
     chain: Any = None,
-    prev_session: str = PREV,
+    prev_session: Optional[str] = PREV,
 ) -> Iterator[SimpleNamespace]:
     now_dt = _et(now)
     intraday_df = intraday if intraday is not None else make_15m()
@@ -166,15 +166,37 @@ def env(
         chain=AsyncMock(return_value=chain if chain is not None else make_chain()),
         expiries=AsyncMock(return_value=["2026-10-28", "2026-11-06", "2026-11-13"]),
     )
-    with patch("services.wall_break_service._now_et", return_value=now_dt), patch(
-        "market_analysis.price_volume_alert.datetime"
-    ) as dt, patch(
-        "market_time.get_last_completed_trading_date", return_value=prev_session
-    ), patch("services.market_data_service.get_history_df", new=_hist), patch(
-        "services.market_data_service.get_quote", new=ns.quote
-    ), patch("services.market_data_service.get_option_chain", new=ns.chain), patch(
-        "services.market_data_service.get_all_option_expiries", new=ns.expiries
-    ), patch("services.wall_break_service.SentimentEngine.detect_uoa", new=ns.uoa):
+    with ExitStack() as stack:
+        stack.enter_context(
+            patch("services.wall_break_service._now_et", return_value=now_dt)
+        )
+        dt = stack.enter_context(patch("market_analysis.price_volume_alert.datetime"))
+        if prev_session is not None:
+            # None＝不 mock，驗證真實行事曆的「今日場次之前」錨點參考日
+            stack.enter_context(
+                patch(
+                    "market_time.get_last_completed_trading_date",
+                    return_value=prev_session,
+                )
+            )
+        stack.enter_context(
+            patch("services.market_data_service.get_history_df", new=_hist)
+        )
+        stack.enter_context(
+            patch("services.market_data_service.get_quote", new=ns.quote)
+        )
+        stack.enter_context(
+            patch("services.market_data_service.get_option_chain", new=ns.chain)
+        )
+        stack.enter_context(
+            patch(
+                "services.market_data_service.get_all_option_expiries",
+                new=ns.expiries,
+            )
+        )
+        stack.enter_context(
+            patch("services.wall_break_service.SentimentEngine.detect_uoa", new=ns.uoa)
+        )
         dt.now.return_value = now_dt
         yield ns
 
@@ -523,3 +545,44 @@ async def test_symbol_evaluated_once_for_n_users() -> None:
     assert e.uoa.await_count <= 1
     assert sent.await_count == 3
     assert {c.args[1] for c in sent.await_args_list} == {1, 2, 3}
+
+
+# ------------------------------------------------------------------ 收盤後（16:03）
+
+
+async def test_anchor_reference_is_previous_session_post_close() -> None:
+    """收盤後 16:03：真實行事曆下錨點參考日仍為「今日之前」的 PREV，並能偵測 15:45 收盤棒。"""
+    await _anchor()
+    df = make_15m(last_bar="15:45", overrides={"15:45": BREAK_BAR})
+    mon = WallBreakMonitor(detect_only=True)
+    with env(now=f"{TODAY} 16:03", intraday=df, prev_session=None):
+        mon.begin_cycle()
+        out = await mon.process_symbol("NVDA", make_eval())
+    assert len(out.intraday) == 1
+    assert out.intraday[0].trigger.bar_time == datetime(2026, 10, 29, 15, 45)
+    row = get_wall_break_event("NVDA", TODAY, "BREAKOUT", "CLOSE_BEYOND")
+    assert row is not None
+    assert row["bar_time"] == f"{TODAY} 15:45"
+    assert row["anchor_trade_date"] == PREV
+
+
+async def test_anchor_reference_unchanged_intraday_real_calendar() -> None:
+    """盤中（11:30）真實行事曆下參考日同樣是 PREV，與收盤後一致。"""
+    await _anchor()
+    df = make_15m(overrides={"11:15": BREAK_BAR})
+    mon = WallBreakMonitor(detect_only=True)
+    with env(intraday=df, prev_session=None):
+        mon.begin_cycle()
+        out = await mon.process_symbol("NVDA", make_eval())
+    assert len(out.intraday) == 1
+
+
+async def test_anchor_older_than_previous_session_skips_post_close() -> None:
+    await upsert_wall_anchor("NVDA", "2026-10-27", 100.0, 90.0, None)
+    df = make_15m(last_bar="15:45", overrides={"15:45": BREAK_BAR})
+    with env(now=f"{TODAY} 16:03", intraday=df, prev_session=None) as e:
+        out = await WallBreakMonitor(detect_only=True).process_symbol(
+            "NVDA", make_eval()
+        )
+    assert out.intraday == []
+    e.quote.assert_not_called()

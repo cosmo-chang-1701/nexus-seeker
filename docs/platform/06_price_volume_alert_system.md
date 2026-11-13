@@ -2,7 +2,7 @@
 
 ## 1. 功能總覽
 
-不同於 WTI 監控（單一固定標的 `CL=F`，見 [`../macro_sentiment/03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md)），這是一套**每使用者、多標的**的自選警戒清單：每位使用者最多可註冊 15 組獨立的 `(symbol, target_price, direction, volume_multiplier)` 監控，排程器在盤中於每小時 :02／:17／:32／:47（ET）評估所有已註冊監控（15m K 棒 :00／:15／:30／:45 收盤後留約 2 分鐘讓 Yahoo 定案，並與 :00 巡邏、:05 持倉監控錯開）。
+不同於 WTI 監控（單一固定標的 `CL=F`，見 [`../macro_sentiment/03_wti_crude_oil_monitor.md`](../macro_sentiment/03_wti_crude_oil_monitor.md)），這是一套**每使用者、多標的**的自選警戒清單：每位使用者最多可註冊 15 組獨立的 `(symbol, target_price, direction, volume_multiplier)` 監控，排程器在盤中（及收盤後 16:02，半日市 13:02，評估最後一根 15:45 收盤棒）於每小時 :02／:17／:32／:47（ET）評估所有已註冊監控（15m K 棒 :00／:15／:30／:45 收盤後留約 2 分鐘讓 Yahoo 定案，並與 :00 巡邏、:05 持倉監控錯開）。
 
 ## 2. K 棒完整性防呆（`market_analysis/price_volume_alert.py::get_confirmed_15m_bar`）
 
@@ -52,7 +52,7 @@
 
 - `@tasks.loop(minutes=15)`，受 `market_time.is_market_open()` 閘門控制（與 WTI 的 24/7 節奏不同，因為股票盤中 K 棒在非交易時段沒有意義）。
 - 先依標的分組所有已註冊監控，每個唯一標的每輪只抓取一次已收盤 K 棒，即使多位使用者監控同一標的。
-- **KV Cache 防重複發送**：`price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` —— `YYYYMMDD` 取自 K 棒自身的交易日（`bar.bar_time`）而非執行當天——每位使用者、每個標的、每根 K 棒最多一則警報；09:32 評估到的前一交易日 15:45 收盤棒使用前一日的鍵，不會佔用當日鍵而擋掉當日盤中突破。
+- **KV Cache 防重複發送**：`price_volume_alert_{user_id}_{symbol}_{YYYYMMDD}` —— `YYYYMMDD` 取自 K 棒自身的交易日（`bar.bar_time`）而非執行當天——每位使用者、每個標的、每根 K 棒最多一則警報；15:45 收盤棒於收盤後 16:02（半日市 13:02，`market_time.is_within_post_close_window()` 收盤後 15 分鐘內）評估；監控器會跳過 `bar_time` 不是今日 ET 日期的棒（隔日 09:32 不再對前一場次收盤棒告警），也跳過起始時間在今日收盤時刻（含）之後的列（如 16:00 列，非常規盤收盤棒）。
 
 ## 6. 互動指令與 `/notif_settings`
 

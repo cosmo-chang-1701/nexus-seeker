@@ -275,3 +275,109 @@ async def test_deep_loop_records_latest_eval() -> None:
     # 睡眠前已還原，快速偵測才能在睡眠期間使用快取
     assert seen["running_at_sleep"] is False
     assert pipe._deep_cycle_running is False
+
+
+# ------------------------------------------------------------------ 收盤後 16:03 快速偵測
+
+
+def _frozen_dt(fake_now: datetime) -> type[datetime]:
+    class _Fixed(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:  # type: ignore[override]
+            return fake_now.astimezone(tz) if tz is not None else fake_now
+
+    return _Fixed
+
+
+def _et_dt(y: int, mo: int, d: int, h: int, mi: int) -> datetime:
+    return datetime(y, mo, d, h, mi, tzinfo=ny_tz)
+
+
+async def test_post_close_1603_detects_closing_bar_break(db_conn: Any) -> None:
+    """16:03：快速偵測在收盤後放行，對前一場次錨點偵測 15:45 收盤棒突破（今日 trade_date）。"""
+    import market_time
+    from database.connection import execute_write_async
+    from database.wall_break import get_wall_break_event, upsert_wall_anchor
+    from tests.unit.test_wall_break_service import (
+        BREAK_BAR,
+        PREV,
+        TODAY,
+        env,
+        make_15m,
+        make_eval,
+    )
+
+    await execute_write_async("DELETE FROM wall_anchor")
+    await execute_write_async("DELETE FROM wall_break_events")
+    await upsert_wall_anchor("NVDA", PREV, 100.0, 90.0, "2026-10-30")
+
+    pipe = IntradayScanPipeline(MagicMock())
+    monitor = WallBreakMonitor(detect_only=True)
+    pipe._wall_break_fast_monitor = monitor
+    pipe._rows = [(1, "NVDA", True)]  # type: ignore[attr-defined]
+    outcomes: list[WallBreakOutcome] = []
+
+    async def _dispatch(uid: int, sym: str, ev: Any, monitor: Any = None) -> None:
+        outcomes.append(await monitor.process_symbol(sym, ev))
+
+    pipe._dispatch_wall_break_alerts = _dispatch  # type: ignore[method-assign,assignment]
+    pipe._latest_evals["NVDA"] = (datetime.now(ny_tz), make_eval())
+    df = make_15m(last_bar="15:45", overrides={"15:45": BREAK_BAR})
+    now = _et_dt(2026, 10, 29, 16, 3)
+    try:
+        with env(now=f"{TODAY} 16:03", intraday=df, prev_session=None), _patches(
+            pipe, market=False
+        ), patch("market_time.datetime", _frozen_dt(now)), patch.object(
+            pl, "is_market_open", wraps=market_time.is_market_open
+        ):
+            await pipe._run_wall_break_fast_pass()
+        assert len(outcomes) == 1
+        assert len(outcomes[0].intraday) == 1
+        assert outcomes[0].intraday[0].verdict == "CANDIDATE"
+        assert get_wall_break_event("NVDA", TODAY, "BREAKOUT", "CLOSE_BEYOND")
+    finally:
+        await execute_write_async("DELETE FROM wall_anchor")
+        await execute_write_async("DELETE FROM wall_break_events")
+
+
+async def test_post_close_1618_fast_pass_skipped() -> None:
+    """16:18（窗外）、週末、國定假日：快速偵測不跑。"""
+    import market_time
+
+    for when in (
+        _et_dt(2026, 11, 11, 16, 18),
+        _et_dt(2026, 11, 14, 16, 3),
+        _et_dt(2026, 11, 26, 16, 3),
+    ):
+        pipe, dispatch = _pipe([(1, "NVDA", True)])
+        pipe._latest_evals["NVDA"] = (datetime.now(ny_tz), _gex_eval())
+        with _patches(pipe, market=False), patch(
+            "market_time.datetime", _frozen_dt(when)
+        ), patch.object(pl, "is_market_open", wraps=market_time.is_market_open):
+            await pipe._run_wall_break_fast_pass()
+        dispatch.assert_not_called()
+
+    # 對照組：同日 16:03 在窗內，會派發
+    pipe, dispatch = _pipe([(1, "NVDA", True)])
+    pipe._latest_evals["NVDA"] = (datetime.now(ny_tz), _gex_eval())
+    with _patches(pipe, market=False), patch(
+        "market_time.datetime", _frozen_dt(_et_dt(2026, 11, 11, 16, 3))
+    ), patch.object(pl, "is_market_open", wraps=market_time.is_market_open):
+        await pipe._run_wall_break_fast_pass()
+    assert dispatch.await_count == 1
+
+
+async def test_post_close_deep_loop_does_not_run() -> None:
+    """收盤後深度心跳 (_run_loop) 仍進入待機，不評估任何標的。"""
+    pipe = IntradayScanPipeline(MagicMock())
+    pipe.is_running = True
+    pipe.evaluate_watchlist_symbol = AsyncMock()  # type: ignore[method-assign]
+
+    async def fake_sleep(_s: float) -> None:
+        pipe.is_running = False
+
+    with patch("market_time.datetime", _frozen_dt(_et_dt(2026, 11, 11, 16, 3))), patch(
+        "services.llm_service.is_memory_safe", return_value=True
+    ), patch.object(pl.asyncio, "sleep", new=fake_sleep):
+        await pipe._run_loop()
+    pipe.evaluate_watchlist_symbol.assert_not_called()

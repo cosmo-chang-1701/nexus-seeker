@@ -503,7 +503,7 @@ async def test_monitor_dispatches_and_dedups(mock_bot: Any, db_conn: Any) -> Non
 
     triggering_bar = Confirmed15mBar(
         symbol="AAPL",
-        bar_time=datetime.now(),
+        bar_time=datetime(2026, 11, 11, 10, 0),
         close=110.0,
         volume=3000.0,
         avg_volume=1000.0,
@@ -517,6 +517,10 @@ async def test_monitor_dispatches_and_dedups(mock_bot: Any, db_conn: Any) -> Non
             new_callable=AsyncMock,
         ) as mock_get_bar,
         patch("database.is_notification_enabled", return_value=True),
+        patch(
+            "cogs.trading.price_volume_alert_monitor._now_et",
+            return_value=datetime(2026, 11, 11, 10, 3, tzinfo=market_time.ny_tz),
+        ),
     ):
         mock_get_bar.return_value = triggering_bar
 
@@ -540,7 +544,7 @@ async def test_monitor_skips_when_notification_disabled(
 
     triggering_bar = Confirmed15mBar(
         symbol="MSFT",
-        bar_time=datetime.now(),
+        bar_time=datetime(2026, 11, 11, 10, 0),
         close=110.0,
         volume=3000.0,
         avg_volume=1000.0,
@@ -554,6 +558,10 @@ async def test_monitor_skips_when_notification_disabled(
             new_callable=AsyncMock,
         ) as mock_get_bar,
         patch("database.is_notification_enabled", return_value=False),
+        patch(
+            "cogs.trading.price_volume_alert_monitor._now_et",
+            return_value=datetime(2026, 11, 11, 10, 3, tzinfo=market_time.ny_tz),
+        ),
     ):
         mock_get_bar.return_value = triggering_bar
         await cog._evaluate_price_volume_alerts()
