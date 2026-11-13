@@ -320,7 +320,7 @@ $$\text{unit\_weighted\_delta} = 0.16 \times \beta \times \frac{S}{S_{SPY}} \tim
 
 $$\text{cap} = \max\left(0, \left\lfloor \frac{\text{可動用現金}}{\text{每口擔保}} \right\rfloor\right),\quad \text{可動用現金} = \text{現金儲備} - \text{未平倉 Short Put 擔保金}$$
 
-可動用現金與 `/dash` 同定義（`short_put_collateral()`，價差已淨額）。每口擔保：`/x` 無指定履約價，取 `現價 × 100`（OTM Put 的保守上界）；掃描與手動分析取候選合約 `strike × 100`，缺值才用現價。口數超過 cap 時截斷並重算投影 Delta、避險股數與曝險 %，警告 `擔保上限 N 口（現金 $X）`；cap 為 0 時警告 `現金擔保不足：暫停賣方新倉`（含「暫停」，使 /x 不再印出假的 Delta 0 口原因）。現金儲備未設（0）不套用上限，警告 `未設現金儲備：無擔保上限`；讀取持倉失敗同樣不阻斷 sizing，警告 `持倉讀取失敗：無擔保上限`。以上字串皆 $\le 20$ 字（/x embed 字數餘裕極小）。
+CSP 上限的可動用現金只計現金儲備減未平倉 Short Put 擔保金（`short_put_collateral()`，價差已淨額；BOXX 為 ETF，無法直接擔保 CSP）；`/dash` 的安全提領紅線則另計現金等價物。每口擔保：`/x` 無指定履約價，取 `現價 × 100`（OTM Put 的保守上界）；掃描與手動分析取候選合約 `strike × 100`，缺值才用現價。口數超過 cap 時截斷並重算投影 Delta、避險股數與曝險 %，警告 `擔保上限 N 口（現金 $X）`；cap 為 0 時警告 `現金擔保不足：暫停賣方新倉`（含「暫停」，使 /x 不再印出假的 Delta 0 口原因）。現金儲備未設（0）不套用上限，警告 `未設現金儲備：無擔保上限`；讀取持倉失敗同樣不阻斷 sizing，警告 `持倉讀取失敗：無擔保上限`。以上字串皆 $\le 20$ 字（/x embed 字數餘裕極小）。
 3. **/x 參考 Delta 帶號**：引擎的方向乘數預期**帶號合約 Delta**，/x 傳入 $-0.16 \times \beta \times S/S_{SPY} \times 100$（策略 `STO_PUT`）；顯示欄位 `kelly_unit_weighted_delta` 維持正的量值。
 4. **/x 倉位用 IV**：規則與呈現層完全一致——`LIVE_IV` 且 `current_iv_dte` $\le 2$ 且未做尺度修正視為近到期；有跨式反推 IV 且（近到期或與 `current_iv` 背離 $\ge 2$ 倍）時，倉位改用跨式 IV；近到期但無跨式可校驗時沿用原值，並列入降級原因「近到期 IV 未校驗」（觸發資料降級減半）。IV 被低估會縮小 $IV_{stock}/IV_{SPY}$ 而放大口數，故不再用近到期的失真值。上限／背離門檻皆為 `PRE_CALIBRATION／僅呈現` 未校準值。
 

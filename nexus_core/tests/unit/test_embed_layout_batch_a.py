@@ -220,9 +220,10 @@ def test_strategic_dash_full_data_total_length_guard() -> None:
     assert all(not f.inline for f in embed.fields)
     assert all((f.value or "").startswith("```ansi") for f in embed.fields)
     text = _strip("\n".join(f.value or "" for f in embed.fields))
+    assert "RAM" not in text and "賣出" not in text
     for token in (
         "$182,345", "$25,000.00", "壓力跑道 6.2 年", "零報酬對照 14.3 年", "$85.50",
-        "+420.0", "賣出 420 股 SPY", "對沖狀態", "RAM",
+        "+420.0", "體制避險",
     ):  # fmt: skip
         assert token in text
 

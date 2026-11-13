@@ -55,20 +55,17 @@ def _field(embed: Any, prefix: str) -> str:
     raise AssertionError(prefix)
 
 
-def test_m1_dash_hedge_status_compares_dollar_notional() -> None:
+def test_m1_dash_beta_delta_shows_dollar_notional_and_no_spy_advice() -> None:
     from cogs.embed_builders.portfolio_embeds import create_strategic_dash_embed
 
-    # Beta-Delta +40 SPY 股 × $670 = $26,800 > 資本 $100,000 × 10% = $10,000
-    # → 需調整。舊版直接比 40 < 10,000 (股數 vs 美元) → 永遠「運行中」。
+    # Beta-Delta +40 SPY 股 × $670 = $26,800；不再給出 SPY 買賣建議，
+    # 也不再同時出現「需調整」與「無需調整」的自相矛盾。
     embed = create_strategic_dash_embed(
         _dash_ctx(40.0), {}, vix_spot=20.0, spy_price=670.0
     )
-    assert "需調整" in _field(embed, "🛡️ 組合風險精算")
-    # +10 股 × 670 = $6,700 < $10,000 → 運行中
-    embed2 = create_strategic_dash_embed(
-        _dash_ctx(10.0), {}, vix_spot=20.0, spy_price=670.0
-    )
-    assert "運行中" in _field(embed2, "🛡️ 組合風險精算")
+    nro = _field(embed, "🛡️ 組合風險精算")
+    assert "$26,800" in nro
+    assert "需調整" not in nro and "無需立即調整" not in nro and "賣出" not in nro
     # SPY / VIX 未知 → 標示資料不足
     embed3 = create_strategic_dash_embed(_dash_ctx(40.0), {}, vix_spot=None)
     nro = _field(embed3, "🛡️ 組合風險精算")
@@ -113,6 +110,7 @@ async def test_m2_market_nav_golden() -> None:
     assert nav["spot_market_value"] == pytest.approx(18000.0)
     assert nav["missing_spot_symbols"] == ["ZZZ"]
     assert nav["is_complete"] is False
+    assert nav["cash_equivalent_value"] == 0.0
 
 
 # ===========================================================================

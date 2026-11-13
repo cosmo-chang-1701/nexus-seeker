@@ -67,6 +67,13 @@ class PortfolioHubView(discord.ui.View):
             spy_quote = await market_data_service.get_quote("SPY")
             spy_raw = spy_quote.get("c") if spy_quote else None
             spy_now = float(spy_raw) if spy_raw and float(spy_raw) > 0 else None
+            try:
+                from market_analysis.index_microstructure import get_market_regime
+
+                market_regime = await get_market_regime()
+            except Exception as exc:
+                logger.warning("戰略看板取得大盤體制失敗：%s", exc)
+                market_regime = "UNKNOWN"
 
             embed = create_strategic_dash_embed(
                 ctx,
@@ -76,6 +83,7 @@ class PortfolioHubView(discord.ui.View):
                 runway_stale=runway_stale,
                 nav_data=nav_data,
                 spy_price=spy_now,
+                market_regime=market_regime,
             )
         except Exception as e:
             await interaction.followup.send(

@@ -149,7 +149,7 @@ def test_strategic_dash_degraded() -> None:
     )
     assert "[降級模式]" in (embed.title or "")
     text = _fields_text(embed)
-    assert "總資產 (NAV): \x1b[1;37m-- (" in text
+    assert "總資產 (NAV): \x1b[1;37m--" in text
     assert "BoundedCache" not in text
     assert "$0" not in text.split("總資產")[1].split("\n")[0]
     full = create_strategic_dash_embed(

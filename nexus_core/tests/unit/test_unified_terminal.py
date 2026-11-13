@@ -322,6 +322,11 @@ async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # t
             "services.market_data_service.get_macro_environment", new_callable=AsyncMock
         ) as mock_macro,
         patch("database.get_full_user_context") as mock_user_ctx,
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
     ):
         mock_pnl.return_value = {"trades": [], "total_unrealized_pnl": 0.0}
         mock_macro.return_value = {"vix": 18.0}
@@ -345,8 +350,13 @@ async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # t
         assert isinstance(kwargs["view"], PortfolioHubView)
         embed = kwargs["embed"]
         assert "Nexus 交易員戰略看板" in embed.title
-        # Verify content reflects Spectator Mode
-        assert "觀戰模式" in embed.fields[0].value
+        # 模式文字已移除（is_professional_mode 無任何設定入口）
+        assert "觀戰模式" not in embed.fields[0].value
+        assert "實戰模式" not in embed.fields[0].value
+        assert [f.name for f in embed.fields] == [
+            "🏁 提領跑道 (Withdrawal Runway)",
+            "🛡️ 組合風險精算 (NRO Integrity)",
+        ]
 
 
 @pytest.mark.asyncio
