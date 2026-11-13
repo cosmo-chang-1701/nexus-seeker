@@ -2,7 +2,8 @@
 
 取代 margin_defense.py 的反向 ETF 路由：
 - 第一級（大盤 NORMAL、個股跌破 PutWall）只允許 PSQ（-1x），佔 NAV 10–30%。
-- 第二級（大盤 SHORT_GAMMA_CRITICAL／SYSTEMIC_LIQUIDITY_CRISIS）才允許 SQQQ／SOXS（-3x）。
+- 第二級（大盤 SHORT_GAMMA_CRITICAL／SYSTEMIC_LIQUIDITY_CRISIS）才允許 SQQQ／SOXS（-3x），
+  且另須通過「−3x 啟動紅線」（VIX／VTS／SPY 低於 Flip），否則凍結轉 BOXX。
 
 帳戶為現金帳戶、零融資：多頭現貨市值 + 反向 ETF 市值 + 現金等價物 <= NAV。
 買反向 ETF 先用現金等價物，不足才賣多頭現貨。本模組只負責「算」，由引擎負責下單與推播。
@@ -61,6 +62,45 @@ STOP_MARKET_PCT: dict[str, float] = {"PSQ": 3.5, "SQQQ": 7.0, "SOXS": 7.0}
 
 # 守門員比較的浮點容差
 _GUARD_EPS: float = 1e-9
+
+# −3x 啟動紅線（PRE_CALIBRATION：尚未回測，數值為保守初值）
+# VIX 瞬時值下限（含）
+MINUS3X_ACTIVATION_MIN_VIX: float = 22.0
+# VTS 比率下限（嚴格大於）
+MINUS3X_ACTIVATION_MIN_VTS: float = 1.0
+# SPY 低於 Gamma Flip 的最小幅度 %（含）
+MINUS3X_ACTIVATION_MIN_FLIP_BREACH_PCT: float = 1.0
+_REDLINE_PREFIX: str = "−3x 啟動紅線未達："
+
+
+def minus3x_activation_block_reason(
+    vix: Optional[float],
+    vts_ratio: Optional[float],
+    spy_spot: Optional[float],
+    gamma_flip: Optional[float],
+) -> Optional[str]:
+    """−3x 啟動紅線：三條件全過回傳 None，否則回傳列出所有未達／未知條件的原因。"""
+    failed: list[str] = []
+    if vix is None:
+        failed.append("VIX 未知")
+    elif vix < MINUS3X_ACTIVATION_MIN_VIX - _GUARD_EPS:
+        failed.append(f"VIX {vix:.2f} < {MINUS3X_ACTIVATION_MIN_VIX:.2f}")
+    if vts_ratio is None:
+        failed.append("VTS 未知")
+    elif vts_ratio <= MINUS3X_ACTIVATION_MIN_VTS + _GUARD_EPS:
+        failed.append(f"VTS {vts_ratio:.2f} ≤ {MINUS3X_ACTIVATION_MIN_VTS:.2f}")
+    if spy_spot is None or spy_spot <= 0 or gamma_flip is None or gamma_flip <= 0:
+        failed.append("SPY 低於 Flip 幅度未知")
+    else:
+        breach = (gamma_flip - spy_spot) / gamma_flip * 100.0
+        if breach < MINUS3X_ACTIVATION_MIN_FLIP_BREACH_PCT - _GUARD_EPS:
+            failed.append(
+                f"SPY 低於 Flip {breach:.2f}%"
+                f"（需 ≥ {MINUS3X_ACTIVATION_MIN_FLIP_BREACH_PCT:.2f}%）"
+            )
+    if not failed:
+        return None
+    return _REDLINE_PREFIX + "；".join(failed)
 
 
 @dataclass(frozen=True)

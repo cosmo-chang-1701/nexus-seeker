@@ -128,14 +128,14 @@ def test_stop_short_mentions_40pct_cap() -> None:
     assert "40%" in _field(embed, "等效淨 Delta")
 
 
-def test_macro_freeze_field_rendered() -> None:
+def test_frozen_label_field_rendered() -> None:
     embed = create_regime_hedge_embed(
         _plan(frozen="FOMC 前凍結 -3x"),
         market_regime="震盪",
         is_preliminary=False,
         reason="測試",
     )
-    assert "FOMC 前凍結" in _field(embed, "🧊 總經事件凍結")
+    assert "FOMC 前凍結" in _field(embed, "🧊 −3x 凍結")
     assert "本輪不新增反向 ETF" in _field(embed, "反向 ETF 委託")
 
 

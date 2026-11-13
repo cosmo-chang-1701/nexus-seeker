@@ -147,7 +147,7 @@ $$\text{可動用現金} = \text{現金儲備} + \text{現金等價物市值} - 
 ### 5.3b /dash 組合風險精算與體制避險列（僅呈現）
 - Beta-Delta：`Beta-Delta: +209.0 股 SPY ≈ $140,030（NAV 140%）`，名目 = Δ × SPY 現價，NAV 占比以按市價 NAV 計；NAV 未知或 $\le 0$ 省略占比，SPY 現價未知時只顯示股數並註明無法換算。
 - Vanna 敏感度：$\text{total\_vanna} \times (\text{VIX} \times 0.10 / 100)$，VIX 未知顯示「VIX 資料不足」。
-- 體制避險列（取自 `get_market_regime`，失敗時為 UNKNOWN，不影響 /dash）：`NORMAL` → 第二級未觸發（第一級依個股跌破 PutWall，見推播）；`SHORT_GAMMA_CRITICAL`／`SYSTEMIC_LIQUIDITY_CRISIS` → 黃字警示第二級條件成立（SQQQ／SOXS）；其餘 → 大盤體制未知（資料不足）。
+- 體制避險列（取自 `get_market_regime`，失敗時為 UNKNOWN，不影響 /dash）：`NORMAL` → 第二級未觸發（第一級依個股跌破 PutWall，見推播）；`SHORT_GAMMA_CRITICAL`／`SYSTEMIC_LIQUIDITY_CRISIS` → 黃字警示第二級條件成立（−3x 另受啟動紅線約束）；其餘 → 大盤體制未知（資料不足）。
 - 期權 Theta 列：無期權部位（$|\theta| < 0.005$）／淨賣方收租（附覆蓋月支出 %，僅月支出 $> 0$ 時）／淨買方時間價值流失（不顯示覆蓋 %）。
 - 已移除：SPY 對沖建議（現金帳戶無法放空、與兩級體制避險牴觸、門檻自相矛盾）與「系統健康」RAM 欄位；NAV 行不再顯示觀戰／實戰模式。
 
