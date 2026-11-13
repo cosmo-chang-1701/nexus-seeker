@@ -17,6 +17,7 @@ from typing import Dict, Optional, Tuple
 import pandas as pd
 
 from market_analysis.psq_engine import PSQResult, analyze_psq
+from services.market_data_service.caches import _BAR_SETTLE_GRACE_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -201,10 +202,16 @@ def resample_65m(df_5m: pd.DataFrame) -> pd.DataFrame:
 def split_intraday_confirmed(
     df: pd.DataFrame, bar_minutes: int, now_ny: datetime
 ) -> Tuple[pd.DataFrame, bool]:
-    """回傳 (已收盤日內 K 棒, 最後一根是否未收盤)；索引為 K 棒起始時間。"""
+    """回傳 (已確認日內 K 棒, 最後一根是否未確認)；索引為 K 棒起始時間。
+
+    K 棒收盤後還要再過 Yahoo 定案寬限（`_BAR_SETTLE_GRACE_SECONDS`）才算已確認：
+    深度心跳的 :10/:40 剛好落在 5m 邊界（與 11:40 的 65m 邊界），剛收盤的那一根
+    可能尚未定案，寬限內一律歸入「未確認預覽」。
+    """
     if df.empty:
         return df, False
-    closed = df.index + pd.Timedelta(minutes=bar_minutes) <= pd.Timestamp(now_ny)
+    settle = pd.Timedelta(minutes=bar_minutes, seconds=_BAR_SETTLE_GRACE_SECONDS)
+    closed = df.index + settle <= pd.Timestamp(now_ny)
     return df.loc[closed], bool((~closed).any())
 
 
