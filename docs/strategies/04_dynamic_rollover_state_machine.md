@@ -54,9 +54,9 @@ $$
 3. **轉倉目的地**：恆為 `CASH`，補足現金缺口、解除掛單資金不足風險；不買入任何反向 ETF，也不轉入 `BOXX`。
    本輪若已有非 `HOLD` 的 `MARGIN_DEFENSE` 指令，`portfolio_monitor` 不再評估 `REGIME_HEDGE`（真實現金赤字時不該同時建議買反向 ETF）。
 4. **`/stress_test` 現金赤字精算來源**：
-   `MARGIN_DEFENSE` 與 `/stress_test`（含 /dash「壓測」按鈕）共用同一套算法，由 `services/gtc_stress_test_service.py` 對帳戶所有 `GTC` 效期買單做最壞情境精算：
+   `MARGIN_DEFENSE` 與 `/stress_test`（含 /dash「壓測」按鈕）共用同一套算法：赤字皆由 `dynamic_rollover/_shared.py` 的 `sum_gtc_buy_commitment()` 對帳戶所有 `GTC` 效期買單做最壞情境精算，緩衝公式相同（`MARGIN_DEFENSE` 取持倉現值，`/stress_test` 取即時報價）；`/stress_test` 的組裝與報價缺失降級由 `services/gtc_stress_test_service.py` 負責：
    $$\text{Total Cash Deficit} = \sum_{\text{GTC BUY}} (\text{Limit Price} \times \text{Quantity})$$
-   可動用緩衝為手填現金儲備加計現金等價物（BOXX／BIL／SHV／SGOV）的**即時市值**（無股數上限；任一持有之現金等價物報價缺失時整體降級，不當 0）：
+   可動用緩衝為手填現金儲備加計現金等價物（BOXX／BIL／SHV／SGOV）的**即時市值**（無股數上限；`/stress_test`：任一持有之現金等價物報價缺失時整體降級，不當 0）：
    $$\text{Buffer} = \text{Cash Reserve} + \sum_{\text{cash equiv.}} |\text{Quantity} \times \text{Price}|$$
    當 $\text{Total Cash Deficit} > \text{Buffer}$（即淨赤字為負）時判定為 `is_critical`；若使用者已在 /settings 啟用提領跑道，Embed 會額外標註「危及下次預定提領 \$X」（取自跑道快照，快照過期時註明），未啟用則不顯示提領子句。帳戶資料讀取失敗（`load_failed`）時降級顯示，不做判定。
 
