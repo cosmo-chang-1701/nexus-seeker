@@ -18,6 +18,7 @@ from market_analysis.wall_break import (
     T1Result,
     WallBreakResult,
 )
+from market_analysis.squeeze_entry.rules import TIER_SIZE_PCT
 
 _ICON = {"PASS": "✅", "FAIL": "❌", "UNKNOWN": "❔"}
 _STATUS_ANSI = {"PASS": "1;32", "FAIL": "1;31", "UNKNOWN": "1;33"}
@@ -25,6 +26,8 @@ _CANDIDATE_PREFIX = "（候選，待 T+1 確認；次日未收到確認推播即
 _UOA_NOTE = "※ UOA 方向為日累積推斷（非逐筆成交方向）"
 _RESET = "\u001b[0m"
 _DETAIL_MAX_VLEN = 70
+# 右側現貨輕倉比例比照擠壓進場 T1–T3（取自 TIER_SIZE_PCT，避免與規格漂移）
+_SIZE_RANGE = f"{min(TIER_SIZE_PCT.values()):g}%–{max(TIER_SIZE_PCT.values()):g}%"
 
 
 def _tree(lines: Sequence[str]) -> str:
@@ -67,7 +70,7 @@ def _directive_lines(direction: str, wall: float) -> list[str]:
         return [
             "嚴禁追高現貨與在突破點賣低履約價 Covered Call。",
             f"等待縮量回踩原 CallWall ${wall:.2f} 確認支撐後，"
-            "以 10%–15% 輕倉配置右側現貨，"
+            f"以總資產 {_SIZE_RANGE} 輕倉配置右側現貨（比照擠壓進場 T1–T3），"
             f"結構停損設於 ${lo:.2f}–${hi:.2f}；",
             "或於原底牆賣 30–45 DTE、Delta 0.12–0.15 的現金擔保賣 Put（CSP）。",
         ]
