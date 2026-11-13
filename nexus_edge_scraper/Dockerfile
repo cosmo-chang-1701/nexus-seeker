@@ -4,9 +4,11 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
+# playwright 內建的 node driver 需要 libatomic（python:3.12-slim 未附帶）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
+    libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .

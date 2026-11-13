@@ -33,6 +33,11 @@ FALLBACK_GEX: dict[str, Any] = {
 }
 
 _GEX_MIN_DELTA_THRESHOLD = 0.02
+# 與 nexus_core/market_analysis/index_microstructure.py 的
+# _GEX_VALID_MIN_NEAR_STRIKES／_GEX_VALID_NEAR_BAND 一致（PRE_CALIBRATION，
+# 兩服務不共用模組，改動時須同步）：現價 ±25% 內至少 3 個相異非零履約價才算有效。
+_GEX_VALID_MIN_NEAR_STRIKES = 3
+_GEX_VALID_NEAR_BAND = 0.25
 # 與 nexus_core/config.py RISK_FREE_RATE 一致 (兩服務不共用模組，由測試鎖定)
 RISK_FREE_RATE = 0.042
 
@@ -49,6 +54,33 @@ def _finite_number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return num if math.isfinite(num) else None
+
+
+def _near_strike_count(gex_profile: Mapping[Any, Any] | None, spot: float) -> int:
+    """計算 profile 中有效（非零）的相異履約價數；spot > 0 時僅計現價 ±25% 內。"""
+    if not gex_profile:
+        return 0
+    strikes: set[float] = set()
+    for key, value in gex_profile.items():
+        strike = _finite_number(key)
+        gex = _finite_number(value)
+        if strike is None or gex is None or abs(gex) <= 1e-4:
+            continue
+        if spot > 0 and abs(strike - spot) > spot * _GEX_VALID_NEAR_BAND:
+            continue
+        strikes.add(strike)
+    return len(strikes)
+
+
+def is_valid_gex_profile(
+    gex_profile: dict[str, float] | dict[float, float], spot: float
+) -> bool:
+    """GEX profile 是否可視為真實剖面（與 core 同一規則）。
+
+    現價 ±25% 內至少 3 個 |GEX| > 1e-4 的相異履約價；spot <= 0 時改為全 profile
+    至少 3 個非零履約價。非數值／非有限的鍵或值一律忽略。
+    """
+    return _near_strike_count(gex_profile, spot) >= _GEX_VALID_MIN_NEAR_STRIKES
 
 
 def _resolve_info_dividend_yield(info: Mapping[str, Any] | None) -> float:
@@ -404,6 +436,15 @@ async def scrape_symbol_gex_core(
         dominant_expiry = (
             max(exp_counts, key=lambda e: (exp_counts[e], e)) if exp_counts else None
         )
+
+        # 夜間 Yahoo OI 未就緒時只會剩單一遠端履約價，不能當成真實剖面回傳
+        if not is_valid_gex_profile(gex_by_strike, spot_price):
+            logger.warning(
+                f"{symbol_upper} GEX 剖面稀疏（現價±25%內僅 "
+                f"{_near_strike_count(gex_by_strike, spot_price)} 個有效履約價，"
+                "OI 未就緒），改用 fallback。"
+            )
+            return fallback
 
         return {
             "spot": round(spot_price, 2),
