@@ -3,17 +3,19 @@ scheduler.py
 
 nexus_edge_scraper 原本是純請求驅動的服務(見 AGENTS.md 描述)，完全沒有背景
 排程。本模組是第一個常駐背景輪詢器：對 nexus_core 同步過來的自選標的清單
-(`database.tracked_symbols`)，於盤中每 5 分鐘（+隨機 1~5 秒緩衝）輪詢一小批
+(`database.tracked_symbols`)，於盤中以固定 5 分鐘節奏（輪次起點對起點，+隨機 1~5
+秒緩衝）輪詢一小批
 標的的 GEX 與最近到期日的 Option Chain，寫入本地 SQLite，讓 local_api.py 的
 快取讀取端點可以毫秒級回應，取代過去 nexus_core 每次查詢都觸發一次即時
 Playwright/yfinance 抓取的行為。
 
-採分批輪詢（見 POLL_ROTATION_CYCLES 註解）：整份追蹤清單約每 30 分鐘輪完
-一次，維持與單一時間點全量刷新相近的更新頻率，但改成分散在多輪、時間點
+採分批輪詢（見 POLL_ROTATION_CYCLES 註解）：整份追蹤清單約每 25 分鐘（5 輪）
+輪完一次，落在 nexus_core 的 1800 秒快照新鮮度門檻內（約留 5 分鐘餘裕，避免
+快照過期而退回即時 Chromium 抓取），但改成分散在多輪、時間點
 隨機化的小批次請求，降低對 Yahoo 的請求爆量與固定週期特徵。
 
 其中被標記為 priority（實際持倉標的，見 database.upsert_tracked_symbols）
-的標的不受批次輪替影響，每輪都會被抓取，將它們的延遲上限從 ~30 分鐘壓到
+的標的不受批次輪替影響，每輪都會被抓取，將它們的延遲上限從 ~25 分鐘壓到
 單一輪詢週期本身（~5 分鐘），其餘一般自選標的仍走原本的批次輪替。
 
 另有 OI 就緒度紀錄（option_oi_readiness）：盤中每次輪詢抓到的最近到期日
@@ -46,7 +48,9 @@ from yf_api import (
 
 logger = logging.getLogger(__name__)
 
-POLL_BASE_INTERVAL_SECONDS = 5 * 60  # 基礎輪詢間隔：5 分鐘
+POLL_BASE_INTERVAL_SECONDS = 5 * 60  # 輪次起點對起點的固定間隔：5 分鐘
+# 睡眠下限：單輪耗時逼近或超過基礎間隔時，仍至少睡這麼久，避免連續無間隔輪詢
+POLL_MIN_SLEEP_SECONDS = 30
 POLL_JITTER_SECONDS = (
     1.0,
     5.0,
@@ -55,9 +59,10 @@ POLL_JITTER_SECONDS = (
 # v7/finance/options/{symbol}），沒有合併多標的的批次查詢端點，所以無法在單一
 # HTTP 請求內拿多檔資料。改為在排程層面分批：每輪只處理整份追蹤清單的一小批，
 # 批次大小依 POLL_ROTATION_CYCLES 動態計算，讓整份清單約每 POLL_ROTATION_CYCLES
-# 輪（≈30 分鐘）輪完一次，維持與舊版「每 30 分鐘全量刷新」相近的單一標的更新頻率，
-# 但把原本集中在單一時間點的請求爆量，分散成多個較小、間隔隨機化的批次。
-POLL_ROTATION_CYCLES = 6
+# 輪（≈25 分鐘）輪完一次。輪次採固定節奏（睡眠 = 基礎間隔 − 本輪耗時，見 _loop），
+# 一般標的實際刷新週期約 5 × 300 秒，落在 nexus_core 1800 秒快照新鮮度門檻內
+# （約留 5 分鐘餘裕）；並把請求爆量分散成多個較小、間隔隨機化的批次。
+POLL_ROTATION_CYCLES = 5
 MAX_CONCURRENCY = 2
 PRUNE_AFTER_HOURS = 48
 
@@ -429,10 +434,10 @@ async def _maybe_prune_gex_history() -> None:
         logger.warning(f"GEX 快照歷史保留期清理失敗: {e}")
 
 
-async def poll_once() -> None:
+async def poll_once() -> float:
     """執行一輪 GEX + Option Chain 輪詢：priority 標的（持倉）每輪必抓，
     其餘一般自選標的取出下一小批（分批輪詢，見模組頂端 POLL_ROTATION_CYCLES
-    註解）。兩者為互斥分割（見 database.get_priority_symbols /
+    註解）。回傳本輪耗時秒數（無標的時為 0.0）。兩者為互斥分割（見 database.get_priority_symbols /
     get_non_priority_symbols），不會重複抓取同一標的。
 
     加入批次量與耗時觀測記錄：priority 標的自 commit 710cb59 起改為每輪必抓，
@@ -449,7 +454,7 @@ async def poll_once() -> None:
     )
     batch = list(priority_symbols) + non_priority_batch
     if not batch:
-        return
+        return 0.0
 
     logger.info(
         f"[poll_once] 本輪批次量：priority={len(priority_symbols)}, "
@@ -480,11 +485,13 @@ async def poll_once() -> None:
         f"[poll_once] 本輪耗時 {elapsed:.1f}s（批次上限週期 "
         f"{POLL_BASE_INTERVAL_SECONDS}s）"
     )
+    return elapsed
 
 
 async def _loop() -> None:
     await asyncio.to_thread(database.init_db)
     while True:
+        round_start = time.monotonic()
         try:
             if _is_us_market_hours():
                 await poll_once()
@@ -497,8 +504,12 @@ async def _loop() -> None:
                     await record_em_snapshot_once()
         except Exception as e:
             logger.error(f"背景輪詢迴圈執行失敗: {e}", exc_info=True)
+        # 固定節奏：睡眠 = 基礎間隔 − 本輪耗時（下限 POLL_MIN_SLEEP_SECONDS），
+        # 讓輪次起點對起點約 300 秒，一般標的刷新週期才能落在 1800 秒門檻內
+        elapsed = time.monotonic() - round_start
         await asyncio.sleep(
-            POLL_BASE_INTERVAL_SECONDS + random.uniform(*POLL_JITTER_SECONDS)
+            max(POLL_MIN_SLEEP_SECONDS, POLL_BASE_INTERVAL_SECONDS - elapsed)
+            + random.uniform(*POLL_JITTER_SECONDS)
         )
 
 
