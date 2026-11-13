@@ -186,6 +186,14 @@ elif (
 
 `oi_pcr` 比照辦理（Put OI 有值、Call OI 為 0 時判為結構防禦）。下游在 `insights_engine.py` 與 `market_embeds.py` 以 `_safe_float` 處理 `None`，不觸發破位順向殺盤。
 
+#### 5.3.1 OI PCR 快取降級（僅供呈現）
+即時 OI 不可得（盤前／夜間 OI 未就緒、抓取失敗、無到期日、全零、比率無定義、例外）時，`calculate_pcr()` 會附上最近一筆已存的 OI PCR，避免 /x 面板只顯示「N/A (結構缺失)」：
+- **落盤**：即時 `oi_pcr` 為真實比值（Put、Call OI 皆 > 0）時，寫入 `sentiment_history`，指標名 `OI_PCR`；單邊或 `None` 不寫。
+- **上限**：僅採用 96 小時內的紀錄（`_OI_PCR_CACHE_MAX_AGE_SECONDS`，對齊 GEX kv 快照的 96h 上限）。
+- **鍵**：僅新增 `oi_pcr_cached`（2 位小數）、`oi_pcr_cached_state`（與即時相同的分類，含指數 ETF 門檻）、`oi_pcr_cached_age_seconds`。
+- **不動閘門**：`oi_pcr` 與 `oi_pcr_state` 維持原狀（仍為 `None`／N/A），盤中擠壓警報閘門與 Kelly 降級理由皆不變；即時 OI 單邊時也不附快取。
+- **非標準母體**：`OI_PCR` 不在 `CANONICAL_INDICATORS`，不進入任何百分位母體。
+
 ### 5.4 Skew 百分位的統計母體與樣本邊界防護 (Canonical Daily Population & Edge Guards)
 `calculate_skew()` 的呼叫點遍布心跳、終端指令、Analyst runner 與委託單遙測，每次呼叫都寫入一筆 `sentiment_history`，取樣頻率不固定。舊實作以「最近 500 列」為母體，實際只涵蓋兩三週且相鄰樣本高度自相關：安靜期的微小跳動即可衝上高分位，連續數週的恐慌反而被當成常態。現行實作改為**雙軌**：
 

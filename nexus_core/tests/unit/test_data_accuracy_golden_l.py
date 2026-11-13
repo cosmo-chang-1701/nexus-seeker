@@ -162,6 +162,9 @@ async def _run_pcr(chain: Any, last_stored: Optional[float]) -> tuple[dict, Asyn
         "market_analysis.sentiment.options_flow.get_last_stored_sentiment",
         return_value=last_stored,
     ), patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ), patch(
         "market_analysis.sentiment.options_flow.save_sentiment_history",
         new_callable=AsyncMock,
     ) as mock_save:
@@ -177,7 +180,8 @@ async def test_l6_premarket_zero_volume_does_not_store_balanced_sentinel() -> No
     assert res["oi_pcr"] == 1.5
     assert res["oi_pcr_state"] == "🐻 結構防禦/偏向空頭"
     assert "error" not in res
-    mock_save.assert_not_awaited()
+    assert [c for c in mock_save.await_args_list if c.args[1] == "PCR"] == []
+    mock_save.assert_awaited_once_with("AAPL", "OI_PCR", 1.5)
 
 
 @pytest.mark.asyncio
@@ -186,7 +190,8 @@ async def test_l6_zero_volume_uses_stored_pcr_with_cache_label() -> None:
     assert res["volume_pcr"] == 0.8
     assert res["state"].endswith("[歷史快取]")
     assert res["oi_pcr"] == 1.5
-    mock_save.assert_not_awaited()
+    assert [c for c in mock_save.await_args_list if c.args[1] == "PCR"] == []
+    mock_save.assert_awaited_once_with("AAPL", "OI_PCR", 1.5)
 
 
 @pytest.mark.asyncio
@@ -194,7 +199,10 @@ async def test_l6_normal_pcr_still_stored() -> None:
     # put 1200 / call 1000 = 1.2 → 寫入歷史
     res, mock_save = await _run_pcr(_pcr_chain(1000.0, 1200.0, 500.0, 500.0), None)
     assert res["volume_pcr"] == 1.2
-    mock_save.assert_awaited_once_with("AAPL", "PCR", 1.2)
+    pcr_calls = [c for c in mock_save.await_args_list if c.args[1] == "PCR"]
+    assert len(pcr_calls) == 1
+    assert pcr_calls[0].args == ("AAPL", "PCR", 1.2)
+    mock_save.assert_any_await("AAPL", "OI_PCR", 1.0)
 
 
 # ===========================================================================

@@ -44,6 +44,9 @@ async def test_issue_2_6_index_etf_dynamic_pcr_thresholds_and_dte_30() -> None:
     ), patch(
         "market_analysis.sentiment.options_flow.save_sentiment_history",
         new_callable=AsyncMock,
+    ), patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
     ):
         spy_res = await calculate_pcr("SPY")
 
@@ -64,6 +67,9 @@ async def test_issue_2_6_index_etf_dynamic_pcr_thresholds_and_dte_30() -> None:
     ), patch(
         "market_analysis.sentiment.options_flow.save_sentiment_history",
         new_callable=AsyncMock,
+    ), patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
     ):
         aapl_res = await calculate_pcr("AAPL")
 
