@@ -19,12 +19,9 @@ class RolloverScenario(str, Enum):
     # 做空進場訊號 (short_entry_deployment.py)，帶獨立的進場／停損／目標與倉位。
     SHORT_ENTRY = "SHORT_ENTRY"
     # 順勢金字塔加碼 (pyramid_add.py)。刻意獨立成情境、不借用 TRANSITION_ENGINE
-    # 既有的 OPEN_PYRAMID action：後者是 entry_regime 驅動的一次性狀態切換
-    # （Regime I 左側倉進化為右側動能倉，由 state["pyramided"] 旗標保證只觸發
-    # 一次），本情境是任何右側獲利倉在趨勢延續時的例行加碼（可觸發至
-    # _PYRAMID_MAX_ADDS 次）。兩者觸發源、次數上限皆不同，合併會讓路徑一的
-    # 一次性保證失效——但兩者最終都路由到同一個 action=="OPEN_PYRAMID" 下游
-    # 派發分支，必須靠 scenario 欄位區分文案與資料。
+    # 的狀態旗標：轉換引擎路徑一不再發出 OPEN_PYRAMID，state["pyramided"] 旗標
+    # 現僅讓保本棘輪只觸發一次；任何加碼一律只走本情境 (PYRAMID_ADD，依多時間
+    # 框架擠壓規則，可觸發至 _PYRAMID_MAX_ADDS 次)，路徑一不授權加碼。
     PYRAMID_ADD = "PYRAMID_ADD"
     # 兩級體制避險 (regime_hedge.py)：投資組合層級的 PSQ／SQQQ／SOXS 對沖計畫。
     REGIME_HEDGE = "REGIME_HEDGE"
@@ -32,8 +29,9 @@ class RolloverScenario(str, Enum):
 
 class TradingStrategyMode(str, Enum):
     """使用者 /settings 可選的交易策略模式，決定 Scenario 2 (opportunity_cost.py)
-    進場閘門要套用哪一套六重鐵律。RIGHT_SIDE 為現行、已上線的預設行為，未選擇的
-    使用者一律沿用 RIGHT_SIDE，零行為變化。
+    進場閘門要套用哪一套規則。RIGHT_SIDE 為預設行為（多時間框架擠壓做多進場，
+    見 docs/strategies/10；舊右側六重鐵律動能進場已於 2026-10 退役），未選擇的
+    使用者一律沿用 RIGHT_SIDE。
 
     ⚠️ SHORT_SIDE 是本系統唯一的空頭方向進場路徑。左側 (LEFT_SIDE) 儘管技術定義
     與右側相反，本質仍是**做多**——逆勢均值回歸、做市商 Put Wall 底牆接刀，條件三
@@ -43,9 +41,7 @@ class TradingStrategyMode(str, Enum):
     新增 enum 值不需要 migration：user_settings.trading_strategy 是
     TEXT DEFAULT 'RIGHT_SIDE'，無 CHECK 約束 (見 v068_add_trading_strategy.py)。"""
 
-    RIGHT_SIDE = (
-        "RIGHT_SIDE"  # 右側交易：順勢動能突破六重鐵律 (opportunity_cost.py 現行邏輯)
-    )
+    RIGHT_SIDE = "RIGHT_SIDE"  # 右側交易：多時間框架擠壓做多進場 (market_analysis/squeeze_entry/)
     LEFT_SIDE = "LEFT_SIDE"  # 左側交易：逆勢均值回歸六重鐵律 (left_side_entry.py)
     SHORT_SIDE = "SHORT_SIDE"  # 做空交易：結構破位追空六重鐵律 (short_side_entry.py)
     DYNAMIC = "DYNAMIC"  # 動態調整：5態 Regime 分類器路由 (regime_classifier.py)
@@ -55,7 +51,7 @@ class RiskAppetite(str, Enum):
     """使用者 /settings 可選的風險偏好，決定 TP 階梯比例、EV 轉倉門檻與核心資金
     部署比例要套用哪一組參數 (見 constants.py::resolve_risk_profile)。
 
-    DEFENSIVE 為現行、已上線的預設行為，未選擇的使用者一律沿用，零行為變化。
+    DEFENSIVE 為預設行為，未選擇的使用者一律沿用，零行為變化。
     AGGRESSIVE 的數值全部來自已移除的離線轉倉回測（backtest_engine_2025）的 aggressive
     模式。採用當時的依據（早期引擎「報酬/MDD/Sharpe 三項皆優於 DEFENSIVE」）在
     2026-09-23 以 Sortino 為主的判準重跑後已不成立（DEFENSIVE 1.45 > AGGRESSIVE
@@ -146,10 +142,14 @@ class DynamicRegime(str, Enum):
            SHORT_GAMMA_CRITICAL / VIX 深度倒掛) —— 壓過一切，做多做空皆禁。
            系統性流動性危機下做空同樣會被劇烈軋空，不是安全的方向。
         2. Regime V  破位追空態
-        3. Regime IV 的**個股結構封頂**分支 (Call Wall 空間不足 / STO 封頂)
-        4. Regime III → Regime III-B → Regime I → Regime II
+        3. Regime I  左側接刀態 —— 條件式：無個股封頂時照常；有封頂時，僅當所有
+           適用封頂位階 (有效目標／STO 封頂履約價) 皆高於左側回歸目標
+           min(Session VWAP, Gamma Flip) 才優先於 IV（左側進場閘門條件三不檢查
+           封頂，封頂不阻擋回歸路徑）；否則 IV 維持優先
+        4. Regime IV 的**個股結構封頂**分支 (Call Wall 空間不足 / STO 封頂)
+        5. Regime III → Regime III-B → Regime II
 
-    第 2 與第 3 的先後是刻意的：個股結構封頂與破位追空的條件可以同時成立
+    第 2 與第 4 的先後是刻意的：個股結構封頂與破位追空的條件可以同時成立
     (壓頂 + 跌破底牆)，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
 
     Regime III-B 緊接在 Regime III 之後、且**必須**在其之後：兩者都是多頭右側
@@ -166,8 +166,8 @@ class DynamicRegime(str, Enum):
     REGIME_III_RIGHT_MOMENTUM = (
         "REGIME_III_RIGHT_MOMENTUM"  # 右側動能態：結構突破伽馬擠壓
     )
-    # 右側趨勢延續態：已在趨勢中、非突破瞬間。路由至右側六重鐵律，但條件一改判
-    # 「持續站穩」、條件四改為 _ENTRY_UOA_LOOKBACK_DAYS 交易日回看窗。
+    # 右側趨勢延續態：已在趨勢中、非突破瞬間。路由至多時間框架擠壓規則（現行）；
+    # 分類條件一改判「持續站穩」、UOA 條件改為 _ENTRY_UOA_LOOKBACK_DAYS 交易日回看窗。
     # 乾跑期間由 config.REGIME_III_B_DRY_RUN 在派發端攔截，不推播只記稽核。
     REGIME_III_B_TREND_CONTINUATION = "REGIME_III_B_TREND_CONTINUATION"
     REGIME_IV_STRUCTURAL_CAP_CRISIS = (

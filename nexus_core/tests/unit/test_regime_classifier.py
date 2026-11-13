@@ -512,6 +512,112 @@ class TestRegimeI:
         assert "極端負乖離吸籌確認" in reason
 
 
+async def _classify_capitulation(
+    *,
+    vwap: float,
+    gex_profile_data: dict,
+    uoa: Optional[list] = None,
+) -> tuple[DynamicRegime, str]:
+    """Regime I 條件成立 (現價 90 密著 Put Wall 90、RSI=0) 的共用呼叫器，
+    供「Regime I 與個股結構封頂先後」測試覆寫 VWAP／封頂條件。"""
+    with (
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="NORMAL",
+        ),
+        patch(
+            "services.market_data_service.get_vix_term_structure",
+            new_callable=AsyncMock,
+            return_value={"vts_ratio": 0.9},
+        ),
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=_CAPITULATION_DF,
+        ),
+        patch(
+            "market_analysis.vwap_utils.fetch_session_vwap",
+            new_callable=AsyncMock,
+            return_value=vwap,
+        ),
+        _patch_atr_1d(),
+        _patch_high_60d(),
+    ):
+        regime, reason, _data = await classify_dynamic_regime(
+            "TEST", 90.0, gex_profile_data, uoa or []
+        )
+    return regime, reason
+
+
+_STO_CAP_UOA = [
+    {
+        "type": "CALL",
+        "action": "🔴 賣出開倉 (STO - Bid)",
+        "strike": 120.0,
+        "ratio": 2.0,
+    }
+]
+
+
+class TestRegimeIBeforeStructuralCap:
+    """Regime I 條件式優先於 Regime IV 個股結構封頂：僅當所有適用封頂位階都高於
+    回歸目標 min(VWAP, Gamma Flip) 才勝出（左側閘門不檢查封頂）。"""
+
+    @pytest.mark.asyncio
+    async def test_regime_i_precedes_structural_cap_callwall_above_target(
+        self,
+    ) -> None:
+        # Call Wall 94 距現價 4.4% < 動態門檻 -> 封頂；94 > 回歸目標 VWAP 93。
+        regime, reason = await _classify_capitulation(
+            vwap=93.0,
+            gex_profile_data={"call_wall": 94.0, "put_wall": 90.0, "gex_profile": {}},
+        )
+        assert regime == DynamicRegime.REGIME_I_LEFT_CATCH
+        assert "不阻擋左側回歸" in reason
+
+    @pytest.mark.asyncio
+    async def test_regime_i_precedes_structural_cap_sto_above_target(self) -> None:
+        # 無 Call Wall 封頂 (110)，僅 STO 封頂 @120 > 回歸目標 VWAP 95。
+        regime, reason = await _classify_capitulation(
+            vwap=95.0,
+            gex_profile_data={"call_wall": 110.0, "put_wall": 90.0, "gex_profile": {}},
+            uoa=_STO_CAP_UOA,
+        )
+        assert regime == DynamicRegime.REGIME_I_LEFT_CATCH
+        assert "不阻擋左側回歸" in reason
+
+    @pytest.mark.asyncio
+    async def test_structural_cap_blocks_regime_i_when_below_target(self) -> None:
+        # Call Wall 91 封頂且 <= 回歸目標 VWAP 95 -> Regime IV 維持優先。
+        regime, reason = await _classify_capitulation(
+            vwap=95.0,
+            gex_profile_data={"call_wall": 91.0, "put_wall": 90.0, "gex_profile": {}},
+        )
+        assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+        assert "Regime I 條件成立但封頂" in reason
+
+    @pytest.mark.asyncio
+    async def test_structural_cap_blocks_regime_i_when_target_unknown(self) -> None:
+        # 無 VWAP 時 Regime I 本身不成立 (需深度負乖離)，直接驗 IV；
+        # 回歸目標未知的分支由「無 VWAP 且無 Flip」固定為 IV。
+        regime, _reason = await _classify_capitulation(
+            vwap=0.0,
+            gex_profile_data={"call_wall": 91.0, "put_wall": 90.0, "gex_profile": {}},
+        )
+        assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+
+    @pytest.mark.asyncio
+    async def test_structural_cap_still_beats_iii_and_ii(self) -> None:
+        # 現價 90 未深度乖離 VWAP 90.5 -> 無 Regime I 條件；封頂照常為 IV。
+        regime, reason = await _classify_capitulation(
+            vwap=90.5,
+            gex_profile_data={"call_wall": 91.0, "put_wall": 90.0, "gex_profile": {}},
+        )
+        assert regime == DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS
+        assert "Regime I 條件成立" not in reason
+
+
 class TestRegimeV:
     @pytest.mark.asyncio
     async def test_breakdown_structure_classifies_regime_v(self) -> None:
