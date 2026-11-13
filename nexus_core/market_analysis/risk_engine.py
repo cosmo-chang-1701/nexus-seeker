@@ -519,7 +519,7 @@ def kelly_position_fraction(
     return max(0.0, min(kelly_f * kelly_scale, cap))
 
 
-# 期權決策數據降級 (IV/IVR/PCR 缺失、GEX 快取、結算日引力) 時的風險額度縮減係數。
+# 期權決策數據降級 (IV/IVR/PCR 缺失、GEX 快取、結算日偏離痛點) 時的風險額度縮減係數。
 _DATA_DEGRADED_HAIRCUT: float = 0.5
 
 
@@ -557,7 +557,7 @@ def optimize_position_risk(
             fail-closed 為 0 口——權利金與保證金都由 IV 推導，以佔位值算出的
             口數沒有意義；其他方向視同一項資料降級 (×_DATA_DEGRADED_HAIRCUT)。
         data_degraded_reasons: 期權決策數據的降級原因 (IVR／PCR 缺失、GEX 快取
-            降級、結算日引力等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
+            降級、結算日偏離痛點等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
             並以繁中原因列入 warnings。
         collateral_per_contract: 每口現金擔保 (strike × 100)。
         available_collateral: 可動用現金 (現金儲備 − 未平倉 Short Put 擔保金)。
@@ -568,6 +568,7 @@ def optimize_position_risk(
         return OptimizationResult(suggested_contracts=0, exposure_pct=0.0)
 
     spy_iv, current_risk_limit = 0.16, risk_limit
+    spy_iv_source = "預設"  # 僅供呈現：IV 比分母來源
     warnings = []
     intent = classify_trade_intent(strategy)
     is_directional_short = intent == "DIRECTIONAL_SHORT"
@@ -654,6 +655,7 @@ def optimize_position_risk(
         else:
             current_risk_limit = risk_limit * d_vix * d_oil * d_regime
         spy_iv = macro_data.vix / 100.0
+        spy_iv_source = "VIX"
 
     if vix_unknown and is_directional_short:
         # macro 區塊已被略過，做空的 VIX 未知保守乘數須在此套用。
@@ -766,6 +768,9 @@ def optimize_position_risk(
         warnings=warnings,
         unit_adj_delta=round(abs(float(val_adj_unit_delta)), 2),
         risk_budget_shares=risk_budget_shares,
+        iv_ratio_stock_iv=None if stock_iv_unknown else float(stock_iv),
+        iv_ratio_ref_iv=float(max(spy_iv, 0.01)),
+        iv_ratio_ref_source=spy_iv_source,
     )
 
 

@@ -46,6 +46,10 @@ class OptimizationResult(BaseModel):
     # 僅供呈現（0 口原因說明）：單口 IV 調整後 SPY 等值股數與剩餘風險額度股數。
     unit_adj_delta: Optional[float] = None
     risk_budget_shares: Optional[float] = None
+    # 僅供呈現（IV 比分母揭露）：個股 IV、參考 IV 與其來源（VIX／預設）。
+    iv_ratio_stock_iv: Optional[float] = None
+    iv_ratio_ref_iv: Optional[float] = None
+    iv_ratio_ref_source: Optional[str] = None
 
 
 class MacroRiskMetrics(BaseModel):
