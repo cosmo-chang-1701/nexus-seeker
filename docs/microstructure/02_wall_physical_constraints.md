@@ -138,7 +138,7 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `GEX_THIN_WALL_THRESHOLD` | `500,000.0` | 支撐底牆有效性之最低 GEX 深度門檻 | `nexus_core/market_analysis/index_microstructure.py` |
 | `thin_wall_threshold()` / `GEX_WALL_MIN_DEPTH_RATIO` | `max(500k, 1e-5×ADV×100)` | `/x` PutWall 紙牆判定門檻（PRE_CALIBRATION／僅呈現）；ADV 與雷達同源 | `nexus_core/market_analysis/gex_wall_depth.py` |
-| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_LEGACY_BUFFER_MAX_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/room_threshold.py` |
 | `_ROOM_RISK_MULTIPLIER` / `_ROOM_ATR_1D_MULTIPLIER` / `_ROOM_ABSOLUTE_FLOOR_PCT` | `2.2` / `1.5` / `0.035` | 帶正負號 Call Wall 空間率的動態門檻三項；取代退役的 `_ENTRY_ASYMMETRIC_ROOM_PCT` 固定 $5\%$ | `nexus_core/market_analysis/room_threshold.py` |
 | `_BUFFER_MULTIPLIERS` | `RIGHT/SHORT: (2.5, 1.8)`, `LEFT: (1.0, 1.2)` | 牆體緩衝雙邊界倍率；取代退役的固定 $5\%$ 上限 | `nexus_core/market_analysis/room_threshold.py` |
 

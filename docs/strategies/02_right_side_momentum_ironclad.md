@@ -255,24 +255,18 @@ flowchart TD
 | `_ENTRY_VOLUME_SURGE_MULTIPLIER` | `1.5` | 15m 突破放量倍數門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_BUFFER_LOWER_MULTIPLIERS["RIGHT"]` | `2.5` | 停損距離下界倍率（×ATR₁₅ₘ） | `nexus_core/market_analysis/room_threshold.py` |
 | `_BUFFER_MAX_STOP_DISTANCE_PCT` | `0.08` ($8\%$) | 停損距離的絕對上限兜底 | `nexus_core/market_analysis/room_threshold.py` |
-| `_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_LEGACY_BUFFER_MAX_PCT` | `0.05` ($5\%$) | ATR 兩項皆缺時退回的舊版單邊上限（降級路徑） | `nexus_core/market_analysis/room_threshold.py` |
 | `_ENTRY_UOA_CAP_RATIO_THRESHOLD` | `1.5` | 單筆 STO Call 判定為物理封頂之最低 Volume/OI 比值 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ROOM_RISK_MULTIPLIER` | `2.2` | 盈虧比要求；取代退役的 `_ENTRY_ASYMMETRIC_ROOM_PCT` 固定 $5\%$ | `nexus_core/market_analysis/room_threshold.py` |
 | `_ROOM_ATR_1D_MULTIPLIER` | `1.5` | 空間至少須涵蓋 1.5 個單日波幅 | `nexus_core/market_analysis/room_threshold.py` |
 | `_ROOM_ABSOLUTE_FLOOR_PCT` | `0.035` ($3.5\%$) | 動態門檻的絕對底線與資料缺失時的退回值 | `nexus_core/market_analysis/room_threshold.py` |
 | `_ROOM_STOP_ATR_15M_MULTIPLIER` | `0.5` | 停損墊片；必須與軌道一的 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT` 同步 | `nexus_core/market_analysis/room_threshold.py` |
-| `_ENTRY_UOA_MIN_DTE` | `7` | 主力 UOA 買盤最低到期天數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_UOA_MIN_RATIO` | `0.8` | 主力 UOA 買盤最低 Volume/OI 比值 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 主力 UOA 買盤最低權利金名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_UOA_LOOKBACK_DAYS` | `5` | **僅 Regime III-B** 套用的條件四回看窗，以**交易日**計；Regime III 維持「評估當下必須存在」 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_III_B_LOOKBACK_BARS` / `_REGIME_III_B_MIN_HELD_BARS` | `6` / `5` | 條件一趨勢延續變體的回看窗與最低站穩根數；$5/6$ 容差允許 1 根洗盤針 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_EARNINGS_PRE_EVENT_BUFFER_DAYS` | `3` | 避開財報發布的最小安全天數緩衝 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_CANDIDATE_MIN_DTE` | `1` | 標的自身最近效期選擇權最低 DTE 要求（避開 0/1 DTE） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_ROOM_EXTENDED_PCT` | `0.10` ($10\%$) | Call Wall 空間達此值視為「延伸跑道」，建議波段天期（僅影響建議文字） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_DTE_BAND_SHORT` | `(7, 21)` | 短線建議 DTE band，歷史沿革（已退役）：原沿用 `transition_engine.py` 舊的路徑一天期慣例，該路徑已不再發出 `OPEN_PYRAMID` | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_DTE_BAND_SWING` | `(21, 45)` | 波段建議 DTE band，沿用既有「次月合約」慣例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_IVR_SPREAD_THRESHOLD` | `50.0` ($50\%$) | IVR 高於此值改建議 Bull Call Spread（與左側 `_LEFT_ENTRY_IVR_SPREAD_THRESHOLD` 同值同理由） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `GEX_THIN_WALL_THRESHOLD` | `500,000.0` | 做市商有效正 Gamma 牆體之最低曝險深度門檻 | `nexus_core/market_analysis/index_microstructure.py` |
+
+> 註：條件四 UOA 門檻、條件六 DTE／IVR 建議參數已於 2026-11 隨退役邏輯自 constants.py 刪除；左側／做空側的對應參數見 `_LEFT_ENTRY_*` / `_SHORT_ENTRY_*`。
 
 ---
 

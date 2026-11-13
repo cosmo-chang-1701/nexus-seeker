@@ -101,7 +101,7 @@ _BUFFER_LOWER_MULTIPLIERS: dict[str, float] = {
 _BUFFER_MAX_STOP_DISTANCE_PCT: float = 0.08
 
 # 資料不足以計算下界時，降級回本模組出現前的既有單邊判定 0 < ΔS <= 5%
-# (_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT / _REGIME_III_SUPPORT_WALL_MAX_DIST_PCT)。
+# (_REGIME_III_SUPPORT_WALL_MAX_DIST_PCT)。
 _LEGACY_BUFFER_MAX_PCT: float = 0.05
 
 # --- 公式 C：破位追空次級節點空間具名常數 ---
