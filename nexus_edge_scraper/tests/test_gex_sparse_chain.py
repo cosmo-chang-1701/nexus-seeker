@@ -17,7 +17,67 @@ import pytest
 import database
 import gex_scraper
 import scheduler
-from tests.test_gex_scraper import _make_browser, _make_html, _row
+from playwright.async_api import Browser
+
+
+class _FakePage:
+    def __init__(self, html: str) -> None:
+        self._html = html
+
+    async def goto(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def wait_for_selector(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def wait_for_timeout(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def content(self) -> str:
+        return self._html
+
+    async def close(self) -> None:
+        return None
+
+
+class _FakeContext:
+    def __init__(self, html: str) -> None:
+        self._page = _FakePage(html)
+
+    async def route(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    async def new_page(self) -> _FakePage:
+        return self._page
+
+    async def unroute_all(self, **kwargs: Any) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+
+class _FakeBrowser:
+    def __init__(self, html: str) -> None:
+        self._html = html
+
+    async def new_context(self, **kwargs: Any) -> _FakeContext:
+        return _FakeContext(self._html)
+
+
+def _make_browser(html: str) -> Browser:
+    return cast(Browser, _FakeBrowser(html))
+
+
+def _row(contract_name: str, strike: float, oi: int, iv_pct: float) -> str:
+    cols = [contract_name, "-", str(strike)] + ["-"] * 6 + [str(oi), f"{iv_pct}"]
+    return "<tr>" + "".join(f"<td>{c}</td>" for c in cols) + "</tr>"
+
+
+def _make_html(spot: float, call_rows: list[str], put_rows: list[str]) -> str:
+    calls_table = "<table><tr><th>hdr</th></tr>" + "".join(call_rows) + "</table>"
+    puts_table = "<table><tr><th>hdr</th></tr>" + "".join(put_rows) + "</table>"
+    return f'<div data-testid="qsp-price">{spot}</div>{calls_table}{puts_table}'
 
 
 def test_helper_nvda_single_far_strike_invalid() -> None:
