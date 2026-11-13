@@ -3515,7 +3515,7 @@ def test_create_tactical_symbol_embed_shows_anti_washout_stop_with_atr_15m() -> 
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
     # PutWall(100.0) - 0.5 * ATR_15m(2.0) = 99.0；(105 - 99) / 105 = 5.71%
-    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $99.00 (↓5.71%)" in desc
+    assert "結構失效線 (PutWall−0.5×ATR₁₅ₘ): $99.00 (↓5.71%)" in desc
     assert "1.5×ATR" not in desc
 
 
@@ -3580,15 +3580,12 @@ def test_create_tactical_symbol_embed_shows_net_gex_flip_and_callwall() -> None:
     assert "CallWall: $108.00" in desc
     assert "距現價空間: ↑8.00%" in desc
     assert "深度: +$40K" in desc
-    assert "距現價空間 (下行緩衝): ↓10.00%" in desc
+    assert "距現價空間: ↓10.00%" in desc
 
 
-def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> None:
-    """GEX CallWall 距現價空間低於動態門檻時應附註「❌ 不足 X%」警示。
-
-    本案例刻意不提供 atr_15m/atr_14，走 room_threshold 的降級路徑：門檻退回
-    3.5% 絕對底線，且必須在旗標下方獨立一行揭露降級原因——使用者有權知道
-    看到的門檻不是完整推導出來的。
+def test_create_tactical_symbol_embed_callwall_space_has_no_threshold_flag() -> None:
+    """CallWall 距現價空間偏小時只列事實，不再附「❌ 不足 X%」門檻旗標或降級揭露
+    （公式 A 已不在 /x GEX 區塊使用，右側規則退役）。
     """
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
@@ -3611,17 +3608,15 @@ def test_create_tactical_symbol_embed_flags_callwall_insufficient_space() -> Non
     desc = get_embed_text(embed)
 
     assert "Net GEX Regime (最近到期): -$50K (🔴 SHORT_GAMMA (助漲助跌))" in desc
-    assert "距現價空間: ↑3.00% ❌ 不足 3.50%" in desc
-    assert "數據缺失" in desc and "已退回 3.5% 絕對底線" in desc
+    assert "距現價空間: ↑3.00%" in desc
+    assert "❌ 不足" not in desc
+    assert "數據缺失" not in desc and "絕對底線" not in desc
 
 
-def test_create_tactical_symbol_embed_callwall_uses_dynamic_threshold() -> None:
-    """ATR 與 PutWall 齊備時，CallWall 旗標須顯示實際推導出的動態門檻值，
-    而非 3.5% 底線，且不得出現降級揭露。
+def test_create_tactical_symbol_embed_callwall_has_no_dynamic_threshold() -> None:
+    """ATR 與 PutWall 齊備時，CallWall 空間行仍只列距離，不得出現動態門檻旗標。
 
-    現價 100、PutWall 96、ATR₁₅ₘ 1.0 -> Stop = 95.5、Risk = 4.5%，
-    門檻 = max(2.2×4.5%, 1.5×5%, 3.5%) = 9.90%；CallWall 108 的 8% 空間不足。
-    停損墊片 0.5×ATR₁₅ₘ 與引擎軌道一一致。
+    現價 100、CallWall 108 -> 空間 8.00%（舊版會印「❌ 不足 9.90% (動態門檻…)」）。
     """
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
@@ -3645,16 +3640,14 @@ def test_create_tactical_symbol_embed_callwall_uses_dynamic_threshold() -> None:
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "距現價空間: ↑8.00% ❌ 不足 9.90% (動態門檻：2.2×停損風險)" in desc
+    assert "距現價空間: ↑8.00%" in desc
+    assert "動態門檻" not in desc
+    assert "❌ 不足" not in desc
     assert "已退回 3.5% 絕對底線" not in desc
 
 
-def test_create_tactical_symbol_embed_putwall_buffer_three_states() -> None:
-    """PutWall 下行緩衝的過窄／甜蜜點／過寬三態渲染。
-
-    量的是停損距離 (現價 → PutWall − 0.5×ATR₁₅ₘ)。
-    ATR₁₅ₘ 1.0、現價 100 -> 下界 2.5%、上界為絕對 8%。
-    """
+def test_create_tactical_symbol_embed_putwall_buffer_plain_distance() -> None:
+    """PutWall 下行緩衝一律只印「距現價空間: ↓X.XX%」，過窄／甜蜜點／過寬不再發判定。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     def _build(put_wall: float) -> str:
@@ -3676,14 +3669,11 @@ def test_create_tactical_symbol_embed_putwall_buffer_three_states() -> None:
         }
         return get_embed_text(create_tactical_symbol_embed(data))
 
-    too_tight = _build(98.5)  # 停損 98.0 -> 停損距離 2.0% < 下界 2.5%
-    assert "❌ 過窄 (< 2.5×ATR₁₅ₘ = 2.50%)，易遭掃損" in too_tight
-
-    sweet = _build(95.9)  # 停損 95.4 -> 停損距離 4.6%，落在 [2.5%, 8%]
-    assert "距現價空間 (下行緩衝): ↓4.10%｜停損距離 4.60% ✅ 進場甜蜜點" in sweet
-
-    too_wide = _build(91.0)  # 停損 90.5 -> 停損距離 9.5% > 絕對上界 8%
-    assert "⚠ 停損距離過寬 (> 絕對上限 8.00%)，停損距離過遠" in too_wide
+    for wall, expect in ((98.5, "↓1.50%"), (95.9, "↓4.10%"), (91.0, "↓9.00%")):
+        text = _build(wall)
+        assert f"距現價空間: {expect}" in text
+        for gone in ("過窄", "易遭掃損", "進場甜蜜點", "停損距離", "過寬"):
+            assert gone not in text, (wall, gone)
 
 
 def test_create_tactical_symbol_embed_flags_callwall_data_anomaly_when_below_spot() -> (
@@ -3729,7 +3719,7 @@ def test_create_tactical_symbol_embed_shows_putwall_headroom_anomaly_when_above_
     embed = create_tactical_symbol_embed(data)
     desc = get_embed_text(embed)
 
-    assert "距現價空間 (下行緩衝): ↑5.00% ⚠️ [數據異常：PutWall已高於現價]" in desc
+    assert "距現價空間: ↑5.00% ⚠️ [數據異常：PutWall已高於現價]" in desc
 
 
 def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensical() -> (
@@ -3755,14 +3745,14 @@ def test_create_tactical_symbol_embed_anti_washout_stop_falls_back_when_nonsensi
     # 101.0 - 0.5*0.2 = 100.9 >= 100.0 (現價) -> 觸發 fallback
     # fallback: 100.0 - 2*0.2 = 99.60
     assert (
-        "結構停損 (PutWall−0.5×ATR₁₅ₘ): $99.60 (↓0.40%)"
+        "結構失效線 (PutWall−0.5×ATR₁₅ₘ): $99.60 (↓0.40%)"
         " [PutWall異常降級：改用現價−2×ATR₁₅ₘ]" in desc
     )
 
 
 def test_create_tactical_symbol_embed_structural_stop_matches_stop_distance() -> None:
-    """/x 實測回報 (MU)：結構停損價必須與「停損距離」同一條線，
-    即 停損價 = 現價 × (1 − 停損距離)，不得再並列 1.5× 的另一條停損。"""
+    """/x 實測回報 (MU)：結構失效線只有一條（0.5×ATR₁₅ₘ），不得再並列 1.5× 的另一條，
+    也不再另印「停損距離」判定。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3777,8 +3767,8 @@ def test_create_tactical_symbol_embed_structural_stop_matches_stop_distance() ->
 
     desc = get_embed_text(create_tactical_symbol_embed(data))
     # 1050 - 0.5 * 9.70 = 1045.15；(1097.39 - 1045.15) / 1097.39 = 4.76%
-    assert "停損距離 4.76%" in desc
-    assert "結構停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
+    assert "停損距離" not in desc
+    assert "結構失效線 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
     assert "防洗盤停損" not in desc
     assert "助跌區" not in desc
 
@@ -3786,8 +3776,8 @@ def test_create_tactical_symbol_embed_structural_stop_matches_stop_distance() ->
 def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_negative() -> (
     None
 ):
-    """PutWall 處淨 GEX 為負（助跌區）時，呈現上以淨 GEX 最大支撐為錨的參考停損
-    作主行，引擎閘門停損（PutWall 錨）降為次行；閘門不變（docs/microstructure/02 §7）。"""
+    """PutWall 處淨 GEX 為負（助跌區）時，呈現上以淨 GEX 最大支撐為錨的參考失效線
+    作主行，PutWall 失效線（PutWall 錨）降為次行；引擎不變（docs/microstructure/02 §7）。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -3808,11 +3798,11 @@ def test_create_tactical_symbol_embed_discloses_alt_stop_when_putwall_net_gex_ne
     assert "實為助跌區" in desc
     assert "淨 GEX 最大支撐: $1070.00" in desc
     # 1070 - 0.5 * 9.70 = 1065.15；(1097.39 - 1065.15) / 1097.39 = 2.94%
-    assert "參考停損 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.15 (↓2.94%)" in desc
-    # 閘門不變：引擎停損仍以 PutWall 1050 為錨，降為次行
-    assert "引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
-    assert "閘門仍以 PutWall 為準" in desc
-    assert desc.index("參考停損 (淨 GEX 支撐") < desc.index("引擎閘門停損")
+    assert "參考失效線 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.15 (↓2.94%)" in desc
+    # PutWall 錨的失效線仍以 PutWall 1050 計算，降為次行
+    assert "PutWall 失效線 (PutWall−0.5×ATR₁₅ₘ): $1045.15 (↓4.76%)" in desc
+    assert "閘門仍以 PutWall 為準" not in desc
+    assert desc.index("參考失效線 (淨 GEX 支撐") < desc.index("PutWall 失效線")
 
 
 def test_create_tactical_symbol_embed_flags_sto_put_divergence_from_putwall() -> None:
@@ -5282,7 +5272,7 @@ def test_create_tactical_symbol_embed_reanchors_putwall_when_spot_breaks_down() 
 
     assert "PutWall: $150.00 (動態重錨)" in desc
     assert "⚠️ [數據異常：PutWall已高於現價]" not in desc
-    assert "距現價空間 (下行緩衝): ↓" in desc
+    assert "距現價空間: ↓" in desc
 
 
 # ---------------------------------------------------------------------------
@@ -5348,11 +5338,11 @@ def test_create_tactical_symbol_embed_reanchors_callwall_when_equal_to_spot() ->
     assert "⚠️ [數據異常：CallWall已低於現價]" not in desc
 
 
-def test_create_tactical_symbol_embed_discloses_degrade_when_no_valid_put_stop_wall() -> (
+def test_create_tactical_symbol_embed_no_degrade_line_when_no_valid_put_stop_wall() -> (
     None
 ):
-    """PutWall 等於現價且下方無任何正 GEX 支撐：valid_put_stop_wall 歸 0，
-    CallWall 空間門檻必須走降級揭露，而不是靜默套用一個低估的門檻。"""
+    """PutWall 等於現價且下方無任何正 GEX 支撐：CallWall 空間行只列距離，
+    不再有門檻降級揭露（公式 A 已不在 /x GEX 區塊使用）。"""
     from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
 
     data = {
@@ -5375,7 +5365,9 @@ def test_create_tactical_symbol_embed_discloses_degrade_when_no_valid_put_stop_w
 
     desc = get_embed_text(create_tactical_symbol_embed(data))
 
-    assert "數據缺失" in desc
+    assert "數據缺失" not in desc
+    assert "動態門檻" not in desc
+    assert "CallWall: $165.00" in desc
     assert "PutWall" in desc
 
 

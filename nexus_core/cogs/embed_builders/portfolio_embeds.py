@@ -31,14 +31,9 @@ from market_analysis.index_microstructure import (
 from market_analysis.room_threshold import (
     _BUFFER_MAX_STOP_DISTANCE_PCT,
     _DAILY_NOISE_STOP_ATR_1D_MULT,
-    _ROOM_ABSOLUTE_FLOOR_PCT,
-    _ROOM_ATR_1D_MULTIPLIER,
-    _ROOM_RISK_MULTIPLIER,
     _ROOM_STOP_ATR_15M_MULTIPLIER,
     _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER,
-    compute_dynamic_room_threshold,
     compute_reference_stop,
-    evaluate_wall_buffer,
     is_valid_daily_atr,
     resolve_atr_15m,
 )
@@ -894,13 +889,6 @@ def create_strategic_dash_embed(
     embed.set_footer(text="戰術風險管理終端")
     return embed
 
-
-# CallWall 空間門檻 max(2.2×停損風險, 1.5×ATR₁D, 3.5%) 中實際生效的那一項
-_ROOM_BINDING_TERM_LABELS: Dict[str, str] = {
-    "RISK": f"{_ROOM_RISK_MULTIPLIER:g}×停損風險",
-    "ATR_1D": f"{_ROOM_ATR_1D_MULTIPLIER:g}×ATR₁D",
-    "FLOOR": f"{_ROOM_ABSOLUTE_FLOOR_PCT:.1%} 底線",
-}
 
 # 釘住效應判定帶寬：ATR₁D 不可得時，現價距 CallWall 在此百分比內即視為貼牆。
 _PIN_FALLBACK_BAND_PCT: float = 1.0
@@ -2103,25 +2091,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
                     put_wall_float = _to_float(gex_putwall, 0.0) if has_putwall else 0.0
                     put_reanchored = False
-                    # 下檔／上檔兩個區塊延後到上檔空間算完才輸出：「進場甜蜜點」與盈虧比
-                    # 必須和 CallWall 空間交叉判定（docs/strategies/06 §5）。
+                    # 下檔／上檔兩個區塊延後到上檔空間算完才輸出（僅呈現順序）。
                     put_block_items: Optional[List[str]] = None
                     call_block_items: Optional[List[str]] = None
-                    sweet_spot_idx: Optional[int] = None
-                    sweet_spot_prefix = ""
-                    put_stop_for_rr = 0.0
-                    # 停損距離過窄時的合格下界 (2.5×ATR₁₅ₘ，佔現價比例)；盈虧比須
-                    # 另以此重算，否則過窄停損會把比值灌水成 ✅。
-                    put_min_stop_frac: Optional[float] = None
-                    # TOO_TIGHT（含降級、min_pct 為 None）時盈虧比須標示比值虛高。
-                    put_too_tight = False
                     # PutWall 為助跌區或紙牆（淨 GEX 不構成支撐）。
                     put_wall_weak = False
                     _put_kind_outer = ""
-                    alt_stop_for_rr = 0.0
-                    alt_anchor_for_rr = 0.0
                     upside_room_pct: Optional[float] = None
-                    upside_threshold_pct: Optional[float] = None
 
                     if (
                         effective_c_val > 0
@@ -2212,26 +2188,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 / effective_c_val
                                 * 100
                             )
-                            # 下行緩衝判定自固定 5% 升級為 room_threshold.py
-                            # 公式 B。量的是**停損距離**（現價到 PutWall −
-                            # 0.5×ATR₁₅ₘ，即引擎軌道一真正會掛的那條線）：
-                            #   過窄 (< 2.5×ATR₁₅ₘ)：停損落在日內雜訊帶內，
-                            #        會先被掃穿再回頭，即 Liquidity Sweep。
-                            #   過寬 (> 絕對 8%)：絕對風險上限兜底。
-                            # 「PutWall 已高於現價」的資料異常分支優先於三態判定
-                            # 保留——那是資料問題，不是緩衝問題。
+                            # 純呈現：只列距離事實，不發進場判定（右側規則已退役，
+                            # 多頭進場判定僅在 Target Lock 擠壓區塊）。
                             _pw_atr_1d = _to_float(data.get("atr_14"), 0.0)
                             if _pw_atr_1d <= 0.0:
                                 _pw_atr_1d = _to_float(data.get("atr_1d"), 0.0)
                             _pw_atr_15m = resolve_atr_15m(
                                 _to_float(data.get("atr_15m"), 0.0), _pw_atr_1d
-                            )
-                            put_buffer_eval = evaluate_wall_buffer(
-                                effective_c_val,
-                                put_wall_float,
-                                _pw_atr_15m,
-                                _pw_atr_1d,
-                                profile="RIGHT",
                             )
                             is_put_zero = math.isclose(
                                 put_buffer_pct, 0.0, abs_tol=1e-4
@@ -2239,85 +2202,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             put_arrow = (
                                 "↓" if (put_buffer_pct >= 0 or is_put_zero) else "↑"
                             )
-                            # 已把 degrade_reason 內嵌進文案的分支不再重複輸出
-                            put_degrade_inline = False
-                            # 判定量的是停損距離（牆 − 0.5×ATR₁₅ₘ），不是牆距；兩者
-                            # 並列，避免「7.46% 被判 > 8%」這種看似比較式寫反的誤讀。
-                            stop_dist_tag = (
-                                f"｜停損距離 {put_buffer_eval.buffer_pct * 100:.2f}%"
-                                if put_buffer_eval.min_pct is not None
+                            put_space_flag = (
+                                " ⚠️ [數據異常：PutWall已高於現價]"
+                                if (put_buffer_pct < 0 and not is_put_zero)
                                 else ""
                             )
-                            if put_buffer_pct < 0 and not is_put_zero:
-                                put_space_flag = " ⚠️ [數據異常：PutWall已高於現價]"
-                                put_items.append(
-                                    f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%{put_space_flag}"
-                                )
-                            elif put_buffer_eval.state == "SWEET_SPOT":
-                                sweet_spot_prefix = (
-                                    f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}"
-                                )
-                                sweet_spot_idx = len(put_items)
-                                if put_wall_weak:
-                                    put_items.append(
-                                        f"{sweet_spot_prefix} ✅ 停損距離合格"
-                                        f"\n │  ⚠ PutWall 為{put_wall_kind}，支撐性待校準"
-                                    )
-                                else:
-                                    put_items.append(
-                                        f"{sweet_spot_prefix} ✅ 進場甜蜜點"
-                                    )
-                            elif put_buffer_eval.state == "TOO_TIGHT":
-                                # 邊界不可得時不得印出「< 2.5×ATR₁₅ₘ = 下界」這種
-                                # 有公式卻無數值的誤導文案——該情境走的是降級的
-                                # 固定 5% 判定，應改為據實揭露降級原因。
-                                put_too_tight = True
-                                if put_buffer_eval.min_pct is not None:
-                                    put_min_stop_frac = put_buffer_eval.min_pct
-                                    _note = (
-                                        f"❌ 過窄 (< 2.5×ATR₁₅ₘ = "
-                                        f"{put_buffer_eval.min_pct * 100:.2f}%)，易遭掃損"
-                                    )
-                                else:
-                                    _note = (
-                                        f"❌ 緩衝過窄，易遭掃損"
-                                        f"（⚠ {put_buffer_eval.degrade_reason}）"
-                                    )
-                                    put_degrade_inline = True
-                                put_items.append(
-                                    f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}\n │  {_note}"
-                                )
-                            else:
-                                if put_buffer_eval.max_pct is not None:
-                                    _note = (
-                                        f"⚠ 停損距離過寬 (> 絕對上限 "
-                                        f"{put_buffer_eval.max_pct * 100:.2f}%)，停損距離過遠"
-                                    )
-                                else:
-                                    _note = (
-                                        f"⚠ 緩衝過寬，停損距離過遠"
-                                        f"（⚠ {put_buffer_eval.degrade_reason}）"
-                                    )
-                                    put_degrade_inline = True
-                                put_items.append(
-                                    f"距現價空間 (下行緩衝): {put_arrow}"
-                                    f"{abs(put_buffer_pct):.2f}%{stop_dist_tag}\n │  {_note}"
-                                )
-
-                            # 降級一律揭露，不限於判定不利時：門檻／邊界本身是
-                            # 降級值時，即使結論是「甜蜜點」使用者同樣有權知道那
-                            # 是在缺數據下算出來的（docs/strategies/06 §5 的強制
-                            # 揭露義務）。
-                            if (
-                                put_buffer_eval.degrade_reason
-                                and not put_degrade_inline
-                            ):
-                                put_items[-1] += (
-                                    f"\n │  ⚠ {put_buffer_eval.degrade_reason}"
-                                )
+                            put_items.append(
+                                f"距現價空間: {put_arrow}"
+                                f"{abs(put_buffer_pct):.2f}%{put_space_flag}"
+                            )
 
                         atr_15m_val = (
                             _pw_atr_15m
@@ -2347,9 +2240,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 / effective_c_val
                                 * 100
                             )
-                            put_stop_for_rr = structural_stop
                             stop_item = (
-                                f"結構停損 (PutWall−0.5×ATR₁₅ₘ): "
+                                f"結構失效線 (PutWall−0.5×ATR₁₅ₘ): "
                                 f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
                                 f"{fallback_marker}"
                             )
@@ -2364,15 +2256,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 alt_stop_pct = (
                                     (effective_c_val - alt_stop) / effective_c_val * 100
                                 )
-                                alt_stop_for_rr = alt_stop
-                                alt_anchor_for_rr = alt_net_supp
                                 stop_item = (
-                                    f"參考停損 (淨 GEX 支撐 ${alt_net_supp:.2f}−0.5×ATR₁₅ₘ): "
+                                    f"參考失效線 (淨 GEX 支撐 ${alt_net_supp:.2f}−0.5×ATR₁₅ₘ): "
                                     f"${alt_stop:.2f} (↓{alt_stop_pct:.2f}%)"
-                                    f"\n │  引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): "
+                                    f"\n │  PutWall 失效線 (PutWall−0.5×ATR₁₅ₘ): "
                                     f"${structural_stop:.2f} (↓{stop_dist_pct:.2f}%)"
                                     f"{fallback_marker}"
-                                    f"\n │  ⚠ PutWall 為{put_wall_kind}，閘門仍以 PutWall 為準"
                                 )
                             # docs/strategies/06 §5：日線噪音帶參考停損，僅並列於
                             # 停損行尾，閘門不動，待 calibration 停損墊片比較。
@@ -2592,50 +2481,12 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         _cw_atr_15m = resolve_atr_15m(
                             _to_float(data.get("atr_15m"), 0.0), _cw_atr_1d
                         )
-                        valid_put_stop_wall = (
-                            put_wall_float
-                            if (
-                                has_putwall
-                                and put_wall_float < effective_c_val
-                                and not math.isclose(
-                                    put_wall_float, effective_c_val, abs_tol=1e-4
-                                )
-                            )
-                            else 0.0
-                        )
-                        _cw_room = compute_dynamic_room_threshold(
-                            effective_c_val,
-                            valid_put_stop_wall,
-                            _cw_atr_15m,
-                            _cw_atr_1d,
-                            direction="LONG",
-                        )
-                        _cw_threshold_pct = _cw_room.threshold_pct * 100
                         space_flag = ""
-                        degrade_line: Optional[str] = None
                         is_call_zero = math.isclose(
                             call_wall_dist_pct, 0.0, abs_tol=1e-4
                         )
                         if call_wall_dist_pct < 0 and not is_call_zero:
                             space_flag = " ⚠️ [數據異常：CallWall已低於現價]"
-                        elif call_wall_dist_pct < _cw_threshold_pct or is_call_zero:
-                            space_flag = f" ❌ 不足 {_cw_threshold_pct:.2f}%"
-                            if not _cw_room.degrade_reason:
-                                # 標出決定門檻的那一項，免得與盈虧比 ✅ 看似矛盾
-                                _binding_label = _ROOM_BINDING_TERM_LABELS.get(
-                                    _cw_room.binding_term
-                                )
-                                space_flag += (
-                                    f" (動態門檻：{_binding_label})"
-                                    if _binding_label
-                                    else " (動態門檻)"
-                                )
-                        # 降級一律揭露，不限於門檻未達時（docs/strategies/06 §5）：
-                        # 空間充足的結論若建立在降級門檻上（例如底牆已失效、
-                        # valid_put_stop_wall 歸 0 使 RISK 項被剔除），靜默通過等於
-                        # 讓使用者誤以為那是完整數據下的判定。
-                        if _cw_room.degrade_reason:
-                            degrade_line = f" │  ⚠ {_cw_room.degrade_reason}"
                         call_arrow = (
                             "↑" if (call_wall_dist_pct >= 0 or is_call_zero) else "↓"
                         )
@@ -2652,8 +2503,6 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             _space_line += f" 📌 貼牆(<{_cw_band_pct:.2f}%)"
                             _call_wall_hug_outer = max(call_wall_dist_pct, 0.0)
                             _call_wall_band_outer = _cw_band_pct
-                        if degrade_line:
-                            _space_line += f"\n{degrade_line}"
                         call_reanchor_note = " (動態重錨)" if call_reanchored else ""
                         call_items = [
                             f"CallWall: ${call_wall_float:.2f}{call_reanchor_note}",
@@ -2710,84 +2559,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         call_block_items = call_items
                         if call_wall_dist_pct >= 0 or is_call_zero:
                             upside_room_pct = max(call_wall_dist_pct, 0.0)
-                            upside_threshold_pct = _cw_threshold_pct
 
                     # ── 下檔 × 上檔交叉判定 ──
                     if put_block_items is not None:
-                        upside_short = (
-                            upside_room_pct is not None
-                            and upside_threshold_pct is not None
-                            and upside_room_pct < upside_threshold_pct
-                        )
-                        if sweet_spot_idx is not None and upside_short:
-                            # 停損距離合格不等於可進場：上方空間不足以支撐 2.2:1
-                            put_block_items[sweet_spot_idx] = (
-                                f"{sweet_spot_prefix} ✅ 停損距離合格"
-                                f"\n │  ❌ 上檔空間 {upside_room_pct:.2f}% 不足 "
-                                f"{upside_threshold_pct:.2f}%，非進場點"
-                            )
-                        if (
-                            upside_room_pct is not None
-                            and effective_c_val > 0
-                            and 0 < put_stop_for_rr < effective_c_val
-                        ):
-                            reward = call_wall_float - effective_c_val
-                            rr_parts: List[str] = []
-                            if _call_wall_hug_outer is not None:
-                                # 貼牆：上檔已封頂，盈虧比無意義，單行帶過以省字數
-                                put_block_items.append(
-                                    "短線盈虧比: ⛔ 上檔已封頂（距 CallWall "
-                                    f"{_call_wall_hug_outer:.2f}% < {_call_wall_band_outer:.2f}%），不計"
-                                )
-                            else:
-                                _rr_cases = (
-                                    (
-                                        "閘門"
-                                        if (put_wall_weak and alt_stop_for_rr > 0)
-                                        else "",
-                                        put_stop_for_rr,
-                                    ),
-                                    (
-                                        f"淨 GEX 支撐錨 ${alt_anchor_for_rr:.2f}",
-                                        alt_stop_for_rr,
-                                    ),
-                                )
-                                for _label, _stop in _rr_cases:
-                                    if not (0 < _stop < effective_c_val):
-                                        continue
-                                    _rr = max(reward, 0.0) / (effective_c_val - _stop)
-                                    _flag = (
-                                        "✅" if _rr >= _ROOM_RISK_MULTIPLIER else "❌"
-                                    )
-                                    if (
-                                        not _label.startswith("淨 GEX")
-                                        and put_too_tight
-                                        and _flag == "✅"
-                                    ):
-                                        _flag = "⚠ 停損過窄、比值虛高"
-                                    _prefix = f"{_label} " if _label else ""
-                                    rr_parts.append(f"{_prefix}{_rr:.2f}:1 {_flag}")
-                                if (
-                                    put_min_stop_frac is not None
-                                    and put_min_stop_frac > 0
-                                ):
-                                    _rr_min = max(reward, 0.0) / (
-                                        effective_c_val * put_min_stop_frac
-                                    )
-                                    _flag_min = (
-                                        "✅"
-                                        if _rr_min >= _ROOM_RISK_MULTIPLIER
-                                        else "❌"
-                                    )
-                                    rr_parts.append(
-                                        f"合格停損 ↓{put_min_stop_frac * 100:.2f}% "
-                                        f"{_rr_min:.2f}:1 {_flag_min}"
-                                    )
-                                put_block_items.append(
-                                    f"短線盈虧比 (期權視角，至 CallWall ${call_wall_float:.2f}): "
-                                    + "｜".join(rr_parts)
-                                    + f" (門檻 {_ROOM_RISK_MULTIPLIER:.1f}:1)"
-                                )
                         _append_tree_block(
                             gex_lines,
                             "⚠️ 下檔助跌"
@@ -2958,7 +2732,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 f"（{_drift_pct:+.1f}%）"
                             )
                             if abs(_drift_pct) > _atr_pct:
-                                _drift_line += "，牆位／盈虧比僅供參考"
+                                _drift_line += "，牆位僅供參考"
                             # 置於欄首（程式碼區塊首行之後），避免被欄位切分擠到
                             # 續欄而不易察覺。
                             gex_lines.insert(1, _drift_line)
@@ -3791,7 +3565,7 @@ _ENTRY_RULES_DETAIL_LEFT = _treeify_rule_detail(
         "條件五",
         "•總經流動性危機與財報黑天鵝安全閥",
         "•前四項須全數通過才會真正發動，否則列「⏭️ 略過」",
-        "•重用右側條件五的財報緩衝期與大盤 Regime 子檢查 (門檻校準單一來源)",
+        "•重用共用條件五 (財報緩衝期與大盤 Regime 子檢查，門檻單一來源)",
         "•額外疊加 VIX 期限結構倒掛防禦：vts_ratio ≥ 1.10 直接判定未通過",
         "•任一外部資料抓取失敗一律 fail-safe 判定未通過 (不預設放行)",
         "",
@@ -3816,10 +3590,10 @@ _ENTRY_RULES_DETAIL_SHORT: List[str] = _treeify_rule_detail(
         " 檢查，僅於前置條件皆通過後才真正發動 (未發動時列「⏭️ 略過」)",
         " ----------------------------------",
         "條件一",
-        "•結構性放量破位確認 (全面鏡像右側條件一)",
+        "•結構性放量破位確認",
         "•15m 實體『陰線』收盤價 < Gamma Flip 估算門檻",
         "•若全鏈 Net GEX > 0 且無交叉點：做市商正 Gamma 買跌賣漲吸收波動，",
-        "  結構性多頭直接判定未通過 (右側「Net GEX < 0 直接不通過」的鏡像)",
+        "  結構性多頭直接判定未通過 (Net GEX < 0 直接判定未通過)",
         "•若全鏈 Net GEX < 0 且無交叉點：改以跌破 Session VWAP − 0.5×ATR₁₅ₘ 確認",
         "•15m 成交量 ≥ 前20根均量 × 1.5 倍，且收盤須跌破 Session VWAP",
         "",
@@ -3848,7 +3622,7 @@ _ENTRY_RULES_DETAIL_SHORT: List[str] = _treeify_rule_detail(
         "",
         "條件五",
         "•總經與財報事件安全閥",
-        "•完全重用右側條件五 (財報緩衝期 + 大盤 Regime)：二元事件風險對做多做空",
+        "•完全重用共用條件五 (財報緩衝期 + 大盤 Regime)：二元事件風險對做多做空",
         "  同樣致命，空單遇上優於預期的財報會被跳空軋空",
         "•刻意不疊加 VIX 倒掛檢查：左側視倒掛為流動性凍結風險，對做空卻是順風，",
         "  兩者語意相反，硬套會方向性地誤殺",
@@ -3918,12 +3692,12 @@ def create_entry_rules_embed(
     if trading_strategy == "DYNAMIC" and dynamic_regime:
         _regime_display = {
             "REGIME_I_LEFT_CATCH": "🩹 Regime I：左側接刀態 (極端負乖離吸籌)",
-            "REGIME_II_CHAOS_STANDASIDE": "⚪ Regime II：混沌泥淖態 (全系統休眠)",
-            "REGIME_III_RIGHT_MOMENTUM": "🎯 Regime III：右側動能態 (結構突破伽馬擠壓)",
+            "REGIME_II_CHAOS_STANDASIDE": "⚪ Regime II：混沌泥淖態 (多頭交給擠壓規則)",
+            "REGIME_III_RIGHT_MOMENTUM": "🎯 Regime III：順勢態 (多頭交給擠壓規則)",
             "REGIME_III_B_TREND_CONTINUATION": (
-                "🚀 Regime III-B：右側趨勢延續態 (持續站穩結構，非突破瞬間)"
+                "🚀 Regime III-B：趨勢延續態 (多頭交給擠壓規則)"
             ),
-            "REGIME_IV_STRUCTURAL_CAP_CRISIS": "🔴 Regime IV：結構封頂／危機態 (強制鎖定)",
+            "REGIME_IV_STRUCTURAL_CAP_CRISIS": "🔴 Regime IV：結構封頂 (多頭交給擠壓規則，壓力區只標註)",
             "REGIME_V_BREAKDOWN_CHASE": "🐻 Regime V：破位追空態 (負 Gamma 順勢助跌)",
         }.get(dynamic_regime, dynamic_regime)
         regime_lines = [
