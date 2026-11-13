@@ -487,7 +487,8 @@ def test_edge_failure_graceful_degradation_and_hiding() -> None:
     edge_text = str(fields["📐 情緒與邊緣偵測 (Edge Detection)"])
     # 意圖映射區塊應被優雅隱藏
     assert "巨鯨/散戶意圖映射" not in edge_text
-    assert "狀態: \x1b[1;32m同步\x1b[0m" in edge_text
+    # Reddit 抓取失敗時不得以綠色「同步」暗示散戶背離已判定
+    assert "狀態: \x1b[1;30m同步（Reddit 缺失，散戶背離未判定）\x1b[0m" in edge_text
 
 
 def test_core_indicators_tab_only_retains_calculated_summary() -> None:
