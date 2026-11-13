@@ -129,11 +129,12 @@ flowchart TD
 | `min_volume` | `300` | 候選篩選最低合約成交口數 | `nexus_core/market_analysis/sentiment/uoa_detector.py` |
 | `max_non_index_nominal` | `$500,000,000.0` | 個股單場合約名目上限（防範異常壞數據） | `nexus_core/market_analysis/sentiment/uoa_detector.py` |
 | `min_fraction` | `0.05` ($5\%$) | 開盤時段進度正規化分母下限鉗制值（約開盤 20 分鐘） | `nexus_core/market_time.py` |
-| `_ENTRY_UOA_MIN_NOTIONAL_USD` | `$200,000.0` | 右側進場條件四認可之主力最低名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD` | `$500,000.0` | SL-主力對沖單筆 PUT BTO 最低名目金額 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `UOA_ATM_BAND_PCT` | `0.025` ($2.5\%$) | 履約價距現價不足此比例一律判為平價 (ATM) 方向性博弈 | `nexus_core/market_analysis/uoa_telemetry.py` |
 | `UOA_DEEP_ITM_MIN_DELTA` | `0.80` | 「ITM 機構主力吸籌」要求的最低 $|\Delta|$；未達者為 `ITM_Directional` | `nexus_core/market_analysis/uoa_telemetry.py` |
 | `SPREAD_VOLUME_RATIO_TOL` | `0.25` | BTO／STO 兩腿成交量相差在 ±25% 內才配對為價差組合 | `nexus_core/market_analysis/uoa_telemetry.py` |
+
+> 註：原右側條件四 $200,000 名目門檻已於 2026-11 隨退役邏輯刪除。
 
 ---
 

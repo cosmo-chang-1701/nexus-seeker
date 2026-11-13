@@ -55,9 +55,9 @@ _COVERED_CALL_MAX_DTE: int = 30
 #                                      cogs/embed_builders/portfolio_embeds.py (RVOL 門檻)
 #     _ENTRY_UOA_CAP_RATIO_THRESHOLD → regime_classifier.py (Regime III/IV 物理封頂判定)
 #     _ENTRY_UOA_LOOKBACK_DAYS       → 僅被註解引用 (uoa_history 保留期與 Regime III-B 歷史窗說明)
-#   其餘常數 (_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT、_ENTRY_UOA_MIN_*、_ENTRY_CANDIDATE_MIN_DTE、
-#   _ENTRY_IVR_SPREAD_THRESHOLD、_ENTRY_ROOM_EXTENDED_PCT、_ENTRY_DTE_BAND_*) 目前無程式引用，
-#   僅保留定義與下列歷史紀錄，勿據此假設其仍在運作。
+#   其餘僅服務已退役右側條件的常數（支撐牆距離上限、UOA 最低 DTE／ratio／名目金額、
+#   候選最低 DTE、IVR 分流門檻、延伸跑道空間、DTE band）已於 2026-11 刪除，
+#   僅保留下列歷史紀錄，勿據此假設其仍在運作。
 # 以下為已退役規格的歷史紀錄（非現行規格）：原設計要求六項條件同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
 #   條件一：結構性右側放量突破 (15m 實體「陽線」收盤站穩 Gamma Flip 估算門檻 +
 #           放量 + Session VWAP 站穩確認)。針對極端單邊期權分佈導致 Gamma Flip
@@ -70,7 +70,7 @@ _COVERED_CALL_MAX_DTE: int = 30
 #           範圍強制約束在現價下方 (K < Spot)，即 Support Wall = argmax_{K < Spot}
 #           (Net GEX(K))，避免將現價上方的阻力牆 (Call Wall) 誤當成支撐底牆；
 #           若現價下方無正 GEX 峰值 (或曝險低於 500k 薄紙牆門檻) 則判定未通過；
-#           現價須 > 支撐牆，且距離落在 (0, _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT]
+#           現價須 > 支撐牆，且距離落在 (0, 5%]（原支撐牆距離上限，常數已刪除）
 #           之內才算「即時有效防禦」(支撐牆離現價過遠等同缺乏保護)。
 #   條件三：做市商阻力結構與非對稱空間 (無 UOA 物理封頂，Call Wall 空間充足)。
 #           物理封頂偵測改以 Call Wall（而非現價）作為 strike 位置基準，並將
@@ -81,16 +81,13 @@ _COVERED_CALL_MAX_DTE: int = 30
 #           必須還在現價之上——現價已觸及/跌破 Call Wall (負距離) 同樣視為
 #           空間不足，而非誤判為「已站上、無封頂」。
 #   條件四：主力跨週期買盤認證與雜訊過濾 (BTO Call，須同時滿足 DTE、ratio、
-#           名目金額 _ENTRY_UOA_MIN_NOTIONAL_USD 三門檻，並排除 strike 低於
+#           名目金額（原 $200,000 門檻，常數已刪除）三門檻，並排除 strike 低於
 #           現價的深實值避險單)
 #   條件五：二元宏觀與財報事件安全閥
 #   條件六：candidate 自身最近效期選擇權週期雜訊過濾 (避開 0/1 DTE)
 _ENTRY_VOLUME_LOOKBACK_BARS: int = 20  # 條件一：15m 成交量基準所需回看根數 (不含確認根)
 _ENTRY_VOLUME_SURGE_MULTIPLIER: float = (
     1.5  # 條件一：「放量」門檻，須達回看均量的 1.5 倍
-)
-_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT: float = (
-    0.05  # 條件二：現價距支撐牆的最大有效防禦距離，超過視為缺乏即時保護
 )
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
     1.5  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
@@ -100,13 +97,6 @@ _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
 #   （公式 A：max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)）。公式 A 目前由
 #   左側閘門 (profile LEFT)、做空閘門 (profile SHORT)、regime classifier 路由與做空
 #   部位試算共用。此處刻意不留常數，避免有人「順手」把它接回去而讓固定值與動態值再度分歧。
-_ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
-_ENTRY_UOA_MIN_RATIO: float = (
-    0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
-)
-_ENTRY_UOA_MIN_NOTIONAL_USD: float = (
-    200_000.0  # 條件四：驅動進場的主力 UOA 買盤最低權利金名目金額要求
-)
 # 條件四的時間窗放寬：**僅 Regime III-B 趨勢延續路徑**套用。Regime III (突破態)
 # 維持「評估當下必須存在」的嚴格語意，不放寬（保護既有行為）。
 # 物理意義：突破那一瞬間機構掃單與價格同步發生，要求同時存在是合理的；趨勢的
@@ -114,29 +104,8 @@ _ENTRY_UOA_MIN_NOTIONAL_USD: float = (
 # 還有一筆」等於要求主力每 15 分鐘重新表態一次——這正是 handoff.md §1.3 診斷出的
 # 「事件式進場」病灶。回看窗以**交易日**計（非日曆日），避開週末與假日。
 _ENTRY_UOA_LOOKBACK_DAYS: int = 5
-_ENTRY_CANDIDATE_MIN_DTE: int = (
-    1  # 條件六：標的自身最近效期需 > 此值天數 (避開 0/1 DTE 結算日雜訊)
-)
-
-# 條件六附加輸出：建議進場結構 (structure_directive) 的推導門檻。
-# 這組常數「只影響建議文字，不影響條件六的 Pass/Fail 判定」——條件六的通過與否
-# 仍完全由上方 _ENTRY_CANDIDATE_MIN_DTE 決定。設計動機：天期不應該是一個在進場
-# 當下蓋章、之後永不更新的部位標籤 (參見 transition_engine.py 移除路徑 2/3/4 的
-# 原因，entry_regime 標籤陳舊導致部位失去例行停損)，而應該是每輪重評都依當下
-# 市況重算的輸出參數。作法完全比照左側條件六既有的 IVR 分流
-# (_confirm_left_entry_condition6_candidate_dte_ivr)。
-_ENTRY_IVR_SPREAD_THRESHOLD: float = (
-    50.0  # IVR > 此值改建議 Bull Call Spread，避免高隱波下單腳買方遭 Vega 崩塌
-)
-_ENTRY_ROOM_EXTENDED_PCT: float = (
-    0.10  # Call Wall 空間 >= 此值視為「延伸跑道」，建議波段天期；否則建議短天期
-)
-# DTE band 數值沿用 repo 既有慣例，不引入新的未校準數字：
-#   短天期 (7, 21)  —— 數值來源為歷史：原 transition_engine.py 路徑一（已退役加碼邏輯）的「新開短天期 (DTE 7-21)」
-#                      (路徑一已不再發出 OPEN_PYRAMID，數值保留不變)
-#   波段   (21, 45) —— 比照 opportunity_cost / recommend_covered_calls 既有「次月」慣例
-_ENTRY_DTE_BAND_SHORT: tuple[int, int] = (7, 21)
-_ENTRY_DTE_BAND_SWING: tuple[int, int] = (21, 45)
+# 原條件六的候選最低 DTE、IVR 分流與 DTE band 建議參數（僅影響建議文字）已隨退役邏輯於 2026-11 刪除；
+# 左側／做空側的對應參數見 _LEFT_ENTRY_* / _SHORT_ENTRY_*。
 
 # --- 華爾街資深交易員與機構風控量化常數 ---
 # 雙軌出場防守引擎軌道二：極端瞬時停損 (Extreme Tick Breach) 的 ATR 墊片倍數。
@@ -174,7 +143,7 @@ _MACRO_TOP_ESCAPE_PUT_DTE_MIN: int = 30  # 建議 DTE 下限：涵蓋典型宏�
 _MACRO_TOP_ESCAPE_PUT_DTE_MAX: int = 60  # 建議 DTE 上限：避開近月 Theta 加速區
 
 # --- DTE 三態狀態機 (structural_signals.py::evaluate_option_dte_tier) 具名常數 ---
-# 僅對 OPTIONS 部位有意義。與既有 _ENTRY_UOA_MIN_DTE(7)/_ENTRY_CANDIDATE_MIN_DTE(1)
+# 僅對 OPTIONS 部位有意義。與原右側進場的 UOA 最低 DTE(7)／候選最低 DTE(1)（常數已刪除）
 # 刻意分開命名而不合併重用：後兩者是「候選標的」進場確認條件的一部分，本組常數
 # 是「既有持倉」本身的到期日分級門檻，語意不同，數值恰好相同純屬巧合。
 _HOLDING_DTE_LOCKOUT_THRESHOLD: int = 7  # dte < 此值時，TP 輪動目標的轉倉
@@ -250,7 +219,9 @@ _MICROSTRUCTURE_SL_WHALE_PUT_MIN_NOTIONAL_USD: float = (
 _MICROSTRUCTURE_SL_WHALE_PUT_MIN_RATIO: float = (
     1.5  # SL-主力對沖：單筆 PUT BTO 最低 ratio (Volume/OI)
 )
-_MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT: float = 0.05  # SL-主力對沖：近平值判定容差，沿用 _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT 既有 5% 慣例
+_MICROSTRUCTURE_SL_WHALE_PUT_NEAR_ATM_PCT: float = (
+    0.05  # SL-主力對沖：近平值判定容差，沿用既有 5% 慣例
+)
 _MICROSTRUCTURE_SL_TRAILING_CALLWALL_PROGRESS_PCT: float = (
     0.5  # SL-動態保本：現價漲幅達距 Call Wall 空間此比例時，停損上移至保本點
 )
