@@ -8,7 +8,6 @@ from cogs.embed_builders._core import (
 )
 import logging
 import math
-import psutil
 
 import re
 import time
@@ -780,10 +779,6 @@ def create_trades_embed(
     return embed
 
 
-# /dash 對沖狀態：淨 Beta-Delta 美元名目 (|Δ| × SPY) 低於資本的 10% 視為平衡。
-_DASH_HEDGE_NOTIONAL_RATIO: float = 0.1
-
-
 def create_strategic_dash_embed(
     user_ctx: Any,
     pnl_data: Dict[str, Any],
@@ -792,10 +787,16 @@ def create_strategic_dash_embed(
     runway_stale: bool = False,
     nav_data: Optional[Dict[str, Any]] = None,
     spy_price: Optional[float] = None,
+    market_regime: Optional[str] = None,
 ) -> discord.Embed:
     """
-    建構戰略看板 (Strategic Dashboard) Embed.
-    遵循 Task 1 的 Traditional Chinese 模板。
+    建構戰略看板 (Strategic Dashboard) Embed（純呈現，不做任何網路／DB I/O）。
+
+    欄位（共兩個）：
+    1. 🏁 提領跑道：NAV（按市價）、現金儲備、跑道、期權 Theta、安全提領紅線
+       （可動用現金 = 現金儲備 + 現金等價物市值 − Short Put 擔保金）。
+    2. 🛡️ 組合風險精算：Beta-Delta（名目與 NAV 占比）、Vanna 壓力、體制避險狀態。
+    不提供 SPY 買賣建議：現金帳戶無法放空，避險以兩級體制避險推播為準。
     """
     embed = NexusEmbed(
         title="📊 Nexus 交易員戰略看板",
@@ -818,14 +819,13 @@ def create_strategic_dash_embed(
 
     payout_threshold = get_safety_payout_threshold()
 
-    status_mode = "觀戰模式" if not user_ctx.is_professional_mode else "實戰模式"
     # NAV 按市價：現金 + 現貨市值 + 期權市值 (賣方為負債)，見
     # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
     # 資本 + 未實現損益——那會忽略現貨漲跌並重複計入賣方權利金)。
     nav_missing = ""
     if nav_data is not None:
         _nav_txt = fmt_or_dash(nav_data.get("nav"), ",.0f", prefix="$")
-        nav_line = f"{_nav_txt} (按市價，{status_mode})"
+        nav_line = f"{_nav_txt} (按市價)"
         missing_parts: List[str] = []
         if nav_data.get("missing_spot_symbols"):
             missing_parts.append(
@@ -836,7 +836,7 @@ def create_strategic_dash_embed(
         if missing_parts:
             nav_missing = f"⚠️ 報價缺失未計入：{'；'.join(missing_parts)}"
     else:
-        nav_line = f"-- ({status_mode})"
+        nav_line = "--"
 
     _w, _y, _z = _ANSI_W, _ANSI_Y, _ANSI_0
     runway_rows = [f"總資產 (NAV): {_w}{nav_line}{_z}"]
@@ -845,27 +845,44 @@ def create_strategic_dash_embed(
     runway_rows.append(f"現金儲備: {_w}${cash_reserve:,.2f}{_z}")
     for line in format_runway_lines(runway, stale=runway_stale):
         runway_rows.append(line)
-    runway_rows.append(
-        f"收租效率: 每日 Theta {_w}${daily_theta:,.2f}{_z}"
-        + (f" (覆蓋期權熔斷月支出 {coverage_pct:.1f}%)" if daily_expense > 0 else "")
-    )
+    if abs(daily_theta) < 0.005:
+        runway_rows.append("期權 Theta: 無期權部位")
+    elif daily_theta > 0:
+        runway_rows.append(
+            f"期權 Theta: 每日 {_w}+${daily_theta:,.2f}{_z}（淨賣方收租）"
+            + (
+                f" 覆蓋期權熔斷月支出 {coverage_pct:.1f}%"
+                if monthly_expense > 0
+                else ""
+            )
+        )
+    else:
+        runway_rows.append(
+            f"期權 Theta: 每日 {_w}−${-daily_theta:,.2f}{_z}（淨買方時間價值流失）"
+        )
     _trades_raw = (pnl_data or {}).get("trades") if isinstance(pnl_data, dict) else None
     _put_collateral = short_put_collateral(
         _trades_raw if isinstance(_trades_raw, list) else []
     )
-    if cash_reserve <= 0:
+    _cash_eq = (
+        float(nav_data.get("cash_equivalent_value") or 0.0)
+        if isinstance(nav_data, dict)
+        else 0.0
+    )
+    if cash_reserve <= 0 and _cash_eq <= 0:
         runway_rows.append(
             f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z}"
             "｜可動用現金 --（未設定現金儲備）"
         )
     else:
         _usable_cash, _payout_surplus = payout_coverage(
-            cash_reserve, _put_collateral, payout_threshold
+            cash_reserve + _cash_eq, _put_collateral, payout_threshold
         )
+        _eq_txt = f"＋現金等價物 ${_cash_eq:,.0f}" if _cash_eq > 0 else ""
         runway_rows.append(
             f"安全提領紅線: {_w}${payout_threshold:,.0f}{_z}"
             f"｜可動用現金 {_w}${_usable_cash:,.0f}{_z}"
-            f"（現金儲備 − Short Put 擔保金 ${_put_collateral:,.0f}）"
+            f"（現金儲備 ${cash_reserve:,.0f}{_eq_txt} − Short Put 擔保金 ${_put_collateral:,.0f}）"
         )
         if _payout_surplus < 0:
             runway_rows.append(
@@ -882,52 +899,52 @@ def create_strategic_dash_embed(
     # Vanna Sensitivity Stress Test: 若 VIX 上升 10%，隱含 Delta 將變動至 [New_Delta]
     total_vanna = _safe_float(user_ctx.total_vanna)
     total_delta = _safe_float(user_ctx.total_weighted_delta)
-    capital = _safe_float(user_ctx.capital)
-
     # VIX 未知時不做 Vanna 壓力測試（過去以 18.0 冒充真實 VIX）。
     new_delta: Optional[float] = None
     if vix_spot is not None and vix_spot > 0:
         vanna_impact = total_vanna * (vix_spot * 0.10 / 100.0)
         new_delta = total_delta + vanna_impact
 
-    # 對沖狀態與建議：Beta-Delta 是 SPY 等值「股數」，須乘上 SPY 價格換成
-    # 美元名目才能與資本比較 (過去把股數直接和美元比，永遠顯示「運行中」)。
+    # Beta-Delta 為 SPY 等值股數；有 SPY 現價時換算美元名目與 NAV 占比。
+    _nav_val = _safe_float(nav_data.get("nav")) if isinstance(nav_data, dict) else 0.0
     if spy_price is not None and spy_price > 0:
-        hedge_status = (
-            "運行中"
-            if abs(total_delta) * spy_price < capital * _DASH_HEDGE_NOTIONAL_RATIO
-            else "需調整"
+        _notional = total_delta * spy_price
+        _nav_pct = f"（NAV {_notional / _nav_val * 100:.0f}%）" if _nav_val > 0 else ""
+        _sign = "" if _notional >= 0 else "−"
+        delta_row = (
+            f"Beta-Delta: {_w}{total_delta:+.1f}{_z} 股 SPY ≈ "
+            f"{_sign}${abs(_notional):,.0f}{_nav_pct}"
         )
     else:
-        hedge_status = "資料不足 (SPY 現價未知)"
-    # 簡單邏輯：如果 Delta 太正，建議賣出 SPY；如果太負，建議買入 SPY
-    if total_delta > 100:
-        hedge_instruction = f"賣出 {int(total_delta)} 股 SPY 以對沖正 Delta"
-    elif total_delta < -100:
-        hedge_instruction = f"買入 {int(abs(total_delta))} 股 SPY 以對沖負 Delta"
+        delta_row = (
+            f"Beta-Delta: {_w}{total_delta:+.1f}{_z} 股 SPY"
+            "（SPY 現價未知，無法換算名目）"
+        )
+
+    if market_regime == "NORMAL":
+        regime_row = (
+            "體制避險: 大盤 NORMAL｜第二級未觸發"
+            "（第一級依個股跌破 PutWall，見體制避險推播）"
+        )
+    elif market_regime in ("SHORT_GAMMA_CRITICAL", "SYSTEMIC_LIQUIDITY_CRISIS"):
+        regime_row = (
+            f"{_y}⚠️ 體制避險: 大盤 {market_regime}｜第二級條件成立"
+            f"（SQQQ／SOXS，見體制避險推播）{_z}"
+        )
     else:
-        hedge_instruction = "目前曝險平衡，無需立即調整"
+        regime_row = "體制避險: 大盤體制未知（資料不足）"
 
     nro_rows = [
-        f"Beta-Delta: {_w}{total_delta:+.1f}{_z} (相對於 SPY 的整體曝險)",
+        delta_row,
         (
             f"Vanna 敏感度: 若 VIX 上升 10%，隱含 Delta 將變動至 {_w}{new_delta:+.1f}{_z}。"
             if new_delta is not None
             else f"Vanna 敏感度: {_w}--{_z} (VIX 資料不足，無法壓力測試)"
         ),
-        f"對沖狀態: {hedge_status}",
-        f"🎯 建議對沖位：{hedge_instruction}",
+        regime_row,
     ]
     _add_ansi_field_safely(
         embed, "🛡️ 組合風險精算 (NRO Integrity)", _ansi_tree_lines(nro_rows)
-    )
-
-    # 3. 系統健康
-    ram_usage = psutil.virtual_memory().percent
-    _add_ansi_field_safely(
-        embed,
-        "⚙️ 系統健康",
-        _ansi_tree_lines([f"RAM {_w}{ram_usage}%{_z}"]),
     )
 
     embed.set_footer(text="戰術風險管理終端")

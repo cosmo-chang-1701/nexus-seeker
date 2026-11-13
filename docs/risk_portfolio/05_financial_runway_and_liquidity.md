@@ -135,12 +135,21 @@ flowchart TD
 ### 5.3a /dash 安全提領紅線與可動用現金（僅呈現）
 `get_safety_payout_threshold()` 是**現金底線**，/dash 以 `market_analysis/payout_coverage.py` 與實際可動用現金對照：
 
-$$\text{可動用現金} = \text{現金儲備} - \text{Short Put 擔保金},\quad \text{餘裕} = \text{可動用現金} - \text{紅線}$$
+$$\text{可動用現金} = \text{現金儲備} + \text{現金等價物市值} - \text{Short Put 擔保金},\quad \text{餘裕} = \text{可動用現金} - \text{紅線}$$
 
+- 現金等價物：BOXX／BIL／SHV／SGOV 多頭按市價的合計（`get_market_nav` 回傳的 `cash_equivalent_value`，已含於現貨市值、不改變 NAV；無報價者不計）。與提領跑道、體制避險一致，視為可動用資金。紅線金額（`get_safety_payout_threshold`）不變。
 - 擔保金（`short_put_collateral`）：每口未平倉 Short Put（`quantity < 0`）為 $K \times 100$；同標的、同到期、**較低履約價**的 Long Put 視為價差，被涵蓋的口只計 $(K_{short} - K_{long}) \times 100$。配對由高到低履約價貪婪進行，一口 Long 至多涵蓋一口 Short；Call、履約價或數量缺失／無效的列一律忽略。
-- 顯示：`安全提領紅線: $X｜可動用現金 $Y（現金儲備 − Short Put 擔保金 $Z）`；餘裕 $<0$ 加一列「❌ 低於紅線 $N：擔保金解鎖前暫停新 CSP」，否則「✅ 高於紅線 $N」。現金儲備 $\le 0$（未設定）時顯示「可動用現金 --（未設定現金儲備）」且不輸出 ✅／❌。
+- 顯示：`安全提領紅線: $X｜可動用現金 $Y（現金儲備 $A＋現金等價物 $B − Short Put 擔保金 $Z）`（現金等價物為 0 時省略「＋現金等價物」）；餘裕 $<0$ 加一列「❌ 低於紅線 $N：擔保金解鎖前暫停新 CSP」，否則「✅ 高於紅線 $N」。現金儲備與現金等價物皆 $\le 0$（未設定）時顯示「可動用現金 --（未設定現金儲備）」且不輸出 ✅／❌。
 - 假設：現金儲備為使用者輸入、已含 CSP 所收權利金，且 CSP 的擔保現金仍計在其中（NAV 同此處理，見 `reports.py`），故需扣除擔保金才是實際可動用額度。
+- CSP 擔保上限（`/x`、`market_analysis/risk_engine.py`）仍只計現金儲備：BOXX 是 ETF，無法直接作為 CSP 的擔保現金。
 - 純呈現：不阻擋、不閘控任何指令；「暫停新 CSP」是給使用者的建議字樣。
+
+### 5.3b /dash 組合風險精算與體制避險列（僅呈現）
+- Beta-Delta：`Beta-Delta: +209.0 股 SPY ≈ $140,030（NAV 140%）`，名目 = Δ × SPY 現價，NAV 占比以按市價 NAV 計；NAV 未知或 $\le 0$ 省略占比，SPY 現價未知時只顯示股數並註明無法換算。
+- Vanna 敏感度：$\text{total\_vanna} \times (\text{VIX} \times 0.10 / 100)$，VIX 未知顯示「VIX 資料不足」。
+- 體制避險列（取自 `get_market_regime`，失敗時為 UNKNOWN，不影響 /dash）：`NORMAL` → 第二級未觸發（第一級依個股跌破 PutWall，見推播）；`SHORT_GAMMA_CRITICAL`／`SYSTEMIC_LIQUIDITY_CRISIS` → 黃字警示第二級條件成立（SQQQ／SOXS）；其餘 → 大盤體制未知（資料不足）。
+- 期權 Theta 列：無期權部位（$|\theta| < 0.005$）／淨賣方收租（附覆蓋月支出 %，僅月支出 $> 0$ 時）／淨買方時間價值流失（不顯示覆蓋 %）。
+- 已移除：SPY 對沖建議（現金帳戶無法放空、與兩級體制避險牴觸、門檻自相矛盾）與「系統健康」RAM 欄位；NAV 行不再顯示觀戰／實戰模式。
 
 ### 5.4 不作為預測
 壓力跑道是「歷史最壞路徑若從今天重演」的條件式數字，不是機率預測，也不隱含下一次崩跌會與歷史相同；面板與推播都附上兩條路徑各自的年數與零報酬跑道，讓使用者看到區間而非單一數字。

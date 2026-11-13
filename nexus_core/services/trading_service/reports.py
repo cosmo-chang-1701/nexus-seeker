@@ -119,9 +119,14 @@ class ReportsMixin:
           (含 entry×100×|口數|) + 未實現損益 ((entry−mid)×100×|口數|)，等於把
           賣方權利金計入兩次 (2×entry − mid)。
         - 報價缺失的部位不計入，回傳 missing_* 供畫面標示。
+        - cash_equivalent_value：現貨市值中 BOXX／BIL／SHV／SGOV 多頭的子合計
+          （已含於 spot_market_value，不影響 NAV），供安全提領紅線計入現金等價物。
         """
         from services.asset_manager import AssetManager
         from models.asset import ContextType
+        from market_analysis.dynamic_rollover.regime_hedge_sizing import (
+            CASH_EQUIVALENT_SYMBOLS,
+        )
 
         manager = AssetManager()
         holdings = await asyncio.to_thread(
@@ -141,6 +146,7 @@ class ReportsMixin:
         prices = dict(zip(symbols, await asyncio.gather(*[_price(s) for s in symbols])))
 
         spot_value = 0.0
+        cash_equivalent_value = 0.0
         missing_spot: List[str] = []
         for h in holdings:
             qty = float((h.metadata or {}).get("quantity", 0.0) or 0.0)
@@ -151,6 +157,8 @@ class ReportsMixin:
                 missing_spot.append(str(h.symbol).upper())
                 continue
             spot_value += qty * px
+            if qty > 0 and str(h.symbol).upper() in CASH_EQUIVALENT_SYMBOLS:
+                cash_equivalent_value += qty * px
 
         option_value = float(pnl_data.get("total_option_market_value", 0.0) or 0.0)
         missing_options = int(pnl_data.get("missing_quote_count", 0) or 0)
@@ -159,6 +167,7 @@ class ReportsMixin:
             "nav": nav,
             "cash_reserve": float(cash_reserve),
             "spot_market_value": spot_value,
+            "cash_equivalent_value": cash_equivalent_value,
             "option_market_value": option_value,
             "missing_spot_symbols": missing_spot,
             "missing_option_quotes": missing_options,
