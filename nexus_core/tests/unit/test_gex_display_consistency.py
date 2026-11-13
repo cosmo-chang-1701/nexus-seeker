@@ -65,7 +65,9 @@ def test_dram_embed_shows_vacuum_and_local_regime() -> None:
     )
     assert "LONG_GAMMA (自穩定壓制波動)" in text
     assert "局部體制 (現價處): 🔴 SHORT_GAMMA（與全鏈體制相反" in text
-    assert "局部 Gamma 翻轉線 ≈ $62." in text
+    assert "Gamma Flip: ≈ $62." in text
+    assert "局部翻轉線，以上轉負 Gamma；全鏈無交叉，閘門不採用" in text
+    assert "無法估算" not in text
     assert "上方無正 Gamma 牆（負 Gamma 真空" in text
     assert "數據異常：CallWall已低於現價" not in text
 
