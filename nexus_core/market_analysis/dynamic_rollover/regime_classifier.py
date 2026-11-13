@@ -132,11 +132,13 @@ async def _classify_dynamic_regime_impl(
     """動態調整模式 4 態市場結構分類器。依既有結構性指標 (Put Wall / Call
     Wall / Gamma Flip / Session VWAP / ATR₁₅ₘ / 15m RSI / 成交量 / UOA / 大盤
     Regime) 將盤勢分類為 Regime I (左側接刀態) / II (混沌泥淖態，全系統休眠)
-    / III (右側動能態) / IV (結構封頂／危機態，強制鎖定)，決定
-    opportunity_cost.py Scenario 2 進場閘門要路由至左側六重鐵律、右側六重
-    鐵律、還是完全不進場。
+    / III (右側動能態) / IV (結構封頂／危機態，強制鎖定)，決定進場顧問
+    (entry_advisor) 要路由至左側接刀規則、多時間框架擠壓規則 (II／III／
+    III-B／IV)、做空規則 (Regime V)，還是完全不進場。判定優先序：IV 宏觀鎖定
+    → V → I（有個股封頂時須封頂位階皆高於回歸目標）→ IV 個股封頂 → III →
+    III-B → II。
 
-    Fail-safe 精神比照 _confirm_entry_signal：任何必要資料缺失一律回傳
+    Fail-safe 精神：任何必要資料缺失一律回傳
     REGIME_II_CHAOS_STANDASIDE (最保守，不進場也不強制平倉)。
 
     回傳 (regime, reason, market_data)。market_data 為本次判定實際抓取/計算
@@ -273,7 +275,7 @@ async def _classify_dynamic_regime_impl(
         else None
     )
     # Call Wall 空間門檻自固定 5% 升級為動態自適應波動率門檻 (room_threshold.py
-    # 公式 A)。Regime 分類器 (路由層) 與六重鐵律條件三 (進場確認層) 共用的是同
+    # 公式 A)。Regime 分類器 (路由層) 與左側／做空進場閘門 (進場確認層) 共用的是同
     # 一條公式，但仍各自獨立呼叫、各自持有輸入——constants.py 明訂的「兩層門檻
     # 不合併」政策針對的是可變旋鈕，不是演算法。
     room = compute_dynamic_room_threshold(
@@ -296,9 +298,11 @@ async def _classify_dynamic_regime_impl(
     # 判定優先序（見 models.py::DynamicRegime docstring）：
     #   1. Regime IV 宏觀鎖定分支（已於上方早退）
     #   2. Regime V  破位追空態
-    #   3. Regime IV 個股結構封頂分支 (Call Wall 空間不足 / STO 封頂)
-    #   4. Regime III → I → II
-    # 第 2 與第 3 的先後是刻意的：壓頂與破位可以同時成立，若不拆分優先序，
+    #   3. Regime I  左側接刀態（條件式：有封頂時須所有封頂位階高於回歸目標
+    #      min(VWAP, Gamma Flip)；無封頂時照常）
+    #   4. Regime IV 個股結構封頂分支 (Call Wall 空間不足 / STO 封頂)
+    #   5. Regime III → III-B → II
+    # 第 2 與第 4 的先後是刻意的：壓頂與破位可以同時成立，若不拆分優先序，
     # 做空將永遠被 Regime IV 遮蔽而無法觸發。
     is_structural_cap = is_call_wall_capped or has_sto_call_cap
 
@@ -435,11 +439,60 @@ async def _classify_dynamic_regime_impl(
             ),
         )
 
-    # --- Regime IV：個股結構封頂分支 (未達 Regime V 時才判定) ---
-    if is_structural_cap:
+    # --- Regime I：左側接刀態（條件式優先於 Regime IV 個股結構封頂）---
+    # atr_15m 已於本函式開頭自同一份 df_confirmed 就地算好（Regime IV 的動態
+    # 門檻亦需要），此處直接沿用，不重算也不重抓。
+    put_wall_dist_pct = (
+        (target_spot - put_wall) / target_spot
+        if put_wall > 0 and target_spot > 0
+        else None
+    )
+    is_densely_attached_put_wall = (
+        put_wall_dist_pct is not None
+        and _REGIME_I_PUT_WALL_LOWER_PCT
+        <= put_wall_dist_pct
+        <= _REGIME_I_PUT_WALL_UPPER_PCT
+    )
+    is_deep_deviation = (
+        session_vwap > 0
+        and atr_15m > 0
+        and target_spot <= session_vwap - _REGIME_I_VWAP_ATR_MULT * atr_15m
+    )
+    is_regime_i = (
+        is_deep_deviation
+        and not math.isnan(rsi_val)
+        and rsi_val <= _REGIME_I_RSI_MAX
+        and is_densely_attached_put_wall
+    )
+    # 左側進場閘門（left_side_entry.py 條件三）只量到 min(VWAP, Gamma Flip) 的
+    # 空間、不檢查 Call Wall／STO Call 封頂，故 Regime I 僅在「所有適用的封頂位
+    # 階都高於回歸目標」時才優先於結構封頂（封頂未阻擋回歸路徑）；封頂位階 ≤
+    # 回歸目標或回歸目標無法計算時，Regime IV 維持優先。
+    reversion_candidates = [v for v in (session_vwap, gamma_flip) if v > 0]
+    reversion_target = min(reversion_candidates) if reversion_candidates else None
+    cap_levels: list[float] = []
+    if is_call_wall_capped:
+        cap_levels.append(eff_target.target)
+    if has_sto_call_cap and capping_strike > 0:
+        cap_levels.append(capping_strike)
+    cap_clear_of_target = (
+        reversion_target is not None
+        and len(cap_levels) > 0
+        and all(level > reversion_target for level in cap_levels)
+    )
+    if is_regime_i and (not is_structural_cap or cap_clear_of_target):
+        reason_i = (
+            f"極端負乖離吸籌確認：Spot ${target_spot:.2f} 密著 Put Wall ${put_wall:.2f}，"
+            f"RSI={rsi_val:.1f}"
+        )
+        if is_structural_cap and reversion_target is not None:
+            reason_i += (
+                f"｜封頂 ${min(cap_levels):.2f} 高於回歸目標 "
+                f"${reversion_target:.2f}，不阻擋左側回歸"
+            )
         return (
-            DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS,
-            _build_regime_iv_reason(),
+            DynamicRegime.REGIME_I_LEFT_CATCH,
+            reason_i,
             RegimeMarketData(
                 df_15m=df_15m,
                 session_vwap=session_vwap,
@@ -448,7 +501,28 @@ async def _classify_dynamic_regime_impl(
             ),
         )
 
-    # --- Regime III：右側動能態 ---
+    # --- Regime IV：個股結構封頂分支 (未達 Regime V／條件式 Regime I 時才判定) ---
+    if is_structural_cap:
+        reason_iv = _build_regime_iv_reason()
+        if is_regime_i and cap_levels and reversion_target is not None:
+            reason_iv += (
+                f"｜Regime I 條件成立但封頂 ${min(cap_levels):.2f} ≤ "
+                f"回歸目標 ${reversion_target:.2f}"
+            )
+        elif is_regime_i:
+            reason_iv += "｜Regime I 條件成立但回歸目標無法計算"
+        return (
+            DynamicRegime.REGIME_IV_STRUCTURAL_CAP_CRISIS,
+            reason_iv,
+            RegimeMarketData(
+                df_15m=df_15m,
+                session_vwap=session_vwap,
+                atr_15m=atr_15m,
+                rsi_15m=rsi_val,
+            ),
+        )
+
+    # --- Regime III：右側動能態（現行路由至多時間框架擠壓規則）---
     is_regime_iii = (
         gamma_flip > 0
         and target_spot > gamma_flip
@@ -476,7 +550,7 @@ async def _classify_dynamic_regime_impl(
             ),
         )
 
-    # --- Regime III-B：右側趨勢延續態（必須排在 Regime III 之後）---
+    # --- Regime III-B：右側趨勢延續態（必須排在 Regime III 之後；現行路由至擠壓規則）---
     # Regime III 問「突破是否正在發生」，III-B 問「趨勢是否仍然成立」。突破當下
     # 兩者都會成立，歸類為 III 是刻意的：它帶著更強的進場證據，且 III-B 的 UOA
     # 時間窗放寬不應套用在突破態上。
@@ -512,44 +586,6 @@ async def _classify_dynamic_regime_impl(
             f"（門檻 {_REGIME_III_B_MIN_HELD_BARS}/{_REGIME_III_B_LOOKBACK_BARS}），"
             f"Net GEX {net_gex:+,.0f} 仍為正，RSI={rsi_val:.1f}；"
             f"{target_label} ${eff_target.target:.2f} 尚有 {call_wall_room_pct:.2%} 空間",
-            RegimeMarketData(
-                df_15m=df_15m,
-                session_vwap=session_vwap,
-                atr_15m=atr_15m,
-                rsi_15m=rsi_val,
-            ),
-        )
-
-    # --- Regime I：左側接刀態 ---
-    # atr_15m 已於本函式開頭自同一份 df_confirmed 就地算好（Regime IV 的動態
-    # 門檻亦需要），此處直接沿用，不重算也不重抓。
-    put_wall_dist_pct = (
-        (target_spot - put_wall) / target_spot
-        if put_wall > 0 and target_spot > 0
-        else None
-    )
-    is_densely_attached_put_wall = (
-        put_wall_dist_pct is not None
-        and _REGIME_I_PUT_WALL_LOWER_PCT
-        <= put_wall_dist_pct
-        <= _REGIME_I_PUT_WALL_UPPER_PCT
-    )
-    is_deep_deviation = (
-        session_vwap > 0
-        and atr_15m > 0
-        and target_spot <= session_vwap - _REGIME_I_VWAP_ATR_MULT * atr_15m
-    )
-    is_regime_i = (
-        is_deep_deviation
-        and not math.isnan(rsi_val)
-        and rsi_val <= _REGIME_I_RSI_MAX
-        and is_densely_attached_put_wall
-    )
-    if is_regime_i:
-        return (
-            DynamicRegime.REGIME_I_LEFT_CATCH,
-            f"極端負乖離吸籌確認：Spot ${target_spot:.2f} 密著 Put Wall ${put_wall:.2f}，"
-            f"RSI={rsi_val:.1f}",
             RegimeMarketData(
                 df_15m=df_15m,
                 session_vwap=session_vwap,

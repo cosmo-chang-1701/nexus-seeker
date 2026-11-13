@@ -9,14 +9,14 @@
 Nexus Seeker 的核心架構導入了 **6-Regime 市場結構動態路由矩陣**（`DynamicRegime`），將市場行情精確劃分為六種微觀拓撲狀態（依判定優先序列出）：
 1. **Regime IV 宏觀鎖定分支（最高優先級，壓過一切）**：當大盤爆發系統性流動性危機（`SYSTEMIC_LIQUIDITY_CRISIS`）、做市商集體翻入負 Gamma 順向踩踏（`SHORT_GAMMA_CRITICAL`）、或 VIX 期限結構深度倒掛（Front-month 溢價超過 10%）時觸發。此狀態下系統硬性凍結**一切方向**的新開倉——包含做空：系統性流動性危機下空頭同樣會被劇烈軋空，不是安全的方向。此分支刻意在 15m K 線與 ATR 抓取**之前**判定，能早退就不為它多發一次網路請求。
 2. **Regime V（破位追空態）**：標的現價同時跌破 Gamma Flip、Session VWAP 與 Put Wall，做市商翻入負 Gamma 並對下跌順勢助跌；上方阻力頂牆完好且牆距落在緩衝雙邊界內；下方至次級負 Gamma 節點尚有 $\ge 2.0 \times \text{ATR}_{1D}$ 的空間；伴隨 15 分鐘實體陰線與 1.5 倍放量，RSI 位於弱勢空頭區間（$< 45$）。此狀態路由至「做空破位追空六重鐵律」；通過後產生**獨立的 `SHORT_ENTRY` 做空進場訊號**（見 [`07_short_side_breakdown_ironclad.md`](07_short_side_breakdown_ironclad.md)），絕不進入機會成本轉倉或核心資金部署的多頭下游。由於 Regime V 要求跌破 Put Wall，`DYNAMIC` 模式只會產生「破位追空」子模式。
-3. **Regime IV 個股結構封頂分支**：上方阻力牆空間低於動態自適應波動率門檻、或偵測到機構級單筆大額 STO Call 巨鯨物理封頂。此分支**排在 Regime V 之後**是刻意設計——壓頂與破位可以同時成立，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
-4. **Regime III（右側動能態，突破順勢）**：標的現價確認站穩做市商自穩定分界線（Gamma Flip）與當日成交量加權均價（Session VWAP），且上方具備充裕獲利空間（Call Wall 空間 $\ge$ 動態門檻），下方有有效正 Gamma 支撐牆貼身防禦（牆距落在緩衝雙邊界內），同時伴隨 15 分鐘實體陽線與 1.5 倍放量突破，RSI 位於強勢多頭區間（$> 55$）。此狀態路由至「右側動能六重鐵律」。
-5. **Regime III-B（右側趨勢延續態，續航順勢）**：標的**已在**趨勢之中、而非正處於突破瞬間。最近 6 根已收盤 15 分鐘 K 棒中至少 5 根收盤同時站穩 Gamma Flip 與 Session VWAP，做市商仍處正 Gamma（Net GEX $> 0$），15 分鐘 RSI 落在 $50 < \text{RSI} < 78$，上方空間與下方底牆的要求與 Regime III 完全相同。此狀態同樣路由至「右側動能六重鐵律」，但條件一改判「持續站穩」、條件四的主力 UOA 改為 5 個交易日回看窗（見 [`02_right_side_momentum_ironclad.md`](02_right_side_momentum_ironclad.md) §2.1.1／§2.4.1）。
+3. **Regime I（左側接刀態，極端負乖離吸籌）**：標的價格短線遭遇非理性恐慌拋售，現價嚴重偏離當日均價達 $1.5 \times \text{ATR}_{15m}$ 以上，15 分鐘 RSI 進入極度超賣區（$\le 30$），但下方精準密著做市商 Put Wall 底牆（$-1.0\% \sim +1.5\%$ 容差帶）。此狀態下預期做市商被動買盤將提供強力緩衝，路由至「左側均值回歸六重鐵律」——注意左側**仍是做多**。 **判定優先序為條件式優先於 Regime IV 個股結構封頂**：左側進場閘門條件三只量測至 $\min(\text{VWAP},\ \text{Gamma Flip})$ 的回歸空間、不檢查 Call Wall／STO Call 封頂，故僅當所有適用封頂位階（有效目標、STO 封頂履約價）皆**高於**該回歸目標時，Regime I 才優先於個股結構封頂（封頂不阻擋回歸路徑，理由字串附註）；封頂位階 $\le$ 回歸目標或回歸目標無法計算時，仍由 Regime IV 優先；無封頂時 Regime I 行為不變。
+4. **Regime IV 個股結構封頂分支**：上方阻力牆空間低於動態自適應波動率門檻、或偵測到機構級單筆大額 STO Call 巨鯨物理封頂。此分支**排在 Regime V 與（條件式）Regime I 之後**——Regime I 僅在封頂位階皆高於回歸目標時才勝出，見上方第 3 項；排在 Regime V 之後是刻意設計——壓頂與破位可以同時成立，若不拆分優先序，做空將永遠被 Regime IV 遮蔽而無法觸發。
+5. **Regime III（右側動能態，突破順勢）**：標的現價確認站穩做市商自穩定分界線（Gamma Flip）與當日成交量加權均價（Session VWAP），且上方具備充裕獲利空間（Call Wall 空間 $\ge$ 動態門檻），下方有有效正 Gamma 支撐牆貼身防禦（牆距落在緩衝雙邊界內），同時伴隨 15 分鐘實體陽線與 1.5 倍放量突破，RSI 位於強勢多頭區間（$> 55$）。此狀態路由至「右側動能六重鐵律」。
+6. **Regime III-B（右側趨勢延續態，續航順勢）**：標的**已在**趨勢之中、而非正處於突破瞬間。最近 6 根已收盤 15 分鐘 K 棒中至少 5 根收盤同時站穩 Gamma Flip 與 Session VWAP，做市商仍處正 Gamma（Net GEX $> 0$），15 分鐘 RSI 落在 $50 < \text{RSI} < 78$，上方空間與下方底牆的要求與 Regime III 完全相同。此狀態同樣路由至「右側動能六重鐵律」，但條件一改判「持續站穩」、條件四的主力 UOA 改為 5 個交易日回看窗（見 [`02_right_side_momentum_ironclad.md`](02_right_side_momentum_ironclad.md) §2.1.1／§2.4.1）。
 
    **為什麼需要獨立一態**：Regime III 的放量突破與實體陽線是「特定瞬間」才會出現的事件特徵，而趨勢的續航段是縮量、陰陽交錯的——錯過啟動那一根，整波行情就再也沒有進場路徑。這是系統長期「操作次數過少、錯過上漲趨勢」的直接成因。III-B 只放寬**進場節奏**的兩項判準，條件二（底牆緩衝雙邊界）、條件三（非對稱空間與物理封頂）、條件五（財報／總經安全閥）、條件六（0/1 DTE 雜訊）四項**風控**逐字不動。
 
    **判定優先序必須排在 Regime III 之後**：突破當下兩者的條件都會成立，此時應歸類為 Regime III——它帶著更強的進場證據（放量 + 實體陽線），且 III-B 的 UOA 時間窗放寬不應套用在突破態上（突破那一瞬間機構掃單與價格同步發生，要求主力同時表態是合理的）。
-6. **Regime I（左側接刀態，極端負乖離吸籌）**：標的價格短線遭遇非理性恐慌拋售，現價嚴重偏離當日均價達 $1.5 \times \text{ATR}_{15m}$ 以上，15 分鐘 RSI 進入極度超賣區（$\le 30$），但下方精準密著做市商 Put Wall 底牆（$-1.0\% \sim +1.5\%$ 容差帶）。此狀態下預期做市商被動買盤將提供強力緩衝，路由至「左側均值回歸六重鐵律」——注意左側**仍是做多**。
 7. **Regime II（混沌泥淖態，全系統休眠）**：兜底分支。當標的處於無人區過渡震盪，既未展現右側突破動能、亦未維持趨勢延續結構、未到達極端左側做市商底牆、也未構成結構性破位，或任何關鍵量化數據（現價、GEX Profile、15m K 線）缺失時，系統啟用 Fail-Safe 機制，自動休眠觀望，嚴禁盲目交易。
 
 ### 資料快照複用設計 (RegimeMarketData Snapshot)
@@ -46,7 +46,7 @@ $$
 
 - 若 $\Delta_{\text{CallWall}} < \text{Threshold}_{\text{dynamic}}$（含現價已穿過／跌破 Call Wall 導致值為負數的情形），代表上方壓制極近，不具備多頭獲利盈虧比，觸發 Regime IV 個股結構封頂分支。
 - 若 $\Delta_{\text{CallWall}} \ge \text{Threshold}_{\text{dynamic}}$，則滿足 Regime III 右側動能的阻力空間要求。
-- 路由層（本分類器）與進場確認層（六重鐵律條件三）共用同一條公式，但仍**各自獨立呼叫、各自持有輸入**——`constants.py` 明訂的「兩層門檻不合併」政策針對的是可變旋鈕，不是演算法。
+- 路由層（本分類器）與左側／做空進場閘門（進場確認層）共用同一條公式（現行右側路徑已改走擠壓規則，不再使用六重鐵律條件三），但仍**各自獨立呼叫、各自持有輸入**——`constants.py` 明訂的「兩層門檻不合併」政策針對的是可變旋鈕，不是演算法。
 
 ### 2.3 做市商正 Gamma 支撐牆即時防禦距離
 支撐位在物理定義上必須位於現價下方，有效防禦距離計算如下：
@@ -140,21 +140,21 @@ flowchart TD
 
     CheckRegimeV -- "Spot < GammaFlip 且 Spot < VWAP 且 Spot < PutWall<br/>次級負 GEX 節點空間 >= 2.0 x ATR_1D<br/>上方頂牆停損距離落在 [2.5 x ATR_15m, 絕對 8%]<br/>15m 實體陰線且放量 >= 1.5x<br/>15m RSI < 45" --> ReturnRegimeV["返回 Regime V: 破位追空態<br/>路由至: 做空破位追空六重鐵律"]
 
-    CheckRegimeV -- 否 --> CheckCapGate{"個股結構封頂旗標成立?"}
+    CheckRegimeV -- 否 --> CheckRegimeI{"Regime I 逆勢接刀審查（先於個股封頂）<br/>全部條件是否成立?"}
+
+    CheckRegimeI -- "Spot <= VWAP - 1.5 * ATR_15m<br/>15m RSI <= 30<br/>Put Wall 密著帶 [-1.0%, +1.5%]<br/>且（無個股封頂，或所有封頂位階 > min(VWAP, GammaFlip)）" --> ReturnRegimeI["返回 Regime I: 左側接刀態<br/>路由至: 左側均值回歸六重鐵律 (做多)"]
+
+    CheckRegimeI -- 否 --> CheckCapGate{"個股結構封頂旗標成立?<br/>(含 Regime I 條件成立但封頂 <= 回歸目標)"}
     CheckCapGate -- 是 --> ReturnRegimeIV
     CheckCapGate -- 否 --> CheckRegimeIII{"Regime III 順勢突破審查<br/>全部條件是否成立?"}
 
-    CheckRegimeIII -- "Spot > GammaFlip 且 Spot > VWAP<br/>Call Wall 空間 >= 動態門檻<br/>支撐牆停損距離落在 [2.5 x ATR_15m, 絕對 8%]<br/>15m 實體陽線且放量 >= 1.5x<br/>15m RSI > 55" --> ReturnRegimeIII["返回 Regime III: 右側動能態<br/>路由至: 右側突破六重鐵律"]
+    CheckRegimeIII -- "Spot > GammaFlip 且 Spot > VWAP<br/>Call Wall 空間 >= 動態門檻<br/>支撐牆停損距離落在 [2.5 x ATR_15m, 絕對 8%]<br/>15m 實體陽線且放量 >= 1.5x<br/>15m RSI > 55" --> ReturnRegimeIII["返回 Regime III: 右側動能態<br/>路由至: 多時間框架擠壓規則 (docs/strategies/10)"]
 
     CheckRegimeIII -- 否 --> CheckRegimeIIIB{"Regime III-B 趨勢延續審查<br/>(必須排在 Regime III 之後)"}
 
-    CheckRegimeIIIB -- "近 6 根已收盤 K 棒至少 5 根<br/>收盤同時 > GammaFlip 且 > VWAP<br/>(須全屬同一交易時段)<br/>Net GEX > 0<br/>50 < 15m RSI < 78<br/>有效目標空間 >= 動態門檻<br/>支撐牆停損距離落在雙邊界內" --> ReturnRegimeIIIB["返回 Regime III-B: 右側趨勢延續態<br/>路由至: 右側六重鐵律<br/>(條件一改判持續站穩、條件四套 5 交易日回看窗)"]
+    CheckRegimeIIIB -- "近 6 根已收盤 K 棒至少 5 根<br/>收盤同時 > GammaFlip 且 > VWAP<br/>(須全屬同一交易時段)<br/>Net GEX > 0<br/>50 < 15m RSI < 78<br/>有效目標空間 >= 動態門檻<br/>支撐牆停損距離落在雙邊界內" --> ReturnRegimeIIIB["返回 Regime III-B: 右側趨勢延續態<br/>路由至: 多時間框架擠壓規則<br/>(分類條件為持續站穩、UOA 套 5 交易日回看窗)"]
 
-    CheckRegimeIIIB -- 否 --> CheckRegimeI{"Regime I 逆勢接刀審查<br/>全部條件是否成立?"}
-
-    CheckRegimeI -- "Spot <= VWAP - 1.5 * ATR_15m<br/>15m RSI <= 30<br/>Put Wall 密著帶 [-1.0%, +1.5%]" --> ReturnRegimeI["返回 Regime I: 左側接刀態<br/>路由至: 左側均值回歸六重鐵律 (做多)"]
-
-    CheckRegimeI -- 否 --> ReturnRegimeII
+    CheckRegimeIIIB -- 否 --> ReturnRegimeII
 ```
 
 ---
@@ -197,7 +197,7 @@ flowchart TD
    `session_vwap` 來自 `fetch_session_vwap()`，是「當前（或最近一個已結束）交易時段」的**單一純量**。若回看窗跨越了前一交易日，等於拿昨天的收盤價去比今天的 VWAP——那不是「持續站穩」，只是兩個不相干數字的比較。因此窗口內 6 根 K 棒必須全屬同一交易日，否則直接判定 Regime III-B 不成立。
    實務效果是 III-B 最早於 **11:00 ET**（09:30 起第 6 根 15 分鐘 K 棒收盤）才可能觸發。這對一條「趨勢延續」路徑是合理的——開盤前 90 分鐘本來就還沒有「延續」可言，且可一併規避開盤競價的價格發現雜訊。
    ⚠️ 比較基準用的是「當下」的 Gamma Flip 與 Session VWAP 純量，而非每根 K 棒當時的值。Gamma Flip 是日內幾乎不動的結構位階，此近似可接受；VWAP 的近似則因同時段約束而被限制在 90 分鐘內，偏差有界。
-4. **判定優先序不可任意調換**：Regime V 必須排在 Regime IV 的**個股結構封頂**分支之前，但排在**宏觀鎖定**分支之後。壓頂（Call Wall 空間不足）與破位（跌破 Put Wall）可以同時成立，若把個股結構封頂提前，做空將永遠被遮蔽而無法觸發；反之宏觀鎖定必須壓過 Regime V——系統性流動性危機下做空同樣會被劇烈軋空。
+4. **判定優先序不可任意調換**：Regime V 必須排在 Regime IV 的**個股結構封頂**分支之前，但排在**宏觀鎖定**分支之後。壓頂（Call Wall 空間不足）與破位（跌破 Put Wall）可以同時成立，若把個股結構封頂提前，做空將永遠被遮蔽而無法觸發；**Regime I 條件式排在個股結構封頂之前**（僅當所有封頂位階高於回歸目標 min(VWAP, Gamma Flip)，因左側閘門不檢查封頂），其餘情形 Regime IV 維持優先；反之宏觀鎖定必須壓過 Regime V——系統性流動性危機下做空同樣會被劇烈軋空。
    **Regime III-B 必須排在 Regime III 之後**：突破當下兩者的條件都會成立，若順序顛倒，帶著更強事件證據的突破態會被降級成放寬態，UOA 時間窗也會被錯誤地套用到突破進場上。III-B 同時排在 Regime IV 個股結構封頂之後——上方沒有空間時，趨勢再完好也不構成進場理由。
 5. **動態門檻的降級是刻意的 fail-open**：15m K 線或 ATR 抓取失敗時，`room_threshold` 自動降級至 $3.5\%$ 絕對底線——比舊版固定 $5\%$ **寬鬆**。這是刻意選擇：資料缺失不應把標的誤鎖進「結構封頂危機態」而連帶封鎖整個動態轉倉引擎。降級狀態會在分類理由字串中以 `⚠️` 明確揭露。
 6. **大盤總經 API 異常防禦**：
