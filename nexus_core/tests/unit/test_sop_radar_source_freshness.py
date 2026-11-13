@@ -199,7 +199,14 @@ async def test_edge_gex_data_timestamp_written_to_kv() -> None:
         patch(
             "services.edge_cache_client.get_cached_gex",
             new_callable=AsyncMock,
-            return_value={"age_seconds": 900.0, "data": {"put_wall": 140.0}},
+            return_value={
+                "age_seconds": 900.0,
+                "data": {
+                    "spot": 150.0,
+                    "put_wall": 140.0,
+                    "gex_profile": {"140.0": 500.0, "150.0": 800.0, "160.0": 600.0},
+                },
+            },
         ),
         patch("database.cache.save_kv_cache", side_effect=fake_save_kv),
     ):
@@ -232,7 +239,7 @@ async def test_scrape_symbol_gex_raw_writes_data_timestamp() -> None:
             "net_gex": 1000.0,
             "call_wall": 160.0,
             "put_wall": 140.0,
-            "gex_profile": {"140": 500.0, "160": 1000.0},
+            "gex_profile": {"140": 500.0, "150": 800.0, "160": 1000.0},
         },
     }
 

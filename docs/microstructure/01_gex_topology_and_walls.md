@@ -148,7 +148,7 @@ flowchart TD
    分析中心與心跳的「曝險熱力圖」只畫離現價最近的 ±3 檔（共 7 檔）履約價，`Net GEX Regime` 則是 edge 回傳的全鏈 $\sum_{i=1}^N 	ext{GEX}(K_i)$（與 `gex_profile` 全部履約價加總完全相等）。視窗外履約價的貢獻可達表列加總的數倍，兩者本來就不應相等；畫面上分別標示「(現價±3檔，非全鏈)」與「(全鏈加總)」，避免被誤讀為加總算錯。
 
 7. **個股 GEX 降級備援順序與年齡上限**：
-   `fetch_symbol_gex_metrics()` 在即時 scrape 回傳空／全 0 profile、HTTP 失敗、例外或 `TUNNEL_URL` 未設定（盤前與夜間常見）時，從「本機 kv 舊快取」與「edge 背景快照」中挑**資料時間最新且 profile 有效**者；`force_live=True` 亦適用。候選資料超過 `_GEX_STALE_FALLBACK_MAX_AGE_SECONDS`（96 小時，涵蓋長週末）則視為不可信，回傳空 fallback。所有降級結果帶 `_is_stale_cache=True` 與 `_data_ts`（快照實際產生的 epoch 秒），呼叫端據此顯示資料時間；牆突破錨點仍只採用非 `_is_stale_cache` 的資料。即時 profile 無效時**不寫入 kv**（舊資料不會被重設為新鮮，空 profile 也不會被當作新鮮快取）；`_is_stale_cache` 與 `_data_ts` 不落地。舊版程式（#185 前）曾把重新蓋章的舊資料連同 `_is_stale_cache=True` 寫入 kv，這類殘留條目的信封時間不可信，一律視為資料時間未知：不走 30 分鐘新鮮捷徑，也會被 96 小時上限排除而不優先於 edge 快照。
+   `fetch_symbol_gex_metrics()` 在即時 scrape 回傳空／全 0 profile、HTTP 失敗、例外或 `TUNNEL_URL` 未設定（盤前與夜間常見）時，從「本機 kv 舊快取」與「edge 背景快照」中挑**資料時間最新且 profile 有效**者；`force_live=True` 亦適用。候選資料超過 `_GEX_STALE_FALLBACK_MAX_AGE_SECONDS`（96 小時，涵蓋長週末）則視為不可信，回傳空 fallback。所有降級結果帶 `_is_stale_cache=True` 與 `_data_ts`（快照實際產生的 epoch 秒），呼叫端據此顯示資料時間；牆突破錨點仍只採用非 `_is_stale_cache` 的資料。即時 profile 無效時**不寫入 kv**（舊資料不會被重設為新鮮，空 profile 也不會被當作新鮮快取）；`_is_stale_cache` 與 `_data_ts` 不落地。profile 有效的定義為：現價 ±25% 內至少 3 個 |值| > 1e-4 的相異履約價（現價缺失時改為全 profile 至少 3 個非零履約價；PRE_CALIBRATION），夜間 OI 未就緒只剩單一遠端履約價的 profile 視為無效，新鮮 kv／edge 捷徑與即時寫入 kv 皆套用同一規則。舊版程式（#185 前）曾把重新蓋章的舊資料連同 `_is_stale_cache=True` 寫入 kv，這類殘留條目的信封時間不可信，一律視為資料時間未知：不走 30 分鐘新鮮捷徑，也會被 96 小時上限排除而不優先於 edge 快照。
 
 ---
 

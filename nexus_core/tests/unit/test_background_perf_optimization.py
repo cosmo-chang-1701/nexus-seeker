@@ -197,7 +197,7 @@ async def test_fetch_symbol_gex_metrics_swr_consistency() -> None:
         "net_gex": 1000000.0,
         "call_wall": 155.0,
         "put_wall": 145.0,
-        "gex_profile": {"150.0": 500000.0},
+        "gex_profile": {"145.0": 300000.0, "150.0": 500000.0, "155.0": 400000.0},
     }
 
     # Test fresh cache return

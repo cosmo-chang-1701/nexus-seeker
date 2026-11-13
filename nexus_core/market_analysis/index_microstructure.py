@@ -623,20 +623,44 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
 _GEX_STALE_FALLBACK_MAX_AGE_SECONDS: float = 4 * 86400
 
 
+# PRE_CALIBRATION：GEX profile 有效性門檻。夜間 Yahoo OI 未就緒時，edge 只會留下
+# 少數遠離現價的履約價，不足以代表近端曝險分布，須視為無效並改用完整快照。
+_GEX_VALID_MIN_NEAR_STRIKES: int = 3
+_GEX_VALID_NEAR_BAND: float = 0.25
+
+
 def _has_valid_gex_profile(data: Any) -> bool:
-    """gex_profile 內至少有一個 |值| > 1e-4 才算有效 (空 dict 或全 0 皆無效)。"""
+    """有效 = 現價 ±25% 內至少 3 個相異且 |值| > 1e-4 的有限履約價。
+    現價缺失/非數值/≤0 時，改為要求全 profile 至少 3 個非零履約價。"""
     if not isinstance(data, dict):
         return False
     prof = data.get("gex_profile", {})
     if not isinstance(prof, dict) or not prof:
         return False
-    for v in prof.values():
+    spot: Optional[float] = None
+    try:
+        raw_spot = data.get("spot")
+        if raw_spot is not None and not isinstance(raw_spot, bool):
+            sp = float(raw_spot)
+            if math.isfinite(sp) and sp > 0:
+                spot = sp
+    except (TypeError, ValueError):
+        spot = None
+    strikes: set[float] = set()
+    for k, v in prof.items():
         try:
-            if abs(float(v)) > 0.0001:
-                return True
-        except Exception:
-            pass
-    return False
+            strike = float(k)
+            val = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not (math.isfinite(strike) and math.isfinite(val)):
+            continue
+        if abs(val) <= 0.0001:
+            continue
+        if spot is not None and abs(strike - spot) > _GEX_VALID_NEAR_BAND * spot:
+            continue
+        strikes.add(strike)
+    return len(strikes) >= _GEX_VALID_MIN_NEAR_STRIKES
 
 
 def _empty_gex_fallback() -> dict:
@@ -794,6 +818,7 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                     not force_live
                     and not is_legacy_restamped
                     and time.time() - cached_data_ts < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+                    and _has_valid_gex_profile(data)
                 ):
                     return data
                 # 快取已過期（或 force_live 要求略過），保留作為降級備援，並記住其真實資料時間
@@ -813,7 +838,11 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             edge_age = edge_cached.get("age_seconds")
             # 與選擇權鏈共用同一顆 edge 背景輪詢器（約 30 分鐘輪完一輪），
             # 故沿用同一個新鮮度閾值常數，避免兩處各自維護不同步的數值。
-            if edge_age is not None and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS:
+            if (
+                edge_age is not None
+                and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
+                and _has_valid_gex_profile(edge_cached.get("data"))
+            ):
                 from database.cache import save_kv_cache
 
                 edge_data = edge_cached["data"]
