@@ -546,7 +546,7 @@ def test_short_entry_full_plan_formats() -> None:
 
 def test_pyramid_add_missing_plan_values_dash() -> None:
     embed = create_transition_pyramid_embed(
-        "AAA", "r", "s", scenario="PYRAMID_ADD", pyramid_add_plan={"vix_spot": None}
+        "AAA", "r", "s", pyramid_add_plan={"vix_spot": None}
     )
     text = _plain(embed)
     assert "$0.00" not in text

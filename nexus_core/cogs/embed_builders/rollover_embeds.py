@@ -821,39 +821,30 @@ def create_transition_pyramid_embed(
     symbol: str,
     reason: str,
     suggested_strategy: str,
-    scenario: str = "TRANSITION_ENGINE",
     pyramid_add_plan: Optional[Mapping[str, Any]] = None,
 ) -> discord.Embed:
     """
-    產生 OPEN_PYRAMID 加碼建議的專屬 Embed，涵蓋的觸發源（路徑1 已不再發出 OPEN_PYRAMID，現行僅 PYRAMID_ADD）：
+    產生 PYRAMID_ADD 順勢金字塔加碼建議 (OPEN_PYRAMID) 的專屬 Embed。
 
-    * TRANSITION_ENGINE（歷史遺留）：舊版動態調整狀態切換引擎路徑1 的一次性
-      加碼建議，沒有具體倉位計算，僅文字建議。
-    * PYRAMID_ADD：例行順勢金字塔加碼，附帶 `pyramid_add_plan`
-      （market_analysis/dynamic_rollover/models.py::PyramidAddPlan）具體的
-      加碼股數／風險預算／停損距離倉位計算結果，比照
-      create_short_entry_embed 的「⚖️ 倉位」欄位風格渲染。
+    OPEN_PYRAMID 現僅由 PYRAMID_ADD 發出（TRANSITION_ENGINE 路徑1 已改為只發保本
+    停損上移，見 create_transition_ratchet_embed）。附帶 `pyramid_add_plan`
+    （market_analysis/dynamic_rollover/models.py::PyramidAddPlan）具體的
+    加碼股數／風險預算／停損距離倉位計算結果，比照
+    create_short_entry_embed 的「⚖️ 倉位」欄位風格渲染；未提供時僅顯示文字建議。
 
     刻意不重用 create_dynamic_rollover_embed：該函式以「賣出 sell_symbol →
     買入 buy_symbol」的轉倉框架建模，但 OPEN_PYRAMID 不是賣出任何既有部位，
     而是建議在同一標的「額外開立第二筆」新部位，語意上不適合「標的 → 轉倉
     目標」的框架（理由與既有 create_covered_call_overlay_embed 相同）。
     """
-    is_pyramid_add = scenario == "PYRAMID_ADD"
-    style = _SCENARIO_STYLE["PYRAMID_ADD" if is_pyramid_add else "TRANSITION_ENGINE"]
-    title_label = "順勢金字塔加碼" if is_pyramid_add else "順勢加碼 (Pyramiding)"
+    style = _SCENARIO_STYLE["PYRAMID_ADD"]
     embed = NexusEmbed(
-        title=f"{style['emoji']} {'順勢加碼' if is_pyramid_add else '動態調整'}・{title_label}: {symbol}",
+        title=f"{style['emoji']} 順勢加碼・順勢金字塔加碼: {symbol}",
         color=style["color"],
     )
 
     safe_reason = truncate_with_boundary(reason, _EMBED_DESCRIPTION_SAFE_LIMIT)
-    intro = (
-        "**📈【建議動作：順勢加碼】部位獲利延伸且棘輪停損已鎖定成本之上，" "授權加碼**"
-        if is_pyramid_add
-        else "**🔀【建議動作：順勢加碼】原部位已隨 Regime 演化確認，授權開立第二筆"
-        "高動能部位**"
-    )
+    intro = "**📈【建議動作：順勢加碼】部位獲利延伸且棘輪停損已鎖定成本之上，授權加碼**"
     embed.description = f"{intro}\n\n{safe_reason}"
 
     C_RESET = " [0m"
@@ -870,7 +861,7 @@ def create_transition_pyramid_embed(
     ]
     embed.add_field(name="🔀 加碼建議", value="\n".join(pyramid_lines), inline=False)
 
-    if is_pyramid_add and pyramid_add_plan:
+    if pyramid_add_plan:
 
         def _money(key: str) -> str:
             # 缺值（None／非數值）顯示 `--`，不以 $0.00 冒充
@@ -895,11 +886,7 @@ def create_transition_pyramid_embed(
         ]
         _add_ansi_field_safely(embed, "⚖️ 倉位", _ansi_tree_lines(sizing_rows))
 
-    embed.set_footer(
-        text="Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
-        if is_pyramid_add
-        else "Risk & Rollover Engine • 動態調整狀態切換引擎，原部位維持不動"
-    )
+    embed.set_footer(text="Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動")
 
     return embed
 

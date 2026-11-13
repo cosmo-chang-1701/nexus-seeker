@@ -116,23 +116,6 @@ class ShortEntryEvaluation(NamedTuple):
     ivr: Optional[float]  # None = IVR 未知
 
 
-class EntryConfirmation(NamedTuple):
-    """Scenario 2 進場鐵律的確認結果，轉交 Scenario 5 與 SHORT_ENTRY 情境沿用。
-
-    早期是 `(is_confirmed, reason)` 二元組，**不帶方向**——`core_deployment.py`
-    因此把做空確認當成「候選標的可以買進」，把 CORE 超額資金以 Buy Shares 部署
-    進剛被確認要做空的標的。`direction` 是修復該缺陷的最小必要資訊。
-    """
-
-    is_confirmed: bool
-    reason: str
-    direction: EntryDirection = "LONG"
-    short_evaluation: Optional[ShortEntryEvaluation] = None
-    entry_regime: Optional[str] = None
-    # 分類器算出的 15m RSI (Regime V 路徑)，供做空倉位的凱利先驗查表沿用。
-    rsi_15m: Optional[float] = None
-
-
 class DynamicRegime(str, Enum):
     """動態調整模式的 6 態市場結構分類 (regime_classifier.py::classify_dynamic_regime)。
 

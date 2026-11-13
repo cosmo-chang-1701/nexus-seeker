@@ -12,12 +12,12 @@ Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）以**買入�
 5. `COVERED_CALL_PROFIT_LOCK`：期權賣方時間價值階梯停利與末日指派防衛。
 6. `MACRO_TOP_ESCAPE_DEFENSE`：宏觀逃頂前瞻防禦，僅建議買入 SPY 保護性 Put，不減碼、不轉入 BOXX。
 7. `FUNDAMENTAL_BROKEN`：基本面護城河破滅**告知**（不附清倉指令與按鈕）。
-8. `TRANSITION_ENGINE`：動態調整狀態切換引擎（左側轉右側演化）。
+8. `TRANSITION_ENGINE`：動態調整狀態切換引擎，現僅發出一次性保本停損上移（`TRANSITION_RATCHET`），不再授權任何新開倉。
 9. `SHORT_ENTRY`：獨立的做空進場訊號（做空六重鐵律確認後，自帶進場／停損／目標與倉位）。
 10. `PYRAMID_ADD`：依擠壓規則對獲利多頭部位順勢金字塔加碼（strategies/10 §2.6；可重複觸發，是目前唯一的 `OPEN_PYRAMID` 觸發源）。
 11. `REGIME_HEDGE`：兩級體制避險（組合層級指令，`symbol="PORTFOLIO"`）；第一級 NORMAL 盤 PSQ 局部對沖（預設乾跑）、第二級大盤危機清倉＋SQQQ／SOXS 對沖或止損轉空，見 §2.12。
 
-⚠️ **進場確認帶方向**：進場六重鐵律回傳 `EntryConfirmation(is_confirmed, reason, direction, …)`。`direction == "SHORT"` 的確認**永遠不會**進入任何買進候選流程；做空確認僅由 `SHORT_ENTRY` 處理。
+⚠️ **做空確認與多頭進場分離**：做空確認只存在於 `short_side_entry.py`（`evaluate_short_entry` 回傳 `ShortEntryEvaluation`，`_confirm_short_entry_signal` 為其三元組包裝），情境流程中僅由 `SHORT_ENTRY`（`_find_best_short_target`）消費；`/x` 面板與 `entry_advisor` 也只把它當成明確的 SHORT 方向讀取。做空確認**永遠不會**進入任何買進候選流程。多頭進場來自擠壓規則（strategies/10）與左側進場閘門（`left_side_entry._confirm_left_entry_signal`）。
 
 所有轉倉建議皆統一封裝為 `RolloverInstruction` 結構，提供行動指令、目標標的、賣出比例與結構化理由，為交易員或下游排程提供確定性的執行依據。
 
@@ -205,7 +205,7 @@ stateDiagram-v2
     投資組合資產評估 --> COVERED_CALL_PROFIT_LOCK: 賣方期權時間價值衰減 >= 50%
     投資組合資產評估 --> MACRO_TOP_ESCAPE_DEFENSE: 宏觀逃頂評分達 WATCH 以上
     投資組合資產評估 --> FUNDAMENTAL_BROKEN: 基本面護城河破滅分析確認（僅告知）
-    投資組合資產評估 --> TRANSITION_ENGINE: 左側部位帶量突破 VWAP & GammaFlip
+    投資組合資產評估 --> TRANSITION_ENGINE: 左側部位帶量站穩 VWAP & GammaFlip
     投資組合資產評估 --> SHORT_ENTRY: SHORT_SIDE/DYNAMIC 使用者且做空六重鐵律通過
     投資組合資產評估 --> PYRAMID_ADD: 右側獲利倉且棘輪停損已鎖定成本之上
 
@@ -229,7 +229,7 @@ stateDiagram-v2
     PYRAMID_ADD --> 加碼訊號: 八項條件皆通過 (可重複觸發至 2 次)
 ```
 
-派送順序（`portfolio_monitor.monitor_real_portfolio_task`）：`SATELLITE_REBALANCE`（含 `TRANSITION_ENGINE` 與 `PYRAMID_ADD` 的per-asset 迴圈內評估）→ `CORE_DEPLOYMENT`（Covered Call Overlay）→ `MARGIN_DEFENSE` → `REGIME_HEDGE`（僅在本輪無非 `HOLD` 的 `MARGIN_DEFENSE` 時評估；其第二級要清倉的標的併入後續逃頂防禦的 `already_flagged`）→ `MACRO_TOP_ESCAPE_DEFENSE` → 賣方停利 → `SHORT_ENTRY`。`SHORT_ENTRY` 走 `alpha_market_signals` 通知頻道與專屬 embed（不掛 `RolloverActionView`，該按鈕試算的是 BUY 股數），受 `SHORT_ENTRY_DRY_RUN` 閘門控制；`REGIME_HEDGE` 走 `defense_margin_call`（左尾防護）頻道與專屬 embed（`create_regime_hedge_embed`，不掛互動按鈕），第一級受 `REGIME_HEDGE_TIER1_DRY_RUN`（預設 `true`）閘門控制、第二級照常推播；`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 同走 `defense_option_rollover` 通知頻道，受 `PYRAMID_ADD_DRY_RUN`（預設 `true`）閘門控制。另有一道**跨情境**閘門：由 Regime III-B（右側趨勢延續態，見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §1）確認出的指令受 `REGIME_III_B_DRY_RUN`（預設 `true`）抑制，該閘門依 `instruction["entry_regime"]` 判斷而非 `scenario`。
+派送順序（`portfolio_monitor.monitor_real_portfolio_task`）：`SATELLITE_REBALANCE`（含 `TRANSITION_ENGINE` 與 `PYRAMID_ADD` 的per-asset 迴圈內評估）→ `CORE_DEPLOYMENT`（Covered Call Overlay）→ `MARGIN_DEFENSE` → `REGIME_HEDGE`（僅在本輪無非 `HOLD` 的 `MARGIN_DEFENSE` 時評估；其第二級要清倉的標的併入後續逃頂防禦的 `already_flagged`）→ `MACRO_TOP_ESCAPE_DEFENSE` → 賣方停利 → `SHORT_ENTRY`。`SHORT_ENTRY` 走 `alpha_market_signals` 通知頻道與專屬 embed（不掛 `RolloverActionView`，該按鈕試算的是 BUY 股數），受 `SHORT_ENTRY_DRY_RUN` 閘門控制；`REGIME_HEDGE` 走 `defense_margin_call`（左尾防護）頻道與專屬 embed（`create_regime_hedge_embed`，不掛互動按鈕），第一級受 `REGIME_HEDGE_TIER1_DRY_RUN`（預設 `true`）閘門控制、第二級照常推播；`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 同走 `entry_pyramid_add` 通知頻道，受 `PYRAMID_ADD_DRY_RUN`（預設 `true`）閘門控制。另有一道**跨情境**閘門：由 Regime III-B（右側趨勢延續態，見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §1）確認出的指令受 `REGIME_III_B_DRY_RUN`（預設 `true`）抑制，該閘門依 `instruction["entry_regime"]` 判斷而非 `scenario`。
 
 ### 3.2 DTE 三態狀態機決策階梯
 
@@ -266,7 +266,7 @@ flowchart TD
 | `_HOLDING_DTE_LOCKOUT_THRESHOLD` | `7` | DTE $< 7$ 封鎖新開倉與轉倉部署 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT` | `0.50` ($50\%$) | 賣方權利金衰減達 50% 時 BTC 回補 50% | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_COVERED_CALL_PROFIT_LOCK_FULL_DECAY_PCT` | `0.80` ($80\%$) | 賣方權利金衰減達 80% 時 BTC 100% 全額平倉 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_TRANSITION_PATH1_VWAP_VOLUME_MULT` | `1.5` | 左側轉右側演化 15m 收盤站穩 VWAP 放量倍數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_TRANSITION_PATH1_VWAP_VOLUME_MULT` | `1.5` | `TRANSITION_ENGINE` 保本上移：15m 收盤站穩 VWAP 放量倍數 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_SHORT_ENTRY_ACCOUNT_RISK_PCT` | `0.005` ($0.5\%$) | `SHORT_ENTRY` 單筆帳戶風險上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE` | `1` | `SHORT_ENTRY` 每位使用者每週期上限 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `SHORT_ENTRY_DRY_RUN` | `true` | `SHORT_ENTRY` 只寫稽核紀錄不推播 | `nexus_core/config.py` |
@@ -285,7 +285,7 @@ flowchart TD
 1. **反向 ETF 僅由兩級體制避險建議**：`MARGIN_DEFENSE` 不再路由至反向 ETF；`REGIME_HEDGE` 的第一級只允許 PSQ（封鎖 SQQQ／SOXS），-3x 反向 ETF 僅限第二級，且受總經事件凍結約束，且第二級反向部位受淨 Delta 守門區間縮減（§2.12）。取不到參考價時股數待確認，不以備援估計值下單。
 2. **末日合約結算與轉倉窗口**：
    當期權部位 $\text{DTE} \le 1$ 時，系統直接短路所有常規指標計算，跳過 15m 實體收盤等待，直接發出 `EXPIRATION_SETTLEMENT_ALERT`，並指示次月合約尋找窗口設定在 $21 \sim 45$ DTE，避免連鎖陷入連續末日合約耗損。
-3. **做空確認的下游隔離**：`direction == "SHORT"` 的 `EntryConfirmation` 不得進入任何買進候選流程；做空只走 `SHORT_ENTRY`（`_find_best_short_target`）。
+3. **做空確認的下游隔離**：做空確認（`short_side_entry.py` 的 `ShortEntryEvaluation`／`_confirm_short_entry_signal`）不得進入任何買進候選流程；情境流程中做空只走 `SHORT_ENTRY`（`_find_best_short_target`）。
 4. **Delta 終局平倉硬鎖**：
    當期權部位 Delta 升至 $\ge 0.85$ 時，做市商避險已近乎 1:1 現貨對沖，凸性利潤耗盡並伴隨深實值流動性枯竭風險，系統觸發 TP3 強制收割利潤。
 5. **右側突破目標牆錨定與同根震盪防護（Regime III Target Wall Anchoring）**：
@@ -325,7 +325,7 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`evaluate_short_entry_opportunity()`（情境九）
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：做空價位與倉位
 - `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：`evaluate_pyramid_add_impl()`（情境十，八項條件；條件二～四呼叫 `squeeze_entry.evaluate_symbol()`）、`compute_pyramid_add_sizing()`、`build_pyramid_add_plan()`
-- `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_transition_pyramid_embed()`（依 `scenario` 分流 `TRANSITION_ENGINE`／`PYRAMID_ADD` 文案與倉位欄位）
+- `nexus_core/cogs/embed_builders/rollover_embeds.py`：`create_transition_pyramid_embed()`（僅渲染 `PYRAMID_ADD` 加碼建議與倉位欄位；`TRANSITION_ENGINE` 保本上移改由 `create_transition_ratchet_embed()` 渲染）
 - `nexus_core/tests/unit/test_pyramid_add.py`：八項條件逐項測試、條件二不變式、次數上限、冷卻、曝險降量、空頭排除、狀態延後提交、端到端整合測試
 - `nexus_core/cogs/trading/portfolio_monitor.py`：十大情境的評估順序、通知頻道分流與 dry-run 閘門
 - `nexus_core/services/gtc_stress_test_service.py`：`run_gtc_stress_test()`／`build_stress_test_results()`，GTC 掛單現金赤字與現金等價物即時市值精算（`/stress_test` 指令與 /dash 壓測共用）

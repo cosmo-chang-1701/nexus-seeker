@@ -109,7 +109,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
   - `classify_trade_intent()`: `PREMIUM_SELL` / `DIRECTIONAL_LONG` / `DIRECTIONAL_SHORT` (drives VIX ladder & Kelly priors). Never use `"STO"` / `"BTO"` strings.
   - `is_short_exposure_strategy()`: Boolean net short direction for display/decision (never as a Delta multiplier).
 - **Negative Portfolio Delta != Hedge**: Distinguish short alpha from hedges via `trade_category == "HEDGE"`.
-- **Directional Confirmations**: Entry-confirmation gates return `EntryConfirmation(direction=...)`. Confirmations with `direction == "SHORT"` must never enter buy-candidate downstream flows; short entries route solely through `SHORT_ENTRY`.
+- **Directional Confirmations**: Short-side confirmation lives only in `short_side_entry.py` (`evaluate_short_entry` → `ShortEntryEvaluation`; `_confirm_short_entry_signal` is its tuple wrapper). The scenario flow consumes it solely via `SHORT_ENTRY` (`_find_best_short_target`); the `/x` panel and `entry_advisor` read it only as an explicit SHORT direction. A short confirmation must never enter buy-candidate downstream flows. Long-side entries come from the squeeze rule (strategies/10) and the left-side gate (`left_side_entry._confirm_left_entry_signal`).
 
 ### 3. Market Data & Timezone Conventions
 - **Timezone Invariant**: `get_history_df` returns **tz-naive US/Eastern** indexes (never UTC). Treating them as UTC shifts intraday bars by 4–5 hours and daily bars by one day.
