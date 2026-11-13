@@ -131,7 +131,7 @@ flowchart TD
 | `GAMMA_FLIP_MATERIALITY_CANDIDATES` | `(0.02, 0.05, 0.10)` | 重要性比的離線比較候選門檻（§5.6），閘門不使用 | `nexus_core/market_analysis/index_microstructure.py` |
 | `GAMMA_FLIP_MATERIALITY_DISPLAY` | `0.05` | 呈現層「雜訊交叉」標註與前向記錄分組門檻；**未經校準，不得用於閘門** | `nexus_core/market_analysis/index_microstructure.py` |
 | `_GAMMA_FLIP_MIN_FAR_SIDE_GEX_RATIO` | `0.01` | 大盤 edge 零交叉的遠側（遠離現價一側）總 GEX 峰值須達全區 max\|G\| 的此比例，否則視為 BS 尾端雜訊並剔除（§5.z） | `nexus_edge_scraper/local_api/macro.py` |
-| `Gamma Flip Fallback` | `VWAP + 0.5 ATR_15m` | 當 Flip 估算為 0.0 且全鏈正 Gamma 時的替代突破門檻 | `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py` |
+| `Gamma Flip Fallback` | `VWAP + 0.5 ATR_15m`（右側，已退役） | 原為 Flip 估算為 0.0 且全鏈正 Gamma 時的替代突破門檻；右側條件一已刪除，此列無現行消費端。做空條件一另有鏡像 `VWAP − 0.5 ATR_15m`（全域 Short Gamma Fallback 模式） | `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py` |
 
 ---
 
@@ -153,7 +153,7 @@ flowchart TD
    - **第一步：先補記錄，不改行為**。前向蒐集目前只在 `regime_evaluation_log` 記錄 `gamma_flip`（單向定義）與全鏈 `net_gex`，沒有局部體制，無從驗證。應在 `evaluation_recorder.py` 的 `features_json` 加入 `analyze_local_gamma_regime()` 的 `local_gex`、`flip_strike`、`flip_side`，並補「加上記錄點後輸出逐位元不變」的測試（比照 `test_exit_tier_forward_collection.py`）。
    - **分組比較**：累積後以 `calibration forward-report` 將 `ENTRY_RIGHT`／`ENTRY_LEFT`／`REGIME_CLASSIFIER` 紀錄分成「全鏈 LONG 且局部 SHORT」與「全鏈 LONG 且局部 LONG」兩組，比較事後逆向先觸及率與 ±k×ATR 路徑標註。
    - **判讀準則**：每組 $n \ge 100$，且局部 SHORT 組的逆向先觸及率顯著較高（bootstrap CI 不重疊），才評估讓右側進場在局部負 Gamma 區降級或加嚴；否則維持 `estimate_symbol_gamma_flip()` 的單向定義。
-   - **改動時的連帶工作**：右側條件一的 `VWAP + 0.5×ATR₁₅ₘ` 替代門檻（見 §4 `Gamma Flip Fallback`）是建立在「無交叉點＝回傳 0」的語意上；若閘門改用雙向交叉，必須同步重新定義替代門檻的觸發條件。
+   - **改動時的連帶工作**：右側條件一已於 2026-10 刪除，其 `VWAP + 0.5×ATR₁₅ₘ` 替代門檻（見 §4 `Gamma Flip Fallback`）不再有消費端。若閘門語意改變（例如改用雙向交叉），須同步檢視做空條件一 `VWAP − 0.5×ATR₁₅ₘ` 鏡像門檻（`short_side_entry.py`）的觸發條件。
 
 5. **離散履約價格點 vs 內插零軸（呈現層）**：
    `estimate_symbol_gamma_flip()` 回傳的是 $\mathcal{Z}$ 中的履約價 $K_{(i)}$（第一個非負的格點），真正的零軸落在 $K_{(i-1)}$ 與 $K_{(i)}$ 之間。例如 $g(225)=-1{,}434{,}309\text{K}$、$g(227.5)=+18{,}108{,}163\text{K}$ 時閘門取 $227.50$，內插零軸約 $225.18$。分析中心因此將標籤寫成「Gamma Flip (轉正履約價)」，並以 `interpolate_gamma_flip_zero()`（與 §5.4 同一條內插式，只取 $(K_{(i-1)}, K_{(i)})$ 這一對）加列「相鄰履約價內插零軸 ≈ …（閘門以履約價格點為準）」。閘門維持取格點：格點版本已是所有進場閘門與 Regime 分類器共用的門檻線，改成內插值會讓「站上 Flip」提早觸發，須先經 `calibration` 比對才能改。
@@ -168,7 +168,7 @@ flowchart TD
    - **前向記錄**：`features_json` 記錄 `gamma_flip_raw`、`gamma_flip_ratio`、`gamma_flip_neg_peak`、`gamma_flip_material_5pct`（見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13）。
    - **離線報表**：`micro-report` 的 `GammaFlip重要性` 輸出 $\rho$ 分位，以及 2%／5%／10% 門檻下原始 Flip 被剔除、改選到其他履約價、完全消失的次數，用來挑選門檻；`forward-report` 的 `gamma_flip_materiality` 將閘門紀錄分成雜訊組與重要組，比較逆向先觸及率。
    - **判讀準則**：兩組皆 $n \ge 100$，且雜訊組逆向先觸及率的 bootstrap CI（依日期叢集）下界高於重要組 CI 上界，才提案讓 `estimate_symbol_gamma_flip()` 套用門檻；否則維持無門檻定義，只保留呈現層揭露。
-   - **改閘門時的連帶工作**：右側條件一的 `VWAP + 0.5×ATR₁₅ₘ` Fallback 建立在「無交叉＝回傳 0」上，門檻會讓更多標的落入 Fallback，觸發條件須重新確認；`regime_classifier`、左側／做空進場、`opportunity_cost` 的測試夾具多以小量負值構造交叉，需逐一檢查。
+   - **改閘門時的連帶工作**：（歷史）右側條件一已刪除，其 `VWAP + 0.5×ATR₁₅ₘ` Fallback 不再有消費端；做空條件一的 `VWAP − 0.5×ATR₁₅ₘ` 鏡像門檻（`short_side_entry.py`）若受閘門語意影響，須重新確認觸發條件；`regime_classifier`、左側／做空進場、相關單元測試夾具多以小量負值構造交叉，需逐一檢查。
 
 ---
 
@@ -249,7 +249,7 @@ SPY PutWall 由 758（錯 q）修正為 767。
   - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
   - 內插零軸（呈現層）：`interpolate_gamma_flip_zero()`
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
-  - 右側突破引用與 Fallback 替代：`_confirm_entry_condition1_breakout()`（第 55–255 行）
+  - （歷史，已退役）右側突破引用與 Fallback 替代：原右側條件一函式（`opportunity_cost.py`）已刪除；做空鏡像見 `short_side_entry.py::_confirm_short_entry_condition1_breakdown()`
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：
   - 6-Regime 路由引用：`classify_dynamic_regime()`
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`：Symbol Hub 個股 GEX Flip 線呈現

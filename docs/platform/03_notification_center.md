@@ -37,7 +37,7 @@
 | | | `risk_portfolio_downside` | 投組下行風險：距一年高點回撤跨越 −10%／−15%／−20% 階梯（盤中與收盤檢查），或 1 日 CVaR95 超出 `risk_limit` 推導的預算／尾部體制轉換（收盤檢查）。去重前綴 `downside_dd_`／`downside_cvar_`；推播未送達時武裝狀態不前進（`services/downside_risk_service.py`） |
 | | | `risk_withdrawal_runway` | 提領跑道（收盤檢查）：壓力跑道跌破 3／2／1 年門檻（回升至門檻 + 0.5 年才重新武裝；NAV 快照過期時不推播），以及提領前置提醒（前一個月 15 日起）與提領月份首個交易日的提領額與賣出清單。去重前綴 `runway_warn_`／`runway_remind_`；狀態鍵 `runway_state_` 不列入去重清理，推播未送達時狀態不前進（`services/withdrawal_runway_service.py`，見 [`../risk_portfolio/05_financial_runway_and_liquidity.md`](../risk_portfolio/05_financial_runway_and_liquidity.md)） |
 | | | `risk_allocation_drift` | 配置偏離提醒（收盤檢查）：股票占比偏離宣告目標 `target_equity_pct` ≥ 5 pp 時，於首次超標當天與仍超標時每月第一次執行推播（固定比例、不擇時，總經狀態僅作註記；有提領設定時扣除下次提領預留，缺當日跑道快照則略過）。去重前綴 `alloc_drift_remind_`；狀態鍵 `alloc_drift_state_` 不列入去重清理，推播未送達時狀態不前進（`services/allocation_drift_service.py`，見 [`../strategies/09_static_allocation_rebalance.md`](../strategies/09_static_allocation_rebalance.md) §7） |
-| 🚀 上行捕捉 | `UPSIDE_CAPTURE` | `advisory_entry_signal` | 自選標的進場顧問（六重鐵律通過時推播進場價／停損／目標） |
+| 🚀 上行捕捉 | `UPSIDE_CAPTURE` | `advisory_entry_signal` | 自選標的進場顧問（依進場路由通過時推播：擠壓進場為進場價／停損／檔位與部位比例、無目標價；左側另含目標） |
 | | | `entry_pyramid_add` | `PYRAMID_ADD`、`TRANSITION_ENGINE`（停損上推／一次性加碼）、`CORE_DEPLOYMENT` |
 | | | `alpha_short_entry` | `SHORT_ENTRY` 做空進場（校準中，歸雜訊；另受 `SHORT_ENTRY_DRY_RUN` 控制） |
 | ✂️ 上行削減 | `UPSIDE_TRIM` | `defense_option_rollover` | TP1–TP3 分批、衛星再平衡、動態保本（`SL_TRAILING_BREAKEVEN`） |

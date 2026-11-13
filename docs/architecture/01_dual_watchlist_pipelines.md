@@ -24,7 +24,7 @@
 | **主動推送過濾門檻** | 自選雷達面板不推播 | **僅當 `tactical.alert_level != "green"` 時發送**<br/>（非綠色警報才推送，杜絕無效打擾） |
 | **通知控制頻道** | （`heartbeat_watchlist`、`intel_market_scenario` 已移除） | `/notif_settings` $\to$ `heartbeat_symbol_deep`<br/>（migration `v070` 獨立分離） |
 | **進階進攻模組** | 無 | 無（Gamma Squeeze 進階進攻引擎已於 2026-10-17 退役） |
-| **進場顧問獨立推播** | 無 | `_dispatch_entry_advisor_alert()`：**僅在心跳為 green 時**評估，六重鐵律通過才推播（含進場／停損／目標／盈虧比）。獨立通知頻道 `advisory_entry_signal`、**不受 `enable_analyst_agent` 約束**，不新增 `scenario`、不覆寫 `tactical`。預設乾跑（`WATCHLIST_ADVISOR_DRY_RUN`） |
+| **進場顧問獨立推播** | 無 | `_dispatch_entry_advisor_alert()`：**僅在心跳為 green 時**評估，依進場路由判定通過才推播：右側與 DYNAMIC Regime II／III／III-B／IV 走多時間框架擠壓規則（推播進場價／停損／檔位與部位比例，無目標價與盈虧比）；LEFT_SIDE 與 DYNAMIC Regime I 走左側鐵律（含目標與盈虧比）；SHORT_SIDE 與 DYNAMIC Regime V 走做空鐵律。獨立通知頻道 `advisory_entry_signal`、**不受 `enable_analyst_agent` 約束**，不新增 `scenario`、不覆寫 `tactical`。預設乾跑（`WATCHLIST_ADVISOR_DRY_RUN`） |
 
 ---
 
@@ -96,7 +96,7 @@ flowchart TD
         P2_Queue --> AdvisorGate
         AdvisorGate -- 否 --> LoopSleep
         AdvisorGate -- 是 --> AdvisorRadar["_resolve_candidate_radar()<br/>共享雷達快取(目前無寫入端) → Semaphore(3) 補抓"]
-        AdvisorRadar --> AdvisorEval["evaluate_entry_advice()<br/>策略分派 + 六重鐵律 + 價位<br/>(記憶化於 strategy:symbol:15m bar)"]
+        AdvisorRadar --> AdvisorEval["evaluate_entry_advice()<br/>策略分派（擠壓／左側／做空三路）+ 價位<br/>(記憶化於 strategy:symbol:15m bar)"]
         AdvisorEval --> AdvisorDry{"通過且三個乾跑旗標皆已關閉<br/>且當日 Regime 去重未命中?"}
         AdvisorDry -- 是 --> AdvisorQueue["create_entry_rules_embed → queue_dm<br/>寫入 advisory_entry_ 去重旗標"]
         AdvisorDry -- 否 --> LoopSleep
@@ -174,7 +174,7 @@ flowchart TD
   - `WallBreakMonitor`（`nexus_core/services/wall_break_service.py`）: 每輪對自選標的偵測 GEX 牆突破／跌破與 T+1 結算，獨立於心跳警報等級與進場顧問，推播至 `alpha_wall_break`
   - `_dispatch_entry_advisor_alert` / `_resolve_candidate_radar`: 進場顧問獨立派發與 radar 取得（共享快取優先、Semaphore(3) 補抓）
 - `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`
-  - `evaluate_entry_advice`: 策略分派、六重鐵律確認、價位計算與跨使用者記憶化
+  - `evaluate_entry_advice`: 策略分派（擠壓規則、左側鐵律、做空鐵律三路）、進場確認、價位計算與跨使用者記憶化
 - `nexus_core/cogs/embed_builders/portfolio_embeds.py`
   - `create_entry_rules_embed`: 進場鐵律 Embed（進場顧問追加「價位建議」欄位；`/x` 頁籤共用；開盤後 30 分鐘前附加「⏰ 期權鏈開盤重算提醒」，純呈現不改任何判定）
   - 提醒時刻來自 `market_time.get_options_chain_recompute_ready_at`：盤前快照的 GEX／OI 為前一交易日快取（OI 盤中不更新），以 NYSE 開盤＋30 分鐘重算後的 Gamma Flip／CallWall 盈虧比為準；台灣時間由美東時刻動態換算（夏令 22:00、冬令 23:00），已過該時刻或行事曆查詢失敗時不顯示
