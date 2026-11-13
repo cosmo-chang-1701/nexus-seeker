@@ -165,7 +165,7 @@ $$\text{Payout} = \begin{cases}
 
 - **因子 4 與進場閘門同源**：大盤負 Gamma 取自 `get_market_regime()`，推導與 `squeeze_entry/vetoes.py`（`compute_macro_escape_tier`）、`macro_top_escape_defense.py` 完全相同：`UNKNOWN` → `None`（⚪ 未知（不計分），不計入緊縮也不計入寬鬆）；`SHORT_GAMMA_CRITICAL`／`SYSTEMIC_LIQUIDITY_CRISIS` → `True`（🚨 負 Gamma 踩踏）；其餘 → `False`（🟢 未達踩踏條件，**不稱為「正 Gamma」**）。同一組輸入下，簡報的逃頂 tier 必等於擠壓進場閘門算出的 tier（`tests/unit/test_escape_briefing_regime.py` 以同一組 mock 輸入斷言）。**FedWatch 輸入同源**：簡報經 `get_latest_fedwatch_probability` 讀 KV `macro_fedwatch_probability`；無資料（冷啟動）時回傳 `(None, True, False)`，不查 `economic_calendar_events` 備援（該欄位與 KV 同一次寫入、無年齡上限）、不捏造 0.50，簡報顯示「暫無數據」，tier 與閘門一致（其餘因子常態時為 `UNKNOWN`、指引為「資料不足」）；過期同理。簡報／閘門一致性僅保證於無資料與過期情境，KV 值超出 (0.01, 0.99) 時簡報視為未知而閘門仍以原始值計分（edge 寫入端已拒收此類值）。舊版讀取無任何寫入者的 KV 鍵 `macro_short_gamma_critical`（恆為 False）已移除。
 - **指引依逃頂分級**：NORMAL → 維持持有（無需額外避險）；WATCH／ELEVATED／CRITICAL → 考慮 SPY 保護性 Put（情境 6，對沖約 30% Beta 加權 Delta，保留上檔），措辭依分級升高（前哨／警戒升高／確認級）但動作相同；使用者已開啟 `enable_macro_top_escape_defense` 時附「具體口數見盤中情境 6 推播」，未開啟則提示「可於 /settings 開啟「宏觀逃頂前瞻防禦」以收到口數建議」；UNKNOWN → 資料不足，無法判定逃頂分級。指引不含任何減倉、撤退、網格或裸賣建議。
-- **逃頂窗口已退役**：使用者自訂的「逃頂窗口（起~訖）」與 ±5／8 個交易日位移在程式中沒有任何消費端，且與 Buy & Hold 設計牴觸，已自簡報、`/market`（列名改為「流動性狀態」）、`/calendar`（「總經防護聯動」只陳述狀態）與 `/settings` 移除。DB 欄位 `escape_window_start`／`escape_window_end`、migration v048 與 `UserContext` 對應欄位**保留但不再使用**，既有使用者已存的值不受影響。
+- **逃頂窗口已退役**：使用者自訂的「逃頂窗口（起~訖）」與 ±5／8 個交易日位移在程式中沒有任何消費端，且與 Buy & Hold 設計牴觸，已自簡報、`/market`（列名改為「流動性狀態」）、`/calendar`（「總經防護聯動」只陳述狀態）與 `/settings` 移除。DB 欄位 `escape_window_start`／`escape_window_end`、migration v048 保留於 DB 但不再使用；`UserSettings`／`UserContext` 已不讀寫這兩欄，既有使用者已存的值不受影響。
 - **Embed 顏色**：收縮紅、寬鬆綠、均衡金；標題後綴 `[歷史快取/備援]`／`[資料過期]` 不變。
 
 ---

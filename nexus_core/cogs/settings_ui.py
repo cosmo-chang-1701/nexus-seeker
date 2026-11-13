@@ -405,12 +405,12 @@ SETTINGS_LABELS = {
     ),
     "trading_strategy": (
         "📐 交易策略",
-        "選擇動態轉倉引擎的進場邏輯模式 (動態調整/左側交易/右側交易/做空交易)",
+        "選擇進場邏輯模式 (動態調整/左側交易/右側擠壓/做空交易)",
         None,
     ),
     "risk_appetite": (
         "⚖️ 風險偏好",
-        "選擇動態轉倉引擎的 TP1 執行比例與衛星預算上限 (防禦/進攻)",
+        "選擇 TP1 減碼比例與衛星預算上限 (防禦/進攻；現貨多頭為顧問告知)",
         None,
     ),
     "target_equity_pct": (
@@ -426,7 +426,7 @@ SETTINGS_LABELS = {
 TRADING_STRATEGY_DISPLAY = {
     "DYNAMIC": "動態調整",
     "LEFT_SIDE": "左側交易",
-    "RIGHT_SIDE": "右側交易",
+    "RIGHT_SIDE": "右側交易 (擠壓建倉)",
     "SHORT_SIDE": "做空交易",
 }
 
@@ -441,15 +441,15 @@ RISK_APPETITE_DISPLAY = {
 # 空間）。做空交易 (SHORT_SIDE) 才是本系統唯一的空頭方向進場路徑，描述文字
 # 刻意寫明方向，避免使用者把「左側」誤讀為「做空」。
 TRADING_STRATEGY_DESCRIPTIONS = {
-    "DYNAMIC": "5 態 Regime 路由：依結構自動切換左/右側/做空六重鐵律或強制鎖倉",
+    "DYNAMIC": "Regime 路由：I 左側接刀、V 做空六重鐵律，其餘多頭交給擠壓規則",
     "LEFT_SIDE": "做多・逆勢均值回歸：Put Wall 底牆接刀六重鐵律",
-    "RIGHT_SIDE": "做多・順勢動能突破：現行六重鐵律 (預設)",
+    "RIGHT_SIDE": "做多・多時間框架擠壓建倉／加碼 (strategies/10，預設)",
     "SHORT_SIDE": "做空・結構破位追空：負 Gamma 順勢助跌六重鐵律",
 }
 
 RISK_APPETITE_DESCRIPTIONS = {
-    "DEFENSIVE": "TP1 執行 50%、衛星預算上限較低 (預設，現行行為)",
-    "AGGRESSIVE": "TP1 執行 30%、衛星預算上限較高",
+    "DEFENSIVE": "TP1 減碼 50%、衛星預算上限較低 (預設；現貨多頭為顧問告知，不賣出)",
+    "AGGRESSIVE": "TP1 減碼 30%、衛星預算上限較高 (現貨多頭為顧問告知，不賣出)",
 }
 
 
@@ -727,7 +727,7 @@ class AccountSettingsView(discord.ui.View):
             )
             embed = create_info_embed(
                 title="📐 選擇交易策略",
-                message="請選擇動態轉倉引擎的進場邏輯模式：",
+                message="請選擇進場邏輯模式：",
             )
             await interaction.response.edit_message(embed=embed, view=view)
         elif key == "risk_appetite":
@@ -735,7 +735,7 @@ class AccountSettingsView(discord.ui.View):
             view = RiskAppetiteSelectView(self.user_id, parent_view=self)
             embed = create_info_embed(
                 title="⚖️ 選擇風險偏好",
-                message="請選擇動態轉倉引擎的風險偏好參數組：",
+                message="請選擇風險偏好參數組：",
             )
             await interaction.response.edit_message(embed=embed, view=view)
         else:
