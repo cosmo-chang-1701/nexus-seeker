@@ -72,7 +72,10 @@ async def test_calculate_pcr() -> None:
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
-    ) as mock_chain:
+    ) as mock_chain, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ):
         mock_expiries.return_value = [MOCK_EXPIRY]
 
         calls_df = pd.DataFrame(
@@ -180,7 +183,10 @@ async def test_sentiment_edge_cases() -> None:
     # Test PCR with no expiries
     with patch(
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
-    ) as mock_expiries:
+    ) as mock_expiries, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ):
         mock_expiries.return_value = []
         res = await SentimentEngine.calculate_pcr("AAPL")
         assert res["pcr"] is None
@@ -190,7 +196,10 @@ async def test_sentiment_edge_cases() -> None:
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_expiries, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
-    ) as mock_chain:
+    ) as mock_chain, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ):
         mock_expiries.return_value = [MOCK_EXPIRY]
         mock_chain.return_value = None
         res = await SentimentEngine.calculate_pcr("AAPL")
@@ -282,6 +291,9 @@ async def test_sentiment_edge_cases() -> None:
     with patch(
         "services.market_data_service.get_all_option_expiries",
         side_effect=Exception("PCR Error"),
+    ), patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
     ):
         res = await SentimentEngine.calculate_pcr("AAPL")
         assert res["state"] == "ERROR"
@@ -1206,7 +1218,10 @@ async def test_calculate_pcr_zero_call_volume_reports_bearish() -> None:
     ), patch(
         "market_analysis.sentiment.options_flow.save_sentiment_history",
         new_callable=AsyncMock,
-    ) as mock_save:
+    ) as mock_save, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ):
         res = await SentimentEngine.calculate_pcr("AAPL")
 
     assert res is not None
@@ -1214,7 +1229,8 @@ async def test_calculate_pcr_zero_call_volume_reports_bearish() -> None:
     assert res["volume_pcr"] is None
     assert res["state"].startswith("🐻 偏向空頭/看空主導")
     assert res["oi_pcr"] == 10.0
-    mock_save.assert_not_awaited()
+    assert [c for c in mock_save.await_args_list if c.args[1] == "PCR"] == []
+    mock_save.assert_awaited_once_with("AAPL", "OI_PCR", 10.0)
 
 
 @pytest.mark.asyncio
@@ -1237,7 +1253,10 @@ async def test_calculate_skew_and_pcr_passes_prune_pct_35() -> None:
         "services.market_data_service.get_option_chain",
         new_callable=AsyncMock,
         return_value=None,
-    ) as mock_chain:
+    ) as mock_chain, patch(
+        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+        return_value=(None, None),
+    ):
         await SentimentEngine.calculate_skew("TSLA")
         assert mock_chain.call_args is not None
         assert mock_chain.call_args.kwargs.get("prune_pct") == 0.35

@@ -1,6 +1,7 @@
 from .history_storage import (
     PercentileResult,
     get_last_stored_sentiment,
+    get_last_stored_sentiment_with_age,
     get_indicator_percentile_detail,
     save_sentiment_history,
 )
@@ -245,12 +246,53 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
         return _get_skew_fallback(f"Exception during skew calculation: {str(e)}")
 
 
+# OI PCR 快取上限 96 小時（對齊 GEX kv 快照的 96h 上限，涵蓋週末與連假）。
+_OI_PCR_CACHE_MAX_AGE_SECONDS = 96 * 3600
+
+
+def _classify_oi_pcr(oi_pcr: float, is_index_etf: bool) -> str:
+    """OI PCR 結構狀態分類（即時值與快取值共用；指數 ETF 採較高門檻）。"""
+    if is_index_etf:
+        low_th, high_th = 1.20, 1.40
+    else:
+        low_th, high_th = 0.90, 1.10
+    if oi_pcr < low_th or (is_index_etf and oi_pcr <= low_th):
+        return "🐂 結構看漲/偏向多頭"
+    if oi_pcr > high_th:
+        return "🐻 結構防禦/偏向空頭"
+    return "結構平衡"
+
+
 async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]:
     """
     計算買賣權比率 (Put/Call Ratio)，拆分為成交量 (Volume) 與未平倉量 (Open Interest) 比率。
     """
 
+    def _attach_oi_cache(result: Dict[str, Any]) -> Dict[str, Any]:
+        """僅供呈現：即時 OI 缺失時附上近 96h 內的 OI PCR 快取。
+
+        不動 oi_pcr / oi_pcr_state（它們餵給閘門），只新增 oi_pcr_cached* 鍵。
+        """
+        try:
+            cached, age = get_last_stored_sentiment_with_age(
+                symbol, "OI_PCR", max_age_seconds=_OI_PCR_CACHE_MAX_AGE_SECONDS
+            )
+        except Exception as cache_err:
+            logger.warning(f"[{symbol}] 讀取 OI PCR 快取失敗: {cache_err}")
+            return result
+        if cached is None or age is None:
+            return result
+        result["oi_pcr_cached"] = round(cached, 2)
+        result["oi_pcr_cached_state"] = _classify_oi_pcr(
+            cached, symbol.upper() in {"SPY", "QQQ", "IWM", "DIA"}
+        )
+        result["oi_pcr_cached_age_seconds"] = float(age)
+        return result
+
     def _get_pcr_fallback(reason: str) -> Dict[str, Any]:
+        return _attach_oi_cache(_build_pcr_fallback(reason))
+
+    def _build_pcr_fallback(reason: str) -> Dict[str, Any]:
         last_pcr = get_last_stored_sentiment(symbol, "PCR")
         if last_pcr is not None:
             volume_state = "平衡 [歷史快取]"
@@ -371,11 +413,7 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         if oi_one_sided:
             oi_state = "🐻 結構防禦/偏向空頭 (Call 未平倉量為 0)"
         elif oi_pcr is not None:
-            oi_state = "結構平衡"
-            if oi_pcr < low_th or (is_index_etf and oi_pcr <= low_th):
-                oi_state = "🐂 結構看漲/偏向多頭"
-            elif oi_pcr > high_th:
-                oi_state = "🐻 結構防禦/偏向空頭"
+            oi_state = _classify_oi_pcr(oi_pcr, is_index_etf)
         oi_fields = {
             "oi_pcr": round(oi_pcr, 2) if oi_pcr is not None else None,
             "put_vol": total_put_vol,
@@ -385,9 +423,13 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
             "oi_pcr_state": oi_state,
         }
 
+        # 即時 OI PCR 為真實比值（Put/Call OI 皆 > 0）才落盤，供日後快取呈現用。
+        if oi_pcr is not None and total_put_oi > 0:
+            await save_sentiment_history(symbol, "OI_PCR", oi_pcr)
+
         if volume_one_sided:
             one_sided_state = "🐻 偏向空頭/看空主導 (Call 成交量為 0)"
-            return {
+            one_sided_result: Dict[str, Any] = {
                 "symbol": symbol,
                 "pcr": None,
                 "volume_pcr": None,
@@ -395,12 +437,25 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
                 "volume_pcr_state": one_sided_state,
                 **oi_fields,
             }
+            return (
+                _attach_oi_cache(one_sided_result)
+                if oi_pcr is None and not oi_one_sided
+                else one_sided_result
+            )
         if volume_pcr is None:
             # 兩邊成交量皆為 0：成交量部分沿用降級路徑 (歷史快取或 None)，
             # 未平倉量比率照常回報。
             fallback = _get_pcr_fallback("Call volume is zero")
             fallback.pop("error", None)
             fallback.update(oi_fields)
+            if oi_pcr is not None or oi_one_sided:
+                # 有即時 OI 資訊（含單邊）時不附快取
+                for _k in (
+                    "oi_pcr_cached",
+                    "oi_pcr_cached_state",
+                    "oi_pcr_cached_age_seconds",
+                ):
+                    fallback.pop(_k, None)
             return fallback
 
         volume_state = "平衡"
@@ -411,7 +466,7 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
 
         await save_sentiment_history(symbol, "PCR", volume_pcr)
 
-        return {
+        result: Dict[str, Any] = {
             "symbol": symbol,
             "pcr": round(volume_pcr, 2),
             "volume_pcr": round(volume_pcr, 2),
@@ -419,5 +474,8 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
             "volume_pcr_state": volume_state,
             **oi_fields,
         }
+        if oi_pcr is None and not oi_one_sided:
+            _attach_oi_cache(result)
+        return result
     except Exception as e:
         return _get_pcr_fallback(f"Exception during PCR calculation: {str(e)}")
