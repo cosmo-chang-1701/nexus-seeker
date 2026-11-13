@@ -232,7 +232,12 @@ async def get_sma(symbol: str, window: int = 200) -> Optional[float]:
         current_sma = round(float(sma_series.iloc[-1]), 4)
 
         if not pd.isna(current_sma):
-            _sma_cache[cache_key] = (current_sma, current_time + _SMA_CACHE_TTL)
+            # 備忘錄不可比底層日線快取活得更久（盤中部分值不跨收盤）
+            memo_expiry = min(
+                current_time + _SMA_CACHE_TTL,
+                history_cache_expiry("1d", period, current_time),
+            )
+            _sma_cache[cache_key] = (current_sma, memo_expiry)
 
         return current_sma if not pd.isna(current_sma) else None
     except Exception as e:
@@ -261,7 +266,11 @@ async def get_ema(symbol: str, window: int = 21) -> Optional[float]:
         current_ema = round(float(ema_series.iloc[-1]), 4)
 
         if not np.isnan(current_ema):
-            _ema_cache[cache_key] = (current_ema, now + _EMA_CACHE_TTL)
+            # 備忘錄不可比底層日線快取活得更久（盤中部分值不跨收盤）
+            memo_expiry = min(
+                now + _EMA_CACHE_TTL, history_cache_expiry("1d", period, now)
+            )
+            _ema_cache[cache_key] = (current_ema, memo_expiry)
         return current_ema if not np.isnan(current_ema) else None
     except Exception as e:
         logger.error(f"[{symbol}] EMA{window} 計算失敗: {e}")

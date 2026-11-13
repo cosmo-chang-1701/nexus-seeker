@@ -225,7 +225,9 @@ async def build_enhanced_watchlist_metrics(
             gex_max_put_wall = gex_data.get("put_wall", 0.0)
             gex_max_call_wall = gex_data.get("call_wall", 0.0)
             vanna_sensitivity = 0.0
-        if gex_max_put_wall is not None and gex_max_put_wall > 0.0:
+        # 過期（last-known-good）資料僅本次沿用，不可以新時間戳寫回 kv 快取
+        is_stale_gex = bool(gex_data and gex_data.get("_is_stale_cache"))
+        if not is_stale_gex and gex_max_put_wall is not None and gex_max_put_wall > 0.0:
             await save_cached_gex_putwall(symbol, gex_max_put_wall)
     except Exception as e:
         logger.warning(f"Error calculating GEX PutWall for {symbol}: {e}")
