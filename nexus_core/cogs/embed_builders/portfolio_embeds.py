@@ -301,6 +301,30 @@ def _dte0_time_years(now_ny: Optional[datetime] = None) -> Optional[float]:
     return frac / 252.0
 
 
+def _quote_range_label(quote_ts: Any, now_ny: datetime) -> str:
+    """報價區間標籤：o/h/l 是否屬於今日。
+
+    回傳 " 前日區間" 的兩種情況：
+    1. 美東時間早於 09:30（今日常規盤尚未開盤，o/h/l 只能是前一交易日的）。
+    2. 報價時間 t（epoch 秒）的美東日期早於 now 的美東日期（週末／假日）。
+    其餘（含 t 缺失、無效或為 0）回傳 " 今日區間"。
+    """
+    from market_time import ny_tz as _range_ny_tz
+
+    local_now = now_ny.astimezone(_range_ny_tz)
+    if local_now.hour * 60 + local_now.minute < 9 * 60 + 30:
+        return " 前日區間"
+    t_val = _to_float(quote_ts)
+    if t_val > 0:
+        try:
+            quote_date = datetime.fromtimestamp(t_val, _range_ny_tz).date()
+        except (OverflowError, OSError, ValueError):
+            return " 今日區間"
+        if quote_date < local_now.date():
+            return " 前日區間"
+    return " 今日區間"
+
+
 def get_scenario_guidance(
     current_price: float,
     max_pain: float,
@@ -324,7 +348,7 @@ def get_scenario_guidance(
         )
     if sigma_to_expiry is not None and abs(current_price - max_pain) > sigma_to_expiry:
         return (
-            f"痛點 ${max_pain:.2f} 超出結算前 1σ (±${sigma_to_expiry:.2f})，"
+            f"痛點 ${max_pain:.2f} 超出結算前 1σ (±${sigma_to_expiry:.1f})，"
             "收斂機率低。"
         )
 
@@ -1116,11 +1140,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ]
     else:
         color_code = "\u001b[1;32m" if dp_val >= 0 else "\u001b[1;31m"
+        from market_time import ny_tz as _quote_range_tz
+
+        range_label = _quote_range_label(quote.get("t"), datetime.now(_quote_range_tz))
         quote_lines = [
             "```ansi",
             " 當前現價",
             f" └─ 現價: {color_code}${c_val:.2f} ({price_emoji} {dp_val:+.2f}% / {d_val:+.2f})\u001b[0m",
-            " 今日區間",
+            range_label,
             f" └─ 開盤: \u001b[1;36m{fmt_or_dash(o_raw, '.2f')}\u001b[0m | 最高: \u001b[1;31m{fmt_or_dash(h_raw, '.2f')}\u001b[0m | 最低: \u001b[1;32m{fmt_or_dash(l_raw, '.2f')}\u001b[0m | 前收: \u001b[1;30m{fmt_or_dash(pc_raw, '.2f')}\u001b[0m",
         ]
 
