@@ -6,7 +6,7 @@
 
 Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）以**買入並持有（B&H）為主要策略**（見 §2.10.1 的回測結論），引擎已精簡為顧問式的風控與告知層，不再代替使用者換股或把資金轉入 BOXX。情境編號沿用歷史編號以利對照；已刪除者標註於下，由專屬枚舉類 `RolloverScenario` 統轄現存情境：
 1. `CORE_DEPLOYMENT`：僅保留 CORE 持倉的 Covered Call 增強（原「超額資金部署」的 BOXX 防禦與機會分支已刪除）。
-2. ~~`OPPORTUNITY_COST`~~：**已刪除**（機會成本動能換股）；其進場六重鐵律函式保留給 `SHORT_ENTRY` 與 `SATELLITE_REBALANCE` 的 TP 輪動目標挑選使用。
+2. ~~`OPPORTUNITY_COST`~~：**已刪除**（機會成本動能換股）；`opportunity_cost.py` 現僅保留條件五（`_confirm_entry_condition5_macro_earnings_gate`，左側／做空／擠壓共用）與 EV 代理的目標挑選函式 `_find_best_rollover_target`／`_find_best_short_target`（不使用任何六重鐵律輔助函式）。
 3. `SATELLITE_REBALANCE`：衛星部位微觀結構出場與超額風險修剪。
 4. `MARGIN_DEFENSE`：極端系統性危機下，真實 GTC 現金赤字超過現金緩衝時的保證金防禦（清倉轉 `CASH`）；不再建議反向 ETF。
 5. `COVERED_CALL_PROFIT_LOCK`：期權賣方時間價值階梯停利與末日指派防衛。
@@ -14,7 +14,7 @@ Nexus Seeker 的**動態轉倉引擎**（`DynamicRolloverEngine`）以**買入�
 7. `FUNDAMENTAL_BROKEN`：基本面護城河破滅**告知**（不附清倉指令與按鈕）。
 8. `TRANSITION_ENGINE`：動態調整狀態切換引擎（左側轉右側演化）。
 9. `SHORT_ENTRY`：獨立的做空進場訊號（做空六重鐵律確認後，自帶進場／停損／目標與倉位）。
-10. `PYRAMID_ADD`：右側獲利部位順勢金字塔加碼（可重複觸發，與情境八的一次性 `OPEN_PYRAMID` 觸發源不同）。
+10. `PYRAMID_ADD`：依擠壓規則對獲利多頭部位順勢金字塔加碼（strategies/10 §2.6；可重複觸發，是目前唯一的 `OPEN_PYRAMID` 觸發源）。
 11. `REGIME_HEDGE`：兩級體制避險（組合層級指令，`symbol="PORTFOLIO"`）；第一級 NORMAL 盤 PSQ 局部對沖（預設乾跑）、第二級大盤危機清倉＋SQQQ／SOXS 對沖或止損轉空，見 §2.12。
 
 ⚠️ **進場確認帶方向**：進場六重鐵律回傳 `EntryConfirmation(is_confirmed, reason, direction, …)`。`direction == "SHORT"` 的確認**永遠不會**進入任何買進候選流程；做空確認僅由 `SHORT_ENTRY` 處理。
@@ -89,14 +89,14 @@ $$
 嚴格排除總經週期、短線匯率或單季資本支出波動。當輸出 `is_broken == True` 時，系統只推播**告知**（判讀理由、信心與資料來源），不附清倉／轉倉指令與執行按鈕，是否調整持倉由使用者自行判斷。
 
 ### 2.8 情境八：動態調整狀態切換引擎 (`TRANSITION_ENGINE`)
-負責將左側進場部位在行情發展中平滑演化為右側動能部位：
-- **切換路徑 1（左側部位進化）**：
+左側進場部位站回 Session VWAP 與 Gamma Flip 時，僅建議將停損上移至保本點（不授權任何新開倉）：
+- **切換路徑 1（左側部位保本上移）**：
   當透過 Regime I 建立的左側接刀倉位，其 15 分鐘收盤價伴隨 1.5 倍以上放量（$\text{Volume}_{15m} \ge 1.5 \times \overline{\text{Volume}}_{20}$）同時站穩 Session VWAP 與 Gamma Flip 時：
-  1. **防守升級**：將部位停損線向上鎖定於保本點：
+  **防守升級**：將部位停損線向上鎖定於保本點：
      $$
      \text{Ratchet Stop} = \max(\text{Average Cost}, \; \text{Anchor Base})
      $$
-  2. **加碼授權**：授權新開立短天期（DTE 7–21 天）右側順勢加碼單（`OPEN_PYRAMID`），實現利潤奔馳。
+  `pyramided` 旗標僅讓此保本上移建議只發一次；加碼一律走 `PYRAMID_ADD`（情境十）。
 
 ### 2.9 情境九：做空進場訊號 (`SHORT_ENTRY`)
 僅對 `trading_strategy ∈ {SHORT_SIDE, DYNAMIC}` 的使用者評估（含沒有任何持倉者），在保證金防禦、宏觀逃頂與賣方停利之後執行。候選為下行預期波幅 × 空頭動能挑出的做空候選（`_find_best_short_target`）；本週期若有 `MARGIN_DEFENSE` 指令、或 VIX $\ge 35$（做空乘數為 $0$）即抑制。倉位：
@@ -148,7 +148,7 @@ $$
 
 ### 2.11 情境十：順勢金字塔加碼 (`PYRAMID_ADD`)
 
-讓右側進場的獲利部位在趨勢延續時**加碼**，而非只能減碼——直接對症 §2.10 揭露的「曝險單調遞減、沒有遞增路徑」問題。與情境八 `TRANSITION_ENGINE` 的 `OPEN_PYRAMID`（Regime 演化驅動的一次性狀態切換，`state["pyramided"]` 旗標保證只觸發一次）刻意分離：本情境是「任何右側獲利倉在趨勢延續時的例行加碼」，可重複觸發至 $\text{\_PYRAMID\_MAX\_ADDS} = 2$ 次；兩者最終皆路由到同一個 `action == "OPEN_PYRAMID"` 下游派發分支，靠 `scenario` 欄位區分文案與資料。
+讓右側進場的獲利部位在趨勢延續時**加碼**，而非只能減碼——直接對症 §2.10 揭露的「曝險單調遞減、沒有遞增路徑」問題。情境八 `TRANSITION_ENGINE` 已不再發出 `OPEN_PYRAMID`（僅保留保本停損上移），所有加碼只經由本情境：依擠壓規則（strategies/10 §2.6）對獲利多頭部位例行加碼，可重複觸發至 $\text{\_PYRAMID\_MAX\_ADDS} = 2$ 次，並路由到 `action == "OPEN_PYRAMID"` 下游派發分支。
 
 八項觸發條件全部為 AND：
 
@@ -220,7 +220,7 @@ stateDiagram-v2
     第二級 --> 對沖模式: 仍有多頭 → 淨 Delta 目標 -10%
     第二級 --> 止損轉空: 多頭清空 → SQQQ+SOXS <= 40% NAV
 
-    TRANSITION_ENGINE --> 升級右側動能倉: 停損上移至保本點 + 授權 PYRAMID 加碼 (一次性)
+    TRANSITION_ENGINE --> 保本上移: 停損上移至保本點 (一次性)
 
     SHORT_ENTRY --> 抑制: 本週期有 MARGIN_DEFENSE、第二級 REGIME_HEDGE 或 VIX >= 35
     SHORT_ENTRY --> 做空訊號: 價位合法且倉位 >= 1 股 (每週期至多 1 筆)
@@ -310,7 +310,7 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/models.py`：`RolloverScenario`, `RolloverInstruction`
 - `nexus_core/market_analysis/dynamic_rollover/constants.py`：轉倉決策常數
 - `nexus_core/market_analysis/dynamic_rollover/core_deployment.py`：`evaluate_covered_call_overlay()`
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：進場六重鐵律條件函式與 `_find_best_rollover_target`（情境二本體已刪除，僅保留給 `SHORT_ENTRY`／TP 輪動目標使用）
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：條件五（`_confirm_entry_condition5_macro_earnings_gate`，左側／做空／擠壓共用）與 EV 代理目標挑選 `_find_best_rollover_target`／`_find_best_short_target`（情境二本體與六重鐵律輔助函式已刪除）
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：`check_satellite_rebalancing()`
 - `nexus_core/market_analysis/dynamic_rollover/margin_defense.py`：`evaluate_margin_defense()`
 - `nexus_core/market_analysis/dynamic_rollover/covered_call_profit_lock.py`：`evaluate_covered_call_profit_lock()`

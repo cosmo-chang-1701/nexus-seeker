@@ -783,7 +783,7 @@ class PortfolioMonitorCog(commands.Cog):
             except Exception as e:
                 logger.error(f"物理死鎖解除審計錯誤: {e}")
 
-            # 🚀 動態轉倉 (輕量級邏輯: 機會成本對比、再平衡防禦)
+            # 🚀 動態轉倉 (輕量級邏輯: 諮詢式風控、備兌買權、防禦)
             try:
                 user_assets: Dict[int, List[Dict[str, Any]]] = {}
 
@@ -1380,17 +1380,16 @@ class PortfolioMonitorCog(commands.Cog):
                                 ),
                             )
                         elif ins.get("action") == "OPEN_PYRAMID":
-                            # OPEN_PYRAMID 有兩個觸發源：動態調整狀態切換引擎
-                            # 路徑1 (TRANSITION_ENGINE，一次性 regime 演化) 與
-                            # PYRAMID_ADD (例行順勢加碼，可重複觸發)——皆為
-                            # 加碼建議，非賣出導向框架，沒有第二個轉倉標的，
-                            # 理由同上不套用通用轉倉框架，但依 scenario 分流
+                            # OPEN_PYRAMID 現僅由 PYRAMID_ADD (擠壓規則順勢加碼，
+                            # 可重複觸發) 發出；TRANSITION_ENGINE 路徑1 已不再
+                            # 加碼。為加碼建議，非賣出導向框架，沒有第二個轉倉
+                            # 標的，理由同上不套用通用轉倉框架，但依 scenario 分流
                             # 文案與是否附加倉位計算欄位。
                             embed = create_transition_pyramid_embed(
                                 symbol=ins["symbol"],
                                 reason=ins["reason"],
                                 suggested_strategy=ins.get(
-                                    "suggested_strategy", "新開右側動能部位"
+                                    "suggested_strategy", "順勢加碼"
                                 ),
                                 scenario=scenario,
                                 pyramid_add_plan=ins.get("pyramid_add_plan"),

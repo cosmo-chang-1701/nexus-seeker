@@ -95,7 +95,7 @@ def test_set_asset_dynamic_state_missing_asset_returns_false() -> None:
 
 @pytest.mark.asyncio
 @patch("market_analysis.dynamic_rollover.transition_engine.set_asset_dynamic_state")
-async def test_path1_left_evolves_to_right_pyramid_and_ratchet(
+async def test_path1_left_reclaim_emits_ratchet_only(
     mock_set_state: MagicMock, engine: DynamicRolloverEngine
 ) -> None:
     asset = _base_asset(
@@ -117,14 +117,12 @@ async def test_path1_left_evolves_to_right_pyramid_and_ratchet(
 
     instructions = await evaluate_transition_for_position(engine, 1, asset, metrics)
 
-    assert len(instructions) == 2
-    hold_ins, pyramid_ins = instructions
+    assert len(instructions) == 1
+    hold_ins = instructions[0]
     assert hold_ins["action"] == "HOLD"
     assert hold_ins["scenario"] == "TRANSITION_ENGINE"
     assert hold_ins["exit_tier"] == "TRANSITION_RATCHET"
     assert hold_ins["entry_regime"] == "REGIME_I_LEFT_CATCH"
-    assert pyramid_ins["action"] == "OPEN_PYRAMID"
-    assert pyramid_ins["exit_tier"] == "TRANSITION_PYRAMID"
     # 狀態改由派發端在確認送出後才提交，引擎只負責附上待寫入的增量
     mock_set_state.assert_not_called()
     _patch = hold_ins["dynamic_state_patch"]
@@ -132,6 +130,34 @@ async def test_path1_left_evolves_to_right_pyramid_and_ratchet(
     assert _patch["ratchet_applied"] is True
     assert _patch["pyramided"] is True
     assert _patch["ratchet_stop"] > 0
+
+
+@pytest.mark.asyncio
+@patch("market_analysis.dynamic_rollover.transition_engine.set_asset_dynamic_state")
+async def test_path1_does_not_open_pyramid(
+    mock_set_state: MagicMock, engine: DynamicRolloverEngine
+) -> None:
+    asset = _base_asset(
+        dynamic_strategy_state={
+            "entry_mode": "DYNAMIC",
+            "entry_regime": "REGIME_I_LEFT_CATCH",
+            "pyramided": False,
+            "lockout": False,
+        }
+    )
+    metrics = _base_metrics(
+        price_15m_close=50.0,
+        gamma_flip=45.0,
+        call_wall=60.0,
+        put_wall=40.0,
+        session_vwap=48.0,
+        vwap_reclaim_with_volume=True,
+    )
+
+    instructions = await evaluate_transition_for_position(engine, 1, asset, metrics)
+
+    assert instructions
+    assert all(ins["action"] != "OPEN_PYRAMID" for ins in instructions)
 
 
 @pytest.mark.asyncio
@@ -423,7 +449,7 @@ async def test_path1_defers_state_commit_to_dispatcher(
 
     instructions = await evaluate_transition_for_position(engine, 1, asset, metrics)
 
-    assert len(instructions) == 2
+    assert len(instructions) == 1
     mock_set_state.assert_not_called()
     for ins in instructions:
         assert ins["asset_id"] == 42
