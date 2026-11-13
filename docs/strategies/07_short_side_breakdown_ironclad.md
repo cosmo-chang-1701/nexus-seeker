@@ -289,7 +289,8 @@ flowchart TD
 - `nexus_core/market_analysis/dynamic_rollover/structural_signals.py`：`_scan_resistance_wall_above_spot()`（$K > \text{Spot}$ 阻力頂牆掃描）、`_detect_whale_call_bto_block()`（做空的 SL-主力對沖偵測）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime V 破位追空態的分類與優先序
 - `nexus_core/market_analysis/dynamic_rollover/anti_washout.py`：做空鏡像出場矩陣（`_correct_wall_topology_short()`、`_compute_short_anti_washout_stop()`、`_evaluate_microstructure_tp_ladder_short()`、`_evaluate_microstructure_sl_ladder_short()`）
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：`SHORT_SIDE` 與 Regime V 的策略路由分支（回傳帶方向的 `EntryConfirmation`）、`_find_best_short_target()`
+- `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`：`SHORT_SIDE` 與 Regime V 的策略路由分支（`_evaluate_uncached()` 內呼叫 `evaluate_short_entry()`，回傳 `ShortEntryEvaluation`）
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：`_find_best_short_target()`（做空候選 EV 代理挑選）
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_deployment.py`：`SHORT_ENTRY` 情境（`_ShortEntryMixin.evaluate_short_entry_opportunity()`、`ShortCandidateInput`）
 - `nexus_core/market_analysis/dynamic_rollover/short_entry_sizing.py`：`build_short_entry_levels()`、`compute_short_entry_sizing()`
 - `nexus_core/market_analysis/dynamic_rollover/core_deployment.py`：SHORT 確認不進入機會分支

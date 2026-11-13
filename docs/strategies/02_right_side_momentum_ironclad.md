@@ -7,8 +7,8 @@
 右側動能突破交易（Right-Side Momentum Breakout）的核心哲學在於「順應做市商對沖驅動力，絕不在無結構支撐的半山腰猜測底部」。當股價向上突破關鍵結構臨界點時，做市商的 Gamma 曝險由負翻正，其避險行為將由「追漲殺跌順向砸盤」轉化為「逢低買入自穩定護盤」；若此時疊加機構主力的跨週期認可與充足的向上獲利空間，突破的勝率與期望值將達到極致。
 
 在 Nexus Seeker 系統中，右側六重鐵律是以下兩大核心業務管線的**唯一放行閘門**：
-1. **衛星 TP 輪動目標與做空候選**：機會成本換股（`OPPORTUNITY_COST`）已刪除；六重鐵律的條件函式保留給 `SATELLITE_REBALANCE` 的 TP 輪動目標挑選與 `SHORT_ENTRY` 使用，候選標的必須 100% 通過。
-2. **核心資金部署 (`CORE_DEPLOYMENT` 機會分支)**：當核心防禦資產（如 VOO）超額配置欲部署至進攻性衛星標的時，亦強制要求標的滿足六重鐵律。
+1. **衛星 TP 輪動目標與做空候選**：機會成本換股（`OPPORTUNITY_COST`）已刪除；六重鐵律條件函式已自程式碼刪除。現行 `SATELLITE_REBALANCE` 的 TP 輪動目標挑選（`_find_best_rollover_target`）與 `SHORT_ENTRY` 的做空候選挑選（`_find_best_short_target`）僅以 EV 代理值排序，不呼叫六重鐵律條件函式。
+2. **核心資金部署 (`CORE_DEPLOYMENT` 機會分支)**：原「超額配置部署至進攻性衛星標的」的機會分支已刪除（現行 `CORE_DEPLOYMENT` 僅保留 CORE 持倉的 Covered Call 增強，見 04 文件），不再要求六重鐵律。
 
 ### 兩種進場節奏：突破態與趨勢延續態
 
@@ -269,7 +269,7 @@ flowchart TD
 | `_EARNINGS_PRE_EVENT_BUFFER_DAYS` | `3` | 避開財報發布的最小安全天數緩衝 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_CANDIDATE_MIN_DTE` | `1` | 標的自身最近效期選擇權最低 DTE 要求（避開 0/1 DTE） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_ROOM_EXTENDED_PCT` | `0.10` ($10\%$) | Call Wall 空間達此值視為「延伸跑道」，建議波段天期（僅影響建議文字） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `_ENTRY_DTE_BAND_SHORT` | `(7, 21)` | 短線建議 DTE band，沿用 `transition_engine.py` 路徑一加碼的既有天期慣例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
+| `_ENTRY_DTE_BAND_SHORT` | `(7, 21)` | 短線建議 DTE band，歷史沿革（已退役）：原沿用 `transition_engine.py` 舊的路徑一天期慣例，該路徑已不再發出 `OPEN_PYRAMID` | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_DTE_BAND_SWING` | `(21, 45)` | 波段建議 DTE band，沿用既有「次月合約」慣例 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_ENTRY_IVR_SPREAD_THRESHOLD` | `50.0` ($50\%$) | IVR 高於此值改建議 Bull Call Spread（與左側 `_LEFT_ENTRY_IVR_SPREAD_THRESHOLD` 同值同理由） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `GEX_THIN_WALL_THRESHOLD` | `500,000.0` | 做市商有效正 Gamma 牆體之最低曝險深度門檻 | `nexus_core/market_analysis/index_microstructure.py` |
