@@ -6,14 +6,14 @@
 回歸空間，條件六在高 IVR 時建議 Bull Call Spread / Short Put）。把左側誤讀為
 做空是導入本模組時最容易犯的錯。
 
-檔案結構完全比照 `left_side_entry.py` 與 `opportunity_cost.py` 的六重鐵律組裝
+檔案結構比照 `left_side_entry.py` 的六重鐵律組裝（原右側六重鐵律已退役）
 方式：六個模組層級的 `_confirm_short_entry_condition{1..6}_*` 函式 + 一個
 orchestrator，共用衍生資料、`reasons` 列表原地累積、條件五/六在前四項未全數
 通過時短路略過 (⏭️ 標記)，orchestrator 對六項 AND 後回傳
 `(bool, reason_str, structure_directive)` 三元組——與左右側簽章完全一致，
 呼叫端因此可以無差別解包。
 
-技術定義全面鏡像右側：右側要求 15m 實體**陽線**收盤站上 Gamma Flip；做空要求
+技術定義鏡像原右側六重鐵律（已退役）：原右側要求 15m 實體**陽線**收盤站上 Gamma Flip；做空要求
 實體**陰線**收盤跌破 Gamma Flip。同一時間點一檔標的技術上幾乎不可能同時滿足
 兩套條件一。
 
@@ -70,9 +70,9 @@ async def _confirm_short_entry_condition1_breakdown(
     """做空條件一：結構性放量破位確認（15m 實體陰線收盤跌破 Gamma Flip + 放量
     + 跌破 Session VWAP）。
 
-    Gamma Flip 邊界處理與 Fallback（完全鏡像右側條件一的對稱處理）：
+    Gamma Flip 邊界處理與 Fallback（完全鏡像原右側條件一的對稱處理）：
       * 全鏈 Net GEX > 0：做市商處於正 Gamma 自穩定狀態，會買跌賣漲吸收波動，
-        結構性多頭，直接判定未通過——這正是右側「Net GEX < 0 直接不通過」的鏡像。
+        結構性多頭，直接判定未通過——這正是原右側「Net GEX < 0 直接不通過」的鏡像。
       * 全鏈 Net GEX < 0 但無 Flip 交叉點：全區間已處於負 Gamma 順勢助跌泥淖，
         強求 Flip 交叉門檻會造成誤殺，改以跌破 `VWAP − 0.5 × ATR₁₅ₘ` 作為
         破位確認的替代標準。
@@ -203,12 +203,12 @@ def _confirm_short_entry_condition2_resistance_wall(
 ) -> Tuple[bool, float]:
     """做空條件二：做市商負 Gamma 頂牆完好，且緩衝距離落在動態雙邊界之內。
 
-    物理定義約束與右側條件二完全鏡像——阻力位在物理定義上必須位於現價**上方**：
+    物理定義約束與原右側條件二完全鏡像——阻力位在物理定義上必須位於現價**上方**：
 
         Resistance Wall = argmax_{K > Spot} (Net GEX(K))
 
     透過 `_scan_resistance_wall_above_spot()` 把掃描範圍強制約束在現價上方，
-    避免把下方的支撐底牆誤當成上方的壓制天花板（右側條件二防的是反向的同一
+    避免把下方的支撐底牆誤當成上方的壓制天花板（原右側條件二防的是反向的同一
     種錯誤）。現價上方無任何正 GEX 峰值、或曝險低於 GEX_THIN_WALL_THRESHOLD
     薄紙牆門檻，直接判定未通過。
 
@@ -418,7 +418,7 @@ def _confirm_short_entry_condition4_smart_money_pressure(
 
     * **PUT BTO**：主力買進 PUT 押注下跌。排除 strike 遠低於現價的深度價外
       樂透單（`strike >= 現價 × 0.85`）——那是低成本尾部投機，不代表機構
-      對方向有真實信心，與右側條件四排除「深實值避險單」的用意對稱。
+      對方向有真實信心，與原右側條件四排除「深實值避險單」的用意對稱。
     * **CALL STO**：主力賣出 CALL 築頂。須 `strike >= 現價`，即在上方賣壓築頂，
       而非賣出價內 Call 的平倉單。
 
@@ -481,7 +481,7 @@ async def _confirm_short_entry_condition5_macro_earnings_gate(
     把倒掛視為「流動性凍結、不可接刀」，但對做空而言倒掛正是順風，兩者語意
     相反，硬套會方向性地誤殺。
 
-    前四項未全數通過時短路略過，理由同左右側：避免對已確定失敗的整體結果仍
+    前四項未全數通過時短路略過，理由同左側：避免對已確定失敗的整體結果仍
     發動真實 I/O。
     """
     if not prior_conditions_passed:
@@ -507,11 +507,11 @@ async def _confirm_short_entry_condition6_candidate_dte_ivr(
 ) -> Tuple[bool, Optional[str]]:
     """做空條件六：Candidate 自身效期防禦與 IVR 結構分流。
 
-    DTE 門檻 (`_SHORT_ENTRY_CANDIDATE_MIN_DTE` = 14) 高於右側的 1、接近左側的
+    DTE 門檻 (`_SHORT_ENTRY_CANDIDATE_MIN_DTE` = 14) 高於原右側的 1、接近左側的
     21：破位後常有劇烈反抽回測前低/前高，空單需要承受震盪期，短天期會在回測
     過程中被 Theta 與 Vega 雙殺。
 
-    IVR 分流方向與左右側一致——高隱波下不當單腳買方：
+    IVR 分流方向與左側一致——高隱波下不當單腳買方：
       * IVR <= 50：Long Put（輕度 OTM）
       * IVR >  50：Bear Call Spread，改當賣方收取恐慌溢價，避免破位當下買進
         已被灌滿恐慌溢價的 Put，事後隨反抽遭 IV Crush 的 Vega 崩塌。
@@ -727,7 +727,7 @@ async def _confirm_short_entry_signal(
 ) -> Tuple[bool, str, Optional[str]]:
     """`evaluate_short_entry` 的三元組包裝。
 
-    簽章與 `_confirm_left_entry_signal` / `_confirm_entry_signal` 完全一致，
+    簽章與 `_confirm_left_entry_signal` 完全一致（原右側進場確認函式已於 2026-10 退役），
     呼叫端可無差別解包 `(all_passed, reason_str, structure_directive)`。
     需要價位的呼叫端 (SHORT_ENTRY 情境) 請直接呼叫 `evaluate_short_entry`。
     """

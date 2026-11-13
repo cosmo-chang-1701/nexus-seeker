@@ -46,8 +46,19 @@ _COVERED_CALL_MAX_LOTS: int = (
 _COVERED_CALL_MIN_DTE: int = 22
 _COVERED_CALL_MAX_DTE: int = 30
 
-# --- 進場訊號六重嚴格過濾鐵律 (opportunity_cost.py::_confirm_entry_signal) 具名常數 ---
-# 六項條件必須同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
+# --- 原右側六重嚴格過濾鐵律 (opportunity_cost.py，已退役) 具名常數 ---
+# ⚠️ 右側六重鐵律已於 2026-10 退役：進場確認函式與條件一至四、六已刪除，
+#   多頭進場與 PYRAMID_ADD 加碼改由 squeeze_entry 規則 (docs/strategies/10) 決定。
+#   本區常數目前的現行使用者（依 grep 確認）：
+#     _ENTRY_VOLUME_LOOKBACK_BARS   → regime_classifier.py、left_side_entry.py、short_side_entry.py
+#     _ENTRY_VOLUME_SURGE_MULTIPLIER → squeeze_entry/intraday_conflict.py (盤中破位 RVOL)、
+#                                      cogs/embed_builders/portfolio_embeds.py (RVOL 門檻)
+#     _ENTRY_UOA_CAP_RATIO_THRESHOLD → regime_classifier.py (Regime III/IV 物理封頂判定)
+#     _ENTRY_UOA_LOOKBACK_DAYS       → 僅被註解引用 (uoa_history 保留期與 Regime III-B 歷史窗說明)
+#   其餘常數 (_ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT、_ENTRY_UOA_MIN_*、_ENTRY_CANDIDATE_MIN_DTE、
+#   _ENTRY_IVR_SPREAD_THRESHOLD、_ENTRY_ROOM_EXTENDED_PCT、_ENTRY_DTE_BAND_*) 目前無程式引用，
+#   僅保留定義與下列歷史紀錄，勿據此假設其仍在運作。
+# 以下為已退役規格的歷史紀錄（非現行規格）：原設計要求六項條件同時成立才允許對候選標的實際啟動機會成本轉倉/核心資金部署指令：
 #   條件一：結構性右側放量突破 (15m 實體「陽線」收盤站穩 Gamma Flip 估算門檻 +
 #           放量 + Session VWAP 站穩確認)。針對極端單邊期權分佈導致 Gamma Flip
 #           無零交叉點之邊界：若全鏈動態 Net GEX < 0 則確認處於全域 Short Gamma
@@ -84,10 +95,11 @@ _ENTRY_SUPPORT_WALL_MAX_DISTANCE_PCT: float = (
 _ENTRY_UOA_CAP_RATIO_THRESHOLD: float = (
     1.5  # 條件三：單筆 STO Call 視為物理封頂的 ratio (volume/OI) 門檻
 )
-# ⚠️ 已退役：條件三的非對稱獲利空間門檻已自固定 5% 升級為動態自適應波動率門檻，
+# ⚠️ 已退役：原右側六重鐵律條件三的非對稱獲利空間門檻已自固定 5% 升級為動態自適應波動率門檻，
 #   唯一實作在 market_analysis/room_threshold.py::compute_dynamic_room_threshold()
-#   （公式 A：max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)）。此處刻意不留
-#   常數，避免有人「順手」把它接回去而讓固定值與動態值再度分歧。
+#   （公式 A：max(2.2 × Risk_actual, 1.5 × ATR₁D/Spot, 3.5%)）。公式 A 目前由
+#   左側閘門 (profile LEFT)、做空閘門 (profile SHORT)、regime classifier 路由與做空
+#   部位試算共用。此處刻意不留常數，避免有人「順手」把它接回去而讓固定值與動態值再度分歧。
 _ENTRY_UOA_MIN_DTE: int = 7  # 條件四：驅動進場的主力 UOA 買盤最低 DTE 要求
 _ENTRY_UOA_MIN_RATIO: float = (
     0.8  # 條件四：驅動進場的主力 UOA 買盤最低 ratio (volume/OI) 要求
@@ -120,7 +132,8 @@ _ENTRY_ROOM_EXTENDED_PCT: float = (
     0.10  # Call Wall 空間 >= 此值視為「延伸跑道」，建議波段天期；否則建議短天期
 )
 # DTE band 數值沿用 repo 既有慣例，不引入新的未校準數字：
-#   短天期 (7, 21)  —— 比照 transition_engine.py 路徑一加碼的「新開短天期 (DTE 7-21)」
+#   短天期 (7, 21)  —— 數值來源為歷史：原 transition_engine.py 路徑一（已退役加碼邏輯）的「新開短天期 (DTE 7-21)」
+#                      (路徑一已不再發出 OPEN_PYRAMID，數值保留不變)
 #   波段   (21, 45) —— 比照 opportunity_cost / recommend_covered_calls 既有「次月」慣例
 _ENTRY_DTE_BAND_SHORT: tuple[int, int] = (7, 21)
 _ENTRY_DTE_BAND_SWING: tuple[int, int] = (21, 45)
@@ -269,8 +282,8 @@ _MICROSTRUCTURE_TP3_DTE_THRESHOLD: int = (
 _MICROSTRUCTURE_TP3_RATIO: float = 0.2  # TP3 執行比例 (20%)
 
 # --- 左側六重嚴格過濾鐵律 (left_side_entry.py::_confirm_left_entry_signal) 具名常數 ---
-# 逆勢均值回歸／做市商 Put Wall 底牆接刀，結構完全比照上方右側六重鐵律
-# (opportunity_cost.py) 的組裝方式，僅技術定義方向相反（右側要求收盤站上
+# 逆勢均值回歸／做市商 Put Wall 底牆接刀。組裝方式曾比照已退役的原右側六重鐵律
+# (opportunity_cost.py，2026-10 已刪除)，僅技術定義方向相反（原右側要求收盤站上
 # 突破線；左側要求深跌破 VWAP 且密著 Put Wall），故同一時間點一檔標的
 # 技術上幾乎不可能同時滿足兩套條件一。
 # 條件一：結構性空頭力竭與極值乖離確認
@@ -318,7 +331,7 @@ _LEFT_ENTRY_PUT_STO_MIN_NOTIONAL_USD: float = 300_000.0
 _LEFT_ENTRY_CALL_BTO_MIN_DTE: int = 30
 _LEFT_ENTRY_CALL_BTO_MIN_RATIO: float = 0.8
 _LEFT_ENTRY_CALL_BTO_MIN_NOTIONAL_USD: float = 200_000.0
-# 條件五：總經流動性危機與財報黑天鵝安全閥 (疊加在重用的右側條件五之上)
+# 條件五：總經流動性危機與財報黑天鵝安全閥 (疊加在共用的條件五之上)
 _LEFT_ENTRY_VTS_BACKWARDATION_RATIO: float = (
     1.10  # front-month VIX 溢價 3-month 超過此比例 (vts_ratio) 視為倒掛防禦
 )
@@ -371,7 +384,8 @@ _REGIME_IV_VTS_BACKWARDATION_RATIO: float = 1.10
 # 微觀結構出場決策矩陣，故原路徑 2/4 的門檻常數已隨該邏輯一併移除。
 # 僅接管使用者透過 /add_trade、/add_holding 手動標記 dynamic_strategy_state 的
 # 部位；未標記部位完全不受影響，仍走既有 anti_washout.py 通用 SL/TP 矩陣。
-# 切換路徑 1：左側部位進化為右側動能倉 (加碼 + 停損上移保本)
+# 切換路徑 1：左側部位進化為右側動能倉 (停損上移保本；pyramided 旗標僅使保本棘輪單次觸發，
+# 路徑 1 已不再發出 OPEN_PYRAMID，加碼一律經 PYRAMID_ADD 的 squeeze 規則)
 _TRANSITION_PATH1_VWAP_VOLUME_MULT: float = (
     1.5  # 15m 收盤站上 VWAP 與 Gamma Flip 同時須伴隨量能放大達此倍數，方視為真突破
 )
@@ -381,12 +395,12 @@ _TRANSITION_PATH1_VWAP_VOLUME_MULT: float = (
 # 後者只在文案中引用本常數。調整此值時請一併確認該處。
 
 # --- 做空六重嚴格過濾鐵律 (short_side_entry.py::_confirm_short_entry_signal) 具名常數 ---
-# 結構性破位追空／做市商負 Gamma 順勢助跌，組裝方式完全比照右側 (opportunity_cost.py)
-# 與左側 (left_side_entry.py) 六重鐵律，技術定義全面鏡像：右側要求 15m 實體陽線收盤
+# 結構性破位追空／做市商負 Gamma 順勢助跌，組裝方式曾完全比照已退役的原右側六重鐵律 (opportunity_cost.py)
+# 與左側 (left_side_entry.py) 六重鐵律，技術定義全面鏡像：原右側要求 15m 實體陽線收盤
 # 站上 Gamma Flip，做空要求實體陰線收盤跌破 Gamma Flip。
 #
 # ⚠️ 本系統在此之前**完全沒有空頭方向的進場路徑**。左側 (LEFT_SIDE) 雖然技術定義
-# 與右側相反，本質仍是做多（Put Wall 底牆接刀、向上回歸空間、Bull Call Spread）。
+# 與原右側相反，本質仍是做多（Put Wall 底牆接刀、向上回歸空間、Bull Call Spread）。
 # 新增本組常數等同新增一個方向性風險完全相反的子系統，上線前請留意風險揭露段落。
 #
 # 條件一：結構性放量破位確認
@@ -432,9 +446,9 @@ _SHORT_ENTRY_MAX_INSTRUCTIONS_PER_CYCLE: int = 1
 _SHORT_ENTRY_MAX_CANDIDATES: int = 2
 
 # --- PYRAMID_ADD 情境 (pyramid_add.py) 具名常數 ---
-# 順勢金字塔加碼：右側進場的獲利部位在趨勢延續時例行加碼，與
-# transition_engine.py 路徑一的一次性 OPEN_PYRAMID（regime 演化觸發）刻意分開
-# 命名——本組數值控制的是「可重複觸發」的加碼節奏與風險預算，語意不同。
+# 順勢金字塔加碼：獲利的多頭部位在趨勢延續時依 squeeze 規則 (docs/strategies/10) 例行加碼。
+# 歷史上 transition_engine.py 路徑一曾發出一次性 OPEN_PYRAMID（regime 演化觸發），該輸出
+# 已於 2026-10 移除，加碼現僅經由 PYRAMID_ADD；本組數值控制的是「可重複觸發」的加碼節奏與風險預算。
 # ⚠️ 全部**未經歷史回測校準**，校準前一律取保守值，比照 _SHORT_ENTRY_* 慣例。
 _PYRAMID_PROFIT_THRESHOLD_PCT: float = 0.03  # 條件一：部位獲利 >= 此比例才允許加碼
 _PYRAMID_MAX_ADDS: int = 2  # 條件五：同一部位最多加碼次數，防幾何爆倉

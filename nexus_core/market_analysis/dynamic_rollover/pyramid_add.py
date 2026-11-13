@@ -1,13 +1,9 @@
 """pyramid_add.py — 情境十：PYRAMID_ADD 順勢金字塔加碼。
 
-讓右側進場的獲利部位能在趨勢延續時**加碼**，而非只能減碼——是 handoff.md
+讓依 squeeze 規則進場的獲利多頭部位能在趨勢延續時**加碼**，而非只能減碼——是 handoff.md
 §1.2「曝險單調遞減、沒有遞增路徑」問題的核心對症機制。
 
-與 `transition_engine.py` 路徑一的 `OPEN_PYRAMID` 刻意分離：路徑一是「左側倉
-進化為右側倉」的一次性狀態切換（由 `entry_regime` 觸發、`pyramided` 旗標燒掉，
-只觸發一次），本情境是「任何右側獲利倉在趨勢延續時的例行加碼」（可重複觸發至
-`_PYRAMID_MAX_ADDS` 次）。兩者觸發源與次數上限皆不同，合併會讓路徑一的一次性
-保證失效。
+歷史上曾與 `transition_engine.py` 路徑一的 `OPEN_PYRAMID` 刻意分離（路徑一曾是「左側倉進化為右側倉」的一次性狀態切換，由 `entry_regime` 觸發、`pyramided` 旗標燒掉）。路徑一已於 2026-10 不再發出 `OPEN_PYRAMID`，`pyramided` 旗標僅使保本棘輪單次觸發；本情境是獲利多頭部位在趨勢延續時的例行加碼（可重複觸發至 `_PYRAMID_MAX_ADDS` 次），加碼只經由此處。
 
 八項觸發條件全部為 AND（見 `evaluate_pyramid_add_impl` docstring）。倉位模型
 直接沿用 `short_entry_sizing.py` 已驗證的「風險預算 ÷ 停損距離」模型，方向

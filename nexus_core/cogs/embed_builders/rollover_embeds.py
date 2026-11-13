@@ -313,7 +313,7 @@ def create_dynamic_rollover_embed(
     """
     產生動態轉倉 (Dynamic Rollover) 的 Embed 推播訊息。
 
-    :param rollover_type: 轉倉類型的補充描述文字，例如 '原型假設破滅', '再平衡', '機會成本'。
+    :param rollover_type: 轉倉類型的補充描述文字，例如 '原型假設破滅', '再平衡'（「機會成本」僅為歷史遺留類型，現已不產生，僅供舊資料說明）。
         僅作為標題的補充說明，顏色/危險等級判斷改由 `scenario` 明確決定。
     :param sell_symbol: 建議賣出的標的 (例如 AMD)
     :param sell_ratio: 建議賣出比例 (例如 1.0 表示全部，0.5 表示 50%)
@@ -825,10 +825,10 @@ def create_transition_pyramid_embed(
     pyramid_add_plan: Optional[Mapping[str, Any]] = None,
 ) -> discord.Embed:
     """
-    產生 OPEN_PYRAMID 加碼建議的專屬 Embed，涵蓋兩個觸發源：
+    產生 OPEN_PYRAMID 加碼建議的專屬 Embed，涵蓋的觸發源（路徑1 已不再發出 OPEN_PYRAMID，現行僅 PYRAMID_ADD）：
 
-    * TRANSITION_ENGINE（預設）：動態調整狀態切換引擎路徑1，Regime 演化
-      驅動的一次性加碼授權，沒有具體倉位計算，僅文字建議。
+    * TRANSITION_ENGINE（歷史遺留）：舊版動態調整狀態切換引擎路徑1 的一次性
+      加碼建議，沒有具體倉位計算，僅文字建議。
     * PYRAMID_ADD：例行順勢金字塔加碼，附帶 `pyramid_add_plan`
       （market_analysis/dynamic_rollover/models.py::PyramidAddPlan）具體的
       加碼股數／風險預算／停損距離倉位計算結果，比照

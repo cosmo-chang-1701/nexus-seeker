@@ -5,8 +5,7 @@
 (`evaluate_watch_trigger`)，因為同一標的可能被多位使用者監測，K 棒資料
 只需抓取一次即可供所有使用者共用比對。
 
-注意：不可沿用 `market_analysis/dynamic_rollover/opportunity_cost.py::
-_confirm_entry_signal` 的作法直接取用 `df_15m.iloc[-1]` —— 在盤中查詢時，
+注意：不可沿用已退役的原右側條件一 (`market_analysis/dynamic_rollover/opportunity_cost.py`，2026-10 刪除) 的作法直接取用 `df_15m.iloc[-1]` —— 在盤中查詢時，
 yfinance 回傳的最後一根 K 棒通常仍在成型中 (尚未收盤)，必須以「起始時間 +
 15 分鐘 <= 現在」排除尚未收盤的最後一根。
 """

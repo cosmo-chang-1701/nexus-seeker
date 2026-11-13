@@ -973,12 +973,14 @@ def detect_uoa_sto_call_physical_cap(
     wall_reference 為 None 或 <=0 時完全比照舊行為退回使用 spot，確保
     get_spx_capped_from_above_signal() 這類未傳入該參數的既有呼叫端行為不變。
 
-    抽自 dynamic_rollover/opportunity_cost.py 的
-    _confirm_entry_condition3_no_physical_cap (僅取其 STO ratio 封頂偵測邏輯，
-    不含該函式另外疊加的 Call Wall 緊貼現價判定 —— 那部分是個股特有的
-    call_wall 概念，SPY/SPX 等大盤代理標的沒有對應語意)，供該函式與
-    get_spx_capped_from_above_signal() 共用，確保「什麼算 STO 物理封頂」在
-    個股進場確認與大盤結構訊號兩處定義一致。刻意放在 index_microstructure.py
+    歷史出處：原抽自 dynamic_rollover/opportunity_cost.py 的
+    原右側六重鐵律條件三的封頂判定 (該函式已於 2026-10 隨右側六重鐵律
+    退役而刪除；僅取其 STO ratio 封頂偵測邏輯，不含該函式另外疊加的 Call Wall
+    緊貼現價判定 —— 那部分是個股特有的 call_wall 概念，SPY/SPX 等大盤代理標的沒有
+    對應語意)。現行僅 get_spx_capped_from_above_signal() 使用本邏輯，確保「什麼算
+    STO 物理封頂」的定義集中於此。現行呼叫者為 get_spx_capped_from_above_signal()
+    與 regime_classifier.py（個股 Regime IV 封頂判定）；函式名稱為
+    detect_uoa_sto_call_physical_cap。刻意放在 index_microstructure.py
     而非 dynamic_rollover/ 內，維持既有的單向依賴方向
     (dynamic_rollover 已經 import index_microstructure，反向則不然)。
 

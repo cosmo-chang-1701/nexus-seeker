@@ -388,9 +388,8 @@ class IntradayScanPipeline:
 
             # 同一份資料另存一份**可回看的歷史**：上面的 kv_cache 是
             # ON CONFLICT DO UPDATE 的 upsert，每輪覆蓋前一輪，結構上無法回答
-            # 「最近 5 個交易日有沒有出現過機構買盤」。右側條件四的 Regime III-B
-            # 時間窗 (見 opportunity_cost.py::_confirm_entry_condition4_uoa_dte)
-            # 需要歷史，故另寫 uoa_history。兩者共用同一份 hb_uoa_list，
+            # 「最近 5 個交易日有沒有出現過機構買盤」。已退役的原右側條件四 (曾見 opportunity_cost.py，2026-10 刪除) 的 Regime III-B 時間窗需要歷史，故另寫 uoa_history。
+            # 目前 production 無讀取者（database/uoa_history.py::get_recent_uoa 僅定義未被呼叫），此表僅寫入與保留期清理。兩者共用同一份 hb_uoa_list，
             # 不產生任何額外的期權鏈抓取成本。
             try:
                 from database.uoa_history import save_uoa_observations

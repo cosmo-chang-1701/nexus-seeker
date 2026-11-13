@@ -6,7 +6,7 @@
 固定百分比的根本缺陷是「與標的自身波動率無關」：對 ATR 僅 0.8% 的 KO，5% 是
 遙不可及的天花板；對 ATR 4% 的 TSLA，5% 連一根日線都吃不掉，等於沒有盈虧比
 保護。本模組改以「該標的實際下行風險 × 盈虧比要求」與「該標的單日波幅」共同
-推導門檻，讓 2.2:1 盈虧比成為結構性保證而非巧合。
+推導門檻，使左側與做空閘門的盈虧比具結構性保證（2.2:1）而非巧合（原右側路徑亦曾採用同一公式，該路徑已退役）。
 
 設計約束（刻意維持）：
 
@@ -31,7 +31,8 @@ from typing import Literal, NamedTuple, Optional
 Direction = Literal["LONG", "SHORT"]
 
 # 牆體緩衝雙邊界的 Regime 分流剖面。
-#   RIGHT —— Regime III 右側動能態 / trading_strategy=RIGHT_SIDE
+#   RIGHT —— Regime III 右側動能態（僅供 regime classifier 的 Regime III/III-B 分類使用；
+#             右側進場閘門已於 2026-10 退役）
 #   LEFT  —— Regime I  左側接刀態 / trading_strategy=LEFT_SIDE
 #   SHORT —— Regime V  破位追空態 / trading_strategy=SHORT_SIDE
 BufferProfile = Literal["RIGHT", "LEFT", "SHORT"]
@@ -63,10 +64,10 @@ _ROOM_STOP_FALLBACK_ATR_15M_MULTIPLIER: float = 2.0  # 牆體拓撲異常時的�
 #     「引擎真正會掛的那條停損，離進場價夠不夠遠、又不會遠得離譜？」
 #
 # 下界 (依剖面分流，×ATR₁₅ₘ)：防停損落在日內隨機雜訊帶內而遭做市商
-#   Liquidity Sweep 掃損。這是條件三的 2.2×Risk **完全沒有**定價的風險，
+#   Liquidity Sweep 掃損。這是公式 A 的 2.2×Risk **完全沒有**定價的風險，
 #   故必須獨立成閘門。
 _BUFFER_LOWER_MULTIPLIERS: dict[str, float] = {
-    # Regime III 右側動能態 / Regime V 破位追空態：基準值
+    # Regime III 右側動能態（僅分類用途）/ Regime V 破位追空態：基準值
     "RIGHT": 2.5,
     "SHORT": 2.5,
     # Regime I 左側接刀態：貼牆截擊本質上緩衝極薄，下界須放寬，否則會與既有的
@@ -89,7 +90,7 @@ _BUFFER_LOWER_MULTIPLIERS: dict[str, float] = {
 # 的荒謬配置。
 #
 # ⚠️ 早期版本用 1.8 × ATR₁D 這個**隨波動率伸縮**的上界，實測證明是錯的：
-#   * 它與條件三的 2.2 × Risk 在防同一件事（牆太遠 = 風險太大），而條件三
+#   * 它與公式 A 的 2.2 × Risk 在防同一件事（牆太遠 = 風險太大），而公式 A
 #     已經用「要求等比例更多的上行空間」對該風險做了**連續**定價；ATR 上界
 #     等於同一個風險收第二次費，而且第二次是**二元否決**。
 #   * 更致命的是量綱：ATR₁D = 0.8% 的低波標的，可接受帶寬只有 1.05%，而
@@ -131,7 +132,7 @@ class RoomThreshold(NamedTuple):
     """``compute_dynamic_room_threshold()`` 的結構化輸出。
 
     ``degrade_reason`` 為可直接輸出的繁體中文字串，供展示層（GEX 空間欄位）與
-    六重鐵律的 ``reasons`` 文案原樣引用，避免各呼叫端各自拼裝而彼此分歧。
+    左側／做空六重鐵律的 ``reasons`` 文案原樣引用，避免各呼叫端各自拼裝而彼此分歧。
     """
 
     threshold_pct: float
@@ -443,8 +444,8 @@ def resolve_effective_target(
     此時 Call Wall 反映的是「流動性真空」而非「真實阻力」。以 ATR 外推的動態
     目標取代之，才能解鎖趨勢追價權限。
 
-    刻意放在本模組而非 ``dynamic_rollover/``：Regime IV 封頂判定、六重鐵律
-    條件三（非對稱空間）、``PYRAMID_ADD`` 條件四三處都要用同一個天花板定義，
+    刻意放在本模組而非 ``dynamic_rollover/``：Regime 分類器的 Regime IV 封頂判定與
+    Regime III/III-B 空間判定、左側與做空閘門的空間判定都要用同一個天花板定義，
     分散實作必然漂移——這正是本模組當初把 7 處固定百分比收斂成單一權威演算法
     的同一個理由。
 

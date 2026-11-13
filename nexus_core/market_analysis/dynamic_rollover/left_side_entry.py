@@ -41,9 +41,9 @@ from .constants import (
 
 
 # --- 左側交易六重嚴格過濾鐵律 (逆勢均值回歸／做市商 Put Wall 底牆接刀) ---
-# 結構完全比照 opportunity_cost.py 的右側六重鐵律組裝方式：共用衍生資料、
+# 結構曾比照已退役的原右側六重鐵律 (opportunity_cost.py，2026-10 刪除) 的組裝方式：共用衍生資料、
 # reasons 列表原地累積、條件五/六在 1-4 未全數通過時短路略過 (⏭️ 標記)，
-# orchestrator 對六項條件 AND 後回傳整體結果。技術定義方向與右側相反，故
+# orchestrator 對六項條件 AND 後回傳整體結果。技術定義方向與原右側相反，故
 # 同一時間點同一標的技術上幾乎不可能同時滿足兩套條件一。
 
 
@@ -132,7 +132,7 @@ async def _confirm_left_entry_condition1_exhaustion_reversal(
     承接：到期 = 下一根 15m 收盤 + 60 秒，互動路徑才真的強刷），且一律先經
     `price_volume_alert.trim_to_confirmed_15m_bars()` 截斷至最近一根**已收盤**
     K 棒：AGENTS.md 與 price_volume_alert.py 的模組 docstring 都明確警告過
-    opportunity_cost.py 現行右側條件一沿用的抓取方式不檢查 bar 完整性、不強制
+    已退役的原右側條件一 (opportunity_cost.py) 沿用的抓取方式不檢查 bar 完整性、不強制
     刷新，並指名「新的日內K棒邏輯不應照抄該模式」。這對本條件尤其關鍵——
     「縮量窒息 (量 <= 0.7x 均量)」若用尚在成型的 K 棒判定，會在每根 K 棒的
     前段時間恆為真，形成危險方向的偽陽性；錘頭/Pin Bar 形態判定同樣會因
@@ -493,7 +493,7 @@ async def _confirm_left_entry_condition5_macro_earnings_vts_gate(
     opportunity_cost.py 既有的 _confirm_entry_condition5_macro_earnings_gate
     做共用的財報緩衝期 + 大盤 Regime 子檢查 (避免重複邏輯，維持門檻校準單一
     來源)，額外疊加 VIX 期限結構倒掛防禦。前四項未全數通過時短路略過，比照
-    右側條件五同樣的短路優化理由，避免對已確定失敗的整體結果仍發動真實 I/O。
+    條件五同樣的短路優化理由，避免對已確定失敗的整體結果仍發動真實 I/O。
     """
     if not prior_conditions_passed:
         reasons.append("左側條件五⏭️：前四項未全數通過，略過總經/財報/VTS 安全閥檢查")
@@ -502,7 +502,7 @@ async def _confirm_left_entry_condition5_macro_earnings_vts_gate(
     from .opportunity_cost import _confirm_entry_condition5_macro_earnings_gate
 
     shared_reasons: list = []
-    # 右側條件五現已一併回傳距財報天數 (供右側條件六收斂 DTE band)；左側條件六
+    # 條件五現已一併回傳距財報天數 (原供右側條件六收斂 DTE band)；左側條件六
     # 的 DTE 門檻是固定的 _LEFT_ENTRY_CANDIDATE_MIN_DTE (磨底需求)，不做財報收斂，
     # 故此處僅取用通過與否。
     (
@@ -546,8 +546,7 @@ async def _confirm_left_entry_condition6_candidate_dte_ivr(
 ) -> Tuple[bool, Optional[str]]:
     """左側條件六：Candidate 自身 Theta 磨底防禦。回傳
     (是否通過, structure_directive)。structure_directive 為依 IVR 分流的建議
-    策略字串——這是本函式與右側六重鐵律 (`_confirm_entry_condition6_candidate_
-    dte`，僅回傳布林值) 唯一的簽章差異。target_ivr 由呼叫端從 candidate_radar
+    策略字串——這是本函式與已退役的原右側條件六（僅回傳布林值）唯一的簽章差異。target_ivr 由呼叫端從 candidate_radar
     的 iv_metrics 萃取傳入 (與 evaluate_opportunity_cost_for_satellites 既有
     target_ivr 同一來源)，避免另外發動一次 IV 抓取。"""
     if not prior_conditions_passed:
@@ -606,8 +605,7 @@ async def _confirm_left_entry_signal(
     session_vwap: Optional[float] = None,
     atr_15m: Optional[float] = None,
 ) -> Tuple[bool, str, Optional[str]]:
-    """左側交易進場訊號六重嚴格過濾鐵律 orchestrator。結構完全比照
-    opportunity_cost.py::_confirm_entry_signal 的六重鐵律組裝方式 (共用衍生
+    """左側交易進場訊號六重嚴格過濾鐵律 orchestrator。結構曾比照已退役的原右側六重鐵律 (opportunity_cost.py，2026-10 刪除) 的組裝方式 (共用衍生
     資料、reasons 列表、條件五/六短路略過)。回傳 (六項條件是否全數通過,
     逐項原因說明字串, structure_directive)。
 
