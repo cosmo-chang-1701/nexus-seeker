@@ -263,6 +263,21 @@ def straddle_implied_annual_iv(em_weekly: float, spot: float) -> float | None:
     return em_weekly / (spot * math.sqrt(7.0 / 365.0))
 
 
+def _should_apply_event_loading(
+    iv_source: str, has_event: bool, iv_scale_corrected: bool
+) -> bool:
+    """是否對 IV 套用 1.4x 事件加載。
+
+    不變式：跨式反推 IV（`straddle_implied_iv`）已內含事件定價，絕不再加載；
+    `iv_scale_corrected` 為真代表 current_iv 已改用跨式反推值，故同樣排除。
+    """
+    return (
+        iv_source in ["STORED_IV", "HV_PROXY"]
+        and has_event
+        and not iv_scale_corrected  # 跨式反推值已含事件定價，不可再 ×1.4
+    )
+
+
 async def _calculate_iv_term_structure(
     symbol: str, spot_price: float, force_live: bool = False
 ) -> tuple[str | None, float | None]:
@@ -654,18 +669,21 @@ async def fetch_and_calculate_iv_metrics(
                 logger.debug(f"[{symbol}] 財報日與近月到期日比對失敗: {e}")
 
         # Apply Event Loading Factor (1.4x) if fallback used and event near
-        if iv_source in ["STORED_IV", "HV_PROXY"]:
-            if has_earnings_event or has_macro_event:
-                orig = current_iv
-                current_iv = current_iv * 1.4
-                # 這是刻意的事件風險補償（快取/HV 代理值無法反映即將到來的事件
-                # 定價），但放大後的值會一路流入 IV Rank、Expected Move 與所有
-                # IVR 閘門，因此必須讓呈現層有辦法據實揭露，而不是讓使用者以為
-                # 看到的是原始觀測值。
-                event_loading_applied = True
-                logger.warning(
-                    f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
-                )
+        if _should_apply_event_loading(
+            iv_source,
+            has_earnings_event or has_macro_event,
+            iv_scale_corrected,
+        ):
+            orig = current_iv
+            current_iv = current_iv * 1.4
+            # 這是刻意的事件風險補償（快取/HV 代理值無法反映即將到來的事件
+            # 定價），但放大後的值會一路流入 IV Rank、Expected Move 與所有
+            # IVR 閘門，因此必須讓呈現層有辦法據實揭露，而不是讓使用者以為
+            # 看到的是原始觀測值。
+            event_loading_applied = True
+            logger.warning(
+                f"[{symbol}] Real-time IV missing. Applied 1.4x Event Loading Factor to {iv_source}: {orig:.4f} -> {current_iv:.4f}"
+            )
 
         # 4. 取得 DB 歷史 IV：窗口為「最近 252 個交易日」(含今天)，而非 252
         # 列資料 (舊版 LIMIT 252 會把週末/假日重複列算進樣本數)。非交易日的
