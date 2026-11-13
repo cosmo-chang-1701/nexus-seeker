@@ -15,6 +15,7 @@ import pytest
 
 from market_analysis.sentiment import iv_metrics
 from market_analysis.sentiment.iv_metrics import (
+    IvSource,
     _should_apply_event_loading,
     straddle_implied_annual_iv,
 )
@@ -88,7 +89,8 @@ async def test_stored_iv_event_loading_skips_straddle_value() -> None:
     assert metrics.current_iv == pytest.approx(_STORED_IV * 1.4)
     # 跨式反推值原樣揭露，絕不被 ×1.4 加載
     assert metrics.straddle_implied_iv == pytest.approx(expected_straddle_iv)
-    assert metrics.straddle_implied_iv != pytest.approx(_STORED_IV * 1.4)
+    # 跨式值本身未被 ×1.4
+    assert metrics.straddle_implied_iv != pytest.approx(expected_straddle_iv * 1.4)
     assert metrics.iv_scale_corrected is False
 
 
@@ -117,9 +119,10 @@ async def test_helper_false_disables_event_loading_on_stored_path() -> None:
 
     # 分支必須經由 helper 判定：helper 回 False 時不得加載
     mock_helper.assert_called_once()
-    assert mock_helper.call_args.args[0] == "STORED_IV"
-    assert mock_helper.call_args.args[1] is True
-    assert mock_helper.call_args.args[2] is False
+    assert mock_helper.call_args.args == ()
+    assert mock_helper.call_args.kwargs["iv_source"] == "STORED_IV"
+    assert mock_helper.call_args.kwargs["has_event"] is True
+    assert mock_helper.call_args.kwargs["iv_scale_corrected"] is False
     assert metrics.event_loading_applied is False
     assert metrics.current_iv == pytest.approx(_STORED_IV)
 
@@ -142,9 +145,20 @@ async def test_helper_false_disables_event_loading_on_stored_path() -> None:
     ],
 )
 def test_should_apply_event_loading_truth_table(
-    iv_source: str, has_event: bool, iv_scale_corrected: bool, expected: bool
+    iv_source: IvSource, has_event: bool, iv_scale_corrected: bool, expected: bool
 ) -> None:
     assert (
-        _should_apply_event_loading(iv_source, has_event, iv_scale_corrected)
+        _should_apply_event_loading(
+            iv_source=iv_source,
+            has_event=has_event,
+            iv_scale_corrected=iv_scale_corrected,
+        )
         is expected
     )
+
+
+def test_helper_is_keyword_only() -> None:
+    # 三個參數皆為關鍵字參數：位置呼叫必須拋出 TypeError（避免兩個 bool 被靜默對調）
+    fn: Any = _should_apply_event_loading
+    with pytest.raises(TypeError):
+        fn("STORED_IV", True, False)
