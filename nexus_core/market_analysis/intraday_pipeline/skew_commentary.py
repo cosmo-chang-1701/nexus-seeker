@@ -11,7 +11,13 @@ from market_analysis.sentiment.skew_taxonomy import (
     SKEW_STATE_BULLISH,
     SKEW_STATE_DEFENSIVE,
 )
-from models.schemas import EnhancedWatchlistMetrics, ScanParams, WatchlistTacticalPlan
+from market_analysis.intraday_pipeline.events import is_earnings_lockout
+from models.schemas import (
+    EnhancedWatchlistMetrics,
+    ScanParams,
+    WatchlistEventContext,
+    WatchlistTacticalPlan,
+)
 
 
 _SKEW_PCR_DIVERGENCE_WARNING = (
@@ -27,6 +33,9 @@ _SKEW_BADGE_PREMIUM_HARVEST = ("[1;33m", "🟠", "賣方收租（不追價）",
 _SKEW_BADGE_DEFENSIVE = ("[1;31m", "🔴", "防禦／避險需求升溫", "bearish")
 _SKEW_BADGE_DIVERGENCE = ("[1;31m", "⚠️", "方向背離／降槓桿", "neutral")
 _SKEW_BADGE_BULLISH = ("[1;32m", "🟢", "偏多／賣方收租", "bullish")
+# 財報鎖定窗口（14 日內）的替代徽章：收租類判讀不得與事件日曆的禁賣指令打架
+_SKEW_BADGE_EARNINGS_LOCK = ("[1;31m", "🔴", "財報鎖定／禁收租", "bearish")
+_SKEW_BADGE_BULLISH_EARNINGS_LOCK = ("[1;32m", "🟢", "偏多（財報前禁收租）", "bullish")
 
 
 def _optional_float(value: Any) -> Optional[float]:
@@ -127,6 +136,7 @@ def _format_skew_commentary(
 def build_watchlist_skew_rule_commentary(
     metrics: EnhancedWatchlistMetrics,
     tactical: "WatchlistTacticalPlan | None" = None,
+    event_context: "WatchlistEventContext | None" = None,
 ) -> str:
     """Deterministic skew diagnostics with a direction badge (no LLM).
 
@@ -151,6 +161,8 @@ def build_watchlist_skew_rule_commentary(
     pcr = _optional_float(getattr(metrics, "pcr", None))
     if pcr is not None and pcr <= 0.0:
         pcr = None
+    # 財報 14 日內：收租類分支改為禁收租（僅文案，分支條件不變）
+    earnings_lockout = is_earnings_lockout(event_context)
 
     # 分位數據本身缺失時不做任何方向判讀，避免把資料缺口誤報為常態。
     if skew_percentile is None:
@@ -197,6 +209,14 @@ def build_watchlist_skew_rule_commentary(
                 tactical,
             )
         if iv_rank > 70.0:
+            if earnings_lockout:
+                return _format_skew_commentary(
+                    _SKEW_BADGE_EARNINGS_LOCK,
+                    "[IV 火山爆發 ── 財報鎖定] 左尾極端避險且 IV 膨脹，但距財報 ≤14 日，"
+                    "嚴禁賣方收租，僅限現貨防守減碼。",
+                    metrics,
+                    tactical,
+                )
             return _format_skew_commentary(
                 _SKEW_BADGE_PREMIUM_HARVEST,
                 "[IV 火山爆發 ── 收租主動路由] 市場呈現左尾極端避險，建議優先收租/定義風險的 Premium Extraction。",
@@ -239,7 +259,12 @@ def build_watchlist_skew_rule_commentary(
         and skew_percentile <= SKEW_BULLISH_PERCENTILE
     ):
         return _format_skew_commentary(
-            _SKEW_BADGE_BULLISH, SKEW_STATE_BULLISH, metrics, tactical
+            _SKEW_BADGE_BULLISH_EARNINGS_LOCK
+            if earnings_lockout
+            else _SKEW_BADGE_BULLISH,
+            SKEW_STATE_BULLISH,
+            metrics,
+            tactical,
         )
 
     # 兜底：此處必然落在 30-70 抑制窗之外（否則早已回傳），所以不能寫「屬常態區」。

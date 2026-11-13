@@ -69,6 +69,7 @@ $$\text{Structural Divergence} \iff \begin{cases} (\text{Skew Percentile} > 85.0
 **`/x` 呈現層（僅文案，觸發條件不動）**：
 - 結構性背離 overlay 依實際命中的分支描述：(a) Skew 避險分位極端（Put 貴）而 Volume PCR 極低（Call 量主導）；(b) Skew Call 溢價分位極端而 Volume PCR 極高（Put 量主導）；(c) 現價上漲但 Skew 避險分位 $>90$；(d) 現價大跌但 IV Rank 極低（留意快取異常）。(c)(d) 不檢查 PCR，文案亦不提 PCR；所用 PCR 一律為 Volume PCR。
 - 財報鎖定窗口（IV 事件旗標、日曆快取 14 日內，或事件日曆有 $0 \le$ 距財報 $\le 14$ 日的財報）內，「情緒背離偵測」建議覆寫：High Divergence 改為「嚴禁追價買權與賣方收租，僅限現貨防守減碼」，散戶恐慌＋權利金便宜的 CSP 建議改為「財報鎖定窗口：勿賣出賣權，待財報後再評估 CSP」。窗口外文案不變。
+- 雷達／SDDM 路徑同樣接財報鎖定（`events.is_earnings_lockout()`：`0 < earnings_tte_hours ≤ 336`，即 14 日，已公布者 tte ≤ 0 自然排除）：`evaluation.py` 的結構背離與 IV 壓抑背離閘門在窗口內不再寫「僅允許小倉位收租」，改為嚴禁賣方收租；`skew_commentary.py` 的「IV 火山爆發 ── 收租主動路由」改為「財報鎖定／禁收租」，「偏多／賣方收租」徽章改為「偏多（財報前禁收租）」。僅文案，分支條件與 `risk_mode`（event-lock 72h／earnings-guard 168h）不變。
 
 **缺值不得呈現為「同步」**：Skew 分位或 Volume PCR 任一缺失時上式無從判定，`/x` 的「情緒背離偵測」改印灰色「資料不足（Skew 分位／PCR 缺失）」。舊版預設字串為「同步」，等於把「沒資料」說成「沒背離」。
 
