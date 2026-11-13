@@ -325,12 +325,67 @@ def test_short_entry_and_pyramid_use_ansi_trees() -> None:
         assert (fld.value or "").startswith("```ansi\n")
     assert "進場 (限價放空)：$92.00" in _fields(short)["📐 價位"]
 
-    pyramid = create_transition_pyramid_embed(
-        "AAA", "r", "s", scenario="PYRAMID_ADD", pyramid_add_plan=plan
-    )
+    pyramid = create_transition_pyramid_embed("AAA", "r", "s", pyramid_add_plan=plan)
     _assert_layout(pyramid)
     assert (pyramid.fields[-1].value or "").startswith("```ansi\n")
     assert pyramid.fields[-1].name == "⚖️ 倉位"
+
+
+_PYRAMID_PIN_PLAN = {
+    "stop_price": 97.5,
+    "risk_budget_usd": 250.0,
+    "share_qty": 45,
+    "notional_usd": 4140.0,
+    "stop_distance_usd": 5.5,
+    "binding_constraint": "KELLY",
+    "vix_spot": 22.0,
+    "vix_tier_name": "T2",
+    "pyramid_count_after": 2,
+}
+_PYRAMID_PIN_TITLE = "📈 順勢加碼・順勢金字塔加碼: AAA"
+_PYRAMID_PIN_DESC = (
+    "**📈【建議動作：順勢加碼】部位獲利延伸且棘輪停損已鎖定成本之上，授權加碼**"
+    "\n\n理由文字"
+)
+_PYRAMID_PIN_FIELD_ADVICE = (
+    "```ansi\n 🔀 加碼建議\n ----------------------------------\n"
+    " ├─ 標的: AAA\n ├─ 動作:  [1;32mOPEN_PYRAMID [0m (新開第二筆部位)\n"
+    " └─ 策略: 順勢加碼\n```"
+)
+_PYRAMID_PIN_FIELD_SIZING = (
+    "```ansi\n ├─ 建議加碼股數：\x1b[1;37m45\x1b[0m 股（名目 $4,140.00）\n"
+    " ├─ 風險預算：\x1b[1;37m$250.00\x1b[0m\n"
+    " ├─ 停損距離：\x1b[1;37m$5.50\x1b[0m（擠壓參考停損 \x1b[1;37m$97.50\x1b[0m）\n"
+    " ├─ 約束來源：凱利先驗 (R:R 偏低)\n"
+    " ├─ VIX \x1b[1;37m22.0\x1b[0m｜T2（僅供參考，不調整倉位）\n"
+    " └─ 第 \x1b[1;37m2\x1b[0m 次加碼\n```\n\u200b"
+)
+_PYRAMID_PIN_FOOTER = (
+    "🌌 Nexus Seeker • Risk & Rollover Engine • 順勢金字塔加碼，原部位維持不動"
+)
+
+
+def test_pyramid_add_embed_text_pinned() -> None:
+    full = create_transition_pyramid_embed(
+        "AAA", "理由文字", "順勢加碼", pyramid_add_plan=_PYRAMID_PIN_PLAN
+    )
+    assert full.title == _PYRAMID_PIN_TITLE
+    assert full.description == _PYRAMID_PIN_DESC
+    assert [(f.name, f.value, f.inline) for f in full.fields] == [
+        ("🔀 加碼建議", _PYRAMID_PIN_FIELD_ADVICE, False),
+        ("⚖️ 倉位", _PYRAMID_PIN_FIELD_SIZING, False),
+    ]
+    assert full.footer.text == _PYRAMID_PIN_FOOTER
+
+    bare = create_transition_pyramid_embed(
+        "AAA", "理由文字", "順勢加碼", pyramid_add_plan=None
+    )
+    assert bare.title == _PYRAMID_PIN_TITLE
+    assert bare.description == _PYRAMID_PIN_DESC
+    assert [(f.name, f.value, f.inline) for f in bare.fields] == [
+        ("🔀 加碼建議", _PYRAMID_PIN_FIELD_ADVICE, False),
+    ]
+    assert bare.footer.text == _PYRAMID_PIN_FOOTER
 
 
 def test_dynamic_rollover_fields_not_inline() -> None:
