@@ -247,7 +247,7 @@ embed 一律標示「VIX 資料不足」（倉位不放大、賣方新倉暫停�
 - `stock_iv_unknown=True`：比照 §5.1a 的 fail-closed——**賣方新倉**一律 $0$ 口（權利金與保證金都由 IV 推導，佔位 IV 算出的口數沒有意義）；其他方向視同一項降級。
 - `data_degraded_reasons`：非空即對風險額度套用 `_DATA_DEGRADED_HAIRCUT`（$0.5$），warnings 列出「期權數據降級（原因、…）：倉位減半」。套用位置在 All-in 模式重設 `current_risk_limit` 之後，不會被覆寫。
 
-`symbol_deep_dive.py` 收集的降級原因：IV Rank 缺失、Volume PCR 缺失、OI PCR 缺失（與呈現層同一取值定義）、GEX `_is_stale_cache`、結算日 DTE n 偏離痛點（中性措辭；[`../valuation_pricing/02_expected_move_and_max_pain.md`](../valuation_pricing/02_expected_move_and_max_pain.md) §5.2a）。同處 `risk_limit` 的備援值由誤植的 $0.05$ 改為 DB 預設的 $15.0$（百分比單位）。
+`symbol_deep_dive.py` 收集的降級原因：IV Rank 缺失、Volume PCR 缺失、OI PCR 缺失（與呈現層同一取值定義；即時值缺失但有 ≤96h 快取可呈現時，原因改為「OI PCR 僅快取」，仍套用 ×0.5，2026-11-13 #225）、GEX `_is_stale_cache`。結算日痛點偏離不再列入 Kelly 降級原因（2026-11-13 #226）：它是日曆狀態而非期權數據降級，已由賣方前提「結算窗❌」把關，不再縮減額度（見 [`../valuation_pricing/02_expected_move_and_max_pain.md`](../valuation_pricing/02_expected_move_and_max_pain.md) §5.2a）。同處 `risk_limit` 的備援值由誤植的 $0.05$ 改為 DB 預設的 $15.0$（百分比單位）。
 
 ### 5.2 賠率為零或為負防護 (Zero or Negative Odds Guard)
 若因為數據延遲或深度價外，期權權利金報價為零（`bid <= 0`）或潛在利潤為負，賠率 $b \le 0$。若直接套入公式將引發除以零錯誤。`risk_engine.py:229` 設置前置防護：

@@ -519,7 +519,7 @@ def kelly_position_fraction(
     return max(0.0, min(kelly_f * kelly_scale, cap))
 
 
-# 期權決策數據降級 (IV/IVR/PCR 缺失、GEX 快取、結算日偏離痛點) 時的風險額度縮減係數。
+# 期權決策數據降級 (IV/IVR/PCR 缺失或僅快取、GEX 快取) 時的風險額度縮減係數。
 _DATA_DEGRADED_HAIRCUT: float = 0.5
 
 
@@ -556,8 +556,8 @@ def optimize_position_risk(
         stock_iv_unknown: 個股真實 IV 取不到（`stock_iv` 只是佔位值）。賣方新倉
             fail-closed 為 0 口——權利金與保證金都由 IV 推導，以佔位值算出的
             口數沒有意義；其他方向視同一項資料降級 (×_DATA_DEGRADED_HAIRCUT)。
-        data_degraded_reasons: 期權決策數據的降級原因 (IVR／PCR 缺失、GEX 快取
-            降級、結算日偏離痛點等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
+        data_degraded_reasons: 期權決策數據的降級原因 (IVR／PCR 缺失或「OI PCR 僅快取」、
+            GEX 快取降級等)。非空即對風險額度套用 _DATA_DEGRADED_HAIRCUT，
             並以繁中原因列入 warnings。
         collateral_per_contract: 每口現金擔保 (strike × 100)。
         available_collateral: 可動用現金 (現金儲備 − 未平倉 Short Put 擔保金)。

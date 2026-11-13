@@ -20,7 +20,6 @@ from market_analysis.atr_utils import (
 )
 from market_analysis.vwap_utils import fetch_session_stats
 from market_analysis.price_volume_alert import get_confirmed_15m_bar
-from market_analysis.sentiment.max_pain import find_settlement_gravity
 import market_math
 
 from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
@@ -47,6 +46,23 @@ _PROGRESS_EDIT_TIMEOUT_S = 5.0  # 進度訊息編輯的等待上限（撞 webhoo
 
 # 合法代號不含這些分隔字元（見 quote.py `_TICKER_PATTERN`）
 _SYMBOL_SPLIT_RE = re.compile(r"[,，、;；\s]+")
+
+
+def _oi_pcr_degraded_reason(pcr_data: Any) -> Optional[str]:
+    """OI PCR 降級原因：即時值缺失時，有可呈現的快取回「僅快取」，否則「缺失」。
+
+    取值與缺值定義與呈現層 (portfolio_embeds) 相同；快取條件同為 oi_pcr_cached > 0。
+    即時值正常回 None。
+    """
+    if not isinstance(pcr_data, dict):
+        return "OI PCR 缺失"
+    live = pcr_data.get("oi_pcr", pcr_data.get("pcr"))
+    if live is not None and _safe_float(live, 0.0) > 0:
+        return None
+    cached = pcr_data.get("oi_pcr_cached")
+    if cached is not None and _safe_float(cached, 0.0) > 0:
+        return "OI PCR 僅快取"
+    return "OI PCR 缺失"
 
 
 def parse_symbol_list(raw: str) -> list[str]:
@@ -848,24 +864,13 @@ class SymbolDeepDiveMixin:
                 degraded_reasons.append("IV Rank 缺失")
             if vol_pcr is None:
                 degraded_reasons.append("Volume PCR 缺失")
-            # 與呈現層 (portfolio_embeds) 相同的取值與缺值定義
-            oi_pcr_raw = (
-                pcr_data.get("oi_pcr", pcr_data.get("pcr"))
-                if isinstance(pcr_data, dict)
-                else None
-            )
-            if oi_pcr_raw is None or _safe_float(oi_pcr_raw, 0.0) <= 0:
-                degraded_reasons.append("OI PCR 缺失")
+            oi_pcr_reason = _oi_pcr_degraded_reason(pcr_data)
+            if oi_pcr_reason:
+                degraded_reasons.append(oi_pcr_reason)
             if isinstance(gex_profile_data, dict) and gex_profile_data.get(
                 "_is_stale_cache"
             ):
                 degraded_reasons.append("GEX 快取降級")
-            gravity = find_settlement_gravity(result.get("month_max_pains"), now_ny)
-            if gravity is not None:
-                degraded_reasons.append(
-                    f"結算日 DTE {gravity['dte']} 偏離痛點 "
-                    f"{gravity['distance_pct']:+.1f}%"
-                )
 
             # 單口 β 加權 Delta（SPY 等值股數），與 strategy/analyze.py 同定義：
             # Δ × β × (股價/SPY) × 100。舊版寫死 0.16 少乘了後三項。
