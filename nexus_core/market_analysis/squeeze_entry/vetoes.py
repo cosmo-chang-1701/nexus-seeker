@@ -1,7 +1,6 @@
 """擠壓進場與加碼共用的否決／降級條件（承擔新曝險，一律 fail-closed）。
 
-* 否決：財報緩衝期、大盤負 Gamma 踩踏／流動性危機／Regime 未知（沿用右側鐵律
-  條件五 `_confirm_entry_condition5_macro_earnings_gate`），以及 VIX 期限結構深度
+* 否決：財報緩衝期、大盤負 Gamma 踩踏／流動性危機／Regime 未知（共用條件五 `_confirm_entry_condition5_macro_earnings_gate`，左側、做空與擠壓共用），以及 VIX 期限結構深度
   倒掛（Regime IV 宏觀鎖定的第三個分支）。
 * 降級：宏觀逃頂評分 tier != NORMAL（含算不出來的 UNKNOWN）。
 """

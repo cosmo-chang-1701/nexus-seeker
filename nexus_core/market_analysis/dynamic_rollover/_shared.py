@@ -55,7 +55,7 @@ async def resolve_room_threshold_inputs(
 
     取數優先序（刻意「先用手上已有的，最後才發網路請求」）：
 
-    * ``put_wall``：``gex_profile_data["put_wall"]``——呼叫端在六重鐵律開始前
+    * ``put_wall``：``gex_profile_data["put_wall"]``——呼叫端在左側／做空六重鐵律開始前
       早已解析過同一份 dict，零額外成本。傳入 ``target_spot > 0`` 時額外套用
       **現價物理約束**（見下）。
     * ``atr_15m``：呼叫端傳入的 ``df_15m`` 就地計算 > radar 快取的

@@ -1,7 +1,7 @@
 """Facade for the Dynamic Rollover Engine (動態轉倉引擎).
 
 Public import path stays `market_analysis.dynamic_rollover`. Scenario logic is
-split across sibling modules (fundamental_thesis / opportunity_cost /
+split across sibling modules (fundamental_thesis / opportunity_cost（現僅剩條件五與轉倉／做空目標挑選） /
 anti_washout / margin_defense / structural_signals); this file assembles
 `DynamicRolloverEngine` and re-exports the public API + the module-attribute
 names that existing tests patch via `@patch("market_analysis.dynamic_rollover.X")`.

@@ -1,6 +1,6 @@
 """evaluation_recorder.py — Regime 分類與進場鐵律評估的前向蒐集記錄器。
 
-為什麼需要：GEX 相關門檻 (Put Wall、Gamma Flip、次級負 GEX 節點、2.2×Risk)
+為什麼需要：GEX 相關門檻 (Put Wall、Gamma Flip、次級負 GEX 節點、公式 A 的 2.2×Risk)
 **無法回測**——edge scraper 的 `gex_snapshot` 與 core 的 `kv_cache gex_metrics_*`
 全是 upsert、只留最新值，Regime 分類與進場評估也從未被記錄。唯一的校準資料
 來源是從現在開始，把每次評估「當下實際使用的數值」存下來，再由離峰排程回填
@@ -349,7 +349,7 @@ def record_gate_reason(
     direction: str = "LONG",
     candidate_radar: Optional[Mapping[str, Any]] = None,
 ) -> None:
-    """記錄右側／左側六重鐵律結果 (條件遮罩以正則解析 reason，best-effort)。"""
+    """記錄左側／做空六重鐵律結果（原右側六重鐵律已退役） (條件遮罩以正則解析 reason，best-effort)。"""
     try:
         mask, evaluated = parse_condition_masks(reason)
         row: dict[str, Any] = {

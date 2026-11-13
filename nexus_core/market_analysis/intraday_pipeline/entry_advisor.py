@@ -58,7 +58,7 @@ class EntryAdvice(NamedTuple):
     stop_loss: Optional[float] = None
     target: Optional[float] = None
     rr_ratio: Optional[float] = None
-    # 多時間框架擠壓進場（多頭右側路徑）專屬欄位；其餘路徑皆為 None。
+    # 多時間框架擠壓進場（多頭建倉）專屬欄位；其餘路徑皆為 None。
     tier: Optional[int] = None
     size_pct: Optional[float] = None
     squeeze_status: Optional[str] = None
@@ -95,7 +95,7 @@ async def _compute_long_levels(
     phase1_price: Optional[float],
     is_left_catch: bool,
 ) -> tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
-    """多頭 (右側／左側) 的 (進場, 停損, 目標, 盈虧比)。任何一項算不出來回 None。
+    """多頭（現行僅左側路徑使用；擠壓多頭路徑不回傳目標與盈虧比）的 (進場, 停損, 目標, 盈虧比)。任何一項算不出來回 None。
 
     價位純屬顯示資訊，不影響 `passed`；缺資料時該欄位留空而非自行編造 fallback
     ——`resolve_effective_target` 對 60 日高點／ATR 缺失自有降級階梯。

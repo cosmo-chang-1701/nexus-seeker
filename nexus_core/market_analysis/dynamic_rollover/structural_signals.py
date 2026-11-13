@@ -73,8 +73,8 @@ def _scan_gex_walls(
     """
     掃描 gex_profile（履約價 -> GEX 曝險值）找出 support_wall/resistance_wall
     及其對應的 GEX 曝險值。抽自 _compute_structural_breakdown_signals，供該函式
-    (Scenario 3/4 結構性破位判定) 與 _confirm_entry_signal (Scenario 2 進場確認
-    條件二) 共用，確保「什麼算正 Gamma 支撐牆」在進場/出場兩端定義一致。
+    (Scenario 3/4 結構性破位判定) 與已退役的原右側進場確認函式 (Scenario 2 進場確認
+    條件二，2026-10 刪除) 共用，確保「什麼算正 Gamma 支撐牆」在進場/出場兩端定義一致。
 
     Support Wall 物理約束：支撐位在物理定義上必須位於現價下方。當提供 spot > 0 時，
     支撐牆的掃描範圍強制約束在現價下方（K < Spot），即：
@@ -258,9 +258,8 @@ def _detect_whale_put_bto_block(
     """SL-主力對沖（微觀結構出場決策矩陣）：偵測近平值單筆 PUT BTO 大單壓制。
 
     取代舊版 `is_whale_sto_block` 的動能代理 (sqz_mom<0 且 skew<-0.3)，改用
-    真實 UOA 名目金額/比率資料。比照既有 `opportunity_cost.py::
-    _confirm_entry_condition4_uoa_dte` 的 UOA 掃描模式（型別+動作+ratio+
-    名目金額+strike 位置門檻），僅方向反轉為 PUT BTO（主力买入 PUT 押注下跌，
+    真實 UOA 名目金額/比率資料。比照已退役的原右側條件四 (opportunity_cost.py，2026-10 刪除) 的 UOA 掃描模式（型別+動作+ratio+
+    名目金額+strike 位置門檻），僅方向反轉為 PUT BTO（主力買入 PUT 押注下跌，
     做市商需即時空頭對沖）。uoa_list 為 None 或空list 時 fail-safe 回傳 False。
 
     ratio 門檻優先採用 `paced_ratio`（uoa_detector.py 依當日交易時段進度
@@ -429,7 +428,8 @@ def count_structure_held_bars(
     但全鏈 Net GEX > 0 時，呼叫端改傳條件一既有的「全域 Long Gamma 替代門檻」
     (VWAP + 0.5 × ATR₁₅ₘ)——兩者回答的是同一個問題：做市商自穩定區的下緣在哪。
 
-    路由層 (regime_classifier) 與進場確認層 (六重鐵律條件一) 共用這個**演算法**，
+    路由層 (regime_classifier 的 Regime III-B 判定) 使用這個**演算法**；原右側條件一
+    (已退役) 亦曾與之共用，
     但各自獨立呼叫、各自持有輸入，比照 constants.py 明訂的「兩層門檻不合併」政策。
 
     回傳 `(站穩根數, 實際取到的窗口根數, 這些 K 棒是否全屬同一交易時段)`。
