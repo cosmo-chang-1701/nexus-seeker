@@ -250,12 +250,20 @@ async def calculate_skew(symbol: str, force_live: bool = False) -> Dict[str, Any
 _OI_PCR_CACHE_MAX_AGE_SECONDS = 96 * 3600
 
 
+# 指數 ETF 集合（動態到期日、較高 PCR 門檻皆以此判定）。
+_INDEX_ETF_SYMBOLS: frozenset[str] = frozenset({"SPY", "QQQ", "IWM", "DIA"})
+
+
+def _pcr_thresholds(is_index_etf: bool) -> tuple[float, float]:
+    """PCR 狀態門檻 (low, high)：指數 ETF 常態避險需求高，基準較高 (1.3~1.8)。"""
+    if is_index_etf:
+        return 1.20, 1.40
+    return 0.90, 1.10
+
+
 def _classify_oi_pcr(oi_pcr: float, is_index_etf: bool) -> str:
     """OI PCR 結構狀態分類（即時值與快取值共用；指數 ETF 採較高門檻）。"""
-    if is_index_etf:
-        low_th, high_th = 1.20, 1.40
-    else:
-        low_th, high_th = 0.90, 1.10
+    low_th, high_th = _pcr_thresholds(is_index_etf)
     if oi_pcr < low_th or (is_index_etf and oi_pcr <= low_th):
         return "🐂 結構看漲/偏向多頭"
     if oi_pcr > high_th:
@@ -284,7 +292,7 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
             return result
         result["oi_pcr_cached"] = round(cached, 2)
         result["oi_pcr_cached_state"] = _classify_oi_pcr(
-            cached, symbol.upper() in {"SPY", "QQQ", "IWM", "DIA"}
+            cached, symbol.upper() in _INDEX_ETF_SYMBOLS
         )
         result["oi_pcr_cached_age_seconds"] = float(age)
         return result
@@ -342,7 +350,7 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         # SPY/QQQ/IWM 等每日皆有 0-DTE，若僅截前 3 到期日僅覆蓋 3 天，遺失主力月度對沖倉位。
         # 指數 ETF 匯總 DTE <= 30 天的合約，且動態放寬常態避險 PCR 門檻。
         today_dt = datetime.now().date()
-        is_index_etf = symbol.upper() in {"SPY", "QQQ", "IWM", "DIA"}
+        is_index_etf = symbol.upper() in _INDEX_ETF_SYMBOLS
         if is_index_etf:
             target_expiries = [
                 exp
@@ -403,11 +411,7 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
         ):
             return _get_pcr_fallback("Put/Call denominators are zero")
 
-        # 大盤 ETF 常態避險需求高，PCR 自然基準較高 (1.3~1.8)
-        if is_index_etf:
-            low_th, high_th = 1.20, 1.40
-        else:
-            low_th, high_th = 0.90, 1.10
+        low_th, high_th = _pcr_thresholds(is_index_etf)
 
         oi_state = "N/A"
         if oi_one_sided:
@@ -444,18 +448,11 @@ async def calculate_pcr(symbol: str, force_live: bool = False) -> Dict[str, Any]
             )
         if volume_pcr is None:
             # 兩邊成交量皆為 0：成交量部分沿用降級路徑 (歷史快取或 None)，
-            # 未平倉量比率照常回報。
-            fallback = _get_pcr_fallback("Call volume is zero")
+            # 未平倉量比率照常回報。此分支必有即時 OI 資訊（否則已於上方降級返回），
+            # 故不需讀取 OI PCR 快取，也就不會附上 oi_pcr_cached* 鍵。
+            fallback = _build_pcr_fallback("Call volume is zero")
             fallback.pop("error", None)
             fallback.update(oi_fields)
-            if oi_pcr is not None or oi_one_sided:
-                # 有即時 OI 資訊（含單邊）時不附快取
-                for _k in (
-                    "oi_pcr_cached",
-                    "oi_pcr_cached_state",
-                    "oi_pcr_cached_age_seconds",
-                ):
-                    fallback.pop(_k, None)
             return fallback
 
         volume_state = "平衡"
