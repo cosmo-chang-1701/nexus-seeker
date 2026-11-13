@@ -34,6 +34,22 @@ def test_dedup_suffix_prelim_and_final_differ() -> None:
     assert regime_hedge_dedup_suffix({"scenario": "SHORT_ENTRY"}) == ""
 
 
+def _ins_legs(*symbols: str) -> dict[str, Any]:
+    ins = _ins(2, "HEDGE", False)
+    ins["hedge_plan"].legs = tuple(SimpleNamespace(symbol=s) for s in symbols)
+    return ins
+
+
+def test_dedup_suffix_x3_added_for_minus3x_leg() -> None:
+    assert regime_hedge_dedup_suffix(_ins_legs("SQQQ")) == "_T2_HEDGE_FINAL_X3"
+    assert regime_hedge_dedup_suffix(_ins_legs("PSQ", "SOXS")) == "_T2_HEDGE_FINAL_X3"
+
+
+def test_dedup_suffix_x3_absent_for_psq_only_or_no_legs() -> None:
+    assert regime_hedge_dedup_suffix(_ins_legs("PSQ")) == "_T2_HEDGE_FINAL"
+    assert regime_hedge_dedup_suffix(_ins_legs()) == "_T2_HEDGE_FINAL"
+
+
 def test_tier1_dry_run_flag_default_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("REGIME_HEDGE_TIER1_DRY_RUN", raising=False)
     assert (

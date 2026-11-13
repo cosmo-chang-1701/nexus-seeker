@@ -3,6 +3,7 @@ import logging
 import math
 import time
 import config
+from dataclasses import dataclass
 from typing import Any, Dict, NamedTuple, Optional
 
 # 薄牆門檻定義見 gex_wall_depth.py（stdlib 葉模組，避免循環匯入）；此處重新匯出
@@ -28,6 +29,21 @@ logger = logging.getLogger(__name__)
 _MARKET_REGIME_CACHE_TTL: float = 60.0
 _market_regime_cache_value: Optional[str] = None
 _market_regime_cache_expiry: float = 0.0
+
+
+@dataclass(frozen=True)
+class MarketRegimeInputs:
+    """最近一次 regime 計算所用的輸入快照（Flip 為通過時效與離群閘門後的值）。"""
+
+    regime: str
+    vix: Optional[float]
+    vts_ratio: Optional[float]
+    spy_spot: Optional[float]
+    gamma_flip: Optional[float]
+    computed_at: float
+
+
+_market_regime_inputs_value: Optional[MarketRegimeInputs] = None
 
 # fetch_core_macro_metrics() 快取：所有現有呼叫端皆非次秒級時效需求 (排程本身即
 # 每 30 分鐘一次，其餘呼叫端僅在 KV 快取為空時才觸發 fallback)，故給予較長 TTL。
@@ -107,8 +123,10 @@ def invalidate_market_regime_cache() -> None:
     流程於成功刷新 GEX/流動性數據後呼叫，避免管理員手動強制刷新後仍看到過期的
     市況判讀結果長達一個 TTL 週期。"""
     global _market_regime_cache_value, _market_regime_cache_expiry
+    global _market_regime_inputs_value
     _market_regime_cache_value = None
     _market_regime_cache_expiry = 0.0
+    _market_regime_inputs_value = None
 
 
 def invalidate_core_macro_metrics_cache() -> None:
@@ -253,6 +271,38 @@ async def get_market_regime() -> str:
     return regime  # type: ignore
 
 
+async def get_market_regime_inputs() -> Optional[MarketRegimeInputs]:
+    """回傳與當前 get_market_regime() 結果一致且未逾 TTL 的輸入快照；否則 None。
+
+    不額外發出網路請求（僅透過 get_market_regime() 取得／刷新快取）。
+    """
+    regime = await get_market_regime()
+    snap = _market_regime_inputs_value
+    if snap is None or snap.regime != regime:
+        return None
+    if time.time() - snap.computed_at > _MARKET_REGIME_CACHE_TTL:
+        return None
+    return snap
+
+
+def _record_market_regime_inputs(
+    regime: str,
+    vix: Optional[float],
+    vts_ratio: Optional[float],
+    spy_spot: Optional[float],
+    gamma_flip: Optional[float],
+) -> None:
+    global _market_regime_inputs_value
+    _market_regime_inputs_value = MarketRegimeInputs(
+        regime=regime,
+        vix=vix,
+        vts_ratio=vts_ratio,
+        spy_spot=spy_spot,
+        gamma_flip=gamma_flip,
+        computed_at=time.time(),
+    )
+
+
 # 大盤 GEX last-known-good 快取供判定使用的最長時效：涵蓋週末/長假 (週五
 # 收盤後 edge 失敗到週一盤中約 2.5 天)，超過即視為未知——OI 結構已換手。
 # regime 判定、/market 面板與 /force_macro_update 共用此門檻。
@@ -385,6 +435,9 @@ async def _compute_market_regime_uncached() -> str:
             (ted_spread > 0.5) if ted_spread is not None else None, below_flip
         )
     if liquidity_crisis is True:
+        _record_market_regime_inputs(
+            "SYSTEMIC_LIQUIDITY_CRISIS", vix, vts_ratio, spy_spot, gamma_flip
+        )
         return "SYSTEMIC_LIQUIDITY_CRISIS"
 
     # 條件：VIX > 20 且 vts_ratio >= 1.0 (Backwardation) 且 SPY 現貨價 < Gamma Flip Line
@@ -394,15 +447,20 @@ async def _compute_market_regime_uncached() -> str:
         below_flip,
     )
     if gamma_critical is True:
+        _record_market_regime_inputs(
+            "SHORT_GAMMA_CRITICAL", vix, vts_ratio, spy_spot, gamma_flip
+        )
         return "SHORT_GAMMA_CRITICAL"
 
     if liquidity_crisis is False and gamma_critical is False:
+        _record_market_regime_inputs("NORMAL", vix, vts_ratio, spy_spot, gamma_flip)
         return "NORMAL"
 
     logger.warning(
         "大盤 Regime 無法判定 (資料不足)："
         f"VIX={vix} VTS={vts_ratio} SPY={spy_spot} Flip={gamma_flip} TED={ted_spread}"
     )
+    _record_market_regime_inputs("UNKNOWN", vix, vts_ratio, spy_spot, gamma_flip)
     return "UNKNOWN"
 
 

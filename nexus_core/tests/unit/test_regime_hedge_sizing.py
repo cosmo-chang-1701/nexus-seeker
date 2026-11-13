@@ -315,3 +315,50 @@ def test_all_plans_respect_cash_account_invariant(
         plan = build_tier2_plan(pos, nav, ["NVDA", "MSFT"], cash, PRICES, {}, TODAY)
     _check_invariant(plan, pos, nav)
     assert plan.mode == mode
+
+
+def _redline(
+    vix: float | None = 25.0,
+    vts: float | None = 1.05,
+    spot: float | None = 98.0,
+    flip: float | None = 100.0,
+) -> str | None:
+    return rhs.minus3x_activation_block_reason(vix, vts, spot, flip)
+
+
+def test_redline_all_pass_returns_none() -> None:
+    assert _redline() is None
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "blocked"),
+    [
+        ({"vix": 21.99}, True),
+        ({"vix": 22.0}, False),
+        ({"vts": 1.0}, True),
+        ({"vts": 1.01}, False),
+        ({"spot": 99.01}, True),
+        ({"spot": 99.0}, False),
+    ],
+)
+def test_redline_boundaries(kwargs: dict[str, float], blocked: bool) -> None:
+    reason = _redline(**kwargs)
+    assert (reason is not None) is blocked
+    if reason is not None:
+        assert reason.startswith("−3x 啟動紅線未達：")
+
+
+def test_redline_unknown_inputs_fail_closed() -> None:
+    assert "VIX 未知" in (_redline(vix=None) or "")
+    assert "VTS 未知" in (_redline(vts=None) or "")
+    assert "未知" in (_redline(spot=None) or "")
+    assert "未知" in (_redline(flip=None) or "")
+    assert "未知" in (_redline(spot=0.0) or "")
+    assert "未知" in (_redline(flip=-1.0) or "")
+
+
+def test_redline_lists_all_failures_with_values() -> None:
+    reason = _redline(vix=21.4, vts=1.0, spot=99.4, flip=100.0) or ""
+    assert "VIX 21.40 < 22.00" in reason
+    assert "VTS 1.00 ≤ 1.00" in reason
+    assert "SPY 低於 Flip 0.60%（需 ≥ 1.00%）" in reason

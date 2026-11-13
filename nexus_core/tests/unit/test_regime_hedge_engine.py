@@ -1,15 +1,17 @@
 """兩級體制避險引擎 (market_analysis.dynamic_rollover.regime_hedge) 單元測試。"""
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from market_analysis.dynamic_rollover import DynamicRolloverEngine
+from market_analysis.index_microstructure import MarketRegimeInputs
 from market_analysis.dynamic_rollover.regime_hedge_timing import MacroFreezeStatus
 
 _MOD = "market_analysis.dynamic_rollover.regime_hedge"
 _REGIME = "market_analysis.index_microstructure.get_market_regime"
+_INPUTS = "market_analysis.index_microstructure.get_market_regime_inputs"
 _CTX = "market_analysis.dynamic_rollover.get_full_user_context"
 
 _ORDERS = "database.orders.get_user_active_orders"
@@ -51,6 +53,19 @@ def _ctx(cash: float = 10000.0, load_failed: bool = False) -> MagicMock:
     return MagicMock(cash_reserve=cash, load_failed=load_failed)
 
 
+_UNSET: Any = object()
+
+
+def _inputs(
+    vix: Optional[float] = 25.0,
+    vts: Optional[float] = 1.05,
+    spot: Optional[float] = 98.0,
+    flip: Optional[float] = 100.0,
+    regime: str = "SHORT_GAMMA_CRITICAL",
+) -> MarketRegimeInputs:
+    return MarketRegimeInputs(regime, vix, vts, spot, flip, 0.0)
+
+
 async def _run(
     assets: List[Dict[str, Any]],
     regime: str,
@@ -63,7 +78,15 @@ async def _run(
     flagged: Any = None,
     freeze_error: bool = False,
     orders: Any = None,
+    inputs: Any = _UNSET,
 ) -> List[Any]:
+    if inputs is _UNSET:
+        inputs = _inputs()
+    inputs_mock = (
+        AsyncMock(side_effect=inputs)
+        if isinstance(inputs, Exception)
+        else AsyncMock(return_value=inputs)
+    )
     eng = _engine()
     if callable(no_edge):
         edge = AsyncMock(side_effect=lambda **kw: (no_edge(kw["symbol"]), False, False))
@@ -80,6 +103,7 @@ async def _run(
         status = MacroFreezeStatus(frozen=True, calendar_known=False)
     with (
         patch(_REGIME, new=AsyncMock(return_value=regime)),
+        patch(_INPUTS, new=inputs_mock),
         patch(_CTX, return_value=_ctx(cash, load_failed)),
         patch(f"{_MOD}.load_earnings_dates", new=AsyncMock(return_value={})),
         patch(
@@ -294,3 +318,67 @@ async def test_gtc_commitment_orders_read_failure_falls_back() -> None:
     out = await _run(assets, "NORMAL", cash=30000.0, orders=RuntimeError("db"))
     assert len(out) == 1
     assert not any("GTC" in n for n in out[0]["hedge_plan"].notes)
+
+
+_REDLINE_PREFIX = "−3x 啟動紅線未達："
+
+
+async def test_redline_not_met_freezes_minus3x_keeps_liquidations() -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    out = await _run(
+        assets,
+        "SHORT_GAMMA_CRITICAL",
+        no_edge=True,
+        inputs=_inputs(vix=21.0, vts=1.05, spot=98.0, flip=100.0),
+    )
+    assert len(out) == 1
+    plan = out[0]["hedge_plan"]
+    assert not [leg for leg in plan.legs if leg.symbol in ("SQQQ", "SOXS")]
+    assert set(plan.liquidate_symbols) == {"NVDA", "AAPL"}
+    assert plan.minus3x_frozen_reason.startswith(_REDLINE_PREFIX)
+    assert plan.boxx_target_value > 0
+
+
+async def test_redline_met_produces_minus3x_legs() -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    out = await _run(assets, "SHORT_GAMMA_CRITICAL", no_edge=True)
+    plan = out[0]["hedge_plan"]
+    assert {leg.symbol for leg in plan.legs} == {"SOXS", "SQQQ"}
+    assert plan.minus3x_frozen_reason is None
+
+
+@pytest.mark.parametrize("bad", [None, RuntimeError("boom")])
+async def test_redline_inputs_unavailable_fails_closed(bad: Any) -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    out = await _run(assets, "SHORT_GAMMA_CRITICAL", no_edge=True, inputs=bad)
+    plan = out[0]["hedge_plan"]
+    assert not plan.legs
+    assert "啟動紅線資料不足" in plan.minus3x_frozen_reason
+
+
+async def test_redline_and_macro_freeze_reasons_joined() -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    out = await _run(
+        assets,
+        "SHORT_GAMMA_CRITICAL",
+        no_edge=True,
+        frozen=True,
+        inputs=_inputs(vix=20.0),
+    )
+    reason = out[0]["hedge_plan"].minus3x_frozen_reason
+    assert "；" in reason
+    assert _REDLINE_PREFIX in reason
+    assert not out[0]["hedge_plan"].legs
+
+
+async def test_redline_liquidity_crisis_with_low_vix_frozen() -> None:
+    assets = [_asset("NVDA", 30000.0), _asset("AAPL", 30000.0)]
+    out = await _run(
+        assets,
+        "SYSTEMIC_LIQUIDITY_CRISIS",
+        no_edge=True,
+        inputs=_inputs(vix=18.0, regime="SYSTEMIC_LIQUIDITY_CRISIS"),
+    )
+    plan = out[0]["hedge_plan"]
+    assert not [leg for leg in plan.legs if leg.symbol in ("SQQQ", "SOXS")]
+    assert plan.minus3x_frozen_reason.startswith(_REDLINE_PREFIX)

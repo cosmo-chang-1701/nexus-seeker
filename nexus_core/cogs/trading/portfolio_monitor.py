@@ -70,7 +70,12 @@ def regime_hedge_dedup_suffix(ins: Mapping[str, Any]) -> str:
     tier = getattr(plan, "tier", ins.get("hedge_tier"))
     mode = getattr(plan, "mode", "NA")
     phase = "PRELIM" if ins.get("is_preliminary") else "FINAL"
-    return f"_T{tier}_{mode}_{phase}"
+    # 含 −3x 腿（SQQQ／SOXS）者另加 _X3，避免「紅線未達→BOXX」卡片吞掉同日稍後的 −3x 卡片
+    legs = getattr(plan, "legs", ()) or ()
+    x3 = any(
+        str(getattr(leg, "symbol", "")).upper() in ("SQQQ", "SOXS") for leg in legs
+    )
+    return f"_T{tier}_{mode}_{phase}" + ("_X3" if x3 else "")
 
 
 def is_regime_hedge_tier1_dry_run(ins: Mapping[str, Any]) -> bool:

@@ -146,7 +146,7 @@ def create_regime_hedge_embed(
 
     if plan.minus3x_frozen_reason:
         embed.add_field(
-            name="🧊 總經事件凍結",
+            name="🧊 −3x 凍結",
             value=_safe(plan.minus3x_frozen_reason),
             inline=False,
         )

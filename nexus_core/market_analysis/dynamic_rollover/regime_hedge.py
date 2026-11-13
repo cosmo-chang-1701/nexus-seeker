@@ -2,7 +2,8 @@
 
 - 第一級：大盤 NORMAL 且有多頭現貨跌破 PutWall → PSQ（-1x）局部對沖計畫。
 - 第二級：大盤 SHORT_GAMMA_CRITICAL／SYSTEMIC_LIQUIDITY_CRISIS → 結構無勝率者清倉，
-  並以 SQQQ／SOXS 對沖或止損轉空。
+  並以 SQQQ／SOXS 對沖或止損轉空；
+  -3x 另須通過啟動紅線（VIX≥22、VTS>1、SPY 低於 Flip ≥1%，未知視為未達），否則凍結轉 BOXX。
 
 每位使用者每輪最多產生一筆投資組合層級（symbol="PORTFOLIO"）指令。
 本引擎只「算」：不寫 DB、不推播、不讀乾跑旗標（由呼叫端接線處理）。
@@ -24,6 +25,7 @@ from .regime_hedge_sizing import (
     HedgePosition,
     build_tier1_plan,
     build_tier2_plan,
+    minus3x_activation_block_reason,
 )
 from .regime_hedge_timing import (
     is_preliminary_window,
@@ -208,6 +210,28 @@ async def evaluate_regime_hedge_impl(
             logger.warning(f"[REGIME_HEDGE] 載入總經凍結狀態失敗: {e}")
             # fail-closed：讀取失敗時保守凍結新建 -3x
             frozen_reason = "總經凍結狀態讀取失敗，保守凍結新建 −3x 反向 ETF"
+
+        # −3x 啟動紅線（fail-closed：資料不足視為未達）
+        redline_reason: Optional[str]
+        try:
+            from market_analysis.index_microstructure import get_market_regime_inputs
+
+            inputs = await get_market_regime_inputs()
+        except Exception as e:
+            logger.warning(f"[REGIME_HEDGE] 載入 −3x 啟動紅線輸入失敗: {e}")
+            inputs = None
+        if inputs is None:
+            redline_reason = (
+                "−3x 啟動紅線資料不足（VIX／VTS／Gamma Flip 無法取得），"
+                "保守凍結新建 −3x 反向 ETF"
+            )
+        else:
+            redline_reason = minus3x_activation_block_reason(
+                inputs.vix, inputs.vts_ratio, inputs.spy_spot, inputs.gamma_flip
+            )
+        frozen_reason = (
+            "；".join(r for r in (frozen_reason, redline_reason) if r) or None
+        )
 
         prices = await _fetch_reference_prices(engine)
         today_et = datetime.now(_NY_TZ).date()
