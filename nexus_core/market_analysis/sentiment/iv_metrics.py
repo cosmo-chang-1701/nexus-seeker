@@ -17,6 +17,9 @@ from services.market_data_service.caches import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 from .cache import _iv_cache, _IV_CACHE_TTL
 
 
+# IV 來源型別（與 IVMetrics.iv_source 的取值一致）
+IvSource = Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"]
+
 logger = logging.getLogger(__name__)
 _TERM_STRUCTURE_MIN_IV = 0.01
 # 即時 IV 與跨式反推 IV 相差超過此倍數即視為尺度錯誤（非期限結構差異）。
@@ -264,7 +267,7 @@ def straddle_implied_annual_iv(em_weekly: float, spot: float) -> float | None:
 
 
 def _should_apply_event_loading(
-    iv_source: str, has_event: bool, iv_scale_corrected: bool
+    *, iv_source: IvSource, has_event: bool, iv_scale_corrected: bool
 ) -> bool:
     """是否對 IV 套用 1.4x 事件加載。
 
@@ -476,9 +479,7 @@ async def fetch_and_calculate_iv_metrics(
 
         # 2. 獲取當前 IV
         current_iv: float | None = None
-        iv_source: Literal["LIVE_IV", "STORED_IV", "HV_PROXY", "UNAVAILABLE"] = (
-            "UNAVAILABLE"
-        )
+        iv_source: IvSource = "UNAVAILABLE"
         is_market_active = is_market_open()
         current_iv_expiry: str | None = None
         current_iv_dte: int | None = None
@@ -670,9 +671,9 @@ async def fetch_and_calculate_iv_metrics(
 
         # Apply Event Loading Factor (1.4x) if fallback used and event near
         if _should_apply_event_loading(
-            iv_source,
-            has_earnings_event or has_macro_event,
-            iv_scale_corrected,
+            iv_source=iv_source,
+            has_event=has_earnings_event or has_macro_event,
+            iv_scale_corrected=iv_scale_corrected,
         ):
             orig = current_iv
             current_iv = current_iv * 1.4
