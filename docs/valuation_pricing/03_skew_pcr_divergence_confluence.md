@@ -191,7 +191,7 @@ elif (
 - **落盤**：即時 `oi_pcr` 為真實比值（Put、Call OI 皆 > 0）時，寫入 `sentiment_history`，指標名 `OI_PCR`；單邊或 `None` 不寫。
 - **上限**：僅採用 96 小時內的紀錄（`_OI_PCR_CACHE_MAX_AGE_SECONDS`，對齊 GEX kv 快照的 96h 上限）。
 - **鍵**：僅新增 `oi_pcr_cached`（2 位小數）、`oi_pcr_cached_state`（與即時相同的分類，含指數 ETF 門檻）、`oi_pcr_cached_age_seconds`。
-- **不動閘門**：`oi_pcr` 與 `oi_pcr_state` 維持原狀（仍為 `None`／N/A），盤中擠壓警報閘門與 Kelly 降級理由皆不變；即時 OI 單邊時也不附快取。
+- **不動閘門**：`oi_pcr` 與 `oi_pcr_state` 維持原狀（仍為 `None`／N/A），盤中擠壓警報閘門不變；Kelly 降級仍成立（×0.5 不變），但呈現快取時理由文字改為「OI PCR 僅快取」（無有效快取仍為「OI PCR 缺失」，2026-11-13 #225）；即時 OI 單邊時也不附快取。
 - **非標準母體**：`OI_PCR` 不在 `CANONICAL_INDICATORS`，不進入任何百分位母體。
 
 ### 5.4 Skew 百分位的統計母體與樣本邊界防護 (Canonical Daily Population & Edge Guards)

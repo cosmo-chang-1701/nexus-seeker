@@ -62,7 +62,8 @@ def test_deep_dive_reason_wording_neutral() -> None:
         Path(pe.__file__).parent.parent / "unified_terminal" / "symbol_deep_dive.py"
     ).read_text(encoding="utf-8")
     assert "結算日引力" not in src
-    assert "結算日 DTE {gravity['dte']} 偏離痛點" in src
+    assert "偏離痛點" not in src
+    assert "find_settlement_gravity" not in src
 
 
 def test_settlement_reason_still_halves_budget_and_no_gravity_word() -> None:
