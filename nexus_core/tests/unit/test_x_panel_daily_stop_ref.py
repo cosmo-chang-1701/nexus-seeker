@@ -48,7 +48,7 @@ def test_normal_case_appended_to_stop_line_with_correct_value() -> None:
     text = _text(_base())
     # 150 - 0.25 * 2.5 = 149.375 → 149.38；(154 - 149.375) / 154 = 3.00%
     assert " ｜日線參考 $149.38 (↓3.00%)" in text
-    stop_line = next(ln for ln in text.splitlines() if "結構停損" in ln)
+    stop_line = next(ln for ln in text.splitlines() if "結構失效線" in ln)
     assert "日線參考" in stop_line  # 同一行尾註，不另起一行
 
 

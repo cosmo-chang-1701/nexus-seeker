@@ -54,7 +54,9 @@ def test_a_far_thin_wall_rejected_with_adv() -> None:
     assert "CallWall: $790.00" not in text
     assert VACUUM in text
     # 有 ADV 時 scanner 自身的薄牆門檻已擋下 790，故不會有「已略過」註記。
-    assert "$790.00" not in text
+    # （$790 可能以 Gamma Flip 履約價出現，與 CallWall 無關，故只查壓力區塊字樣。）
+    assert "CallWall $790.00" not in text
+    assert "已略過" not in text
 
 
 def test_b_far_thin_wall_rejected_without_adv() -> None:

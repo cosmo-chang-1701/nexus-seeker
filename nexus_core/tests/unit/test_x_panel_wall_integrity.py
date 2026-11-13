@@ -45,21 +45,22 @@ def _case(pw_net: float, key: str = "150.0", **extra: Any) -> dict[str, Any]:
 def test_negative_putwall_is_flagged_inline() -> None:
     text = _render(_case(-30_000_000.0))
     assert "PutWall: $150.00〔淨GEX" in text and "實為助跌區" in text
-    assert "參考停損 (淨 GEX 支撐" in text
-    assert "PutWall 為助跌區，閘門仍以 PutWall 為準" in text
+    assert "參考失效線 (淨 GEX 支撐" in text
+    assert "PutWall 失效線 (PutWall−0.5×ATR₁₅ₘ)" in text
+    assert "閘門仍以 PutWall 為準" not in text
 
 
 def test_paper_wall_is_flagged_and_gets_alt_stop() -> None:
     text = _render(_case(200_000.0))  # +$2K < 門檻 $5K
     assert "〔紙牆：淨GEX" in text
-    assert "參考停損 (淨 GEX 支撐" in text
-    assert "PutWall 為紙牆" in text
+    assert "參考失效線 (淨 GEX 支撐" in text
+    assert "PutWall 為紙牆" not in text
 
 
 def test_solid_wall_has_no_flag() -> None:
     text = _render(_case(80_000_000.0))
     assert "紙牆" not in text and "助跌區" not in text
-    assert "參考停損 (淨 GEX 支撐" not in text
+    assert "參考失效線 (淨 GEX 支撐" not in text
 
 
 def test_integer_string_key_is_not_paper_wall() -> None:
@@ -79,23 +80,19 @@ def test_paper_wall_kelly_precondition_fails() -> None:
     assert "牆淨GEX❌" in text
 
 
-def test_degraded_too_tight_marks_inflated_ratio() -> None:
-    """TOO_TIGHT：盈虧比不得單獨印 ✅（旗標改由 put_too_tight 驅動）。
-
-    降級分支（min_pct 為 None）要求 ATR₁₅ₘ 無效，此時停損行本身不輸出
-    （atr_15m_val<=0），盈虧比區塊亦不會出現，故以有 min_pct 的路徑驗證旗標。
-    """
+def test_too_tight_stop_has_no_verdict_or_ratio() -> None:
+    """停損過窄不再發判定，也不印盈虧比；只留距離與結構失效線事實。"""
     d = _case(80_000_000.0, price=150.4, atr_1d=3.0, atr_15m=0.5)
     d["gex_profile_data"].update({"spot": 150.4, "put_wall": 150.0, "call_wall": 200.0})
     d["gex_profile_data"]["gex_profile"]["200.0"] = 3_000_000.0
     text = _render(d)
-    assert "短線盈虧比" in text
-    assert ":1 ⚠ 停損過窄、比值虛高" in text
-    primary = next(ln for ln in text.splitlines() if "短線盈虧比" in ln)
-    assert primary.split("合格停損")[0].count("✅") == 0
+    for gone in ("短線盈虧比", "比值虛高", "過窄", "易遭掃損", "合格停損"):
+        assert gone not in text
+    assert "距現價空間: ↓0.27%" in text
+    assert "結構失效線 (PutWall−0.5×ATR₁₅ₘ)" in text
 
 
-def test_callwall_hug_caps_upside_and_skips_ratio() -> None:
+def test_callwall_hug_keeps_tag_without_ratio() -> None:
     d = _case(80_000_000.0, price=372.48, atr_15m=1.2, atr_1d=8.0)
     d["gex_profile_data"].update(
         {
@@ -111,8 +108,8 @@ def test_callwall_hug_caps_upside_and_skips_ratio() -> None:
     )
     text = _render(d)
     assert "📌 貼牆(<0.32%)" in text
-    assert "上檔已封頂（距 CallWall 0.01% < 0.32%）" in text
-    assert ":1 ✅" not in text
+    assert "盈虧比" not in text
+    assert "上檔已封頂" not in text
 
 
 def test_credit_spread_sto_call_cap_line() -> None:

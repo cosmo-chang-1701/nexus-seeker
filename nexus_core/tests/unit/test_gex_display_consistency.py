@@ -5,7 +5,7 @@ GEX 呈現層一致性（fixture 取自實盤回報的 DRAM / RKLB / MU / BE）�
   #7  CallWall 低於現價且上方全為負 GEX → 顯示負 Gamma 真空，不印舊牆
   #8  全鏈 LONG_GAMMA 但現價已落入負 Gamma 區 → 揭露局部體制與雙向翻轉線
   #10 PutWall 處淨 GEX 為負 → 揭露助跌區並列出淨 GEX 最大支撐
-  #11 下行緩衝同時顯示牆距與停損距離，判定依停損距離
+  #11 下行緩衝只顯示牆距（不發進場判定）
 並確認 `estimate_symbol_gamma_flip()`（進場閘門共用）行為不變。
 """
 
@@ -119,11 +119,11 @@ def test_healthy_putwall_has_no_extra_disclosure() -> None:
 @pytest.mark.parametrize(
     "put_wall,expect",
     [
-        (92.54, "↓7.46%｜停損距離 7.96%"),  # BE：牆距 7.46% 但停損距離接近上限
-        (91.9, "停損距離過寬 (> 絕對上限 8.00%)"),
+        (92.54, "距現價空間: ↓7.46%"),
+        (91.9, "距現價空間: ↓8.10%"),
     ],
 )
-def test_be_buffer_shows_stop_distance(put_wall: float, expect: str) -> None:
+def test_be_buffer_shows_plain_wall_distance(put_wall: float, expect: str) -> None:
     text = _text(
         {
             "symbol": "BE",
@@ -143,6 +143,8 @@ def test_be_buffer_shows_stop_distance(put_wall: float, expect: str) -> None:
         }
     )
     assert expect in text
+    for gone in ("停損距離", "過寬", "進場甜蜜點", "易遭掃損"):
+        assert gone not in text
 
 
 # ---------------------------------------------------------------------------

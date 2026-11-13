@@ -50,32 +50,32 @@ def _mu_case(**overrides: Any) -> dict[str, Any]:
     return data
 
 
-def test_sweet_spot_downgraded_when_upside_room_insufficient() -> None:
+def test_no_entry_verdict_when_upside_room_insufficient() -> None:
+    """GEX 區塊不發進場判定（右側規則已退役）：曾印「非進場點」的案例只留事實。"""
     desc = _embed_text(_mu_case())
-    assert "✅ 進場甜蜜點" not in desc
-    assert "✅ 停損距離合格" in desc
-    assert "❌ 上檔空間 0.24% 不足 10.47%，非進場點" in desc
-    # CallWall 距現價 0.24% < 貼牆帶 0.88%（9.68/1097.39）：盈虧比改為單行「上檔已封頂」
-    assert "📌 貼牆(<0.88%)" in desc
-    assert "短線盈虧比: ⛔ 上檔已封頂（距 CallWall 0.24% < 0.88%），不計" in desc
+    for gone in ("進場甜蜜點", "停損距離合格", "非進場點", "盈虧比", "動態門檻"):
+        assert gone not in desc
+    # 事實仍在：距離、貼牆標記、結構失效線
+    assert "距現價空間: ↓4.32%" in desc
+    assert "距現價空間: ↑0.24% 📌 貼牆(<0.88%)" in desc
+    assert "PutWall 失效線 (PutWall−0.5×ATR₁₅ₘ): $1045.16 (↓4.76%)" in desc
     assert ":1 ❌" not in desc
 
 
-def test_rr_alt_anchor_kept_when_not_hugging_callwall() -> None:
-    """非貼牆（CallWall 距 1.15% > 貼牆帶 0.88%）時，盈虧比雙錨邏輯維持。"""
+def test_no_rr_line_when_not_hugging_callwall() -> None:
+    """非貼牆（CallWall 距 1.15% > 貼牆帶 0.88%）時同樣不印盈虧比。"""
     data = _mu_case()
     data["gex_profile_data"]["call_wall"] = 1110.0
     data["gex_profile_data"]["gex_profile"]["1110.0"] = 8_850_000_000
     desc = _embed_text(data)
     assert "🧲 Gamma 曝險分布" in desc
     assert "貼牆" not in desc
-    # (1110 − 1097.39) / (1097.39 − 1045.16) = 0.24；淨 GEX 錨 (1070 → 1065.16) = 0.39
-    assert "短線盈虧比 (期權視角，至 CallWall $1110.00): 閘門 0.24:1 ❌" in desc
-    assert "淨 GEX 支撐錨 $1070.00 0.39:1 ❌" in desc
-    assert "(門檻 2.2:1)" in desc
+    assert "盈虧比" not in desc
+    assert "門檻 2.2:1" not in desc
+    assert "距現價空間: ↑1.15%" in desc
 
 
-def test_sweet_spot_kept_when_upside_room_sufficient() -> None:
+def test_no_verdict_when_upside_room_sufficient() -> None:
     data = _mu_case()
     data["gex_profile_data"] = {
         "put_wall": 1050.0,
@@ -83,17 +83,21 @@ def test_sweet_spot_kept_when_upside_room_sufficient() -> None:
         "gex_profile": {"1050.0": 300_000_000, "1250.0": 900_000_000},
     }
     desc = _embed_text(data)
-    assert "✅ 進場甜蜜點" in desc
+    assert "進場甜蜜點" not in desc
     assert "非進場點" not in desc
-    # (1250 − 1097.39) / (1097.39 − 1045.16) = 2.92
-    assert "2.92:1 ✅" in desc
+    assert "盈虧比" not in desc
+    assert "距現價空間: ↑13.91%" in desc
 
 
-def test_net_gex_support_stop_is_primary_when_putwall_is_short_gamma() -> None:
+def test_net_gex_support_invalidation_line_is_primary_when_putwall_is_short_gamma() -> (
+    None
+):
     desc = _embed_text(_mu_case())
-    assert "參考停損 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.16" in desc
-    assert "引擎閘門停損 (PutWall−0.5×ATR₁₅ₘ): $1045.16 (↓4.76%)" in desc
-    assert desc.index("參考停損 (淨 GEX 支撐") < desc.index("引擎閘門停損")
+    assert "參考失效線 (淨 GEX 支撐 $1070.00−0.5×ATR₁₅ₘ): $1065.16" in desc
+    assert "PutWall 失效線 (PutWall−0.5×ATR₁₅ₘ): $1045.16 (↓4.76%)" in desc
+    assert desc.index("參考失效線 (淨 GEX 支撐") < desc.index("PutWall 失效線")
+    assert "閘門仍以 PutWall 為準" not in desc
+    assert "引擎閘門停損" not in desc
 
 
 def test_pinning_note_when_long_gamma_and_hugging_callwall() -> None:
@@ -271,20 +275,19 @@ def _mu_intraday_case(**overrides: Any) -> dict[str, Any]:
     return data
 
 
-def test_rr_not_green_when_stop_too_tight() -> None:
+def test_no_tight_stop_or_rr_verdict_in_intraday_case() -> None:
     desc = _embed_text(_mu_intraday_case())
-    assert "❌ 過窄 (< 2.5×ATR₁₅ₘ = 2.23%)" in desc
-    # (1100 − 1075.47) / (1075.47 − 1065.205) = 2.39，但停損過窄，不得給 ✅
-    assert "2.39:1 ⚠ 停損過窄、比值虛高" in desc
-    assert "2.39:1 ✅" not in desc
-    # 合格停損 2.23%：24.53 / 23.975 = 1.02
-    assert "合格停損 ↓2.23% 1.02:1 ❌" in desc
+    for gone in ("過窄", "易遭掃損", "盈虧比", "合格停損", "比值虛高"):
+        assert gone not in desc
+    assert "距現價空間: ↓0.51%" in desc
+    assert "結構失效線 (PutWall−0.5×ATR₁₅ₘ): $1065.20" in desc
 
 
-def test_callwall_threshold_names_binding_term() -> None:
+def test_callwall_line_has_no_dynamic_threshold_flag() -> None:
     desc = _embed_text(_mu_intraday_case())
-    # max(2.2×0.95%, 1.5×4.40%, 3.5%) = 6.60%，由單日波幅項決定
-    assert "❌ 不足 6.60% (動態門檻：1.5×ATR₁D)" in desc
+    assert "動態門檻" not in desc
+    assert "❌ 不足" not in desc
+    assert "距現價空間: ↑2.28%" in desc
 
 
 def test_released_catalysts_are_not_shown_with_negative_days() -> None:

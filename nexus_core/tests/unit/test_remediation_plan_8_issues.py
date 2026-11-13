@@ -105,8 +105,8 @@ def test_portfolio_embed_callwall_at_spot_does_not_trigger_data_anomaly() -> Non
     assert "⚠️ [數據異常：CallWall已低於現價]" not in text
 
 
-def test_portfolio_embed_breached_putwall_filters_from_dynamic_room_threshold() -> None:
-    """驗證當 PutWall 已被跌破且下方無有效底牆時，compute_dynamic_room_threshold 獲取 0.0 並標記降級。"""
+def test_portfolio_embed_breached_putwall_has_no_entry_verdict() -> None:
+    """PutWall 已被跌破且下方無有效底牆時，GEX 欄位只留牆位事實，不發進場判定／盈虧比／動態門檻。"""
     data: dict[str, Any] = {
         "symbol": "SPCX",
         "price": 90.0,
@@ -124,8 +124,9 @@ def test_portfolio_embed_breached_putwall_filters_from_dynamic_room_threshold() 
     }
     embed = create_tactical_symbol_embed(data)
     text = _get_embed_all_text(embed)
-    # 由於 PutWall 跌破且無更低底牆，上檔空間計算缺少 PutWall 支撐牆，應退回絕對底線並揭露降級原因
-    assert "數據缺失" in text or "PutWall" in text or "不足" in text
+    for gone in ("盈虧比", "非進場點", "動態門檻", "進場甜蜜點", "❌ 不足"):
+        assert gone not in text
+    assert "PutWall" in text and "CallWall: $110.00" in text
 
 
 # ---------------------------------------------------------------------------

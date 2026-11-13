@@ -185,7 +185,7 @@ flowchart TD
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
-1. **降級階梯與強制揭露**：任一輸入缺失，該項即自 $\max()$ 中剔除，其餘項與 $3.5\%$ 絕對底線照常參與；三項皆不可得時門檻即為 $3.5\%$。任何降級都會標記 `is_degraded` 並附上可直接呈現的繁體中文原因字串，呼叫端**有義務**向使用者揭露——分析中心的 GEX 空間欄位會在旗標下方獨立一行輸出該原因，六重鐵律的逐項判定字串則以 `｜⚠️` 前綴附加。
+1. **降級階梯與強制揭露**：任一輸入缺失，該項即自 $\max()$ 中剔除，其餘項與 $3.5\%$ 絕對底線照常參與；三項皆不可得時門檻即為 $3.5\%$。任何降級都會標記 `is_degraded` 並附上可直接呈現的繁體中文原因字串，呼叫端**有義務**向使用者揭露——左側／做空六重鐵律的逐項判定字串以 `｜⚠️` 前綴附加。`/x` 分析中心的 GEX 欄位自 2026-11 起不再使用公式 A／B，故無此揭露義務。
 
 2. **`0.01` 佔位值陷阱**：`EnhancedWatchlistMetrics.atr_14` 的欄位約束是 `gt=0.0`，因此「日線 ATR 取不到」時寫入的是 `0.01` 佔位值而非 `0`。判定有效性時必須排除此值，否則會得到一個約 $0.015$ 美元的假緩衝。`resolve_atr_15m()` 內建此排除。
 
@@ -197,29 +197,25 @@ flowchart TD
 
 6. **`stop_wall` 的現價物理約束前置義務**：傳入公式 A 的 `stop_wall` 必須是**已通過現價物理約束校驗**的牆體。`compute_reference_stop()` 對「牆體落在現價錯誤一側」有一道拓撲逆轉 fallback（LONG 改用 $\text{Spot} - 2.0 \times \text{ATR}_{15m}$），它保證停損不會落在進場價的錯誤一側，但代價是 $\text{Risk}_{\text{actual}}$ 退化成一個**與真實支撐位置完全脫鉤的固定 ATR 代理**。快取牆體已失效（現價跌穿 Put Wall）而次一道真實支撐遠在下方時，門檻會被系統性低估——現價 $\$100$／失效底牆 $\$102$／真實支撐 $\$90$／$\text{ATR}_{15m} = 1.0$ 的數值範例是門檻 $4.4\%$ vs $23.1\%$。因此呼叫端**有義務**先經 `resolve_room_threshold_inputs(target_spot=...)` 重錨（規則見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §2.2.2），重錨不到則傳 $0.0$ 讓 $\text{Risk}$ 項走降級剔除而非假值。
 
-7. **降級揭露不得因判定有利而省略**：`is_degraded` 的揭露義務與判定結果無關。空間充足、緩衝落在甜蜜點等**有利**結論若建立在降級門檻上，同樣必須輸出 `degrade_reason`——否則使用者會誤以為那是完整數據下的判定。分析中心 GEX 欄位的兩側（PutWall 緩衝三態、CallWall 空間）皆已統一為「一律揭露」。
+7. **降級揭露不得因判定有利而省略**：`is_degraded` 的揭露義務與判定結果無關。空間充足、緩衝落在甜蜜點等**有利**結論若建立在降級門檻上，同樣必須輸出 `degrade_reason`——否則使用者會誤以為那是完整數據下的判定。（`/x` GEX 欄位已不呈現公式 A／B 判定，此義務僅適用於仍使用它們的呼叫端。）
 
-8. **「進場甜蜜點」必須與上檔空間交叉判定（呈現層）**：公式 B 的 `SWEET_SPOT` 只代表「停損距離不在雜訊帶內、也不超過 8% 上限」，**不代表可進場**——它完全不看上方空間。2026-10-02 MU 實測：現價 $\$1097.39$、PutWall $\$1050$、CallWall $\$1100$，停損距離 $4.76\%$ 落在甜蜜點，但上檔只剩 $0.24\%$（公式 A 門檻 $10.47\%$），實際 R:R 僅 $0.05:1$，舊版仍單獨印出「✅ 進場甜蜜點」。分析中心因此改為：
-    - 下檔與上檔兩個區塊等 CallWall 空間算完才一起輸出；`SWEET_SPOT` 但上檔空間 $<$ 公式 A 門檻時，標籤降格為「✅ 停損距離合格｜❌ 上檔空間 X% 不足 Y%，非進場點」。
-    - 下檔區塊末行新增「進場盈虧比 (至 CallWall)」：$\text{R:R} = (\text{CallWall} - \text{Spot}) / (\text{Spot} - \text{Stop})$，Stop 與停損距離同一條線，以 `_ROOM_RISK_MULTIPLIER`（$2.2$）為 ✅／❌ 門檻；PutWall 落在淨 GEX 助跌區時並列淨 GEX 支撐錨的 R:R（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）。下行緩衝判定為過窄（停損距離 $< 2.5\times\text{ATR}_{15m}$）時，原比值即使 $\ge 2.2$ 也不得印 ✅（改標「⚠ 停損過窄、比值虛高」），並另列以合格停損 $\text{Spot}\times(1-\text{min\_pct})$ 重算的 R:R。CallWall 空間不足旗標標出 `binding_term` 對應的生效項（$2.2\times$停損風險／$1.5\times\text{ATR}_{1D}$／$3.5\%$ 底線），避免與盈虧比 ✅ 看似矛盾。
+8. **`/x` GEX 區塊不發進場判定（2026-11 起，隨右側規則退役）**：🛡️ 下檔支撐／🚧 上檔壓力只列市場結構事實——距現價空間、牆位深度、助跌區／紙牆標籤、結構失效線——不再印任何進場可否、停損距離合格與否、盈虧比之類的判定字樣，也不再呼叫公式 A／B。多頭進場判定只在同一 embed 的 Target Lock 擠壓區塊（見 [`10_multi_timeframe_squeeze_entry.md`](10_multi_timeframe_squeeze_entry.md) §5.x）。保留的呈現規則：
     - Gamma 體制區塊在「全鏈 Long Gamma 且 $0 \le$ 上檔空間 $\le 1 \times \text{ATR}_{1D}/\text{Spot}$」（ATR₁D 不可得退回 $1\%$，`_PIN_FALLBACK_BAND_PCT`）時加註「📌 釘住效應」：做市商逆勢避險壓制突破延續。
-    - 以上皆為呈現層；引擎閘門（`opportunity_cost.py` 條件三本來就交叉判定空間）不變。
-    - **弱 PutWall 不稱甜蜜點（sar/x-panel-dash-coherence）**：PutWall 標為「助跌區」（淨 GEX $<0$）或「紙牆」（$0 \le$ 淨 GEX $<$ `thin_wall_threshold`）時，`SWEET_SPOT` 標籤改為「✅ 停損距離合格」，下一行註「⚠ PutWall 為{助跌區／紙牆}，支撐性待校準」；上檔空間同時不足時維持原「✅ 停損距離合格｜❌ 上檔空間 X% 不足 Y%，非進場點」，不再加註支撐性（結論已是非進場點，且 PutWall 行已帶〔助跌區／紙牆〕標籤；亦為守住字數預算）。僅停止稱「甜蜜點」，不宣稱「非進場點」——離線校準（microstructure/02 §7，樣本仍低於決策量）顯示淨 GEX $<0$ 的 PutWall 守住率不劣於 $\ge 0$。引擎閘門（`evaluate_wall_buffer`、edge PutWall 閘門）不變。
-
-    - **降級 TOO_TIGHT 與主錨標示（PR fix/x-panel-wall-integrity）**：只要下行緩衝為 `TOO_TIGHT`（含 `min_pct` 為 None 的降級路徑），主盈虧比 ✅ 一律改標「⚠ 停損過窄、比值虛高」（旗標 `put_too_tight`，不再依賴 `put_min_stop_frac`）；PutWall 為助跌區或紙牆且有淨 GEX 支撐錨時，主項前綴加「閘門」。
-    - **CallWall 貼牆帶**：距 CallWall $< \max(\text{ATR}_{15m}/\text{Spot},\ 0.10\%)$（常數 `_CALLWALL_HUG_MIN_PCT = 0.10`，PRE_CALIBRATION／僅呈現）時，空間行尾加「📌 貼牆(<帶寬%)」（帶寬為實際 $\max(\text{ATR}_{15m}/\text{Spot},\ 0.10\%)$，ATR 缺失時即 0.10%），盈虧比改為單行「上檔已封頂，不計」，不再算出 ✅ 或虛低比值。
+    - **CallWall 貼牆帶**：距 CallWall $< \max(\text{ATR}_{15m}/\text{Spot},\ 0.10\%)$（常數 `_CALLWALL_HUG_MIN_PCT = 0.10`，PRE_CALIBRATION／僅呈現）時，空間行尾加「📌 貼牆(<帶寬%)」；此規則仍供 Target Lock 的 ⚠封頂判定使用。
+    - PutWall 為助跌區／紙牆時，停損行改為「參考失效線（淨 GEX 支撐 − 0.5×ATR₁₅ₘ）」為主行、「PutWall 失效線」為次行（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；PutWall 行已帶〔助跌區／紙牆〕標籤，不再另加閘門說明。
+    - 以上皆為呈現層；左側／做空引擎閘門與公式 A／B 的消費端不變。
 
 9. **ATR₁D 取數的網路成本**：`fetch_atr_1d()` 刻意**不**使用 `force_refresh`——日線 ATR 的量級在盤中幾乎不動，既有的日線快取足以覆蓋整個交易日。呼叫端應優先沿用手上已有的 `atr_14`（radar 快取、`EnhancedWatchlistMetrics` 皆已攜帶），只有真的取不到才發動抓取。
 
-10. **日線噪音帶參考停損（並列、待校準）**：`/x` 在結構停損行尾並列「｜日線參考 $x (↓y%)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（倍數為 `room_threshold._DAILY_NOISE_STOP_ATR_1D_MULT`，/x 與 calibration 共用）。ATR₁D 先取 `atr_1d`、再取 `atr_14`，並以 `is_valid_daily_atr()` 排除 $0.01$ 佔位值（與 §5 第 2 點同一判定）；PutWall 不低於現價、停損不低於現價、PutWall 異常降級分支、淨 GEX 助跌區或紙牆分支（PutWall 已被宣告不可靠）皆不輸出。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
+10. **日線噪音帶參考停損（並列、待校準）**：`/x` 在結構失效線行尾並列「｜日線參考 $x (↓y%)」，即 $\text{PutWall} - 0.25 \times \text{ATR}_{1D}$（倍數為 `room_threshold._DAILY_NOISE_STOP_ATR_1D_MULT`，/x 與 calibration 共用）。ATR₁D 先取 `atr_1d`、再取 `atr_14`，並以 `is_valid_daily_atr()` 排除 $0.01$ 佔位值（與 §5 第 2 點同一判定）；PutWall 不低於現價、停損不低於現價、PutWall 異常降級分支、淨 GEX 助跌區或紙牆分支（PutWall 已被宣告不可靠）皆不輸出。這只是並列參考，不改任何閘門；校準比較見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13 的「停損墊片比較」，樣本不足前維持現行 $0.5 \times \text{ATR}_{15m}$。
 
 11. **公式 D 的 fail-open 例外**：本規格書其餘所有降級皆遵循「資料缺失即保守」，唯獨公式 D 的 $\text{High}_{60d}$ 缺失時刻意**fail-open**（見 §2.5 降級規則）——這是唯一的例外，因為此處要保護的風險是「誤判創新高標的為封頂、白白錯過趨勢」，與其餘公式要保護的「誤判空間充足、實際冒了過大風險」方向相反。新增公式 D 的消費端時不得將此例外誤用於其他降級路徑。
 
-12. **三個消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`opportunity_cost.py`（條件三）、`pyramid_add.py`（條件四）三處各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務右側/左側/做空三套鐵律，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
+12. **公式 D 消費端須取得完全相同的天花板值**：`regime_classifier.py`（Regime IV 封頂判定）、`advisory_mode.py` 與 `intraday_pipeline/entry_advisor.py::_compute_long_levels`（左側價位）各自獨立呼叫 `fetch_high_60d()` 與 `fetch_atr_1d()`，而非共用同一次快取結果——與既有 $\text{ATR}_{1D}$ 三處各自抓取的既有模式一致（見 §2.1 的 `resolve_room_threshold_inputs()` 匯聚點僅服務左側／做空兩套鐵律與 `entry_advisor`，`regime_classifier.py` 本身並未走該匯聚點）。三者理論上應取得相同快取值，但因各自的抓取時序不同，實務上不保證同一輪次三者快取命中同一份快照；這是既有架構的已知限制，非公式 D 新引入。
 
 13. **Kelly 呈現與賣方前提（2026-10-08 起）**：`/x` 的 Kelly 區塊標題為「賣 Put 曝險上限 (Kelly·16Δ，非現貨進場許可)」，「每口」註明未指定到期日；它是賣出 16Δ Put 的額度，與現貨進場閘門（上檔空間、停損距離、盈虧比）不同源，閘門全紅時仍可能有口數。為免口數被讀成許可，標題依賣方前提下判決：任一項 ❌ 標題改為「賣 Put 曝險上限 (Kelly·16Δ) ⛔前提未過」；無 ❌ 但有 ⚠ 為「… ⚠前提待確認」；全過維持原標題。口數 > 0 且現價有效時，「建議上限」行改顯示被指派名目（口數 × 現價 × 100，緊湊格式如 `$327K`、`$1.2M`、`$8,400`）與 β 加權 Delta 佔資金比；0 口維持原文。高波提示（IVR > 50 或跨式 IV > 80%）在 14 日內有財報時，建議改為「財報跳空風險，縮小部位勿賣方收租」，不再建議賣方策略（STO 禁用文案不變）。口數的計算規則（擔保上限、β 對沖折抵、IVR 未知減半等）見 risk_portfolio/02，本節只在呈現層補一行「賣方前提」：`IVR`（未知或異常值⚠、`is_selling_locked_by_ivr()` 鎖定 ❌，門檻不另寫死）、`結算窗`（原名「引力」，易與 Max Pain 磁吸混淆；沿用結算指引已算的 `find_settlement_gravity()` 結果，有值 ❌；✅ = 不在 DTE≤1 結算窗口，不代表 Max Pain 磁吸成立；斷路器觸發時 `—`）、`牆淨GEX`（PutWall 淨 GEX < 0 ❌）、`局部Γ`（局部體制為 SHORT_GAMMA ❌）、`事件`（沿用 IV 區塊的財報／總經事件加載判定 ⚠）；GEX 缺失的兩項顯示 `—`。無風控警示時省略「系統風控」整行。Kelly 為 0 口且無禁用／暫停警示時，「0 口原因」改顯示數字（見 risk_portfolio/02 §5.x）：單口 IV 調整後 SPY 等值股數 > 可用額度股數，或組合既有 Delta 已用盡額度；欄位缺失時沿用舊文案。
 
-14. **`/x` GEX 欄位的過期與缺失揭露（僅呈現）**：GEX 欄位不得把缺失或過期資料呈現為即時資料。(a) 降級快取（`_is_stale_cache`）時，欄名後綴在快照帶 `_data_ts`（epoch 秒）時以 `format_cache_age_suffix(..., stale_threshold_seconds=0.0)` 顯示「[快取 / API 降級，更新於N小時前]」，缺 `_data_ts` 時維持舊後綴「[快取 / API 降級]」。(b) 同時比較快照 `spot` 與即時價 `c_val`，兩者皆 $>0$ 且偏離 $\ge 1\%$ 時，欄內首行下方加一行「⏱ 快照現價 $x → 即時 $y（±z%）」；偏離超過 $1 \times \text{ATR}_{1D}/\text{Spot}$（ATR 先 `atr_1d` 後 `atr_14`，以 `is_valid_daily_atr()` 驗證，皆無效退回 $5\%$）再加「，牆位／盈虧比僅供參考」。(c) 完全沒有可用 GEX 輪廓時不再靜默略過，改輸出欄位「GEX 資料暫缺（期權鏈未刷新且無可用快照）」。以上皆為字串，不改任何閘門、門檻或 Kelly 輸入；新鮮 GEX 路徑不新增任何文字（守住 `/x` 字數預算）。(d) 另，日線參考停損於 PutWall 為助跌區／紙牆時一律不輸出（即使現價下方無淨 GEX 支撐，見第 10 點）。
+14. **`/x` GEX 欄位的過期與缺失揭露（僅呈現）**：GEX 欄位不得把缺失或過期資料呈現為即時資料。(a) 降級快取（`_is_stale_cache`）時，欄名後綴在快照帶 `_data_ts`（epoch 秒）時以 `format_cache_age_suffix(..., stale_threshold_seconds=0.0)` 顯示「[快取 / API 降級，更新於N小時前]」，缺 `_data_ts` 時維持舊後綴「[快取 / API 降級]」。(b) 同時比較快照 `spot` 與即時價 `c_val`，兩者皆 $>0$ 且偏離 $\ge 1\%$ 時，欄內首行下方加一行「⏱ 快照現價 $x → 即時 $y（±z%）」；偏離超過 $1 \times \text{ATR}_{1D}/\text{Spot}$（ATR 先 `atr_1d` 後 `atr_14`，以 `is_valid_daily_atr()` 驗證，皆無效退回 $5\%$）再加「，牆位僅供參考」。(c) 完全沒有可用 GEX 輪廓時不再靜默略過，改輸出欄位「GEX 資料暫缺（期權鏈未刷新且無可用快照）」。以上皆為字串，不改任何閘門、門檻或 Kelly 輸入；新鮮 GEX 路徑不新增任何文字（守住 `/x` 字數預算）。(d) 另，日線參考停損於 PutWall 為助跌區／紙牆時一律不輸出（即使現價下方無淨 GEX 支撐，見第 10 點）。
 
 ---
 
@@ -234,12 +230,12 @@ flowchart TD
   - 停損推導：`compute_reference_stop()`（公開，SHORT_ENTRY 倉位計算共用；保留私有別名 `_compute_reference_stop`）
 - `nexus_core/market_analysis/atr_utils.py`：`fetch_atr_1d()`、`fetch_atr_15m()`、`compute_atr_15m_from_df()`、`compute_atr_14_from_daily_df()`、`fetch_high_60d()`、`compute_high_60d_from_daily_df()`（公式 D 的 60 日高點資料源，`shift(1)` 防前視）
 - `nexus_core/market_analysis/dynamic_rollover/_shared.py`：`resolve_room_threshold_inputs()`（三項輸入的集中解析、取數優先序，以及 `target_spot` 的 Put Wall 現價物理約束校驗）
-- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：右側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `put_wall=` 餵入條件三；條件三另呼叫公式 D 取得有效目標天花板取代裸 Call Wall，見 §2.5）
+- `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：僅剩共用條件五（左側／做空／擠壓共用的財報與大盤 Regime 閘門）與 EV 代理目標挑選；右側條件二／條件三已隨右側鐵律退役，不再消費公式 A／B
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime IV 個股結構封頂分支呼叫公式 D 取代裸 Call Wall 判定空間是否不足（見 §2.5）
-- `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：條件四（上方空間）呼叫公式 D，詳見 [`04_dynamic_rollover_state_machine.md`](04_dynamic_rollover_state_machine.md) §2.11
+- `nexus_core/market_analysis/dynamic_rollover/pyramid_add.py`：加碼條件改為擠壓規則判定，不再消費公式 A／B／D
+- `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py`：`_compute_long_levels`（左側價位）使用 `compute_reference_stop()` 與公式 D；做空價位走 `short_entry_sizing.py`
 - `nexus_core/market_analysis/dynamic_rollover/left_side_entry.py`：左側條件二／條件三（**已**套用 `target_spot` 重錨，重錨值經 `stop_wall=` 餵入條件三；條件二刻意仍用 raw Put Wall——它量的是「距原始底牆多遠」的密著帶，餵重錨值會讓該語意失效）
 - `nexus_core/market_analysis/dynamic_rollover/short_side_entry.py`：做空條件二／條件三（**刻意不**套用——做空的停損牆是現價上方的 Call Wall，由條件二的 `_scan_resistance_wall_above_spot()` 自行解析並以 `resistance_wall` 傳給條件三）
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：Regime III / IV / V 的空間與緩衝判定
-- `nexus_core/cogs/embed_builders/portfolio_embeds.py`：分析中心 GEX 上檔壓力／下檔支撐欄位的旗標渲染
 - `nexus_core/tests/unit/test_room_threshold.py`：三組公式與降級階梯的單元測試
 - `nexus_core/tests/unit/test_blue_sky_ceiling.py`：公式 D 的降級路徑、貼近前高判定、fail-open 例外與一致性測試

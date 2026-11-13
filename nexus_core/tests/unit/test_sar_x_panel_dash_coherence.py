@@ -56,24 +56,32 @@ def _wall_case(net_at_wall: float, call_wall: float = 1250.0) -> dict[str, Any]:
 @pytest.mark.parametrize("net, kind", [(-138_988_000, "助跌區"), (1_000, "紙牆")])
 def test_b1_weak_putwall_never_sweet_spot(net: float, kind: str) -> None:
     desc = _embed_text(_wall_case(net))
-    assert "進場甜蜜點" not in desc
-    assert desc.count("✅ 停損距離合格") == 1
-    assert f"⚠ PutWall 為{kind}，支撐性待校準" in desc
+    for gone in ("進場甜蜜點", "停損距離合格", "支撐性待校準", "閘門仍以 PutWall 為準"):
+        assert gone not in desc
+    # 弱牆事實由 PutWall 行的〔助跌區／紙牆〕標籤承載
+    assert kind in desc
+    assert desc.count("距現價空間: ↓") == 1
 
 
-def test_b1_weak_and_upside_short_single_qualified_line() -> None:
+def test_b1_weak_and_upside_short_no_entry_verdict() -> None:
     desc = _embed_text(_wall_case(-138_988_000, call_wall=1100.0))
-    assert "進場甜蜜點" not in desc
-    assert desc.count("✅ 停損距離合格") == 1
-    assert "支撐性待校準" not in desc
-    assert "❌ 上檔空間" in desc
-    assert "非進場點" in desc
+    for gone in (
+        "進場甜蜜點",
+        "停損距離合格",
+        "支撐性待校準",
+        "上檔空間",
+        "非進場點",
+        "盈虧比",
+    ):
+        assert gone not in desc
+    assert "📌 貼牆" in desc
 
 
-def test_b1_strong_putwall_keeps_sweet_spot() -> None:
+def test_b1_strong_putwall_has_plain_distance_line() -> None:
     desc = _embed_text(_wall_case(5_000_000_000))
-    assert "✅ 進場甜蜜點" in desc
+    assert "進場甜蜜點" not in desc
     assert "支撐性待校準" not in desc
+    assert "結構失效線 (PutWall−0.5×ATR₁₅ₘ)" in desc
 
 
 # ── B2 ─────────────────────────────────────────────────────────────────
