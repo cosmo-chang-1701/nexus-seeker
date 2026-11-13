@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # 動態調整狀態切換引擎 (Transition Engine) 的部位歸屬標記選項，供
 # /add_trade、/edit_trade、/add_holding、/edit_holding 共用。僅 REGIME_I
-# (左側接刀態) 與 REGIME_III (右側動能態) 兩個會實際產生已建立部位的 Regime
+# (左側接刀態) 與 REGIME_III (順勢態，擠壓建倉) 兩個會實際產生已建立部位的 Regime
 # 可選——Regime II (混沌泥淖態，全系統休眠) 與 Regime IV (結構封頂危機態，
 # 強制鎖定) 依定義不會有對應的已開倉部位。
 _DYNAMIC_ENTRY_REGIME_CHOICES = [
@@ -31,11 +31,11 @@ _DYNAMIC_ENTRY_REGIME_CHOICES = [
         value="REGIME_I_LEFT_CATCH",
     ),
     app_commands.Choice(
-        name="動態調整・Regime III 右側動能 (順勢突破)",
+        name="動態調整・Regime III 順勢態 (擠壓建倉)",
         value="REGIME_III_RIGHT_MOMENTUM",
     ),
     app_commands.Choice(
-        name="動態調整・Regime III-B 右側趨勢延續 (非突破瞬間)",
+        name="動態調整・Regime III-B 趨勢延續態 (擠壓建倉)",
         value="REGIME_III_B_TREND_CONTINUATION",
     ),
 ]

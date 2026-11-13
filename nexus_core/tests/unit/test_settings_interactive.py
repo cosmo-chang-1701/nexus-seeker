@@ -263,9 +263,6 @@ def test_settings_no_longer_offers_escape_window(db_conn: Any) -> None:
         assert "逃頂窗口" not in label and "逃頂窗口" not in desc
     # 宏觀逃頂前瞻防禦的說明不得再宣稱減碼
     assert "減碼" not in SETTINGS_LABELS["enable_macro_top_escape_defense"][1]
-    database.upsert_user_config(
-        user_id, escape_window_start="08-20", escape_window_end="09-10"
-    )
     view = AccountSettingsView(user_id)
     embed = view.build_embed()
     text = " ".join(
@@ -274,9 +271,9 @@ def test_settings_no_longer_offers_escape_window(db_conn: Any) -> None:
     )
     assert "宏觀逃頂窗口" not in text
     assert "宏觀逃頂前瞻防禦" in text
-    # 既有使用者已存的欄位值不受影響
+    # UserSettings 不再讀寫已退役欄位（DB 欄位保留）
     ctx = database.get_full_user_context(user_id)
-    assert (ctx.escape_window_start, ctx.escape_window_end) == ("08-20", "09-10")
+    assert not [a for a in vars(ctx) if a.startswith("escape_window")]
 
 
 def test_withdrawal_settings_registered_in_labels() -> None:
