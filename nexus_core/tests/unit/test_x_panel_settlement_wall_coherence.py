@@ -252,6 +252,35 @@ def test_zero_lot_reason_discloses_iv_denominator() -> None:
     assert "×IV比4.97(93.5%÷VIX18.7%)≈31.3 股 SPY 等值" in text
 
 
+def test_zero_lot_reason_high_iv_uses_integer_percent() -> None:
+    res = OptimizationResult(
+        suggested_contracts=0,
+        exposure_pct=0.0,
+        unit_adj_delta=31.3,
+        risk_budget_shares=10.0,
+        iv_ratio_stock_iv=1.234,
+        iv_ratio_ref_iv=0.187,
+        iv_ratio_ref_source="VIX",
+    )
+    text = _kelly_text(res)
+    assert "(123%÷VIX18.7%)" in text
+    assert "123.4%" not in text
+
+
+def test_zero_lot_reason_default_source_label() -> None:
+    res = OptimizationResult(
+        suggested_contracts=0,
+        exposure_pct=0.0,
+        unit_adj_delta=31.3,
+        risk_budget_shares=10.0,
+        iv_ratio_stock_iv=0.935,
+        iv_ratio_ref_iv=0.16,
+        iv_ratio_ref_source="預設",
+    )
+    text = _kelly_text(res)
+    assert "(93.5%÷預設16.0%)" in text
+
+
 def test_zero_lot_reason_without_fields_keeps_old_text() -> None:
     res = OptimizationResult(
         suggested_contracts=0,
