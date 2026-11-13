@@ -76,7 +76,7 @@ async def test_poll_once_writes_snapshots_for_tracked_symbols(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
 
-    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=6 時每輪批次大小為 1，
+    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=5 時每輪批次大小為 1，
     # 需呼叫兩次 poll_once() 讓 round-robin 游標輪過所有標的。
     await scheduler.poll_once()
     await scheduler.poll_once()
@@ -164,7 +164,7 @@ async def test_poll_once_continues_when_one_symbol_fails(
         scheduler, "async_playwright", lambda: _FakeAsyncPlaywrightCtx()
     )
 
-    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=6 時每輪批次大小為 1，
+    # 分批輪詢：2 個標的、POLL_ROTATION_CYCLES=5 時每輪批次大小為 1，
     # 需呼叫兩次 poll_once() 讓 round-robin 游標輪過所有標的。
     await scheduler.poll_once()
     await scheduler.poll_once()
@@ -299,3 +299,64 @@ async def test_gex_history_prune_runs_at_most_once_per_et_day(
     await scheduler._maybe_prune_gex_history()
     await scheduler._maybe_prune_gex_history()
     assert len(calls) == 1
+
+
+def test_rotation_cycles_is_five() -> None:
+    assert scheduler.POLL_ROTATION_CYCLES == 5
+
+
+@pytest.mark.parametrize("n", [10, 7])
+def test_rotation_covers_all_non_priority_in_five_rounds(
+    monkeypatch: pytest.MonkeyPatch, n: int
+) -> None:
+    monkeypatch.setattr(scheduler, "_poll_cursor", 0)
+    symbols = [f"S{i}" for i in range(n)]
+    counts: dict[str, int] = {s: 0 for s in symbols}
+    for _ in range(scheduler.POLL_ROTATION_CYCLES):
+        for sym in scheduler._next_batch(symbols):
+            counts[sym] += 1
+    assert all(c >= 1 for c in counts.values())
+    if n % scheduler.POLL_ROTATION_CYCLES == 0:
+        # N=10 -> 每輪 2 檔，5 輪每檔恰好一次
+        assert all(c == 1 for c in counts.values())
+
+
+async def _run_one_loop_iteration(
+    monkeypatch: pytest.MonkeyPatch, elapsed: float
+) -> list[float]:
+    """跑 _loop 一圈並回傳 asyncio.sleep 收到的秒數。"""
+    clock = {"t": 1000.0}
+    sleeps: list[float] = []
+
+    async def _fake_poll_once() -> float:
+        clock["t"] += elapsed
+        return elapsed
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(scheduler.time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(scheduler, "poll_once", _fake_poll_once)
+    monkeypatch.setattr(scheduler, "_is_us_market_hours", lambda: True)
+    monkeypatch.setattr(scheduler.random, "uniform", lambda a, b: 3.0)
+    monkeypatch.setattr(scheduler.asyncio, "sleep", _fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler._loop()
+    return sleeps
+
+
+@pytest.mark.asyncio
+async def test_fixed_rate_sleep_subtracts_round_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps = await _run_one_loop_iteration(monkeypatch, 40.0)
+    assert sleeps == [max(30, 300 - 40.0) + 3.0]
+
+
+@pytest.mark.asyncio
+async def test_fixed_rate_sleep_floor_when_round_overruns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps = await _run_one_loop_iteration(monkeypatch, 400.0)
+    assert sleeps == [scheduler.POLL_MIN_SLEEP_SECONDS + 3.0]

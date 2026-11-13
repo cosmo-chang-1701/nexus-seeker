@@ -55,8 +55,9 @@ $$\text{Skip Tier 1} \iff force\_live = \text{True}$$
 設自選標的集合為 $S_{\text{watch}}$，全體持倉標的（現貨 HOLDINGS ＋ 期權 TRADES）集合為 $S_{\text{priority}}$。
 在每次 15 分鐘盤中巡邏（`dynamic_market_scanner`，總經快取更新之後）中，`nexus_core` 透過 `_sync_edge_watchlist()` → `edge_cache_client.sync_watchlist_symbols` 將兩份清單同步給邊緣節點（此段原本掛在已移除的 15 分鐘自選雷達開頭，搬移後行為不變；未設 `TUNNEL_URL` 時完全不執行）：
 $$S_{\text{priority}} = \left\{ \text{sym} \mid \text{sym} \in \text{database.get\_all\_portfolio()} \land \text{sym} \neq \emptyset \right\}$$
-邊緣節點的排程器對 $S_{\text{priority}}$ 實施高頻循環，使其數據延遲上限從常規的 30 分鐘壓縮至單一輪詢週期（約 5 分鐘）：
-$$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{delay, normal}} \approx 30 \text{ 分鐘}$$
+邊緣節點的排程器對 $S_{\text{priority}}$ 實施高頻循環，使其數據延遲上限從常規輪替的約 25 分鐘壓縮至單一輪詢週期（約 5 分鐘）：
+$$\Delta t_{\text{delay, priority}} \le 5 \text{ 分鐘} \ll \Delta t_{\text{delay, normal}} \approx 25 \text{ 分鐘}$$
+輪詢採固定 5 分鐘節奏（輪次起點對起點，睡眠 = 300 秒 − 本輪耗時，下限 30 秒，另加 1~5 秒隨機緩衝），非優先標的以 5 輪輪替（`POLL_ROTATION_CYCLES = 5`，約 25 分鐘）輪完一次，落在 nexus_core 1800 秒（30 分鐘）快照新鮮度門檻內並保留約 5 分鐘餘裕，避免快照過期而退回即時 Chromium 抓取。
 
 ### 2.4 GEX 快照歷史 (前向蒐集)
 `gex_snapshot` 是 upsert、只保留每個標的的最新值，使 GEX 相關門檻無法回測。快照同時含 GEX `expiry`（最常見到期日），`GET /api/v1/cache/gex/{symbol}` 會一併回傳；`expiry` 為 NULL 的情況包括：遷移前寫入的舊列（直到下次輪詢才補上）、抓取或解析失敗時寫入的 fallback 結果，以及無法判定到期日的合約。`gex_snapshot_history` 沒有 `expiry` 欄位，因此歷史資料中無法辨識到期日換月（roll-over）。邊緣節點在**同一交易內**另寫入 `gex_snapshot_history`，以 15 分鐘分桶、每桶只留第一筆：
@@ -122,8 +123,10 @@ flowchart TD
 
 | 常數名稱 | 數值 / 門檻 | 物理約束與代碼意涵 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |
-| `_EDGE_SNAPSHOT_MAX_AGE_SECONDS` | `300.0` 秒 (5 分鐘) | Edge SQLite 快照新鮮度門檻（超過則視為失效） | `nexus_core/services/market_data_service/options.py:22` |
-| `_OPTION_EXPIRIES_CACHE_TTL` | `1800.0` 秒 (30 分鐘) | 期權到期日清單之記憶體快取存活時間 | `nexus_core/services/market_data_service/options.py:23` |
+| `_EDGE_SNAPSHOT_MAX_AGE_SECONDS` | `1800` 秒 (30 分鐘) | Edge SQLite 快照新鮮度門檻（超過則視為失效，退回即時抓取） | `nexus_core/services/market_data_service/caches.py` |
+| `_OPTION_EXPIRIES_CACHE_TTL` | `43200` 秒 (12 小時) | 期權到期日清單之記憶體快取存活時間 | `nexus_core/services/market_data_service/caches.py` |
+| `POLL_ROTATION_CYCLES` | `5` | 非優先標的輪替輪數（約 25 分鐘輪完，須小於快照新鮮度門檻） | `nexus_edge_scraper/scheduler.py` |
+| `POLL_MIN_SLEEP_SECONDS` | `30` 秒 | 固定節奏輪詢的睡眠下限（單輪逾時也不會連續無間隔輪詢） | `nexus_edge_scraper/scheduler.py` |
 | `yahoo_slot()`／`get_gate("yahoo")` | 窗口 60/60s（互動保留 30，背景 ≤ 30/分）、併發 7（背景 2）；冷卻 60→900 秒 | Yahoo 統一預算與全域 429 冷卻（閘門規格見 [`07_outbound_rate_gate.md`](07_outbound_rate_gate.md)） | `nexus_core/services/rate_gate.py`、`nexus_core/services/market_data_service/_core.py` |
 | `_HISTORY_SEMAPHORE` | `BoundedSemaphore(2)` | edge `/history` 同時 `ticker.history` 上限 | `nexus_edge_scraper/yf_api.py` |
 | `TUNNEL_URL` | 組態參數 (Config / Tunnel Endpoint) | Cloudflare Tunnel 對外端點網址（Tunnel 本身不驗證身分，存取控制見 §5.4） | `nexus_core/config.py` |
