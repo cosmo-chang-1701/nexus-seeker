@@ -136,8 +136,90 @@ def test_split_intraday_confirmed() -> None:
     df = pd.DataFrame({"Close": [1.0, 2.0, 3.0, 4.0]}, index=idx)
     conf, live = split_intraday_confirmed(df, 15, datetime(2026, 10, 1, 10, 20))
     assert live is True and len(conf) == 3  # 10:15 那一根尚未收盤
-    conf2, live2 = split_intraday_confirmed(df, 15, datetime(2026, 10, 1, 10, 30))
+    conf1, live1 = split_intraday_confirmed(df, 15, datetime(2026, 10, 1, 10, 30))
+    assert live1 is True and len(conf1) == 3  # 剛收盤仍在定案寬限內
+    conf2, live2 = split_intraday_confirmed(df, 15, datetime(2026, 10, 1, 10, 31))
     assert live2 is False and len(conf2) == 4
+
+
+def _ohlc(idx: pd.DatetimeIndex) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 10.0},
+        index=idx,
+    )
+
+
+def test_split_intraday_confirmed_grace_5m() -> None:
+    df = _ohlc(
+        pd.DatetimeIndex(
+            [pd.Timestamp("2026-10-01 10:00"), pd.Timestamp("2026-10-01 10:05")]
+        )
+    )
+    for now, n in [
+        (datetime(2026, 10, 1, 10, 10, 0), 1),
+        (datetime(2026, 10, 1, 10, 10, 59), 1),
+        (datetime(2026, 10, 1, 10, 11, 0), 2),
+    ]:
+        conf, _ = split_intraday_confirmed(df, 5, now)
+        assert len(conf) == n, now
+
+
+def test_split_intraday_confirmed_grace_15m() -> None:
+    df = _ohlc(
+        pd.DatetimeIndex(
+            [pd.Timestamp("2026-10-01 10:00"), pd.Timestamp("2026-10-01 10:15")]
+        )
+    )
+    for now, n in [
+        (datetime(2026, 10, 1, 10, 30, 0), 1),
+        (datetime(2026, 10, 1, 10, 30, 59), 1),
+        (datetime(2026, 10, 1, 10, 31, 0), 2),
+    ]:
+        conf, _ = split_intraday_confirmed(df, 15, now)
+        assert len(conf) == n, now
+
+
+def test_split_intraday_confirmed_grace_65m() -> None:
+    df = _ohlc(
+        pd.DatetimeIndex(
+            [pd.Timestamp("2026-10-01 09:30"), pd.Timestamp("2026-10-01 10:35")]
+        )
+    )
+    for now, n in [
+        (datetime(2026, 10, 1, 11, 40, 0), 1),
+        (datetime(2026, 10, 1, 11, 40, 30), 1),
+        (datetime(2026, 10, 1, 11, 41, 0), 2),
+    ]:
+        conf, _ = split_intraday_confirmed(df, 65, now)
+        assert len(conf) == n, now
+
+
+def test_build_matrix_within_grace_is_preview_only() -> None:
+    idx = (
+        pd.date_range("2026-09-29 09:30", "2026-09-29 15:55", freq="5min")
+        .append(pd.date_range("2026-09-30 09:30", "2026-09-30 15:55", freq="5min"))
+        .append(pd.date_range("2026-10-01 09:30", "2026-10-01 11:35", freq="5min"))
+    )
+    n = len(idx)
+    t = np.arange(n)
+    close = 100 + np.sin(t / 4.0) * 2
+    df5 = pd.DataFrame(
+        {
+            "Open": close,
+            "High": close + 0.5,
+            "Low": close - 0.5,
+            "Close": close,
+            "Volume": 1000.0,
+        },
+        index=idx,
+    )
+    last_start = str(idx[-1])  # 11:35，結束於 11:40
+    inside = build_matrix(None, None, df5, datetime(2026, 10, 1, 11, 40, 30), {})
+    assert "5m" in inside
+    assert inside["5m"].bar_ts != last_start
+    assert inside["5m"].preview_squeeze_level is not None
+    after = build_matrix(None, None, df5, datetime(2026, 10, 1, 11, 41, 0), {})
+    assert after["5m"].bar_ts == last_start
 
 
 def test_build_matrix_missing_data_is_absent() -> None:
