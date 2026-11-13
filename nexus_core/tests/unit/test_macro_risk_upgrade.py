@@ -2141,7 +2141,7 @@ async def test_fetch_symbol_gex_metrics_prefers_fresh_edge_cache() -> None:
             "net_gex": 500.0,
             "call_wall": 240.0,
             "put_wall": 220.0,
-            "gex_profile": {"220.0": 100.0},
+            "gex_profile": {"210.0": 80.0, "220.0": 100.0, "240.0": 60.0},
         },
         "age_seconds": 120.0,
     }
@@ -2187,7 +2187,7 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_cache_stale() -> No
             "net_gex": 500.0,
             "call_wall": 240.0,
             "put_wall": 220.0,
-            "gex_profile": {"220.0": 100.0},
+            "gex_profile": {"210.0": 80.0, "220.0": 100.0, "240.0": 60.0},
         },
     }
 
@@ -2245,7 +2245,7 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_cache_older_than_ti
             "net_gex": 500.0,
             "call_wall": 240.0,
             "put_wall": 220.0,
-            "gex_profile": {"220.0": 100.0},
+            "gex_profile": {"210.0": 80.0, "220.0": 100.0, "240.0": 60.0},
         },
     }
 
@@ -2290,7 +2290,7 @@ async def test_fetch_symbol_gex_metrics_falls_back_when_edge_unreachable() -> No
             "net_gex": 500.0,
             "call_wall": 240.0,
             "put_wall": 220.0,
-            "gex_profile": {"220.0": 100.0},
+            "gex_profile": {"210.0": 80.0, "220.0": 100.0, "240.0": 60.0},
         },
     }
 

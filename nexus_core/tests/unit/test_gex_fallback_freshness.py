@@ -22,7 +22,11 @@ def _snap(tag: float) -> dict:
         "net_gex": 1000.0,
         "call_wall": tag + 5,
         "put_wall": tag - 5,
-        "gex_profile": {"100": 500.0, "110": -300.0},
+        "gex_profile": {
+            str(tag - 5): 200.0,
+            str(tag): 500.0,
+            str(tag + 5): -300.0,
+        },
     }
 
 
