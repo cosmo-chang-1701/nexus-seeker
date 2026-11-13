@@ -10,8 +10,11 @@ import pandas as pd
 
 from calibration.config import CalibrationConfig
 from calibration.forward_log import (
+    SHADOW_DERIVED_KEYS,
+    SHADOW_DERIVED_LABELS,
     SHADOW_FLAG_KEYS,
     SHADOW_MIN_N,
+    _derived_flags,
     _independent_events,
     _prepare,
     build_regime_breakdown,
@@ -443,3 +446,91 @@ def test_shadow_g1_g2_unchanged() -> None:
 
 def test_shadow_contract_keys() -> None:
     assert ", ".join(SHADOW_FLAG_KEYS) == _CONTRACT_KEYS
+
+
+def _rr_setup(
+    rrs: list[Any], rets: list[float], with_features: bool = True
+) -> tuple[pd.DataFrame, dict[str, list[tuple[date, float]]]]:
+    """每個事件一檔標的；features_json 只寫 sv_rr（原始值），報酬剛好等於指定值。"""
+    base = [d for d, _ in _closes(n=60)]
+    rows: list[dict[str, Any]] = []
+    closes: dict[str, list[tuple[date, float]]] = {}
+    for i, (rr, r) in enumerate(zip(rrs, rets)):
+        sym = f"R{i}"
+        idx = i % 20
+        closes[sym] = [
+            (d, 100.0 if k < idx + 20 else 100.0 * (1 + r)) for k, d in enumerate(base)
+        ]
+        row = _sq(base[idx], symbol=sym)
+        if with_features:
+            row["features_json"] = json.dumps({"sv_rr": rr})
+        rows.append(row)
+    return pd.DataFrame(rows), closes
+
+
+def test_rr22_derived_flag_values() -> None:
+    assert _derived_flags(json.dumps({"sv_rr": 2.19})) == {"sv_f_rr22": True}
+    assert _derived_flags(json.dumps({"sv_rr": 2.2})) == {"sv_f_rr22": False}
+    assert _derived_flags(json.dumps({"sv_rr": 2.5})) == {"sv_f_rr22": False}
+    assert _derived_flags(json.dumps({"sv_rr": None})) == {"sv_f_rr22": None}
+    assert _derived_flags(json.dumps({"sv_rr": "2.1"})) == {"sv_f_rr22": None}
+    assert _derived_flags(json.dumps({"sv_rr": True})) == {"sv_f_rr22": None}
+    assert _derived_flags(json.dumps({"sv_f_rr": True})) == {"sv_f_rr22": None}
+    assert _derived_flags("{壞掉") == {"sv_f_rr22": None}
+    assert _derived_flags(None) == {"sv_f_rr22": None}
+    assert _derived_flags('{"sv_rr": NaN}') == {"sv_f_rr22": None}
+
+
+def test_rr22_events_keep_contract_flags_unchanged() -> None:
+    d = date(2026, 3, 2)
+    rows = pd.DataFrame(
+        [
+            {**_sq(d, symbol="A"), "features_json": json.dumps({"sv_rr": 2.1})},
+            {**_sq(d, symbol="B"), "features_json": json.dumps({"sv_rr": 2.5})},
+        ]
+    )
+    ev = {e["symbol"]: e for e in _independent_events(rows, {})}
+    assert ev["A"]["derived"] == {"sv_f_rr22": True}
+    assert ev["B"]["derived"] == {"sv_f_rr22": False}
+    for s in "AB":
+        assert set(ev[s]["flags"]) == set(SHADOW_FLAG_KEYS)
+        assert "sv_f_rr22" not in ev[s]["flags"]
+
+
+def test_rr22_group_entry_and_render() -> None:
+    n = 12
+    rows, closes = _rr_setup([2.1] * n + [2.5] * n, _jit(n, -0.10) + _jit(n, 0.10))
+    res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
+    e = res["sv_f_rr22"]
+    assert (
+        e["label"]
+        == "牆位盈虧比 <2.2（報表衍生）"
+        == SHADOW_DERIVED_LABELS["sv_f_rr22"]
+    )
+    assert (e["n_flag"], e["n_pass"], e["n_null"]) == (n, n, 0)
+    assert e["diff"] is not None and e["diff"] < 0
+    assert list(res)[-1] == "sv_f_rr22" and SHADOW_DERIVED_KEYS == ("sv_f_rr22",)
+    # 契約鍵分組不受影響
+    assert res["sv_any"]["n_flag"] == 0 and res["sv_any"]["n_null"] == n * 2
+    md = render_markdown(_results(rows, closes))
+    assert "牆位盈虧比 <2.2（報表衍生）" in md
+
+
+def test_rr22_null_and_bad_values_not_in_groups() -> None:
+    rrs: list[Any] = [2.1, 2.5, None, "2.1", True, float("nan")]
+    rets = [0.1, -0.1, 0.0, 0.0, 0.0, 0.0]
+    rows, closes = _rr_setup(rrs, rets)
+    e = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"][
+        "sv_f_rr22"
+    ]
+    assert (e["n_flag"], e["n_pass"], e["n_null"]) == (1, 1, 4)
+
+
+def test_rr22_legacy_no_features_column() -> None:
+    rows, closes = _rr_setup([2.1] * 4, [0.01] * 4, with_features=False)
+    assert "features_json" not in rows.columns
+    e = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"][
+        "sv_f_rr22"
+    ]
+    assert e["n_null"] == 4
+    assert e["verdict"] == "樣本不足"

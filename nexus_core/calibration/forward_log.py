@@ -632,6 +632,13 @@ SHADOW_FLAG_LABELS: dict[str, str] = {
     "sv_f_hy_lvl": "HY OAS ≥400bps",
     "sv_f_hy_chg": "HY OAS 1M ≥+50bps",
 }
+# 報表端衍生旗標：由 features_json 的原始值在報表端計算，不寫入 features_json、
+# 不屬 SHADOW_FLAG_KEYS 契約、不計入 sv_any。PRE_CALIBRATION／僅紀錄，不參與判定
+SHADOW_DERIVED_RR_THRESHOLD = 2.2
+SHADOW_DERIVED_KEYS: tuple[str, ...] = ("sv_f_rr22",)
+SHADOW_DERIVED_LABELS: dict[str, str] = {
+    "sv_f_rr22": "牆位盈虧比 <2.2（報表衍生）",
+}
 # 每組（旗標成立／放行）最少事件數。PRE_CALIBRATION／僅紀錄，不參與判定
 SHADOW_MIN_N = 10
 # G.2／G.3 與影子否決判讀所需最少事件交易日數（與 micro-report「≥20 個可標註日」一致）
@@ -689,20 +696,40 @@ def _trade_pos(sym_dates: Optional[list[date]], d: date, anchor: date) -> int:
     return int(np.busday_count(anchor.isoformat(), d.isoformat()))
 
 
+def _features_obj(raw: Any) -> dict[str, Any]:
+    """features_json 解析為 dict；非字串、解析失敗或非物件一律回傳空 dict。"""
+    if not isinstance(raw, str):
+        return {}
+    try:
+        obj: Any = json.loads(raw)
+    except ValueError:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
 def _shadow_flags(raw: Any) -> dict[str, Optional[bool]]:
     """解析 features_json 的影子旗標；解析失敗、缺鍵或非布林值一律為 None。"""
-    obj: Any = {}
-    if isinstance(raw, str):
-        try:
-            obj = json.loads(raw)
-        except ValueError:
-            obj = {}
-    if not isinstance(obj, dict):
-        obj = {}
+    obj = _features_obj(raw)
     out: dict[str, Optional[bool]] = {}
     for k in SHADOW_FLAG_KEYS:
         v = obj.get(k)
         out[k] = v if isinstance(v, bool) else None
+    return out
+
+
+def _derived_flags(raw: Any) -> dict[str, Optional[bool]]:
+    """由原始 sv_rr 衍生報表端旗標 sv_f_rr22（= sv_rr < 2.2）。
+    sv_rr 須為有限數字；缺值、null、字串、布林、NaN 一律為 None。"""
+    rr = _features_obj(raw).get("sv_rr")
+    out: dict[str, Optional[bool]] = {}
+    if (
+        isinstance(rr, bool)
+        or not isinstance(rr, (int, float))
+        or not math.isfinite(rr)
+    ):
+        out["sv_f_rr22"] = None
+    else:
+        out["sv_f_rr22"] = rr < SHADOW_DERIVED_RR_THRESHOLD
     return out
 
 
@@ -713,23 +740,35 @@ def _independent_events(
     events: list[dict[str, Any]] = []
     anchor = date(2000, 1, 3)
     pos = rows[rows["decision"] == 1]
-    parsed: list[tuple[str, Any, date, Any, dict[str, Optional[bool]]]] = []
+    parsed: list[
+        tuple[str, Any, date, Any, dict[str, Optional[bool]], dict[str, Optional[bool]]]
+    ] = []
     for r in pos.itertuples(index=False):
         d = _event_date(r.bar_ts)
         if d is None:
             continue
         tier = None if pd.isna(r.conditions_mask) else int(r.conditions_mask)
-        flags = _shadow_flags(getattr(r, "features_json", None))
-        parsed.append((str(r.symbol), tier, d, r.bar_ts, flags))
+        raw = getattr(r, "features_json", None)
+        flags = _shadow_flags(raw)
+        derived = _derived_flags(raw)
+        parsed.append((str(r.symbol), tier, d, r.bar_ts, flags, derived))
     parsed.sort(key=lambda x: (x[0], str(x[1]), x[2], str(x[3])))
     last: dict[tuple[str, Any], int] = {}
-    for sym, tier, d, _ts, flags in parsed:
+    for sym, tier, d, _ts, flags, derived in parsed:
         p = _trade_pos(dates_by_sym.get(sym), d, anchor)
         key = (sym, tier)
         if key in last and p - last[key] < SQUEEZE_DEDUP_TRADING_DAYS:
             continue
         last[key] = p
-        events.append({"symbol": sym, "tier": tier, "date": d, "flags": flags})
+        events.append(
+            {
+                "symbol": sym,
+                "tier": tier,
+                "date": d,
+                "flags": flags,
+                "derived": derived,
+            }
+        )
     return events
 
 
@@ -854,7 +893,9 @@ def _shadow_veto_groups(
     （旗標為 None 者計入 n_null、不進任一組），以事件日期分群 bootstrap 比較
     成立組 − 放行組的 20 日報酬差。
     """
-    samples: list[tuple[float, str, dict[str, Optional[bool]]]] = []
+    samples: list[
+        tuple[float, str, dict[str, Optional[bool]], dict[str, Optional[bool]]]
+    ] = []
     for e in events:
         series = closes.get(e["symbol"])
         if not series:
@@ -863,16 +904,19 @@ def _shadow_veto_groups(
         if r is None:
             continue
         flags = e.get("flags") or {}
-        samples.append((r, e["date"].isoformat(), flags))
+        derived = e.get("derived") or {}
+        samples.append((r, e["date"].isoformat(), flags, derived))
     out: dict[str, Any] = {}
-    for key in SHADOW_FLAG_KEYS:
+    for key in (*SHADOW_FLAG_KEYS, *SHADOW_DERIVED_KEYS):
+        is_derived = key in SHADOW_DERIVED_KEYS
+        label = SHADOW_DERIVED_LABELS[key] if is_derived else SHADOW_FLAG_LABELS[key]
         fv: list[float] = []
         fc: list[str] = []
         pv: list[float] = []
         pc: list[str] = []
         n_null = 0
-        for r, c, flags in samples:
-            f = flags.get(key)
+        for r, c, flags, derived in samples:
+            f = (derived if is_derived else flags).get(key)
             if f is None:
                 n_null += 1
             elif f:
@@ -882,7 +926,7 @@ def _shadow_veto_groups(
                 pv.append(r)
                 pc.append(c)
         entry: dict[str, Any] = {
-            "label": SHADOW_FLAG_LABELS[key],
+            "label": label,
             "n_flag": len(fv),
             "n_pass": len(pv),
             "n_null": n_null,
