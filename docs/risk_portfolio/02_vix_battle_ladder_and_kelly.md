@@ -247,7 +247,7 @@ embed 一律標示「VIX 資料不足」（倉位不放大、賣方新倉暫停�
 - `stock_iv_unknown=True`：比照 §5.1a 的 fail-closed——**賣方新倉**一律 $0$ 口（權利金與保證金都由 IV 推導，佔位 IV 算出的口數沒有意義）；其他方向視同一項降級。
 - `data_degraded_reasons`：非空即對風險額度套用 `_DATA_DEGRADED_HAIRCUT`（$0.5$），warnings 列出「期權數據降級（原因、…）：倉位減半」。套用位置在 All-in 模式重設 `current_risk_limit` 之後，不會被覆寫。
 
-`symbol_deep_dive.py` 收集的降級原因：IV Rank 缺失、Volume PCR 缺失、OI PCR 缺失（與呈現層同一取值定義）、GEX `_is_stale_cache`、結算日引力（[`../valuation_pricing/02_expected_move_and_max_pain.md`](../valuation_pricing/02_expected_move_and_max_pain.md) §5.2a）。同處 `risk_limit` 的備援值由誤植的 $0.05$ 改為 DB 預設的 $15.0$（百分比單位）。
+`symbol_deep_dive.py` 收集的降級原因：IV Rank 缺失、Volume PCR 缺失、OI PCR 缺失（與呈現層同一取值定義）、GEX `_is_stale_cache`、結算日 DTE n 偏離痛點（中性措辭；[`../valuation_pricing/02_expected_move_and_max_pain.md`](../valuation_pricing/02_expected_move_and_max_pain.md) §5.2a）。同處 `risk_limit` 的備援值由誤植的 $0.05$ 改為 DB 預設的 $15.0$（百分比單位）。
 
 ### 5.2 賠率為零或為負防護 (Zero or Negative Odds Guard)
 若因為數據延遲或深度價外，期權權利金報價為零（`bid <= 0`）或潛在利潤為負，賠率 $b \le 0$。若直接套入公式將引發除以零錯誤。`risk_engine.py:229` 設置前置防護：
@@ -309,7 +309,7 @@ $$\text{unit\_weighted\_delta} = 0.16 \times \beta \times \frac{S}{S_{SPY}} \tim
 
 β 取 `calculate_beta_strict(日線, SPY)`，重疊資料不足 60 筆時以 1.0 計並列入降級原因「Beta 資料不足」。舊版寫死 0.16，少乘了後三項，在高 β、股價相對 SPY 偏低的標的上口數被高估、曝險 % 被低估。欄位另顯示 β 與單口 SPY 等值股數，0 口時說明原因。現貨建倉部位以擠壓等級（strategies/10）為準，兩者並列。
 
-**0 口原因的呈現欄位（僅呈現，不參與 sizing）**：`OptimizationResult` 新增 `unit_adj_delta`（$|\text{val\_adj\_unit\_delta}|$，單口含 IV 調整的 SPY 等值股數）與 `risk_budget_shares`（$\text{max\_safe\_shares} \mp \text{current\_delta}$：單口 Delta 為正取減、為負取加；單口 Delta 為 0 時為 `None`），皆四捨五入至 2 位、預設 `None`，僅在 `optimize_position_risk` 最後的回傳帶入，提前返回路徑與 `suggested_contracts` 不變。`/x` 在 0 口時：`risk_budget_shares` $\le 0$ 顯示「組合既有 β 加權 Delta 已用盡可用額度」；否則顯示「單口 ≈X 股 SPY 等值（含 IV 調整）> 可用額度 ≈Y 股」；欄位為 `None` 時沿用「單口 β 加權 Delta 已超過可用風險額度」。
+**0 口原因的呈現欄位（僅呈現，不參與 sizing）**：`OptimizationResult` 新增 `unit_adj_delta`（$|\text{val\_adj\_unit\_delta}|$，單口含 IV 調整的 SPY 等值股數）與 `risk_budget_shares`（$\text{max\_safe\_shares} \mp \text{current\_delta}$：單口 Delta 為正取減、為負取加；單口 Delta 為 0 時為 `None`），皆四捨五入至 2 位、預設 `None`，僅在 `optimize_position_risk` 最後的回傳帶入，提前返回路徑與 `suggested_contracts` 不變。`/x` 在 0 口時：`risk_budget_shares` $\le 0$ 顯示「組合既有 β 加權 Delta 已用盡可用額度」；否則顯示「單口 ≈X 股 SPY 等值（含 IV 調整）> 可用額度 ≈Y 股」；欄位為 `None` 時沿用「單口 β 加權 Delta 已超過可用風險額度」。IV 比分母揭露：`OptimizationResult` 另有僅呈現的 `iv_ratio_stock_iv`、`iv_ratio_ref_iv`、`iv_ratio_ref_source`（"VIX"＝取自 macro VIX／"預設"＝0.16 備援），0 口原因行據此印「×IV比5.00(93.5%÷VIX18.7%)」；欄位缺失時維持原文。
 
 ### 5.7 賣 Put 的現金擔保上限、無對沖折抵與 /x 倉位用 IV
 

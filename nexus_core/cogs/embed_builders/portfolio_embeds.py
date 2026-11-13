@@ -281,6 +281,26 @@ def _session_phase(now_ny: datetime) -> Literal["盤中", "盤前", "盤後", "�
     return "盤前"
 
 
+def _dte0_time_years(now_ny: Optional[datetime] = None) -> Optional[float]:
+    """DTE 0 的同日 ±1σ 時間（年，交易日基準 1/252）。
+
+    09:30 前取整個常規盤（1.0）；盤中取剩餘分鐘/390；16:00 後回 None。
+    now_ny 可注入以利測試。
+    """
+    if now_ny is None:
+        from market_time import ny_tz as _d0_tz
+
+        now_ny = datetime.now(_d0_tz)
+    minutes = now_ny.hour * 60 + now_ny.minute
+    if minutes >= 16 * 60:
+        return None
+    if minutes < 9 * 60 + 30:
+        frac = 1.0
+    else:
+        frac = (16 * 60 - minutes) / 390.0
+    return frac / 252.0
+
+
 def get_scenario_guidance(
     current_price: float,
     max_pain: float,
@@ -2112,6 +2132,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                     # 下檔／上檔兩個區塊延後到上檔空間算完才輸出（僅呈現順序）。
                     put_block_items: Optional[List[str]] = None
                     call_block_items: Optional[List[str]] = None
+                    _cw_kind_outer = ""
                     # PutWall 為助跌區或紙牆（淨 GEX 不構成支撐）。
                     put_wall_weak = False
                     _put_kind_outer = ""
@@ -2483,10 +2504,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         ]
                     elif has_callwall and effective_c_val > 0:
                         call_wall_depth = _safe_gex(call_wall_float)
+                        # 淨 GEX 已知且 < 0＝突破轉助漲區（與 PutWall 助跌區對稱）：
+                        # 不當硬頂、不貼牆、不釘住；封頂改以 Flip 為準。僅呈現，閘門不變。
+                        _cw_net_known = _prof_by_strike.get(float(call_wall_float))
+                        _cw_neg_net = _cw_net_known is not None and _cw_net_known < 0
+                        _cw_flip_c = 0.0
+                        if _cw_neg_net:
+                            _cw_flip_c = estimate_symbol_gamma_flip(
+                                gex_prof, effective_c_val
+                            )
+                        _cw_flip_up = (
+                            _cw_flip_c if _cw_flip_c > call_wall_float else 0.0
+                        )
                         call_wall_dist_pct = (
                             (call_wall_float - effective_c_val) / effective_c_val * 100
                         )
-                        _call_wall_px_outer = call_wall_float
+                        if not _cw_neg_net:
+                            _call_wall_px_outer = call_wall_float
+                        elif _cw_flip_c > effective_c_val:
+                            _call_wall_px_outer = _cw_flip_c
                         # 上檔空間門檻自固定 5% 升級為動態自適應波動率門檻
                         # (room_threshold.py 公式 A)：由該標的「下方實際要冒多少
                         # 風險」反推「上方要留多少空間」，使 2.2:1 盈虧比成為
@@ -2515,8 +2551,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         _cw_band_pct = max(
                             _cw_atr_15m / effective_c_val * 100, _CALLWALL_HUG_MIN_PCT
                         )
-                        if (call_wall_dist_pct >= 0 or is_call_zero) and (
-                            call_wall_dist_pct < _cw_band_pct
+                        if (
+                            not _cw_neg_net
+                            and (call_wall_dist_pct >= 0 or is_call_zero)
+                            and (call_wall_dist_pct < _cw_band_pct)
                         ):
                             _space_line += f" 📌 貼牆(<{_cw_band_pct:.2f}%)"
                             _call_wall_hug_outer = max(call_wall_dist_pct, 0.0)
@@ -2527,6 +2565,15 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             _space_line,
                             f"深度: {_fmt_gex_notional(call_wall_depth)}",
                         ]
+                        if _cw_neg_net and _cw_net_known is not None:
+                            _cw_flip_ptr = (
+                                f"；Flip ${_cw_flip_up:.2f}" if _cw_flip_up > 0 else ""
+                            )
+                            call_items[0] += (
+                                f"〔淨GEX {_fmt_gex_notional(_cw_net_known)}，"
+                                f"突破轉助漲區{_cw_flip_ptr}〕"
+                            )
+                            call_items.pop()  # 括號已含淨 GEX，省略深度行
                         _cap_call = _sto_best(
                             [
                                 s
@@ -2575,8 +2622,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 f" 封頂{_cc_tag}"
                             )
                         call_block_items = call_items
-                        if call_wall_dist_pct >= 0 or is_call_zero:
+                        if not _cw_neg_net and (
+                            call_wall_dist_pct >= 0 or is_call_zero
+                        ):
                             upside_room_pct = max(call_wall_dist_pct, 0.0)
+                        _cw_kind_outer = "助漲" if _cw_neg_net else ""
 
                     # ── 下檔 × 上檔交叉判定 ──
                     if put_block_items is not None:
@@ -2588,7 +2638,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             put_block_items,
                         )
                     if call_block_items is not None:
-                        _append_tree_block(gex_lines, "🚧 上檔壓力", call_block_items)
+                        _append_tree_block(
+                            gex_lines,
+                            "⚠️ 上檔助漲" if _cw_kind_outer else "🚧 上檔壓力",
+                            call_block_items,
+                        )
 
                     regime_items: List[str] = []
                     net_gex_raw = gex_data.get("net_gex")
@@ -3045,7 +3099,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 else ("\u001b[1;31m" if vol_pcr > 1.10 else "\u001b[1;36m")
             )
 
-        if oi_pcr_raw is None or oi_pcr == 0.0:
+        _oi_cached = _to_float_or_none(pcr_dict.get("oi_pcr_cached"))
+        if (oi_pcr_raw is None or oi_pcr == 0.0) and _oi_cached and _oi_cached > 0:
+            _oi_age = _to_float_or_none(pcr_dict.get("oi_pcr_cached_age_seconds"))
+            _oi_h = max(1, round(_oi_age / 3600)) if _oi_age is not None else 1
+            oi_pcr_str = f"{_oi_cached:.2f}"
+            oi_state = (
+                f"{pcr_dict.get('oi_pcr_cached_state') or ''} [快取 {_oi_h}h前]"
+            ).strip()
+            oi_pcr_color = (
+                "\u001b[1;32m"
+                if _oi_cached < _PCR_BULLISH_NEUTRAL
+                else ("\u001b[1;31m" if _oi_cached > 1.10 else "\u001b[1;36m")
+            )
+        elif oi_pcr_raw is None or oi_pcr == 0.0:
             oi_state = "N/A (結構缺失)"
             oi_pcr_str = "--"
             oi_pcr_color = "\u001b[1;30m"
@@ -3075,8 +3142,13 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _st_iv_f = _to_float_or_none(_iv_attr("straddle_implied_iv"))
 
     def _sigma_to_dte(dte_days: int) -> Optional[float]:
-        if _st_iv_f is None or _st_iv_f <= 0 or price <= 0 or dte_days < 1:
+        if _st_iv_f is None or _st_iv_f <= 0 or price <= 0 or dte_days < 0:
             return None
+        if dte_days == 0:
+            _t0 = _dte0_time_years()
+            if _t0 is None:
+                return None
+            return _st_iv_f * price * math.sqrt(_t0)
         return _st_iv_f * price * math.sqrt(dte_days / 365.0)
 
     # 結算前 1σ 必須對齊頭條 Max Pain 實際鎖定的到期日（週五當天會滾到下週五），
@@ -3147,10 +3219,17 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             data.get("month_max_pains"), datetime.now(_gravity_tz)
         )
         if gravity is not None:
+            if _neg_gamma_hint_outer:
+                # 負 Gamma 下痛點磁吸不成立，不可宣稱釘住效應最強（與指引一致）
+                _grav_tail = "負Gamma 下波動放大，避免追價新倉"
+                _grav_head = "⚠️ 結算日風險"
+            else:
+                _grav_tail = "結算前 Gamma 釘住效應最強，避免追價新倉"
+                _grav_head = "⚠️ 結算日引力"
             scenario_overlays.append(
-                f"⚠️ 結算日引力：{gravity['expiry']} (DTE {gravity['dte']}) 痛點 "
+                f"{_grav_head}：{gravity['expiry']} (DTE {gravity['dte']}) 痛點 "
                 f"${gravity['max_pain']:.2f}，現價偏離 {gravity['distance_pct']:+.1f}%，"
-                "結算前 Gamma 釘住效應最強，避免追價新倉"
+                f"{_grav_tail}"
             )
 
     spread_ratio = data.get("spread_ratio")
@@ -3257,6 +3336,9 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             elif "結算日引力" in overlay:
                 label = "結算引力"
                 ov_color = "\u001b[1;31m"
+            elif "結算日風險" in overlay:
+                label = "結算風險"
+                ov_color = "\u001b[1;31m"
             elif "重心轉移" in overlay:
                 label = "結算轉移"
                 ov_color = "\u001b[1;33m"
@@ -3327,8 +3409,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 kelly_lines.append(" ├─ 0 口原因: 組合既有 β 加權 Delta 已用盡可用額度")
             else:
                 if _k_unit:
+                    _k_iv_s = getattr(kelly_sizing, "iv_ratio_stock_iv", None)
+                    _k_iv_r = getattr(kelly_sizing, "iv_ratio_ref_iv", None)
+                    _k_iv_src = getattr(kelly_sizing, "iv_ratio_ref_source", None)
+                    if _k_iv_s and _k_iv_r and _k_iv_src:
+                        _k_iv_note = (
+                            f"({_k_iv_s * 100:{'.0f' if _k_iv_s >= 1 else '.1f'}}%"
+                            f"÷{_k_iv_src}{_k_iv_r * 100:.1f}%)"
+                        )
+                    else:
+                        _k_iv_note = ""
                     _k_unit_txt = (
                         f"單口 ≈{_k_unit:.1f} 股×IV比{_k_unit_adj / _k_unit:.2f}"
+                        f"{_k_iv_note}"
                         f"≈{_k_unit_adj:.1f} 股 SPY 等值"
                     )
                 else:

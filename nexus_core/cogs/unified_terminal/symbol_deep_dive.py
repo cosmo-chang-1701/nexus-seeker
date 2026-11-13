@@ -863,7 +863,7 @@ class SymbolDeepDiveMixin:
             gravity = find_settlement_gravity(result.get("month_max_pains"), now_ny)
             if gravity is not None:
                 degraded_reasons.append(
-                    f"結算日引力 DTE {gravity['dte']} 偏離痛點 "
+                    f"結算日 DTE {gravity['dte']} 偏離痛點 "
                     f"{gravity['distance_pct']:+.1f}%"
                 )
 

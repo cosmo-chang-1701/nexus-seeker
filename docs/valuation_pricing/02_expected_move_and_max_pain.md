@@ -162,7 +162,7 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
 - $0 \le \text{DTE} \le$ `SETTLEMENT_GRAVITY_MAX_DTE`（$1$）；到期當日 16:00 ET 之後該檔已結算，不列入。
 - `SETTLEMENT_GRAVITY_MIN_DIST_PCT`（$3\%$）$< |\text{偏離}| \le$ `SETTLEMENT_GRAVITY_MAX_DIST_PCT`（$30\%$，與 §5.1 斷路器同門檻）。
 
-命中時：(1) 分析中心「結算價操作指引」追加「結算引力」overlay（斷路器觸發時不加）；(2) Kelly 建倉額度把「結算日引力」列入資料降級原因，風險額度 ×0.5（見 [`../risk_portfolio/02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §5.1b）。
+命中時：(1) 分析中心「結算價操作指引」追加「結算引力」overlay（斷路器觸發時不加）；**負 Gamma（局部短 Gamma、全鏈淨 GEX<0 或現價低於 PutWall）時改為「結算風險」overlay「⚠️ 結算日風險：…負Gamma 下波動放大，避免追價新倉」，不再宣稱「Gamma 釘住效應最強」**（僅呈現，賣方前提「結算窗❌」與 Kelly 減半不變）；(2) Kelly 建倉額度把「結算日 DTE n 偏離痛點 x%」（中性措辭，不稱引力／釘住）列入資料降級原因，風險額度 ×0.5（只套用一次，無重複懲罰）（見 [`../risk_portfolio/02_vix_battle_ladder_and_kelly.md`](../risk_portfolio/02_vix_battle_ladder_and_kelly.md) §5.1b）。
 
 **個股週一／週三到期**：Nasdaq／MIAX 自 2026-01-26 起對合格個股（含 MU 等大型股）掛牌週一、週三到期，`get_all_option_expiries()` 不做星期過濾是正確行為；DTE ≤ 7 的非週五到期標為「期中特約/末日週線」。
 
@@ -203,7 +203,7 @@ Max Pain 向上磁吸只在做市商處於正 Gamma 時成立。批次雷達（`
 
 欄位標示為「7 日 1σ（到期日 跨式 ×√(7/DTE)）」，到期日與 DTE 由 `_select_straddle_expiry()` 提供（與 EM 計算同一定義）。只要 `reference_spot_price` 與週度 EM 皆有值（與 IV 來源無關），區間即以 `reference_spot_price`（跨式定價當下的現價）為中心：盤中標「現價」，盤後／盤前標「最新收盤」；因盤後 `quote.pc` 是**昨日**收盤，不得再用前收為中心。`reference_spot_price` 不可得時沿用前收並標「前收」。雷達與 Max Pain 路徑不變。
 
-**結算前 1σ 與依體制指引（僅 /x）**：有 `straddle_implied_iv` 且 DTE ≥ 1 時，痛點列尾附 `±$x`，σ_exp = straddle_iv × 現價 × √(DTE/365)。`get_scenario_guidance` 依序判定：(1) Long Gamma 釘住效應成立 → 以釘住履約價（CallWall）為主、痛點僅供參考；(2) 現價與痛點距離超過最近到期的結算前 1σ → 「收斂機率低」；(3) 其餘維持原三種文案。`find_settlement_gravity` 與 Kelly 降級原因不變。　方向性文案（高於／低於痛點）會標明所用痛點的到期日（如 `10/23 痛點`，週五當天頭條痛點滾到下週五，價位見上方 Max Pain 清單）；負 Gamma（局部短 Gamma、全鏈淨 GEX<0 或現價低於 PutWall）時「低於痛點」改述「負Gamma，10/23 痛點磁吸不成立。」並以紅色呈現，不再宣稱回升動能；「高於痛點」的下拉壓制不受影響。
+**結算前 1σ 與依體制指引（僅 /x）**：有 `straddle_implied_iv` 且 DTE ≥ 1 時，痛點列尾附 `±$x`，σ_exp = straddle_iv × 現價 × √(DTE/365)；DTE 0 改用同日交易時間：美東 09:30 前取整個常規盤、盤中取（距 16:00 分鐘數 / 390）、16:00 後不顯示，σ = straddle_iv × 現價 × √(該比例/252)（交易日 1/252 基準，與 DTE ≥ 1 的日曆 1/365 基準不同，僅呈現）。`get_scenario_guidance` 依序判定：(1) Long Gamma 釘住效應成立 → 以釘住履約價（CallWall）為主、痛點僅供參考；(2) 現價與痛點距離超過最近到期的結算前 1σ → 「收斂機率低」；(3) 其餘維持原三種文案。`find_settlement_gravity` 與 Kelly 降級原因不變。　方向性文案（高於／低於痛點）會標明所用痛點的到期日（如 `10/23 痛點`，週五當天頭條痛點滾到下週五，價位見上方 Max Pain 清單）；負 Gamma（局部短 Gamma、全鏈淨 GEX<0 或現價低於 PutWall）時「低於痛點」改述「負Gamma，10/23 痛點磁吸不成立。」並以紅色呈現，不再宣稱回升動能；「高於痛點」的下拉壓制不受影響。
 
 ## 6. 核心程式碼檔案路徑關聯
 
