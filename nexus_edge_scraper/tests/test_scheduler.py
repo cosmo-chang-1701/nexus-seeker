@@ -60,7 +60,7 @@ async def test_poll_once_writes_snapshots_for_tracked_symbols(
             "net_gex": 1.0,
             "call_wall": 110.0,
             "put_wall": 90.0,
-            "gex_profile": {"100.0": 1.0},
+            "gex_profile": {"98.0": 1.0, "100.0": 1.0, "102.0": 1.0},
         }
 
     async def _fake_nearest_chain(symbol: str) -> dict[str, Any]:
@@ -100,7 +100,7 @@ async def test_poll_symbol_passes_expiry(monkeypatch: pytest.MonkeyPatch) -> Non
             "net_gex": 1.0,
             "call_wall": 110.0,
             "put_wall": 90.0,
-            "gex_profile": {},
+            "gex_profile": {"98.0": 1.0, "100.0": 1.0, "102.0": 1.0},
             "expiry": "2026-11-20",
         }
 
@@ -152,7 +152,7 @@ async def test_poll_once_continues_when_one_symbol_fails(
             "net_gex": 1.0,
             "call_wall": 1.0,
             "put_wall": 1.0,
-            "gex_profile": {},
+            "gex_profile": {"0.9": 1.0, "1.0": 1.0, "1.1": 1.0},
         }
 
     async def _fake_nearest_chain(symbol: str) -> None:

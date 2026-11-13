@@ -92,7 +92,12 @@ async def test_call_wall_only_selects_from_strikes_at_or_above_spot() -> None:
     """迴歸測試：現價下方一筆龐大 Put 曝險不應被誤判為 CallWall。"""
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 105.0, 500, 20)],
+        call_rows=[
+            _row("TESTC1", 105.0, 500, 20),
+            # 湊足 ≥3 個近現價履約價（邊緣 GEX 有效性規則）；價內不屬 CallWall 候選
+            _row("TESTC2", 95.0, 1, 20),
+            _row("TESTC3", 96.0, 1, 20),
+        ],
         put_rows=[_row("TESTP1", 90.0, 5000, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
@@ -105,7 +110,12 @@ async def test_put_wall_only_selects_from_strikes_at_or_below_spot() -> None:
     html = _make_html(
         spot=100.0,
         call_rows=[_row("TESTC1", 110.0, 5000, 20)],
-        put_rows=[_row("TESTP1", 95.0, 500, 20)],
+        put_rows=[
+            _row("TESTP1", 95.0, 500, 20),
+            # 湊足 ≥3 個近現價履約價；價內 Put 不屬 PutWall 候選
+            _row("TESTP2", 105.0, 1, 20),
+            _row("TESTP3", 106.0, 1, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["put_wall"] == 95.0
@@ -117,8 +127,17 @@ async def test_call_wall_returns_zero_when_no_strike_above_spot_has_calls() -> N
     區分，會把 0.00% 牆距當成真實數據渲染。"""
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 95.0, 1000, 20)],
-        put_rows=[_row("TESTP1", 85.0, 1000, 20)],
+        call_rows=[
+            _row("TESTC1", 95.0, 1000, 20),
+            # 湊足 ≥3 個近現價履約價；價內 Call 不屬 CallWall 候選
+            _row("TESTC2", 96.0, 1, 20),
+            _row("TESTC3", 97.0, 1, 20),
+        ],
+        put_rows=[
+            _row("TESTP1", 85.0, 1000, 20),
+            _row("TESTP2", 84.0, 1, 20),
+            _row("TESTP3", 86.0, 1, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 0.0
@@ -129,8 +148,17 @@ async def test_put_wall_returns_zero_when_no_strike_below_spot_has_puts() -> Non
     """同上：底牆側的空候選集 sentinel 亦為 0.0。"""
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 115.0, 1000, 20)],
-        put_rows=[_row("TESTP1", 110.0, 1000, 20)],
+        call_rows=[
+            _row("TESTC1", 115.0, 1000, 20),
+            # 湊足 ≥3 個近現價履約價（同為深度價外，維持原 fail-safe 情境）
+            _row("TESTC2", 116.0, 1, 20),
+            _row("TESTC3", 117.0, 1, 20),
+        ],
+        put_rows=[
+            _row("TESTP1", 110.0, 1000, 20),
+            _row("TESTP2", 109.0, 1, 20),
+            _row("TESTP3", 108.0, 1, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["put_wall"] == 0.0
@@ -141,7 +169,11 @@ async def test_net_gex_and_gex_profile_unchanged_sign_convention() -> None:
     """本次修正不應變動 net_gex/gex_profile 的正負號語意（Call 正、Put 反號）。"""
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 105.0, 300, 20)],
+        call_rows=[
+            _row("TESTC1", 105.0, 300, 20),
+            # 第三個近現價履約價（邊緣 GEX 有效性規則），期望值一併納入計算
+            _row("TESTC2", 98.0, 200, 20),
+        ],
         put_rows=[_row("TESTP1", 95.0, 400, 20)],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
@@ -152,11 +184,16 @@ async def test_net_gex_and_gex_profile_unchanged_sign_convention() -> None:
     gamma_put = gex_scraper._calculate_gamma(100.0, 95.0, t, r, 0.20)
     expected_call_gex = 300 * 100.0 * gamma_call * 100.0 * 100.0
     expected_put_gex = 400 * 100.0 * gamma_put * 100.0 * 100.0
-    expected_net = expected_call_gex - expected_put_gex
+    gamma_call_itm = gex_scraper._calculate_gamma(100.0, 98.0, t, r, 0.20)
+    expected_call_gex_itm = 200 * 100.0 * gamma_call_itm * 100.0 * 100.0
+    expected_net = expected_call_gex + expected_call_gex_itm - expected_put_gex
 
     assert result["net_gex"] == pytest.approx(round(expected_net, 2), abs=0.05)
     assert result["gex_profile"][105.0] == pytest.approx(
         round(expected_call_gex, 2), abs=0.05
+    )
+    assert result["gex_profile"][98.0] == pytest.approx(
+        round(expected_call_gex_itm, 2), abs=0.05
     )
     assert result["gex_profile"][95.0] == pytest.approx(
         round(-expected_put_gex, 2), abs=0.05
@@ -170,6 +207,9 @@ async def test_deep_otm_low_delta_high_oi_contract_excluded_from_wall() -> None:
         call_rows=[
             _row("TESTC1", 105.0, 200, 20),  # 近月價平，delta 正常
             _row("AAPL301231C", 400.0, 1_000_000, 20),  # 深度價外、超巨量 OI
+            # 湊足 ≥3 個近現價履約價（價內，不屬 CallWall 候選）
+            _row("TESTC2", 98.0, 1, 20),
+            _row("TESTC3", 99.0, 1, 20),
         ],
         put_rows=[_row("TESTP1", 95.0, 100, 20)],
     )
@@ -184,7 +224,12 @@ async def test_noise_filter_failsafe_keeps_side_when_all_contracts_are_low_delta
     html = _make_html(
         spot=100.0,
         call_rows=[_row("AAPL301231C", 400.0, 1_000_000, 20)],
-        put_rows=[_row("TESTP1", 95.0, 100, 20)],
+        put_rows=[
+            _row("TESTP1", 95.0, 100, 20),
+            # 湊足 ≥3 個近現價履約價（Put 端，Call 端維持全為深度價外）
+            _row("TESTP2", 102.0, 1, 20),
+            _row("TESTP3", 103.0, 1, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["call_wall"] == 400.0
@@ -214,8 +259,17 @@ async def test_scrape_symbol_gex_core_with_dividend_yield() -> None:
     """ISSUE-4.3: 驗證傳入 dividend_yield 時 GEX 計算正確代入 q。"""
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 100.0, 500, 20)],
-        put_rows=[_row("TESTP1", 100.0, 500, 20)],
+        call_rows=[
+            _row("TESTC1", 100.0, 500, 20),
+            # 湊足 ≥3 個近現價履約價（價內 Call，不屬 CallWall 候選）
+            _row("TESTC2", 98.0, 1, 20),
+            _row("TESTC3", 99.0, 1, 20),
+        ],
+        put_rows=[
+            _row("TESTP1", 100.0, 500, 20),
+            _row("TESTP2", 101.0, 1, 20),
+            _row("TESTP3", 102.0, 1, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core(
         "TEST", _make_browser(html), risk_free_rate=0.04, dividend_yield=0.03
@@ -253,14 +307,27 @@ async def test_atm_strike_within_tolerance_excluded_from_walls() -> None:
     # 案例 2：若僅有 ATM 浮點擾動合約而無其他 OTM 合約時，候選池為空並回 0.0
     html_atm_only = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 100.00005, 5000, 20)],
-        put_rows=[_row("TESTP1", 99.99995, 5000, 20)],
+        call_rows=[
+            _row("TESTC1", 100.00005, 5000, 20),
+            # 價內 Call（現價下方）：維持剖面有效、不構成 CallWall 候選
+            _row("TESTC2", 90.0, 5000, 20),
+            _row("TESTC3", 95.0, 5000, 20),
+        ],
+        put_rows=[
+            _row("TESTP1", 99.99995, 5000, 20),
+            # 價內 Put（現價上方）：維持剖面有效、不構成 PutWall 候選
+            _row("TESTP2", 105.0, 5000, 20),
+            _row("TESTP3", 110.0, 5000, 20),
+        ],
     )
     result_atm_only = await gex_scraper.scrape_symbol_gex_core(
         "TEST", _make_browser(html_atm_only)
     )
     assert result_atm_only["call_wall"] == 0.0
     assert result_atm_only["put_wall"] == 0.0
+    # 非 fallback：剖面有效，牆為 0.0 確由 isclose 排除所致
+    assert result_atm_only["spot"] == 100.0
+    assert result_atm_only["gex_profile"]
 
 
 def test_risk_free_rate_matches_nexus_core_config() -> None:
@@ -291,7 +358,11 @@ async def test_expiry_is_most_common_contract_expiry() -> None:
             _row(f"TEST{d1}C00101000", 101.0, 500, 20),
             _row(f"TEST{d2}C00100000", 100.0, 500, 20),
         ],
-        put_rows=[_row(f"TEST{d1}P00100000", 100.0, 500, 20)],
+        put_rows=[
+            _row(f"TEST{d1}P00100000", 100.0, 500, 20),
+            # 湊足 ≥3 個近現價履約價（邊緣 GEX 有效性規則）
+            _row(f"TEST{d1}P00099000", 99.0, 500, 20),
+        ],
     )
     result = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))
     assert result["expiry"] == exp1.isoformat()
@@ -361,7 +432,13 @@ async def test_info_dividend_auto_resolved_matches_explicit_decimal(
     monkeypatch.setattr(yfinance, "Ticker", _FakeTicker)
     html = _make_html(
         spot=100.0,
-        call_rows=[_row("TESTC1", 105.0, 500, 25), _row("TESTC2", 110.0, 300, 25)],
+        call_rows=[
+            _row("TESTC1", 105.0, 500, 25),
+            _row("TESTC2", 110.0, 300, 25),
+            # 湊足 ≥3 個近現價履約價（價內 Call 不被 delta 雜訊過濾）
+            _row("TESTC3", 97.0, 200, 25),
+            _row("TESTC4", 98.0, 200, 25),
+        ],
         put_rows=[_row("TESTP1", 95.0, 500, 25), _row("TESTP2", 90.0, 300, 25)],
     )
     auto = await gex_scraper.scrape_symbol_gex_core("TEST", _make_browser(html))

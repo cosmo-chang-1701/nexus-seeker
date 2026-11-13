@@ -36,7 +36,7 @@ from datetime import datetime
 from playwright.async_api import Browser, async_playwright
 
 import database
-from gex_scraper import scrape_symbol_gex_core
+from gex_scraper import is_valid_gex_profile, scrape_symbol_gex_core
 from yf_api import (
     fetch_last_close,
     fetch_nearest_option_chain,
@@ -300,16 +300,23 @@ async def _poll_symbol(symbol: str, browser: Browser, sem: "asyncio.Semaphore") 
 
         try:
             gex_data = await scrape_symbol_gex_core(symbol, browser)
-            await asyncio.to_thread(
-                database.save_gex_snapshot,
-                symbol,
-                float(gex_data.get("spot", 0.0)),
-                float(gex_data.get("net_gex", 0.0)),
-                float(gex_data.get("call_wall", 0.0)),
-                float(gex_data.get("put_wall", 0.0)),
-                gex_data.get("gex_profile", {}),
-                gex_data.get("expiry"),
-            )
+            gex_spot = float(gex_data.get("spot", 0.0))
+            if gex_spot <= 0 or not is_valid_gex_profile(
+                gex_data.get("gex_profile", {}), gex_spot
+            ):
+                # 稀疏／fallback 結果不得覆蓋上一筆好快照，也不寫入歷史
+                logger.info(f"[{symbol}] GEX 剖面無效（OI 未就緒？），略過快照寫入")
+            else:
+                await asyncio.to_thread(
+                    database.save_gex_snapshot,
+                    symbol,
+                    gex_spot,
+                    float(gex_data.get("net_gex", 0.0)),
+                    float(gex_data.get("call_wall", 0.0)),
+                    float(gex_data.get("put_wall", 0.0)),
+                    gex_data.get("gex_profile", {}),
+                    gex_data.get("expiry"),
+                )
         except Exception as e:
             logger.warning(f"[{symbol}] 排程 GEX 抓取失敗: {e}")
 
