@@ -313,7 +313,9 @@ class IntradayScanPipeline:
         )
 
         skew_commentary = build_watchlist_skew_rule_commentary(
-            evaluation.metrics, evaluation.tactical
+            evaluation.metrics,
+            evaluation.tactical,
+            event_context=evaluation.event_context,
         )
 
         # 取得 embed 所需的補充數據（均已快取，額外開銷極低）

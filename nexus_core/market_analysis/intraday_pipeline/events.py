@@ -9,6 +9,19 @@ from models.schemas import WatchlistEventContext, WatchlistRiskMode
 
 logger = logging.getLogger(__name__)
 
+# 財報鎖定窗口（小時）：與 /x「情緒背離偵測」的 14 日財報窗口一致。窗口內
+# 背離／Skew 判讀不得再建議賣方收租，避免與事件風控的禁賣指令打架。
+# 僅影響文案，不改 risk_mode（event-lock 72h／earnings-guard 168h）門檻。
+EARNINGS_LOCKOUT_HOURS: float = 14 * 24.0
+
+
+def is_earnings_lockout(event_context: WatchlistEventContext | None) -> bool:
+    """財報是否落在未來 14 日內（已公布者 tte ≤ 0，自然排除）。"""
+    if event_context is None:
+        return False
+    tte = event_context.earnings_tte_hours
+    return tte is not None and 0.0 < tte <= EARNINGS_LOCKOUT_HOURS
+
 
 def _hours_to_days_text(hours: float) -> str:
     if hours >= 24.0:

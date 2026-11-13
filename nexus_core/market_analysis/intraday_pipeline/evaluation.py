@@ -7,6 +7,7 @@ from typing import Any, Optional
 import pandas as pd
 
 from models.schemas import WatchlistEvaluation, WatchlistTacticalPlan
+from market_analysis.intraday_pipeline.events import is_earnings_lockout
 from risk_engine.nro import WatchlistRiskController
 from market_analysis.sentiment.skew_taxonomy import (
     SKEW_DIVERGENCE_HIGH_PERCENTILE,
@@ -111,6 +112,9 @@ async def evaluate_watchlist_symbol(
     )
     if metrics is None:
         return None
+
+    # 財報鎖定窗口（14 日內）：下方背離閘門不得再建議收租（與事件日曆禁賣一致）
+    earnings_lockout = is_earnings_lockout(event_context)
 
     # 2. 將避險資產（BOXX/BIL）白名單風控防線下沉至 Ingress 層
     is_hedging = symbol.upper() in ["BOXX", "BIL"]
@@ -311,8 +315,13 @@ async def evaluate_watchlist_symbol(
             sddm_route="WAIT (觀望 / 待機)",
             action_guideline=(
                 "⚠️ 警告：結構性情緒背離｜Skew 分位極端但 PCR 指向相反極端，"
-                "可能是機構大幅對沖、散戶追逐買權的結構性分裂。建議停止追價單腿，"
-                "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
+                "可能是機構大幅對沖、散戶追逐買權的結構性分裂。"
+                + (
+                    "財報鎖定窗口內嚴禁追價買權與賣方收租，僅限現貨防守減碼。"
+                    if earnings_lockout
+                    else "建議停止追價單腿，"
+                    "僅允許小倉位收租並搭配保護性 Put/Collar 或使用價差結構。"
+                )
             ),
         )
 
@@ -369,7 +378,11 @@ async def evaluate_watchlist_symbol(
                     "⚠️ WARNING: IV Suppression Divergence｜現價暴跌但波動率低壓，"
                     f"IV Rank 處於極低位階 ({metrics.iv_rank:.1f}%)，與現貨大跌 ({dp_val:+.2f}%) 矛盾。"
                     "可能存在系統快取延遲或異常，建議暫緩單腿長權利金操作，"
-                    "僅允許小倉位收租並搭配保護性結構。"
+                    + (
+                        "財報鎖定窗口內嚴禁賣方收租。"
+                        if earnings_lockout
+                        else "僅允許小倉位收租並搭配保護性結構。"
+                    )
                 ),
             )
     except Exception as e:
