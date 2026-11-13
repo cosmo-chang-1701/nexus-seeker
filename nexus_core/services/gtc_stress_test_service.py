@@ -116,7 +116,6 @@ async def run_gtc_stress_test(user_id: int) -> dict[str, Any]:
         holdings = await asyncio.to_thread(get_user_holdings, user_id)
     except Exception as e:
         logger.warning(f"[stress_test] 讀取持倉失敗: {e}")
-        holdings = []
         res = build_stress_test_results(orders, cash_reserve, [])
         res["cash_equiv_value"] = None
         res["net_deficit"] = None
