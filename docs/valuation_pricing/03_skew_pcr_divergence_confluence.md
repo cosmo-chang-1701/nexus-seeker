@@ -66,6 +66,10 @@ $$\text{Structural Divergence} \iff \begin{cases} (\text{Skew Percentile} > 85.0
 輸出風控警告：
 `[⚠️ 警告：結構性情緒背離] Skew 分位極端且 PCR 指向相反極端，市場內部籌碼嚴重分歧，指標失真度極高；建議暫停單方向開倉。`
 
+**`/x` 呈現層（僅文案，觸發條件不動）**：
+- 結構性背離 overlay 依實際命中的分支描述：(a) Skew 避險分位極端（Put 貴）而 Volume PCR 極低（Call 量主導）；(b) Skew Call 溢價分位極端而 Volume PCR 極高（Put 量主導）；(c) 現價上漲但 Skew 避險分位 $>90$；(d) 現價大跌但 IV Rank 極低（留意快取異常）。(c)(d) 不檢查 PCR，文案亦不提 PCR；所用 PCR 一律為 Volume PCR。
+- 財報鎖定窗口（IV 事件旗標、日曆快取 14 日內，或事件日曆有 $0 \le$ 距財報 $\le 14$ 日的財報）內，「情緒背離偵測」建議覆寫：High Divergence 改為「嚴禁追價買權與賣方收租，僅限現貨防守減碼」，散戶恐慌＋權利金便宜的 CSP 建議改為「財報鎖定窗口：勿賣出賣權，待財報後再評估 CSP」。窗口外文案不變。
+
 **缺值不得呈現為「同步」**：Skew 分位或 Volume PCR 任一缺失時上式無從判定，`/x` 的「情緒背離偵測」改印灰色「資料不足（Skew 分位／PCR 缺失）」。舊版預設字串為「同步」，等於把「沒資料」說成「沒背離」。
 
 **參考級：量價／預測市場背離**（僅 `/x` 呈現，不設 `is_structural_divergence`、不觸發結構背離 overlay）：在上述判定皆未命中時，若最近一根已收盤 15m 為實體陽線、有效量比 $\ge 1.5$（優先採同時段量比，見 [`../platform/06_price_volume_alert_system.md`](../platform/06_price_volume_alert_system.md)），且 Polymarket 加權看多機率 $\le$ `POLYMARKET_BEARISH_PCT`（$45\%$），輸出「量價／預測市場背離（參考）：量價偏多 vs Polymarket 偏空」；實體陰線且 $\ge$ `POLYMARKET_BULLISH_PCT`（$55\%$）為鏡像。文案必附「Polymarket 多為目標價合約，機率≠方向偏好」——目標價型問句的 Yes 機率低只代表目標難達成，不等於巨鯨看空，因此只作參考。$45/55$ 與 `calculate_polymarket_weighted_odds()` 的分級共用 `skew_taxonomy.py` 常數。

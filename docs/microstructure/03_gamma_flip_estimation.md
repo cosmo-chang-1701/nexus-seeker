@@ -147,7 +147,7 @@ flowchart TD
 4. **局部 Gamma 體制（呈現層，雙向交叉）**：
    `estimate_symbol_gamma_flip()` 只偵測由負轉正的交叉，對「下方正 Gamma、上方負 Gamma」的鏈型一律回傳 `0.0`，而全鏈 Net GEX 為正時體制標籤仍顯示 LONG_GAMMA——現價其實已落入負 Gamma 區。`analyze_local_gamma_regime()` 以相鄰履約價線性內插求現價處淨 GEX $G(\text{Spot})$，並雙向搜尋離現價最近的零交叉：
    $$K^* = K_1 + \frac{0 - G_1}{G_2 - G_1}(K_2 - K_1),\quad \text{sign}(G_1) \ne \text{sign}(G_2),\ K^* \in [0.7\,\text{Spot}, 1.3\,\text{Spot}]$$
-   分析中心在「⚙️ 體制判讀」加列「局部體制 (現價處)」，與全鏈體制相反時註明；閘門用的 flip 找不到交叉時，改列局部翻轉線與其方向（以上／以下轉負 Gamma）。刻意**另立函式**、不改 `estimate_symbol_gamma_flip()`：後者是右側／左側／做空進場與 Regime 分類器共用的門檻線，改動需先經 `calibration` 比對。
+   分析中心在「⚙️ 體制判讀」加列「局部體制 (現價處)」，與全鏈體制相反時註明；閘門用的 flip 找不到交叉時，「Gamma Flip」列合併改印局部翻轉線與其方向（`Gamma Flip: ≈ $X（局部翻轉線，以上／以下轉負 Gamma；全鏈無交叉，閘門不採用）`），不再同時出現「無法估算」與另列的局部翻轉線；該局部值僅供呈現，**不**餵入 `_gamma_flip_outer`／`_gex_price_outer` 等任何閘門輸入。刻意**另立函式**、不改 `estimate_symbol_gamma_flip()`：後者是右側／左側／做空進場與 Regime 分類器共用的門檻線，改動需先經 `calibration` 比對。
 
    **後續觀察事項（閘門是否參考局部體制，決定前不得改動閘門）**：
    - **第一步：先補記錄，不改行為**。前向蒐集目前只在 `regime_evaluation_log` 記錄 `gamma_flip`（單向定義）與全鏈 `net_gex`，沒有局部體制，無從驗證。應在 `evaluation_recorder.py` 的 `features_json` 加入 `analyze_local_gamma_regime()` 的 `local_gex`、`flip_strike`、`flip_side`，並補「加上記錄點後輸出逐位元不變」的測試（比照 `test_exit_tier_forward_collection.py`）。

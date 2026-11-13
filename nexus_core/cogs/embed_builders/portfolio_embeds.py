@@ -993,6 +993,33 @@ def _settlement_shift_overlay(month_mps: Any, price: float) -> Optional[str]:
 _POLY_PCT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)%\s*(?:巨鯨看多|巨鯨偏空|中性分歧)")
 
 
+def _iv_has_earnings_event(iv_data: Any) -> bool:
+    """IV 資料自帶的財報事件旗標（attr 或 dict key）。"""
+    if not iv_data:
+        return False
+    return bool(
+        getattr(iv_data, "has_earnings_event", False)
+        or (isinstance(iv_data, dict) and iv_data.get("has_earnings_event", False))
+    )
+
+
+def _cached_earnings_within_14d(symbol: str) -> bool:
+    """日曆快取的財報日是否落在今日起 14 日內；任何例外視為否。"""
+    try:
+        from database.calendar_cache import get_cached_earnings
+
+        earnings = get_cached_earnings(symbol)
+        if earnings and earnings.get("earnings_date"):
+            today_dt = datetime.now().date()
+            earn_date = datetime.strptime(
+                earnings["earnings_date"][:10], "%Y-%m-%d"
+            ).date()
+            return today_dt <= earn_date <= today_dt + timedelta(days=14)
+    except Exception:
+        pass
+    return False
+
+
 def _parse_poly_bullish_pct(summary: Any) -> Optional[float]:
     """自 `calculate_polymarket_weighted_odds()` 的標籤字串解析加權看多機率 (0~100)。"""
     if not summary:
@@ -1428,6 +1455,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
 
     is_structural_divergence = False
     divergence_level = ""
+    divergence_kind = ""
+
+    # 財報鎖定窗口：與下方 IV 區塊／事件日曆同一判定（旗標、日曆快取、catalysts 14 日內）
+    earnings_lockout = _iv_has_earnings_event(iv_data)
+    if not earnings_lockout and iv_source in ["STORED_IV", "HV_PROXY"]:
+        earnings_lockout = _cached_earnings_within_14d(symbol)
+    if not earnings_lockout:
+        for _cat in data.get("catalysts") or []:
+            if hasattr(_cat, "date"):
+                _cat_days = _to_float_or_none(getattr(_cat, "days_to_earnings", None))
+                if _cat_days is not None and 0.0 <= _cat_days <= 14.0:
+                    earnings_lockout = True
+                    break
 
     # 防止盤前(0.0) 觸發背離誤報
     if skew_percentile is not None and pcr_val_for_div is not None:
@@ -1437,15 +1477,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ):
             is_structural_divergence = True
             divergence_level = "High Divergence"
+            divergence_kind = "put_skew_call_volume"
         elif skew_percentile < SKEW_DIVERGENCE_LOW_PERCENTILE and pcr_val_for_div > 1.5:
             is_structural_divergence = True
             divergence_level = "High Divergence"
+            divergence_kind = "call_skew_put_volume"
         elif dp_val > 0.0 and skew_percentile > SKEW_HIGH_DEFENSE_PERCENTILE:
             is_structural_divergence = True
             divergence_level = "Warning"
+            divergence_kind = "price_up_put_skew"
         elif dp_val < -3.0 and iv_rank_val is not None and iv_rank_val < 15.0:
             is_structural_divergence = True
             divergence_level = "IV Suppression"
+            divergence_kind = "price_down_low_iv"
 
     divergence = "同步"
     action = "保持觀察"
@@ -1457,7 +1501,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         else:
             divergence = "⚠️ 警告：結構性情緒背離"
             if divergence_level == "High Divergence":
-                action = "高度背離：避免追價買權；僅允許小倉位收租並搭配保護"
+                action = (
+                    "高度背離：嚴禁追價買權與賣方收租，僅限現貨防守減碼"
+                    if earnings_lockout
+                    else "高度背離：避免追價買權；僅允許小倉位收租並搭配保護"
+                )
             else:
                 action = "留意結構性背離：建議降槓桿、以保護性結構防禦"
     elif (
@@ -1481,7 +1529,11 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         )
     ):
         divergence = "情緒背離 (散戶恐慌 vs 權利金便宜)"
-        action = "考慮賣出賣權 (Cash Secured Put)"
+        action = (
+            "財報鎖定窗口：勿賣出賣權，待財報後再評估 CSP"
+            if earnings_lockout
+            else "考慮賣出賣權 (Cash Secured Put)"
+        )
 
     # 「同步」只能代表「已判定且一致」：Skew 分位或 PCR 缺失時上方結構性分支
     # 全數跳過，舊版仍印「同步」等於把「沒資料」說成「沒背離」。
@@ -1648,9 +1700,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         status_tw = (
             iv_status_map.get(iv_status, "正常 / 公允") if iv_status else "正常 / 公允"
         )
-        earnings_loading = getattr(iv_data, "has_earnings_event", False) or (
-            isinstance(iv_data, dict) and iv_data.get("has_earnings_event", False)
-        )
+        earnings_loading = _iv_has_earnings_event(iv_data)
         macro_loading = getattr(iv_data, "has_macro_event", False) or (
             isinstance(iv_data, dict) and iv_data.get("has_macro_event", False)
         )
@@ -1663,20 +1713,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             macro_loading = True
 
         if iv_source in ["STORED_IV", "HV_PROXY"] and not earnings_loading:
-            try:
-                from database.calendar_cache import get_cached_earnings
-                from datetime import timedelta
-
-                earnings = get_cached_earnings(symbol)
-                if earnings and earnings.get("earnings_date"):
-                    today_dt = datetime.now().date()
-                    earn_date = datetime.strptime(
-                        earnings["earnings_date"][:10], "%Y-%m-%d"
-                    ).date()
-                    if today_dt <= earn_date <= today_dt + timedelta(days=14):
-                        earnings_loading = True
-            except Exception:
-                pass
+            if _cached_earnings_within_14d(symbol):
+                earnings_loading = True
 
         _event_loading_outer = bool(earnings_loading or macro_loading)
         _earnings_loading_outer = bool(earnings_loading)
@@ -2759,6 +2797,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                         regime_items.append(flip_item)
                     else:
                         regime_items.append("Gamma Flip: -- (無法估算)")
+                        _flip_placeholder_idx = len(regime_items) - 1
 
                     local_regime = analyze_local_gamma_regime(gex_prof, effective_c_val)
                     if local_regime is not None:
@@ -2796,8 +2835,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                                 if local_regime.flip_side == "SHORT_ABOVE"
                                 else "以下轉負 Gamma"
                             )
-                            regime_items.append(
-                                f"局部 Gamma 翻轉線 ≈ ${local_regime.flip_strike:.2f}（{side_note}）"
+                            # 合併為單一列取代「無法估算」佔位；僅呈現，閘門不採用
+                            regime_items[_flip_placeholder_idx] = (
+                                f"Gamma Flip: ≈ ${local_regime.flip_strike:.2f}"
+                                f"（局部翻轉線，{side_note}；全鏈無交叉，閘門不採用）"
                             )
 
                     _append_tree_block(gex_lines, "⚙️ 體制判讀", regime_items)
@@ -3231,7 +3272,25 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     scenario_overlays: list[str] = []
     if is_structural_divergence:
         scenario_overlays.append(
-            "⚠️ 結構性情緒背離：Skew 避險分位極端，且 PCR 落在相反極端，請以防守為主。"
+            {
+                "put_skew_call_volume": (
+                    "⚠️ 結構性情緒背離：Skew 避險分位極端（Put 貴）"
+                    "而 Volume PCR 極低（Call 量主導），請以防守為主。"
+                ),
+                "call_skew_put_volume": (
+                    "⚠️ 結構性情緒背離：Skew Call 溢價分位極端"
+                    "而 Volume PCR 極高（Put 量主導），請以防守為主。"
+                ),
+                "price_up_put_skew": (
+                    "⚠️ 結構性情緒背離：現價上漲但 Skew 避險分位 >90%，請以防守為主。"
+                ),
+                "price_down_low_iv": (
+                    "⚠️ 情緒背離：現價大跌但 IV Rank 極低，留意快取異常，請以防守為主。"
+                ),
+            }.get(
+                divergence_kind,
+                "⚠️ 結構性情緒背離：請以防守為主。",
+            )
         )
     if ivr_comp >= 90.0:
         scenario_overlays.append(
