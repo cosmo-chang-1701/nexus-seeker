@@ -187,13 +187,21 @@ def create_squeeze_entry_embed(
         def _px(v: Optional[float]) -> str:
             return f"${v:,.2f}" if v is not None else "N/A"
 
+        _stop_note = (
+            "（⚠ 高於進場價，錨點已失守）"
+            if entry_price is not None
+            and stop_loss is not None
+            and stop_loss >= entry_price
+            else "（D 擠壓區間低點與 20SMA 較低者 − 0.5×ATR₁D）"
+        )
+
         _add_ansi_field_safely(
             embed,
             "💰 價位與部位建議",
             [
                 "```ansi",
                 f" ├─ 進場價: {_px(entry_price)}",
-                f" ├─ 參考停損: {_px(stop_loss)}（D 擠壓區間低點與 20SMA 較低者 − 0.5×ATR₁D）",
+                f" ├─ 參考停損: {_px(stop_loss)}{_stop_note}",
                 f" └─ 建議部位: {f'總資產 {size_pct:g}%' if size_pct else 'N/A'}",
                 "```",
             ],

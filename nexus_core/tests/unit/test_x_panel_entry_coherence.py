@@ -129,19 +129,26 @@ def _bar_fields(bar_time: datetime, **extra: Any) -> dict[str, Any]:
     return fields
 
 
+def _today_bar(hour: int, minute: int) -> datetime:
+    """今日（紐約）的 K 棒時間：即時量比判定只適用於同日 K 棒。"""
+    return datetime.now(ny_tz).replace(
+        hour=hour, minute=minute, second=0, microsecond=0, tzinfo=None
+    )
+
+
 def test_rvol_label_is_volume_only_and_uses_time_of_day_baseline() -> None:
-    bar_time = datetime(2026, 10, 1, 15, 45)
+    bar_time = _today_bar(15, 45)
     desc = _embed_text(
         _mu_case(**_bar_fields(bar_time, rvol_15m_tod=1.86, tod_sample_count=4))
     )
     assert "放量突破" not in desc
     assert "即時量比 (RVOL_15m): 2.45x｜同時段量比 1.86x (前 4 日中位數)" in desc
     assert "🟢 放量 >= 1.5x" in desc
-    assert "@10-01 15:45 [前一交易日]" in desc
+    assert "@15:45" in desc and "[前一交易日]" not in desc
 
 
 def test_rvol_status_follows_time_of_day_ratio() -> None:
-    bar_time = datetime(2026, 10, 1, 15, 45)
+    bar_time = _today_bar(15, 45)
     desc = _embed_text(
         _mu_case(**_bar_fields(bar_time, rvol_15m_tod=1.2, tod_sample_count=4))
     )
@@ -149,7 +156,7 @@ def test_rvol_status_follows_time_of_day_ratio() -> None:
 
 
 def test_auction_bar_caveat_without_time_of_day_baseline() -> None:
-    bar_time = datetime(2026, 10, 1, 15, 45)
+    bar_time = _today_bar(15, 45)
     desc = _embed_text(_mu_case(**_bar_fields(bar_time)))
     assert "開盤／收盤競價時段，量比天然偏高" in desc
 
@@ -177,7 +184,7 @@ def test_divergence_reports_missing_data_instead_of_in_sync() -> None:
 def test_reference_divergence_volume_vs_polymarket() -> None:
     desc = _embed_text(
         _mu_case(
-            **_bar_fields(datetime(2026, 10, 1, 14, 0), rvol_15m_tod=1.9),
+            **_bar_fields(_today_bar(14, 0), rvol_15m_tod=1.9),
             polymarket_summary="🔴 20.2% 巨鯨偏空 (3檔加權 · 池量 $1.2M)",
         )
     )

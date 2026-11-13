@@ -1291,6 +1291,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                 rvol_line = (
                     " ├─ 即時量比 (RVOL_15m): -- (狀態: ⚠️ " + "；".join(bar_notes) + ")"
                 )
+            elif (
+                rvol_val is not None
+                and isinstance(_bt, datetime)
+                and _bt.date() != _today_ny
+            ):
+                # 前一交易日 K 棒的量比不是即時量比：只陳列，不判量能、不入背離參考
+                _stale_tod = (
+                    f"｜同時段 {rvol_tod_val:.2f}x" if rvol_tod_val is not None else ""
+                )
+                rvol_line = (
+                    f" ├─ 量比 (RVOL_15m，前一交易日): {rvol_val:.2f}x{_stale_tod}"
+                    " (⏸ 非即時，不判量能)"
+                )
+                rvol_effective = None
             elif rvol_val is not None:
                 # 量比只代表量能，不代表價位突破（是否站上阻力見 GEX 區塊）。
                 # 狀態優先以同時段量比判定：20 根滾動均量跨越日內 U 型量能曲線，
@@ -1467,6 +1481,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             if pcr_val_for_div < _PCR_BULLISH_NEUTRAL:
                 action = "Call 量能偏多但下檔避險升溫，勿以 PCR 單獨判多"
 
+    _reddit_down = "抓取失敗" in str(reddit_score) or "無法" in str(reddit_score)
+    if divergence == "同步" and _reddit_down:
+        divergence = "同步（Reddit 缺失，散戶背離未判定）"
+
     skew_color = (
         "\u001b[1;35m"
         if skew_percentile is not None and skew_percentile > SKEW_DEFENSIVE_PERCENTILE
@@ -1485,7 +1503,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             else "\u001b[1;33m"
         )
     )
-    if divergence_data_missing:
+    if divergence_data_missing or divergence.startswith("同步（Reddit 缺失"):
         divergence_color = "\u001b[1;30m"
     elif divergence.startswith(("量價／預測市場背離", "未達背離門檻")):
         divergence_color = "\u001b[1;33m"
@@ -2979,6 +2997,14 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         ddp_status = f"不符合（{_ddp_reason}）" if _ddp_reason else "不符合"
         ddp_color = "\u001b[1;30m"
 
+    if data.get("tdpq_activated") or data.get("tdp_activated"):
+        _d_tf = getattr(data.get("squeeze_eval"), "matrix", None)
+        _d_res = _d_tf.get("D") if isinstance(_d_tf, dict) else None
+        _d_mom = _to_float_or_none(getattr(_d_res, "momentum_value", None))
+        if _d_mom is not None and _d_mom <= 0:
+            ddp_status = "⚠️" + ddp_status[1:] + f"（D 動能 {_d_mom:.2f}，慎防接刀）"
+            ddp_color = "\u001b[1;33m"
+
     ivr_val = data.get("iv_rank")
     ivr_num = _to_float_or_none(ivr_val)
     if ivr_num is None:
@@ -3206,7 +3232,7 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     target_lines.extend(
         [
             " DDP 與期權風控",
-            f" ├─ DDP 估值雙擊: {ddp_color}{ddp_status}\u001b[0m",
+            f" ├─ DDP/TDP 估值: {ddp_color}{ddp_status}\u001b[0m",
             f" ├─ IV Rank: {ivr_color}{ivr_str}\u001b[0m",
             f" ├─ Volume PCR (即時情緒): {vol_pcr_color}{vol_pcr_str} ({volume_state})\u001b[0m",
             f" └─ OI PCR (結構防禦): {oi_pcr_color}{oi_pcr_str} ({oi_state})\u001b[0m",
@@ -3300,9 +3326,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             elif _k_budget <= 0:
                 kelly_lines.append(" ├─ 0 口原因: 組合既有 β 加權 Delta 已用盡可用額度")
             else:
+                if _k_unit:
+                    _k_unit_txt = (
+                        f"單口 ≈{_k_unit:.1f} 股×IV比{_k_unit_adj / _k_unit:.2f}"
+                        f"≈{_k_unit_adj:.1f} 股 SPY 等值"
+                    )
+                else:
+                    _k_unit_txt = f"單口 ≈{_k_unit_adj:.1f} 股 SPY 等值（含 IV 調整）"
+                _k_sep = " > " if _k_unit else "> "
                 kelly_lines.append(
-                    f" ├─ 0 口原因: 單口 ≈{_k_unit_adj:.1f} 股 SPY 等值（含 IV 調整）"
-                    f"> 可用額度 ≈{_k_budget:.1f} 股"
+                    f" ├─ 0 口原因: {_k_unit_txt}{_k_sep}可用額度 ≈{_k_budget:.1f} 股"
                 )
         if getattr(kelly_sizing, "warnings", None):
             kelly_lines.append(f" └─ 系統風控: \u001b[1;33m{warnings}\u001b[0m")
@@ -3347,13 +3380,19 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         _px_now = _to_float(data.get("price"), 0.0)
         _sq_entry = str(_sq_res.status) == _sq_rules.STATUS_ENTRY
         if _sq_stop:
+            _stop_above = _px_now > 0 and _sq_stop >= _px_now
             _stop_pct = (
                 f" (↓{(_px_now - _sq_stop) / _px_now * 100:.2f}%)"
                 if _px_now > 0
                 else ""
             )
+            if _stop_above:
+                _stop_pct = (
+                    f" (⚠ 高於現價 +{(_sq_stop - _px_now) / _px_now * 100:.2f}%，"
+                    "錨點已失守)"
+                )
             _wide_note = ""
-            if _sq_entry and _px_now > 0:
+            if _sq_entry and _px_now > 0 and not _stop_above:
                 _stop_dist = (_px_now - _sq_stop) / _px_now * 100
                 if _stop_dist > _BUFFER_MAX_STOP_DISTANCE_PCT * 100:
                     _sz = _to_float_or_none(_size)
