@@ -18,8 +18,8 @@
 | 特性維度 | 15 分鐘盤中巡邏（不再推播自選雷達） | 30 分鐘標的分析中心 2.0 深度心跳 |
 | :--- | :--- | :--- |
 | **進入點** | `SchedulerCog.dynamic_market_scanner()`（`cogs/trading/scheduler.py`） | `IntradayScanPipeline._run_loop()`<br/>$\to$ `market_analysis/intraday_pipeline/` |
-| **排程調度機制** | 盤中時鐘嚴格對齊（`:00`, `:15`, `:30`, `:45`）<br/>透過 `discord.ext.tasks.loop` | 獨立 `asyncio.Task` 背景常駐迴圈，<br/>每輪執行後 `await asyncio.sleep(30 * 60)`（時間漂移） |
-| **記憶體閘門** | `is_memory_safe()`，超過 85% 整輪略過 | `is_memory_safe()`，超過 85% 整輪略過、30 分鐘後再試 |
+| **排程調度機制** | 盤中時鐘嚴格對齊（`:00`, `:15`, `:30`, `:45`）<br/>透過 `discord.ext.tasks.loop` | 獨立 `asyncio.Task` 背景常駐迴圈，<br/>每輪結束後睡至下一個 `:10`／`:40` ET 時槽（`_seconds_until_next_slot`，最少 60 秒，且相鄰兩輪開始間隔至少 20 分鐘）；另有 `:03`／`:18`／`:33`／`:48` 的牆突破快速偵測路徑 |
+| **記憶體閘門** | `is_memory_safe()`，超過 85% 整輪略過 | `is_memory_safe()`，超過 85% 整輪略過，並睡至下一個 `:10`／`:40` 時槽再試 |
 | **自選標的相關工作** | edge 自選同步 `_sync_edge_watchlist()`（未設 `TUNNEL_URL` 不做任何事）；NRO／DDP／IV 期權掃描（`MarketScanCog`） | `evaluate_watchlist_symbol()` $\to$ `create_watchlist_signal_embed()` |
 | **主動推送過濾門檻** | 自選雷達面板不推播 | **僅當 `tactical.alert_level != "green"` 時發送**<br/>（非綠色警報才推送，杜絕無效打擾） |
 | **通知控制頻道** | （`heartbeat_watchlist`、`intel_market_scenario` 已移除） | `/notif_settings` $\to$ `heartbeat_symbol_deep`<br/>（migration `v070` 獨立分離） |
@@ -54,7 +54,7 @@ $$\text{Phase} = \begin{cases}
 \text{Phase C (尾盤結算與做市商對沖)} & t_{\text{close}} - 60 \text{ 分鐘} \le t_{\text{now}} \le t_{\text{close}} \\
 \text{Closed (閉市待機)} & \text{其他時段}
 \end{cases}$$
-當 $\text{Phase} = \text{Closed}$ 時，管線自動進入 600 秒休眠循環。
+當 $\text{Phase} = \text{Closed}$ 時，管線自動進入 600 秒休眠循環（`pipeline.py:902`）。深度心跳本身不以固定 30 分鐘間隔執行：每輪結束後睡至下一個 `:10`／`:40` ET 時槽（見 §1.2）。
 
 ---
 
@@ -75,13 +75,13 @@ flowchart TD
     end
 
     subgraph Pipeline2 ["管線二：30 分鐘深度戰術心跳 (深度決策)"]
-        LoopTrigger(["獨立 Task: sleep(30m) 循環"]) --> P2_Leader{"動態檢查 Leader 狀態<br/>getattr(bot, '_is_leader_instance')"}
+        LoopTrigger(["獨立 Task: 對齊 :10／:40 ET 時槽循環"]) --> P2_Leader{"動態檢查 Leader 狀態<br/>getattr(bot, '_is_leader_instance')"}
         P2_Leader -- 否 --> SleepLeader["休眠 600 秒等待選舉"] --> LoopTrigger
         P2_Leader -- 是 --> CheckMarket{美股開盤中?}
         CheckMarket -- 否 --> SleepClosed["休眠 600 秒待機"] --> LoopTrigger
         CheckMarket -- 是 --> EvalPhase["計算 Phase A/B/C 時段"]
         EvalPhase --> P2_Mem{"is_memory_safe()?"}
-        P2_Mem -- 否 --> LoopSleepMem["休眠 1800 秒，整輪略過"] --> LoopTrigger
+        P2_Mem -- 否 --> LoopSleepMem["睡至下一個 :10／:40 時槽，整輪略過"] --> LoopTrigger
 
         P2_Mem -- 是 --> EvalSymbol["evaluate_watchlist_symbol()<br/>計算微觀結構, Greeks, ATR"]
         EvalSymbol --> CheckAlert{"tactical.alert_level != 'green'?"}
@@ -101,7 +101,7 @@ flowchart TD
         AdvisorDry -- 是 --> AdvisorQueue["create_entry_rules_embed → queue_dm<br/>寫入 advisory_entry_ 去重旗標"]
         AdvisorDry -- 否 --> LoopSleep
         AdvisorQueue --> LoopSleep
-        LoopSleep["await asyncio.sleep(1800)"]
+        LoopSleep["await asyncio.sleep(_seconds_until_next_slot(...))<br/>睡至下一個 :10／:40 時槽"]
         LoopSleep --> LoopTrigger
     end
 ```
@@ -114,8 +114,10 @@ flowchart TD
 | :--- | :--- | :--- | :--- |
 | `RADAR_FETCH_CONCURRENCY` | `3` (Semaphore) | 進場顧問 radar 補抓的併發上限（比照持倉監控的 `Semaphore(3)`） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:48` |
 | `RADAR_CHUNK_SIZE` | `10` 檔 / 頁 | 雷達批次掃描 Embed 每頁封裝上限（防 4096 溢位；目前僅 `/x` 使用） | `nexus_core/cogs/embed_builders/market_embeds.py:401` |
-| `DEEP_PIPELINE_INTERVAL` | `1800` 秒 (30 分鐘) | 深度心跳每輪執行完畢（或因記憶體閘門略過）後的非阻塞休眠間隔 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:45` |
-| `CLOSED_STANDBY_INTERVAL` | `600` 秒 (10 分鐘) | 休市或非 Leader 實例時的待機探測間隔 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:633` |
+| `_PIPELINE_SLOT_MINUTES` | `(10, 40)`（每小時 :10／:40 ET） | 深度心跳的時槽對齊點；每輪結束（或因記憶體閘門略過）後經 `_seconds_until_next_slot` 睡至下一個時槽 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:29` |
+| `_WALL_BREAK_FAST_SLOT_MINUTES` | `(3, 18, 33, 48)`（每小時 :03／:18／:33／:48 ET） | GEX 牆突破快速偵測的時槽，沿用深度心跳快取的評估（`detect_only`） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:33` |
+| `_MIN_SLOT_SLEEP_SECONDS` / `_MIN_SCAN_GAP_SECONDS` | `60.0` 秒 / `20 × 60` 秒 | 時槽睡眠下限（避免同一分鐘重複執行）；相鄰兩輪掃描開始時間的最小間隔（避免非綠標的收到重複 DM） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:39`、`:45` |
+| 休市／非 Leader 待機（字面值） | `600` 秒 (10 分鐘) | 休市時於 `_run_loop` 內 `asyncio.sleep(600)`；非 Leader 實例同為 600 秒探測 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py`：休市 `:902`；非 Leader `:857` |
 | `MEMORY_SAFETY_THRESHOLD` | `85.0` % (RAM+Swap) | 30 分鐘深度心跳與 15 分鐘巡邏的記憶體閘門；超過即整輪略過 | `nexus_core/services/llm_service.py:13` |
 | `ANTI_WASHOUT_ATR_MULT` | `1.50` (1.5x) | 自選標的心跳的買賣點 ATR 緩衝（**與持倉停損無關**，見下方消歧義） | `nexus_core/market_analysis/signal_calculator.py` |
 | `NOTIF_CHANNEL_RADAR`（已移除） | `"heartbeat_watchlist"` / `"intel_market_scenario"` | 15 分鐘雷達與情境事件的舊通知開關；推播來源已下線，migration `v087` 刪除殘留設定列 | `nexus_core/database/migrations/v087_remove_watchlist_radar_channels.py` |
