@@ -146,6 +146,19 @@ class IntradayScanPipeline:
             logger.warning(f"讀取全站期權部位以計算戰術曝險失敗: {e}")
             return {}
 
+    async def _load_user_spot_holdings(self, user_id: int) -> list[Any]:
+        """於執行緒讀取單一使用者的現貨持倉，供戰術曝險統計使用。
+
+        讀取失敗回傳空 list（與 `_compute_user_tactical_exposure` 的降級語意一致）。
+        """
+        import database
+
+        try:
+            return await asyncio.to_thread(database.get_user_holdings, user_id)
+        except Exception as e:
+            logger.warning(f"讀取現貨持倉以計算戰術曝險失敗 (uid={user_id}): {e}")
+            return []
+
     def _compute_user_tactical_exposure(
         self,
         user_id: int,
@@ -212,33 +225,46 @@ class IntradayScanPipeline:
         # ANSI 報表並以 report_body 傳入 embed，但 create_watchlist_signal_embed()
         # 從未讀取該參數，等於白算一份報表。已一併移除。
         user_id = int(getattr(user_context, "user_id", 0))
-        has_position = (
-            database.is_symbol_in_portfolio(user_id, evaluation.metrics.symbol)
-            if user_id
-            else False
-        )
-        holding_row = None
-        symbol_tags = []
-        if user_id:
-            from database.watchlist_tags import get_watchlist_tags
 
-            symbol_tags = get_watchlist_tags(str(user_id), evaluation.metrics.symbol)
-            holdings_rows = database.get_user_holdings(user_id)
+        def _read_embed_db() -> tuple[bool, Any, Any, Optional[float]]:
+            # 所有同步 SQLite 讀取集中於執行緒，不阻塞 event loop (AGENTS.md §1)。
+            has_pos = (
+                database.is_symbol_in_portfolio(user_id, evaluation.metrics.symbol)
+                if user_id
+                else False
+            )
+            tags: Any = []
+            rows: Any = []
+            dtv: Optional[float] = deployed_tactical_value
+            if user_id:
+                from database.watchlist_tags import get_watchlist_tags
+
+                tags = get_watchlist_tags(str(user_id), evaluation.metrics.symbol)
+                rows = database.get_user_holdings(user_id)
+
+                # 資金退守閘門的組合層限額需要「目前已部署的戰術曝險」。呼叫端
+                # (_run_loop) 每位使用者只算一次並傳進來；未提供時就地補算，讓其他
+                # 呼叫端與測試不必知道這個參數。
+                if dtv is None:
+                    dtv = self._compute_user_tactical_exposure(
+                        user_id, spot_holdings=rows
+                    )
+            return has_pos, tags, rows, dtv
+
+        (
+            has_position,
+            symbol_tags,
+            holdings_rows,
+            deployed_tactical_value,
+        ) = await asyncio.to_thread(_read_embed_db)
+
+        holding_row = None
+        if user_id:
             user_holdings = {
                 str(row.get("symbol", "")).upper(): row for row in holdings_rows
             }
             holding_row = user_holdings.get(evaluation.metrics.symbol.upper())
 
-            # 資金退守閘門的組合層限額需要「目前已部署的戰術曝險」。呼叫端
-            # (_run_loop) 每位使用者只算一次並傳進來；未提供時就地補算，讓其他
-            # 呼叫端與測試不必知道這個參數。
-            deployed_tactical_value = (
-                deployed_tactical_value
-                if deployed_tactical_value is not None
-                else self._compute_user_tactical_exposure(
-                    user_id, spot_holdings=holdings_rows
-                )
-            )
         if deployed_tactical_value is None:
             deployed_tactical_value = 0.0
 
@@ -517,7 +543,9 @@ class IntradayScanPipeline:
                 evaluate_entry_advice,
             )
 
-            if not database.is_notification_enabled(user_id, "advisory_entry_signal"):
+            if not await asyncio.to_thread(
+                database.is_notification_enabled, user_id, "advisory_entry_signal"
+            ):
                 return
 
             strategy = (
@@ -587,7 +615,7 @@ class IntradayScanPipeline:
                 f"advisory_entry_{user_id}_{ticker.upper()}_"
                 f"{signal_key}_{now_ny.strftime('%Y%m%d')}"
             )
-            if database.get_kv_cache(cache_key):
+            if await asyncio.to_thread(database.get_kv_cache, cache_key):
                 return
 
             from cogs.embed_builders.portfolio_embeds import create_entry_rules_embed
@@ -901,12 +929,12 @@ class IntradayScanPipeline:
                 # 2. 獲取所有使用者資訊，執行量化分析
                 import database
 
-                user_ids = database.get_all_user_ids()
+                user_ids = await asyncio.to_thread(database.get_all_user_ids)
                 # 全站 TRADE 部位每輪只讀一次（非阻塞），供各使用者的戰術曝險統計取用。
                 trades_by_user = await self._load_tactical_option_positions_by_user()
 
                 for uid in user_ids:
-                    ctx = database.get_full_user_context(uid)
+                    ctx = await asyncio.to_thread(database.get_full_user_context, uid)
                     if getattr(ctx, "load_failed", False) is True:
                         logger.error(
                             f"[Intraday Pipeline] 使用者 {uid} 帳戶資料讀取失敗，本輪略過心跳推播"
@@ -915,11 +943,16 @@ class IntradayScanPipeline:
                     # 掃描 watchlist 中的標的
                     # 戰術曝險每位使用者每輪只算一次（含一次全站 TRADE 讀取），
                     # 不在每檔標的的迴圈裡重複查詢。
+                    spot_rows = await self._load_user_spot_holdings(uid)
                     user_tactical_exposure = self._compute_user_tactical_exposure(
-                        uid, option_positions=trades_by_user.get(uid, [])
+                        uid,
+                        spot_holdings=spot_rows,
+                        option_positions=trades_by_user.get(uid, []),
                     )
 
-                    watchlist = database.get_user_watchlist(uid)
+                    watchlist = await asyncio.to_thread(
+                        database.get_user_watchlist, uid
+                    )
                     for ticker, _ in watchlist:
                         try:
                             watchlist_eval = await self.evaluate_watchlist_symbol(
@@ -938,8 +971,8 @@ class IntradayScanPipeline:
                                 # 原本並存的 15 分鐘批次雷達推播已移除。
                                 # 一次讀取整份設定（走每使用者快取），不再對同一個
                                 # 開關各讀一次 is_notification_enabled 與完整 dict
-                                notif_settings = (
-                                    database.get_user_notification_settings(uid)
+                                notif_settings = await asyncio.to_thread(
+                                    database.get_user_notification_settings, uid
                                 )
                                 hb_enabled = notif_settings.get(
                                     "heartbeat_symbol_deep", True
