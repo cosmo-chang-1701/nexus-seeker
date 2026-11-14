@@ -28,6 +28,7 @@ class PSQResult:
     green_dot_bars_ago: Optional[int] = None  # 0 = 當根解除
     # Turbo：動能柱由非淺藍翻回淺藍（動能 > 0 且重新上升）。
     turbo: bool = False
+    turbo_bars_ago: Optional[int] = None  # 0 = 當根翻回淺藍
     # 最近一段連續擠壓區間的最低價（含當前仍在擠壓的區段）；從未擠壓則為 None。
     squeeze_range_low: Optional[float] = None
 
@@ -133,6 +134,7 @@ def analyze_psq(
     near_pct: float = 1.5,
     vix_spot: float | None = None,
     green_dot_lookback: int = 1,
+    turbo_lookback: int = 1,
 ) -> Optional[PSQResult]:
     """
     計算 PowerSqueeze (PSQ) 量化指標 (Ultimate Edition v2 - Vectorized High Performance)。
@@ -142,6 +144,8 @@ def analyze_psq(
         vix_spot: VIX 即時價格。用於動能標記（OVEREXTENDED_RISK / HIGH_CONVICTION_RECOVERY）
                   以及低波環境時間框架建議。
         green_dot_lookback: Green Dot 回看根數（1 = 只認當根解除）。
+        turbo_lookback: Turbo 回看根數（1 = 只認當根翻回淺藍；N = 當前仍為淺藍，
+                  且「非淺藍 → 淺藍」的翻轉發生在近 N 根內）。
 
     呼叫端若在盤中使用，須自行截掉尚未收盤的最後一根，否則擠壓與動能判定會
     隨每一次 tick 抖動。
@@ -221,10 +225,21 @@ def analyze_psq(
                     green_dot_bars_ago = ago
                     break
 
-        # Turbo：動能柱由非淺藍翻回淺藍。
-        prev_diff = mom_diff.iloc[-2] if len(mom_diff) > 1 else np.nan
-        prev_is_light_blue = bool(prev_mom > 0 and prev_diff > 0)
-        turbo = bool(mom_color == "LightBlue" and not prev_is_light_blue)
+        # Turbo：動能柱由非淺藍翻回淺藍（當前仍為淺藍，且該段淺藍連續區間於近
+        # turbo_lookback 根內起算）。turbo_lookback=1 即只認當根翻轉。
+        light_vals = ((momentum_value > 0) & (mom_diff > 0)).to_numpy(dtype=bool)
+        n_light = len(light_vals)
+        turbo = False
+        turbo_bars_ago: Optional[int] = None
+        if n_light >= 1 and light_vals[-1]:
+            run = 1
+            while run < n_light and light_vals[n_light - 1 - run]:
+                run += 1
+            # run < n_light 代表連續淺藍區間之前確有一根非淺藍（翻轉存在）。
+            if run < n_light or not light_vals[0]:
+                if run <= max(1, int(turbo_lookback)):
+                    turbo = True
+                    turbo_bars_ago = run - 1
 
         # 最近一段連續擠壓區間的最低價。
         squeeze_range_low: Optional[float] = None
@@ -270,6 +285,7 @@ def analyze_psq(
             green_dot=green_dot,
             green_dot_bars_ago=green_dot_bars_ago,
             turbo=turbo,
+            turbo_bars_ago=turbo_bars_ago,
             squeeze_range_low=squeeze_range_low,
         )
     except Exception as e:
@@ -285,6 +301,7 @@ def compute_psq_series(
     bb_mult: float = 2.0,
     kc_mults: list = [1.0, 1.5, 2.0],
     green_dot_lookback: int = 1,
+    turbo_lookback: int = 1,
 ) -> Optional[pd.DataFrame]:
     """逐根 PSQ 序列（離線回測用）：與 `analyze_psq` 的最後一根判定逐欄一致。
 
@@ -317,7 +334,9 @@ def compute_psq_series(
     green_dot = (~sq) & (mom > 0) & recent_release
     color_s = pd.Series(color, index=df.index)
     light = color_s == "LightBlue"
-    turbo = light & ~light.shift(1, fill_value=False)
+    flip = light & ~light.shift(1, fill_value=False)
+    turbo_n = max(1, int(turbo_lookback))
+    turbo = light & flip.rolling(turbo_n, min_periods=1).max().astype(bool)
     return pd.DataFrame(
         {
             "squeeze_level": level,

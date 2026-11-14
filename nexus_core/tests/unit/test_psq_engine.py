@@ -207,3 +207,71 @@ def test_compute_psq_series_matches_analyze_psq_last_bar() -> None:
         assert row["momentum_color"] == res.momentum_color, end
         assert bool(row["green_dot"]) == res.green_dot, end
         assert bool(row["turbo"]) == res.turbo, end
+
+
+def _turbo_frame() -> pd.DataFrame:
+    up1 = np.linspace(100, 120, 40)
+    pause = np.linspace(120, 116, 8)
+    up2 = 116 + np.cumsum(np.full(8, 2.0))
+    close = np.concatenate([up1, pause, up2])
+    return pd.DataFrame(
+        {"Open": close, "High": close + 0.5, "Low": close - 0.5, "Close": close}
+    )
+
+
+def _end_with_turbo_ago(df: pd.DataFrame, ago: int) -> int:
+    for end in range(42, len(df) + 1):
+        res = analyze_psq(df.iloc[:end], turbo_lookback=10)
+        if res is not None and res.turbo and res.turbo_bars_ago == ago:
+            return end
+    raise AssertionError(f"no end with turbo_bars_ago={ago}")
+
+
+def test_turbo_lookback_detects_flip_three_bars_ago() -> None:
+    df = _turbo_frame()
+    end = _end_with_turbo_ago(df, 3)
+    wide = analyze_psq(df.iloc[:end], turbo_lookback=6)
+    narrow = analyze_psq(df.iloc[:end], turbo_lookback=1)
+    assert wide is not None and narrow is not None
+    assert wide.turbo is True and wide.turbo_bars_ago == 3
+    assert narrow.turbo is False and narrow.turbo_bars_ago is None
+    assert analyze_psq(df.iloc[:end], turbo_lookback=3).turbo is False  # type: ignore[union-attr]
+    assert analyze_psq(df.iloc[:end], turbo_lookback=4).turbo is True  # type: ignore[union-attr]
+
+
+def test_turbo_lookback_non_light_blue_current_bar_is_not_turbo() -> None:
+    df = _turbo_frame()
+    for end in range(42, len(df) + 1):
+        res = analyze_psq(df.iloc[:end], turbo_lookback=10)
+        assert res is not None
+        if res.momentum_color != "LightBlue":
+            assert res.turbo is False and res.turbo_bars_ago is None
+
+
+def test_turbo_lookback_default_matches_legacy_behaviour() -> None:
+    df = _turbo_frame()
+    saw = False
+    for end in range(42, len(df) + 1):
+        res = analyze_psq(df.iloc[:end])
+        prev = analyze_psq(df.iloc[: end - 1])
+        assert res is not None and prev is not None
+        legacy = (
+            res.momentum_color == "LightBlue" and prev.momentum_color != "LightBlue"
+        )
+        assert res.turbo is legacy
+        assert res == analyze_psq(df.iloc[:end], turbo_lookback=1)
+        saw = saw or legacy
+    assert saw
+
+
+def test_turbo_lookback_series_matches_analyze_psq() -> None:
+    from market_analysis.psq_engine import compute_psq_series
+
+    df = _turbo_frame()
+    for n in (1, 3, 6):
+        series = compute_psq_series(df, turbo_lookback=n)
+        assert series is not None
+        for end in range(42, len(df) + 1):
+            res = analyze_psq(df.iloc[:end], turbo_lookback=n)
+            assert res is not None
+            assert bool(series.iloc[end - 1]["turbo"]) == res.turbo, (n, end)

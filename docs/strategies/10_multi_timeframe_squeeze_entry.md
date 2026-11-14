@@ -61,7 +61,7 @@ $$
 動能色：$M_t > 0$ 且 $\Delta M_t > 0$ 為淺藍，$M_t > 0$ 且 $\Delta M_t \le 0$ 為深藍，$M_t < 0$ 且 $\Delta M_t < 0$ 為紅，$M_t < 0$ 且 $\Delta M_t \ge 0$ 為金。
 
 - **Green Dot**（使用者定義：擠壓解除點）：近 $N$ 根內出現 $\text{SQ}_{j-1} \wedge \neg \text{SQ}_j$，且當前 $\neg\text{SQ}_t \wedge M_t > 0$。$N$ 見 §4。
-- **Turbo**（Claude 建議、經使用者同意的定義）：動能色由非淺藍翻回淺藍。「3 日 Turbo」即 3D 時間框架的 Turbo。
+- **Turbo**（Claude 建議、經使用者同意的定義）：動能色由非淺藍翻回淺藍。「3 日 Turbo」即 3D 時間框架的 Turbo。盤中 T1 觸發另有回看窗：當前仍為淺藍，且「非淺藍 → 淺藍」的翻轉發生在近 $K$ 根內（$K$ 見 §4 `TURBO_LOOKBACK`；15m 為 2 根、5m 為 6 根，其餘時間框架 $K=1$ 即只認當根翻轉）。原因是深度掃描每 30 分鐘（:10/:40 ET）才評估一次，窗口須涵蓋 ≥ 30 分鐘，否則兩次評估之間的觸發會被漏掉。
 
 ### 2.3 自動壓力區（`squeeze_entry/resistance.py`）
 
@@ -158,7 +158,8 @@ flowchart TD
 
 | 常數 | 值 | 說明 | 位置 |
 | :--- | :--- | :--- | :--- |
-| `GREEN_DOT_LOOKBACK` | W 2、3D/D/65m/15m/5m 3 | Green Dot 解除後仍有效的根數 | `squeeze_entry/timeframes.py` |
+| `GREEN_DOT_LOOKBACK` | W 2、3D/D/65m/15m 3、5m 6 | Green Dot 解除後仍有效的根數（5m 6 根 = 30 分鐘，涵蓋深度掃描間隔） | `squeeze_entry/timeframes.py` |
+| `TURBO_LOOKBACK` | 15m 2、5m 6（其餘預設 1） | Turbo 翻回淺藍後仍有效的根數（≥ 30 分鐘深度掃描間隔） | `squeeze_entry/timeframes.py` |
 | `TIER_SIZE_PCT` | T1 1.0／T2 1.5／T3 2.5 | 建議部位（占總資產 %） | `squeeze_entry/rules.py` |
 | `_MIN_SQUEEZE_MULTI` | 3 | 「多時間框架擠壓」門檻 | `squeeze_entry/rules.py` |
 | `_MIN_SQUEEZE_FOR_WATCH` | 2 | 觀察狀態門檻 | `squeeze_entry/rules.py` |

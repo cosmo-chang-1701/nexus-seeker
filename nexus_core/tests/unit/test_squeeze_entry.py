@@ -666,3 +666,79 @@ def test_squeeze_entry_embed_shows_resistance_warning() -> None:
     text = "\n".join(str(f.value) for f in embed.fields)
     assert "正在衝擊壓力區 $43.76–$44.59，尚未突破" in text
     assert "只提示、不影響判定" in text
+
+
+# ---------------------------------------------------------------------------
+# 盤中 T1 觸發窗口（涵蓋 30 分鐘深度掃描間隔）
+# ---------------------------------------------------------------------------
+def _turbo_lookback_frame() -> pd.DataFrame:
+    close = np.concatenate(
+        [
+            np.linspace(100, 120, 40),
+            np.linspace(120, 116, 8),
+            116 + np.cumsum(np.full(8, 2.0)),
+        ]
+    )
+    return pd.DataFrame(
+        {"Open": close, "High": close + 0.5, "Low": close - 0.5, "Close": close}
+    )
+
+
+def _turbo_lookback_end(df: pd.DataFrame, ago: int) -> int:
+    from market_analysis.psq_engine import analyze_psq
+
+    for end in range(42, len(df) + 1):
+        res = analyze_psq(df.iloc[:end], turbo_lookback=10)
+        if res is not None and res.turbo and res.turbo_bars_ago == ago:
+            return end
+    raise AssertionError(ago)
+
+
+def test_turbo_lookback_constants() -> None:
+    from market_analysis.squeeze_entry.timeframes import (
+        GREEN_DOT_LOOKBACK,
+        TURBO_LOOKBACK,
+    )
+
+    assert GREEN_DOT_LOOKBACK["W"] == 2
+    assert all(GREEN_DOT_LOOKBACK[tf] == 3 for tf in ("3D", "D", "65m", "15m"))
+    assert GREEN_DOT_LOOKBACK["5m"] == 6
+    assert TURBO_LOOKBACK["15m"] == 2 and TURBO_LOOKBACK["5m"] == 6
+    assert all(tf not in TURBO_LOOKBACK for tf in ("W", "3D", "D", "65m"))
+
+
+def test_turbo_lookback_5m_flip_four_bars_back_is_t1() -> None:
+    from market_analysis.squeeze_entry.timeframes import compute_state
+
+    df = _turbo_lookback_frame()
+    st = compute_state("5m", df.iloc[: _turbo_lookback_end(df, 4)])
+    assert st is not None and st.turbo is True
+    # 同一份資料以單根窗口（D：未列入 TURBO_LOOKBACK）看不到
+    legacy = compute_state("D", df.iloc[: _turbo_lookback_end(df, 4)])
+    assert legacy is not None and legacy.turbo is False
+    m = _matrix(D=_SQ)
+    m["5m"] = st
+    r = evaluate_squeeze_entry(m, _NO_RES)
+    assert r.status == STATUS_ENTRY and r.tier == 1
+    assert "5m Turbo" in r.triggers
+
+
+def test_turbo_lookback_15m_flip_one_bar_back_and_window_edge() -> None:
+    from market_analysis.squeeze_entry.timeframes import compute_state
+
+    df = _turbo_lookback_frame()
+    st = compute_state("15m", df.iloc[: _turbo_lookback_end(df, 1)])
+    assert st is not None and st.turbo is True
+    too_old = compute_state("15m", df.iloc[: _turbo_lookback_end(df, 2)])
+    assert too_old is not None and too_old.turbo is False
+
+
+def test_turbo_lookback_does_not_touch_t3_or_t2() -> None:
+    m = _matrix(D={"green_dot": True}, **{"5m": {"turbo": True}})
+    assert evaluate_squeeze_entry(m, _NO_RES).tier == 3
+    m2 = _matrix(
+        W=_SQ,
+        D={**_SQ, "momentum_color": "LightBlue"},
+        **{"65m": _SQ, "5m": {"turbo": True}},
+    )
+    assert evaluate_squeeze_entry(m2, _NO_RES).tier == 2

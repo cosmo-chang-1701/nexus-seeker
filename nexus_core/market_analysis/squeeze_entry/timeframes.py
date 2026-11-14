@@ -25,16 +25,19 @@ TIMEFRAMES: Tuple[str, ...] = ("W", "3D", "D", "65m", "15m", "5m")
 HIGHER_TIMEFRAMES: Tuple[str, ...] = ("W", "3D", "D")
 INTRADAY_TRIGGER_TIMEFRAMES: Tuple[str, ...] = ("15m", "5m")
 
-# Green Dot 回看根數：解除後 N 根內仍視為有效觸發（只看解除那一根太嚴，盤中
-# 30 分鐘才評估一次，很容易錯過）。
+# 盤中 T1 觸發回看根數：深度掃描每 30 分鐘（:10/:40 ET）才評估一次，只看最後
+# 一根已收盤 K 棒會漏掉兩次評估之間的觸發。因此盤中窗口須涵蓋 ≥ 30 分鐘：
+# 5m = 6 根、15m = 2 根。Green Dot（解除後 N 根內仍有效）與 Turbo（翻回淺藍後
+# N 根內仍有效）各自設定；未列出的時間框架一律為 1（只認當根）。
 GREEN_DOT_LOOKBACK: Dict[str, int] = {
     "W": 2,
     "3D": 3,
     "D": 3,
     "65m": 3,
     "15m": 3,
-    "5m": 3,
+    "5m": 6,
 }
+TURBO_LOOKBACK: Dict[str, int] = {"15m": 2, "5m": 6}
 
 # 3D K 棒比照 TradingView 的 Bar alignment：只計交易日，從每年第一個交易日
 # 起算、每年重新計數，因此年底最後一根可能不足 3 天。分組邊界每天不變（若以
@@ -245,7 +248,11 @@ def compute_state(
     """對已收盤 K 棒計算 PSQ；`full`（含未收盤那一根）只用來產生預覽。"""
     if confirmed is None or confirmed.empty:
         return None
-    res = analyze_psq(confirmed, green_dot_lookback=GREEN_DOT_LOOKBACK.get(tf, 1))
+    res = analyze_psq(
+        confirmed,
+        green_dot_lookback=GREEN_DOT_LOOKBACK.get(tf, 1),
+        turbo_lookback=TURBO_LOOKBACK.get(tf, 1),
+    )
     if res is None:
         return None
     preview = None
