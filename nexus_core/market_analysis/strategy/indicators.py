@@ -62,6 +62,11 @@ def _calculate_technical_indicators(df: Any):  # type: ignore
         return None
 
 
+# RSI 高於此值的 STO_CALL 屬右側賣 Call (追強賣 Covered Call)，NRO 掃描對齊閘門
+# (market_scan._strategy_alignment_reject_reason) 以同一常數攔截。
+STO_CALL_OVERBOUGHT_RSI = 65
+
+
 def _determine_strategy_signal(indicators: Any, ivr: Optional[float] = None):  # type: ignore
     """根據技術指標決定策略"""
     price = indicators.get("price", 0.0)
@@ -83,7 +88,7 @@ def _determine_strategy_signal(indicators: Any, ivr: Optional[float] = None):  #
 
     if rsi < 35 and hv_rank >= 30:
         return "STO_PUT", "put", deltas.get("STO_PUT", -0.20), 30, 45
-    elif rsi > 65 and hv_rank >= 30:
+    elif rsi > STO_CALL_OVERBOUGHT_RSI and hv_rank >= 30:
         return "STO_CALL", "call", deltas.get("STO_CALL", 0.20), 30, 45
     elif price > sma20 and 50 <= rsi <= 65 and macd_hist > 0:
         if hv_rank < 50:

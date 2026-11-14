@@ -267,14 +267,6 @@ class MarketScanCog(commands.Cog):
                             if user_context.enable_vtr:
                                 await self.trading_service.execute_vtr_auto_entry(data)
 
-                    elif alert_type == "PSQ":
-                        if await self._should_send_alert(
-                            uid, sym, user_context.option_alert_mode
-                        ):
-                            valid_alerts.append(data)
-                        if is_auto:
-                            user_cooldowns[cooldown_key] = now
-
                 if valid_alerts:
                     title = (
                         "📡 **【盤中動態掃描】NRO 風控已介入判定：**"
@@ -289,20 +281,13 @@ class MarketScanCog(commands.Cog):
                     for data in valid_alerts:
                         # 單則組裝失敗只略過該則，不影響同批其他警報
                         try:
-                            if data.get("alert_type") == "PSQ":
-                                from cogs.embed_builder import create_psq_embed
+                            scan_embeds.append(create_scan_embed(data, user_capital))
 
-                                scan_embeds.append(create_psq_embed(data))
-                            else:
-                                scan_embeds.append(
-                                    create_scan_embed(data, user_capital)
+                            rehedge_info = data.get("rehedge_info")
+                            if rehedge_info:
+                                rehedge_embeds.append(
+                                    create_rehedge_embed(rehedge_info)
                                 )
-
-                                rehedge_info = data.get("rehedge_info")
-                                if rehedge_info:
-                                    rehedge_embeds.append(
-                                        create_rehedge_embed(rehedge_info)
-                                    )
                         except Exception as build_err:
                             logger.error(
                                 f"掃描警報 embed 組裝失敗 "

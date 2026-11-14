@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import time
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, TypedDict
@@ -13,9 +14,11 @@ from config import get_vix_tier
 from market_analysis import portfolio, hedging
 from market_analysis.gap_analysis import GapAnalyzer
 from market_analysis.risk_engine import (
+    classify_trade_intent,
     optimize_position_risk,
     position_delta_sign,
 )
+from market_analysis.strategy.indicators import STO_CALL_OVERBOUGHT_RSI
 from services import market_data_service, news_service
 from models.execution import MarketCondition, Signal
 
@@ -24,6 +27,81 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 ny_tz = ZoneInfo("America/New_York")
+
+
+_SHARES_PER_CONTRACT = 100
+
+
+def _strategy_alignment_reject_reason(
+    strategy: str,
+    rsi: Any,
+    shares: float,
+    trading_strategy: str,
+    regime_value: Optional[str],
+) -> Optional[str]:
+    """NRO 掃描策略對齊閘門 (純函式)：回傳拒絕原因，None 表示放行。
+
+    - STO_CALL (Covered Call)：RSI 高於 STO_CALL_OVERBOUGHT_RSI 屬右側追強賣 Call
+      (離線比較中最大的績效拖累)；持股不足 100 股則為裸賣 Call。
+    - BTO_PUT (方向性做空)：僅 SHORT_SIDE，或 DYNAMIC 且 Regime 為 V 時放行；
+      Regime 未知 (None) 一律拒絕 (fail-closed)。
+    - 其餘策略 (STO_PUT / BTO_CALL) 不受影響。
+    """
+    if strategy == "STO_CALL":
+        try:
+            rsi_val = float(rsi)
+        except (TypeError, ValueError):
+            return "RSI 缺值，無法確認非右側賣 Call"
+        if math.isnan(rsi_val):
+            return "RSI 缺值，無法確認非右側賣 Call"
+        if rsi_val > STO_CALL_OVERBOUGHT_RSI:
+            return (
+                f"RSI {rsi_val:.1f} > {STO_CALL_OVERBOUGHT_RSI}，"
+                "右側追強賣 Call 不符合現行策略"
+            )
+        if shares < _SHARES_PER_CONTRACT:
+            return f"持股 {shares:g} 股不足 {_SHARES_PER_CONTRACT} 股，不推裸賣 Call"
+        return None
+    if strategy and classify_trade_intent(strategy) == "DIRECTIONAL_SHORT":
+        mode = trading_strategy or "RIGHT_SIDE"
+        if mode == "SHORT_SIDE":
+            return None
+        if mode == "DYNAMIC":
+            if regime_value == "REGIME_V_BREAKDOWN_CHASE":
+                return None
+            return (
+                f"DYNAMIC 體制為 {regime_value or '未知'}，非 Regime V，不推方向性做空"
+            )
+        return f"{mode} 策略不推方向性做空 (BTO_PUT)"
+    return None
+
+
+async def _classify_symbol_regime_value(sym: str, spot: float) -> Optional[str]:
+    """以 radar 同源的 GEX 資料分類單一標的 Regime；任何失敗回傳 None (fail-closed)。"""
+    try:
+        from market_analysis.dynamic_rollover.regime_classifier import (
+            classify_dynamic_regime,
+        )
+        from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+
+        gex = await fetch_symbol_gex_metrics(sym)
+        if not isinstance(gex, dict) or not gex:
+            return None
+        gex_profile_data = {
+            "put_wall": gex.get("put_wall"),
+            "call_wall": gex.get("call_wall"),
+            "net_gex": gex.get("net_gex"),
+            "gex_profile": gex.get("gex_profile", {}),
+            "gamma_flip": gex.get("gamma_flip"),
+            "_is_stale_cache": bool(gex.get("_is_stale_cache", False)),
+        }
+        regime, _reason, _market_data = await classify_dynamic_regime(
+            sym, spot, gex_profile_data, []
+        )
+        return str(regime.value)
+    except Exception as e:
+        logger.warning(f"[Strategy Align] {sym} Regime 分類失敗 (fail-closed): {e}")
+        return None
 
 
 class EarningsAlert(TypedDict):
@@ -126,6 +204,16 @@ class MarketScanMixin:
 
         all_holdings = await asyncio.to_thread(get_all_holdings)
         holding_map = {(h["user_id"], h["symbol"]): h["avg_cost"] for h in all_holdings}
+        # 現貨股數：NRO 策略對齊閘門 (Covered Call 需持股) 使用；缺值視為 0 (fail-closed)
+        holding_qty_map: Dict[Tuple[int, str], float] = {}
+        for h in all_holdings:
+            try:
+                qty_val = float(h.get("quantity", 0) or 0)
+            except (TypeError, ValueError):
+                qty_val = 0.0
+            holding_qty_map[(h["user_id"], h["symbol"])] = qty_val
+        # DYNAMIC 使用者的 Regime 分類：每輪每標的至多一次，跨使用者共用
+        regime_cache: Dict[str, Optional[str]] = {}
 
         from market_analysis.risk_engine import MacroContext, build_macro_context
 
@@ -281,13 +369,8 @@ class MarketScanMixin:
                         )
 
                     is_option_valid = base_data.get("is_option_valid", False)
-                    psq_result = base_data.get("psq_result")
-                    has_psq_signal = psq_result and (
-                        getattr(psq_result, "is_breakout_long", False)
-                        or psq_result.is_near_support
-                    )
 
-                    if not is_option_valid and not has_psq_signal:
+                    if not is_option_valid:
                         continue  # 此標的沒有任何觸發訊號
 
                     # === 1. 選擇權策略分支 ===
@@ -331,6 +414,36 @@ class MarketScanMixin:
                         tte_hours = cached_sent["tte_hours"]
 
                         strategy = opt_data.get("strategy", "")
+
+                        # 🚫 策略對齊閘門：必須在任何副作用 (倉位優化、re-hedge 寫入、
+                        # 警報加入) 之前執行。
+                        _raw_ts = getattr(user_context, "trading_strategy", "")
+                        trading_strategy = _raw_ts if isinstance(_raw_ts, str) else ""
+                        shares_held = holding_qty_map.get((uid, sym), 0.0)
+                        regime_value: Optional[str] = None
+                        if (
+                            strategy
+                            and classify_trade_intent(strategy) == "DIRECTIONAL_SHORT"
+                            and trading_strategy == "DYNAMIC"
+                        ):
+                            if sym not in regime_cache:
+                                regime_cache[sym] = await _classify_symbol_regime_value(
+                                    sym, float(opt_data.get("price") or 0.0)
+                                )
+                            regime_value = regime_cache[sym]
+                        align_reason = _strategy_alignment_reject_reason(
+                            strategy,
+                            opt_data.get("rsi"),
+                            shares_held,
+                            trading_strategy,
+                            regime_value,
+                        )
+                        if align_reason is not None:
+                            logger.info(
+                                f"🚫 [Strategy Align] {sym} {strategy}: {align_reason}"
+                            )
+                            continue
+
                         _strike = float(opt_data.get("strike") or 0.0)
                         _ref_px = float(opt_data.get("price") or 0.0)
                         collateral_per_contract = (
@@ -362,6 +475,18 @@ class MarketScanMixin:
                         ):
                             opt_res.warnings.append(collateral_warning)
                         safe_qty = opt_res.suggested_contracts
+                        if strategy == "STO_CALL":
+                            # Covered Call 張數不得超過持股可覆蓋的整張數。
+                            # (程式庫無可重用的「已開空 Call 張數」helper，未扣除既有空單。)
+                            safe_qty = min(
+                                safe_qty, int(shares_held // _SHARES_PER_CONTRACT)
+                            )
+                            if safe_qty <= 0:
+                                logger.info(
+                                    f"🚫 [Strategy Align] {sym} {strategy}: "
+                                    "持股可覆蓋張數為 0"
+                                )
+                                continue
                         hedge_spy = opt_res.suggested_hedge_spy
 
                         if opt_res.warnings:
@@ -441,12 +566,6 @@ class MarketScanMixin:
 
                         valid_user_alerts.append(opt_data)
 
-                    # === 2. PSQ 戰情分支 ===
-                    if user_context.enable_psq_watchlist and has_psq_signal:
-                        psq_data = base_data.copy()
-                        psq_data["alert_type"] = "PSQ"
-                        valid_user_alerts.append(psq_data)
-
             if valid_user_alerts:
                 user_alerts_results[uid] = valid_user_alerts
 
@@ -496,18 +615,13 @@ class MarketScanMixin:
                 if res["ema_signals"]:
                     res["is_priority_alert"] = True
 
-            # 🚀 新增 PowerSqueeze 掃描 (使用日 K)
+            # 日 K (價格備援與 ExecutionRouter 指標)
             df_hist_1d = await market_data_service.get_history_df(
                 sym, period="1y", interval="1d"
             )
-            from market_analysis.psq_engine import analyze_psq
-
-            psq_result = analyze_psq(df_hist_1d, vix_spot=vix_spot)
-            if psq_result:
-                res["psq_result"] = psq_result
-                # Ensure price is available for PSQ reports
-                if not df_hist_1d.empty:
-                    res["price"] = float(df_hist_1d["Close"].iloc[-1])
+            if not df_hist_1d.empty:
+                # ExecutionRouter 備援路徑 (下方) 需要價格
+                res["price"] = float(df_hist_1d["Close"].iloc[-1])
 
             # 🚀 整合核心：Execution Router 執行決策 (SDDM)
             try:
@@ -586,15 +700,8 @@ class MarketScanMixin:
                         df_hist_1d["Close"].iloc[-1] if not df_hist_1d.empty else 0.0
                     )
 
-            has_psq_signal = False
-            if psq_result and (
-                getattr(psq_result, "is_breakout_long", False)
-                or psq_result.is_near_support
-            ):
-                has_psq_signal = True
-
             # 語意風控判定: 只在有任何訊號觸發時執行以節省成本
-            if is_option_valid or has_psq_signal:
+            if is_option_valid:
                 # 併行獲取新聞 (Finnhub) 與 Reddit (從 KV 快取讀取)
                 news_task = news_service.fetch_recent_news(sym)
 

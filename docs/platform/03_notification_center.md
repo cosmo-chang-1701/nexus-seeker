@@ -13,7 +13,7 @@
 
 - `capital`（總資本，必須 `> 0`）
 - `risk_limit`（基礎風險百分比限制，範圍 `1.0` 至 `50.0`）
-- `enable_vtr`、`enable_psq_watchlist`、`monthly_expense`、`tax_reserve_rate`、`cash_reserve`
+- `enable_vtr`、`enable_psq_watchlist`（已退役：PSQ 戰情推播已移除，改由擠壓進場顧問，欄位保留但不再產生警報）、`monthly_expense`、`tax_reserve_rate`、`cash_reserve`
 - `trading_strategy`（`RIGHT_SIDE` / `LEFT_SIDE` / `SHORT_SIDE` / `DYNAMIC`，遷移 `v068`，預設 `RIGHT_SIDE`）——詳見 [`../strategies/01_regime_routing_matrix.md`](../strategies/01_regime_routing_matrix.md)。這是第一個既非布林開關、也非自由文字數值欄位的設定，因此 `AccountSettingsView.on_select_callback()` 新增了**第三分支**：一個固定 4 選項的 `TradingStrategySelectView`，直接寫入資料庫並導回父視圖，不經過 Modal（仿照 `ui/watchlist_tags.py` 的 Select 子類作法）。
   - `SHORT_SIDE`（做空交易）是後續新增的第四個值。因該欄位是 `TEXT DEFAULT 'RIGHT_SIDE'` 且無 `CHECK` 約束，新增 enum 值**不需要**新的 migration。選單描述文字刻意標明方向（「做多・逆勢均值回歸」／「做空・結構破位追空」），避免使用者把「左側」誤讀為「做空」——左側本質仍是做多。
 - `portfolio_mode`（遷移 `v079`）——**已停用**：欄位保留但不再讀寫；多頭現貨的停利停損一律顧問化（見 [`../strategies/05_dual_track_anti_washout_stop_loss.md`](../strategies/05_dual_track_anti_washout_stop_loss.md) §3.1）。
@@ -47,7 +47,7 @@
 | 📡 盤中情報 | `INTEL` | `heartbeat_symbol_deep` | 30 分鐘個股深度戰場心跳（`IntradayScanPipeline`，含期權合約規劃） |
 | | | `telemetry_orders` | 待成交掛單遙測對齊 |
 | | | `alpha_market_signals` | DDP、廉價期權（Gamma Squeeze SPEAR 已於 2026-10-17 退役） |
-| | | `alpha_option_scan` | NRO 期權掃描執行決策、PowerSqueeze、期權掃描卡 |
+| | | `alpha_option_scan` | NRO 期權掃描執行決策、期權掃描卡（PowerSqueeze 戰情推播已退役；掃描僅推送符合現行策略的訊號，見 `08_scheduled_jobs_and_background_pipelines.md`） |
 | | | `alpha_price_volume_watch` | 個股 15 分鐘價量突破（自訂門檻） |
 | | | `alpha_wall_break` | 🧱 GEX 牆突破／跌破確認推播（自選標的，未校準）：前一交易日收盤牆被突破／跌破的盤中候選與 T+1 確認；FAKE／UNDETERMINED 只記錄不推播。`INTRADAY`、雜訊、預設開啟，環境變數 `WALL_BREAK_ALERT_ENABLED` 可整體關閉推播；去重前綴 `wall_break_`（`services/wall_break_service.py`，見 [`../microstructure/07_wall_break_verification.md`](../microstructure/07_wall_break_verification.md)） |
 | 🌐 全天候情報 | `INTEL` | `alpha_polymarket`、`alpha_wti_oil` | Polymarket 巨鯨與機率突變；WTI 原油（自訂門檻） |
