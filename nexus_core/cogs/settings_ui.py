@@ -339,8 +339,8 @@ SETTINGS_LABELS = {
         None,
     ),
     "enable_psq_watchlist": (
-        "⚡ PowerSqueeze 追蹤",
-        "是否對自選股開啟 PowerSqueeze 戰情追蹤",
+        "⚡ PowerSqueeze 追蹤（已退役，改由擠壓進場顧問）",
+        "此推播已退役，改由擠壓進場顧問（docs/strategies/10）取代；開關保留但不再產生警報",
         None,
     ),
     "monthly_expense": (
@@ -764,7 +764,7 @@ class AccountSettingsView(discord.ui.View):
             f"💰 **總資金**: `${ctx.capital:,.2f}` *(自動計算)*",
             f"🛡️ **基準風險上限**: `{ctx.risk_limit}%`",
             f"👻 **虛擬交易室 (VTR) 跟單**: `{'🟢 開啟' if ctx.enable_vtr else '🔴 關閉'}`",
-            f"⚡ **PowerSqueeze 追蹤**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
+            f"⚡ **PowerSqueeze 追蹤（已退役，改由擠壓進場顧問）**: `{'🟢 開啟' if ctx.enable_psq_watchlist else '🔴 關閉'}`",
             f"📈 **期權 Spread 權限**: `{'🟢 開啟' if ctx.can_trade_spreads else '🔴 關閉'}`",
             f"🛡️ **備用金防護**: `{'🟢 開啟' if ctx.cash_reserve_protection else '🔴 關閉'}`",
             f"🧭 **宏觀逃頂前瞻防禦**: `{'🟢 開啟' if ctx.enable_macro_top_escape_defense else '🔴 關閉'}`",

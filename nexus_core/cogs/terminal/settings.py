@@ -90,7 +90,7 @@ async def update_settings_impl(
     if enable_psq_watchlist is not None:
         db_updates["enable_psq_watchlist"] = enable_psq_watchlist
         updates.append(
-            f"⚡ PowerSqueeze 追蹤: `{'開啟' if enable_psq_watchlist else '關閉'}`"
+            f"⚡ PowerSqueeze 追蹤（已退役，改由擠壓進場顧問）: `{'開啟' if enable_psq_watchlist else '關閉'}`"
         )
 
     if polymarket_threshold is not None:

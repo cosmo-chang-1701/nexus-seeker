@@ -88,7 +88,7 @@ async def test_run_market_scan_unpacks_correctly(trading_service: Any):  # type:
     ) as mock_get_hist, patch("database.get_full_user_context") as mock_user_ctx, patch(
         "market_analysis.portfolio.refresh_portfolio_greeks", new_callable=AsyncMock
     ) as mock_refresh:
-        # mock_get_hist is called for "5d/1d" (Gap), "60d/1h" (EMA), and "1y/1d" (PSQ/scan)
+        # mock_get_hist is called for "5d/1d" (Gap), "60d/1h" (EMA), and "1y/1d" (scan)
         # return mock_aapl_df_short for all of them
         mock_get_hist.return_value = mock_aapl_df_short
 

@@ -275,6 +275,7 @@ NRO 倉位模型的 $\text{val\_adj\_unit\_delta}$ 需要知道一筆**尚未成
 
 | 消費端 | 修正 |
 | :--- | :--- |
+| NRO 掃描策略對齊 | 15 分鐘掃描在 `optimize_position_risk` 之前先過閘門：`STO_CALL` 限 RSI $\le 65$ 且持股 $\ge 100$ 股（口數再以 $\lfloor \text{持股}/100 \rfloor$ 封頂）；`BTO_PUT` 限 `SHORT_SIDE`／`DYNAMIC`＋Regime V |
 | `optimize_position_risk` | Dormant 拒絕限 `PREMIUM_SELL`；做空改用倒 U 形乘數，$0$ 時回傳 0 口（宏觀資料缺失時同樣判定）；All-in 繞過與分位數 Kelly 放大不適用做空；PCR $< 0.6$ 減碼限 `DIRECTIONAL_LONG`（原本連 `BTO_PUT` 也被砍） |
 | `strategy/analyze.py` | `vix_sizing_multiplier` 依意圖取值；`kelly_fraction_override` 不套用於做空；輸出 `trade_intent` |
 | `trading_service/execution.py` Stage 1 | STO 拒絕限 `PREMIUM_SELL`；新增做空乘數 $0$ 拒絕 |
