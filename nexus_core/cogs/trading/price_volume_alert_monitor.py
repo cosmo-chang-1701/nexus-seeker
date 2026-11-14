@@ -6,7 +6,7 @@ cogs/trading/price_volume_alert_monitor.py
 
 import asyncio
 import logging
-from datetime import time
+from datetime import datetime, time
 from typing import Any, Dict, List, Optional
 
 from discord.ext import commands, tasks
@@ -43,6 +43,39 @@ _pv_alert_times: list[time] = [
 ]
 
 
+def _now_et() -> datetime:
+    return datetime.now(market_time.ny_tz)
+
+
+def _is_evaluable_session_bar(bar: Confirmed15mBar) -> bool:
+    """K 棒是否為「今日常規盤內」的已收盤棒。
+
+    - 前一場次的棒（如 09:32 讀到昨日 15:45 棒）一律跳過：收盤棒已在收盤後
+      16:02 評估過，隔日早上不得再產生過期警報。
+    - 起始時間在今日收盤時刻（含）之後的列（如 yfinance 偶爾回傳的 16:00 列）
+      不是常規盤收盤棒，同樣跳過。
+    """
+    bar_time = bar.bar_time
+    now_et = _now_et()
+    if bar_time.date() != now_et.date():
+        return False
+    try:
+        schedule = market_time.nyse_calendar.schedule(
+            start_date=now_et.date(), end_date=now_et.date()
+        )
+        if schedule.empty:
+            return False
+        close_et = (
+            schedule.iloc[0]["market_close"]
+            .tz_convert(market_time.ny_tz)
+            .to_pydatetime()
+        )
+    except Exception as e:
+        logger.warning(f"📊 [價量監測] 取得今日收盤時刻失敗，略過該棒: {e}")
+        return False
+    return bool(bar_time.replace(tzinfo=market_time.ny_tz) < close_et)
+
+
 class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"):
     """個股 15 分鐘價量突破警報背景排程器。"""
 
@@ -55,10 +88,14 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
 
     @tasks.loop(time=_pv_alert_times)
     async def price_volume_alert_monitor(self) -> None:
-        """價量突破監控主循環 (:02/:17/:32/:47 ET)，僅於盤中執行。"""
+        """價量突破監控主循環 (:02/:17/:32/:47 ET)，盤中與收盤後 15 分鐘內執行。"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
-        if not market_time.is_market_open():
+        # 收盤後 16:02（半日市 13:02）仍放行一輪，評估最後一根 15:45 收盤棒。
+        if (
+            not market_time.is_market_open()
+            and not market_time.is_within_post_close_window()
+        ):
             return
 
         try:
@@ -110,13 +147,16 @@ class PriceVolumeAlertMonitorCog(commands.Cog, name="PriceVolumeAlertMonitorCog"
             ):
                 continue
 
+            if not _is_evaluable_session_bar(bar):
+                continue
+
             if not evaluate_watch_trigger(
                 bar, watch.target_price, watch.direction, watch.volume_multiplier
             ):
                 continue
 
-            # 去重鍵用 K 棒自身的交易日而非今天：09:32 評估到的是前一交易日 15:45 收盤棒，
-            # 若用今天的日期，會佔用今日鍵而擋掉當日真正的盤中突破；同一根棒也只會發一次。
+            # 去重鍵用 K 棒自身的交易日（等同今日，前一場次的棒已被上方跳過）；
+            # 同一根棒也只會發一次。
             bar_date_str = bar.bar_time.strftime("%Y%m%d")
             cache_key = (
                 f"price_volume_alert_{watch.user_id}_{watch.symbol}_{bar_date_str}"

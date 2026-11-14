@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 
-from market_time import ny_tz, is_market_open
+from market_time import ny_tz, is_market_open, is_within_post_close_window
 from models.schemas import WatchlistEvaluation
 
 from market_analysis.signal_calculator import (
@@ -744,7 +744,9 @@ class IntradayScanPipeline:
             return
         if not getattr(self.bot, "_is_leader_instance", True):
             return
-        if not is_market_open():
+        # 收盤後 15 分鐘內的 :03 時槽（16:03，半日市 13:03）仍放行一輪，讓最後一根
+        # 常規盤 15m K 棒（15:45–16:00）被評估；深度心跳 (_run_loop) 不受影響。
+        if not is_market_open() and not is_within_post_close_window():
             return
         from services.llm_service import is_memory_safe
 

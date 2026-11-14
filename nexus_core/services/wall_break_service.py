@@ -214,9 +214,12 @@ class WallBreakMonitor:
         a_put = _wall_or_none(anchor_row.get("put_wall"))
         if a_call is None and a_put is None:
             return
-        if anchor_row.get("trade_date") != market_time.get_last_completed_trading_date(
-            now_et
-        ):
+        # 錨點須為「今日場次之前」最近一個已收盤交易日：以今日 00:00 ET 為基準，
+        # 盤中與收盤後（16:03 快速偵測）結果一致；直接用 now 會在收盤後回傳今天。
+        prev_session = market_time.get_last_completed_trading_date(
+            now_et.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
+        if anchor_row.get("trade_date") != prev_session:
             return
 
         # 6. 便宜的預檢
