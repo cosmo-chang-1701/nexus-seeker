@@ -25,6 +25,8 @@ jobs:
     name: 🧹 Test and Lint
     # public repo：來自 fork 的 PR 一律使用 GitHub 託管 runner，避免外部程式碼在本地 Self-hosted Runner 上執行。
     runs-on: ${{ (inputs.use_local_runner || vars.USE_LOCAL_RUNNER == 'true') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "linux", "x64"]') || 'ubuntu-latest' }}
+    # 正常約 5 分鐘；xdist worker 崩潰後曾靜默卡 1h43m
+    timeout-minutes: 30
 
     steps:
     - name: 📥 Checkout repository
@@ -53,4 +55,5 @@ jobs:
         cd nexus_core
         cp .env.example .env
         # 全量（不帶 -m 篩選）；xdist worker 數受 mem_limit 850m 限制，見 scripts/docker_test.sh
-        docker compose run --rm nexus-seeker python -m pytest tests -n 2 --dist loadfile -p no:cacheprovider
+        # worker 被強殺（如 OOM）時立即失敗並印出崩潰測試名，而非啟動替代 worker 後卡死
+        docker compose run --rm nexus-seeker python -m pytest tests -n 2 --dist loadfile -p no:cacheprovider --max-worker-restart=0
