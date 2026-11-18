@@ -81,8 +81,9 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 
 ## Codebase Architecture by Layer
 
-- `nexus_core/cogs/`: Discord presentation layer (`bot.py` bootstrap/DM queue, `trading/` schedulers, heartbeats & fundamental pipeline monitor, `fundamental_terminal.py` (/fa), `analyst_agent.py`, `unified_terminal/`, `calendar.py`, `order_ui.py`, `settings_ui.py`, `hedging.py`).
-- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`fundamental_pipeline/`, `intraday_pipeline/`, `dynamic_rollover/` slimmed scenarios (B&H-first advisory engine), `room_threshold.py` adaptive volatility leaf, `structural_signals.py` GEX walls, `downside_risk.py` leaf, `sentiment_engine.py`, `wall_break.py` GEX wall-break verdict leaf, `allocation_drift.py` allocation-drift leaf).
+- `nexus_core/bot.py`: bot bootstrap and persistent DM queue (`queue_dm`).
+- `nexus_core/cogs/`: Discord presentation layer (`trading/` schedulers, heartbeats & fundamental pipeline monitor, `fundamental_terminal.py` (/fa), `analyst_agent.py`, `unified_terminal/`, `calendar.py`, `order_ui.py`, `settings_ui.py`, `hedging.py`).
+- `nexus_core/market_analysis/`: Pure quantitative algorithms and decision engines (`fundamental_pipeline/`, `intraday_pipeline/`, `dynamic_rollover/` slimmed scenarios (B&H-first advisory engine; also holds `structural_signals.py` GEX walls and the `short_side_entry.py` / `left_side_entry.py` entry confirmations), `room_threshold.py` adaptive volatility leaf, `downside_risk.py` leaf, `sentiment_engine.py`, `wall_break.py` GEX wall-break verdict leaf, `allocation_drift.py` allocation-drift leaf).
 - `nexus_core/services/`: Asynchronous service orchestrators and I/O pipelines (`sec_edgar_client.py`, `filing_event_service.py`, `liquidity_service.py`, `macro_surprise_service.py`, `fundamental_universe.py`, `alt_data_service.py`, `downside_risk_service.py`, `allocation_drift_service.py`, `notification_dispatcher.py`, `single_flight.py` request deduplication, `alpaca_stream_service.py`, `regime_outcome_labeler.py`, `llm_service.py`).
 - `nexus_core/database/`: SQLite WAL persistence layer (`connection.py` single-writer queue worker & `connect_db()`, `core.py` migration engine, `fundamental_pipeline.py`, `portfolio.py`, `orders.py`, `cache.py`, `notification_channels.py`).
 - `nexus_core/calibration/`: Offline backtest and parameter calibration harness (`microstructure.py`, `notif_report.py`, daily-bar strategy backtests `regime_momentum_backtest.py` / `static_allocation_backtest.py` / `macro_regime.py`; runs on dev machine only, never writes to live DB).
@@ -124,7 +125,7 @@ All quantitative models, risk matrices, and platform designs are specified in [`
 ### 4. Memory & VPS Safety (1GB–2GB RAM)
 - Use `BoundedCache` for high-frequency in-memory caching.
 - Gate all background loops and LLM pipelines with `is_memory_safe()` (85% RAM threshold).
-- Reuse shared in-memory caches across modules (e.g., `bot._latest_radar_data_cache`).
+- Reuse existing shared in-memory caches across modules instead of adding parallel ones; confirm a cache has a writer before relying on it (`bot._latest_radar_data_cache` has none).
 
 ### 5. Strict Typing & Code Quality
 - Strict mypy compliance (`disallow_untyped_defs = true`). Explicit types on empty collections (`_my_set: set[str] = set()`, `_my_list: list[str] = []`).
@@ -157,8 +158,8 @@ docker compose run --rm nexus-seeker python -m pytest tests -n 2 --dist loadfile
 docker compose run --rm nexus-seeker python -m pytest tests -m "not slow and not integration" -n 2 --dist loadfile
 # Type-checking pre-commit check
 docker compose run --rm nexus-seeker python -m mypy --config-file pyproject.toml .
-# Edge scraper tests
-PYTHONPATH=nexus_edge_scraper pytest nexus_edge_scraper/tests
+# Edge scraper tests (from the worktree root, not nexus_core/)
+cd .. && PYTHONPATH=nexus_edge_scraper pytest nexus_edge_scraper/tests
 ```
 - **Markers & Pre-Push Hook**: Tests taking $\ge 1\text{s}$ must be marked `@pytest.mark.slow`. `tests/integration/` is auto-marked `integration`. The 6 AST invariant tests (`test_db_write_centralization.py`, `test_output_centralization.py`, `test_notification_dispatch_centralization.py`, `test_kv_cache_dedup_whitelist.py`, `test_rate_gate_centralization.py`, `test_edge_auth_centralization.py`) must remain in the fast subset. `NEXUS_FULL_TESTS=1 git push` forces the full test suite.
 - **Focused Unit Runs**: `docker compose run --rm nexus-seeker python -m pytest tests/unit/test_intraday_pipeline.py` (or `test_embed_builder.py`, `test_order_ui.py`, `test_settings_interactive.py`).
