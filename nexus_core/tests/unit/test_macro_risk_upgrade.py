@@ -1782,6 +1782,11 @@ async def test_macro_overview_expired_caches_are_not_used_as_live() -> None:
     assert "[73.0 天前快取・不納入判定]" in text
     assert "未知 (GEX 快取過期" in text
     assert "即時抓取失敗" not in text
+    vts_line = next(
+        x for x in str(embed.fields[0].value).splitlines() if "VIX 期限結構 (VTS)" in x
+    )
+    assert "不納入判定" in vts_line
+    assert "0.89" not in vts_line and "0.888" not in vts_line
 
 
 @pytest.mark.asyncio
