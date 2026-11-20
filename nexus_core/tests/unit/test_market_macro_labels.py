@@ -378,3 +378,86 @@ def test_credit_spread_field_length_worst_case() -> None:
     field = next(f for f in embed.fields if "流動性與總經" in str(f.name))
     assert len(str(field.value)) <= 1024
     assert len(embed) <= 6000
+
+
+def _vts_line(**over: Any) -> str:
+    embed = build_market_macro_overview_embed(_macro(**over))
+    return next(
+        x for x in str(embed.fields[0].value).splitlines() if "VIX 期限結構 (VTS)" in x
+    )
+
+
+@pytest.mark.parametrize(
+    "ratio,color,word",
+    [
+        (0.89, "32", "正價差"),
+        (0.99, "32", "正價差"),
+        (1.00, "33", "期限倒掛"),
+        (1.09, "33", "期限倒掛"),
+        (1.10, "31", "嚴重倒掛"),
+        (1.25, "31", "嚴重倒掛"),
+    ],
+)
+def test_vts_thresholds(ratio: float, color: str, word: str) -> None:
+    line = _vts_line(vts_ratio=ratio)
+    assert f"\u001b[1;{color}m{ratio:.2f} ({word})\u001b[0m" in line
+
+
+@pytest.mark.parametrize("bad", ["__absent__", None, 0.0, -1.0, "bad", float("nan")])
+def test_vts_missing_shows_failure(bad: Any) -> None:
+    over: dict[str, Any] = {} if bad == "__absent__" else {"vts_ratio": bad}
+    line = _vts_line(**over)
+    assert "獲取數據失敗" in line
+    assert "0.00" not in line
+    assert "⚪" not in line
+
+
+@pytest.mark.parametrize("ratio", [None, 1.25])
+def test_vts_expired_hides_number(ratio: float | None) -> None:
+    line = _vts_line(
+        vts_is_expired=True, vts_cache_age_seconds=73 * 86400, vts_ratio=ratio
+    )
+    assert "⚪" in line
+    assert "[73.0 天前快取・不納入判定]" in line
+    assert "獲取數據失敗" not in line
+    assert "1.25" not in line
+
+
+def test_vts_tree_and_ansi_structure() -> None:
+    value = str(
+        build_market_macro_overview_embed(_macro(vts_ratio=1.05)).fields[0].value
+    )
+    lines = value.splitlines()
+    idx = next(i for i, x in enumerate(lines) if "VIX 期限結構 (VTS)" in x)
+    assert lines[idx].startswith(" ├─ ")
+    assert "恐慌指數 (VIX)" in lines[idx - 1]
+    assert value.count(" └─ ") == 1
+    assert "GEX Flip" in lines[-2]
+    assert value.startswith("```ansi\n") and value.endswith("\n```")
+    assert lines[idx].count("\u001b[1;3") == lines[idx].count("\u001b[0m")
+
+
+def test_vts_is_presentation_only() -> None:
+    a = build_market_macro_overview_embed(
+        _macro(vts_ratio=1.25, spy_spot=102.0, spy_gamma_flip=100.0)
+    )
+    b = build_market_macro_overview_embed(
+        _macro(vts_ratio=0.85, spy_spot=102.0, spy_gamma_flip=100.0)
+    )
+    assert a.color == b.color
+    ra = next(f for f in a.fields if "風控" in str(f.name) or f is a.fields[1])
+    rb = next(f for f in b.fields if "風控" in str(f.name) or f is b.fields[1])
+    assert str(ra.value) == str(rb.value)
+
+
+def test_core_field_length_worst_case() -> None:
+    embed = build_market_macro_overview_embed(
+        _macro(
+            gex_is_expired=True,
+            gex_cache_age_seconds=99999 * 86400,
+            gamma_flip_line=99999.99,
+            vts_is_expired=True,
+            vts_cache_age_seconds=99999 * 86400,
+        )
+    )
+    assert len(str(embed.fields[0].value)) <= 1024

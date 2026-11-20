@@ -1772,10 +1772,14 @@ async def test_macro_overview_expired_caches_are_not_used_as_live() -> None:
     assert data["fear_greed"] == 28.0
     assert data["rrp_change_30d"] == 10.4
     assert data["core_is_expired"] is False
+    assert data["vts_ratio"] is None
+    assert data["vts_is_expired"] is True
+    assert data["vts_cache_age_seconds"] == 73 * day
 
     embed = build_market_macro_overview_embed(data)
     text = "\n".join(str(f.value) for f in embed.fields)
     assert "[24.0 天前快取・不納入判定]" in text
+    assert "[73.0 天前快取・不納入判定]" in text
     assert "未知 (GEX 快取過期" in text
     assert "即時抓取失敗" not in text
 
@@ -1812,6 +1816,39 @@ async def test_macro_overview_discloses_expired_core_when_refetch_fails() -> Non
 
 
 @pytest.mark.asyncio
+async def test_macro_overview_vts_never_obtained() -> None:
+    from contextlib import ExitStack
+
+    from cogs.embed_builders.market_embeds import build_market_macro_overview_embed
+    from cogs.unified_terminal.utils import get_macro_overview_data
+
+    kv = {k: v for k, v in _STALE_OVERVIEW_KV.items() if k != "macro_vts_ratio"}
+    ages = {
+        k: 600.0
+        for k in (
+            "macro_spy_gamma_flip",
+            "macro_rrp",
+            "macro_fed_balance",
+            "macro_fear_greed",
+            "macro_uer",
+            "macro_sahm_rule",
+        )
+    }
+    with ExitStack() as stack:
+        for p in _overview_patches(kv, ages, {}):
+            stack.enter_context(p)
+        data = await get_macro_overview_data(4245)
+    assert data["vts_ratio"] is None
+    assert data["vts_is_expired"] is False
+    assert data["vts_cache_age_seconds"] is None
+    embed = build_market_macro_overview_embed(data)
+    line = next(
+        x for x in str(embed.fields[0].value).splitlines() if "VIX 期限結構 (VTS)" in x
+    )
+    assert "獲取數據失敗" in line
+
+
+@pytest.mark.asyncio
 async def test_macro_overview_fresh_caches_skip_core_refetch() -> None:
     from contextlib import ExitStack
 
@@ -1838,6 +1875,8 @@ async def test_macro_overview_fresh_caches_skip_core_refetch() -> None:
     mocks[-1].assert_not_awaited()
     assert data["gex_is_expired"] is False
     assert data["core_is_expired"] is False
+    assert data["vts_is_expired"] is False
+    assert data["vts_ratio"] == 0.888
     # 新鮮的 Flip 769.98 > SPY 763.99 → 負 Gamma 計入收縮 (WTI>85 + 負 Gamma = 2)
     assert data["escape_window_direction"] == "收縮"
 

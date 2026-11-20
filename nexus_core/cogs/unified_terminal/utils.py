@@ -394,6 +394,11 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     except (ValueError, TypeError):
         vts_val = None
     vts_cache_age = kv_ages.get("macro_vts_ratio")
+    vts_is_expired = (
+        vts_val is not None
+        and vts_cache_age is not None
+        and vts_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
     if vts_cache_age is not None and vts_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS:
         # 過期的期限結構視為未知：backwardation 改依 VIX 判定、流動性狀態不計分
         vts_val = None
@@ -525,6 +530,9 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "gex_cache_age_seconds": gex_cache_age,
         # 面板實際用於流動性狀態與 backwardation 判定的 VTS（逾時效為 None）
         "vts_ratio": vts_val,
+        # VTS 逾時效：面板顯示過期、不顯示舊值
+        "vts_is_expired": vts_is_expired,
+        "vts_cache_age_seconds": vts_cache_age,
         "core_is_expired": core_is_expired,
         "core_cache_age_seconds": core_cache_age,
     }
