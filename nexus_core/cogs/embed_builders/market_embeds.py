@@ -2183,6 +2183,25 @@ _COMPLACENCY_VIX_MAX = (
 _COMPLACENCY_US10Y = 5.0  # 低波自滿：10Y 殖利率下限（%）
 _COMPLACENCY_WTI = 90.0  # 低波自滿：WTI 下限（美元）
 _COMPLACENCY_HIKE_PROB_PCT = 15.0  # 低波自滿：FedWatch 升息機率下限（%）
+_VTS_INVERTED_RATIO = 1.0  # VTS 期限倒掛（與 unified_terminal/utils.py is_backwardation 及 VIX 尾部預警「期限倒掛」對齊）
+_VTS_SEVERE_INVERTED_RATIO = (
+    1.10  # VTS 嚴重倒掛（與 VIX 尾部預警「嚴重倒掛」及 scheduler 恐慌門檻對齊）
+)
+
+
+def _format_vts(macro_data: Dict[str, Any]) -> str:
+    """VIX 期限結構 (VTS) 的面板顯示：逾時效不顯示數字，缺值顯示獲取數據失敗。"""
+    if bool(macro_data.get("vts_is_expired", False)):
+        age = _format_cache_age(macro_data.get("vts_cache_age_seconds"))
+        return f"\u001b[1;33m⚪ 未知 [{age}快取・不納入判定]\u001b[0m"
+    v = _opt_float(macro_data.get("vts_ratio"))
+    if v is None or v <= 0:
+        return "\u001b[1;31m獲取數據失敗\u001b[0m"
+    if v >= _VTS_SEVERE_INVERTED_RATIO:
+        return f"\u001b[1;31m{v:.2f} (嚴重倒掛)\u001b[0m"
+    if v >= _VTS_INVERTED_RATIO:
+        return f"\u001b[1;33m{v:.2f} (期限倒掛)\u001b[0m"
+    return f"\u001b[1;32m{v:.2f} (正價差)\u001b[0m"
 
 
 # PRE_CALIBRATION／僅呈現：雷達賣方標籤的財報事件窗（日曆天），與 IVMetrics.has_earnings_event 一致。
@@ -2631,6 +2650,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     core_lines = [
         f" ├─ S&P 500 Index (SPX): {spx_val_str}",
         f" ├─ 恐慌指數 (VIX): {vix_val_str}",
+        f" ├─ VIX 期限結構 (VTS): {_format_vts(macro_data)}",
         f" ├─ 10年期美債收益率 (US10Y): {us10y_val_str}",
         f" └─ 零 Gamma 翻轉線 (GEX Flip): {flip_val_str}",
     ]
