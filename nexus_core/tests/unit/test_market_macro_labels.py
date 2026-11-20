@@ -431,6 +431,7 @@ def test_vts_tree_and_ansi_structure() -> None:
     idx = next(i for i, x in enumerate(lines) if "VIX 期限結構 (VTS)" in x)
     assert lines[idx].startswith(" ├─ ")
     assert "恐慌指數 (VIX)" in lines[idx - 1]
+    assert "US10Y" in lines[idx + 1]
     assert value.count(" └─ ") == 1
     assert "GEX Flip" in lines[-2]
     assert value.startswith("```ansi\n") and value.endswith("\n```")
@@ -445,9 +446,14 @@ def test_vts_is_presentation_only() -> None:
         _macro(vts_ratio=0.85, spy_spot=102.0, spy_gamma_flip=100.0)
     )
     assert a.color == b.color
-    ra = next(f for f in a.fields if "風控" in str(f.name) or f is a.fields[1])
-    rb = next(f for f in b.fields if "風控" in str(f.name) or f is b.fields[1])
+    ra = next(f for f in a.fields if f.name and "聯動風控引擎狀態" in f.name)
+    rb = next(f for f in b.fields if f.name and "聯動風控引擎狀態" in f.name)
     assert str(ra.value) == str(rb.value)
+    # 除 fields[0]（核心欄，合法含 VTS 列）外，其餘欄位須完全一致
+    assert len(a.fields) == len(b.fields)
+    for fa, fb in zip(a.fields[1:], b.fields[1:], strict=True):
+        assert fa.name == fb.name
+        assert fa.value == fb.value
 
 
 def test_core_field_length_worst_case() -> None:
