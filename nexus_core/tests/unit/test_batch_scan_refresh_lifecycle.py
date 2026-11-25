@@ -18,6 +18,7 @@ from cogs.unified_terminal.batch_scan_view import (
     BatchScanWarningButton,
 )
 from cogs.unified_terminal.cog import UnifiedTerminalCog
+from cogs.unified_terminal.radar_view import UnifiedRadarView
 
 _IDLE_LABEL = "☑️ 暫無可更新項目"
 _ALL_FRESH_LABEL = "✅ 資料皆在 30 分鐘內"
@@ -643,6 +644,84 @@ async def test_warning_finally_waits_for_pending_transition(
         assert view.btn_return_panel.disabled is False
     else:
         it.edit_original_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_settled_survives_pre_try_error() -> None:
+    view = _view([_res("A", None)], _cog())
+    with (
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch(
+            "services.market_data_service.mark_interactive_request",
+            side_effect=RuntimeError("boom"),
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            await _btn(view).callback(_interaction())
+    assert view.transition_settled.is_set() is True
+
+
+# --- 控制面板逾時 ------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_radar_panel_timeout_removes_buttons_via_last_interaction() -> None:
+    panel = UnifiedRadarView(MagicMock(), 12345)
+    message = MagicMock()
+    message.edit = AsyncMock()
+    panel.message = message
+    it = _interaction()
+    it.response.is_done = MagicMock(return_value=False)
+    await panel.update_state_message(it)
+    stored: Any = panel.last_interaction
+    assert stored is it
+    await panel.on_timeout()
+    it.edit_original_response.assert_awaited_once_with(view=None)
+    message.edit.assert_not_awaited()
+    assert panel.children == []
+
+
+@pytest.mark.asyncio
+async def test_radar_panel_timeout_falls_back_to_message() -> None:
+    panel = UnifiedRadarView(MagicMock(), 12345)
+    message = MagicMock()
+    message.edit = AsyncMock(side_effect=RuntimeError("gone"))
+    panel.message = message
+    await panel.on_timeout()
+    message.edit.assert_awaited_once_with(view=None)
+
+    orphan = UnifiedRadarView(MagicMock(), 12345)
+    await orphan.on_timeout()
+    assert orphan.children == []
+
+
+@pytest.mark.asyncio
+async def test_return_panel_hands_interaction_to_panel() -> None:
+    it = _interaction()
+    await _view([_res("A")]).btn_return_panel.callback(it)
+    panel = it.response.edit_message.await_args.kwargs["view"]
+    assert panel.last_interaction is it
+
+    failing = _interaction()
+    failing.response.edit_message = AsyncMock(side_effect=RuntimeError("down"))
+    with pytest.raises(RuntimeError):
+        await _view([_res("A")]).btn_return_panel.callback(failing)
+    orphan = failing.response.edit_message.await_args.kwargs["view"]
+    assert orphan.last_interaction is None
+    assert orphan.message is None
+
+
+@pytest.mark.asyncio
+async def test_panel_open_stores_message_on_view() -> None:
+    cog = UnifiedTerminalCog(MagicMock())
+    it = _interaction()
+    sent = MagicMock()
+    it.followup.send = AsyncMock(return_value=sent)
+    callback: Any = cog.symbol_hub.callback
+    await callback(cog, it, symbol=None, scan_type=None, tag=None, squeeze=None)
+    kwargs = it.followup.send.await_args.kwargs
+    assert kwargs["wait"] is True
+    assert kwargs["view"].message is sent
 
 
 # --- GEX 即時抓取 ------------------------------------------------------------

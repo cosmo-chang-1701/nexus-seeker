@@ -289,7 +289,6 @@ class BatchScanRefreshButton(discord.ui.Button):
         recently = view._active_recent_refreshes()
         # 檢查到此處之間沒有 await，同一 View 的第二次點擊必定看得到旗標
         view.refresh_in_progress = True
-        view.transition_settled.clear()
         # 整個更新流程（慢速重算與重新掃描）皆視為使用者互動來源
         with market_data_service.mark_interactive_request():
             previous_disabled = [
@@ -298,6 +297,8 @@ class BatchScanRefreshButton(discord.ui.Button):
             for child in view.children:
                 setattr(child, "disabled", True)
             self.label = f"⏳ 更新中 ({len(stale)} 檔)…"
+            # 緊接 try，避免之前拋例外使警示收尾永久等待
+            view.transition_settled.clear()
             try:
                 await interaction.response.edit_message(view=view)
             except Exception:
@@ -594,6 +595,8 @@ class BatchScanPaginatedView(discord.ui.View):
             )
             embed = build_unified_radar_panel_embed(view.get_state_dict())
             await interaction.response.edit_message(embed=embed, view=view)
+            # 面板逾時時以此互動移除按鈕；編輯失敗時面板不得持有任何參照
+            view.last_interaction = interaction
             # 編輯成功才停用本 View；失敗時畫面仍是原按鈕，須保持可用且逾時仍會移除
             self._retire()
         finally:
