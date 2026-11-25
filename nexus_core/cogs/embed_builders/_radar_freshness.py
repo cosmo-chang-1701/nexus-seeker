@@ -14,7 +14,7 @@ from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 _UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
 # 固定收益標的不讀 Max Pain
-_FIXED_INCOME_SYMBOLS: frozenset[str] = frozenset({"BOXX", "BIL", "SHV"})
+FIXED_INCOME_SYMBOLS: frozenset[str] = frozenset({"BOXX", "BIL", "SHV"})
 
 
 @dataclass(frozen=True)
@@ -81,7 +81,7 @@ def assess_radar_row(r: Mapping[str, Any]) -> RowFreshness:
 
     mp_flagged = False
     circuit_breaker = False
-    is_fixed_income = str(r.get("symbol") or "").upper() in _FIXED_INCOME_SYMBOLS
+    is_fixed_income = str(r.get("symbol") or "").upper() in FIXED_INCOME_SYMBOLS
     mp_data = r.get("max_pain")
     if not is_fixed_income and isinstance(mp_data, dict):
         circuit_breaker = bool(mp_data.get("circuit_breaker_triggered", False))

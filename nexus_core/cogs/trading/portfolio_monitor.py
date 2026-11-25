@@ -257,8 +257,8 @@ class PortfolioMonitorCog(commands.Cog):
                 if isinstance(raw_max_pain, dict)
                 else (float(raw_max_pain) if raw_max_pain else 0.0)
             )
-            # 標的層級快照不帶 DTE：radar 的 `nearest_dte` 是「該標的最近一個
-            # 到期日」(SPY 等每日到期標的恆為 0)，不是任何一張持倉合約的到期日。
+            # 標的層級快照不帶 DTE：雷達已移除 `nearest_dte`（它曾是該標的最近一個
+            # 到期日，SPY 等每日到期標的恆為 0，不是任何一張持倉合約的到期日）。
             # 過去把它當成部位 DTE，使長天期期權落入 dte<=1 的強制結算保護、
             # 現貨部位誤觸 TP3 (dte<=5)。現貨無到期概念維持 99；期權部位的 DTE
             # 一律由 _build_option_asset_entry 依合約自身 expiry 計算。

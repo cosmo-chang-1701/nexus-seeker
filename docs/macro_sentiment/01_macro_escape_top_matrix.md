@@ -151,7 +151,7 @@ $$\text{Payout} = \begin{cases}
 
 ### 2.7 /market 面板呈現層標示（僅呈現，不接任何閘門）
 
-以下六項只改 `build_market_macro_overview_embed()` 的文字，`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動：
+以下六項的使用者可見變更集中於 `build_market_macro_overview_embed()` 的文字（例外：VTS、TED 與信用利差三項另於 `get_macro_overview_data` 新增呈現用鍵，其中信用利差的 `credit_spreads` 鍵由 `services/credit_spread_service.py` 抓取；TED 項另使 `build_radar_scan_embed` 不再顯示宏觀區塊），`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動：
 
 - **VIX 期限結構 (VTS)**：位於「📊 大盤與核心指標」欄 VIX 之後，格式 `x.xx (狀態)`：< `_VTS_INVERTED_RATIO`（1.00）綠 正價差；1.00 至 < `_VTS_SEVERE_INVERTED_RATIO`（1.10）黃 期限倒掛；≥ 1.10 紅 嚴重倒掛。兩常數為 PRE_CALIBRATION／僅呈現：1.00 與 `is_backwardation` 及 VIX 尾部預警「期限倒掛」對齊，1.10 與「嚴重倒掛」及 scheduler 恐慌門檻對齊。來源 kv `macro_vts_ratio`（15 分鐘巡邏，僅 0.5–3.0 且有效時寫入）；快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）顯示 `⚪ 未知 [N 天前快取・不納入判定]`，絕不顯示舊值；缺值或 ≤ 0 顯示「獲取數據失敗」。`get_macro_overview_data` 輸出 `vts_is_expired`／`vts_cache_age_seconds`。不接任何閘門。
 - **零 Gamma 踩踏三態**：以 SPY 現價與 SPY Gamma Flip（與閘門同基準，避開 SPX/SPY 10 倍基差）計算緩衝 $buf = (S_{SPY} - Flip_{SPY}) / Flip_{SPY} \times 100$。判定順序：(1) `short_gamma_critical` 成立 → 🚨 CRITICAL（既有）；(2) $buf < 0$ → 🟡 負 Gamma 區（低於 Flip），註明 VIX／VTS 未達危機門檻、網格維持；(3) $0 \le buf <$ `_FLIP_KNIFE_EDGE_PCT`（0.5%）→ 🟡 臨界，盤中轉負即踩踏；(4) 其餘 🟢 NORMAL。Flip 或 SPY 現價缺值、或 GEX 快取過期時不算緩衝，維持原顯示。GEX Flip 行另附 `(SPY 緩衝 ±x.xx%)`。2026-10-09 實跑稽查：SPY 773.93／Flip 774.17（緩衝 −0.03%），SPX 7765.36／Flip 線 7767.77，兩個尺度一致、快取無過期，未重現 −520 點。現行程式碼下基差結構上不可能造成 520 點（`unified_terminal/utils.py` 在 SPX/SPY 比值落於 [9.8, 10.3] 時以該比值換算 Flip 線，兩尺度的百分比恆等）；可能是不同時點的快照，或 edge Flip 高於現價且落在離群閘門 20% 上限以內的雜訊（520 點約為 SPX 的 6.7%）。比值超出該區間時，Flip 行不附 SPY 緩衝後綴。🟡 負 Gamma 區文案只列出實際未成立的條件（VIX ≤ 20、VTS 未倒掛／缺值時依 VIX > 25）；🟡 狀態的邊框為警示色。
