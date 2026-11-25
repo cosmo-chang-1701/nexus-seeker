@@ -100,7 +100,7 @@ def test_critical_keeps_existing_label() -> None:
     assert "負 Gamma 區" not in text
 
 
-def test_ted_label_renamed_radar() -> None:
+def test_ted_label_moved_from_radar_to_market() -> None:
     scan = [
         {
             "symbol": "SPY",
@@ -113,8 +113,12 @@ def test_ted_label_renamed_radar() -> None:
         mock_kv.side_effect = lambda k: "0.03" if k == "macro_ted_spread" else None
         embeds = build_radar_scan_embed(scan, "ALL", 12345)
     text = "\n".join(_text(e) for e in embeds)
-    assert "CP−T-Bill 利差 (TED 代理)" in text
+    assert "🌍" not in text
+    assert "CP−T-Bill" not in text
     assert "TED Spread (流動性指標)" not in text
+    market = _render(ted_spread=0.03)
+    assert "CP−T-Bill 利差 (TED 代理): \u001b[1;36m0.03\u001b[0m" in market
+    assert "TED Spread (流動性指標)" not in market
 
 
 def test_rrp_small_base_hides_percentage() -> None:
@@ -373,6 +377,8 @@ def test_credit_spread_field_length_worst_case() -> None:
             rrp_change_30d=-99.9,
             sahm_rule=0.5,
             sahm_rule_date="2026-09-01",
+            ted_spread=-99.99,
+            ted_is_fallback=True,
         )
     )
     field = next(f for f in embed.fields if "流動性與總經" in str(f.name))

@@ -39,8 +39,8 @@ from cogs.embed_builders.settings_embeds import create_info_embed
 from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
     NexusEmbed,
-    format_cache_age_suffix,
 )
+from cogs.embed_builders._radar_freshness import assess_radar_row
 from market_analysis.macro_signals import SAHM_THRESHOLD
 from market_analysis.macro_calendar_translator import translate_macro_event
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
@@ -52,10 +52,6 @@ from market_analysis.insights_engine import (
 )
 from market_analysis.room_threshold import resolve_atr_15m
 from market_analysis.trading_orchestration import RRP_MATERIAL_BALANCE_BILLIONS
-
-# UOA kv_cache 新鮮度門檻：15 分鐘心跳週期的 2 倍緩衝。刻意獨立於 GEX 的
-# _EDGE_SNAPSHOT_MAX_AGE_SECONDS（30 分鐘 edge scraper 輪詢），兩者走不同管線。
-from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
 
 # `import database`（模組物件 + 呼叫時屬性存取）可以留在頂層：
 # `patch("database.get_full_user_context")` 改寫的是模組屬性，仍能攔截到。
@@ -73,8 +69,6 @@ from market_analysis.sentiment.skew_taxonomy import (
     SKEW_HIGH_DEFENSE_PERCENTILE,
     SKEW_TRIPLE_CONFLUENCE_PERCENTILE,
 )
-
-_UOA_SNAPSHOT_MAX_AGE_SECONDS: float = float(_EDGE_SNAPSHOT_MAX_AGE_SECONDS)
 
 # 雷達表格不定長欄位的單元格上限：單列不得因上游異常字串撐破 1024 字元的
 # field，否則 _safe_clamp_field_value 會在 code block 內硬切，表格失去閉合 `|`。
@@ -838,86 +832,6 @@ def build_radar_scan_embed(
             color=0x3498DB,  # Default to 資訊藍
         )
 
-        # 讀取全域快取指標 (TED Spread & GEX Flip)
-        macro_ansi_header = []
-        try:
-            from database.cache import get_kv_cache, get_kv_cache_with_age
-            from market_analysis.index_microstructure import (
-                MACRO_GEX_STALE_MAX_AGE_SECONDS,
-                is_macro_gamma_flip_outlier,
-            )
-
-            gex_flip = get_kv_cache("macro_spy_gamma_flip")
-            _, gex_flip_age = get_kv_cache_with_age("macro_spy_gamma_flip")
-            ted_spread = get_kv_cache("macro_ted_spread")
-            # 修正前寫入的離群 Flip 不顯示（與 /market 面板同一合理性閘門）
-            gex_flip_is_outlier = gex_flip is not None and is_macro_gamma_flip_outlier(
-                gex_flip, get_kv_cache("macro_spy_spot")
-            )
-
-            if gex_flip is not None or ted_spread is not None:
-                gex_val = None
-                if gex_flip is not None and not isinstance(gex_flip, bool):
-                    try:
-                        _parsed_gex = float(gex_flip)
-                        if math.isfinite(_parsed_gex):
-                            gex_val = _parsed_gex
-                    except (ValueError, TypeError):
-                        gex_val = None
-
-                if gex_flip_is_outlier:
-                    gex_str = (
-                        "SPY 零 Gamma 線 (GEX Flip): "
-                        "\u001b[1;33m快取數值離群，已濾除\u001b[0m"
-                    )
-                elif gex_val is not None and gex_val > 0:
-                    gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_val:.2f}\u001b[0m"
-                    if (
-                        gex_flip_age is not None
-                        and gex_flip_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
-                    ):
-                        gex_str += (
-                            " \u001b[1;33m["
-                            f"{_format_cache_age(gex_flip_age)}快取]\u001b[0m"
-                        )
-                elif gex_flip is not None:
-                    gex_str = (
-                        "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m"
-                    )
-                else:
-                    gex_str = ""
-
-                ted_val = None
-                if ted_spread is not None and not isinstance(ted_spread, bool):
-                    try:
-                        _parsed_ted = float(ted_spread)
-                        if math.isfinite(_parsed_ted):
-                            ted_val = _parsed_ted
-                    except (ValueError, TypeError):
-                        ted_val = None
-
-                if ted_val is not None:
-                    ted_alert = (
-                        " \u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
-                    )
-                    ted_color = "\u001b[1;31m" if ted_val > 0.5 else "\u001b[1;36m"
-                    ted_str = f"CP−T-Bill 利差 (TED 代理): {ted_color}{ted_val:.2f}\u001b[0m{ted_alert}"
-                elif ted_spread is not None:
-                    ted_str = (
-                        "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m"
-                    )
-                else:
-                    ted_str = ""
-                macro_parts = [p for p in (gex_str, ted_str) if p]
-                if macro_parts:
-                    macro_ansi_header.append(" 🌍 雷達：宏觀數據發布與流動性枯竭警告")
-                    for i, part in enumerate(macro_parts):
-                        prefix = " ├─ " if i < len(macro_parts) - 1 else " └─ "
-                        macro_ansi_header.append(prefix + part)
-                    macro_ansi_header.append("")
-        except Exception:
-            pass
-
         # 依標的分組（保持列順序；同標的多列合併為同一組）
         insights_by_sym: dict[str, list[str]] = {}
         # 資料時效備註改為整頁合併一行（不再逐標的各佔一則警示）
@@ -932,20 +846,6 @@ def build_radar_scan_embed(
             insights = insights_by_sym.setdefault(sym, [])
             quote = r["quote"] or {}
             iv_metrics: Any = r.get("iv_metrics")
-            is_premarket_row = False
-            if iv_metrics is not None:
-                if hasattr(iv_metrics, "is_premarket"):
-                    is_premarket_row = bool(iv_metrics.is_premarket)
-                elif isinstance(iv_metrics, dict):
-                    is_premarket_row = bool(iv_metrics.get("is_premarket", False))
-            raw_gex = r.get("gex_metrics")
-            gex_m_dict: dict[str, Any] = raw_gex if isinstance(raw_gex, dict) else {}
-            gex_is_stale = bool(gex_m_dict.get("_is_stale_cache", False))
-            uoa_age_seconds = r.get("uoa_age_seconds")
-            uoa_is_stale = (
-                uoa_age_seconds is not None
-                and uoa_age_seconds > _UOA_SNAPSHOT_MAX_AGE_SECONDS
-            )
             mp_data = r["max_pain"] or {}
 
             # 1. 價格與漲跌幅
@@ -1018,9 +918,6 @@ def build_radar_scan_embed(
             max_pain_strike = 0.0
             dist_pct = 0.0
             cb_triggered = False
-            mp_is_stale = False
-            mp_is_degraded = False
-            mp_age_seconds = None
 
             if is_fixed_income:
                 max_pain_strike = 0.0
@@ -1030,22 +927,6 @@ def build_radar_scan_embed(
                 mp_val = mp_data.get("max_pain")
                 max_pain_strike = float(mp_val) if mp_val is not None else 0.0
                 cb_triggered = mp_data.get("circuit_breaker_triggered", False)
-                mp_is_stale = bool(mp_data.get("is_stale", False))
-                mp_is_degraded = bool(
-                    mp_data.get("is_degraded", False)
-                    or mp_data.get("calculation_mode", "OI") == "Volume"
-                )
-                mp_updated_at = mp_data.get("updated_at")
-                if mp_updated_at:
-                    try:
-                        mp_age_seconds = (
-                            datetime.now(timezone.utc)
-                            - datetime.strptime(
-                                mp_updated_at, "%Y-%m-%d %H:%M:%S"
-                            ).replace(tzinfo=timezone.utc)
-                        ).total_seconds()
-                    except Exception:
-                        mp_age_seconds = None
                 if max_pain_strike > 0 and price_val > 0:
                     dist_pct = (price_val - max_pain_strike) / max_pain_strike * 100
             elif isinstance(mp_data, (float, int)):
@@ -2002,46 +1883,25 @@ def build_radar_scan_embed(
             )
             # 資料新鮮度標示 (🕓)：與上方「結構性風險」⚠️ 刻意分開，避免把「資料只是
             # 舊了」和「真正的結構性風險」混為一談，誤導使用者過度反應舊資料。
-            is_data_stale_or_degraded = (
-                mp_is_stale or mp_is_degraded or gex_is_stale or uoa_is_stale
-            )
-            # 盤前選擇權市場尚未開盤，Max Pain/GEX/OI 本來就不會有比前一交易日
-            # 收盤更新的數據，此時單純的年齡過期（gex_is_stale/uoa_is_stale）屬
-            # 正常現象；只有 mp_is_stale（SWR 重算失敗回退舊值）、mp_is_degraded
-            # （Volume 降級）或斷路器觸發才代表資料品質真的有問題，兩者仍需維持
-            # 原本較強烈的警語，不受盤前狀態影響。
-            is_genuine_degradation = mp_is_stale or mp_is_degraded or cb_triggered
-            is_benign_premarket_staleness = (
-                is_premarket_row and not is_genuine_degradation
-            )
-            if is_data_stale_or_degraded:
-                _stale_ages: list[float] = []
-                if (mp_is_stale or mp_is_degraded) and mp_age_seconds is not None:
-                    _stale_ages.append(mp_age_seconds)
-                if uoa_is_stale and uoa_age_seconds is not None:
-                    _stale_ages.append(uoa_age_seconds)
-                display_age = max(_stale_ages) if _stale_ages else mp_age_seconds
-                age_note = format_cache_age_suffix(display_age)
-                if is_benign_premarket_staleness:
-                    if sym not in premarket_syms:
-                        premarket_syms.append(sym)
-                else:
-                    _pos = age_note.find("更新於")
-                    compact_age = (
-                        age_note[_pos + 3 :].rstrip(")") if _pos >= 0 else "降級"
-                    )
-                    if all(sym != _s for _s, _ in stale_notes):
-                        stale_notes.append((sym, compact_age))
+            # 非交易時段單純的年齡過期屬正常 (🌙)；MP 過期／降級或斷路器觸發才是
+            # 真正的資料品質問題，維持較強烈的警語 (判定見 _radar_freshness)。
+            freshness = assess_radar_row(r)
+            if freshness.is_benign_premarket:
+                if sym not in premarket_syms:
+                    premarket_syms.append(sym)
+            elif freshness.is_stale:
+                if all(sym != _s for _s, _ in stale_notes):
+                    stale_notes.append((sym, freshness.compact_note()))
             if price_missing or (
-                is_data_stale_or_degraded and not is_benign_premarket_staleness
+                freshness.is_stale and not freshness.is_benign_premarket
             ):
                 page_has_degraded_row = True
             risk_prefix = "⚠️" if is_high_risk_or_anomaly else ""
             freshness_prefix = (
                 "🌙"
-                if is_data_stale_or_degraded and is_benign_premarket_staleness
+                if freshness.is_benign_premarket
                 else "🕓"
-                if is_data_stale_or_degraded
+                if freshness.is_stale
                 else ""
             )
             sym_cell_md = f"{risk_prefix}{freshness_prefix} {sym}".strip()
@@ -2055,15 +1915,6 @@ def build_radar_scan_embed(
 
         if page_has_degraded_row:
             embed.title = f"{embed.title} [快取/降級]"
-
-        if macro_ansi_header:
-            # macro_ansi_header[0] is the title, macro_ansi_header[1:-1] is the content
-            macro_content = "\n".join(macro_ansi_header[1:-1])
-            embed.add_field(
-                name="🌍 雷達：宏觀數據發布與流動性枯竭警告",
-                value=f"```ansi\n{macro_content}\n```",
-                inline=False,
-            )
 
         radar_title = "🧠 核心 AI 暨持倉量化雷達"
         md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall(±) | Skw% | SQZ向量 | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
@@ -2112,8 +1963,9 @@ def build_radar_scan_embed(
 
         # 獨立風控圖例與指標指引欄位 (避免擠佔表格 codeblock 字元數)
         legend_notes = (
-            "提示: ⚠️ 代表與最大痛點偏離度過高（>10%）或具備異常籌碼結構，需點擊穿透審查。\n"
-            "提示: 🕓 代表該標的本列存在快取/降級數據 (Max Pain/GEX/UOA)，詳見下方即時聯動警示。\n"
+            "提示: ⚠️ 痛點偏離>10%或籌碼結構異常，需穿透審查。\n"
+            "提示: 🕓 快取/降級，依來源標示年齡；盤後 GEX 常無新資料，詳見上方即時聯動警示。\n"
+            "提示: 🌙 非交易時段沿用收盤快照，屬正常。\n"
             "備註: EM Z-Score：(現價−前收)/週預期波動，±1 代表觸及預期區間上下緣。\n"
             "指標: SQZ 🟢多頭動能/🔴空頭動能，⏱️ 代表處於擠壓蓄力期，數值為動能。\n"
             "風控: 🛑 離場判定鐵律：嚴守 15 分鐘實體 K 線收盤撤退線 (過濾下影線流動性獵殺)。\n"
@@ -2132,12 +1984,13 @@ def build_radar_scan_embed(
         freshness_bullets: list[str] = []
         if stale_notes:
             freshness_bullets.append(
-                "• 🕓 非即時（Max Pain/GEX/UOA，請謹慎採信灰階建議）："
+                "• 🕓 非即時（請謹慎採信灰階建議）："
                 + "、".join(f"{_s} {_a}" for _s, _a in stale_notes)
             )
         if premarket_syms:
             freshness_bullets.append(
-                "• 🌙 盤前沿用前日收盤快照（屬正常）：" + "、".join(premarket_syms)
+                "• 🌙 非交易時段沿用最近收盤快照（屬正常）："
+                + "、".join(premarket_syms)
             )
         if freshness_bullets:
             insights_by_sym[_INSIGHTS_FRESHNESS_KEY] = freshness_bullets
@@ -2375,6 +2228,28 @@ def _format_credit_spread(
         f" ├─ {label}: {color}{bps} bps\u001b[0m{change_str} "
         f"{obs.strftime('%m/%d')}{stale_str}"
     )
+
+
+def _format_ted_spread(macro_data: Dict[str, Any]) -> str:
+    """CP−T-Bill 利差（TED 代理）單行；過期或備援快取一律附標示。僅呈現。
+
+    0 與負值是合法利差；缺值、布林值與非有限值顯示獲取數據失敗。
+    """
+    label = " ├─ CP−T-Bill 利差 (TED 代理)"
+    raw = macro_data.get("ted_spread")
+    v = None if isinstance(raw, bool) else _opt_float(raw)
+    if v is None:
+        return f"{label}: \u001b[1;31m獲取數據失敗\u001b[0m"
+    if v > 0.5:
+        text = f"\u001b[1;31m{v:.2f}\u001b[0m \u001b[1;31m⚠️ 流動性警戒\u001b[0m"
+    else:
+        text = f"\u001b[1;36m{v:.2f}\u001b[0m"
+    if macro_data.get("ted_is_expired", False):
+        age = _format_cache_age(macro_data.get("ted_cache_age_seconds"))
+        text += f" \u001b[1;33m[{age}快取]\u001b[0m"
+    elif macro_data.get("ted_is_fallback", False):
+        text += " \u001b[1;33m[即時抓取失敗，沿用快取]\u001b[0m"
+    return f"{label}: {text}"
 
 
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
@@ -2718,6 +2593,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             _IG_OAS_RED_BPS,
             _now_et().date(),
         ),
+        _format_ted_spread(macro_data),
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",

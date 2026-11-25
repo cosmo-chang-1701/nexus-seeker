@@ -680,6 +680,11 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
 # 上限的快照一律視為不可信，寧可回傳空資料也不顯示舊到失真的牆體與現價。
 _GEX_STALE_FALLBACK_MAX_AGE_SECONDS: float = 4 * 86400
 
+# SWR 降級寫回 kv 的最小時間前進量：edge 快照的資料時間是由「現在 − edge 年齡」
+# 換算而來，同一快照每次換算會有秒級誤差；超過此容差才視為 edge 比 kv 新，
+# 避免同一快照被重複寫入。
+_GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS: float = 60.0
+
 
 # PRE_CALIBRATION：GEX profile 有效性門檻。夜間 Yahoo OI 未就緒時，edge 只會留下
 # 少數遠離現價的履約價，不足以代表近端曝險分布，須視為無效並改用完整快照。
@@ -924,6 +929,36 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
         # 觸發背景刷新前先檢查退避窗口，避免上游持續故障時每次呼叫都重新發起嘗試。
         if stale_cached_data is not None:
             now = time.time()
+            edge_cand = _edge_gex_candidate(edge_cached, now)
+            # edge 快照比 kv 新且有效時，以其真實資料時間寫回 kv（不標記為新鮮），
+            # 讓直接讀 kv 的 /x 批次雷達追上最新快照。須在排程背景抓取之前完成，
+            # 以免覆蓋該任務寫入的即時資料。
+            if (
+                edge_cand is not None
+                and _has_valid_gex_profile(edge_cand[0])
+                and edge_cand[1] - stale_data_ts
+                > _GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS
+                and now - edge_cand[1] <= _GEX_STALE_FALLBACK_MAX_AGE_SECONDS
+            ):
+                from database.cache import save_kv_cache
+
+                try:
+                    await save_kv_cache(
+                        cache_key,
+                        {
+                            "data": {
+                                k: v
+                                for k, v in edge_cand[0].items()
+                                if k not in ("_is_stale_cache", "_data_ts")
+                            },
+                            "timestamp": now,
+                            "data_timestamp": edge_cand[1],
+                        },
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"寫回 edge GEX 快照至 kv_cache 失敗 ({symbol}): {e}"
+                    )
             last_attempt = _gex_swr_last_attempt.get(symbol.upper(), 0.0)
             if now - last_attempt >= _GEX_SWR_REFRESH_BACKOFF_SECONDS:
                 _gex_swr_last_attempt[symbol.upper()] = now
@@ -940,7 +975,6 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             swr_candidates: list[tuple[Optional[dict], float]] = [
                 (stale_cached_data, stale_data_ts)
             ]
-            edge_cand = _edge_gex_candidate(edge_cached, time.time())
             if edge_cand is not None:
                 swr_candidates.append(edge_cand)
             return _pick_freshest_gex_fallback(swr_candidates) or _empty_gex_fallback()

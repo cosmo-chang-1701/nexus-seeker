@@ -276,6 +276,7 @@ async def test_end_to_end_grouping_and_button_parse() -> None:
     interaction.message.embeds = [embed]
     view = MagicMock()
     view.children = [btn]
+    view.is_finished.return_value = False
     btn._view = view
 
     await btn.callback(interaction)
@@ -417,6 +418,7 @@ async def test_button_reads_continuation_fields_but_not_legend() -> None:
     interaction.message.embeds = [embed]
     view = MagicMock()
     view.children = [btn]
+    view.is_finished.return_value = False
     btn._view = view
     await btn.callback(interaction)
     assert cog._run_warning_symbols_hub.call_args.args[1] == ["AAA", "BBB", "CCC"]

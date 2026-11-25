@@ -20,6 +20,16 @@ from cogs.unified_terminal.radar_view import UnifiedRadarView
 from services.rate_gate import _is_interactive_request
 
 
+@pytest.fixture(autouse=True)
+def _mock_live_gex() -> Any:
+    """重算流程可能即時抓取 GEX，測試一律不連網。"""
+    with patch(
+        "market_analysis.index_microstructure.fetch_symbol_gex_metrics",
+        new_callable=AsyncMock,
+    ) as mocked:
+        yield mocked
+
+
 def _res(sym: str, age: Any, **extra: Any) -> dict[str, Any]:
     return {"symbol": sym, "_freshness": {"radar_age_seconds": age}, **extra}
 

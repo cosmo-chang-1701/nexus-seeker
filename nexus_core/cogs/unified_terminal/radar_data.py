@@ -504,14 +504,15 @@ class RadarDataMixin:
             else radar_cache.get("net_gex")
         )
         # 牆位／淨 GEX 由快照回退（無 gex_metrics 或其無牆位）時，沿用快照年齡判斷新鮮度。
-        if (
+        gex_from_radar = bool(
             (not gex_data.get("put_wall") and radar_cache.get("put_wall_strike"))
             or (not gex_data.get("call_wall") and radar_cache.get("call_wall_strike"))
             or (
                 gex_data.get("net_gex") is None
                 and radar_cache.get("net_gex") is not None
             )
-        ) and radar_is_stale:
+        )
+        if gex_from_radar and radar_is_stale:
             gex_is_stale = True
 
         atr_14 = float(radar_cache.get("atr_14", 0.0) or 0.0)
@@ -598,6 +599,20 @@ class RadarDataMixin:
         _f_ages = [
             a for a in [_mc_age, uoa_age_seconds, radar_age_seconds] if a is not None
         ]
+        # GEX 自身的資料年齡（供雷達 🕓 註記使用）
+        gex_age_seconds: Optional[float] = None
+        if gex_data and gex_ts > 0:
+            gex_age_seconds = time.time() - gex_ts
+        if gex_data.get("_is_stale_cache"):
+            # 舊版降級殘留的信封時間被重新蓋章過，年齡不可信
+            gex_age_seconds = None
+        elif gex_from_radar:
+            # 部分欄位來自快照時取兩者較舊者；快照年齡不明則整體不明
+            gex_age_seconds = (
+                None
+                if radar_age_seconds is None
+                else max(radar_age_seconds, gex_age_seconds or 0.0)
+            )
         if uoa_from_radar:
             uoa_is_stale = radar_is_stale
         else:
@@ -611,6 +626,7 @@ class RadarDataMixin:
                 "mp_age_seconds": _mc_age,
                 "uoa_age_seconds": uoa_age_seconds,
                 "radar_age_seconds": radar_age_seconds,
+                "gex_age_seconds": gex_age_seconds,
                 "oldest_age_seconds": max(_f_ages) if _f_ages else None,
                 "is_any_stale": bool(market_cache.get("is_stale", 0))
                 or gex_is_stale
@@ -719,10 +735,10 @@ class RadarDataMixin:
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
 
-        本函式僅由背景排程呼叫（15 分鐘 Watchlist 心跳、08:45 ET 盤前預熱、
-        15 分鐘持倉監控），並非互動指令的即時深度分析路徑，因此刻意維持預設
-        的 force_live=False / force_refresh=False，繼續吃 Edge Snapshot 與
-        IV/Max Pain 自身的快取——這正是這些排程任務存在的目的，避免每輪都對
+        呼叫端為 08:45 ET 盤前預熱、持倉監控、進場顧問與雷達的更新按鈕，
+        並非互動指令的即時深度分析路徑，因此刻意維持預設的
+        force_live=False / force_refresh=False，繼續吃 Edge Snapshot 與
+        IV/Max Pain 自身的快取——這正是背景排程任務存在的目的，避免每輪都對
         每個使用者、每個標的重複發動即時網路請求。互動指令（`/x symbol:`、
         批次掃描的「⚡ 批次分析警示標的」按鈕）走的是完全獨立的
         `_fetch_single_symbol_data_raw`，那裡才是保證即時性的地方。
@@ -731,6 +747,7 @@ class RadarDataMixin:
         呼叫端 opt-in）會強制重算 Max Pain、IV 指標與 PSQ（不沿用 squeeze 快取並
         重新寫回）；GEX 仍走 Edge Snapshot。預設 False 行為與上述完全一致。
         """
+        import time
         from market_analysis.sentiment_engine import SentimentEngine
         from services import market_data_service
 
@@ -755,40 +772,7 @@ class RadarDataMixin:
                 logger.error(f"[{symbol}] Batch Scan 獲取 UOA/物理封頂 失敗: {e}")
                 return [], []
 
-        async def _get_far_mp_and_dte(symbol: str) -> tuple[float, Optional[int]]:
-            try:
-                exp = await market_data_service.get_all_option_expiries(symbol)
-                if not exp:
-                    return 0.0, None
-                from datetime import datetime
-
-                today_dt = datetime.now().date()
-                target_mp = None
-                nearest_dte = None
-                for e in exp:
-                    try:
-                        diff = (datetime.strptime(e, "%Y-%m-%d").date() - today_dt).days
-                        if diff >= 0:
-                            if nearest_dte is None or diff < nearest_dte:
-                                nearest_dte = diff
-                            if diff >= 7 and target_mp is None:
-                                target_mp = e
-                    except ValueError:
-                        pass
-
-                far_mp = 0.0
-                if target_mp:
-                    from market_analysis.sentiment.max_pain import calculate_max_pain
-
-                    res = await calculate_max_pain(symbol, target_mp)
-                    if res and res.get("max_pain"):
-                        far_mp = float(res["max_pain"])
-                return far_mp, nearest_dte
-            except Exception:
-                pass
-            return 0.0, None
-
-        # 2. 情緒 (Skew)、UOA/物理封頂、IV、Max Pain、GEX、遠月 Max Pain、PCR
+        # 2. 情緒 (Skew)、UOA/物理封頂、IV、Max Pain、GEX、PCR
         # 彼此互不依賴，一律併入同一個 gather 平行執行，避免先前 Skew/UOA
         # 序列等待再進入 gather 造成的不必要延遲疊加（純效能修正，與快取新鮮度
         # 政策無關，背景排程任務一樣受益）。
@@ -804,7 +788,6 @@ class RadarDataMixin:
             mp_task = SentimentEngine.get_unified_max_pain(sym)
         gex_task = fetch_symbol_gex_metrics(sym)
         pcr_task = SentimentEngine.calculate_pcr(sym)
-        far_mp_task = _get_far_mp_and_dte(sym)
         atr_15m_task = fetch_atr_15m(sym)
 
         (
@@ -813,7 +796,6 @@ class RadarDataMixin:
             iv_m,
             mp_data,
             gex_data,
-            (far_mp_val, nearest_dte),
             pcr_data,
             atr_15m,
         ) = await asyncio.gather(
@@ -822,7 +804,6 @@ class RadarDataMixin:
             iv_task,
             mp_task,
             gex_task,
-            far_mp_task,
             pcr_task,
             atr_15m_task,
         )
@@ -1108,7 +1089,6 @@ class RadarDataMixin:
             "ma20": ma20_val,
             "atr_14": atr_14,
             "atr_15m": atr_15m,
-            "nearest_dte": nearest_dte,
             "vp_data": vp_data or {},
             "vol_data": vol_data,
         }
@@ -1171,7 +1151,6 @@ class RadarDataMixin:
                 "mp_near": mp_data.get("max_pain")
                 if isinstance(mp_data, dict)
                 else 0.0,
-                "mp_far": far_mp_val,
                 # 僅在到期日為真實日期時記錄；快取命中常回傳 "WEEKLY"，一律存 None。
                 "mp_near_expiry": _parse_iso_date(
                     mp_data.get("expiry") if isinstance(mp_data, dict) else None
@@ -1224,9 +1203,18 @@ class RadarDataMixin:
             except Exception:
                 pass
         _ages_s: list[float] = [a for a in [_mp_age_s, real_uoa_age] if a is not None]
+        # 只有降級備援的 GEX 帶有真實資料時間 `_data_ts`；其餘年齡不明
+        _gex_data_ts = (
+            _positive_number(gex_data.get("_data_ts"))
+            if isinstance(gex_data, dict)
+            else None
+        )
         result["_freshness"] = {
             "mp_age_seconds": _mp_age_s,
             "uoa_age_seconds": real_uoa_age,
+            "gex_age_seconds": time.time() - _gex_data_ts
+            if _gex_data_ts is not None
+            else None,
             "oldest_age_seconds": max(_ages_s) if _ages_s else None,
             "is_any_stale": bool(mp_data.get("is_stale", False))
             if isinstance(mp_data, dict)
