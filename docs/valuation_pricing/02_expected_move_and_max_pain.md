@@ -157,6 +157,7 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
    - **雷達快速路徑節流**：預設到期日計算失敗（無到期日、14 天內無到期、無期權鏈或例外）時，`save_market_cache()` 會把結果寫入 `WEEKLY` 列，該列即「最後一次失敗紀錄」。雷達快速路徑在沒有近月列時，以此列的 `updated_at` 節流背景重算 6 小時（`_MARKET_CACHE_MAX_AGE_SECONDS`）；`is_stale` 不影響節流，`updated_at` 無法解析則照常重算。`save_wall_levels()` 新建的牆位列帶紀元時間戳（1970-01-01），不受節流。
    - 節流期間不採用 `WEEKLY` 列的任何數值：Max Pain、預期區間與新鮮度欄位仍按快取缺失處理。
    - 節流只限雷達快速路徑；其他非強制重算路徑（例如 30 分鐘深掃、盤前預熱、更新按鈕）不受影響。
+   - **慢速路徑背景重算**：雷達慢速路徑在 Max Pain 回退舊快取（`is_stale`）時觸發的背景重算，與快速路徑共用 `_schedule_market_cache_revalidation()`（同一 `mc_{SYM}` 去重與 `Semaphore(3)` 併發上限）；上述 6 小時節流不套用於此觸發。
    - **觀察清單回退**：沒有近月列時改讀最新列，`reference_spot_price` 大於 0 就只顯示 `$價格`（不附 MP 偏離與標籤），否則顯示「-- (尚未預熱)」。
 
 只需要最新參考現價或牆位的讀取端維持原行為（不帶 `near_term`，取最新列）；指定到期日的讀寫不受影響。
