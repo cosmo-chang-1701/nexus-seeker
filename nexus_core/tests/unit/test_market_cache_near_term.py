@@ -17,7 +17,11 @@ import pytest
 
 import config
 from database.core import run_migrations
-from database.market_cache import get_market_cache, save_market_cache
+from database.market_cache import (
+    get_market_cache,
+    save_market_cache,
+    save_wall_levels,
+)
 from market_analysis.sentiment.max_pain import (
     _current_week_friday,
     get_unified_max_pain,
@@ -58,13 +62,14 @@ async def _seed(
     expiry: str,
     max_pain: float,
     hours_ago: float = 0.1,
+    spot: float = 100.0,
 ) -> None:
     assert await save_market_cache(
         symbol,
         max_pain,
         95.0,
         105.0,
-        reference_spot_price=100.0,
+        reference_spot_price=spot,
         expiry=expiry,
     )
     conn = sqlite3.connect(config.DB_NAME)
@@ -281,6 +286,31 @@ async def test_radar_and_watchlist_read_default_expiry_row(temp_db: None) -> Non
     assert market_cache_row["max_pain"] == 80.0
 
     assert "MP+25.0%" in _format_watchlist_price_info("NTH")
+
+
+@pytest.mark.asyncio
+async def test_watchlist_latest_price_fallback(
+    temp_db: None, fixed_today: None
+) -> None:
+    from cogs.embed_builders.watchlist_embeds import _format_watchlist_price_info
+
+    # 只有 WEEKLY 失敗列：只顯示參考價，不附 MP 偏離
+    await _seed("WLA", "WEEKLY", 10.0, spot=12.34)
+    assert _format_watchlist_price_info("WLA") == "$12.34"
+
+    # 過期到期日列＋牆位新建列（紀元時間戳不會成為最新列）
+    await _seed("WLB", "2027-03-05", 90.0, hours_ago=48, spot=88.5)
+    assert await save_wall_levels("WLB", call_wall=110.0, put_wall=80.0)
+    assert _format_watchlist_price_info("WLB") == "$88.50"
+
+    # 只有牆位新建列：沒有參考價
+    assert await save_wall_levels("WLC", call_wall=110.0, put_wall=80.0)
+    assert _format_watchlist_price_info("WLC") == "-- (尚未預熱)"
+
+    # 有近月列時行為不變，即使 WEEKLY 失敗列較新
+    await _seed("WLD", "2027-03-12", 80.0, hours_ago=3)
+    await _seed("WLD", "WEEKLY", 0.0, spot=12.34)
+    assert "MP+25.0%" in _format_watchlist_price_info("WLD")
 
 
 # ---------------------------------------------------------------------------

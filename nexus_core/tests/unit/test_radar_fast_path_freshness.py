@@ -1,5 +1,6 @@
 """雷達 fast path 的 Max Pain／新鮮度真實性，與 slow path 的 force_refresh。"""
 
+import asyncio
 import threading
 from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
@@ -39,9 +40,10 @@ async def _run_fast(
     market_cache: Optional[dict[str, Any]] = None,
     session_fresh: Any = None,
     history_side_effects: Optional[dict[str, Any]] = None,
+    revalidate: Optional[AsyncMock] = None,
 ) -> Any:
     cog = UnifiedTerminalCog(MagicMock())
-    cog._async_revalidate_market_cache = AsyncMock()  # type: ignore[method-assign]
+    cog._async_revalidate_market_cache = revalidate or AsyncMock()  # type: ignore[method-assign]
     he = history_side_effects or {}
     with ExitStack() as st:
         st.enter_context(
@@ -212,6 +214,136 @@ async def test_j_history_reads_run_off_event_loop() -> None:
     # last_iv、skew、skew percentile、PCR 共四次
     assert len(on_loop) == 4
     assert not any(on_loop)
+
+
+# ── WEEKLY 失敗列節流 ─────────────────────────────────────────────
+
+
+def _utc_ts(hours_ago: float) -> str:
+    moment = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    return moment.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def _run_fast_with_weekly(
+    monkeypatch: pytest.MonkeyPatch,
+    market_cache: Optional[dict[str, Any]],
+    weekly_row: Optional[dict[str, Any]],
+) -> tuple[Any, AsyncMock, MagicMock]:
+    """執行快速路徑並等背景任務跑完；回傳 (輸出, 重算 mock, get_market_cache mock)。"""
+    # 全域去重集合可能殘留先前測試的鍵，換成新的避免誤判為「已在重算」。
+    monkeypatch.setattr("cogs.unified_terminal.radar_data._active_swr_tasks", set())
+    revalidate = AsyncMock()
+    before = asyncio.all_tasks()
+    with patch(
+        "database.market_cache.get_market_cache", return_value=weekly_row
+    ) as get_mc:
+        data = await _run_fast(_rows(None), market_cache, revalidate=revalidate)
+    spawned = asyncio.all_tasks() - before - {asyncio.current_task()}
+    if spawned:
+        await asyncio.gather(*spawned)
+    return data, revalidate, get_mc
+
+
+@pytest.mark.parametrize("is_stale", [0, 1])
+@pytest.mark.asyncio
+async def test_weekly_failure_row_throttles_revalidation(
+    monkeypatch: pytest.MonkeyPatch, is_stale: int
+) -> None:
+    _, revalidate, get_mc = await _run_fast_with_weekly(
+        monkeypatch,
+        None,
+        {"expiry": "WEEKLY", "is_stale": is_stale, "updated_at": _utc_ts(1)},
+    )
+    get_mc.assert_called_once_with("NVDA", "WEEKLY")
+    revalidate.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "weekly_row",
+    [
+        pytest.param(
+            {"expiry": "WEEKLY", "is_stale": 0, "updated_at": _utc_ts(7)},
+            id="seven_hours",
+        ),
+        pytest.param(
+            {"expiry": "WEEKLY", "updated_at": "1970-01-01 00:00:00"}, id="epoch"
+        ),
+        pytest.param(None, id="no_row"),
+        pytest.param({"expiry": "WEEKLY", "updated_at": "not-a-time"}, id="bad_ts"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_weekly_failure_row_expired_triggers_revalidation(
+    monkeypatch: pytest.MonkeyPatch, weekly_row: Optional[dict[str, Any]]
+) -> None:
+    _, revalidate, _ = await _run_fast_with_weekly(monkeypatch, None, weekly_row)
+    revalidate.assert_awaited_once_with("NVDA", 150.0)
+
+
+@pytest.mark.parametrize(
+    ("hours_ago", "is_stale", "expect_revalidate"),
+    [(7.0, 0, True), (1.0, 1, True), (1.0, 0, False)],
+)
+@pytest.mark.asyncio
+async def test_weekly_failure_row_ignored_when_near_term_row_exists(
+    monkeypatch: pytest.MonkeyPatch,
+    hours_ago: float,
+    is_stale: int,
+    expect_revalidate: bool,
+) -> None:
+    near_row = {
+        "expiry": "2026-10-30",
+        "max_pain": 150.0,
+        "is_stale": is_stale,
+        "updated_at": _utc_ts(hours_ago),
+    }
+    # WEEKLY 列的新舊與近月列相反，確保結果只由近月列決定。
+    weekly_row = {
+        "expiry": "WEEKLY",
+        "updated_at": _utc_ts(0.1 if expect_revalidate else 7),
+    }
+    _, revalidate, get_mc = await _run_fast_with_weekly(
+        monkeypatch, near_row, weekly_row
+    )
+    get_mc.assert_not_called()
+    assert revalidate.await_count == int(expect_revalidate)
+
+
+@pytest.mark.asyncio
+async def test_weekly_failure_row_values_not_in_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    weekly_row = {
+        "expiry": "WEEKLY",
+        "max_pain": 123.0,
+        "expected_move_lower": 90.0,
+        "expected_move_upper": 110.0,
+        "is_stale": 1,
+        "is_degraded": 1,
+        "circuit_breaker_triggered": 1,
+        "calculation_mode": "Volume",
+        "previous_call_wall": 170.0,
+        "previous_put_wall": 130.0,
+        "updated_at": _utc_ts(1),
+    }
+    data, _, _ = await _run_fast_with_weekly(monkeypatch, None, weekly_row)
+
+    assert data["max_pain"] == {
+        "max_pain": None,
+        "expiry": None,
+        "distance_pct": 0.0,
+        "is_stale": False,
+        "calculation_mode": "OI",
+        "is_degraded": False,
+        "circuit_breaker_triggered": False,
+        "updated_at": None,
+    }
+    assert data["iv_metrics"]["expected_move_lower"] == 0.0
+    assert data["iv_metrics"]["expected_move_upper"] == 0.0
+    assert data["_freshness"]["mp_age_seconds"] is None
+    assert data["month_max_pains"] == []
+    assert data["previous_call_wall"] == 0.0
+    assert data["previous_put_wall"] == 0.0
 
 
 # ── slow path ────────────────────────────────────────────────────
