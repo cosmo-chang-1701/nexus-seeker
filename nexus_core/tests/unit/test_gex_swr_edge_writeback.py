@@ -7,11 +7,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from market_analysis.index_microstructure import fetch_symbol_gex_metrics
+from market_analysis.index_microstructure import (
+    _GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS,
+    _kv_gex_supersedes,
+    fetch_symbol_gex_metrics,
+)
 
 HOUR = 3600.0
 OLD_KV_AGE = 10 * 86400.0
 _MODULE = "market_analysis.index_microstructure"
+CANDIDATE_TS = 1_700_000_000.0
+BOUNDARY_TS = CANDIDATE_TS - _GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS
 
 
 def _snap(tag: float) -> dict[str, Any]:
@@ -292,3 +298,41 @@ async def test_l_reread_failure_only_warns(
     save.assert_not_called()
     assert res["spot"] == 168.0
     assert "寫回 edge GEX 快照至 kv_cache 失敗" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("cached_ts", "expected"),
+    [(BOUNDARY_TS, True), (BOUNDARY_TS - 0.5, False)],
+)
+def test_supersedes_tolerance_boundary(cached_ts: float, expected: bool) -> None:
+    cached = {"data": _snap(214.0), "data_timestamp": cached_ts}
+    assert _kv_gex_supersedes(cached, CANDIDATE_TS) is expected
+
+
+@pytest.mark.parametrize(
+    "times",
+    [
+        # timestamp 刻意給足夠新的值：轉換失敗時不得退回 timestamp 判定。
+        {"data_timestamp": "abc", "timestamp": CANDIDATE_TS},
+        {"data_timestamp": {"x": 1}, "timestamp": CANDIDATE_TS},
+        {"timestamp": "abc"},
+        {"timestamp": {"x": 1}},
+    ],
+)
+def test_supersedes_unparseable_data_time_is_overwritable(
+    times: dict[str, Any],
+) -> None:
+    cached = {"data": _snap(214.0), **times}
+    assert _kv_gex_supersedes(cached, CANDIDATE_TS) is False
+
+
+@pytest.mark.parametrize("extra", [{}, {"data_timestamp": 0}])
+@pytest.mark.parametrize(
+    ("timestamp", "expected"),
+    [(BOUNDARY_TS, True), (BOUNDARY_TS - 0.5, False)],
+)
+def test_supersedes_falls_back_to_timestamp(
+    extra: dict[str, Any], timestamp: float, expected: bool
+) -> None:
+    cached = {"data": _snap(214.0), "timestamp": timestamp, **extra}
+    assert _kv_gex_supersedes(cached, CANDIDATE_TS) is expected
