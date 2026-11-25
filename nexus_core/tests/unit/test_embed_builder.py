@@ -1866,7 +1866,7 @@ def test_build_radar_scan_embed_marks_premarket_stale_gex_as_benign() -> None:
     text = get_embed_text(embeds[0])
     assert "🌙" in text
     assert "PMSYM" in text
-    assert "盤前沿用前日收盤快照" in text
+    assert "非交易時段沿用最近收盤快照" in text
     assert "請謹慎採信灰階建議" not in text
 
 
