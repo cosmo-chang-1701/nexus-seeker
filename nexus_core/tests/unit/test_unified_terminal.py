@@ -1,8 +1,10 @@
 from typing import Any
+import asyncio
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
 import os
+import httpx
 import pandas as pd
 import discord
 
@@ -804,6 +806,73 @@ async def test_symbol_hub_batch_scan_watchlist_many_pages_single_followup(
 
 
 @pytest.mark.asyncio
+async def test_batch_scan_swr_background_tasks_stay_offline(
+    mock_interaction: Any,
+    mock_bot: Any,
+    _offline_swr_revalidation: dict[str, AsyncMock],
+) -> None:
+    """批次掃描快速路徑衍生的三個 SWR 背景任務跑完後，不得發出任何 httpx 請求。"""
+    cog = UnifiedTerminalCog(mock_bot)
+
+    mock_choice = MagicMock()
+    mock_choice.value = "WATCHLIST"
+
+    with (
+        patch("database.get_user_watchlist") as mock_get_watchlist,
+        patch(
+            "services.market_data_service.get_quote", new_callable=AsyncMock
+        ) as mock_quote,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+            new_callable=AsyncMock,
+        ) as mock_iv,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_skew",
+            new_callable=AsyncMock,
+        ) as mock_skew,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.calculate_max_pain",
+            new_callable=AsyncMock,
+        ) as mock_mp,
+        patch(
+            "market_analysis.sentiment_engine.SentimentEngine.get_indicator_percentile"
+        ) as mock_skew_p,
+        patch(
+            "httpx.AsyncClient.send",
+            new_callable=AsyncMock,
+            side_effect=httpx.ConnectError("測試不得連網"),
+        ) as mock_http_send,
+    ):
+        # 使用其他測試不會寫入快取的代號，確保三種快取都未命中。
+        mock_get_watchlist.return_value = [("ZZSWR", 1)]
+        mock_quote.return_value = {"c": 150.0, "dp": 1.2}
+
+        mock_iv_metrics = MagicMock()
+        mock_iv_metrics.iv_rank = 30.0
+        mock_iv_metrics.expected_move_weekly = 4.5
+        mock_iv.return_value = mock_iv_metrics
+
+        mock_skew.return_value = {"skew": 1.1}
+        mock_mp.return_value = {"max_pain": 145.0, "distance_pct": 3.4}
+        mock_skew_p.return_value = 75.0
+
+        before = asyncio.all_tasks()
+        await cog.symbol_hub.callback(  # type: ignore
+            cog,  # type: ignore
+            mock_interaction,
+            symbol=None,
+            scan_type=mock_choice,
+        )
+        spawned = asyncio.all_tasks() - before - {asyncio.current_task()}
+        if spawned:
+            await asyncio.gather(*spawned)
+
+    for mock in _offline_swr_revalidation.values():
+        mock.assert_awaited()
+    mock_http_send.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bot: Any):  # type: ignore
     from cogs.unified_terminal import BatchScanWarningButton
 
@@ -1027,3 +1096,32 @@ def _no_credit_spread_network(monkeypatch: pytest.MonkeyPatch) -> None:
         "get_credit_spreads",
         AsyncMock(return_value={"hy": None, "ig": None}),
     )
+
+
+@pytest.fixture(autouse=True)
+def _offline_swr_revalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, AsyncMock]:
+    """批次掃描快速路徑在快取缺失時會啟動 fire-and-forget 的 SWR 背景任務
+    （market cache、UOA、Squeeze）；測試 DB 為空必定觸發，若不替換就會真的連網，
+    測試結束時任務被取消而留下「coroutine was never awaited」警告。
+    去重集合一併換新：任務在啟動前被取消不會執行 finally，鍵會殘留到後續測試。
+    測試內自行 patch 的同名目標仍以測試自己的為準。"""
+    import services.market_data_service as _mds
+    from cogs.unified_terminal import radar_data
+    from market_analysis.sentiment_engine import SentimentEngine
+
+    mocks = {
+        "market_cache": AsyncMock(return_value=None),
+        "uoa": AsyncMock(return_value=[]),
+        "history": AsyncMock(return_value=None),
+    }
+    monkeypatch.setattr(
+        radar_data.RadarDataMixin,
+        "_async_revalidate_market_cache",
+        mocks["market_cache"],
+    )
+    monkeypatch.setattr(SentimentEngine, "detect_uoa", mocks["uoa"])
+    monkeypatch.setattr(_mds, "get_history_df", mocks["history"])
+    monkeypatch.setattr(radar_data, "_active_swr_tasks", set())
+    return mocks
