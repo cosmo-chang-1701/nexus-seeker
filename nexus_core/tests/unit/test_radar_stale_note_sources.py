@@ -227,6 +227,46 @@ async def test_e2_fast_path_gex_age_from_snapshot_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_e2b_fast_path_gex_age_takes_older_of_kv_and_snapshot() -> None:
+    # kv 的 GEX 信封較舊（2400 秒）且缺 call_wall，call_wall 由快照回退（快照 300 秒）
+    # → 部分欄位來自快照，GEX 年齡取兩者較舊者，即 kv 的 2400 秒。
+    envelope = {
+        "data": {"put_wall": 140.0, "net_gex": 5.0},
+        "data_timestamp": time.time() - 2400.0,
+    }
+    data = await _run_fast(
+        _rows(
+            {"call_wall_strike": 160.0},
+            radar_age_s=300.0,
+            extra={"gex_metrics_NVDA": envelope},
+        ),
+        {},
+    )
+    assert data["gex_metrics"]["call_wall"] == 160.0
+    assert data["_freshness"]["gex_age_seconds"] == pytest.approx(2400.0, abs=5)
+
+
+@pytest.mark.asyncio
+async def test_e2c_fast_path_gex_age_takes_older_snapshot_over_kv() -> None:
+    # 鏡像案例：kv 的 GEX 信封較新（300 秒）且缺 call_wall，回退用的快照較舊
+    # （2400 秒）→ GEX 年齡取兩者較舊者，即快照的 2400 秒。
+    envelope = {
+        "data": {"put_wall": 140.0, "net_gex": 5.0},
+        "data_timestamp": time.time() - 300.0,
+    }
+    data = await _run_fast(
+        _rows(
+            {"call_wall_strike": 160.0},
+            radar_age_s=2400.0,
+            extra={"gex_metrics_NVDA": envelope},
+        ),
+        {},
+    )
+    assert data["gex_metrics"]["call_wall"] == 160.0
+    assert data["_freshness"]["gex_age_seconds"] == pytest.approx(2400.0, abs=5)
+
+
+@pytest.mark.asyncio
 async def test_e3_fast_path_gex_age_unknown() -> None:
     legacy = {
         "data": {"put_wall": 140.0, "net_gex": 5.0, "_is_stale_cache": True},

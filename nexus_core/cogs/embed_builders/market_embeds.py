@@ -40,7 +40,7 @@ from cogs.embed_builders._core import (
     OPTION_DATA_TIMING_NOTE,
     NexusEmbed,
 )
-from cogs.embed_builders._radar_freshness import assess_radar_row
+from cogs.embed_builders._radar_freshness import FIXED_INCOME_SYMBOLS, assess_radar_row
 from market_analysis.macro_signals import SAHM_THRESHOLD
 from market_analysis.macro_calendar_translator import translate_macro_event
 from market_analysis.index_microstructure import estimate_symbol_gamma_flip
@@ -878,7 +878,7 @@ def build_radar_scan_embed(
                     em_weekly = float(em_raw) if em_raw is not None else 0.0
 
             # 3. 本週預期區間 (EM)
-            is_fixed_income = sym.upper() in ["BOXX", "BIL", "SHV"]
+            is_fixed_income = sym.upper() in FIXED_INCOME_SYMBOLS
             if is_fixed_income:
                 em_low = em_high = price_val
             elif price_val > 0 and em_weekly > 0 and iv_metrics is not None:
