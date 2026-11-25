@@ -16,6 +16,13 @@ from cogs.unified_terminal.radar_data import _KvSnapshot
 _SQZ = {"momentum": 1.0, "direction": "🟢", "is_squeezing": False}
 
 
+@pytest.fixture(autouse=True)
+def _isolated_swr_tasks(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 快速與慢速路徑都會寫入模組全域去重集合；任務若在啟動前被取消，鍵會殘留到
+    # 同一 worker 的後續測試，故每個測試換成新集合。
+    monkeypatch.setattr("cogs.unified_terminal.radar_data._active_swr_tasks", set())
+
+
 def _rows(
     radar: Optional[dict[str, Any]] = None,
     radar_age_s: Optional[float] = 60.0,
@@ -431,7 +438,11 @@ async def _run_slow(
             patch("database.cache.get_kv_cache_session_fresh", return_value=None)
         )
         await cog._fetch_sym_radar_data_slow_raw("NVDA", force_refresh=force_refresh)
-    return {"saved": saved, **mocks}
+    return {
+        "saved": saved,
+        "revalidate": cog._async_revalidate_market_cache,
+        **mocks,
+    }
 
 
 @pytest.mark.asyncio
@@ -486,3 +497,66 @@ async def test_k2_force_refresh_uses_distinct_single_flight_key() -> None:
         await cog._fetch_sym_radar_data_slow("NVDA")
         await cog._fetch_sym_radar_data_slow("NVDA", force_refresh=True)
     assert len(set(keys)) == 2
+
+
+# ── slow path 背景重算去重 ────────────────────────────────────────
+
+_STALE_MP: dict[str, Any] = {"max_pain": 100.0, "is_stale": True}
+
+
+async def _drain_loop() -> None:
+    """讓出數次 event loop，使已排程的背景重算任務跑完。"""
+    for _ in range(10):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_slow_path_stale_revalidation_skips_when_in_flight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active = {"mc_NVDA"}
+    monkeypatch.setattr("cogs.unified_terminal.radar_data._active_swr_tasks", active)
+    r = await _run_slow(dict(_STALE_MP))
+    await _drain_loop()
+    r["revalidate"].assert_not_awaited()
+    # 在途鍵屬於另一個重算任務，不得被移除
+    assert active == {"mc_NVDA"}
+
+
+@pytest.mark.asyncio
+async def test_slow_path_stale_revalidation_scheduled_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active: set[str] = set()
+    monkeypatch.setattr("cogs.unified_terminal.radar_data._active_swr_tasks", active)
+    r = await _run_slow(dict(_STALE_MP))
+    await _drain_loop()
+    r["revalidate"].assert_awaited_once_with("NVDA", 100.0)
+    assert "mc_NVDA" not in active
+
+
+@pytest.mark.asyncio
+async def test_slow_path_stale_revalidation_not_triggered_when_fresh() -> None:
+    r = await _run_slow({"max_pain": 100.0, "is_stale": False})
+    await _drain_loop()
+    r["revalidate"].assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_slow_path_stale_revalidation_uses_semaphore(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    acquired: list[None] = []
+
+    class _CountingSemaphore(asyncio.Semaphore):
+        async def acquire(self) -> Any:
+            acquired.append(None)
+            return await super().acquire()
+
+    monkeypatch.setattr(
+        "cogs.unified_terminal.radar_data._SWR_REVALIDATE_SEM", _CountingSemaphore(3)
+    )
+    r = await _run_slow(dict(_STALE_MP))
+    await _drain_loop()
+    r["revalidate"].assert_awaited_once()
+    assert len(acquired) == 1

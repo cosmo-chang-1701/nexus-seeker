@@ -187,6 +187,27 @@ class RadarDataMixin:
         except Exception as e:
             logger.error(f"❌ [SWR] Background revalidation failed for {sym}: {e}")
 
+    def _schedule_market_cache_revalidation(self, sym: str, price: float) -> bool:
+        """排程 Market Cache 背景重算；同一標的已在重算時回傳 False，不重複發動。
+
+        快速與慢速路徑共用：以模組層級 `_active_swr_tasks`（鍵 `mc_{SYM}`）去重，
+        並受 `_SWR_REVALIDATE_SEM` 併發上限約束。
+        """
+        mc_key = f"mc_{sym.upper()}"
+        if mc_key in _active_swr_tasks:
+            return False
+        _active_swr_tasks.add(mc_key)
+
+        async def _revalidate_mc(s: str, p: float, k: str) -> None:
+            try:
+                async with _SWR_REVALIDATE_SEM:
+                    await self._async_revalidate_market_cache(s, p)
+            finally:
+                _active_swr_tasks.discard(k)
+
+        asyncio.create_task(_revalidate_mc(sym, price, mc_key))
+        return True
+
     async def _fetch_sym_radar_data_fast(self, sym: str) -> Any:
         from services.single_flight import SingleFlightManager
 
@@ -280,18 +301,7 @@ class RadarDataMixin:
                 logger.warning(f"[{sym}] 解析 market_cache 時間戳記失敗: {ts_err}")
 
         if market_cache_is_stale:
-            mc_key = f"mc_{sym.upper()}"
-            if mc_key not in _active_swr_tasks:
-                _active_swr_tasks.add(mc_key)
-
-                async def _revalidate_mc(s: str, p: float, k: str) -> None:
-                    try:
-                        async with _SWR_REVALIDATE_SEM:
-                            await self._async_revalidate_market_cache(s, p)
-                    finally:
-                        _active_swr_tasks.discard(k)
-
-                asyncio.create_task(_revalidate_mc(sym, price, mc_key))
+            self._schedule_market_cache_revalidation(sym, price)
         gex_cached = kv.get(f"gex_metrics_{sym.upper()}") or {}
         gex_data = gex_cached.get("data", {}) if isinstance(gex_cached, dict) else {}
         # Fast path 讀取 gex_metrics_{sym} 為未經 fetch_symbol_gex_metrics() 的原始
@@ -899,8 +909,9 @@ class RadarDataMixin:
                 logger.warning(f"[{sym}] 寫入 market_cache 牆體失敗: {cw_err}")
 
         # 異步預警：若返回資料標記為 stale，啟動背景重新驗證
+        # （與快速路徑共用同一 mc_{SYM} 去重與 Semaphore(3) 併發上限）
         if mp_data.get("is_stale"):
-            asyncio.create_task(self._async_revalidate_market_cache(sym, price))
+            self._schedule_market_cache_revalidation(sym, price)
 
         raw_em_context = await SentimentEngine.get_expected_move(
             sym, quote=quote, iv_metrics=iv_m
