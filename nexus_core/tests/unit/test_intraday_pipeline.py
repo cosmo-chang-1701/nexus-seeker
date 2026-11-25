@@ -1,3 +1,5 @@
+import logging
+import threading
 from typing import Any
 import pytest
 from datetime import date
@@ -1418,6 +1420,126 @@ def test_tactical_exposure_fails_safe_on_query_error() -> None:
         total = pipeline._compute_user_tactical_exposure(7, spot_holdings=spot)
 
     assert total == pytest.approx(1200.0)
+
+
+@pytest.mark.asyncio
+async def test_tactical_exposure_fallback_runs_in_worker_thread(
+    intraday_pipeline: Any,
+) -> None:
+    """心跳 Embed 未提供曝險時，就地補算的期權查詢必須跑在 worker thread。
+
+    `_read_embed_db` 以 asyncio.to_thread 執行，其中 `_compute_user_tactical_exposure`
+    會呼叫 `database.get_all_trade_positions()`（同步 SQLite）。若日後有人改成在
+    event loop 上直接呼叫，記錄到的執行緒 ident 就會等於測試協程所在執行緒。
+    """
+    evaluation = SimpleNamespace(
+        metrics=SimpleNamespace(
+            symbol="MU",
+            current_price=410.5,
+            iv_rank=None,
+            option_skew=None,
+            skew_percentile=None,
+            option_skew_state="N/A",
+            buy_zone_status="🟡 測試買區",
+            sell_zone_status="⚪ 測試賣區",
+        ),
+        tactical=SimpleNamespace(
+            alert_level="yellow",
+            scenario="wait",
+            sddm_route="STANDBY",
+        ),
+        event_context=SimpleNamespace(summary="未偵測到近期重大事件"),
+        symbol_gex=None,
+    )
+    user_context = SimpleNamespace(user_id=7, capital=120000.0, risk_limit=12.0)
+
+    loop_thread_ident = threading.get_ident()
+    seen_idents: list[int] = []
+
+    def _record_trade_positions() -> list[Any]:
+        seen_idents.append(threading.get_ident())
+        return []
+
+    with patch(
+        "database.is_symbol_in_portfolio",
+        return_value=False,
+    ), patch(
+        "database.get_user_holdings",
+        return_value=[],
+    ), patch(
+        "database.get_all_trade_positions",
+        side_effect=_record_trade_positions,
+    ), patch(
+        "database.watchlist_tags.get_watchlist_tags",
+        return_value=[],
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.derive_watchlist_option_guidance",
+        return_value="option guidance",
+    ), patch(
+        "market_analysis.intraday_pipeline.pipeline.build_watchlist_option_plan",
+        new_callable=AsyncMock,
+        return_value="option-plan",
+    ), patch(
+        "market_analysis.intraday_pipeline.build_watchlist_skew_rule_commentary",
+        return_value="rule-skew-commentary",
+    ), patch(
+        "cogs.embed_builder.create_watchlist_signal_embed",
+        return_value=MagicMock(),
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "database.cache.save_kv_cache",
+        new_callable=AsyncMock,
+    ):
+        await intraday_pipeline._build_watchlist_heartbeat_embed(
+            evaluation, user_context, deployed_tactical_value=None
+        )
+
+    assert seen_idents, "未補算曝險時應查詢期權部位"
+    assert all(
+        ident != loop_thread_ident for ident in seen_idents
+    ), "期權部位查詢不得在 event loop 執行緒上執行"
+
+
+@pytest.mark.asyncio
+async def test_spot_holdings_warning_text_in_sync(
+    intraday_pipeline: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """兩處現貨持倉讀取失敗的警告文字必須一致，避免日後漂移。"""
+    caplog.set_level(logging.WARNING)
+
+    with patch(
+        "database.get_user_holdings",
+        side_effect=RuntimeError("x"),
+    ):
+        spot_rows = await intraday_pipeline._load_user_spot_holdings(7)
+        intraday_pipeline._compute_user_tactical_exposure(7, option_positions=[])
+
+    assert spot_rows == []
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "讀取現貨持倉" in record.getMessage()
+    ]
+    assert len(messages) == 2, messages
+    assert messages[0] == messages[1]
+    assert "(uid=7)" in messages[0]
+    assert messages[0].endswith(": x")
 
 
 @pytest.mark.asyncio

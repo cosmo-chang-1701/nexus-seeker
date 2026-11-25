@@ -112,7 +112,7 @@ flowchart TD
 
 | 常數名稱 | 數值 / 門檻 | 物理約束與代碼意涵 | 程式碼檔案路徑 |
 | :--- | :--- | :--- | :--- |
-| `RADAR_FETCH_CONCURRENCY` | `3` (Semaphore) | 進場顧問 radar 補抓的併發上限（比照持倉監控的 `Semaphore(3)`） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:48` |
+| `RADAR_FETCH_CONCURRENCY` | `3` (Semaphore) | 進場顧問 radar 補抓的併發上限（比照持倉監控的 `Semaphore(3)`） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:86` |
 | `RADAR_CHUNK_SIZE` | `10` 檔 / 頁 | 雷達批次掃描 Embed 每頁封裝上限（防 4096 溢位；目前僅 `/x` 使用） | `nexus_core/cogs/embed_builders/market_embeds.py:401` |
 | `_PIPELINE_SLOT_MINUTES` | `(10, 40)`（每小時 :10／:40 ET） | 深度心跳的時槽對齊點；每輪結束（或因記憶體閘門略過）後經 `_seconds_until_next_slot` 睡至下一個時槽 | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:29` |
 | `_WALL_BREAK_FAST_SLOT_MINUTES` | `(3, 18, 33, 48)`（每小時 :03／:18／:33／:48 ET） | GEX 牆突破快速偵測的時槽，沿用深度心跳快取的評估（`detect_only`） | `nexus_core/market_analysis/intraday_pipeline/pipeline.py:33` |
