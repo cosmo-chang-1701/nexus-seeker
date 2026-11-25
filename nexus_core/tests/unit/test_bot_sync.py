@@ -5,13 +5,30 @@ Tests for startup tree sync removal, background sync scheduling, and !sync admin
 """
 
 from typing import Any
+from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, PropertyMock, patch
 import asyncio
+import socket
 import pytest
 
 from bot import NexusBot
 from cogs.trading.admin_commands import AdminCommandsCog
 from config import DISCORD_ADMIN_USER_ID
+from tests.unit.network_guard import NetworkGuard
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[NetworkGuard]:
+    """攔截所有對外連線；即使呼叫端吞掉例外，teardown 仍會讓測試失敗。"""
+    guard = NetworkGuard()
+    guard.install(monkeypatch)
+    yield guard
+    guard.assert_clean()
+
+
+def test_network_guard_autouse_installed_in_bot_sync() -> None:
+    """不請求 fixture 也必須已安裝守衛，證明 autouse 生效。"""
+    assert getattr(socket.socket.connect, "_nexus_network_guard", False) is True
 
 
 def _create_test_cog(mock_bot: MagicMock) -> AdminCommandsCog:

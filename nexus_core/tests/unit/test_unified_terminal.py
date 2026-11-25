@@ -1,5 +1,7 @@
 from typing import Any
+from collections.abc import Iterator
 import asyncio
+import socket
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 import sys
@@ -18,6 +20,9 @@ from cogs.unified_terminal import (
     PulseHubView,
     BatchScanPaginatedView,
 )
+from tests.unit.network_guard import NetworkGuard
+
+_MAX_SWR_DRAIN_ROUNDS = 10
 
 
 @pytest.fixture
@@ -29,8 +34,46 @@ def mock_bot() -> Any:
     return bot
 
 
+@pytest.fixture
+def _offline_symbol_hub_externals() -> Iterator[None]:
+    """單標的深度分析鏈上、各測試未自行替換的外部資料源，一律回傳離線時的降級值。"""
+    with (
+        patch(
+            "market_analysis.volume_profile.calculate_volume_profile",
+            return_value=None,
+        ),
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "services.reddit_service.get_reddit_details",
+            new_callable=AsyncMock,
+            return_value=("看多情緒高漲", []),
+        ),
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_catalysts",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
+        patch(
+            "market_analysis.index_microstructure.get_market_regime",
+            new_callable=AsyncMock,
+            return_value="UNKNOWN",
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={"_is_fallback": True},
+        ),
+    ):
+        yield
+
+
 @pytest.mark.asyncio
 @pytest.mark.slow
+@pytest.mark.usefixtures("_offline_symbol_hub_externals")
 async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
@@ -195,6 +238,7 @@ async def test_symbol_hub_command(mock_interaction: Any, mock_bot: Any):  # type
     ],
 )
 @pytest.mark.slow
+@pytest.mark.usefixtures("_offline_symbol_hub_externals")
 async def test_symbol_hub_command_tolerates_malformed_payloads(  # type: ignore
     mock_interaction: Any, mock_bot: Any, case: dict[str, Any]
 ):
@@ -329,6 +373,16 @@ async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # t
             new_callable=AsyncMock,
             return_value="NORMAL",
         ),
+        patch(
+            "services.market_data_service.get_vix_spot_strict",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
     ):
         mock_pnl.return_value = {"trades": [], "total_unrealized_pnl": 0.0}
         mock_macro.return_value = {"vix": 18.0}
@@ -366,10 +420,31 @@ async def test_portfolio_hub_command(mock_interaction: Any, mock_bot: Any):  # t
 async def test_pulse_hub_command(mock_interaction: Any, mock_bot: Any):  # type: ignore
     cog = UnifiedTerminalCog(mock_bot)
 
-    with patch(
-        "services.calendar_service.calendar_service.get_portfolio_events",
-        new_callable=AsyncMock,
-    ) as mock_events:
+    with (
+        patch(
+            "services.calendar_service.calendar_service.get_portfolio_events",
+            new_callable=AsyncMock,
+        ) as mock_events,
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "services.calendar_service.calendar_service.prefetch_monthly_macro_cache",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={"_is_fallback": True},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+    ):
         mock_events.return_value = []
 
         await cog.pulse_hub.callback(cog, mock_interaction)  # type: ignore
@@ -810,8 +885,9 @@ async def test_batch_scan_swr_background_tasks_stay_offline(
     mock_interaction: Any,
     mock_bot: Any,
     _offline_swr_revalidation: dict[str, AsyncMock],
+    _no_outbound_network: NetworkGuard,
 ) -> None:
-    """批次掃描快速路徑衍生的三個 SWR 背景任務跑完後，不得發出任何 httpx 請求。"""
+    """批次掃描快速路徑衍生的三個 SWR 背景任務跑完後，不得發出任何對外請求。"""
     cog = UnifiedTerminalCog(mock_bot)
 
     mock_choice = MagicMock()
@@ -843,7 +919,8 @@ async def test_batch_scan_swr_background_tasks_stay_offline(
             side_effect=httpx.ConnectError("測試不得連網"),
         ) as mock_http_send,
     ):
-        # 使用其他測試不會寫入快取的代號，確保三種快取都未命中。
+        # 三種快取都存在 SQLite，conftest 的 `clean_db` 每個測試清空資料表，
+        # 所以此處必定未命中（與代號無關）。
         mock_get_watchlist.return_value = [("ZZSWR", 1)]
         mock_quote.return_value = {"c": 150.0, "dp": 1.2}
 
@@ -863,13 +940,17 @@ async def test_batch_scan_swr_background_tasks_stay_offline(
             symbol=None,
             scan_type=mock_choice,
         )
-        spawned = asyncio.all_tasks() - before - {asyncio.current_task()}
-        if spawned:
+        # 背景任務可能再衍生任務，持續排空到沒有新任務為止。
+        drain_rounds = 0
+        while spawned := asyncio.all_tasks() - before:
+            assert drain_rounds < _MAX_SWR_DRAIN_ROUNDS, f"背景任務未收斂：{spawned}"
             await asyncio.gather(*spawned)
+            drain_rounds += 1
 
     for mock in _offline_swr_revalidation.values():
         mock.assert_awaited()
     mock_http_send.assert_not_called()
+    assert _no_outbound_network.attempts == []
 
 
 @pytest.mark.asyncio
@@ -1047,6 +1128,11 @@ async def test_fetch_single_symbol_data_raw_forces_live_option_data(  # type: ig
             new_callable=AsyncMock,
             return_value=None,
         ),
+        patch(
+            "services.calendar_service.calendar_service.get_symbol_catalysts",
+            new_callable=AsyncMock,
+            return_value=[],
+        ),
     ):
         mock_spy_hist.return_value = pd.DataFrame({"Close": [500.0]})
         mock_macro.return_value = {"vix": 15.0}
@@ -1125,3 +1211,65 @@ def _offline_swr_revalidation(
     monkeypatch.setattr(_mds, "get_history_df", mocks["history"])
     monkeypatch.setattr(radar_data, "_active_swr_tasks", set())
     return mocks
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[NetworkGuard]:
+    """攔截所有對外連線；即使呼叫端吞掉例外，teardown 仍會讓測試失敗。"""
+    guard = NetworkGuard()
+    guard.install(monkeypatch)
+    yield guard
+    guard.assert_clean()
+
+
+def test_network_guard_autouse_installed() -> None:
+    """不請求 fixture 也必須已安裝守衛，證明 autouse 生效。"""
+    assert getattr(socket.socket.connect, "_nexus_network_guard", False) is True
+
+
+def test_network_guard_blocks_socket_connect(
+    _no_outbound_network: NetworkGuard,
+) -> None:
+    guard = _no_outbound_network
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        with pytest.raises(OSError, match="測試不得連網"):
+            sock.connect(("192.0.2.1", 443))
+        with pytest.raises(OSError, match="測試不得連網"):
+            sock.connect_ex(("192.0.2.1", 443))
+
+    assert len(guard.attempts) == 2
+    assert all("192.0.2.1" in attempt for attempt in guard.attempts)
+    guard.reset()
+
+
+def test_network_guard_blocks_curl_cffi(
+    _no_outbound_network: NetworkGuard,
+) -> None:
+    curl_requests = pytest.importorskip("curl_cffi.requests")
+
+    guard = _no_outbound_network
+    with curl_requests.Session() as session:
+        with pytest.raises(OSError, match="測試不得連網"):
+            session.get("https://example.invalid/")
+
+    assert len(guard.attempts) == 1
+    assert "https://example.invalid/" in guard.attempts[0]
+    guard.reset()
+
+
+def test_network_guard_assert_clean_fails_on_recorded_attempt(
+    _no_outbound_network: NetworkGuard,
+) -> None:
+    """呼叫端吞掉 OSError 時，`assert_clean` 仍須失敗。"""
+    guard = _no_outbound_network
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.2)
+        try:
+            sock.connect(("192.0.2.1", 443))
+        except OSError:
+            pass
+
+    with pytest.raises(AssertionError):
+        guard.assert_clean()
+    guard.reset()
