@@ -832,86 +832,6 @@ def build_radar_scan_embed(
             color=0x3498DB,  # Default to 資訊藍
         )
 
-        # 讀取全域快取指標 (TED Spread & GEX Flip)
-        macro_ansi_header = []
-        try:
-            from database.cache import get_kv_cache, get_kv_cache_with_age
-            from market_analysis.index_microstructure import (
-                MACRO_GEX_STALE_MAX_AGE_SECONDS,
-                is_macro_gamma_flip_outlier,
-            )
-
-            gex_flip = get_kv_cache("macro_spy_gamma_flip")
-            _, gex_flip_age = get_kv_cache_with_age("macro_spy_gamma_flip")
-            ted_spread = get_kv_cache("macro_ted_spread")
-            # 修正前寫入的離群 Flip 不顯示（與 /market 面板同一合理性閘門）
-            gex_flip_is_outlier = gex_flip is not None and is_macro_gamma_flip_outlier(
-                gex_flip, get_kv_cache("macro_spy_spot")
-            )
-
-            if gex_flip is not None or ted_spread is not None:
-                gex_val = None
-                if gex_flip is not None and not isinstance(gex_flip, bool):
-                    try:
-                        _parsed_gex = float(gex_flip)
-                        if math.isfinite(_parsed_gex):
-                            gex_val = _parsed_gex
-                    except (ValueError, TypeError):
-                        gex_val = None
-
-                if gex_flip_is_outlier:
-                    gex_str = (
-                        "SPY 零 Gamma 線 (GEX Flip): "
-                        "\u001b[1;33m快取數值離群，已濾除\u001b[0m"
-                    )
-                elif gex_val is not None and gex_val > 0:
-                    gex_str = f"SPY 零 Gamma 線 (GEX Flip): \u001b[1;35m{gex_val:.2f}\u001b[0m"
-                    if (
-                        gex_flip_age is not None
-                        and gex_flip_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
-                    ):
-                        gex_str += (
-                            " \u001b[1;33m["
-                            f"{_format_cache_age(gex_flip_age)}快取]\u001b[0m"
-                        )
-                elif gex_flip is not None:
-                    gex_str = (
-                        "SPY 零 Gamma 線 (GEX Flip): \u001b[1;31m獲取數據失敗\u001b[0m"
-                    )
-                else:
-                    gex_str = ""
-
-                ted_val = None
-                if ted_spread is not None and not isinstance(ted_spread, bool):
-                    try:
-                        _parsed_ted = float(ted_spread)
-                        if math.isfinite(_parsed_ted):
-                            ted_val = _parsed_ted
-                    except (ValueError, TypeError):
-                        ted_val = None
-
-                if ted_val is not None:
-                    ted_alert = (
-                        " \u001b[1;31m⚠️ 流動性警戒\u001b[0m" if ted_val > 0.5 else ""
-                    )
-                    ted_color = "\u001b[1;31m" if ted_val > 0.5 else "\u001b[1;36m"
-                    ted_str = f"CP−T-Bill 利差 (TED 代理): {ted_color}{ted_val:.2f}\u001b[0m{ted_alert}"
-                elif ted_spread is not None:
-                    ted_str = (
-                        "CP−T-Bill 利差 (TED 代理): \u001b[1;31m獲取數據失敗\u001b[0m"
-                    )
-                else:
-                    ted_str = ""
-                macro_parts = [p for p in (gex_str, ted_str) if p]
-                if macro_parts:
-                    macro_ansi_header.append(" 🌍 雷達：宏觀數據發布與流動性枯竭警告")
-                    for i, part in enumerate(macro_parts):
-                        prefix = " ├─ " if i < len(macro_parts) - 1 else " └─ "
-                        macro_ansi_header.append(prefix + part)
-                    macro_ansi_header.append("")
-        except Exception:
-            pass
-
         # 依標的分組（保持列順序；同標的多列合併為同一組）
         insights_by_sym: dict[str, list[str]] = {}
         # 資料時效備註改為整頁合併一行（不再逐標的各佔一則警示）
@@ -1996,15 +1916,6 @@ def build_radar_scan_embed(
         if page_has_degraded_row:
             embed.title = f"{embed.title} [快取/降級]"
 
-        if macro_ansi_header:
-            # macro_ansi_header[0] is the title, macro_ansi_header[1:-1] is the content
-            macro_content = "\n".join(macro_ansi_header[1:-1])
-            embed.add_field(
-                name="🌍 雷達：宏觀數據發布與流動性枯竭警告",
-                value=f"```ansi\n{macro_content}\n```",
-                inline=False,
-            )
-
         radar_title = "🧠 核心 AI 暨持倉量化雷達"
         md_table_header = "| 標的 | 現價 (漲跌%) | G/P-Wall(±) | Skw% | SQZ向量 | Neg-GEX | STO 鎖死 | IV 策略 | EM Z-Score | 單一最強巨鯨異動 (Top UOA) | 灰階戰術建議 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"
 
@@ -2317,6 +2228,28 @@ def _format_credit_spread(
         f" ├─ {label}: {color}{bps} bps\u001b[0m{change_str} "
         f"{obs.strftime('%m/%d')}{stale_str}"
     )
+
+
+def _format_ted_spread(macro_data: Dict[str, Any]) -> str:
+    """CP−T-Bill 利差（TED 代理）單行；過期或備援快取一律附標示。僅呈現。
+
+    0 與負值是合法利差；缺值、布林值與非有限值顯示獲取數據失敗。
+    """
+    label = " ├─ CP−T-Bill 利差 (TED 代理)"
+    raw = macro_data.get("ted_spread")
+    v = None if isinstance(raw, bool) else _opt_float(raw)
+    if v is None:
+        return f"{label}: \u001b[1;31m獲取數據失敗\u001b[0m"
+    if v > 0.5:
+        text = f"\u001b[1;31m{v:.2f}\u001b[0m \u001b[1;31m⚠️ 流動性警戒\u001b[0m"
+    else:
+        text = f"\u001b[1;36m{v:.2f}\u001b[0m"
+    if macro_data.get("ted_is_expired", False):
+        age = _format_cache_age(macro_data.get("ted_cache_age_seconds"))
+        text += f" \u001b[1;33m[{age}快取]\u001b[0m"
+    elif macro_data.get("ted_is_fallback", False):
+        text += " \u001b[1;33m[即時抓取失敗，沿用快取]\u001b[0m"
+    return f"{label}: {text}"
 
 
 def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
@@ -2660,6 +2593,7 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
             _IG_OAS_RED_BPS,
             _now_et().date(),
         ),
+        _format_ted_spread(macro_data),
         f" ├─ FOMC 利率定價 (FedWatch): {fedwatch_desc}",
         f" ├─ CPI 年增率 (實際 vs 預期): {cpi_desc}",
         f" ├─ CNN 恐懼與貪婪指數: {fg_val_str}",
