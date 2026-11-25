@@ -2,8 +2,9 @@
 
 import asyncio
 import time
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, AsyncIterator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -470,6 +471,178 @@ async def test_cancelled_refresh_task_counted_as_failed() -> None:
     embed = it.edit_original_response.await_args.kwargs["embed"]
     assert "⚠️ 更新失敗: B" in embed.footer.text
     it.followup.send.assert_not_called()
+
+
+# --- 按鈕交錯 ----------------------------------------------------------------
+
+
+@asynccontextmanager
+async def _edit_in_flight(
+    callback: Any, error: Optional[Exception] = None
+) -> AsyncIterator[Any]:
+    """讓 callback 停在第一次 edit_message；離開區塊時放行（可指定該次編輯失敗）。"""
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_edit(**kwargs: Any) -> None:
+        entered.set()
+        await release.wait()
+        if error is not None:
+            raise error
+
+    it = _interaction()
+    it.response.edit_message = AsyncMock(side_effect=blocked_edit)
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        task = asyncio.create_task(callback(it))
+        await entered.wait()
+        try:
+            yield it
+        finally:
+            release.set()
+            if error is None:
+                await task
+            else:
+                with pytest.raises(type(error)):
+                    await task
+
+
+def _assert_only_deferred(it: Any) -> None:
+    it.response.defer.assert_awaited_once_with()
+    it.response.edit_message.assert_not_awaited()
+    it.response.send_message.assert_not_awaited()
+    it.edit_original_response.assert_not_awaited()
+    it.followup.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("button_name", ["btn_prev", "btn_next"])
+async def test_pager_ignored_during_return_panel(button_name: str) -> None:
+    view = _view([_res("A")], pages=3)
+    view.current_page = 1
+    view._update_button_states()
+    async with _edit_in_flight(view.btn_return_panel.callback):
+        click = _interaction()
+        await getattr(view, button_name).callback(click)
+        _assert_only_deferred(click)
+        assert view.current_page == 1
+        # 連點返回面板同樣只回應互動
+        again = _interaction()
+        await view.btn_return_panel.callback(again)
+        _assert_only_deferred(again)
+    assert view.is_finished() is True
+
+
+@pytest.mark.asyncio
+async def test_refresh_ignored_during_return_panel() -> None:
+    cog = _cog()
+    view = _view([_res("A", None)], cog)
+    async with _edit_in_flight(view.btn_return_panel.callback):
+        click = _interaction()
+        await _btn(view).callback(click)
+        _assert_only_deferred(click)
+        assert view.refresh_in_progress is False
+    cog._fetch_sym_radar_data_slow.assert_not_awaited()
+    cog._run_unified_scan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_warning_ignored_during_return_panel() -> None:
+    cog = _cog()
+    cog._run_warning_symbols_hub = AsyncMock()
+    view = _view([_res("A", None)], cog, pages=2)
+    async with _edit_in_flight(view.btn_return_panel.callback):
+        before = [getattr(c, "disabled") for c in view.children]
+        click = _interaction()
+        click.message = MagicMock()
+        click.message.embeds = [discord.Embed(title="x")]
+        await _warn(view).callback(click)
+        _assert_only_deferred(click)
+        assert [getattr(c, "disabled") for c in view.children] == before
+    cog._run_warning_symbols_hub.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_return_panel_during_refresh_is_ignored() -> None:
+    cog = _cog()
+    view = _view([_res("A", None)], cog)
+    async with _edit_in_flight(_btn(view).callback) as first:
+        click = _interaction()
+        await view.btn_return_panel.callback(click)
+        _assert_only_deferred(click)
+        assert view.returning_to_panel is False
+    first.edit_original_response.assert_awaited_once()
+    cog._fetch_sym_radar_data_slow.assert_awaited_once()
+    cog._run_unified_scan.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_return_panel_edit_failure_restores_pager() -> None:
+    view = _view([_res("A")], pages=2)
+    async with _edit_in_flight(
+        view.btn_return_panel.callback, error=RuntimeError("discord down")
+    ):
+        pass
+    assert view.returning_to_panel is False
+    assert view.is_finished() is False
+    click = _interaction()
+    await view.btn_next.callback(click)
+    click.response.defer.assert_not_awaited()
+    click.response.edit_message.assert_awaited_once_with(
+        embed=view.embeds[1], view=view
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("button_name", ["btn_prev", "btn_next"])
+async def test_pager_ignored_during_refresh_first_edit(button_name: str) -> None:
+    view = _view([_res("A", None)], _cog(_outcome([_res("A")], pages=3)), pages=3)
+    view.current_page = 1
+    view._update_button_states()
+    async with _edit_in_flight(_btn(view).callback):
+        click = _interaction()
+        await getattr(view, button_name).callback(click)
+        _assert_only_deferred(click)
+        assert view.current_page == 1
+        assert all(getattr(c, "disabled") for c in view.children)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["return_panel", "refresh"])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_warning_finally_waits_for_pending_transition(
+    transition: str, fails: bool
+) -> None:
+    """警示分析在換畫面編輯在途時結束：成功則不得再編輯訊息，失敗才恢復按鈕。"""
+    view = _view([_res("A", None)], _cog(), pages=2)
+    callback = (
+        view.btn_return_panel.callback
+        if transition == "return_panel"
+        else _btn(view).callback
+    )
+    hub_entered = asyncio.Event()
+    hub_release = asyncio.Event()
+
+    async def during() -> None:
+        hub_entered.set()
+        await hub_release.wait()
+
+    warning = asyncio.create_task(_run_warning(view, during))
+    await hub_entered.wait()
+    error = RuntimeError("discord down") if fails else None
+    async with _edit_in_flight(callback, error=error):
+        hub_release.set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert warning.done() is False
+
+    it = await warning
+    if fails:
+        it.edit_original_response.assert_awaited_once_with(view=view)
+        assert view.btn_next.disabled is False
+        assert _warn(view).disabled is False
+        assert view.btn_return_panel.disabled is False
+    else:
+        it.edit_original_response.assert_not_awaited()
 
 
 # --- GEX 即時抓取 ------------------------------------------------------------
