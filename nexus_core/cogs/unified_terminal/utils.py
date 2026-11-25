@@ -36,6 +36,7 @@ _CORE_MACRO_KV_KEYS: tuple[str, ...] = (
 _MACRO_AGE_TRACKED_KEYS: tuple[str, ...] = _CORE_MACRO_KV_KEYS + (
     "macro_spy_gamma_flip",
     "macro_vts_ratio",
+    "macro_ted_spread",
 )
 
 
@@ -403,6 +404,25 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         # 過期的期限結構視為未知：backwardation 改依 VIX 判定、流動性狀態不計分
         vts_val = None
 
+    # CP−T-Bill 利差（TED 代理）僅供面板呈現。edge 抓取失敗時 kv 保留舊值並寫
+    # macro_liquidity_is_fallback=1；未設定 TUNNEL_URL 的部署缺值屬正常。
+    ted_raw = get_kv_cache("macro_ted_spread")
+    ted_spread: float | None = None
+    if ted_raw is not None and not isinstance(ted_raw, bool):
+        try:
+            ted_parsed = float(ted_raw)
+            if math.isfinite(ted_parsed):
+                ted_spread = ted_parsed
+        except (ValueError, TypeError):
+            ted_spread = None
+    ted_cache_age = kv_ages.get("macro_ted_spread")
+    ted_is_expired = (
+        ted_spread is not None
+        and ted_cache_age is not None
+        and ted_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
+    ted_is_fallback = get_kv_cache("macro_liquidity_is_fallback") == 1
+
     vix_val_safe = float(vix) if vix is not None else 18.0
     is_backwardation = (
         (vts_val >= 1.0)
@@ -503,6 +523,10 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "rrp": rrp,
         "fed_balance": fed_balance,
         "credit_spreads": credit_spreads,
+        "ted_spread": ted_spread,
+        "ted_cache_age_seconds": ted_cache_age,
+        "ted_is_expired": ted_is_expired,
+        "ted_is_fallback": ted_is_fallback,
         "cpi_nfp_calendar": cpi_nfp_calendar,
         "fear_greed": fear_greed,
         "gamma_flip_line": gamma_flip_line,
