@@ -57,10 +57,17 @@ def _env(
     edge: Optional[dict[str, Any]],
     save_exc: Optional[Exception] = None,
     mock_background: bool = True,
+    kv_during_edge_read: Optional[dict[str, Any]] = None,
 ) -> Iterator[tuple[AsyncMock, MagicMock, dict[str, Any]]]:
     """有狀態的假 kv：save_kv_cache 寫入後，下一次 get_kv_cache 讀得到。
-    mock_background=False 供 force_live 使用 (SingleFlight 需要真正的 task)。"""
+    mock_background=False 供 force_live 使用 (SingleFlight 需要真正的 task)。
+    kv_during_edge_read 模擬讀取 edge 快照期間，其他任務寫入了 kv。"""
     store: dict[str, Any] = {"gex_metrics_NVDA": kv}
+
+    async def _get_edge(symbol: str) -> Optional[dict[str, Any]]:
+        if kv_during_edge_read is not None:
+            store["gex_metrics_NVDA"] = kv_during_edge_read
+        return edge
 
     async def _save(key: str, value: Any) -> bool:
         if save_exc is not None:
@@ -76,7 +83,7 @@ def _env(
         patch(
             "services.edge_cache_client.get_cached_gex",
             new_callable=AsyncMock,
-            return_value=edge,
+            side_effect=_get_edge,
         ),
         patch("database.cache.get_kv_cache", side_effect=store.get),
         patch("database.cache.save_kv_cache", save),
@@ -197,3 +204,91 @@ async def test_g_write_failure_keeps_return_value() -> None:
     save.assert_awaited_once()
     ct.assert_called_once()
     _assert_stale(res, 168.0, 10 * HOUR)
+
+
+@pytest.mark.asyncio
+async def test_h_fresh_path_keeps_newer_kv_written_during_edge_read() -> None:
+    live = _kv(300.0, 0)
+    with _env(
+        _kv(214.0, 2 * HOUR), _edge(_snap(168.0), 5 / 60), kv_during_edge_read=live
+    ) as (save, ct, store):
+        res = await fetch_symbol_gex_metrics("NVDA")
+
+    save.assert_not_called()
+    ct.assert_not_called()
+    assert store["gex_metrics_NVDA"] is live
+    # 回傳值同現行：仍回傳本次讀到的 edge 新鮮快照。
+    assert res == _snap(168.0)
+
+
+@pytest.mark.asyncio
+async def test_i_swr_keeps_newer_kv_written_during_edge_read() -> None:
+    live = _kv(300.0, 0)
+    with _env(
+        _kv(214.0, OLD_KV_AGE), _edge(_snap(168.0), 10), kv_during_edge_read=live
+    ) as (save, ct, store):
+        res = await fetch_symbol_gex_metrics("NVDA")
+
+    save.assert_not_called()
+    ct.assert_called_once()
+    assert store["gex_metrics_NVDA"] is live
+    # 回傳值同現行：以開頭讀到的 kv 與 edge 快照挑最新者。
+    _assert_stale(res, 168.0, 10 * HOUR)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_j_fresh_path_overwrites_old_or_legacy_kv(legacy: bool) -> None:
+    # 舊版殘留的信封時間不可信，即使看似很新也要覆蓋。
+    kv = _kv(214.0, 0 if legacy else 2 * HOUR)
+    if legacy:
+        kv["data"]["_is_stale_cache"] = True
+    with _env(kv, _edge(_snap(168.0), 5 / 60)) as (save, _, store):
+        res = await fetch_symbol_gex_metrics("NVDA")
+
+    save.assert_awaited_once()
+    envelope = store["gex_metrics_NVDA"]
+    assert envelope["data"] == _snap(168.0)
+    assert envelope["data_timestamp"] == pytest.approx(time.time() - 300, abs=5.0)
+    assert envelope["timestamp"] == pytest.approx(time.time(), abs=5.0)
+    assert res == _snap(168.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("age_h", [5 / 60, 10.0])
+@pytest.mark.parametrize("kind", ["older", "legacy", "sparse"])
+async def test_k_unusable_kv_written_during_edge_read_is_overwritten(
+    age_h: float, kind: str
+) -> None:
+    during = _kv(300.0, 20 * HOUR if kind == "older" else 0)
+    if kind == "legacy":
+        during["data"]["_is_stale_cache"] = True
+    elif kind == "sparse":
+        during["data"]["gex_profile"] = {"300.0": 500.0}
+    with _env(
+        _kv(214.0, OLD_KV_AGE),
+        _edge(_snap(168.0), age_h),
+        kv_during_edge_read=during,
+    ) as (save, _, store):
+        await fetch_symbol_gex_metrics("NVDA")
+
+    save.assert_awaited_once()
+    assert store["gex_metrics_NVDA"]["data"] == _snap(168.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("age_h", [5 / 60, 10.0])
+async def test_l_reread_failure_only_warns(
+    age_h: float, caplog: pytest.LogCaptureFixture
+) -> None:
+    with _env(_kv(214.0, OLD_KV_AGE), _edge(_snap(168.0), age_h)) as (save, _, __):
+        first_read = _kv(214.0, OLD_KV_AGE)
+        with patch(
+            "database.cache.get_kv_cache",
+            side_effect=[first_read, RuntimeError("boom")],
+        ):
+            res = await fetch_symbol_gex_metrics("NVDA")
+
+    save.assert_not_called()
+    assert res["spot"] == 168.0
+    assert "寫回 edge GEX 快照至 kv_cache 失敗" in caplog.text

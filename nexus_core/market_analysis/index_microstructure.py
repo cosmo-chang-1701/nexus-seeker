@@ -772,6 +772,48 @@ def _edge_gex_candidate(
         return None
 
 
+def _kv_gex_supersedes(cached_obj: Any, candidate_ts: float) -> bool:
+    """kv 現值是否已不比候選快照舊（容差內視為同一份），此時不得覆蓋。
+
+    舊版殘留 (data 帶 _is_stale_cache)、profile 無效或資料時間無法解析者一律
+    視為可覆蓋。"""
+    if not isinstance(cached_obj, dict):
+        return False
+    data = cached_obj.get("data")
+    if not isinstance(data, dict) or data.get("_is_stale_cache"):
+        return False
+    if not _has_valid_gex_profile(data):
+        return False
+    try:
+        cached_ts = float(
+            cached_obj.get("data_timestamp") or cached_obj.get("timestamp") or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+    return cached_ts >= candidate_ts - _GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS
+
+
+async def _write_back_edge_gex(
+    symbol: str, data: dict, now_ts: float, data_ts: float
+) -> None:
+    """把 edge 快照寫回 kv。寫入前重讀一次，避免讀取 edge 期間背景即時抓取
+    剛寫入的較新資料被蓋掉；重讀或寫入失敗只記警告。"""
+    import asyncio
+    from database.cache import get_kv_cache, save_kv_cache
+
+    cache_key = f"gex_metrics_{symbol.upper()}"
+    try:
+        current = await asyncio.to_thread(get_kv_cache, cache_key)
+        if _kv_gex_supersedes(current, data_ts):
+            return
+        await save_kv_cache(
+            cache_key,
+            {"data": data, "timestamp": now_ts, "data_timestamp": data_ts},
+        )
+    except Exception as e:
+        logger.warning(f"寫回 edge GEX 快照至 kv_cache 失敗 ({symbol}): {e}")
+
+
 async def _scrape_symbol_gex_raw(
     symbol: str,
     stale_cached_data: Optional[dict] = None,
@@ -906,22 +948,10 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                 and edge_age < _EDGE_SNAPSHOT_MAX_AGE_SECONDS
                 and _has_valid_gex_profile(edge_cached.get("data"))
             ):
-                from database.cache import save_kv_cache
-
                 edge_data = edge_cached["data"]
                 now_ts = time.time()
                 data_ts = now_ts - float(edge_age)
-                try:
-                    await save_kv_cache(
-                        cache_key,
-                        {
-                            "data": edge_data,
-                            "timestamp": now_ts,
-                            "data_timestamp": data_ts,
-                        },
-                    )
-                except Exception as e:
-                    logger.warning(f"寫入 GEX kv_cache 失敗 ({symbol}): {e}")
+                await _write_back_edge_gex(symbol, edge_data, now_ts, data_ts)
                 return edge_data  # type: ignore
 
         # 已有 kv 舊快取：立即以 kv 舊快取與過期 edge 快照中最新且未超過
@@ -931,8 +961,9 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             now = time.time()
             edge_cand = _edge_gex_candidate(edge_cached, now)
             # edge 快照比 kv 新且有效時，以其真實資料時間寫回 kv（不標記為新鮮），
-            # 讓直接讀 kv 的 /x 批次雷達追上最新快照。須在排程背景抓取之前完成，
-            # 以免覆蓋該任務寫入的即時資料。
+            # 讓直接讀 kv 的 /x 批次雷達追上最新快照。上面的比較基準是本次開頭讀到
+            # 的 kv，讀取 edge 期間先前排程的背景抓取可能已寫入更新的即時資料，故
+            # 寫入前會再重讀比對一次；本次的背景抓取則在寫回完成後才排程。
             if (
                 edge_cand is not None
                 and _has_valid_gex_profile(edge_cand[0])
@@ -940,25 +971,16 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
                 > _GEX_SWR_WRITEBACK_MIN_ADVANCE_SECONDS
                 and now - edge_cand[1] <= _GEX_STALE_FALLBACK_MAX_AGE_SECONDS
             ):
-                from database.cache import save_kv_cache
-
-                try:
-                    await save_kv_cache(
-                        cache_key,
-                        {
-                            "data": {
-                                k: v
-                                for k, v in edge_cand[0].items()
-                                if k not in ("_is_stale_cache", "_data_ts")
-                            },
-                            "timestamp": now,
-                            "data_timestamp": edge_cand[1],
-                        },
-                    )
-                except Exception as e:
-                    logger.warning(
-                        f"寫回 edge GEX 快照至 kv_cache 失敗 ({symbol}): {e}"
-                    )
+                await _write_back_edge_gex(
+                    symbol,
+                    {
+                        k: v
+                        for k, v in edge_cand[0].items()
+                        if k not in ("_is_stale_cache", "_data_ts")
+                    },
+                    now,
+                    edge_cand[1],
+                )
             last_attempt = _gex_swr_last_attempt.get(symbol.upper(), 0.0)
             if now - last_attempt >= _GEX_SWR_REFRESH_BACKOFF_SECONDS:
                 _gex_swr_last_attempt[symbol.upper()] = now

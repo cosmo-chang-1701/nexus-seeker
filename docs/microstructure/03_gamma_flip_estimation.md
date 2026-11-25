@@ -86,8 +86,7 @@ Flip 或 Spot 缺值、非數值、$\le 0$ 時回傳 `False`——「缺值」�
 2. `fetch_gex_metrics()` 的 last-known-good 讀取端：快取內的離群值不再回傳。
 3. `get_market_regime()`：以即時 SPY 報價重新判定，離群時 Flip 視為未知（三值邏輯，見 [`../macro_sentiment/01_macro_escape_top_matrix.md`](../macro_sentiment/01_macro_escape_top_matrix.md) §2.3）。
 4. `/market` 面板（`get_macro_overview_data`）：KV 讀到離群值即丟棄並走自癒（重抓大盤端點 → SPY 個股備援估算）；自癒結果與 SPX 尺度換算後的翻轉線再過一次閘門，仍離群才降為 `None`。
-5. 交易員終端 header：KV 的 Flip 相對 `macro_spy_spot` 離群時改顯示「快取數值離群，已濾除」。
-6. `/force_macro_update`（`services/macro_refresh_service.py`）：離群時改走 SPY 即時估算，失敗則如實回報。
+5. `/force_macro_update`（`services/macro_refresh_service.py`）：離群時改走 SPY 即時估算，失敗則如實回報。
 
 ---
 
@@ -242,12 +241,11 @@ SPY PutWall 由 758（錯 q）修正為 767。
 - `nexus_core/market_analysis/index_microstructure.py`：
   - 核心估算函式：`estimate_symbol_gamma_flip()`；大盤 SPY 備援：`estimate_macro_spy_gamma_flip()`
   - 大盤合理性閘門（§2.2）：`is_macro_gamma_flip_outlier()`、`MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT`、`MACRO_GEX_FLIP_MAX_BELOW_SPOT_PCT`；套用於 `fetch_gex_metrics()`、`_compute_market_regime_uncached()`
-- `nexus_core/cogs/unified_terminal/utils.py`：`get_macro_overview_data()` 的 KV 讀取端閘門與自癒路徑
-- `nexus_core/services/macro_refresh_service.py`：`/force_macro_update` 的離群改走 SPY 即時估算
-- `nexus_core/cogs/embed_builders/market_embeds.py`：交易員終端 header 的離群 Flip 濾除
   - 重要性門檻（呈現與校準，§5.6）：`gamma_flip_materiality()`、`estimate_material_gamma_flip()`、`GammaFlipMateriality`
   - 局部體制與雙向翻轉線（呈現層）：`analyze_local_gamma_regime()`、`LocalGammaRegime`
   - 內插零軸（呈現層）：`interpolate_gamma_flip_zero()`
+- `nexus_core/cogs/unified_terminal/utils.py`：`get_macro_overview_data()` 的 KV 讀取端閘門與自癒路徑
+- `nexus_core/services/macro_refresh_service.py`：`/force_macro_update` 的離群改走 SPY 即時估算
 - `nexus_core/market_analysis/dynamic_rollover/opportunity_cost.py`：
   - （歷史，已退役）右側突破引用與 Fallback 替代：原右側條件一函式（`opportunity_cost.py`）已刪除；做空鏡像見 `short_side_entry.py::_confirm_short_entry_condition1_breakdown()`
 - `nexus_core/market_analysis/dynamic_rollover/regime_classifier.py`：
