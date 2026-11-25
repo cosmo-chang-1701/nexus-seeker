@@ -838,6 +838,7 @@ async def test_batch_scan_warning_button_callback(mock_interaction: Any, mock_bo
     # Mock the button's view
     mock_view = MagicMock()
     mock_view.children = [btn]
+    mock_view.is_finished.return_value = False
     btn._view = mock_view
 
     await btn.callback(mock_interaction)
@@ -891,6 +892,7 @@ async def test_batch_scan_warning_button_many_symbols_single_hub_call(
 
     mock_view = MagicMock()
     mock_view.children = [btn]
+    mock_view.is_finished.return_value = False
     btn._view = mock_view
 
     mock_interaction.followup.send.reset_mock()
