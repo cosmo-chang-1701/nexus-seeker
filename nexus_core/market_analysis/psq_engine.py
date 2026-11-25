@@ -235,8 +235,9 @@ def analyze_psq(
             run = 1
             while run < n_light and light_vals[n_light - 1 - run]:
                 run += 1
-            # run < n_light 代表連續淺藍區間之前確有一根非淺藍（翻轉存在）。
-            if run < n_light or not light_vals[0]:
+            # run < n_light 代表連續淺藍區間之前確有一根非淺藍（翻轉存在）；
+            # 迴圈跑滿（run == n_light）代表整段皆為淺藍、沒有翻轉。
+            if run < n_light:
                 if run <= max(1, int(turbo_lookback)):
                     turbo = True
                     turbo_bars_ago = run - 1

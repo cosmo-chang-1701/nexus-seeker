@@ -1,7 +1,7 @@
 """多時間框架擠壓進場：重採樣、已收盤截斷、壓力區與等級規則。"""
 
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Dict
 
 import numpy as np
@@ -721,6 +721,18 @@ def test_turbo_lookback_5m_flip_four_bars_back_is_t1() -> None:
     r = evaluate_squeeze_entry(m, _NO_RES)
     assert r.status == STATUS_ENTRY and r.tier == 1
     assert "5m Turbo" in r.triggers
+
+
+def test_build_matrix_wires_5m_turbo_lookback() -> None:
+    # 驗證 build_matrix 經 split_intraday_confirmed → compute_state 時，
+    # TURBO_LOOKBACK["5m"] 確實生效（翻轉在 4 根前，單根窗口看不到）。
+    df = _turbo_lookback_frame()
+    df = df.iloc[: _turbo_lookback_end(df, 4)].copy()
+    df["Volume"] = 1e4
+    df.index = pd.date_range("2026-10-01 09:30", periods=len(df), freq="5min")
+    now_ny = df.index[-1].to_pydatetime() + timedelta(minutes=10)
+    m = build_matrix(None, None, df, now_ny, {})
+    assert "5m" in m and m["5m"].turbo is True
 
 
 def test_turbo_lookback_15m_flip_one_bar_back_and_window_edge() -> None:

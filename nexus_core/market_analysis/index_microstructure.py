@@ -797,7 +797,12 @@ async def _write_back_edge_gex(
     symbol: str, data: dict, now_ts: float, data_ts: float
 ) -> None:
     """把 edge 快照寫回 kv。寫入前重讀一次，避免讀取 edge 期間背景即時抓取
-    剛寫入的較新資料被蓋掉；重讀或寫入失敗只記警告。"""
+    剛寫入的較新資料被蓋掉；現值不比本快照舊（`_kv_gex_supersedes`）就不寫。
+
+    `get_kv_cache()`／`save_kv_cache()` 會自行攔截 DB 例外並記 error：重讀失敗
+    回 None，視同無現值而照常寫入；寫入失敗回 False，本函式不另處理。本函式的
+    except 只攔截其餘非預期例外（如 to_thread 或 `_kv_gex_supersedes` 本身的錯誤）
+    並記警告。"""
     import asyncio
     from database.cache import get_kv_cache, save_kv_cache
 

@@ -235,8 +235,10 @@ def test_turbo_lookback_detects_flip_three_bars_ago() -> None:
     assert wide is not None and narrow is not None
     assert wide.turbo is True and wide.turbo_bars_ago == 3
     assert narrow.turbo is False and narrow.turbo_bars_ago is None
-    assert analyze_psq(df.iloc[:end], turbo_lookback=3).turbo is False  # type: ignore[union-attr]
-    assert analyze_psq(df.iloc[:end], turbo_lookback=4).turbo is True  # type: ignore[union-attr]
+    r3 = analyze_psq(df.iloc[:end], turbo_lookback=3)
+    assert r3 is not None and r3.turbo is False
+    r4 = analyze_psq(df.iloc[:end], turbo_lookback=4)
+    assert r4 is not None and r4.turbo is True
 
 
 def test_turbo_lookback_non_light_blue_current_bar_is_not_turbo() -> None:
