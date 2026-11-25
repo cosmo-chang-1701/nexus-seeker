@@ -113,6 +113,11 @@ class BatchScanWarningButton(discord.ui.Button):
         if not view:
             return
 
+        # 換畫面中或已停用：僅回應互動，避免分頁按鈕貼回其他畫面（須在任何 await 之前判斷）
+        if isinstance(view, BatchScanPaginatedView) and view._is_transitioning():
+            await interaction.response.defer()
+            return
+
         # 1. 禁用按鈕與下拉選單以防止重複點擊
         for child in view.children:
             child.disabled = True
@@ -164,6 +169,9 @@ class BatchScanWarningButton(discord.ui.Button):
             # 2. 恢復按鈕與下拉選單狀態：先全數啟用，再交由 View 依頁碼／過期標的數
             #    重新套用邊界按鈕（◀ 首頁、▶ 末頁、更新按鈕）的 disabled 規則。
             #    View 已被其他畫面取代者不得再編輯訊息；已逾時者僅移除按鈕。
+            #    返回面板／更新的換畫面編輯在途時，先等結果：成功即屬已取代，失敗才恢復。
+            if isinstance(view, BatchScanPaginatedView):
+                await view.transition_settled.wait()
             finished = view.is_finished()
             if not (finished and getattr(view, "superseded", False)):
                 if not finished:
@@ -260,7 +268,7 @@ class BatchScanRefreshButton(discord.ui.Button):
             return
 
         # 防連點：須在任何 await 之前判斷；僅回應互動，不重複重算
-        if view.refresh_in_progress or view.is_finished():
+        if view._is_transitioning():
             await interaction.response.defer()
             return
 
@@ -281,6 +289,7 @@ class BatchScanRefreshButton(discord.ui.Button):
         recently = view._active_recent_refreshes()
         # 檢查到此處之間沒有 await，同一 View 的第二次點擊必定看得到旗標
         view.refresh_in_progress = True
+        view.transition_settled.clear()
         # 整個更新流程（慢速重算與重新掃描）皆視為使用者互動來源
         with market_data_service.mark_interactive_request():
             previous_disabled = [
@@ -298,9 +307,12 @@ class BatchScanRefreshButton(discord.ui.Button):
                     setattr(child, "disabled", was_disabled)
                 view._update_button_states()
                 raise
-            view.last_interaction = interaction
-            # 之後本訊息一律換上新 View；舊 View 停用，避免其逾時拆掉新按鈕
-            view._retire()
+            else:
+                view.last_interaction = interaction
+                # 之後本訊息一律換上新 View；舊 View 停用，避免其逾時拆掉新按鈕
+                view._retire()
+            finally:
+                view.transition_settled.set()
 
             try:
                 refresh_failed = await self._refresh_stale_symbols(
@@ -434,6 +446,11 @@ class BatchScanPaginatedView(discord.ui.View):
         self.refresh_button: Optional["BatchScanRefreshButton"] = None
         # True 代表更新按鈕的重算流程已啟動，後續點擊只回應互動
         self.refresh_in_progress = False
+        # True 代表返回面板的編輯在途，其他按鈕只回應互動
+        self.returning_to_panel = False
+        # 換畫面的編輯（返回面板、更新的第一次編輯）有結果前為 clear，供警示按鈕收尾等待
+        self.transition_settled = asyncio.Event()
+        self.transition_settled.set()
 
         # 警示標的分析按鈕獨立一列，避免與換頁按鈕擠在同一排
         warning_button = BatchScanWarningButton(cog, bot)
@@ -491,6 +508,10 @@ class BatchScanPaginatedView(discord.ui.View):
                 targets.add(sym)
         return targets
 
+    def _is_transitioning(self) -> bool:
+        """更新中、返回面板在途或本 View 已停用：按鈕點擊只回應互動。"""
+        return self.refresh_in_progress or self.returning_to_panel or self.is_finished()
+
     def _retire(self) -> None:
         """同一則訊息即將換上其他畫面：停止本 View，使其逾時不再編輯訊息。"""
         self.superseded = True
@@ -523,6 +544,9 @@ class BatchScanPaginatedView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """翻至上一頁。"""
+        if self._is_transitioning():
+            await interaction.response.defer()
+            return
         self.current_page = max(0, self.current_page - 1)
         self._update_button_states()
         await interaction.response.edit_message(
@@ -535,6 +559,9 @@ class BatchScanPaginatedView(discord.ui.View):
         self, interaction: discord.Interaction, button: discord.ui.Button
     ) -> Any:
         """翻至下一頁。"""
+        if self._is_transitioning():
+            await interaction.response.defer()
+            return
         self.current_page = min(len(self.embeds) - 1, self.current_page + 1)
         self._update_button_states()
         await interaction.response.edit_message(
@@ -554,12 +581,25 @@ class BatchScanPaginatedView(discord.ui.View):
             build_unified_radar_panel_embed,
         )
 
-        # 帶入本次掃描的 state，讓控制面板還原範圍／過濾條件／參數／標籤
-        view = UnifiedRadarView(self.cog, interaction.user.id, initial_state=self.state)
-        embed = build_unified_radar_panel_embed(view.get_state_dict())
-        await interaction.response.edit_message(embed=embed, view=view)
-        # 編輯成功才停用本 View；失敗時畫面仍是原按鈕，須保持可用且逾時仍會移除
-        self._retire()
+        # 防連點與併發：須在任何 await 之前判斷
+        if self._is_transitioning():
+            await interaction.response.defer()
+            return
+        self.returning_to_panel = True
+        self.transition_settled.clear()
+        try:
+            # 帶入本次掃描的 state，讓控制面板還原範圍／過濾條件／參數／標籤
+            view = UnifiedRadarView(
+                self.cog, interaction.user.id, initial_state=self.state
+            )
+            embed = build_unified_radar_panel_embed(view.get_state_dict())
+            await interaction.response.edit_message(embed=embed, view=view)
+            # 編輯成功才停用本 View；失敗時畫面仍是原按鈕，須保持可用且逾時仍會移除
+            self._retire()
+        finally:
+            # 失敗時復原旗標讓按鈕可再用；成功時 View 已停用，仍不會再處理點擊
+            self.returning_to_panel = False
+            self.transition_settled.set()
 
     async def on_timeout(self) -> None:
         """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。
