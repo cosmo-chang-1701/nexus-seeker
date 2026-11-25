@@ -164,7 +164,7 @@ def _load_symbol_caches(sym: str, today_str: str) -> tuple[_KvSnapshot, Any, Any
     from database.squeeze_cache import get_squeeze_cache
 
     kv = _KvSnapshot(get_kv_cache_many_with_updated_at(_radar_kv_keys(sym, today_str)))
-    return kv, get_market_cache(sym), get_squeeze_cache(sym)
+    return kv, get_market_cache(sym, near_term=True), get_squeeze_cache(sym)
 
 
 class RadarDataMixin:
@@ -735,13 +735,14 @@ class RadarDataMixin:
         獲取單一標的的雷達量化數據。
         採用統一的 get_unified_max_pain 方法讀取與重算快取。
 
-        呼叫端為 08:45 ET 盤前預熱、持倉監控、進場顧問與雷達的更新按鈕，
-        並非互動指令的即時深度分析路徑，因此刻意維持預設的
+        呼叫端為 08:45 ET 盤前預熱、持倉監控、進場顧問與雷達的更新按鈕。
+        除更新按鈕（互動觸發）以 `force_refresh` opt-in 外，其餘呼叫端為背景
+        排程。本函式並非互動指令的即時深度分析路徑，因此刻意維持預設的
         force_live=False / force_refresh=False，繼續吃 Edge Snapshot 與
-        IV/Max Pain 自身的快取——這正是背景排程任務存在的目的，避免每輪都對
-        每個使用者、每個標的重複發動即時網路請求。互動指令（`/x symbol:`、
-        批次掃描的「⚡ 批次分析警示標的」按鈕）走的是完全獨立的
-        `_fetch_single_symbol_data_raw`，那裡才是保證即時性的地方。
+        IV/Max Pain 自身的快取，避免背景排程每輪都對每個使用者、每個標的重複
+        發動即時網路請求。`/x symbol:` 與批次掃描的「⚡ 批次分析警示標的」按鈕
+        走的是完全獨立的 `_fetch_single_symbol_data_raw`，那裡才是保證即時性的
+        地方。
 
         例外：`force_refresh=True`（僅供「更新逾 30 分鐘標的」按鈕等明確要求重算的
         呼叫端 opt-in）會強制重算 Max Pain、IV 指標與 PSQ（不沿用 squeeze 快取並

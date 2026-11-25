@@ -62,7 +62,7 @@ def _classify_watchlist_cache_tag(
 def _format_watchlist_price_info(symbol: str) -> str:
     """讀取 `market_cache`（純本地 SQLite 快取，零額外網路呼叫）並格式化為
     「快取價 (MP偏離% 標籤)」摘要；快取不存在時回傳降級提示。"""
-    cache = get_market_cache(symbol)
+    cache = get_market_cache(symbol, near_term=True)
     if not cache or not cache.get("reference_spot_price"):
         return "-- (尚未預熱)"
 

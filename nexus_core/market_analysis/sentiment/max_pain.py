@@ -6,7 +6,7 @@ import pandas as pd
 import sqlite3  # noqa: F401
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import Dict, Iterable, Optional
+from typing import Dict, Iterable, Optional, Tuple
 from services import market_data_service
 from market_time import ny_tz
 
@@ -54,6 +54,60 @@ def _current_week_friday(now_dt: Optional[datetime] = None) -> date:
         logger.warning(f"Failed to check NYSE calendar for Friday holiday: {e}")
 
     return friday
+
+
+def _pick_default_expiry(
+    expiries: Iterable[str], today: date
+) -> Tuple[Optional[str], bool]:
+    """預設到期日規則本體。
+
+    回傳 (到期日, 是否回退)：第二個值為 True 表示清單中沒有本週到期合約，
+    改用 14 天內最近一檔。
+    """
+    # 嚴格到期日過濾：鎖定本週五即期到期合約，物理剔除 LEAPs
+    target_friday = _current_week_friday(datetime.combine(today, datetime.min.time()))
+    # 也接受半週到期 (Monday/Wednesday mini-options)
+    acceptable_dates = [
+        target_friday,
+        target_friday - timedelta(days=2),  # Wednesday
+        target_friday - timedelta(days=4),  # Monday
+    ]
+    parsed: list[tuple[date, str]] = []
+    for exp in expiries:
+        try:
+            exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if exp_dt >= today:
+            parsed.append((exp_dt, exp))
+
+    weekly_expiries: list[str] = []
+    near_term_expiries: list[str] = []
+    for exp_dt, exp in sorted(parsed):
+        if exp_dt in acceptable_dates:
+            weekly_expiries.append(exp)
+        elif (exp_dt - today).days <= 14:
+            near_term_expiries.append(exp)
+
+    if weekly_expiries:
+        # 優先選擇本週五
+        friday_str = target_friday.strftime("%Y-%m-%d")
+        if friday_str in weekly_expiries:
+            return friday_str, False
+        return weekly_expiries[0], False
+    if near_term_expiries:
+        return near_term_expiries[0], True
+    return None, False
+
+
+def select_default_expiry(expiries: Iterable[str], today: date) -> Optional[str]:
+    """未指定到期日時的預設到期日（Max Pain 計算端與快取讀取端共用）。
+
+    目標週五（見 `_current_week_friday`）與其前 2、4 天視為週到期，優先週五、
+    否則最早的週到期；沒有週到期則取 14 天內最近一檔；仍沒有回傳 None。
+    已過期與無法解析的到期日一律跳過。
+    """
+    return _pick_default_expiry(expiries, today)[0]
 
 
 _SPLIT_ADJUST_LOOKBACK_DAYS: int = 30
@@ -217,7 +271,11 @@ async def get_unified_max_pain(
     # 2. 讀取 SQLite 快取
     import sys
 
-    cache_data = await asyncio.to_thread(get_market_cache, symbol, expiry)
+    # 未指定到期日時取預設到期日的快取列，不得取「最新寫入列」（可能是遠月）。
+    if expiry:
+        cache_data = await asyncio.to_thread(get_market_cache, symbol, expiry)
+    else:
+        cache_data = await asyncio.to_thread(get_market_cache, symbol, near_term=True)
 
     # Check if get_market_cache is mocked
     is_mock = (
@@ -367,7 +425,7 @@ async def get_unified_max_pain(
                 max_pain = None
                 circuit_breaker_triggered = 1
                 if not force_refresh:
-                    _trigger_background_cache_clear(symbol)
+                    _trigger_background_cache_clear(symbol, expiry)
 
         # 6. 計算本週預期區間
         # 這一步（尤其內部可能重新呼叫 get_quote）若拋出例外（例如標的已下市/更名，
@@ -509,40 +567,9 @@ async def _calculate_max_pain_raw(
             if not expiries:
                 return {"error": "No expiries"}
 
-            # 嚴格到期日過濾：鎖定本週五即期到期合約，物理剔除 LEAPs
-            target_friday = _current_week_friday()
-            # 也接受半週到期 (Monday/Wednesday mini-options)
-            acceptable_dates = [
-                target_friday,
-                target_friday - timedelta(days=2),  # Wednesday
-                target_friday - timedelta(days=4),  # Monday
-            ]
-            weekly_expiries: list[str] = []
-            near_term_expiries: list[str] = []
-            for exp in expiries:
-                try:
-                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                    if exp_dt < today:
-                        continue
-                    if exp_dt in acceptable_dates:
-                        weekly_expiries.append(exp)
-                    elif (exp_dt - today).days <= 14:
-                        near_term_expiries.append(exp)
-                except ValueError:
-                    continue
+            expiry, is_near_term_fallback = _pick_default_expiry(expiries, today)
 
-            if weekly_expiries:
-                # 優先選擇本週五
-                friday_str = target_friday.strftime("%Y-%m-%d")
-                expiry = (
-                    friday_str if friday_str in weekly_expiries else weekly_expiries[0]
-                )
-            elif near_term_expiries:
-                expiry = near_term_expiries[0]
-                logger.warning(
-                    f"[{symbol}] 無本週五到期合約，回退至最近到期日: {expiry}"
-                )
-            else:
+            if expiry is None:
                 logger.warning(
                     f"[{symbol}] 無本週及 14 天內到期合約，物理性阻斷並標記為 Data_Missing"
                 )
@@ -555,6 +582,10 @@ async def _calculate_max_pain_raw(
                     "data_status": "Data_Missing",
                     "error": "Data_Missing",
                 }
+            if is_near_term_fallback:
+                logger.warning(
+                    f"[{symbol}] 無本週五到期合約，回退至最近到期日: {expiry}"
+                )
 
         chain = await market_data_service.get_option_chain(
             symbol, expiry, prune_pct=None, force_live=force_live
@@ -738,7 +769,7 @@ async def _calculate_max_pain_raw(
         ):
             # 觸發警告與資料庫快取標記
             await check_and_reconcile_max_pain_anomaly(
-                symbol, max_pain_strike, spot_price
+                symbol, max_pain_strike, spot_price, expiry=expiry
             )
 
             # SWR: Try to read old cache from DB and return it directly, marked as is_stale = True
@@ -757,6 +788,7 @@ async def _calculate_max_pain_raw(
                 )
                 return {
                     "symbol": symbol,
+                    "expiry": expiry,
                     "max_pain": cached_mp,
                     "current_price": spot_price,
                     "distance_pct": dist_pct,
@@ -773,6 +805,7 @@ async def _calculate_max_pain_raw(
                 # If no old cache exists, we return the calculated strike but mark it as stale
                 return {
                     "symbol": symbol,
+                    "expiry": expiry,
                     "max_pain": max_pain_strike,
                     "current_price": spot_price,
                     "distance_pct": (

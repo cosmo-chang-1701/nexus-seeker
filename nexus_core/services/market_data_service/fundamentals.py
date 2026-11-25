@@ -687,11 +687,12 @@ async def get_vix_zscores() -> Dict[str, float]:
 
 
 async def check_and_reconcile_max_pain_anomaly(
-    symbol: str, max_pain: float, spot_price: float
+    symbol: str, max_pain: float, spot_price: float, expiry: Optional[str] = None
 ) -> bool:
     """
     Check if the Max Pain price deviates from the spot price by more than 30%.
     If so, record a warning log, mark database cache as stale, trigger background revalidation, and return True.
+    指定 ``expiry`` 時只標記該到期日的快取列；未指定時標記該標的所有列。
     """
     if spot_price <= 0.0 or max_pain <= 0.0:
         return False
@@ -707,7 +708,7 @@ async def check_and_reconcile_max_pain_anomaly(
             from database import mark_market_cache_stale
 
             # Mark stale in DB instead of deleting
-            await mark_market_cache_stale(symbol)
+            await mark_market_cache_stale(symbol, expiry)
 
             # Trigger background revalidation task
             async def _async_revalidate_max_pain() -> None:

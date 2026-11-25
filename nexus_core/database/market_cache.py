@@ -1,5 +1,6 @@
 import logging
 import sqlite3
+from datetime import date, datetime
 from typing import Optional, Dict, Any
 from database.connection import get_read_connection, execute_write_async
 
@@ -222,9 +223,51 @@ async def save_wall_levels(
         return False
 
 
+def _today_ny() -> date:
+    from market_time import ny_tz
+
+    return datetime.now(ny_tz).date()
+
+
+def _pick_near_term_row(rows: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """自同一標的的所有快取列挑出預設到期日列。
+
+    只考慮到期日可解析且未過期（美東今日起）者；依 ``select_default_expiry``
+    挑選，無符合者取最近的未到期列；完全沒有未到期列回傳 None。
+    ``WALL_TRACKING_EXPIRY`` 等非日期列永不選中。
+    """
+    # 延遲 import 避免 database 與 market_analysis 的循環依賴。
+    from market_analysis.sentiment.max_pain import select_default_expiry
+
+    today = _today_ny()
+    dated: list[tuple[date, str, Dict[str, Any]]] = []
+    for row in rows:
+        expiry = str(row.get("expiry"))
+        try:
+            expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if expiry_date >= today:
+            dated.append((expiry_date, expiry, row))
+    if not dated:
+        return None
+
+    selected = select_default_expiry([expiry for _, expiry, _ in dated], today)
+    for _, expiry, row in dated:
+        if expiry == selected:
+            return row
+    return min(dated, key=lambda item: item[0])[2]
+
+
 def get_market_cache(
-    symbol: str, expiry: Optional[str] = None
+    symbol: str, expiry: Optional[str] = None, *, near_term: bool = False
 ) -> Optional[Dict[str, Any]]:
+    """讀取 market_cache 單一列。
+
+    指定 ``expiry`` 時回傳該到期日列（``near_term`` 無作用）。未指定時：預設回傳
+    ``updated_at`` 最新的列（僅適用於只需最新參考現價或牆位的讀取端）；
+    ``near_term=True`` 回傳預設到期日列（Max Pain 讀取端使用）。
+    """
     conn = None
     try:
         conn = get_read_connection()
@@ -235,6 +278,12 @@ def get_market_cache(
                 "SELECT * FROM market_cache WHERE symbol = ? AND expiry = ?",
                 (symbol.upper(), expiry),
             )
+        elif near_term:
+            cursor.execute(
+                "SELECT * FROM market_cache WHERE symbol = ?",
+                (symbol.upper(),),
+            )
+            return _pick_near_term_row([dict(r) for r in cursor.fetchall()])
         else:
             cursor.execute(
                 "SELECT * FROM market_cache WHERE symbol = ? ORDER BY updated_at DESC LIMIT 1",
