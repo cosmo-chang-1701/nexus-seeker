@@ -83,6 +83,7 @@ def _interaction() -> Any:
     it.response = MagicMock()
     it.response.edit_message = AsyncMock()
     it.response.send_message = AsyncMock()
+    it.response.defer = AsyncMock()
     it.followup.send = AsyncMock()
     it.edit_original_response = AsyncMock()
     return it
@@ -361,6 +362,114 @@ async def test_warning_button_leaves_replaced_message_alone() -> None:
 
     it = await _run_warning(view, go_back)
     it.edit_original_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_return_panel_edit_failure_keeps_pager_alive() -> None:
+    view = _view([_res("A")])
+    message = MagicMock()
+    message.edit = AsyncMock()
+    view.message = message
+    view._start_listening_from_store(MagicMock())
+    it = _interaction()
+    it.response.edit_message = AsyncMock(side_effect=RuntimeError("discord down"))
+    with pytest.raises(RuntimeError):
+        await view.btn_return_panel.callback(it)
+    assert view.is_finished() is False
+    assert view.superseded is False
+    await view.on_timeout()
+    message.edit.assert_awaited_once_with(view=None)
+    view.stop()
+
+
+@pytest.mark.asyncio
+async def test_double_click_refreshes_only_once() -> None:
+    cog = _cog()
+    view = _view([_res("A", None)], cog)
+    button = _btn(view)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def blocked_edit(**kwargs: Any) -> None:
+        entered.set()
+        await release.wait()
+
+    first = _interaction()
+    first.response.edit_message = AsyncMock(side_effect=blocked_edit)
+    second = _interaction()
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        task = asyncio.create_task(button.callback(first))
+        await entered.wait()
+        await button.callback(second)
+        release.set()
+        await task
+
+    second.response.defer.assert_awaited_once_with()
+    second.response.edit_message.assert_not_awaited()
+    second.edit_original_response.assert_not_awaited()
+    first.response.edit_message.assert_awaited_once()
+    first.edit_original_response.assert_awaited_once()
+    cog._fetch_sym_radar_data_slow.assert_awaited_once()
+    cog._run_unified_scan.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_click_on_finished_view_only_defers() -> None:
+    cog = _cog()
+    view = _view([_res("A", None)], cog)
+    button = _btn(view)
+    view.stop()
+    it = _interaction()
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        await button.callback(it)
+    it.response.defer.assert_awaited_once_with()
+    it.response.edit_message.assert_not_awaited()
+    cog._fetch_sym_radar_data_slow.assert_not_awaited()
+    cog._run_unified_scan.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_first_edit_failure_allows_retry() -> None:
+    cog = _cog()
+    view = _view([_res("A", None)], cog, pages=2)
+    button = _btn(view)
+    before = [getattr(c, "disabled") for c in view.children]
+    label = button.label
+    failing = _interaction()
+    failing.response.edit_message = AsyncMock(side_effect=RuntimeError("x"))
+    with patch("services.llm_service.is_memory_safe", return_value=True):
+        with pytest.raises(RuntimeError):
+            await button.callback(failing)
+
+    assert view.refresh_in_progress is False
+    assert view.is_finished() is False
+    assert [getattr(c, "disabled") for c in view.children] == before
+    assert button.label == label
+    cog._fetch_sym_radar_data_slow.assert_not_awaited()
+
+    retry = _interaction()
+    new_view = await _click(view, retry)
+    assert new_view is not view
+    retry.response.defer.assert_not_awaited()
+    cog._fetch_sym_radar_data_slow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_refresh_task_counted_as_failed() -> None:
+    async def slow(sym: str, force_refresh: bool = False) -> None:
+        if sym == "B":
+            raise asyncio.CancelledError
+
+    cog = _cog(slow=slow)
+    view = _view([_res("A", None), _res("B", None)], cog)
+    it = _interaction()
+    new_view = await _click(view, it)
+    assert new_view.refresh_failed_symbols == ["B"]
+    assert set(new_view.recently_refreshed) == {"A"}
+    cog._run_unified_scan.assert_awaited_once()
+    embed = it.edit_original_response.await_args.kwargs["embed"]
+    assert "⚠️ 更新失敗: B" in embed.footer.text
+    it.followup.send.assert_not_called()
 
 
 # --- GEX 即時抓取 ------------------------------------------------------------

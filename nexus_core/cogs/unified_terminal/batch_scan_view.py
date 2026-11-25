@@ -238,6 +238,11 @@ class BatchScanRefreshButton(discord.ui.Button):
         failed: List[str] = []
         for task, sym in tasks.items():
             if task in done:
+                if task.cancelled():
+                    # 已取消的 task 呼叫 exception() 會拋 CancelledError
+                    logger.warning(f"雷達重算任務被取消: {sym}")
+                    failed.append(sym)
+                    continue
                 exc = task.exception()
                 if exc is not None:
                     logger.warning(f"Radar refresh failed for {sym}: {exc}")
@@ -252,6 +257,11 @@ class BatchScanRefreshButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> Any:
         view = self.view
         if not isinstance(view, BatchScanPaginatedView):
+            return
+
+        # 防連點：須在任何 await 之前判斷；僅回應互動，不重複重算
+        if view.refresh_in_progress or view.is_finished():
+            await interaction.response.defer()
             return
 
         from services.llm_service import is_memory_safe
@@ -269,12 +279,25 @@ class BatchScanRefreshButton(discord.ui.Button):
         live_gex_symbols = view._live_gex_symbols(stale)
         refresh_failed = list(view.refresh_failed_symbols)
         recently = view._active_recent_refreshes()
+        # 檢查到此處之間沒有 await，同一 View 的第二次點擊必定看得到旗標
+        view.refresh_in_progress = True
         # 整個更新流程（慢速重算與重新掃描）皆視為使用者互動來源
         with market_data_service.mark_interactive_request():
+            previous_disabled = [
+                (child, getattr(child, "disabled", False)) for child in view.children
+            ]
             for child in view.children:
                 setattr(child, "disabled", True)
             self.label = f"⏳ 更新中 ({len(stale)} 檔)…"
-            await interaction.response.edit_message(view=view)
+            try:
+                await interaction.response.edit_message(view=view)
+            except Exception:
+                # 畫面未換成「更新中」：復原旗標與按鈕狀態，讓使用者可再次點擊
+                view.refresh_in_progress = False
+                for child, was_disabled in previous_disabled:
+                    setattr(child, "disabled", was_disabled)
+                view._update_button_states()
+                raise
             view.last_interaction = interaction
             # 之後本訊息一律換上新 View；舊 View 停用，避免其逾時拆掉新按鈕
             view._retire()
@@ -409,6 +432,8 @@ class BatchScanPaginatedView(discord.ui.View):
         # True 代表同一則訊息已換上其他畫面，本 View 不得再編輯訊息
         self.superseded = False
         self.refresh_button: Optional["BatchScanRefreshButton"] = None
+        # True 代表更新按鈕的重算流程已啟動，後續點擊只回應互動
+        self.refresh_in_progress = False
 
         # 警示標的分析按鈕獨立一列，避免與換頁按鈕擠在同一排
         warning_button = BatchScanWarningButton(cog, bot)
@@ -532,8 +557,9 @@ class BatchScanPaginatedView(discord.ui.View):
         # 帶入本次掃描的 state，讓控制面板還原範圍／過濾條件／參數／標籤
         view = UnifiedRadarView(self.cog, interaction.user.id, initial_state=self.state)
         embed = build_unified_radar_panel_embed(view.get_state_dict())
-        self._retire()
         await interaction.response.edit_message(embed=embed, view=view)
+        # 編輯成功才停用本 View；失敗時畫面仍是原按鈕，須保持可用且逾時仍會移除
+        self._retire()
 
     async def on_timeout(self) -> None:
         """Timeout 後移除所有按鈕，避免殭屍互動元件殘留。
