@@ -15,7 +15,12 @@ INDEX_SYMBOLS = {"SPY", "QQQ", "DIA", "IWM", "SPX", "NDX", "RUT", "VIX"}
 _revalidating_symbols: set[str] = set()
 
 
-def _trigger_background_cache_clear(symbol: str) -> Any:
+def _trigger_background_cache_clear(symbol: str, expiry: Optional[str] = None) -> Any:
+    """背景清除快取並重新驗證。
+
+    指定 ``expiry`` 時，market_cache 只標記該到期日的列為 stale；未指定時標記
+    該標的所有列。
+    """
     symbol_upper = symbol.upper()
     if symbol_upper in _revalidating_symbols:
         logger.info(
@@ -68,7 +73,7 @@ def _trigger_background_cache_clear(symbol: str) -> Any:
             try:
                 from database import mark_market_cache_stale
 
-                await mark_market_cache_stale(symbol_upper)
+                await mark_market_cache_stale(symbol_upper, expiry)
             except Exception as stale_err:
                 logger.warning(
                     f"Failed to mark market_cache stale for {symbol_upper}: {stale_err}"

@@ -147,7 +147,15 @@ if spot_price > 0 and abs(max_pain - spot_price) / spot_price > 0.30:
     max_pain = None
     circuit_breaker_triggered = 1
 ```
-一旦觸發，系統將 `max_pain` 設為 `None`，向資料庫寫入 `circuit_breaker_triggered = 1`，並發起非同步背景任務清除受污染的本地快取，防止錯誤數據持久化。
+一旦觸發，系統將 `max_pain` 設為 `None`，向資料庫寫入 `circuit_breaker_triggered = 1`，並發起非同步背景任務清除受污染的本地快取，防止錯誤數據持久化。`market_cache` 的 stale 標記只作用於**發生異常的到期日列**（`check_and_reconcile_max_pain_anomaly()` 與 `_trigger_background_cache_clear()` 帶入已解析的到期日），遠月異常不會讓近月列失效；到期日無法解析時才標記該標的所有列。記憶體、期權鏈與 `kv_cache` 的清除仍以標的為單位。
+
+### 5.1a 不指定到期日時的快取列選擇
+`market_cache` 以 `(symbol, expiry)` 為鍵，同一標的可能同時存在多個到期日列（例如深度分析寫入 30 天內各到期日）。Max Pain 讀取端——`get_unified_max_pain()`（未指定到期日）、雷達快速路徑與觀察清單價格摘要——以 `get_market_cache(symbol, near_term=True)` 讀取，不採用「`updated_at` 最新列」：
+1. 只考慮到期日可解析且未過期（美東今日起）的列；`WEEKLY`（牆位追蹤列）等非日期列永不選中。
+2. 依計算端同一規則 `select_default_expiry()` 挑選：目標週五（`_current_week_friday()`）與其前 2、4 天為週到期，優先週五、否則最早的週到期；沒有週到期則取 14 天內最近一檔。
+3. 沒有符合者取最近的未到期列；沒有任何未到期列則視為快取缺失（觸發重算）。
+
+只需要最新參考現價或牆位的讀取端維持原行為（不帶 `near_term`，取最新列）；指定到期日的讀寫不受影響。
 
 ### 5.2 0-DTE 時間縮放失真防護 (Expiry Selection Guard)
 到期當天的跨式只剩幾小時的日內 Gamma 與殘餘時間價值，無論分母怎麼鉗制，都無法用 $\sqrt{7/\text{DTE}}$ 外推成一週。防護方式是**不選它**：`_calculate_straddle_implied_em()` 只在 $\text{DTE} \in [2, 14]$ 中選取最接近 7 天的到期日；沒有合格到期日時回傳 `None`，由 §2.1 的融合機制退回 IV 公式。
@@ -210,7 +218,8 @@ Max Pain 向上磁吸只在做市商處於正 Gamma 時成立。批次雷達（`
 - **預期波幅雙軌計算引擎**:
   - `nexus_core/market_analysis/sentiment/iv_metrics.py`: `_calculate_straddle_implied_em()`, `fetch_and_calculate_iv_metrics()`, `straddle_implied_annual_iv()`, `_select_term_expiries()`
 - **最大痛點最佳化與快取斷路器**:
-  - `nexus_core/market_analysis/sentiment/max_pain.py`: `_calculate_max_pain_with_weights()`, `get_unified_max_pain()`, `_calculate_max_pain_raw()`
+  - `nexus_core/market_analysis/sentiment/max_pain.py`: `_calculate_max_pain_with_weights()`, `get_unified_max_pain()`, `_calculate_max_pain_raw()`, `select_default_expiry()`
+  - `nexus_core/database/market_cache.py`: `get_market_cache()`（`near_term` 快取列選擇）
 - **多 DTE 重力過濾與終端雷達狀態整合**:
   - `nexus_core/cogs/embed_builders/market_embeds.py`: lines 892–929 (多週期引力階梯), lines 1048–1055 (EM Z-Score 渲染)
 - **本地 SQLite 預熱快取資料表定義**:
