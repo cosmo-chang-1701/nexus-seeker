@@ -117,6 +117,8 @@ sequenceDiagram
     View->>Embeds: _apply_footers() 寫入 "頁次: 1/N ｜ 📊 總項目: M"
     View->>Discord: 發送單一 Ephemeral 初始訊息 (第 1 頁)
 
+    Note over View: 換頁、返回面板、警示按鈕的守衛（任何 await 之前判斷）：_is_transitioning()（更新進行中、返回面板在途或 View 已停用）成立時只 defer() 回應互動
+
     User->>Discord: 點擊 "下一頁 ▶"
     Discord->>View: 觸發 btn_next 回調
     View->>View: current_page += 1，更新按鈕 disabled 狀態
@@ -128,6 +130,12 @@ sequenceDiagram
     View->>Discord: interaction.response.edit_message(view=UnifiedRadarView，還原本次掃描的範圍／過濾條件／參數／標籤)
     View->>View: 編輯成功後才 stop()（舊 View 停用，逾時不再編輯訊息）
     Note over View: 編輯失敗時舊 View 保持運作，原按鈕仍可用且逾時仍會移除
+    View->>View: 編輯成功後將本次互動交給新面板的 last_interaction（編輯失敗時新面板不持有任何參照）
+
+    User->>Discord: 點擊 "⚡ 批次分析警示標的"
+    Discord->>View: 觸發 BatchScanWarningButton 回調
+    View->>Discord: 停用所有元件並就地編輯，再以單一 followup 訊息逐檔換頁呈現警示標的
+    Note over View: 收尾（finally）先 await transition_settled.wait()：返回面板與更新的換畫面編輯在途時等其結果。View 已被取代則不再編輯訊息，已逾時僅移除按鈕，否則恢復按鈕
 
     User->>Discord: 點擊 "🔄 更新逾 30 分鐘標的 (N)"
     Discord->>View: 觸發 BatchScanRefreshButton 回調
@@ -154,6 +162,9 @@ sequenceDiagram
     Note over View: 逾時（300 秒無互動）
     View->>Discord: 移除所有按鈕：edit_original_response(view=None)（尚無互動時 message.edit(view=None)）
     Note over View: 已知限制：互動 token 壽命僅 15 分鐘，重算（預算 540 秒）加重掃超過約 10 分鐘時，訊息可能停在「更新中」，或逾時時無法移除按鈕
+
+    Note over Discord: UnifiedRadarView 逾時（300 秒無互動）：面板以最後一次成功編輯的 last_interaction 執行 edit_original_response(view=None)，沒有時改用 /x 開面板時保存的 message.edit(view=None)
+    Note over Discord: 已知限制：Discord 可能晚套用舊編輯（換頁、警示按鈕收尾）而蓋過面板，殘留按鈕由面板逾時清除
 ```
 
 ### 3.3 SQLite 單一寫入者執行緒（nexus-db-writer）狀態與交易佇列
@@ -200,7 +211,7 @@ sequenceDiagram
 | `EMBED_CHUNK_MAX_SIZE` | `5500` 字元 | `chunk_embeds` 單包累積字元安全上限（小於 6000） | `nexus_core/cogs/embed_builders/_embed_helpers.py:1010` |
 | `EMBED_CHUNK_MAX_COUNT`| `10` 個 | `chunk_embeds` 單包 Embed 數量硬上限 | `nexus_core/cogs/embed_builders/_embed_helpers.py:1010` |
 | `TEMP_TABLE_PATTERN` | `^[a-zA-Z0-9_]+$` | SQLite 殘留暫存表名稱安全白名單正則 | `nexus_core/database/core.py:72` |
-| `VIEW_TIMEOUT` | `300.0` 秒 | 批次分頁 View 之互動存活逾時限制 | `nexus_core/cogs/unified_terminal/batch_scan_view.py:405` |
+| `VIEW_TIMEOUT` | `300.0` 秒 | 批次分頁 View 之互動存活逾時限制 | `nexus_core/cogs/unified_terminal/batch_scan_view.py:418` |
 | `_MAX_BATCH_SYMBOLS` | `10` 檔 | `/x symbol:` 逗號分隔多標的單次查詢上限（一則訊息逐檔換頁） | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:39` |
 | `_BATCH_CONCURRENCY` | `2` 檔 | `/x` 多標的同時分析數；CPU／記憶體併發上限，非對外 API 限流（限流由 `rate_gate` 負責） | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:40` |
 | `_BATCH_DEADLINE_S` | `540.0` 秒 | `/x` 多標的整批期限，未完成者轉逾時錯誤頁；540 + View 逾時 300 < 互動 token 15 分鐘壽命（逾時移除按鈕仍需原 token）。不設單檔逾時：SingleFlight 以 shield 包住抓取，取消等待端不會停止抓取 | `nexus_core/cogs/unified_terminal/symbol_deep_dive.py:44` |

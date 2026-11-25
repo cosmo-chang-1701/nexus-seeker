@@ -138,9 +138,11 @@ class UnifiedTerminalCog(
 
                 view = UnifiedRadarView(self, user_id)
                 embed = build_unified_radar_panel_embed(view.get_state_dict())
-                return await interaction.followup.send(
-                    embed=embed, view=view, ephemeral=True
+                # 保留訊息物件，供面板逾時時移除按鈕
+                view.message = await interaction.followup.send(
+                    embed=embed, view=view, ephemeral=True, wait=True
                 )
+                return
 
             scan_value = scan_type.value
 

@@ -1,9 +1,12 @@
 from typing import Any
 import discord
-from typing import Optional, Set
+from typing import Optional, Set, Union
 import asyncio
+import logging
 
 from cogs.embed_builders.scan_embeds import build_unified_radar_panel_embed
+
+logger = logging.getLogger(__name__)
 
 # Discord Select 選項上限 25，扣掉「所有標籤 (不過濾)」後可放的使用者標籤數
 _MAX_TAG_OPTIONS = 24
@@ -75,6 +78,10 @@ class UnifiedRadarView(discord.ui.View):
 
         self.tag_selector_added = False
         self.tag_select: Optional[discord.ui.Select] = None
+
+        # on_timeout 移除按鈕用：優先使用最後一次成功編輯面板的互動，否則編輯初始訊息
+        self.message: Optional[Union[discord.WebhookMessage, discord.Message]] = None
+        self.last_interaction: Optional[discord.Interaction] = None
 
         self._add_static_components()
 
@@ -262,6 +269,7 @@ class UnifiedRadarView(discord.ui.View):
                 await interaction.response.edit_message(embed=embed, view=self)
             else:
                 await interaction.edit_original_response(embed=embed, view=self)
+            self.last_interaction = interaction
         except Exception:
             pass
 
@@ -271,6 +279,7 @@ class UnifiedRadarView(discord.ui.View):
         embed = build_unified_radar_panel_embed(self.get_state_dict())
         try:
             await interaction.edit_original_response(embed=embed, view=self)
+            self.last_interaction = interaction
         except Exception:
             pass
 
@@ -281,9 +290,24 @@ class UnifiedRadarView(discord.ui.View):
                 setattr(item, "disabled", True)
         try:
             await interaction.edit_original_response(view=self)
+            self.last_interaction = interaction
         except Exception:
             pass
 
         await self.cog.execute_unified_scan(
             interaction, self.get_state_dict(), self.user_id
         )
+
+    async def on_timeout(self) -> None:
+        """Timeout 後移除訊息上的所有按鈕（含晚套用的舊畫面按鈕）。
+
+        clear_items() 只改記憶體中的 View，須實際編輯訊息才能移除畫面上的按鈕。
+        """
+        self.clear_items()
+        try:
+            if self.last_interaction is not None:
+                await self.last_interaction.edit_original_response(view=None)
+            elif self.message is not None:
+                await self.message.edit(view=None)
+        except Exception as e:
+            logger.debug(f"UnifiedRadarView 逾時移除按鈕失敗: {e}")
