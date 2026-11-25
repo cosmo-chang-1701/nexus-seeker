@@ -77,7 +77,13 @@ async def test_on_ready_schedules_background_sync() -> None:
             "database.init_db"
         ), patch("database.connection.DatabaseWriteQueue.initialize"), patch(
             "database.leader_lock.try_acquire_leader_lock", return_value=False
-        ), patch.object(bot, "_leader_lock_loop", return_value=None), patch.object(
+        ), patch.object(
+            # self.loop 是 MagicMock，不會 await 收到的協程；若讓 patch.object 對
+            # async 方法自動建立 AsyncMock，會留下「never awaited」警告。
+            bot,
+            "_leader_lock_loop",
+            new_callable=MagicMock,
+        ), patch.object(
             bot, "_sync_commands_background", new_callable=AsyncMock
         ) as mock_sync_bg, patch(
             "asyncio.create_task", side_effect=capture_create_task
