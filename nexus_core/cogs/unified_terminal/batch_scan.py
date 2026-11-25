@@ -61,8 +61,9 @@ class BatchScanMixin:
                 user_id=user_id,
                 failed_symbols=outcome.failed_symbols,
             )
-            await interaction.followup.send(
-                embed=outcome.embeds[0], view=pager_view, ephemeral=True
+            # 保留訊息物件，供 View 逾時時移除按鈕
+            pager_view.message = await interaction.followup.send(
+                embed=outcome.embeds[0], view=pager_view, ephemeral=True, wait=True
             )
 
         except Exception as e:
