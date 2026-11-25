@@ -114,6 +114,14 @@ def _positive_number(value: Any) -> Optional[float]:
     return float(value) if value > 0 else None
 
 
+def _updated_at_age_seconds(updated_at: str) -> float:
+    """market_cache.updated_at（UTC，"%Y-%m-%d %H:%M:%S"）距今秒數；格式不符時拋出例外。"""
+    updated_dt = datetime.strptime(updated_at, "%Y-%m-%d %H:%M:%S").replace(
+        tzinfo=timezone.utc
+    )
+    return (datetime.now(timezone.utc) - updated_dt).total_seconds()
+
+
 _SENTIMENT_HISTORY_MAX_AGE_SECONDS = 5 * 86400  # PRE_CALIBRATION: 5 calendar days
 
 
@@ -210,7 +218,7 @@ class RadarDataMixin:
         import time
         from services import market_data_service
         from services.market_data_service import _EDGE_SNAPSHOT_MAX_AGE_SECONDS
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         quote = await market_data_service.get_quote(sym)
         price = quote.get("c", 0.0) if quote else 0.0
@@ -236,32 +244,40 @@ class RadarDataMixin:
         # _MARKET_CACHE_MAX_AGE_SECONDS）都視為過期，觸發背景重算並寫回，
         # 期間仍先用資料庫裡的舊值（若有）即時回應，比照下方 UOA / Squeeze
         # 既有的自癒模式，重用既有的 _async_revalidate_market_cache()。
-        market_cache_is_stale = True
+        ttl_updated_str: Optional[str] = None
         if market_cache:
-            if market_cache.get("is_stale", 0):
-                market_cache_is_stale = True
-            else:
-                updated_str = market_cache.get("updated_at")
-                market_cache_is_stale = True
-                if updated_str:
-                    try:
-                        from market_analysis.sentiment.max_pain import (
-                            _MARKET_CACHE_MAX_AGE_SECONDS,
-                        )
+            if not market_cache.get("is_stale", 0):
+                ttl_updated_str = market_cache.get("updated_at")
+        else:
+            # 沒有近月列時，以 WEEKLY 列的 updated_at 節流背景重算。該列有兩種身分：
+            # 預設到期日計算失敗時寫入的「最後一次失敗紀錄」，以及牆位追蹤列。
+            # save_wall_levels 新建的列帶紀元時間戳，年齡遠超 TTL，不會被節流。
+            # is_stale 不影響節流；此列僅供節流判斷，其數值不得併入 market_cache。
+            from database.market_cache import WALL_TRACKING_EXPIRY, get_market_cache
 
-                        updated_dt = datetime.strptime(
-                            updated_str, "%Y-%m-%d %H:%M:%S"
-                        ).replace(tzinfo=timezone.utc)
-                        age_seconds = (
-                            datetime.now(timezone.utc) - updated_dt
-                        ).total_seconds()
-                        market_cache_is_stale = (
-                            age_seconds >= _MARKET_CACHE_MAX_AGE_SECONDS
-                        )
-                    except Exception as ts_err:
-                        logger.warning(
-                            f"[{sym}] 解析 market_cache 時間戳記失敗: {ts_err}"
-                        )
+            try:
+                weekly_row = await asyncio.to_thread(
+                    get_market_cache, sym, WALL_TRACKING_EXPIRY
+                )
+            except Exception as read_err:
+                logger.warning(f"[{sym}] 讀取 market_cache 失敗紀錄列失敗: {read_err}")
+                weekly_row = None
+            if weekly_row:
+                ttl_updated_str = weekly_row.get("updated_at")
+
+        market_cache_is_stale = True
+        if ttl_updated_str:
+            try:
+                from market_analysis.sentiment.max_pain import (
+                    _MARKET_CACHE_MAX_AGE_SECONDS,
+                )
+
+                market_cache_is_stale = (
+                    _updated_at_age_seconds(ttl_updated_str)
+                    >= _MARKET_CACHE_MAX_AGE_SECONDS
+                )
+            except Exception as ts_err:
+                logger.warning(f"[{sym}] 解析 market_cache 時間戳記失敗: {ts_err}")
 
         if market_cache_is_stale:
             mc_key = f"mc_{sym.upper()}"

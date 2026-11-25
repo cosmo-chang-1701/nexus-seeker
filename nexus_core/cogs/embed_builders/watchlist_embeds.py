@@ -61,9 +61,18 @@ def _classify_watchlist_cache_tag(
 
 def _format_watchlist_price_info(symbol: str) -> str:
     """讀取 `market_cache`（純本地 SQLite 快取，零額外網路呼叫）並格式化為
-    「快取價 (MP偏離% 標籤)」摘要；快取不存在時回傳降級提示。"""
+    「快取價 (MP偏離% 標籤)」摘要。
+
+    近月列不存在時退回最新列，只顯示其參考價（該列非近月，不附 MP 偏離與標籤）；
+    沒有可用參考價時回傳降級提示。"""
     cache = get_market_cache(symbol, near_term=True)
-    if not cache or not cache.get("reference_spot_price"):
+    if not cache:
+        latest = get_market_cache(symbol)
+        latest_spot = float((latest or {}).get("reference_spot_price") or 0.0)
+        if latest_spot > 0:
+            return f"${latest_spot:.2f}"
+        return "-- (尚未預熱)"
+    if not cache.get("reference_spot_price"):
         return "-- (尚未預熱)"
 
     spot = float(cache["reference_spot_price"])
