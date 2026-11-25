@@ -87,6 +87,11 @@ async def _classify_symbol_regime_value(sym: str, spot: float) -> Optional[str]:
         gex = await fetch_symbol_gex_metrics(sym)
         if not isinstance(gex, dict) or not gex:
             return None
+        # 此為 radar GEX 資料的子集。分類器只讀 put_wall、call_wall、gex_profile、
+        # net_gex；缺少的欄位中僅 adv_dollar_20d 會影響分類 (薄牆門檻)：缺值時退回
+        # 較寬鬆的絕對下限，Regime V 所需的阻力牆更容易成立，並不比顧問路徑 (radar
+        # 有帶 adv_dollar_20d) 保守。傳入空 uoa_list 只影響 Regime IV 的 STO 壓頂
+        # (優先序在 V 之後) 與前向紀錄的影子特徵。補欄位屬閘門變更，待使用者決定。
         gex_profile_data = {
             "put_wall": gex.get("put_wall"),
             "call_wall": gex.get("call_wall"),
@@ -210,6 +215,12 @@ class MarketScanMixin:
             try:
                 qty_val = float(h.get("quantity", 0) or 0)
             except (TypeError, ValueError):
+                qty_val = 0.0
+            if not math.isfinite(qty_val):
+                # NaN／inf 會讓下游 int() 拋例外中止整輪掃描，視為 0 (fail-closed)
+                logger.warning(
+                    f"[Scan] {h['symbol']} 持股數量非有限值 ({qty_val})，視為 0"
+                )
                 qty_val = 0.0
             holding_qty_map[(h["user_id"], h["symbol"])] = qty_val
         # DYNAMIC 使用者的 Regime 分類：每輪每標的至多一次，跨使用者共用
@@ -476,15 +487,38 @@ class MarketScanMixin:
                             opt_res.warnings.append(collateral_warning)
                         safe_qty = opt_res.suggested_contracts
                         if strategy == "STO_CALL":
-                            # Covered Call 張數不得超過持股可覆蓋的整張數。
-                            # (程式庫無可重用的「已開空 Call 張數」helper，未扣除既有空單。)
-                            safe_qty = min(
-                                safe_qty, int(shares_held // _SHARES_PER_CONTRACT)
+                            # Covered Call 張數不得超過「持股扣除既有空 Call 鎖定股數」
+                            # 可覆蓋的整張數；既有部位讀不到時不推 (fail-closed)。
+                            from market_analysis.trading_orchestration import (
+                                get_covered_shares,
                             )
+
+                            try:
+                                covered_shares, _ = await asyncio.to_thread(
+                                    get_covered_shares, uid, sym
+                                )
+                                if not math.isfinite(covered_shares):
+                                    raise ValueError(
+                                        f"鎖定股數非有限值 ({covered_shares})"
+                                    )
+                            except Exception as cover_e:
+                                logger.info(
+                                    f"🚫 [Strategy Align] {sym} {strategy}: "
+                                    "既有空 Call 讀取失敗，不推 STO_CALL "
+                                    f"(fail-closed): {cover_e}"
+                                )
+                                continue
+                            uncovered = shares_held - covered_shares
+                            cover_cap = (
+                                int(uncovered // _SHARES_PER_CONTRACT)
+                                if uncovered > 0
+                                else 0
+                            )
+                            safe_qty = min(safe_qty, cover_cap)
                             if safe_qty <= 0:
                                 logger.info(
                                     f"🚫 [Strategy Align] {sym} {strategy}: "
-                                    "持股可覆蓋張數為 0"
+                                    "持股可覆蓋張數為 0 (已扣除既有空 Call)"
                                 )
                                 continue
                         hedge_spy = opt_res.suggested_hedge_spy

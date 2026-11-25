@@ -1,7 +1,8 @@
 """NRO 15 分鐘掃描策略對齊閘門與 PSQ 戰情分支退役測試。"""
 
+import threading
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -98,11 +99,26 @@ async def _run_scan(
     regime: Any = None,
     suggested_contracts: int = 5,
     psq_result: Any = None,
+    covered_shares: Any = 0.0,
+    user_ids: Sequence[int] = (1,),
 ) -> Dict[str, Any]:
+    """``covered_shares`` 可為股數、Exception，或自訂 callable (取代 helper)。"""
     ts = TradingService(MagicMock())
-    holding: Dict[str, Any] = {"user_id": 1, "symbol": "AAPL", "avg_cost": 150.0}
-    if quantity is not None:
-        holding["quantity"] = quantity
+    holdings: List[Dict[str, Any]] = []
+    for uid in user_ids:
+        holding: Dict[str, Any] = {
+            "user_id": uid,
+            "symbol": "AAPL",
+            "avg_cost": 150.0,
+        }
+        if quantity is not None:
+            holding["quantity"] = quantity
+        holdings.append(holding)
+
+    if isinstance(covered_shares, Exception) or callable(covered_shares):
+        covered_mock = MagicMock(side_effect=covered_shares)
+    else:
+        covered_mock = MagicMock(return_value=(covered_shares, []))
 
     spy_df = pd.DataFrame(
         {"Close": [670.0]}, index=pd.date_range("2026-05-20", periods=1)
@@ -129,14 +145,18 @@ async def _run_scan(
     if psq_result is not None:
         option_res["psq_result"] = psq_result
 
-    ctx = MagicMock()
-    ctx.capital = 100000.0
-    ctx.total_weighted_delta = 0.0
-    ctx.option_alert_mode = 1
-    ctx.risk_limit = 15.0
-    ctx.last_rehedge_alert_time = 0
-    ctx.enable_psq_watchlist = enable_psq
-    ctx.trading_strategy = trading_strategy
+    # re-hedge 寫入會改寫 ctx.last_rehedge_alert_time，每位使用者需獨立 ctx
+    contexts: Dict[int, MagicMock] = {}
+    for uid in user_ids:
+        ctx = MagicMock()
+        ctx.capital = 100000.0
+        ctx.total_weighted_delta = 0.0
+        ctx.option_alert_mode = 1
+        ctx.risk_limit = 15.0
+        ctx.last_rehedge_alert_time = 0
+        ctx.enable_psq_watchlist = enable_psq
+        ctx.trading_strategy = trading_strategy
+        contexts[uid] = ctx
 
     opt_res = SimpleNamespace(
         suggested_contracts=suggested_contracts,
@@ -145,8 +165,11 @@ async def _run_scan(
     )
     upsert = MagicMock()
     regime_mock = regime if regime is not None else AsyncMock()
-    with patch("database.get_all_watchlist", return_value=[(1, "AAPL", 1)]), patch(
-        "database.holdings.get_all_holdings", return_value=[holding]
+    with patch(
+        "database.get_all_watchlist",
+        return_value=[(uid, "AAPL", 1) for uid in user_ids],
+    ), patch("database.holdings.get_all_holdings", return_value=holdings), patch(
+        "market_analysis.trading_orchestration.get_covered_shares", covered_mock
     ), patch(
         "services.market_data_service.get_spy_history_df",
         new_callable=AsyncMock,
@@ -180,7 +203,7 @@ async def _run_scan(
         new_callable=AsyncMock,
         return_value="",
     ), patch("database.upsert_user_config", upsert), patch(
-        "database.get_full_user_context", return_value=ctx
+        "database.get_full_user_context", side_effect=contexts.__getitem__
     ), patch(
         "market_analysis.portfolio.refresh_portfolio_greeks",
         new_callable=AsyncMock,
@@ -202,11 +225,16 @@ async def _run_scan(
         side_effect=lambda _uid, advice: advice,
     ):
         res = await ts.run_market_scan(is_auto=True)
-    return {"res": res, "upsert": upsert, "regime": regime_mock}
+    return {
+        "res": res,
+        "upsert": upsert,
+        "regime": regime_mock,
+        "covered": covered_mock,
+    }
 
 
-def _alerts(out: Dict[str, Any]) -> List[Dict[str, Any]]:
-    alerts: List[Dict[str, Any]] = out["res"].get(1, [])
+def _alerts(out: Dict[str, Any], uid: int = 1) -> List[Dict[str, Any]]:
+    alerts: List[Dict[str, Any]] = out["res"].get(uid, [])
     return alerts
 
 
@@ -229,6 +257,63 @@ async def test_sto_call_capped_by_shares() -> None:
     alerts = _alerts(out)
     assert len(alerts) == 1
     assert alerts[0]["safe_qty"] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "quantity", [float("nan"), float("inf"), float("-inf")], ids=["nan", "inf", "-inf"]
+)
+async def test_non_finite_holding_quantity_does_not_abort_scan(
+    quantity: float,
+) -> None:
+    out = await _run_scan(strategy="STO_CALL", quantity=quantity)
+    assert _alerts(out) == []
+
+
+@pytest.mark.asyncio
+async def test_sto_call_cap_subtracts_existing_short_calls() -> None:
+    out = await _run_scan(strategy="STO_CALL", quantity=250.0, covered_shares=100.0)
+    alerts = _alerts(out)
+    assert len(alerts) == 1
+    assert alerts[0]["safe_qty"] == 1
+    out["covered"].assert_called_once_with(1, "AAPL")
+    out = await _run_scan(strategy="STO_CALL", quantity=250.0, covered_shares=200.0)
+    assert _alerts(out) == []
+    out["upsert"].assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "covered",
+    [RuntimeError("db locked"), float("nan"), float("inf")],
+    ids=["error", "nan", "inf"],
+)
+async def test_sto_call_covered_shares_read_failure_fails_closed(covered: Any) -> None:
+    out = await _run_scan(strategy="STO_CALL", covered_shares=covered)
+    assert _alerts(out) == []
+    out["covered"].assert_called_once()
+    out["upsert"].assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sto_call_covered_shares_read_runs_in_worker_thread() -> None:
+    idents: List[int] = []
+
+    def _record(_uid: int, _sym: str) -> Tuple[float, List[Dict[str, Any]]]:
+        idents.append(threading.get_ident())
+        return 0.0, []
+
+    out = await _run_scan(strategy="STO_CALL", covered_shares=_record)
+    assert len(_alerts(out)) == 1
+    assert idents
+    assert threading.get_ident() not in idents
+
+
+@pytest.mark.asyncio
+async def test_covered_shares_not_read_for_other_strategies() -> None:
+    out = await _run_scan(strategy="STO_PUT")
+    assert len(_alerts(out)) == 1
+    out["covered"].assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -300,6 +385,20 @@ async def test_dynamic_regime_classified_once_per_symbol() -> None:
 
 
 @pytest.mark.asyncio
+async def test_dynamic_regime_cache_shared_across_users() -> None:
+    regime = AsyncMock(return_value=REGIME_V)
+    out = await _run_scan(
+        strategy="BTO_PUT",
+        trading_strategy="DYNAMIC",
+        regime=regime,
+        user_ids=(1, 2),
+    )
+    assert regime.await_count == 1
+    assert len(_alerts(out, 1)) == 1
+    assert len(_alerts(out, 2)) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("strategy", ["STO_PUT", "BTO_CALL"])
 async def test_sto_put_and_bto_call_unaffected(strategy: str) -> None:
     out = await _run_scan(
@@ -316,6 +415,10 @@ async def test_reject_before_rehedge_write() -> None:
     out = await _run_scan(strategy="BTO_PUT", trading_strategy="RIGHT_SIDE")
     assert _alerts(out) == []
     out["upsert"].assert_not_called()
+    # 正向對照：放行路徑確實寫入 re-hedge 冷卻時間
+    out = await _run_scan(strategy="BTO_PUT", trading_strategy="SHORT_SIDE")
+    assert len(_alerts(out)) == 1
+    out["upsert"].assert_called_once()
 
 
 @pytest.mark.asyncio
