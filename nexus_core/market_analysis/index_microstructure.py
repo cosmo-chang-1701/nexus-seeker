@@ -14,6 +14,7 @@ from market_analysis.gex_wall_depth import (  # noqa: F401
     thin_wall_threshold,
 )
 
+from services.background_tasks import spawn_background
 from services.bounded_cache import BoundedCache
 from services.edge_auth import edge_client_kwargs
 
@@ -989,7 +990,7 @@ async def fetch_symbol_gex_metrics(symbol: str, force_live: bool = False) -> dic
             last_attempt = _gex_swr_last_attempt.get(symbol.upper(), 0.0)
             if now - last_attempt >= _GEX_SWR_REFRESH_BACKOFF_SECONDS:
                 _gex_swr_last_attempt[symbol.upper()] = now
-                asyncio.create_task(
+                spawn_background(
                     SingleFlightManager.run(
                         f"scrape_gex_{symbol.upper()}",
                         _scrape_symbol_gex_raw,

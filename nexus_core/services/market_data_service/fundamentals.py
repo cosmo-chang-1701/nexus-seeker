@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from services.background_tasks import spawn_background
 from services.market_data_service._core import (
     _execute_api_call,
     _get_client,
@@ -759,7 +760,7 @@ async def check_and_reconcile_max_pain_anomaly(
                     )
 
             # Trigger background revalidation
-            asyncio.create_task(_async_revalidate_max_pain())
+            spawn_background(_async_revalidate_max_pain())
 
             return True  # Anomaly detected and handled via SWR
         except Exception as e:
