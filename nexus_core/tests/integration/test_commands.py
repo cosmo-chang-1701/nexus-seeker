@@ -1,4 +1,6 @@
 import asyncio
+import gc
+import logging
 import time
 from typing import Any
 import pytest
@@ -593,14 +595,57 @@ async def test_command_sys_health(mock_interaction: Any):  # type: ignore
 
 
 async def _drain_background_tasks(timeout: float = 30.0) -> None:
-    """等待目前事件迴圈上的其他任務全部結束（含排空途中新建的任務），整體限時。"""
+    """等待目前事件迴圈上的其他任務全部結束（含排空途中新建的任務），整體限時。
+
+    完成任務的例外會被取回並僅記錄於 debug 日誌，避免 asyncio 事後回報
+    "exception was never retrieved"；背景任務失敗或被取消都不讓呼叫端測試失敗。
+    """
     current = asyncio.current_task()
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while pending := {t for t in asyncio.all_tasks() if t is not current}:
         remaining = deadline - loop.time()
         assert remaining > 0, f"背景任務逾時仍未結束: {pending}"
-        await asyncio.wait(pending, timeout=remaining)
+        done, _ = await asyncio.wait(pending, timeout=remaining)
+        for task in done:
+            # 已取消的任務呼叫 exception() 會拋 CancelledError，須先排除
+            if task.cancelled():
+                continue
+            exc = task.exception()
+            if exc is not None:
+                logging.debug("排空時背景任務拋出例外: %r", exc)
+
+
+@pytest.mark.asyncio
+async def test_drain_background_tasks_retrieves_exceptions() -> None:
+    """排空時取回背景任務的例外；失敗或已取消的任務都不讓呼叫端失敗。"""
+    loop = asyncio.get_running_loop()
+    original_handler = loop.get_exception_handler()
+    reported: list[str] = []
+    started: list[str] = []
+
+    def collect(_loop: asyncio.AbstractEventLoop, context: dict[str, Any]) -> None:
+        reported.append(str(context.get("message", "")))
+
+    async def boom() -> None:
+        started.append("boom")
+        raise RuntimeError("背景任務失敗")
+
+    loop.set_exception_handler(collect)
+    try:
+        # 刻意不保留參考：例外若沒被取回，任務回收時會呼叫例外處理器
+        asyncio.create_task(boom())
+        await _drain_background_tasks(timeout=1.0)
+        gc.collect()
+        assert started == ["boom"]
+        assert not [m for m in reported if "exception was never retrieved" in m]
+
+        cancelled = asyncio.create_task(asyncio.sleep(10))
+        cancelled.cancel()
+        await _drain_background_tasks(timeout=1.0)
+        assert cancelled.cancelled()
+    finally:
+        loop.set_exception_handler(original_handler)
 
 
 @pytest.mark.asyncio
