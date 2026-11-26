@@ -295,6 +295,9 @@ sequenceDiagram
 
 需要估算值才能繼續計算時（例如 Beta 資料不足以 $1.0$ 估算），必須帶旗標（`beta_estimated`）並在呈現層標示。
 
+### 5.7 測試連網守衛（兩層）
+測試連網守衛 `nexus_core/tests/unit/network_guard.py::NetworkGuard` 分兩層安裝：`nexus_core/tests/conftest.py` 對全部測試阻擋對外 TCP／UDP 連線、DNS 查詢與 curl_cffi 請求（只阻擋、不使測試失敗），讓測試結果不依賴外部網路。個別測試檔另以 autouse fixture 安裝嚴格守衛並在 teardown 呼叫 `assert_clean()`，任何連網嘗試（即使例外被呼叫端吞掉）都會讓測試失敗。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

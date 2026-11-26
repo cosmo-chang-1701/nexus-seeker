@@ -550,9 +550,14 @@ async def test_set_watch_slash_unconventional_punctuation_mixed_valid(
         validate_symbol as real_validate_symbol,
     )
 
+    # 真實驗證邏輯照跑，只把報價來源換成離線值。
     with patch(
         "services.market_data_service.validate_symbol",
         side_effect=real_validate_symbol,
+    ), patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 150.0},
     ):
         await terminal.set_watch.callback(  # type: ignore
             terminal,  # type: ignore

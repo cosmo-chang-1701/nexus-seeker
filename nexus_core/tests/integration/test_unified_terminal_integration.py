@@ -42,7 +42,15 @@ async def test_symbol_hub_full_integration(mock_interaction: Any, db_conn: Any):
         "services.market_data_service.get_all_option_expiries", new_callable=AsyncMock
     ) as mock_exp, patch(
         "services.market_data_service.get_option_chain", new_callable=AsyncMock
-    ) as mock_chain:
+    ) as mock_chain, patch(
+        # 籌碼分佈與 DDP 的 yfinance 直連、大盤 GEX 的 edge tunnel 一律離線。
+        "market_analysis.volume_profile.calculate_volume_profile",
+        return_value=None,
+    ), patch("market_analysis.ddp_inspector.yf") as mock_ddp_yf, patch(
+        "config.TUNNEL_URL", ""
+    ):
+        mock_ddp_yf.Ticker.return_value.info = {}
+        mock_ddp_yf.Ticker.return_value.quarterly_income_stmt = pd.DataFrame()
         mock_val.return_value = True
         mock_quote.return_value = {
             "c": 150.0,
