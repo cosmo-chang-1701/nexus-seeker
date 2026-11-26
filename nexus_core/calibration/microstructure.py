@@ -618,6 +618,12 @@ def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
     }
 
 
+# 下調條件需要的「未測試」基準尚無定義（docs/architecture/05 §5.13），自動判讀只查上調
+DEPTH_DOWNWARD_NOT_JUDGED = (
+    "下調條件未自動判讀：docs §5.13 所需的「未測試」基準尚未定義，須人工判讀"
+)
+
+
 def depth_quartile_hold_rates(labeled: list[dict[str, Any]]) -> dict[str, Any]:
     """支撐牆守住率依深度比四分位（含日期叢集 CI 與自動判讀）。純函式、無 I/O。
 
@@ -639,6 +645,7 @@ def depth_quartile_hold_rates(labeled: list[dict[str, Any]]) -> dict[str, Any]:
         by_q[f"Q{qi + 1}"].append((x["date"], bool(x["held"])))
     table: dict[str, Any] = {k: _hold_rate_stats(v) for k, v in by_q.items()}
     table["quartile_cuts"] = cuts
+    table["下調判讀"] = DEPTH_DOWNWARD_NOT_JUDGED
 
     n_dates = len({x["date"] for x in labeled})
     short = [k for k in by_q if table[k]["tested"] < _MIN_TESTED_PER_DEFINITION]
@@ -923,20 +930,28 @@ def build_micro_report(
     cache_dir: Path,
     horizon_days: int = 5,
     snapshots: Optional[list[dict[str, Any]]] = None,
+    *,
+    gex_since: Optional[str] = None,
 ) -> dict[str, Any]:
-    """`snapshots` 未提供時讀取 micro-snapshot 的快取；edge 來源由呼叫端先轉好傳入。"""
+    """`snapshots` 未提供時讀取 micro-snapshot 的快取；edge 來源由呼叫端先轉好傳入。
+
+    `gex_since`（ISO 日期，含當日）：GEX 衍生段落只用該日起的快照
+    （docs/microstructure/03 §5.w）；週 EM、`n_snapshots`、`snapshot_dates` 用全部。
+    """
     snaps = snapshots if snapshots is not None else load_snapshots(cache_dir)
     if not snaps:
         return {"status": "尚無快照資料", "n_snapshots": 0}
 
     from market_analysis.gex_wall_depth import thin_wall_threshold
 
+    gex_snaps = [s for s in snaps if gex_since is None or s["date"] >= gex_since]
+
     ratios: list[float] = []
     abs_pass = 0
     new_pass = 0
     with_wall = 0
     by_size: dict[str, dict[str, Any]] = {}
-    for s in snaps:
+    for s in gex_snaps:
         g = s["gex"]
         if g.get("support_gex", 0) <= 0:
             continue
@@ -994,11 +1009,11 @@ def build_micro_report(
                 em["em_weekly_calendar"] / ref["em_weekly_calendar"]
             )
 
-    labeled = label_wall_holds(snaps, horizon_days)
+    labeled = label_wall_holds(gex_snaps, horizon_days)
     hold_table: dict[str, Any] = {}
     if labeled:
         hold_table = depth_quartile_hold_rates(labeled)
-    return {
+    report: dict[str, Any] = {
         "n_snapshots": len(snaps),
         "snapshot_dates": sorted({s["date"] for s in snaps}),
         "n_with_support_wall": with_wall,
@@ -1013,7 +1028,11 @@ def build_micro_report(
         or f"尚無走完 {horizon_days} 個交易日觀察期的快照",
         "支撐定義比較": compare_support_definitions(labeled),
         "停損墊片比較": _stop_buffer_report_and_drop_paths(labeled),
-        "PutWall處淨GEX": put_wall_net_gex_stats(snaps, labeled),
-        "GammaFlip重要性": gamma_flip_materiality_stats(snaps),
+        "PutWall處淨GEX": put_wall_net_gex_stats(gex_snaps, labeled),
+        "GammaFlip重要性": gamma_flip_materiality_stats(gex_snaps),
         "n_labeled": len(labeled),
     }
+    if gex_since is not None:
+        report["edge_gex_since"] = gex_since
+        report["n_snapshots_before_gex_since"] = len(snaps) - len(gex_snaps)
+    return report

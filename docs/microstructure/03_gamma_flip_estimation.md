@@ -232,6 +232,16 @@ SPY PutWall 由 758（錯 q）修正為 767。
 
 **校準提醒**：本修正上線前，edge `gex_snapshot_history` 的配息標的 GEX 皆以放大 100 倍的 q 計算。PutWall 校準與 Gamma Flip 重要性 forward-report 判讀，須以 edge 重新部署日切分前後樣本，不得混用。
 
+**報表實作**：切分日為 `calibration/config.py::EDGE_DIVIDEND_FIX_SINCE = "2026-10-30"`（edge 重新部署後的首個完整交易日，含當日；取樣細節見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13、§5.19）。只在 CLI 路徑套用，判讀門檻與閘門不變。
+
+| 命令 | 只用切分日起樣本的段落 | 揭露排除筆數 |
+| :--- | :--- | :--- |
+| `micro-report --source edge` | 牆體深度比分位、薄牆門檻通過率、成交額分組、支撐牆守住率（深度四分位、支撐定義比較、停損墊片）、PutWall 處淨 GEX、`GammaFlip重要性` | `edge_gex_since`、`n_snapshots_before_gex_since` |
+| `regime-stop-report` | 全部 edge GEX 快照 | `edge_gex_since`、`n_snapshots_before_gex_since` |
+| `forward-report` | `gamma_flip_materiality`、`wall_depth_ratio`、`magnitudes`（三項牆距分佈） | `gex_since`、`n_excluded_before_gex_since`；Gamma Flip 研究另有 `since`、`n_excluded_before_since` |
+
+週 EM 偏差（跨式報價，不受 $q$ 影響）與 `n_snapshots`／`snapshot_dates` 仍用全部快照；`forward-report` 的 Skew 分位、`sections`、出場分層與體制分組不受影響；`micro-report --source snapshot`（本機重算 GEX，不受此錯誤影響）不切分。
+
 **後續觀察（不改閘門）**：大盤 Flip 是否改為多到期日聚合，屬閘門定義變更（影響 `short_gamma_critical` 與 regime），須先校準再決策；本節僅記錄，程式與閘門不動。
 
 ## 6. 核心程式碼檔案路徑關聯

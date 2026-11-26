@@ -3,6 +3,10 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# edge 個股 GEX 股息率單位修正（#143，docs/microstructure/03 §5.w）重新部署後的首個
+# 完整交易日。此日之前的 edge GEX 以放大 100 倍的 q 計算，與之後的樣本不得混用。
+EDGE_DIVIDEND_FIX_SINCE = "2026-10-30"
+
 
 def _default_root(container_path: str, local_name: str) -> Path:
     """容器內 (/app 為 bind-mount 的 repo) 用固定路徑；本機執行則相對於 cwd。"""

@@ -129,6 +129,7 @@ flowchart TD
 | `shrinkage_n0` | `200` | 收縮估計的先驗強度 | `nexus_core/calibration/config.py` |
 | `n_boot` | `2000` | 叢集 bootstrap 重抽次數（固定 seed） | `nexus_core/calibration/config.py` |
 | `oos_split` | `"2024-01-01"` | 預設樣本外切點（占比不合理時改 70% 分位數） | `nexus_core/calibration/config.py` |
+| `EDGE_DIVIDEND_FIX_SINCE` | `"2026-10-30"` | edge GEX 股息率單位修正的樣本切分日（含當日）：edge 來源的 GEX 衍生研究只用該日起樣本（§5.13、§5.19；[`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.w） | `nexus_core/calibration/config.py` |
 | `_SPLIT_MIN_TRAIN_SHARE` / `_SPLIT_MAX_TRAIN_SHARE` | `0.40` / `0.85` | 固定切點可沿用的訓練期占比範圍 | `nexus_core/calibration/stats.py` |
 | `hourly_period` | `"729d"` | yfinance 1h 上限 730 天，取 729 避開邊界拒絕 | `nexus_core/calibration/config.py` |
 | `KELLY_TARGET_ATR` / `KELLY_STOP_ATR` | `1.8` / `1.0` | 凱利先驗校準的非對稱屏障（對應先驗賠率 1.8） | `nexus_core/calibration/labeling.py` |
@@ -457,7 +458,7 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 | 子命令 | 資料 | 用途 |
 |---|---|---|
 | `micro-snapshot` | 標的池最近一檔**未到期**（DTE ≥ 1）的期權鏈（與 edge 相同公式重算 GEX：$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM。經 `market_data_service` 抓取（edge 快照 → edge 即時 → 本地 yfinance），期權鏈不裁減履約價 | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
-| `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；`GammaFlip重要性`：閘門 Flip 的重要性比分位與 2%／5%／10% 門檻下的剔除、改選、消失次數（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6） |
+| `micro-report` | 所有快照（`--source edge` 的 GEX 衍生段落只用 `EDGE_DIVIDEND_FIX_SINCE` 起的快照，週 EM 仍用全部）+ 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；`GammaFlip重要性`：閘門 Flip 的重要性比分位與 2%／5%／10% 門檻下的剔除、改選、消失次數（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6） |
 | `skew-proxy` | CBOE ^SKEW × SPY 日線（2000 年起） | 以「日級、252 交易日、只用過去資料的 midrank」計算分位，統計各門檻的觸發率、5 日報酬（bootstrap CI）與 5 日內跌幅 > 3% 的機率 |
 
 執行方式與其他子命令相同（`python -m calibration micro-snapshot --max-symbols 200`、`micro-report`、`skew-proxy`，容器內執行參數見 `AGENTS.md` 的 Testing 段落）。標的池為 watchlist ∪ 固定流動性清單，讀取 watchlist 時 `NEXUS_DB_NAME` 應指向複製的快照。
@@ -489,7 +490,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 - **D-04 牆體深度比**：94 面支撐牆的深度比中位數約 $1.6\times10^{-4}$，p10 約 $10^{-6}$；$< 10^{-5}$ 的牆幾乎都距現價 8–66%。舊 500k 絕對門檻通過率 81.9%，新門檻 76.6%。差異全部落在 ADV \$500M–\$5B 組（84.3% → 74.5%，剔除 ORCL／CRM／XOM／COST 等遠處薄牆）；ADV > \$5B 與 < \$500M 兩組不變。
 - **Skew 門檻（指數層級代理）**：日級母體下 ≥98 分位的觸發率為 4.9%（連續觸發算一次則為 146 段），高於「2%」的直覺值，因為分位序列有趨勢。高分位日之後 SPY 的 5 日跌幅 > 3% 機率（≥98：10.3%、≥90：9.9%、≥85：9.4%）**不高於**基準的 11.6%，5 日報酬 CI 都與基準重疊；反而低分位日（≤5：18.4%）的下跌風險較高（低 SKEW 常與高 VIX 的恐慌期重疊）。**結論：代理資料不支持 handoff 提議的 97.5／88／82 調降**（調降只會增加觸發、沒有預測力依據），現行門檻維持不變；是否調整以個股日級母體的前向蒐集資料為準。
 
-**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出三張表：
+**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位（其中 edge GEX 衍生的牆體深度比、`gamma_flip_materiality` 與牆距分佈 `magnitudes` 只取事件日在 `EDGE_DIVIDEND_FIX_SINCE`（含）之後的列，並揭露排除筆數；Skew 分位用全部樣本），輸出三張表：
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
 - 以上各分桶表（D-04、Skew、依評估器拆分）的勝率與逆向先觸及率皆附日期叢集 bootstrap 95% CI（`win_ci95`／`adverse_ci95`；無日期欄時為空）。同一交易日的樣本高度相關，n 很大但交易日數很少時 CI 會很寬，方向翻轉不代表訊號；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
@@ -697,7 +698,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **目的**：回答「持有於 GEX 錨點之上的部位，依體制調整停損墊片 κ（$\text{stop} = \text{anchor} - \kappa \times ATR_{15m}$）是否優於現行固定 $\kappa = 0.5$」。假說（已放棄的規格提案 `08_factor_covariance_and_regime_stop_pipeline.md` §2.4／§3.2，未合併）為 Long Gamma $\kappa = 1.75$、Short Gamma $\kappa = 0.40$、財報／重大總經事件前 48 小時 $\kappa = 0$。本命令只產出報告，**不修改任何正式參數**（現行常數 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT = 0.5`）。
 
-**資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。
+**資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。edge GEX 快照只取 `EDGE_DIVIDEND_FIX_SINCE`（含）起者（股息率單位修正，[`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.w），結果以 `edge_gex_since`、`n_snapshots_before_gex_since` 揭露排除筆數。
 
 **體制定義**（快照日收盤後起算）：
 
