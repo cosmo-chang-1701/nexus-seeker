@@ -75,7 +75,12 @@ def calculate_new_cost_basis(
 
 
 def get_covered_shares(user_id: int, symbol: str) -> tuple[float, List[Dict[str, Any]]]:
-    """掃描使用者 TRADE 部位，計算既有 Short Call 已鎖定的股數與明細。"""
+    """掃描使用者 TRADE 部位，計算既有 Short Call 已鎖定的股數與明細。
+
+    Raises:
+        ValueError: 匹配標的的 call 部位 quantity 非有限值或無法轉成數值。
+            不可靜默略過，否則鎖定股數會被低估 (fail-open)。
+    """
     from database.portfolio import get_user_portfolio
 
     symbol = symbol.upper()
@@ -92,14 +97,23 @@ def get_covered_shares(user_id: int, symbol: str) -> tuple[float, List[Dict[str,
         quantity = row[6]
         if not sym or sym.upper() != symbol:
             continue
-        if (opt_type or "").lower() == "call" and quantity is not None and quantity < 0:
-            shares = abs(quantity) * 100
+        if (opt_type or "").lower() != "call" or quantity is None:
+            continue
+        error_message = f"{symbol} 的 call 部位 quantity 無效: {quantity!r}"
+        try:
+            qty = float(quantity)
+        except (TypeError, ValueError, OverflowError) as e:
+            raise ValueError(error_message) from e
+        if not math.isfinite(qty):
+            raise ValueError(error_message)
+        if qty < 0:
+            shares = abs(qty) * 100
             covered_shares += shares
             existing_calls.append(
                 {
                     "strike": strike,
                     "expiry": expiry,
-                    "quantity": quantity,
+                    "quantity": qty,
                     "shares_covered": shares,
                 }
             )
@@ -151,7 +165,14 @@ async def recommend_covered_calls(
         return None
 
     # 1.5 檢查既有 Short Call 部位，避免對已鎖定股數重複建議備兌
-    covered_shares, existing_calls = get_covered_shares(user_id, symbol)
+    try:
+        covered_shares, existing_calls = get_covered_shares(user_id, symbol)
+    except ValueError as e:
+        # 單一使用者的壞資料不得中斷呼叫端的批次迴圈。
+        logger.warning(
+            f"使用者 {user_id} 的 {symbol} 既有空 Call 讀取失敗，跳過建議 (fail-closed): {e}"
+        )
+        return None
     uncovered_shares = max(0.0, current_shares - covered_shares)
     max_new_contracts = int(uncovered_shares // 100)
     if max_new_contracts <= 0:
