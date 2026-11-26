@@ -75,7 +75,25 @@ def _prepare(rows: pd.DataFrame, primary_col: str) -> pd.DataFrame:
     return df
 
 
-def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str, Any]:
+def _since_mask(entries: pd.DataFrame, since: Optional[str]) -> pd.Series:
+    """事件日 `date` >= `since` 的列；`since` 為 None 時全留，缺 `date` 欄時全排除。"""
+    if since is None:
+        return pd.Series(True, index=entries.index)
+    if "date" not in entries.columns:
+        return pd.Series(False, index=entries.index)
+    return entries["date"].astype(str) >= since
+
+
+def build_forward_report(
+    rows: pd.DataFrame,
+    cfg: CalibrationConfig,
+    *,
+    gamma_flip_since: Optional[str] = None,
+) -> dict[str, Any]:
+    """`gamma_flip_since`（ISO 日期，含當日）：edge GEX 衍生研究（牆距分佈、牆體
+    深度比、Gamma Flip 重要性）只用該日起的樣本（docs/microstructure/03 §5.w）；
+    其餘段落用全部樣本。
+    """
     report: dict[str, Any] = {"total_labeled": int(len(rows)), "sections": []}
     if rows.empty:
         report["status"] = "資料累積中 (尚無已標註紀錄)"
@@ -145,22 +163,26 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
     # GEX 相關量值分佈 vs 結果 (四分位)。只看進場／分類評估：EXIT_* 的 win
     # 是「離場訊號正確」，與進場勝率語意相反，混入會讓四分位結果失真。
     entries = df[~df["evaluator"].astype(str).str.startswith("EXIT_")]
+    gex = entries[_since_mask(entries, gamma_flip_since)]
+    if gamma_flip_since is not None:
+        report["gex_since"] = gamma_flip_since
+        report["n_excluded_before_gex_since"] = int(len(entries) - len(gex))
     magnitudes: dict[str, Any] = {}
     for name, series in (
         (
             "next_node_space_atr",
-            (entries["spot"] - entries["next_negative_node"]) / entries["atr_1d"],
+            (gex["spot"] - gex["next_negative_node"]) / gex["atr_1d"],
         ),
         (
             "resistance_buffer_atr15",
-            (entries["resistance_wall"] - entries["spot"]) / entries["atr_15m"],
+            (gex["resistance_wall"] - gex["spot"]) / gex["atr_15m"],
         ),
         (
             "put_wall_dist_pct",
-            (entries["spot"] - entries["put_wall"]) / entries["spot"],
+            (gex["spot"] - gex["put_wall"]) / gex["spot"],
         ),
     ):
-        valid = pd.DataFrame({"x": series, "win": entries["win"]}).dropna()
+        valid = pd.DataFrame({"x": series, "win": gex["win"]}).dropna()
         valid = valid[(valid["x"] > 0) & (valid["x"] < 1e6)]
         if len(valid) < FORWARD_MIN_ROWS:
             magnitudes[name] = f"資料累積中 ({len(valid)}/{FORWARD_MIN_ROWS})"
@@ -174,7 +196,9 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
     report["exit_tiers"] = build_exit_tier_breakdown(df)
     report["exit_tiers_excluded"] = count_excluded_exit_rows(df)
     report["regime_breakdown"] = build_regime_breakdown(df, cfg)
-    report["threshold_studies"] = build_threshold_studies(entries)
+    report["threshold_studies"] = build_threshold_studies(
+        entries, gamma_flip_since=gamma_flip_since
+    )
     return report
 
 
@@ -242,7 +266,9 @@ def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
     return out
 
 
-def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
+def build_threshold_studies(
+    entries: pd.DataFrame, *, gamma_flip_since: Optional[str] = None
+) -> dict[str, Any]:
     """D-04 牆體深度比與 Skew 分位門檻的前向驗證 (docs §5.13)。
 
     - `wall_depth_ratio`：support_gex × 0.01 ÷ adv_dollar_20d 的四分位 × 勝率。
@@ -251,6 +277,8 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
       高頻回退池——兩者的分位語意不同，混在一起無法判讀。
       總表依 (symbol, bar_ts, source) 對同一根 K 棒去重，優先保留
       REGIME_CLASSIFIER 的列；依評估器拆分的子表則使用未去重的資料。
+    - `gamma_flip_since`：只作用於 edge GEX 衍生的 `wall_depth_ratio` 與
+      `gamma_flip_materiality`（docs/microstructure/03 §5.w），Skew 用全部樣本。
     """
     feats = _features(entries)
     result: dict[str, Any] = {}
@@ -266,7 +294,7 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
                 "win": entries["win"],
                 "outcome": entries["outcome"],
             }
-        ).dropna()
+        )[_since_mask(entries, gamma_flip_since)].dropna()
         if len(frame) < FORWARD_MIN_ROWS:
             result["wall_depth_ratio"] = f"資料累積中 ({len(frame)}/{FORWARD_MIN_ROWS})"
         else:
@@ -301,7 +329,9 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
         result["skew_percentile_by_evaluator"] = (
             "資料累積中 (尚無 skew_percentile 欄位)"
         )
-    result["gamma_flip_materiality"] = _gamma_flip_materiality_study(entries, feats)
+    result["gamma_flip_materiality"] = _gamma_flip_materiality_study(
+        entries, feats, since=gamma_flip_since
+    )
     return result
 
 
@@ -370,13 +400,18 @@ _FLIP_BOOT_N = 2000
 _FLIP_BOOT_SEED = 7
 
 
-def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) -> Any:
+def _gamma_flip_materiality_study(
+    entries: pd.DataFrame, feats: pd.DataFrame, since: Optional[str] = None
+) -> Any:
     """閘門 Gamma Flip 為雜訊交叉 vs 重要交叉的事後表現 (docs/microstructure/03 §5.6)。
 
     只取閘門 Flip 存在 (`gamma_flip_raw > 0`) 且有重要性比的列，以呈現層門檻
     `GAMMA_FLIP_MATERIALITY_DISPLAY` 分兩組，另附重要性比四分位。逆向先觸及率
     以日期叢集 bootstrap；兩組皆 n ≥ FORWARD_MIN_ROWS 且雜訊組 CI 下界高於重要組
     CI 上界，才判讀「可提案改閘門」。
+
+    `since` 非 None 時只用該日起的列 (§5.w)，`n_excluded_before_since` 為原本
+    可納入、因早於該日而排除的列數。
     """
     from calibration.stats import clustered_bootstrap_mean
     from market_analysis.index_microstructure import GAMMA_FLIP_MATERIALITY_DISPLAY
@@ -393,6 +428,8 @@ def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) ->
             "outcome": entries["outcome"],
         }
     )[(raw > 0) & ratio.notna()]
+    n_eligible = len(frame)
+    frame = frame[_since_mask(entries, since).reindex(frame.index)]
     if frame.empty:
         return f"資料累積中 (0/{FORWARD_MIN_ROWS})"
     frame["group"] = [
@@ -430,6 +467,9 @@ def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) ->
         "groups": groups,
         "判讀": verdict,
     }
+    if since is not None:
+        out["since"] = since
+        out["n_excluded_before_since"] = int(n_eligible - len(frame))
     if len(frame) >= FORWARD_MIN_ROWS:
         frame["q"] = pd.qcut(frame["x"], 4, duplicates="drop")
         out["ratio_quartiles"] = _bucket_rows(frame, "q")

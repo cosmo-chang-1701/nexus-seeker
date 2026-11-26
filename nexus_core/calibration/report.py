@@ -231,6 +231,11 @@ def _render_gamma_flip_materiality(data: Any) -> list[str]:
     if not isinstance(data, dict):
         return lines + [f"- {data}", ""]
     lines.append(f"- 呈現層門檻 ρ = {_fmt(data.get('threshold'))}")
+    if data.get("since"):
+        lines.append(
+            f"- 樣本起日 {data['since']}（edge 股息率修正，microstructure/03 §5.w）；"
+            f"排除前期 {data.get('n_excluded_before_since', 0)} 列"
+        )
     groups = data.get("groups")
     if isinstance(groups, dict) and groups:
         lines += [
@@ -378,6 +383,13 @@ def render_markdown(results: dict[str, Any]) -> str:
             "狀態 OK 只代表 n ≥ 100；同一交易日的樣本高度相關，有效樣本約等於交易日數。",
             "",
         ]
+        if forward and forward.get("gex_since"):
+            lines += [
+                f"- 牆體深度比與牆距分佈：樣本起日 {forward['gex_since']}"
+                "（edge 股息率修正，microstructure/03 §5.w）；"
+                f"排除前期 {forward.get('n_excluded_before_gex_since', 0)} 列",
+                "",
+            ]
         for name, title in (
             ("wall_depth_ratio", "牆體深度比四分位 (D-04)"),
             ("skew_percentile", "Skew 分位區間"),
