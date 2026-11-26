@@ -2,7 +2,7 @@
 
 import asyncio
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -454,6 +454,59 @@ async def test_first_edit_failure_allows_retry() -> None:
     assert new_view is not view
     retry.response.defer.assert_not_awaited()
     cog._fetch_sym_radar_data_slow.assert_awaited_once()
+
+
+async def _assert_pre_edit_failure_allows_retry(
+    it: Any, error: type[BaseException], mark_error: Optional[Exception] = None
+) -> None:
+    """第一次 edit 成功前拋例外：原樣拋出、按鈕復原，且可重試成功。"""
+    cog = _cog()
+    view = _view([_res("A", None)], cog, pages=2)
+    button = _btn(view)
+    before = [getattr(c, "disabled") for c in view.children]
+    label = button.label
+    mark = (
+        patch.object(
+            bsv.market_data_service,
+            "mark_interactive_request",
+            side_effect=mark_error,
+        )
+        if mark_error is not None
+        else nullcontext()
+    )
+    with patch("services.llm_service.is_memory_safe", return_value=True), mark:
+        with pytest.raises(error):
+            await button.callback(it)
+
+    assert view.refresh_in_progress is False
+    assert view.transition_settled.is_set()
+    assert [getattr(c, "disabled") for c in view.children] == before
+    assert button.label == label
+    assert view.is_finished() is False
+    cog._fetch_sym_radar_data_slow.assert_not_awaited()
+
+    retry = _interaction()
+    new_view = await _click(view, retry)
+    assert new_view is not view
+    retry.response.defer.assert_not_awaited()
+    cog._fetch_sym_radar_data_slow.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_pre_edit_exception_resets_flag() -> None:
+    it = _interaction()
+    await _assert_pre_edit_failure_allows_retry(
+        it, RuntimeError, mark_error=RuntimeError("x")
+    )
+    it.response.edit_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_refresh_first_edit_cancelled_resets_flag() -> None:
+    it = _interaction()
+    it.response.edit_message = AsyncMock(side_effect=asyncio.CancelledError())
+    await _assert_pre_edit_failure_allows_retry(it, asyncio.CancelledError)
+    it.response.edit_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio

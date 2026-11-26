@@ -9,6 +9,7 @@ from market_analysis.sentiment.skew_taxonomy import (
     SKEW_DIVERGENCE_HIGH_PERCENTILE,
     SKEW_DIVERGENCE_LOW_PERCENTILE,
 )
+from services.background_tasks import spawn_background
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,7 @@ class RadarDataMixin:
             finally:
                 _active_swr_tasks.discard(k)
 
-        asyncio.create_task(_revalidate_mc(sym, price, mc_key))
+        spawn_background(_revalidate_mc(sym, price, mc_key))
         return True
 
     async def _fetch_sym_radar_data_fast(self, sym: str) -> Any:
@@ -354,7 +355,7 @@ class RadarDataMixin:
                     finally:
                         _active_swr_tasks.discard(k)
 
-                asyncio.create_task(_revalidate_uoa(sym, uoa_key))
+                spawn_background(_revalidate_uoa(sym, uoa_key))
 
         # Squeeze Cache 自癒檢查：若完全未命中或已過期且無歷史數值
         if (
@@ -407,7 +408,7 @@ class RadarDataMixin:
                     finally:
                         _active_swr_tasks.discard(k)
 
-                asyncio.create_task(_revalidate_sqz(sym, sqz_key))
+                spawn_background(_revalidate_sqz(sym, sqz_key))
 
         if not squeeze_cache:
             squeeze_cache = {}
