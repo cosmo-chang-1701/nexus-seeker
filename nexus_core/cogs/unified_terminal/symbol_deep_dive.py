@@ -3,7 +3,16 @@
 import asyncio
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Coroutine,
+    List,
+    Optional,
+    TypeVar,
+)
 
 import discord
 
@@ -26,6 +35,8 @@ from cogs.embed_builder import create_error_embed, create_tactical_symbol_embed
 from .symbol_view import SymbolBatchHubView, SymbolHubPage, SymbolHubView
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -147,6 +158,27 @@ async def _throttled_volume_profile(symbol: str) -> Any:
         return None
 
 
+async def _cancel_and_reap(tasks: list["asyncio.Task[Any]"]) -> None:
+    """子任務收尾：取消尚未完成者、等它們結束，並取回所有例外。
+
+    刻意不用 ``asyncio.TaskGroup``：它會把子任務例外包成 ``ExceptionGroup``，
+    改變呼叫端收到的例外型別；呼叫端必須拿到原本的例外物件。
+
+    取消的語意：經 SingleFlight（``asyncio.shield``）的抓取只代表本函式不再等待，
+    共享任務照常跑完並寫回快取；``asyncio.to_thread`` 的執行緒同樣會跑完，
+    僅結果被丟棄。
+    """
+    for task in tasks:
+        # 先掛回呼再等待：即使下方的等待被第二次取消打斷，例外仍會被取回，
+        # 不會出現 "Task exception was never retrieved"。
+        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+    pending = [t for t in tasks if not t.done()]
+    for task in pending:
+        task.cancel()
+    if pending:
+        await asyncio.wait(pending)
+
+
 class SymbolDeepDiveMixin:
     if TYPE_CHECKING:
         bot: Any
@@ -181,168 +213,172 @@ class SymbolDeepDiveMixin:
                 return await poly_service.get_market_snapshot(limit=0)  # type: ignore
             return []
 
-        # 1. 啟動基礎行情與總經數據任務 (t=0 並行)
-        expiries_task = asyncio.create_task(
-            market_data_service.get_all_option_expiries(symbol)
-        )
-        spy_task = asyncio.create_task(market_data_service.get_spy_history_df("1y"))
-        macro_task = asyncio.create_task(market_data_service.get_macro_environment())
-        quote_task = asyncio.create_task(market_data_service.get_quote(symbol))
-        squeeze_task = asyncio.create_task(
-            _evaluate_squeeze_for_panel(symbol, quote_task)
-        )
+        owned: list[asyncio.Task[Any]] = []
 
-        async def _get_daily_history() -> tuple[Any, datetime]:
-            # 抓取時間在日線回來當下記錄，而非等整個 gather（Reddit 等慢任務）結束
-            df = await market_data_service.get_history_df(
-                symbol, period="1y", interval="1d", force_refresh=True
+        def _spawn(coro: Coroutine[Any, Any, _T]) -> "asyncio.Task[_T]":
+            """建立子任務並登記，供失敗或取消時統一收尾。"""
+            task = asyncio.create_task(coro)
+            owned.append(task)
+            return task
+
+        # 任一子任務失敗（含建立中途失敗）或本函式被取消時，取消並收回其餘子任務，
+        # 原例外原樣往上拋；gather 本身不會取消失敗者的兄弟任務。
+        try:
+            # 1. 啟動基礎行情與總經數據任務 (t=0 並行)
+            expiries_task = _spawn(market_data_service.get_all_option_expiries(symbol))
+            spy_task = _spawn(market_data_service.get_spy_history_df("1y"))
+            macro_task = _spawn(market_data_service.get_macro_environment())
+            quote_task = _spawn(market_data_service.get_quote(symbol))
+            squeeze_task = _spawn(_evaluate_squeeze_for_panel(symbol, quote_task))
+
+            async def _get_daily_history() -> tuple[Any, datetime]:
+                # 抓取時間在日線回來當下記錄，而非等整個 gather（Reddit 等慢任務）結束
+                df = await market_data_service.get_history_df(
+                    symbol, period="1y", interval="1d", force_refresh=True
+                )
+                return df, datetime.now(ny_tz)
+
+            df_hist_task = _spawn(_get_daily_history())
+            gex_profile_task = _spawn(fetch_symbol_gex_metrics(symbol, force_live=True))
+
+            vp_task = _spawn(_throttled_volume_profile(symbol))
+            # 刻意不在此並行 fetch_atr_1d：它內部走的是 get_history_df(symbol, "1y",
+            # "1d")——與上方 df_hist_task 同一個 cache key，而 get_history_df 沒有
+            # single-flight 去重（快取寫入在 await 之後），兩者同時於 t=0 查快取會在
+            # 冷啟動時發出兩次相同的 yfinance/Edge 請求。日線 ATR 改由
+            # _process_symbol_hub_data 以 compute_atr_14_from_daily_df 純記憶體計算，
+            # 真的算不出來時才在那裡惰性 await（此時快取已被 df_hist_task 寫暖）。
+            # atr_15m_task 走 force_refresh=True + 5d/15m 不同 key，不是冗餘，保留。
+            atr_15m_task = _spawn(fetch_atr_15m(symbol))
+            # VWAP 與當日區間極值出自同一份 K 線（見 intraday_consistency.py）
+            vwap_task = _spawn(fetch_session_stats(symbol))
+            bar_15m_task = _spawn(get_confirmed_15m_bar(symbol))
+            from services.calendar_service import calendar_service
+
+            catalysts_task = _spawn(
+                calendar_service.get_symbol_catalysts(symbol, days=14)
             )
-            return df, datetime.now(ny_tz)
+            reddit_task = _spawn(reddit_service.get_reddit_details(symbol))
+            poly_task = _spawn(_safe_get_poly_markets())
+            ddp_task = _spawn(ddp_inspector.inspect_symbol(symbol))
 
-        df_hist_task = asyncio.create_task(_get_daily_history())
-        gex_profile_task = asyncio.create_task(
-            fetch_symbol_gex_metrics(symbol, force_live=True)
-        )
+            # 2. 啟動期權結構分析任務 (SingleFlight 自動合併相同到期日)
+            # 深度分析路徑：一律 force_live/force_refresh=True，保證即時性。
+            skew_task = _spawn(SentimentEngine.calculate_skew(symbol, force_live=True))
+            pcr_task = _spawn(SentimentEngine.calculate_pcr(symbol, force_live=True))
 
-        vp_task = asyncio.create_task(_throttled_volume_profile(symbol))
-        # 刻意不在此並行 fetch_atr_1d：它內部走的是 get_history_df(symbol, "1y",
-        # "1d")——與上方 df_hist_task 同一個 cache key，而 get_history_df 沒有
-        # single-flight 去重（快取寫入在 await 之後），兩者同時於 t=0 查快取會在
-        # 冷啟動時發出兩次相同的 yfinance/Edge 請求。日線 ATR 改由
-        # _process_symbol_hub_data 以 compute_atr_14_from_daily_df 純記憶體計算，
-        # 真的算不出來時才在那裡惰性 await（此時快取已被 df_hist_task 寫暖）。
-        # atr_15m_task 走 force_refresh=True + 5d/15m 不同 key，不是冗餘，保留。
-        atr_15m_task = asyncio.create_task(fetch_atr_15m(symbol))
-        # VWAP 與當日區間極值出自同一份 K 線（見 intraday_consistency.py）
-        vwap_task = asyncio.create_task(fetch_session_stats(symbol))
-        bar_15m_task = asyncio.create_task(get_confirmed_15m_bar(symbol))
-        from services.calendar_service import calendar_service
-
-        catalysts_task = asyncio.create_task(
-            calendar_service.get_symbol_catalysts(symbol, days=14)
-        )
-        reddit_task = asyncio.create_task(reddit_service.get_reddit_details(symbol))
-        poly_task = asyncio.create_task(_safe_get_poly_markets())
-        ddp_task = asyncio.create_task(ddp_inspector.inspect_symbol(symbol))
-
-        # 2. 啟動期權結構分析任務 (SingleFlight 自動合併相同到期日)
-        # 深度分析路徑：一律 force_live/force_refresh=True，保證即時性。
-        skew_task = asyncio.create_task(
-            SentimentEngine.calculate_skew(symbol, force_live=True)
-        )
-        pcr_task = asyncio.create_task(
-            SentimentEngine.calculate_pcr(symbol, force_live=True)
-        )
-
-        async def _get_uoa_with_physical_caps() -> tuple[list, list]:
-            try:
-                return await SentimentEngine.detect_uoa_with_physical_caps(  # type: ignore[no-any-return]
-                    symbol, force_live=True
-                )
-            except Exception as e:
-                logger.warning(f"[{symbol}] 獲取 UOA/物理封頂 STO 失敗: {e}")
-                return [], []
-
-        uoa_task = asyncio.create_task(_get_uoa_with_physical_caps())
-        mp_task = asyncio.create_task(
-            SentimentEngine.calculate_max_pain(symbol, _retry=True)
-        )
-        iv_task = asyncio.create_task(
-            SentimentEngine.fetch_and_calculate_iv_metrics(symbol, force_refresh=True)
-        )
-
-        # 3. 取得 30 天內到期日之 Max Pain
-        async def _fetch_month_max_pains() -> list[dict[str, Any]]:
-            try:
-                expiries = await expiries_task
-            except Exception as e:
-                logger.warning(f"[{symbol}] Failed to fetch expiries: {e}")
-                return []
-
-            if not expiries:
-                return []
-
-            today = datetime.now(ny_tz).date()
-            valid_expiries: list[str] = []
-            for exp in expiries:
+            async def _get_uoa_with_physical_caps() -> tuple[list, list]:
                 try:
-                    exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
-                    if 0 <= (exp_dt - today).days <= 30:
-                        valid_expiries.append(exp)
-                except ValueError:
-                    continue
-
-            if not valid_expiries:
-                return []
-
-            mp_tasks = [
-                SentimentEngine.get_unified_max_pain(
-                    symbol, expiry=exp, force_refresh=True
-                )
-                for exp in valid_expiries
-            ]
-            mp_results = await asyncio.gather(*mp_tasks, return_exceptions=True)
-
-            month_max_pains: list[dict[str, Any]] = []
-            for exp, res in zip(valid_expiries, mp_results):
-                if isinstance(res, dict) and "error" not in res:
-                    month_max_pains.append(
-                        {
-                            "expiry": exp,
-                            "max_pain": res.get("max_pain"),
-                            "distance_pct": res.get("distance_pct", 0.0),
-                            "is_degraded": bool(res.get("is_degraded", 0)),
-                            "calculation_mode": res.get("calculation_mode", "OI"),
-                        }
+                    return await SentimentEngine.detect_uoa_with_physical_caps(  # type: ignore[no-any-return]
+                        symbol, force_live=True
                     )
-            return month_max_pains
+                except Exception as e:
+                    logger.warning(f"[{symbol}] 獲取 UOA/物理封頂 STO 失敗: {e}")
+                    return [], []
 
-        month_mp_task = asyncio.create_task(_fetch_month_max_pains())
+            uoa_task = _spawn(_get_uoa_with_physical_caps())
+            mp_task = _spawn(SentimentEngine.calculate_max_pain(symbol, _retry=True))
+            iv_task = _spawn(
+                SentimentEngine.fetch_and_calculate_iv_metrics(
+                    symbol, force_refresh=True
+                )
+            )
 
-        # 4. 全量 Gather
-        (
-            df_spy,
-            macro_raw,
-            quote,
-            (df_hist_1d, df_hist_fetched_at),
-            gex_profile_data,
-            vp_data,
-            atr_15m_data,
-            session_stats_data,
-            bar_15m_data,
-            catalysts,
-            reddit_details,
-            poly_markets,
-            ddp_report,
-            skew_data,
-            pcr_data,
-            (uoa_data, sto_physical_cap_strikes),
-            max_pain_data,
-            iv_metrics,
-            month_max_pains,
-            squeeze_eval,
-        ) = await asyncio.gather(
-            spy_task,
-            macro_task,
-            quote_task,
-            df_hist_task,
-            gex_profile_task,
-            vp_task,
-            atr_15m_task,
-            vwap_task,
-            bar_15m_task,
-            catalysts_task,
-            reddit_task,
-            poly_task,
-            ddp_task,
-            skew_task,
-            pcr_task,
-            uoa_task,
-            mp_task,
-            iv_task,
-            month_mp_task,
-            squeeze_task,
-        )
+            # 3. 取得 30 天內到期日之 Max Pain
+            async def _fetch_month_max_pains() -> list[dict[str, Any]]:
+                try:
+                    expiries = await expiries_task
+                except Exception as e:
+                    logger.warning(f"[{symbol}] Failed to fetch expiries: {e}")
+                    return []
+
+                if not expiries:
+                    return []
+
+                today = datetime.now(ny_tz).date()
+                valid_expiries: list[str] = []
+                for exp in expiries:
+                    try:
+                        exp_dt = datetime.strptime(exp, "%Y-%m-%d").date()
+                        if 0 <= (exp_dt - today).days <= 30:
+                            valid_expiries.append(exp)
+                    except ValueError:
+                        continue
+
+                if not valid_expiries:
+                    return []
+
+                mp_tasks = [
+                    SentimentEngine.get_unified_max_pain(
+                        symbol, expiry=exp, force_refresh=True
+                    )
+                    for exp in valid_expiries
+                ]
+                mp_results = await asyncio.gather(*mp_tasks, return_exceptions=True)
+
+                month_max_pains: list[dict[str, Any]] = []
+                for exp, res in zip(valid_expiries, mp_results):
+                    if isinstance(res, dict) and "error" not in res:
+                        month_max_pains.append(
+                            {
+                                "expiry": exp,
+                                "max_pain": res.get("max_pain"),
+                                "distance_pct": res.get("distance_pct", 0.0),
+                                "is_degraded": bool(res.get("is_degraded", 0)),
+                                "calculation_mode": res.get("calculation_mode", "OI"),
+                            }
+                        )
+                return month_max_pains
+
+            month_mp_task = _spawn(_fetch_month_max_pains())
+
+            # 4. 全量 Gather
+            (
+                df_spy,
+                macro_raw,
+                quote,
+                (df_hist_1d, df_hist_fetched_at),
+                gex_profile_data,
+                vp_data,
+                atr_15m_data,
+                session_stats_data,
+                bar_15m_data,
+                catalysts,
+                reddit_details,
+                poly_markets,
+                ddp_report,
+                skew_data,
+                pcr_data,
+                (uoa_data, sto_physical_cap_strikes),
+                max_pain_data,
+                iv_metrics,
+                month_max_pains,
+                squeeze_eval,
+            ) = await asyncio.gather(
+                spy_task,
+                macro_task,
+                quote_task,
+                df_hist_task,
+                gex_profile_task,
+                vp_task,
+                atr_15m_task,
+                vwap_task,
+                bar_15m_task,
+                catalysts_task,
+                reddit_task,
+                poly_task,
+                ddp_task,
+                skew_task,
+                pcr_task,
+                uoa_task,
+                mp_task,
+                iv_task,
+                month_mp_task,
+                squeeze_task,
+            )
+        except BaseException:
+            await _cancel_and_reap(owned)
+            raise
 
         # 完整期權到期日清單（任務已完成，僅取結果）：供 /x 推定 GEX 涵蓋的到期日，
         # 不可用 month_max_pains——它會漏掉 Max Pain 計算失敗的到期日。
