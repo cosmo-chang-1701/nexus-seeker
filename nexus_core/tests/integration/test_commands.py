@@ -1,3 +1,4 @@
+import asyncio
 import time
 from typing import Any
 import pytest
@@ -591,7 +592,19 @@ async def test_command_sys_health(mock_interaction: Any):  # type: ignore
         assert discord.Color.red() == embed.color
 
 
+async def _drain_background_tasks(timeout: float = 30.0) -> None:
+    """等待目前事件迴圈上的其他任務全部結束（含排空途中新建的任務），整體限時。"""
+    current = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while pending := {t for t in asyncio.all_tasks() if t is not current}:
+        remaining = deadline - loop.time()
+        assert remaining > 0, f"背景任務逾時仍未結束: {pending}"
+        await asyncio.wait(pending, timeout=remaining)
+
+
 @pytest.mark.asyncio
+@pytest.mark.slow
 async def test_all_commands_structure(
     mock_interaction: Any, db_conn: Any, mock_bot: Any
 ) -> None:
@@ -753,6 +766,10 @@ async def test_all_commands_structure(
     from config import DISCORD_ADMIN_USER_ID
 
     mock_interaction.user.id = DISCORD_ADMIN_USER_ID
+    # 前面的指令（symbol_hub 因 mock bot 的 Polymarket 服務無法 await 而提早失敗）
+    # 會遺留背景任務，其中的進場閘門稍後呼叫 get_market_regime()，若落在下方 patch
+    # 期間就會多呼叫一次 fetch_gex_metrics mock。必須先排空再 patch。
+    await _drain_background_tasks()
     with patch(
         "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
     ) as m_gex, patch(
