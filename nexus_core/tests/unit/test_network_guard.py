@@ -6,17 +6,90 @@
 
 import importlib
 import socket
+from pathlib import Path
+from typing import Any
 
 import pytest
+
+from tests.unit.network_guard import NetworkGuard, _is_loopback, _needs_dns
 
 _BLOCKED = "測試不得連網"
 _HOST = "example.invalid"
 _IP = "192.0.2.1"
 
 
-def test_conftest_guard_installed() -> None:
-    """不安裝任何檔內守衛，`socket.connect` 也必須已被包裝。"""
+def test_conftest_guard_installed(_global_network_block: NetworkGuard) -> None:
+    """不安裝任何檔內守衛，`socket.connect` 也必須已被全域守衛包裝。"""
     assert getattr(socket.socket.connect, "_nexus_network_guard", False) is True
+    owner = getattr(socket.socket.connect, "_nexus_network_guard_owner", None)
+    assert owner is _global_network_block
+
+
+def test_conftest_guard_records_attempts(_global_network_block: NetworkGuard) -> None:
+    """全域守衛雖不讓測試失敗，仍須記錄每次嘗試。"""
+    before = len(_global_network_block.attempts)
+    with pytest.raises(socket.gaierror, match=_BLOCKED):
+        socket.getaddrinfo(_HOST, 443)
+    assert len(_global_network_block.attempts) > before
+    assert _HOST in _global_network_block.attempts[-1]
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="此平台不支援 AF_UNIX")
+def test_allows_af_unix(tmp_path: Path, _global_network_block: NetworkGuard) -> None:
+    """AF_UNIX 是本機通訊，`connect`／`connect_ex` 照常運作且不記錄嘗試。"""
+    path = str(tmp_path / "g.sock")
+    before = len(_global_network_block.attempts)
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(path)
+        server.listen(2)
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.5)
+            client.connect(path)
+            assert client.getpeername() == path
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(0.5)
+            assert client.connect_ex(path) == 0
+
+    assert len(_global_network_block.attempts) == before
+
+
+def test_localhost_variants_normalized() -> None:
+    """localhost 名稱比對不分大小寫並容許單一尾點；其他變體仍阻擋並記錄。"""
+    for host in ("LOCALHOST", "localhost.", "LocalHost."):
+        assert _is_loopback(host), host
+        assert not _needs_dns(host), host
+    assert not _needs_dns(b"LOCALHOST")
+    for host in (
+        "localhost.evil.com",
+        "localhost..",
+        "evil-localhost",
+        "localhost.invalid",
+    ):
+        assert not _is_loopback(host), host
+        assert _needs_dns(host), host
+
+    resolved: list[Any] = []
+
+    def stub(host: Any, *args: Any, **kwargs: Any) -> list[Any]:
+        resolved.append(host)
+        return []
+
+    # 以區域 MonkeyPatch 疊在全域守衛之上，測試結束前即依序還原。
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr(socket, "getaddrinfo", stub)
+        guard = NetworkGuard()
+        guard.install(monkeypatch)
+
+        socket.getaddrinfo("LOCALHOST.", 80)
+        assert resolved == ["LOCALHOST."]
+        assert guard.attempts == []
+
+        with pytest.raises(socket.gaierror, match=_BLOCKED):
+            socket.getaddrinfo("localhost.evil.com", 80)
+        assert resolved == ["LOCALHOST."]
+        assert len(guard.attempts) == 1
+        assert "localhost.evil.com" in guard.attempts[0]
 
 
 def test_blocks_dns_getaddrinfo() -> None:
