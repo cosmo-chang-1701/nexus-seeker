@@ -3,6 +3,7 @@ import market_time
 import asyncio
 import math
 import pandas as pd
+from dataclasses import dataclass, field
 from datetime import datetime, date
 from typing import Dict, Any, List, Optional
 from py_vollib.black_scholes_merton.greeks.analytical import delta
@@ -140,6 +141,55 @@ async def get_hv_30(symbol: str) -> float:
         return 0.30
 
 
+@dataclass
+class _CoveredCallInputs:
+    """`recommend_covered_calls` 所需的資料庫讀取結果。"""
+
+    current_shares: float
+    current_cost: float
+    covered_shares: float = 0.0
+    existing_calls: List[Dict[str, Any]] = field(default_factory=list)
+    covered_error: Optional[ValueError] = None
+    uncovered_shares: float = 0.0
+    max_new_contracts: int = 0
+    orders: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def _load_covered_call_inputs(user_id: int, symbol: str) -> _CoveredCallInputs:
+    """依序讀取持股、既有 Short Call 與活躍掛單 (同步 SQLite，須於工作執行緒呼叫)。
+
+    無持股、`get_covered_shares` 拋出 `ValueError` (存入 `covered_error`)、或
+    未覆蓋股數不足 100 股時提早回傳，後續資料不再讀取。其他例外一律上拋。
+    """
+    holdings = get_user_holdings(user_id)
+    current_shares = 0.0
+    current_cost = 0.0
+    for h in holdings:
+        if h.get("symbol", "").upper() == symbol:
+            current_shares = h.get("quantity", 0.0)
+            current_cost = h.get("avg_cost", 0.0)
+            break
+
+    inputs = _CoveredCallInputs(current_shares, current_cost)
+    if current_shares <= 0:
+        return inputs
+
+    try:
+        inputs.covered_shares, inputs.existing_calls = get_covered_shares(
+            user_id, symbol
+        )
+    except ValueError as e:
+        inputs.covered_error = e
+        return inputs
+    inputs.uncovered_shares = max(0.0, current_shares - inputs.covered_shares)
+    inputs.max_new_contracts = int(inputs.uncovered_shares // 100)
+    if inputs.max_new_contracts <= 0:
+        return inputs
+
+    inputs.orders = get_user_active_orders(user_id)
+    return inputs
+
+
 async def recommend_covered_calls(
     user_id: int, symbol: str
 ) -> Optional[Dict[str, Any]]:
@@ -150,31 +200,27 @@ async def recommend_covered_calls(
 
     symbol = symbol.upper()
 
-    # 1. 取得現有持倉
-    holdings = get_user_holdings(user_id)
-    current_shares = 0.0
-    current_cost = 0.0
-    for h in holdings:
-        if h.get("symbol", "").upper() == symbol:
-            current_shares = h.get("quantity", 0.0)
-            current_cost = h.get("avg_cost", 0.0)
-            break
+    # 1. 取得現有持倉、既有 Short Call 與活躍掛單 (併批離開 event loop 讀取)
+    inputs = await asyncio.to_thread(_load_covered_call_inputs, user_id, symbol)
+    current_shares = inputs.current_shares
+    current_cost = inputs.current_cost
 
     if current_shares <= 0:
         logger.info(f"使用者 {user_id} 目前無 {symbol} 持倉，無需生成解鎖建議。")
         return None
 
     # 1.5 檢查既有 Short Call 部位，避免對已鎖定股數重複建議備兌
-    try:
-        covered_shares, existing_calls = get_covered_shares(user_id, symbol)
-    except ValueError as e:
+    if inputs.covered_error is not None:
         # 單一使用者的壞資料不得中斷呼叫端的批次迴圈。
         logger.warning(
-            f"使用者 {user_id} 的 {symbol} 既有空 Call 讀取失敗，跳過建議 (fail-closed): {e}"
+            f"使用者 {user_id} 的 {symbol} 既有部位讀取失敗，跳過建議 "
+            f"(fail-closed): {inputs.covered_error}"
         )
         return None
-    uncovered_shares = max(0.0, current_shares - covered_shares)
-    max_new_contracts = int(uncovered_shares // 100)
+    covered_shares = inputs.covered_shares
+    existing_calls = inputs.existing_calls
+    uncovered_shares = inputs.uncovered_shares
+    max_new_contracts = inputs.max_new_contracts
     if max_new_contracts <= 0:
         logger.info(
             f"使用者 {user_id} 的 {symbol} 現股已全數被既有 Short Call 覆蓋 "
@@ -182,8 +228,8 @@ async def recommend_covered_calls(
         )
         return None
 
-    # 2. 取得活躍 GTC 網格買單
-    orders = get_user_active_orders(user_id)
+    # 2. 篩選活躍 GTC 網格買單
+    orders = inputs.orders
     grid_orders = [
         o
         for o in orders
@@ -203,7 +249,7 @@ async def recommend_covered_calls(
         return None
 
     # 取得波動率 (IV 優先，儲存之歷史 IV 次之，最後以 30天 HV 代理)
-    stored_iv = SentimentEngine.get_last_stored_iv(symbol)
+    stored_iv = await asyncio.to_thread(SentimentEngine.get_last_stored_iv, symbol)
     if stored_iv and stored_iv > 0.01:
         fallback_iv = stored_iv
     else:
@@ -489,7 +535,9 @@ async def is_covered_call_unlock_allowed() -> bool:
 
     # 1. 取得薩姆規則指標 (月度資料，KV 快取即為最近一次真實值)。薩姆值可為 0
     # 或負值 (失業率低於前 12 個月低點)，是有效讀值，不可當成缺值。
-    sahm_rule = _optional_finite_float(get_kv_cache("macro_sahm_rule"))
+    sahm_rule = _optional_finite_float(
+        await asyncio.to_thread(get_kv_cache, "macro_sahm_rule")
+    )
     if sahm_rule is None:
         try:
             core_data = await fetch_core_macro_metrics()
@@ -507,7 +555,9 @@ async def is_covered_call_unlock_allowed() -> bool:
     except Exception:
         us10y = None
     if us10y is None:
-        us10y = _optional_positive_float(get_kv_cache("macro_us10y"))
+        us10y = _optional_positive_float(
+            await asyncio.to_thread(get_kv_cache, "macro_us10y")
+        )
     if us10y is not None and us10y > 10.0:
         us10y = us10y / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
 
