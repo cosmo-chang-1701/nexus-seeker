@@ -511,7 +511,7 @@ class MarketScanMixin:
                             except Exception as cover_e:
                                 logger.info(
                                     f"🚫 [Strategy Align] {sym} {strategy}: "
-                                    "既有空 Call 讀取失敗，不推 STO_CALL "
+                                    "既有部位讀取失敗，不推 STO_CALL "
                                     f"(fail-closed): {cover_e}"
                                 )
                                 continue
