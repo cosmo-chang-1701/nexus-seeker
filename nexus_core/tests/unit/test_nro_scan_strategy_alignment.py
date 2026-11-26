@@ -361,11 +361,16 @@ async def test_bto_put_dynamic_fail_closed() -> None:
         new_callable=AsyncMock,
         return_value={"put_wall": 140.0, "net_gex": 1.0},
     ), patch(
+        "services.market_data_service.get_history_df",
+        new_callable=AsyncMock,
+        return_value=pd.DataFrame(),
+    ), patch(
         "market_analysis.dynamic_rollover.regime_classifier.classify_dynamic_regime",
         new_callable=AsyncMock,
         side_effect=RuntimeError("boom"),
-    ):
+    ) as classify:
         assert await _classify_symbol_regime_value("AAPL", 150.0) is None
+        classify.assert_awaited_once()
 
     # 整合：helper 回 None -> 不推 BTO_PUT
     out = await _run_scan(

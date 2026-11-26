@@ -131,7 +131,7 @@ flowchart TD
 ## 5. 邊界條件、風控熔斷與例外處理
 
 1. **單薄紙牆的保守落空設計**：
-   在 `_scan_gex_walls` 掃描函式中，當某履約價被分類為 `THIN_SUPPORT_WALL` 時，代碼刻意不為其建立有效支撐回傳，使其維持 `support_wall = 0.0`。此舉杜絕了系統對低於 `thin_wall_threshold(ADV)`（§2 的成交額正規化門檻，下限 500k）之微弱紙牆產生錯誤的避險信任。成交額來自雷達資料的 `gex_profile_data["adv_dollar_20d"]`；缺值時退回 500k，行為與改版前相同。
+   在 `_scan_gex_walls` 掃描函式中，當某履約價被分類為 `THIN_SUPPORT_WALL` 時，代碼刻意不為其建立有效支撐回傳，使其維持 `support_wall = 0.0`。此舉杜絕了系統對低於 `thin_wall_threshold(ADV)`（§2 的成交額正規化門檻，下限 500k）之微弱紙牆產生錯誤的避險信任。成交額讀自 `gex_profile_data["adv_dollar_20d"]`，雷達、`/x` 與 NRO 掃描 Regime 分類以同一公式注入（20 日均量 × 現價）；缺值時薄牆門檻退回 500k。
 2. **負 Gamma 泥淖的極值唯一性**：
    若現價上方存在多個 $\le -5,000,000$ 的負 GEX 峰值，`find_overhead_negative_gex_swamp` 透過 `argmin` 鎖定最深凹陷的最小 GEX 履約價，提供做市商最強砸盤拋售阻力的精確定位。
 3. **數據畸形與非數值過濾**：
