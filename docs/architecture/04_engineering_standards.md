@@ -298,6 +298,8 @@ sequenceDiagram
 ### 5.7 測試連網守衛（兩層）
 測試連網守衛 `nexus_core/tests/unit/network_guard.py::NetworkGuard` 分兩層安裝：`nexus_core/tests/conftest.py` 對全部測試阻擋對外 TCP／UDP 連線、DNS 查詢與 curl_cffi 請求（只阻擋、不使測試失敗），讓測試結果不依賴外部網路。個別測試檔另以 autouse fixture 安裝嚴格守衛並在 teardown 呼叫 `assert_clean()`，任何連網嘗試（即使例外被呼叫端吞掉）都會讓測試失敗。
 
+兩層皆放行 loopback 與 AF_UNIX；`localhost` 名稱比對不分大小寫並容許單一尾點（`LOCALHOST`、`localhost.`），`localhost.evil.com` 等其他名稱仍會阻擋。嚴格守衛晚於全域守衛安裝、包在最外層，嘗試記錄在該檔的守衛實例上；安裝檢查以包裝函式的 `_nexus_network_guard_owner` 屬性分辨最外層是哪一層。
+
 ---
 
 ## 6. 核心程式碼檔案路徑關聯

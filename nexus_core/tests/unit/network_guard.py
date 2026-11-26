@@ -28,8 +28,16 @@ def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None
         return None
 
 
+def _is_localhost_name(host: str) -> bool:
+    """名稱是否為 localhost：不分大小寫，並容許單一尾點（FQDN 寫法）。
+
+    此正規化只用於 localhost 名稱比對，IP 字面值解析不套用。
+    """
+    return host.lower().removesuffix(".") == "localhost"
+
+
 def _is_loopback(host: str) -> bool:
-    if host == "localhost":
+    if _is_localhost_name(host):
         return True
     ip = _parse_ip(host)
     if ip is None:
@@ -44,7 +52,7 @@ def _needs_dns(host: Any) -> bool:
     if host is None:
         return False
     text = host.decode(errors="replace") if isinstance(host, bytes) else str(host)
-    if text in ("", "localhost"):
+    if text == "" or _is_localhost_name(text):
         return False
     return _parse_ip(text) is None
 
@@ -107,8 +115,10 @@ class NetworkGuard:
                 raise self._block(f"socket.sendto {args[-1]}")
             return original_sendto(sock, data, *args)
 
-        setattr(guarded_connect, "_nexus_network_guard", True)
-        setattr(guarded_connect_ex, "_nexus_network_guard", True)
+        # `_nexus_network_guard_owner` 指向安裝該層的實例，雙層安裝時可分辨最外層是誰。
+        for wrapper in (guarded_connect, guarded_connect_ex):
+            setattr(wrapper, "_nexus_network_guard", True)
+            setattr(wrapper, "_nexus_network_guard_owner", self)
         monkeypatch.setattr(socket.socket, "connect", guarded_connect)
         monkeypatch.setattr(socket.socket, "connect_ex", guarded_connect_ex)
         monkeypatch.setattr(socket.socket, "sendto", guarded_sendto)

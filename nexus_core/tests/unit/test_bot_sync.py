@@ -26,9 +26,13 @@ def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[NetworkGua
     guard.assert_clean()
 
 
-def test_network_guard_autouse_installed_in_bot_sync() -> None:
-    """不請求 fixture 也必須已安裝守衛，證明 autouse 生效。"""
-    assert getattr(socket.socket.connect, "_nexus_network_guard", False) is True
+def test_network_guard_autouse_installed_in_bot_sync(
+    _global_network_block: NetworkGuard,
+) -> None:
+    """不請求檔內 fixture 也必須已由嚴格守衛包在最外層，證明 autouse 生效。"""
+    owner = getattr(socket.socket.connect, "_nexus_network_guard_owner", None)
+    assert isinstance(owner, NetworkGuard)
+    assert owner is not _global_network_block
 
 
 def _create_test_cog(mock_bot: MagicMock) -> AdminCommandsCog:
