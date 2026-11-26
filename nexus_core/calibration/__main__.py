@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-from calibration.config import CalibrationConfig
+from calibration.config import EDGE_DIVIDEND_FIX_SINCE, CalibrationConfig
 from calibration.data_store import DataStore
 
 
@@ -220,7 +220,11 @@ async def _main(args: argparse.Namespace) -> int:
 
         snapshot = Path(args.snapshot_db) if args.snapshot_db else None
         try:
-            forward = build_forward_report(load_forward_rows(snapshot), cfg)
+            forward = build_forward_report(
+                load_forward_rows(snapshot),
+                cfg,
+                gamma_flip_since=EDGE_DIVIDEND_FIX_SINCE,
+            )
         except Exception as e:
             forward = {
                 "status": f"無法讀取前向蒐集資料: {e}",
@@ -246,7 +250,11 @@ async def _squeeze_flip_check(
     cfg: CalibrationConfig, snapshot: Optional[Path]
 ) -> dict[str, Any]:
     """擠壓乾跑翻轉檢核；任何失敗（讀取、取價）都只降級該段，不得讓整份報告失敗。"""
-    from calibration.forward_log import build_squeeze_flip_check, load_squeeze_rows
+    from calibration.forward_log import (
+        SQUEEZE_T1_WINDOW_SINCE,
+        build_squeeze_flip_check,
+        load_squeeze_rows,
+    )
 
     try:
         rows = load_squeeze_rows(snapshot)
@@ -267,7 +275,9 @@ async def _squeeze_flip_check(
             print(f"擠壓檢核取價失敗，G.2 以「價格不可得」呈現：{e}", file=sys.stderr)
             closes = {}
     try:
-        return build_squeeze_flip_check(rows, closes, cfg)
+        return build_squeeze_flip_check(
+            rows, closes, cfg, t1_since=SQUEEZE_T1_WINDOW_SINCE
+        )
     except Exception as e:
         return {"status": f"擠壓檢核計算失敗: {e}"}
 
@@ -425,17 +435,27 @@ async def _run_study(args: argparse.Namespace, cfg: CalibrationConfig) -> int:
         edge_snaps, rc = _load_edge_snapshots(args)
         if rc or edge_snaps is None:
             return rc or 2
-        result = run_regime_stop_report(edge_snaps, Path(args.snapshot_db))
+        # edge 股息率修正前的 GEX 不可混用 (docs/microstructure/03 §5.w)
+        kept = [s for s in edge_snaps if s["date"] >= EDGE_DIVIDEND_FIX_SINCE]
+        result = run_regime_stop_report(kept, Path(args.snapshot_db))
         result["source"] = "edge"
+        result["edge_gex_since"] = EDGE_DIVIDEND_FIX_SINCE
+        result["n_snapshots_before_gex_since"] = len(edge_snaps) - len(kept)
     elif args.command == "micro-report":
         from calibration.microstructure import build_micro_report
 
-        snapshots = None
         if args.source == "edge":
             snapshots, rc = _load_edge_snapshots(args)
             if rc:
                 return rc
-        result = build_micro_report(Path(cfg.cache_dir), snapshots=snapshots)
+            result = build_micro_report(
+                Path(cfg.cache_dir),
+                snapshots=snapshots,
+                gex_since=EDGE_DIVIDEND_FIX_SINCE,
+            )
+        else:
+            # snapshot 來源為本機重算 GEX，不受 edge 股息率問題影響
+            result = build_micro_report(Path(cfg.cache_dir))
         result["source"] = args.source
     else:
         from calibration.skew_proxy import run_skew_proxy

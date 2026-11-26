@@ -128,18 +128,29 @@ def _render_regime_breakdown(forward: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
-    g1, g2 = data.get("g1") or {}, data.get("g2") or {}
-    tiers = g1.get("by_tier") or {}
-    tier_txt = "、".join(
+def _tier_text(counts: dict[str, Any]) -> str:
+    tiers = counts.get("by_tier") or {}
+    return "、".join(
         f"等級{t}＝{tiers.get(t, tiers.get(str(t), 0))}" for t in (1, 2, 3)
     )
+
+
+def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
+    g1, g2 = data.get("g1") or {}, data.get("g2") or {}
     lines = [
         f"**{title}**",
         "",
-        f"- G.1 獨立事件：{g1.get('independent_events', 0)}（{tier_txt}）；"
+        f"- G.1 獨立事件：{g1.get('independent_events', 0)}（{_tier_text(g1)}）；"
         f"達標：{_flag(g1.get('g1_passed'))}（需 ≥ 30 且各等級 ≥ 5）",
     ]
+    if g1.get("t1_since"):
+        raw = g1.get("unsegmented") or {}
+        lines.append(
+            f"  - T1 窗口切分（§5.8 G）：等級1 僅計 {g1['t1_since']} 起；"
+            f"排除前期等級1 決策列 {g1.get('t1_excluded_rows', 0)} 筆；"
+            f"未切分（參考，不參與判定）：獨立事件 {raw.get('independent_events', 0)}"
+            f"（{_tier_text(raw)}）、達標：{_flag(raw.get('g1_passed'))}"
+        )
     if g2.get("status") == "價格不可得":
         lines.append("- G.2 20 日超額報酬：價格不可得")
     else:
@@ -220,6 +231,11 @@ def _render_gamma_flip_materiality(data: Any) -> list[str]:
     if not isinstance(data, dict):
         return lines + [f"- {data}", ""]
     lines.append(f"- 呈現層門檻 ρ = {_fmt(data.get('threshold'))}")
+    if data.get("since"):
+        lines.append(
+            f"- 樣本起日 {data['since']}（edge 股息率修正，microstructure/03 §5.w）；"
+            f"排除前期 {data.get('n_excluded_before_since', 0)} 列"
+        )
     groups = data.get("groups")
     if isinstance(groups, dict) and groups:
         lines += [
@@ -367,6 +383,13 @@ def render_markdown(results: dict[str, Any]) -> str:
             "狀態 OK 只代表 n ≥ 100；同一交易日的樣本高度相關，有效樣本約等於交易日數。",
             "",
         ]
+        if forward and forward.get("gex_since"):
+            lines += [
+                f"- 牆體深度比與牆距分佈：樣本起日 {forward['gex_since']}"
+                "（edge 股息率修正，microstructure/03 §5.w）；"
+                f"排除前期 {forward.get('n_excluded_before_gex_since', 0)} 列",
+                "",
+            ]
         for name, title in (
             ("wall_depth_ratio", "牆體深度比四分位 (D-04)"),
             ("skew_percentile", "Skew 分位區間"),

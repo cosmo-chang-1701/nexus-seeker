@@ -172,7 +172,7 @@ $$
 ### 2.12 情境十一：兩級體制避險 (`REGIME_HEDGE`)
 取代原 `MARGIN_DEFENSE` 的反向 ETF 路由。引擎每輪至多產生一筆**組合層級**指令（`symbol="PORTFOLIO"`，`action` 為 `HEDGE_TIER1`／`HEDGE_TIER2`），不對應單一標的，故不附一鍵執行按鈕。帳戶為現金帳戶、零融資：多頭現貨市值＋反向 ETF 市值＋現金等價物 $\le$ NAV；買反向 ETF 先用現金等價物，不足才賣多頭現貨。
 1. **觸發與分級**：
-   - **第一級**：大盤 `NORMAL` 且持股現價跌破 PutWall → 買入 `PSQ`（$-1\times$）局部對沖，佔 NAV $10\% \sim 30\%$；**封鎖 SQQQ／SOXS**。第一級未經回測，`REGIME_HEDGE_TIER1_DRY_RUN` 預設 `true`，只寫去重鍵與 log、不推播，累積前向紀錄後由人工決定翻轉。
+   - **第一級**：大盤 `NORMAL` 且持股現價跌破 PutWall → 買入 `PSQ`（$-1\times$）局部對沖，佔 NAV $10\% \sim 30\%$；**封鎖 SQQQ／SOXS**。第一級未經回測，`REGIME_HEDGE_TIER1_DRY_RUN` 預設 `true`，只寫去重鍵、log 與 `rollover_audit_log` 稽核列（與其他乾跑旗標同一派發路徑）、不推播，累積前向紀錄後由人工決定翻轉（尚無量化翻轉準則）。
    - **第二級**：大盤 `SHORT_GAMMA_CRITICAL` 或 `SYSTEMIC_LIQUIDITY_CRISIS` → 結構無勝率之 `SATELLITE` 持倉清倉，並建立 -3x 反向 ETF（-3x 另須通過第 11 項「−3x 啟動紅線」，否則凍結並轉入 `BOXX`）。第二級不受乾跑旗標影響。
 2. **板塊配比**：半導體標的 $\to$ `SOXS`，其餘 $\to$ `SQQQ`。
 3. **財報隔離**：持股財報日距今 $0 \sim 2$ 天時，受影響板塊的 -3x 腿 $\times 0.5$，削減部分轉入 `BOXX`。
@@ -265,7 +265,7 @@ flowchart TD
 | `MINUS3X_ACTIVATION_MIN_FLIP_BREACH_PCT` | `1.0` (%) | −3x 啟動紅線：SPY 低於 Gamma Flip 的最小幅度（含）；未回測 | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
 | `STOP_MARKET_PCT` | PSQ `3.5`／SQQQ `7.0`／SOXS `7.0` (%) | 各反向 ETF 的 STOP MARKET 距離（禁用 STOP_LIMIT） | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_sizing.py` |
 | `MACRO_FREEZE_LOOKAHEAD_HOURS` | `8.0` | 重大總經事件前 8 小時內凍結新建 -3x 反向 ETF | `nexus_core/market_analysis/dynamic_rollover/regime_hedge_timing.py` |
-| `REGIME_HEDGE_TIER1_DRY_RUN` | `true`（環境變數，預設） | 第一級乾跑：只寫去重鍵與 log、不推播；第二級不受影響 | `nexus_core/config.py` |
+| `REGIME_HEDGE_TIER1_DRY_RUN` | `true`（環境變數，預設） | 第一級乾跑：只寫去重鍵、log 與 `rollover_audit_log` 稽核列、不推播；第二級不受影響 | `nexus_core/config.py` |
 | `_HOLDING_DTE_FORCED_SETTLEMENT_THRESHOLD` | `1` | DTE $\le 1$ 強制結算平倉轉倉 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_HOLDING_DTE_LOCKOUT_THRESHOLD` | `7` | DTE $< 7$ 封鎖新開倉與轉倉部署 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_COVERED_CALL_PROFIT_LOCK_PARTIAL_DECAY_PCT` | `0.50` ($50\%$) | 賣方權利金衰減達 50% 時 BTC 回補 50% | `nexus_core/market_analysis/dynamic_rollover/constants.py` |

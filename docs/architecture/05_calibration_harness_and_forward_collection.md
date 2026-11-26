@@ -129,6 +129,7 @@ flowchart TD
 | `shrinkage_n0` | `200` | 收縮估計的先驗強度 | `nexus_core/calibration/config.py` |
 | `n_boot` | `2000` | 叢集 bootstrap 重抽次數（固定 seed） | `nexus_core/calibration/config.py` |
 | `oos_split` | `"2024-01-01"` | 預設樣本外切點（占比不合理時改 70% 分位數） | `nexus_core/calibration/config.py` |
+| `EDGE_DIVIDEND_FIX_SINCE` | `"2026-10-30"` | edge GEX 股息率單位修正的樣本切分日（含當日）：edge 來源的 GEX 衍生研究只用該日起樣本（§5.13、§5.19；[`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.w） | `nexus_core/calibration/config.py` |
 | `_SPLIT_MIN_TRAIN_SHARE` / `_SPLIT_MAX_TRAIN_SHARE` | `0.40` / `0.85` | 固定切點可沿用的訓練期占比範圍 | `nexus_core/calibration/stats.py` |
 | `hourly_period` | `"729d"` | yfinance 1h 上限 730 天，取 729 避開邊界拒絕 | `nexus_core/calibration/config.py` |
 | `KELLY_TARGET_ATR` / `KELLY_STOP_ATR` | `1.8` / `1.0` | 凱利先驗校準的非對稱屏障（對應先驗賠率 1.8） | `nexus_core/calibration/labeling.py` |
@@ -144,6 +145,7 @@ flowchart TD
 | `FORWARD_MIN_ROWS` | `100` | 前向報告每決策類「資料累積中」門檻 | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時 G.2 顯示「樣本不足（交易日數 n／20）」、影子否決僅顯示「樣本不足」，皆不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SQUEEZE_T1_WINDOW_SINCE` | `date(2026, 11, 14)` | T1 盤中觸發窗口變更的樣本切分日：事件日早於此日的等級 1 決策列不計入 G.1、G.2 處理組與影子否決事件，仍排除在對照組之外（§5.8 G） | `nexus_core/calibration/forward_log.py` |
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_DERIVED_RR_THRESHOLD` | `2.2` | 報表端衍生分組 `sv_f_rr22`（`sv_rr < 2.2`）的門檻；PRE_CALIBRATION／僅紀錄，報表端衍生，不參與判定、不寫入 `features_json`（§5.18） | `nexus_core/calibration/forward_log.py` |
@@ -249,6 +251,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 3. （離線回測已封存，此項無法再量測；改以前向資料判定）原準則為 A/B 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
+> **現況註記（2026-11-26 稽核）**：右側六重鐵律已於 2026-10-04 移除（commit `e8044d05`，v1.16.0），多頭建倉改由擠壓規則判定（`ENTRY_SQUEEZE`），`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自此沒有任何寫入端（快照最後一筆 `ENTRY_RIGHT_B` 為 2026-10-01，共 3 列）。第 1、2 條在現行程式下結構上無法達成；本節判準未修改，是否改寫由使用者決定。
+
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
 
 **2026-09-19 A/B 結果：無法判定，條件 3 視為尚未成立。**（下表為舊判準的總波動對齊數字；2026-09-23 以 Sortino 判準重跑見 §5.12：aggressive Sortino $+0.01$、defensive $-0.02$，結論不變。）
@@ -285,7 +289,7 @@ G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個�
 
 G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超額與 t 值**）：(1) **日期匹配**——每個處理組事件減去同事件日對照組的平均 20 日報酬（無同日對照者略過並計數），以事件日叢集 bootstrap 給出超額與 95% CI；(2) **市況分層**——以基準 `SQUEEZE_BENCHMARK`（VOO）自該日起的 20 日報酬分「下跌（< −2%）／盤整／上漲（> +2%，`SQUEEZE_MARKET_BAND`）」，各狀態內重做處理組對照組比較；基準報酬未滿 20 日者排除並計數，基準無價格時顯示「基準價格不可得」。原因：目前已標註的事件集中在單一週，標的池含高 beta 與槓桿／反向 ETF，混合比較的差值主要反映 beta 與日期組成，而非擠壓進場本身的擇時價值。
 
-**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。
+**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。報表實作：`forward-report` 以 `forward_log.SQUEEZE_T1_WINDOW_SINCE`（2026-11-14）切分，`decision = 1`、`conditions_mask = 1` 且事件日（`bar_ts` 的美東日期）早於該日的列（不分觸發來源），在 10 交易日去重**之前**即移除，不計入 G.1、G.2 處理組與影子否決事件；其 (標的, 日) 仍排除在對照組之外。報表另列排除筆數與「未切分」的 G.1 數字，後者僅供參考、不參與達標判定。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
@@ -375,6 +379,8 @@ UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則
 > （`/x` 手動檢核）寫入，下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，
 > 混在一起算會嚴重高估。
 
+> **現況註記（2026-11-26 稽核）**：`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端；`RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime 改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）。下方查詢 1／2 的 evaluator 清單不含 `ENTRY_SQUEEZE`，主判準因此只涵蓋左側與做空路徑；擠壓路徑的推播另受 `SQUEEZE_ENTRY_DRY_RUN` 控制，其去重後頻率不在本判準內。主判準未修改，是否納入 `ENTRY_SQUEEZE` 由使用者決定。
+
 ```sql
 -- 1. 主判準：去重後的實際 DM 則數
 SELECT COUNT(*) AS dm_per_week FROM (
@@ -447,6 +453,8 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 2. 洗盤率顯著高於訊號正確率（Wilson 區間不重疊）的分層，才列為候選調整對象；調整走 `calibration/` 報告 → 人工審核 → PR。
 3. 被顧問模式丟棄的分層 (`advisory=是`) 不影響任何使用者，其統計只用來佐證同一分層在指令持倉上的結論。
 
+> **現況註記（2026-11-26 稽核）**：派發端對所有多頭現貨一律寫入 `advisory_only = True`（`nexus_core/cogs/trading/portfolio_monitor.py`），`advisory=否` 的 `EXIT_*` 只可能來自空頭現貨或期權部位（期權併入 `ENABLE_OPTIONS_ROLLOVER_INGESTION` 預設關閉）。快照中排除現金等價標的後的 `EXIT_*` 列全數為 `advisory=是`，第 1 條在現行持倉型態下結構上無法達成；判準未修改。
+
 **回測功能開關（已封存）**：（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）2026-09-23 的 A/B 結論：僅 `PYRAMID_ADD` 在 2025 單年對 aggressive 模式有正向 Sortino 變化（1.13 → 1.87），但在 2022–2025 多資產期間不成立；逃頂三級階梯以截斷上行換取低回撤，Sortino 下降。
 
 ### 5.13 微結構與 Skew 門檻校準研究 (`micro-snapshot` / `micro-report` / `skew-proxy`)
@@ -456,7 +464,7 @@ GEX 牆體深度（D-04）與 Skew 分位門檻都**無法回測**：GEX 快取�
 | 子命令 | 資料 | 用途 |
 |---|---|---|
 | `micro-snapshot` | 標的池最近一檔**未到期**（DTE ≥ 1）的期權鏈（與 edge 相同公式重算 GEX：$t \ge 2$ 天、$|\Delta| < 0.02$ 雜訊過濾、$OI \times 100 \times \Gamma \times S^2$），外加 20 日平均成交額、ATR、各到期日推算的週 EM。經 `market_data_service` 抓取（edge 快照 → edge 即時 → 本地 yfinance），期權鏈不裁減履約價 | 每個交易日收盤後跑一次，逐日累積 `microstructure/snapshot_YYYY-MM-DD.jsonl`（以美東日期命名） |
-| `micro-report` | 所有快照 + 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；`GammaFlip重要性`：閘門 Flip 的重要性比分位與 2%／5%／10% 門檻下的剔除、改選、消失次數（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6） |
+| `micro-report` | 所有快照（`--source edge` 的 GEX 衍生段落只用 `EDGE_DIVIDEND_FIX_SINCE` 起的快照，週 EM 仍用全部）+ 快照日**之後**的日線 | 牆體深度比分布、新舊薄牆門檻通過率、週 EM 到期日偏差、支撐牆守住率 × 深度四分位（觀察期 5 個交易日，未走完的快照不標註）；四種支撐定義的守住率並列與 PutWall 處淨 GEX $< 0$ 比例（見 [`../microstructure/02_wall_physical_constraints.md`](../microstructure/02_wall_physical_constraints.md) §5 第 7 點）；`GammaFlip重要性`：閘門 Flip 的重要性比分位與 2%／5%／10% 門檻下的剔除、改選、消失次數（見 [`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.6） |
 | `skew-proxy` | CBOE ^SKEW × SPY 日線（2000 年起） | 以「日級、252 交易日、只用過去資料的 midrank」計算分位，統計各門檻的觸發率、5 日報酬（bootstrap CI）與 5 日內跌幅 > 3% 的機率 |
 
 執行方式與其他子命令相同（`python -m calibration micro-snapshot --max-symbols 200`、`micro-report`、`skew-proxy`，容器內執行參數見 `AGENTS.md` 的 Testing 段落）。標的池為 watchlist ∪ 固定流動性清單，讀取 watchlist 時 `NEXUS_DB_NAME` 應指向複製的快照。
@@ -488,7 +496,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 - **D-04 牆體深度比**：94 面支撐牆的深度比中位數約 $1.6\times10^{-4}$，p10 約 $10^{-6}$；$< 10^{-5}$ 的牆幾乎都距現價 8–66%。舊 500k 絕對門檻通過率 81.9%，新門檻 76.6%。差異全部落在 ADV \$500M–\$5B 組（84.3% → 74.5%，剔除 ORCL／CRM／XOM／COST 等遠處薄牆）；ADV > \$5B 與 < \$500M 兩組不變。
 - **Skew 門檻（指數層級代理）**：日級母體下 ≥98 分位的觸發率為 4.9%（連續觸發算一次則為 146 段），高於「2%」的直覺值，因為分位序列有趨勢。高分位日之後 SPY 的 5 日跌幅 > 3% 機率（≥98：10.3%、≥90：9.9%、≥85：9.4%）**不高於**基準的 11.6%，5 日報酬 CI 都與基準重疊；反而低分位日（≤5：18.4%）的下跌風險較高（低 SKEW 常與高 VIX 的恐慌期重疊）。**結論：代理資料不支持 handoff 提議的 97.5／88／82 調降**（調降只會增加觸發、沒有預測力依據），現行門檻維持不變；是否調整以個股日級母體的前向蒐集資料為準。
 
-**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位，輸出三張表：
+**`forward-report` 的門檻前向驗證**：報告新增「門檻前向驗證」段落（`forward_log.build_threshold_studies()`），從 `features_json` 取出上述欄位（其中 edge GEX 衍生的牆體深度比、`gamma_flip_materiality` 與牆距分佈 `magnitudes` 只取事件日在 `EDGE_DIVIDEND_FIX_SINCE`（含）之後的列，並揭露排除筆數；Skew 分位用全部樣本），輸出三張表：
 - 牆體深度比（`support_gex × 0.01 ÷ adv_dollar_20d`）四分位 × 勝率／逆向先觸及率；
 - 以上各分桶表（D-04、Skew、依評估器拆分）的勝率與逆向先觸及率皆附日期叢集 bootstrap 95% CI（`win_ci95`／`adverse_ci95`；無日期欄時為空）。同一交易日的樣本高度相關，n 很大但交易日數很少時 CI 會很寬，方向翻轉不代表訊號；
 - Skew 分位依現行門檻區間（$<15$、15–85、85–90、90–98、$\ge 98$）× 勝率，並依母體來源（`CANONICAL`／`INTRADAY_FALLBACK`）分開統計——兩者的分位語意不同，混在一起無法判讀。
@@ -507,6 +515,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **判讀準則**：
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。`micro-report` 的深度四分位表每組附日期叢集 95% CI 與自動「判讀」：可標註日期 < 20 或任一組 tested < 30 輸出「樣本不足」；Q2 的 CI 上界低於 Q3 與 Q4 的 CI 下界才提示可提案上調，否則維持現行門檻（閘門仍不得先改）。
+  - **現況註記（2026-11-26 稽核）**：「未測試」基準在本規格與 `micro-report` 皆未定義，報表的自動「判讀」只檢查上調方向；下調條件目前無法客觀判定（報表以 `下調判讀` 鍵揭露），須待使用者定義基準。
 - Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
 
 ### 5.14 通知成效前向評估 (`notification_dispatch_log` / `notif-report`)
@@ -686,6 +695,8 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 只有「顯著較差」且各組 n 足夠時，才由使用者決定是否把該否決接進判定；接進判定須另開 PR 並重新審核，本報表不會自動變更任何常數或閘門。
 
+> **現況註記（2026-11-26 稽核）**：自 2026-10-30 起的擠壓評估中，`sv_f_ceil`、`sv_f_rr`、`sv_any` 與報表衍生 `sv_f_rr22` 幾乎恆為 `true`（以標的日計，`sv_f_ceil` 放行約 1%）：edge CallWall 取現價以上 Call GEX 最大的履約價（`nexus_edge_scraper/gex_scraper.py`），通常緊貼現價（`sv_cw_atr` 中位數約 0.4–0.5 ATR₁D）。相對於 1.5 ATR₁D 與盈虧比 2.0 的尺度，放行組在可預見期間內難以達到「各組 ≥ 10 筆且 ≥ 20 個事件日」；截至 2026-11-25 快照，影子期獨立事件的 `sv_f_rr22` 放行組為 0。門檻與判讀規則未修改，是否調整定義由使用者決定。
+
 **刻意不納入**：
 - 大盤負 Gamma：已是硬否決（`SHORT_GAMMA_CRITICAL`），不重複。
 - Kelly 0 口：依帳戶而定，而擠壓紀錄跨使用者共用，無法放進同一份紀錄。
@@ -696,7 +707,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **目的**：回答「持有於 GEX 錨點之上的部位，依體制調整停損墊片 κ（$\text{stop} = \text{anchor} - \kappa \times ATR_{15m}$）是否優於現行固定 $\kappa = 0.5$」。假說（已放棄的規格提案 `08_factor_covariance_and_regime_stop_pipeline.md` §2.4／§3.2，未合併）為 Long Gamma $\kappa = 1.75$、Short Gamma $\kappa = 0.40$、財報／重大總經事件前 48 小時 $\kappa = 0$。本命令只產出報告，**不修改任何正式參數**（現行常數 `_MICROSTRUCTURE_SL_STRUCTURAL_ATR_MULT = 0.5`）。
 
-**資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。
+**資料來源**：edge GEX 歷史（沿用 `build_edge_snapshots`，與 `micro-report --source edge` 相同的 `--edge-db`／`TUNNEL_URL`）、production 快照 DB（`--snapshot-db`，唯讀）的 `sec_filing_event`（8-K 且 Item 含 `2.02` 視為財報）與 `economic_calendar_events`，以及快照日之後的**未調整**日線（yfinance `auto_adjust=False`，與 GEX 履約價同口徑）。edge GEX 快照只取 `EDGE_DIVIDEND_FIX_SINCE`（含）起者（股息率單位修正，[`../microstructure/03_gamma_flip_estimation.md`](../microstructure/03_gamma_flip_estimation.md) §5.w），結果以 `edge_gex_since`、`n_snapshots_before_gex_since` 揭露排除筆數。
 
 **體制定義**（快照日收盤後起算）：
 

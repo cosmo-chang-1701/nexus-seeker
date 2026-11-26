@@ -75,7 +75,25 @@ def _prepare(rows: pd.DataFrame, primary_col: str) -> pd.DataFrame:
     return df
 
 
-def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str, Any]:
+def _since_mask(entries: pd.DataFrame, since: Optional[str]) -> pd.Series:
+    """事件日 `date` >= `since` 的列；`since` 為 None 時全留，缺 `date` 欄時全排除。"""
+    if since is None:
+        return pd.Series(True, index=entries.index)
+    if "date" not in entries.columns:
+        return pd.Series(False, index=entries.index)
+    return entries["date"].astype(str) >= since
+
+
+def build_forward_report(
+    rows: pd.DataFrame,
+    cfg: CalibrationConfig,
+    *,
+    gamma_flip_since: Optional[str] = None,
+) -> dict[str, Any]:
+    """`gamma_flip_since`（ISO 日期，含當日）：edge GEX 衍生研究（牆距分佈、牆體
+    深度比、Gamma Flip 重要性）只用該日起的樣本（docs/microstructure/03 §5.w）；
+    其餘段落用全部樣本。
+    """
     report: dict[str, Any] = {"total_labeled": int(len(rows)), "sections": []}
     if rows.empty:
         report["status"] = "資料累積中 (尚無已標註紀錄)"
@@ -145,22 +163,26 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
     # GEX 相關量值分佈 vs 結果 (四分位)。只看進場／分類評估：EXIT_* 的 win
     # 是「離場訊號正確」，與進場勝率語意相反，混入會讓四分位結果失真。
     entries = df[~df["evaluator"].astype(str).str.startswith("EXIT_")]
+    gex = entries[_since_mask(entries, gamma_flip_since)]
+    if gamma_flip_since is not None:
+        report["gex_since"] = gamma_flip_since
+        report["n_excluded_before_gex_since"] = int(len(entries) - len(gex))
     magnitudes: dict[str, Any] = {}
     for name, series in (
         (
             "next_node_space_atr",
-            (entries["spot"] - entries["next_negative_node"]) / entries["atr_1d"],
+            (gex["spot"] - gex["next_negative_node"]) / gex["atr_1d"],
         ),
         (
             "resistance_buffer_atr15",
-            (entries["resistance_wall"] - entries["spot"]) / entries["atr_15m"],
+            (gex["resistance_wall"] - gex["spot"]) / gex["atr_15m"],
         ),
         (
             "put_wall_dist_pct",
-            (entries["spot"] - entries["put_wall"]) / entries["spot"],
+            (gex["spot"] - gex["put_wall"]) / gex["spot"],
         ),
     ):
-        valid = pd.DataFrame({"x": series, "win": entries["win"]}).dropna()
+        valid = pd.DataFrame({"x": series, "win": gex["win"]}).dropna()
         valid = valid[(valid["x"] > 0) & (valid["x"] < 1e6)]
         if len(valid) < FORWARD_MIN_ROWS:
             magnitudes[name] = f"資料累積中 ({len(valid)}/{FORWARD_MIN_ROWS})"
@@ -174,7 +196,9 @@ def build_forward_report(rows: pd.DataFrame, cfg: CalibrationConfig) -> dict[str
     report["exit_tiers"] = build_exit_tier_breakdown(df)
     report["exit_tiers_excluded"] = count_excluded_exit_rows(df)
     report["regime_breakdown"] = build_regime_breakdown(df, cfg)
-    report["threshold_studies"] = build_threshold_studies(entries)
+    report["threshold_studies"] = build_threshold_studies(
+        entries, gamma_flip_since=gamma_flip_since
+    )
     return report
 
 
@@ -242,7 +266,9 @@ def _bucket_rows(frame: pd.DataFrame, key: str) -> list[dict[str, Any]]:
     return out
 
 
-def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
+def build_threshold_studies(
+    entries: pd.DataFrame, *, gamma_flip_since: Optional[str] = None
+) -> dict[str, Any]:
     """D-04 牆體深度比與 Skew 分位門檻的前向驗證 (docs §5.13)。
 
     - `wall_depth_ratio`：support_gex × 0.01 ÷ adv_dollar_20d 的四分位 × 勝率。
@@ -251,6 +277,8 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
       高頻回退池——兩者的分位語意不同，混在一起無法判讀。
       總表依 (symbol, bar_ts, source) 對同一根 K 棒去重，優先保留
       REGIME_CLASSIFIER 的列；依評估器拆分的子表則使用未去重的資料。
+    - `gamma_flip_since`：只作用於 edge GEX 衍生的 `wall_depth_ratio` 與
+      `gamma_flip_materiality`（docs/microstructure/03 §5.w），Skew 用全部樣本。
     """
     feats = _features(entries)
     result: dict[str, Any] = {}
@@ -266,7 +294,7 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
                 "win": entries["win"],
                 "outcome": entries["outcome"],
             }
-        ).dropna()
+        )[_since_mask(entries, gamma_flip_since)].dropna()
         if len(frame) < FORWARD_MIN_ROWS:
             result["wall_depth_ratio"] = f"資料累積中 ({len(frame)}/{FORWARD_MIN_ROWS})"
         else:
@@ -301,7 +329,9 @@ def build_threshold_studies(entries: pd.DataFrame) -> dict[str, Any]:
         result["skew_percentile_by_evaluator"] = (
             "資料累積中 (尚無 skew_percentile 欄位)"
         )
-    result["gamma_flip_materiality"] = _gamma_flip_materiality_study(entries, feats)
+    result["gamma_flip_materiality"] = _gamma_flip_materiality_study(
+        entries, feats, since=gamma_flip_since
+    )
     return result
 
 
@@ -370,13 +400,18 @@ _FLIP_BOOT_N = 2000
 _FLIP_BOOT_SEED = 7
 
 
-def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) -> Any:
+def _gamma_flip_materiality_study(
+    entries: pd.DataFrame, feats: pd.DataFrame, since: Optional[str] = None
+) -> Any:
     """閘門 Gamma Flip 為雜訊交叉 vs 重要交叉的事後表現 (docs/microstructure/03 §5.6)。
 
     只取閘門 Flip 存在 (`gamma_flip_raw > 0`) 且有重要性比的列，以呈現層門檻
     `GAMMA_FLIP_MATERIALITY_DISPLAY` 分兩組，另附重要性比四分位。逆向先觸及率
     以日期叢集 bootstrap；兩組皆 n ≥ FORWARD_MIN_ROWS 且雜訊組 CI 下界高於重要組
     CI 上界，才判讀「可提案改閘門」。
+
+    `since` 非 None 時只用該日起的列 (§5.w)，`n_excluded_before_since` 為原本
+    可納入、因早於該日而排除的列數。
     """
     from calibration.stats import clustered_bootstrap_mean
     from market_analysis.index_microstructure import GAMMA_FLIP_MATERIALITY_DISPLAY
@@ -393,6 +428,8 @@ def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) ->
             "outcome": entries["outcome"],
         }
     )[(raw > 0) & ratio.notna()]
+    n_eligible = len(frame)
+    frame = frame[_since_mask(entries, since).reindex(frame.index)]
     if frame.empty:
         return f"資料累積中 (0/{FORWARD_MIN_ROWS})"
     frame["group"] = [
@@ -430,6 +467,9 @@ def _gamma_flip_materiality_study(entries: pd.DataFrame, feats: pd.DataFrame) ->
         "groups": groups,
         "判讀": verdict,
     }
+    if since is not None:
+        out["since"] = since
+        out["n_excluded_before_since"] = int(n_eligible - len(frame))
     if len(frame) >= FORWARD_MIN_ROWS:
         frame["q"] = pd.qcut(frame["x"], 4, duplicates="drop")
         out["ratio_quartiles"] = _bucket_rows(frame, "q")
@@ -594,6 +634,9 @@ def build_regime_breakdown(
 # docs/architecture/05 §5.8 G：第 1–3 條由本段計算，第 4 條為人工項目。
 SQUEEZE_PRIMARY_SOURCE = "WATCHLIST_ADVISOR"
 SQUEEZE_DEDUP_TRADING_DAYS = 10
+# T1 盤中觸發窗口變更切分日（docs §5.8 G；#239，v1.19.45 部署）：事件日（美東）早於
+# 此日的等級 1 決策列與部署後樣本不可直接比較，CLI 路徑不計入 G.1／G.2 處理組。
+SQUEEZE_T1_WINDOW_SINCE: date = date(2026, 11, 14)
 SQUEEZE_MIN_EVENTS = 30
 SQUEEZE_MIN_PER_TIER = 5
 SQUEEZE_HORIZON_DAYS = 20
@@ -960,22 +1003,53 @@ def _shadow_veto_groups(
     return out
 
 
+def _t1_window_excluded_mask(rows: pd.DataFrame, since: Optional[date]) -> pd.Series:
+    """T1 窗口切分前的等級 1 決策列（§5.8 G），不看觸發來源。
+
+    `since` 為 None 或事件日無法解析時該列一律 False（不排除）。
+    """
+    if since is None:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    before = pd.Series(
+        [d is not None and d < since for d in (_event_date(x) for x in rows["bar_ts"])],
+        index=rows.index,
+        dtype=bool,
+    )
+    return (rows["decision"] == 1) & (rows["conditions_mask"] == 1) & before
+
+
+def _g1_counts(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    by_tier = {t: sum(1 for e in events if e["tier"] == t) for t in SQUEEZE_TIERS}
+    return {
+        "independent_events": len(events),
+        "by_tier": by_tier,
+        "g1_passed": len(events) >= SQUEEZE_MIN_EVENTS
+        and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
+    }
+
+
 def _squeeze_analysis(
-    rows: pd.DataFrame, closes: Closes, cfg: CalibrationConfig
+    rows: pd.DataFrame,
+    closes: Closes,
+    cfg: CalibrationConfig,
+    t1_since: Optional[date] = None,
 ) -> dict[str, Any]:
     dates_by_sym: dict[str, list[date]] = {
         s: [c[0] for c in v] for s, v in closes.items() if v
     }
-    events = _independent_events(rows, dates_by_sym)
-    by_tier = {t: sum(1 for e in events if e["tier"] == t) for t in SQUEEZE_TIERS}
-    g1 = {
-        "independent_events": len(events),
-        "by_tier": by_tier,
+    # 切分須在 10 交易日去重之前，前期 T1 才不會擋掉部署後的同標的 T1 事件
+    excluded = _t1_window_excluded_mask(rows, t1_since)
+    events = _independent_events(rows[~excluded], dates_by_sym)
+    g1: dict[str, Any] = {
+        **_g1_counts(events),
         "decision1_rows": int((rows["decision"] == 1).sum()),
         "no_price_events": sum(1 for e in events if e["symbol"] not in dates_by_sym),
-        "g1_passed": len(events) >= SQUEEZE_MIN_EVENTS
-        and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
     }
+    if t1_since is not None:
+        g1["t1_since"] = t1_since.isoformat()
+        g1["t1_excluded_rows"] = int(excluded.sum())
+        # 僅供參考，不參與達標判定
+        g1["unsegmented"] = _g1_counts(_independent_events(rows, dates_by_sym))
     result: dict[str, Any] = {"g1": g1}
     result["shadow_vetoes"] = (
         _shadow_veto_groups(events, closes, cfg) if dates_by_sym else PRICE_UNAVAILABLE
@@ -1006,7 +1080,8 @@ def _squeeze_analysis(
     if events:
         lo_d = min(e["date"] for e in events)
         hi_d = max(e["date"] for e in events)
-        # 任何 decision=1 原始列（含被 10 日規則丟棄者）的 (標的, 日) 不得進入對照組
+        # 任何 decision=1 原始列（含被 10 日規則丟棄者、T1 窗口切分排除者）的
+        # (標的, 日) 不得進入對照組
         treated_pairs = {
             (str(sym_), _event_date(ts))
             for sym_, ts in zip(
@@ -1087,12 +1162,19 @@ def _squeeze_analysis(
 
 
 def build_squeeze_flip_check(
-    rows: pd.DataFrame, closes: Closes, cfg: Optional[CalibrationConfig] = None
+    rows: pd.DataFrame,
+    closes: Closes,
+    cfg: Optional[CalibrationConfig] = None,
+    *,
+    t1_since: Optional[date] = None,
 ) -> dict[str, Any]:
     """擠壓乾跑翻轉檢核 (docs §5.8 G 第 1–3 條)。
 
     主結果只用 `WATCHLIST_ADVISOR`（將來要翻轉推播的路徑）；`SYMBOL_VIEW` 為使用者
     手動 /x 查詢，有選樣偏差，只併入「全部來源（參考）」，不參與達標判定。
+
+    `t1_since` 非 None 時，事件日早於該日的等級 1 決策列不計入 G.1、G.2 處理組與
+    影子否決事件（仍排除在對照組之外）；CLI 傳入 `SQUEEZE_T1_WINDOW_SINCE`。
     """
     cfg = cfg or CalibrationConfig()
     base: pd.DataFrame = (
@@ -1106,10 +1188,11 @@ def build_squeeze_flip_check(
     return {
         "primary_source": SQUEEZE_PRIMARY_SOURCE,
         "n_rows": int(len(primary)),
-        "primary": _squeeze_analysis(primary, closes, cfg),
+        "t1_window_since": t1_since.isoformat() if t1_since is not None else None,
+        "primary": _squeeze_analysis(primary, closes, cfg, t1_since),
         "all_sources": {
             "n_rows": int(len(base)),
-            **_squeeze_analysis(base, closes, cfg),
+            **_squeeze_analysis(base, closes, cfg, t1_since),
         },
         "g4_reminder": SQUEEZE_G4_REMINDER,
         "footer": SQUEEZE_FOOTER,
