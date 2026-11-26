@@ -80,7 +80,7 @@ async def test_blocks_curl_cffi_ws_connect() -> None:
 async def test_blocks_websockets_connect() -> None:
     client = importlib.import_module("websockets.asyncio.client")
 
-    for url in (f"wss://{_HOST}/", f"ws://{_IP}/"):
+    for url in (f"wss://{_HOST}/", f"wss://{_IP}/"):
         with pytest.raises(OSError, match=_BLOCKED):
             await client.connect(url, open_timeout=0.5)
 
