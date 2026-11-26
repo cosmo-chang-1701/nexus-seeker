@@ -1,6 +1,7 @@
 import logging
 import threading
 from typing import Any
+from collections.abc import Iterator
 import pytest
 from datetime import date
 from types import SimpleNamespace
@@ -11,6 +12,16 @@ from market_analysis.intraday_pipeline import (
     build_watchlist_skew_rule_commentary,
 )
 from cogs.embed_builders.portfolio_embeds import get_scenario_guidance
+from tests.unit.network_guard import NetworkGuard
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch: pytest.MonkeyPatch) -> Iterator[NetworkGuard]:
+    """攔截所有對外連線；即使呼叫端吞掉例外，teardown 仍會讓測試失敗。"""
+    guard = NetworkGuard()
+    guard.install(monkeypatch)
+    yield guard
+    guard.assert_clean()
 
 
 @pytest.fixture
@@ -18,8 +29,51 @@ def intraday_pipeline() -> Any:
     return IntradayScanPipeline(MagicMock())
 
 
+@pytest.fixture
+def _offline_heartbeat_data() -> Iterator[None]:
+    """心跳 embed 的補充數據（IV、PCR、UOA、Max Pain）一律回傳無資料，不寫快取。"""
+    with patch(
+        "market_analysis.sentiment_engine.SentimentEngine.fetch_and_calculate_iv_metrics",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.calculate_pcr",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.detect_uoa",
+        new_callable=AsyncMock,
+        return_value=[],
+    ), patch(
+        "market_analysis.sentiment_engine.SentimentEngine.get_unified_max_pain",
+        new_callable=AsyncMock,
+        return_value=None,
+    ), patch(
+        "database.cache.save_kv_cache",
+        new_callable=AsyncMock,
+    ):
+        yield
+
+
+@pytest.fixture
+def _offline_evaluation_externals() -> Iterator[None]:
+    """單標的評估中與受測閘門無關的外部資料：無事件上下文、現價無漲跌幅。"""
+    from models.schemas import WatchlistEventContext
+
+    with patch(
+        "market_analysis.intraday_pipeline.build_watchlist_event_context",
+        new_callable=AsyncMock,
+        return_value=WatchlistEventContext(risk_mode="normal", summary="Normal"),
+    ), patch(
+        "services.market_data_service.get_quote",
+        new_callable=AsyncMock,
+        return_value={"c": 200.0, "dp": 0.0},
+    ):
+        yield
+
+
 @pytest.mark.asyncio
-@pytest.mark.slow
+@pytest.mark.usefixtures("_offline_heartbeat_data")
 async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
     intraday_pipeline: Any,
 ) -> None:
@@ -81,7 +135,7 @@ async def test_build_watchlist_heartbeat_embed_survives_missing_skew(
 
 
 @pytest.mark.asyncio
-@pytest.mark.slow
+@pytest.mark.usefixtures("_offline_heartbeat_data")
 async def test_build_watchlist_heartbeat_embed_includes_option_plan(
     intraday_pipeline: Any,
 ) -> None:
@@ -682,6 +736,10 @@ async def test_evaluate_watchlist_symbol_iv_suppression() -> None:
         "market_analysis.intraday_pipeline.WatchlistRiskController.process_metrics",
         return_value=dummy_tactical,
     ), patch(
+        "market_analysis.index_microstructure.get_market_regime",
+        new_callable=AsyncMock,
+        return_value="NORMAL",
+    ), patch(
         "services.market_data_service.get_quote",
         new_callable=AsyncMock,
         return_value={"dp": -5.0},  # < -3%
@@ -831,6 +889,7 @@ def test_scenario_guidance_below_max_pain() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_offline_evaluation_externals")
 @patch("database.market_cache.get_fundamental_cache")
 @patch("market_analysis.intraday_pipeline.build_enhanced_watchlist_metrics")
 @patch("market_analysis.index_microstructure.get_market_regime")
@@ -944,6 +1003,7 @@ def _build_squeeze_test_metrics(**overrides: Any) -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_offline_evaluation_externals")
 @patch("database.cache.save_kv_cache", new_callable=AsyncMock)
 @patch("database.cache.get_kv_cache")
 @patch("database.market_cache.get_fundamental_cache")

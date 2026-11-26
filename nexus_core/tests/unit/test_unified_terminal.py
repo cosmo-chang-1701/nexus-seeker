@@ -23,6 +23,7 @@ from cogs.unified_terminal import (
 from tests.unit.network_guard import NetworkGuard
 
 _MAX_SWR_DRAIN_ROUNDS = 10
+_SWR_DRAIN_TIMEOUT_SECONDS = 5.0
 
 
 @pytest.fixture
@@ -941,11 +942,15 @@ async def test_batch_scan_swr_background_tasks_stay_offline(
             scan_type=mock_choice,
         )
         # 背景任務可能再衍生任務，持續排空到沒有新任務為止。
+        # 輪數上限擋不住單一卡住的任務，另以整體逾時保護。
         drain_rounds = 0
-        while spawned := asyncio.all_tasks() - before:
-            assert drain_rounds < _MAX_SWR_DRAIN_ROUNDS, f"背景任務未收斂：{spawned}"
-            await asyncio.gather(*spawned)
-            drain_rounds += 1
+        async with asyncio.timeout(_SWR_DRAIN_TIMEOUT_SECONDS):
+            while spawned := asyncio.all_tasks() - before:
+                assert (
+                    drain_rounds < _MAX_SWR_DRAIN_ROUNDS
+                ), f"背景任務未收斂：{spawned}"
+                await asyncio.gather(*spawned)
+                drain_rounds += 1
 
     for mock in _offline_swr_revalidation.values():
         mock.assert_awaited()

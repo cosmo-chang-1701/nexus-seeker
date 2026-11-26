@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import sqlite3
 from unittest.mock import AsyncMock, patch
+from tests.unit.network_guard import NetworkGuard
 
 # Ensure API keys are set for tests to avoid collection errors
 os.environ["OPENAI_API_KEY"] = "sk-dummy-key-for-tests"
@@ -55,6 +56,23 @@ def mock_finnhub_client() -> Any:
     """Globally mock finnhub.Client to avoid real API calls."""
     with patch("finnhub.Client") as mock:
         yield mock
+
+
+@pytest.fixture(autouse=True)
+def _global_network_block() -> Any:
+    """全域連網守衛：只阻擋、不讓測試失敗，使全套測試預設離線、結果確定。
+
+    本層刻意不呼叫 `assert_clean()`；呼叫端看到的是一般的 `OSError`／
+    `socket.gaierror`，會走各自的降級路徑。需要嚴格模式（任何連網嘗試都失敗）的
+    測試檔，另以 autouse fixture 安裝自己的 `NetworkGuard`，並在 teardown 呼叫
+    `assert_clean()`：它晚於本 fixture 安裝、包在最外層，嘗試會記在該檔的守衛上。
+
+    使用獨立的 `MonkeyPatch`，不改變各測試共用 `monkeypatch` fixture 的建立與
+    拆除順序。"""
+    guard = NetworkGuard()
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        guard.install(monkeypatch)
+        yield guard
 
 
 @pytest.fixture(autouse=True)
