@@ -144,6 +144,7 @@ flowchart TD
 | `FORWARD_MIN_ROWS` | `100` | 前向報告每決策類「資料累積中」門檻 | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時 G.2 顯示「樣本不足（交易日數 n／20）」、影子否決僅顯示「樣本不足」，皆不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SQUEEZE_T1_WINDOW_SINCE` | `date(2026, 11, 14)` | T1 盤中觸發窗口變更的樣本切分日：事件日早於此日的等級 1 決策列不計入 G.1、G.2 處理組與影子否決事件，仍排除在對照組之外（§5.8 G） | `nexus_core/calibration/forward_log.py` |
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_DERIVED_RR_THRESHOLD` | `2.2` | 報表端衍生分組 `sv_f_rr22`（`sv_rr < 2.2`）的門檻；PRE_CALIBRATION／僅紀錄，報表端衍生，不參與判定、不寫入 `features_json`（§5.18） | `nexus_core/calibration/forward_log.py` |
@@ -285,7 +286,7 @@ G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個�
 
 G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超額與 t 值**）：(1) **日期匹配**——每個處理組事件減去同事件日對照組的平均 20 日報酬（無同日對照者略過並計數），以事件日叢集 bootstrap 給出超額與 95% CI；(2) **市況分層**——以基準 `SQUEEZE_BENCHMARK`（VOO）自該日起的 20 日報酬分「下跌（< −2%）／盤整／上漲（> +2%，`SQUEEZE_MARKET_BAND`）」，各狀態內重做處理組對照組比較；基準報酬未滿 20 日者排除並計數，基準無價格時顯示「基準價格不可得」。原因：目前已標註的事件集中在單一週，標的池含高 beta 與槓桿／反向 ETF，混合比較的差值主要反映 beta 與日期組成，而非擠壓進場本身的擇時價值。
 
-**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。
+**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。報表實作：`forward-report` 以 `forward_log.SQUEEZE_T1_WINDOW_SINCE`（2026-11-14）切分，`decision = 1`、`conditions_mask = 1` 且事件日（`bar_ts` 的美東日期）早於該日的列（不分觸發來源），在 10 交易日去重**之前**即移除，不計入 G.1、G.2 處理組與影子否決事件；其 (標的, 日) 仍排除在對照組之外。報表另列排除筆數與「未切分」的 G.1 數字，後者僅供參考、不參與達標判定。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 

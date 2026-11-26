@@ -128,18 +128,29 @@ def _render_regime_breakdown(forward: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
-    g1, g2 = data.get("g1") or {}, data.get("g2") or {}
-    tiers = g1.get("by_tier") or {}
-    tier_txt = "、".join(
+def _tier_text(counts: dict[str, Any]) -> str:
+    tiers = counts.get("by_tier") or {}
+    return "、".join(
         f"等級{t}＝{tiers.get(t, tiers.get(str(t), 0))}" for t in (1, 2, 3)
     )
+
+
+def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
+    g1, g2 = data.get("g1") or {}, data.get("g2") or {}
     lines = [
         f"**{title}**",
         "",
-        f"- G.1 獨立事件：{g1.get('independent_events', 0)}（{tier_txt}）；"
+        f"- G.1 獨立事件：{g1.get('independent_events', 0)}（{_tier_text(g1)}）；"
         f"達標：{_flag(g1.get('g1_passed'))}（需 ≥ 30 且各等級 ≥ 5）",
     ]
+    if g1.get("t1_since"):
+        raw = g1.get("unsegmented") or {}
+        lines.append(
+            f"  - T1 窗口切分（§5.8 G）：等級1 僅計 {g1['t1_since']} 起；"
+            f"排除前期等級1 決策列 {g1.get('t1_excluded_rows', 0)} 筆；"
+            f"未切分（參考，不參與判定）：獨立事件 {raw.get('independent_events', 0)}"
+            f"（{_tier_text(raw)}）、達標：{_flag(raw.get('g1_passed'))}"
+        )
     if g2.get("status") == "價格不可得":
         lines.append("- G.2 20 日超額報酬：價格不可得")
     else:

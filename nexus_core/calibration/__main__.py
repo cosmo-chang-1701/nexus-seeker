@@ -246,7 +246,11 @@ async def _squeeze_flip_check(
     cfg: CalibrationConfig, snapshot: Optional[Path]
 ) -> dict[str, Any]:
     """擠壓乾跑翻轉檢核；任何失敗（讀取、取價）都只降級該段，不得讓整份報告失敗。"""
-    from calibration.forward_log import build_squeeze_flip_check, load_squeeze_rows
+    from calibration.forward_log import (
+        SQUEEZE_T1_WINDOW_SINCE,
+        build_squeeze_flip_check,
+        load_squeeze_rows,
+    )
 
     try:
         rows = load_squeeze_rows(snapshot)
@@ -267,7 +271,9 @@ async def _squeeze_flip_check(
             print(f"擠壓檢核取價失敗，G.2 以「價格不可得」呈現：{e}", file=sys.stderr)
             closes = {}
     try:
-        return build_squeeze_flip_check(rows, closes, cfg)
+        return build_squeeze_flip_check(
+            rows, closes, cfg, t1_since=SQUEEZE_T1_WINDOW_SINCE
+        )
     except Exception as e:
         return {"status": f"擠壓檢核計算失敗: {e}"}
 

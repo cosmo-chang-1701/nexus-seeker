@@ -594,6 +594,9 @@ def build_regime_breakdown(
 # docs/architecture/05 §5.8 G：第 1–3 條由本段計算，第 4 條為人工項目。
 SQUEEZE_PRIMARY_SOURCE = "WATCHLIST_ADVISOR"
 SQUEEZE_DEDUP_TRADING_DAYS = 10
+# T1 盤中觸發窗口變更切分日（docs §5.8 G；#239，v1.19.45 部署）：事件日（美東）早於
+# 此日的等級 1 決策列與部署後樣本不可直接比較，CLI 路徑不計入 G.1／G.2 處理組。
+SQUEEZE_T1_WINDOW_SINCE: date = date(2026, 11, 14)
 SQUEEZE_MIN_EVENTS = 30
 SQUEEZE_MIN_PER_TIER = 5
 SQUEEZE_HORIZON_DAYS = 20
@@ -960,22 +963,53 @@ def _shadow_veto_groups(
     return out
 
 
+def _t1_window_excluded_mask(rows: pd.DataFrame, since: Optional[date]) -> pd.Series:
+    """T1 窗口切分前的等級 1 決策列（§5.8 G），不看觸發來源。
+
+    `since` 為 None 或事件日無法解析時該列一律 False（不排除）。
+    """
+    if since is None:
+        return pd.Series(False, index=rows.index, dtype=bool)
+    before = pd.Series(
+        [d is not None and d < since for d in (_event_date(x) for x in rows["bar_ts"])],
+        index=rows.index,
+        dtype=bool,
+    )
+    return (rows["decision"] == 1) & (rows["conditions_mask"] == 1) & before
+
+
+def _g1_counts(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    by_tier = {t: sum(1 for e in events if e["tier"] == t) for t in SQUEEZE_TIERS}
+    return {
+        "independent_events": len(events),
+        "by_tier": by_tier,
+        "g1_passed": len(events) >= SQUEEZE_MIN_EVENTS
+        and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
+    }
+
+
 def _squeeze_analysis(
-    rows: pd.DataFrame, closes: Closes, cfg: CalibrationConfig
+    rows: pd.DataFrame,
+    closes: Closes,
+    cfg: CalibrationConfig,
+    t1_since: Optional[date] = None,
 ) -> dict[str, Any]:
     dates_by_sym: dict[str, list[date]] = {
         s: [c[0] for c in v] for s, v in closes.items() if v
     }
-    events = _independent_events(rows, dates_by_sym)
-    by_tier = {t: sum(1 for e in events if e["tier"] == t) for t in SQUEEZE_TIERS}
-    g1 = {
-        "independent_events": len(events),
-        "by_tier": by_tier,
+    # 切分須在 10 交易日去重之前，前期 T1 才不會擋掉部署後的同標的 T1 事件
+    excluded = _t1_window_excluded_mask(rows, t1_since)
+    events = _independent_events(rows[~excluded], dates_by_sym)
+    g1: dict[str, Any] = {
+        **_g1_counts(events),
         "decision1_rows": int((rows["decision"] == 1).sum()),
         "no_price_events": sum(1 for e in events if e["symbol"] not in dates_by_sym),
-        "g1_passed": len(events) >= SQUEEZE_MIN_EVENTS
-        and all(by_tier[t] >= SQUEEZE_MIN_PER_TIER for t in SQUEEZE_TIERS),
     }
+    if t1_since is not None:
+        g1["t1_since"] = t1_since.isoformat()
+        g1["t1_excluded_rows"] = int(excluded.sum())
+        # 僅供參考，不參與達標判定
+        g1["unsegmented"] = _g1_counts(_independent_events(rows, dates_by_sym))
     result: dict[str, Any] = {"g1": g1}
     result["shadow_vetoes"] = (
         _shadow_veto_groups(events, closes, cfg) if dates_by_sym else PRICE_UNAVAILABLE
@@ -1006,7 +1040,8 @@ def _squeeze_analysis(
     if events:
         lo_d = min(e["date"] for e in events)
         hi_d = max(e["date"] for e in events)
-        # 任何 decision=1 原始列（含被 10 日規則丟棄者）的 (標的, 日) 不得進入對照組
+        # 任何 decision=1 原始列（含被 10 日規則丟棄者、T1 窗口切分排除者）的
+        # (標的, 日) 不得進入對照組
         treated_pairs = {
             (str(sym_), _event_date(ts))
             for sym_, ts in zip(
@@ -1087,12 +1122,19 @@ def _squeeze_analysis(
 
 
 def build_squeeze_flip_check(
-    rows: pd.DataFrame, closes: Closes, cfg: Optional[CalibrationConfig] = None
+    rows: pd.DataFrame,
+    closes: Closes,
+    cfg: Optional[CalibrationConfig] = None,
+    *,
+    t1_since: Optional[date] = None,
 ) -> dict[str, Any]:
     """擠壓乾跑翻轉檢核 (docs §5.8 G 第 1–3 條)。
 
     主結果只用 `WATCHLIST_ADVISOR`（將來要翻轉推播的路徑）；`SYMBOL_VIEW` 為使用者
     手動 /x 查詢，有選樣偏差，只併入「全部來源（參考）」，不參與達標判定。
+
+    `t1_since` 非 None 時，事件日早於該日的等級 1 決策列不計入 G.1、G.2 處理組與
+    影子否決事件（仍排除在對照組之外）；CLI 傳入 `SQUEEZE_T1_WINDOW_SINCE`。
     """
     cfg = cfg or CalibrationConfig()
     base: pd.DataFrame = (
@@ -1106,10 +1148,11 @@ def build_squeeze_flip_check(
     return {
         "primary_source": SQUEEZE_PRIMARY_SOURCE,
         "n_rows": int(len(primary)),
-        "primary": _squeeze_analysis(primary, closes, cfg),
+        "t1_window_since": t1_since.isoformat() if t1_since is not None else None,
+        "primary": _squeeze_analysis(primary, closes, cfg, t1_since),
         "all_sources": {
             "n_rows": int(len(base)),
-            **_squeeze_analysis(base, closes, cfg),
+            **_squeeze_analysis(base, closes, cfg, t1_since),
         },
         "g4_reminder": SQUEEZE_G4_REMINDER,
         "footer": SQUEEZE_FOOTER,
