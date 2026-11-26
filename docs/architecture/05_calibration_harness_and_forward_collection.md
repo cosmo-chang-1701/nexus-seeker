@@ -251,6 +251,8 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 3. （離線回測已封存，此項無法再量測；改以前向資料判定）原準則為 A/B 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
+> **現況註記（2026-11-26 稽核）**：右側六重鐵律已於 2026-10-04 移除（commit `e8044d05`，v1.16.0），多頭建倉改由擠壓規則判定（`ENTRY_SQUEEZE`），`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自此沒有任何寫入端（快照最後一筆 `ENTRY_RIGHT_B` 為 2026-10-01，共 3 列）。第 1、2 條在現行程式下結構上無法達成；本節判準未修改，是否改寫由使用者決定。
+
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
 
 **2026-09-19 A/B 結果：無法判定，條件 3 視為尚未成立。**（下表為舊判準的總波動對齊數字；2026-09-23 以 Sortino 判準重跑見 §5.12：aggressive Sortino $+0.01$、defensive $-0.02$，結論不變。）
@@ -377,6 +379,8 @@ UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則
 > （`/x` 手動檢核）寫入，下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，
 > 混在一起算會嚴重高估。
 
+> **現況註記（2026-11-26 稽核）**：`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端；`RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime 改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）。下方查詢 1／2 的 evaluator 清單不含 `ENTRY_SQUEEZE`，主判準因此只涵蓋左側與做空路徑；擠壓路徑的推播另受 `SQUEEZE_ENTRY_DRY_RUN` 控制，其去重後頻率不在本判準內。主判準未修改，是否納入 `ENTRY_SQUEEZE` 由使用者決定。
+
 ```sql
 -- 1. 主判準：去重後的實際 DM 則數
 SELECT COUNT(*) AS dm_per_week FROM (
@@ -449,6 +453,8 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 2. 洗盤率顯著高於訊號正確率（Wilson 區間不重疊）的分層，才列為候選調整對象；調整走 `calibration/` 報告 → 人工審核 → PR。
 3. 被顧問模式丟棄的分層 (`advisory=是`) 不影響任何使用者，其統計只用來佐證同一分層在指令持倉上的結論。
 
+> **現況註記（2026-11-26 稽核）**：派發端對所有多頭現貨一律寫入 `advisory_only = True`（`nexus_core/cogs/trading/portfolio_monitor.py`），`advisory=否` 的 `EXIT_*` 只可能來自空頭現貨或期權部位（期權併入 `ENABLE_OPTIONS_ROLLOVER_INGESTION` 預設關閉）。快照中排除現金等價標的後的 `EXIT_*` 列全數為 `advisory=是`，第 1 條在現行持倉型態下結構上無法達成；判準未修改。
+
 **回測功能開關（已封存）**：（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）2026-09-23 的 A/B 結論：僅 `PYRAMID_ADD` 在 2025 單年對 aggressive 模式有正向 Sortino 變化（1.13 → 1.87），但在 2022–2025 多資產期間不成立；逃頂三級階梯以截斷上行換取低回撤，Sortino 下降。
 
 ### 5.13 微結構與 Skew 門檻校準研究 (`micro-snapshot` / `micro-report` / `skew-proxy`)
@@ -509,6 +515,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **判讀準則**：
 - `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。`micro-report` 的深度四分位表每組附日期叢集 95% CI 與自動「判讀」：可標註日期 < 20 或任一組 tested < 30 輸出「樣本不足」；Q2 的 CI 上界低於 Q3 與 Q4 的 CI 下界才提示可提案上調，否則維持現行門檻（閘門仍不得先改）。
+  - **現況註記（2026-11-26 稽核）**：「未測試」基準在本規格與 `micro-report` 皆未定義，報表的自動「判讀」只檢查上調方向；下調條件目前無法客觀判定（報表以 `下調判讀` 鍵揭露），須待使用者定義基準。
 - Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
 
 ### 5.14 通知成效前向評估 (`notification_dispatch_log` / `notif-report`)
@@ -687,6 +694,8 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 | 其他 | 無顯著差異（不支持否決） |
 
 只有「顯著較差」且各組 n 足夠時，才由使用者決定是否把該否決接進判定；接進判定須另開 PR 並重新審核，本報表不會自動變更任何常數或閘門。
+
+> **現況註記（2026-11-26 稽核）**：自 2026-10-30 起的擠壓評估中，`sv_f_ceil`、`sv_f_rr`、`sv_any` 與報表衍生 `sv_f_rr22` 幾乎恆為 `true`（以標的日計，`sv_f_ceil` 放行約 1%）：edge CallWall 取現價以上 Call GEX 最大的履約價（`nexus_edge_scraper/gex_scraper.py`），通常緊貼現價（`sv_cw_atr` 中位數約 0.4–0.5 ATR₁D）。相對於 1.5 ATR₁D 與盈虧比 2.0 的尺度，放行組在可預見期間內難以達到「各組 ≥ 10 筆且 ≥ 20 個事件日」；截至 2026-11-25 快照，影子期獨立事件的 `sv_f_rr22` 放行組為 0。門檻與判讀規則未修改，是否調整定義由使用者決定。
 
 **刻意不納入**：
 - 大盤負 Gamma：已是硬否決（`SHORT_GAMMA_CRITICAL`），不重複。
