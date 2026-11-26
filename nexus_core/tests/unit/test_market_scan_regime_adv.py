@@ -86,6 +86,24 @@ async def test_adv_dollar_20d_injected(
 
 
 @pytest.mark.asyncio
+async def test_zero_spot_falls_back_to_daily_close(
+    gex_mock: AsyncMock, history_mock: AsyncMock, classify_mock: AsyncMock
+) -> None:
+    # 最後一根 Close 刻意與先前不同：ADV 須以日線最後收盤價計算
+    history_mock.return_value = pd.DataFrame(
+        {"Close": [90.0] * 24 + [120.0], "Volume": [2_000_000.0] * 25}
+    )
+
+    assert await _classify_symbol_regime_value("AAPL", 0.0) == _REGIME.value
+
+    profile = _passed_profile(classify_mock)
+    assert profile["adv_dollar_20d"] == 2_000_000.0 * 120.0
+    # 備援價只用於 ADV，傳給分類器的 spot 維持原值
+    assert classify_mock.await_args is not None
+    assert classify_mock.await_args.args[1] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_empty_history_omits_adv_and_still_classifies(
     gex_mock: AsyncMock, history_mock: AsyncMock, classify_mock: AsyncMock
 ) -> None:

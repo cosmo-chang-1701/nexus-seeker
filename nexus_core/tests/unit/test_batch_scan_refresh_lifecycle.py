@@ -4,7 +4,7 @@ import asyncio
 import time
 from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Callable, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import discord
@@ -457,14 +457,22 @@ async def test_first_edit_failure_allows_retry() -> None:
 
 
 async def _assert_pre_edit_failure_allows_retry(
-    it: Any, error: type[BaseException], mark_error: Optional[Exception] = None
-) -> None:
-    """第一次 edit 成功前拋例外：原樣拋出、按鈕復原，且可重試成功。"""
+    it: Any,
+    error: type[BaseException],
+    mark_error: Optional[Exception] = None,
+    prepare: Optional[Callable[[BatchScanPaginatedView], None]] = None,
+) -> BaseException:
+    """第一次 edit 成功前拋例外：原樣拋出、按鈕復原，且可重試成功。
+
+    `prepare` 可在點擊前對 View 注入故障；回傳實際拋出的例外。
+    """
     cog = _cog()
     view = _view([_res("A", None)], cog, pages=2)
     button = _btn(view)
     before = [getattr(c, "disabled") for c in view.children]
     label = button.label
+    if prepare is not None:
+        prepare(view)
     mark = (
         patch.object(
             bsv.market_data_service,
@@ -475,7 +483,7 @@ async def _assert_pre_edit_failure_allows_retry(
         else nullcontext()
     )
     with patch("services.llm_service.is_memory_safe", return_value=True), mark:
-        with pytest.raises(error):
+        with pytest.raises(error) as raised:
             await button.callback(it)
 
     assert view.refresh_in_progress is False
@@ -490,6 +498,9 @@ async def _assert_pre_edit_failure_allows_retry(
     assert new_view is not view
     retry.response.defer.assert_not_awaited()
     cog._fetch_sym_radar_data_slow.assert_awaited_once()
+    # 隔離的 mypy 環境沒有 pytest 型別（raised 視為 Any），故明確標註回傳值
+    thrown: BaseException = raised.value
+    return thrown
 
 
 @pytest.mark.asyncio
@@ -507,6 +518,34 @@ async def test_refresh_first_edit_cancelled_resets_flag() -> None:
     it.response.edit_message = AsyncMock(side_effect=asyncio.CancelledError())
     await _assert_pre_edit_failure_allows_retry(it, asyncio.CancelledError)
     it.response.edit_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_refresh_exception_after_flag_before_first_edit_restores() -> None:
+    """旗標已設、第一次 edit 前拋例外（`transition_settled.clear()`）仍走復原分支。"""
+    failure = RuntimeError("clear 失敗")
+    flags_at_failure: list[bool] = []
+
+    def inject(view: BatchScanPaginatedView) -> None:
+        class FailFirstClear(asyncio.Event):
+            def clear(self) -> None:
+                if not flags_at_failure:
+                    flags_at_failure.append(view.refresh_in_progress)
+                    raise failure
+                super().clear()
+
+        settled = FailFirstClear()
+        settled.set()
+        view.transition_settled = settled
+
+    it = _interaction()
+    raised = await _assert_pre_edit_failure_allows_retry(
+        it, RuntimeError, prepare=inject
+    )
+
+    assert raised is failure
+    assert flags_at_failure == [True]
+    it.response.edit_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio
