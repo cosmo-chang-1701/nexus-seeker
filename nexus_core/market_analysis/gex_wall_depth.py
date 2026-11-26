@@ -36,6 +36,38 @@ def thin_wall_threshold(adv_dollar_20d: Optional[float] = None) -> float:
     return GEX_THIN_WALL_THRESHOLD
 
 
+def compute_adv_dollar_20d(df_hist_1d: Any, price: float) -> Optional[float]:
+    """20 日平均成交額（avg_vol_20d × 現價）；缺資料、NaN 或 ≤0 時回傳 None。"""
+    try:
+        if df_hist_1d is None or df_hist_1d.empty or "Volume" not in df_hist_1d:
+            return None
+        px = price
+        if not (px > 0) and "Close" in df_hist_1d:
+            px = float(df_hist_1d["Close"].iloc[-1])
+        avg_vol = float(df_hist_1d["Volume"].tail(20).mean())
+        adv = avg_vol * px
+        if math.isfinite(adv) and adv > 0:
+            return adv
+    except (TypeError, ValueError, IndexError, KeyError):
+        pass
+    return None
+
+
+def with_adv_dollar_20d(gex_profile_data: Any, df_hist_1d: Any, price: float) -> Any:
+    """為 GEX profile 補上 `adv_dollar_20d`（與雷達同公式 avg_vol_20d × 現價）。
+
+    僅在 profile 為 dict 且尚無 ADV、且能算出有效值時回傳**淺拷貝**；
+    其餘情況原物件原樣回傳（不覆寫既有 ADV、不修改原 dict）。
+    ADV 與雷達一樣含當日未完成 K 棒，盤中會偏低。
+    """
+    if not isinstance(gex_profile_data, dict) or gex_profile_data.get("adv_dollar_20d"):
+        return gex_profile_data
+    adv = compute_adv_dollar_20d(df_hist_1d, price)
+    if adv is None:
+        return gex_profile_data
+    return {**gex_profile_data, "adv_dollar_20d": adv}
+
+
 # CallWall 呈現層相對深度門檻：牆深度須 ≥ 此比例 × 整個 profile 最大正淨 GEX。
 # ADV 未注入時（日線取不到）絕對下限 500K 擋不住遠端薄牆（VOO 2026-10-16：
 # 790 深度 2.04e6 vs 710 的 3.04e8），故補一條與標的量級無關的相對規則。

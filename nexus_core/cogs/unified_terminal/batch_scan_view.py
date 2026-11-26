@@ -1,7 +1,8 @@
 import asyncio
 import re
 import time
-from typing import Any, List, Optional, Union
+from contextlib import contextmanager
+from typing import Any, Iterator, List, Optional, Union
 import discord
 import logging
 from services import market_data_service
@@ -190,6 +191,29 @@ class BatchScanWarningButton(discord.ui.Button):
                     )
 
 
+@contextmanager
+def _restore_unless_retired(view: "BatchScanPaginatedView") -> Iterator[None]:
+    """
+    更新按鈕第一次 edit 成功（View 停用）之前，拋出任何例外（含 CancelledError）
+    即復原更新旗標、按鈕狀態與文字並重新拋出，讓使用者可再次點擊。
+
+    須在設 `refresh_in_progress` 與停用子元件之前進入，才記得住點擊前的狀態。
+    """
+    previous_disabled = [
+        (child, getattr(child, "disabled", False)) for child in view.children
+    ]
+    try:
+        yield
+    except BaseException:
+        # View 已停用代表畫面已換成「更新中」，之後的失敗不復原舊 View
+        if not view.superseded:
+            view.refresh_in_progress = False
+            for child, was_disabled in previous_disabled:
+                setattr(child, "disabled", was_disabled)
+            view._update_button_states()
+        raise
+
+
 class BatchScanRefreshButton(discord.ui.Button):
     """
     按鈕：重算（慢速路徑）快照達 30 分鐘門檻、標示非即時或抓取失敗的標的，
@@ -287,13 +311,11 @@ class BatchScanRefreshButton(discord.ui.Button):
         live_gex_symbols = view._live_gex_symbols(stale)
         refresh_failed = list(view.refresh_failed_symbols)
         recently = view._active_recent_refreshes()
-        # 檢查到此處之間沒有 await，同一 View 的第二次點擊必定看得到旗標
-        view.refresh_in_progress = True
+        restore_on_failure = _restore_unless_retired(view)
         # 整個更新流程（慢速重算與重新掃描）皆視為使用者互動來源
-        with market_data_service.mark_interactive_request():
-            previous_disabled = [
-                (child, getattr(child, "disabled", False)) for child in view.children
-            ]
+        with restore_on_failure, market_data_service.mark_interactive_request():
+            # 檢查到此處之間沒有 await，同一 View 的第二次點擊必定看得到旗標
+            view.refresh_in_progress = True
             for child in view.children:
                 setattr(child, "disabled", True)
             self.label = f"⏳ 更新中 ({len(stale)} 檔)…"
@@ -301,14 +323,6 @@ class BatchScanRefreshButton(discord.ui.Button):
             view.transition_settled.clear()
             try:
                 await interaction.response.edit_message(view=view)
-            except Exception:
-                # 畫面未換成「更新中」：復原旗標與按鈕狀態，讓使用者可再次點擊
-                view.refresh_in_progress = False
-                for child, was_disabled in previous_disabled:
-                    setattr(child, "disabled", was_disabled)
-                view._update_button_states()
-                raise
-            else:
                 view.last_interaction = interaction
                 # 之後本訊息一律換上新 View；舊 View 停用，避免其逾時拆掉新按鈕
                 view._retire()

@@ -13,6 +13,7 @@ import market_math
 from config import get_vix_tier
 from market_analysis import portfolio, hedging
 from market_analysis.gap_analysis import GapAnalyzer
+from market_analysis.gex_wall_depth import with_adv_dollar_20d
 from market_analysis.risk_engine import (
     classify_trade_intent,
     optimize_position_risk,
@@ -87,19 +88,25 @@ async def _classify_symbol_regime_value(sym: str, spot: float) -> Optional[str]:
         gex = await fetch_symbol_gex_metrics(sym)
         if not isinstance(gex, dict) or not gex:
             return None
+        df_hist_1d = await market_data_service.get_history_df(
+            sym, period="1y", interval="1d"
+        )
         # 此為 radar GEX 資料的子集。分類器只讀 put_wall、call_wall、gex_profile、
-        # net_gex；缺少的欄位中僅 adv_dollar_20d 會影響分類 (薄牆門檻)：缺值時退回
-        # 較寬鬆的絕對下限，Regime V 所需的阻力牆更容易成立，並不比顧問路徑 (radar
-        # 有帶 adv_dollar_20d) 保守。傳入空 uoa_list 只影響 Regime IV 的 STO 壓頂
-        # (優先序在 V 之後) 與前向紀錄的影子特徵。補欄位屬閘門變更，待使用者決定。
-        gex_profile_data = {
-            "put_wall": gex.get("put_wall"),
-            "call_wall": gex.get("call_wall"),
-            "net_gex": gex.get("net_gex"),
-            "gex_profile": gex.get("gex_profile", {}),
-            "gamma_flip": gex.get("gamma_flip"),
-            "_is_stale_cache": bool(gex.get("_is_stale_cache", False)),
-        }
+        # net_gex，薄牆門檻另讀 adv_dollar_20d：比照雷達與顧問路徑以同一公式注入；
+        # 日線缺值或無效時省略該鍵，退回絕對下限。傳入空 uoa_list 只影響 Regime IV
+        # 的 STO 壓頂 (優先序在 V 之後) 與前向紀錄的影子特徵。
+        gex_profile_data = with_adv_dollar_20d(
+            {
+                "put_wall": gex.get("put_wall"),
+                "call_wall": gex.get("call_wall"),
+                "net_gex": gex.get("net_gex"),
+                "gex_profile": gex.get("gex_profile", {}),
+                "gamma_flip": gex.get("gamma_flip"),
+                "_is_stale_cache": bool(gex.get("_is_stale_cache", False)),
+            },
+            df_hist_1d,
+            spot,
+        )
         regime, _reason, _market_data = await classify_dynamic_regime(
             sym, spot, gex_profile_data, []
         )

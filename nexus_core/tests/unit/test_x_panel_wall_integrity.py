@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 from cogs.embed_builders.portfolio_embeds import create_tactical_symbol_embed
-from cogs.unified_terminal.symbol_deep_dive import _compute_adv_dollar_20d
+from market_analysis.gex_wall_depth import compute_adv_dollar_20d, with_adv_dollar_20d
 
 GEX_FIELD = "🧲 Gamma 曝險分布"
 
@@ -152,13 +152,13 @@ def test_breached_sto_put_line() -> None:
 
 def test_adv_injection_is_shallow_copy_and_guarded() -> None:
     df = pd.DataFrame({"Close": [10.0] * 25, "Volume": [1000.0] * 25})
-    assert _compute_adv_dollar_20d(df, 20.0) == 20_000.0
-    assert _compute_adv_dollar_20d(df.drop(columns=["Volume"]), 20.0) is None
+    assert compute_adv_dollar_20d(df, 20.0) == 20_000.0
+    assert compute_adv_dollar_20d(df.drop(columns=["Volume"]), 20.0) is None
     nan_df = pd.DataFrame({"Close": [10.0], "Volume": [float("nan")]})
-    assert _compute_adv_dollar_20d(nan_df, 10.0) is None
-    assert _compute_adv_dollar_20d(None, 10.0) is None
+    assert compute_adv_dollar_20d(nan_df, 10.0) is None
+    assert compute_adv_dollar_20d(None, 10.0) is None
     zero = pd.DataFrame({"Close": [10.0], "Volume": [0.0]})
-    assert _compute_adv_dollar_20d(zero, 10.0) is None
+    assert compute_adv_dollar_20d(zero, 10.0) is None
 
 
 def test_hug_text_uses_floor_band_when_atr_missing() -> None:
@@ -226,18 +226,16 @@ def test_sto_exp_dte_behaviour() -> None:
 
 
 def test_with_adv_shallow_copy_and_no_overwrite() -> None:
-    from cogs.unified_terminal.symbol_deep_dive import _with_adv
-
     df = pd.DataFrame({"Close": [10.0] * 25, "Volume": [1000.0] * 25})
     orig = {"gex_profile": {"1.0": 1.0}}
-    out = _with_adv(orig, df, 20.0)
+    out = with_adv_dollar_20d(orig, df, 20.0)
     assert out is not orig
     assert "adv_dollar_20d" not in orig
     assert out["adv_dollar_20d"] == 20_000.0
     has = {"adv_dollar_20d": 5.0}
-    assert _with_adv(has, df, 20.0) is has and has["adv_dollar_20d"] == 5.0
-    assert _with_adv(orig, None, 20.0) is orig
-    assert _with_adv(None, df, 20.0) is None
+    assert with_adv_dollar_20d(has, df, 20.0) is has and has["adv_dollar_20d"] == 5.0
+    assert with_adv_dollar_20d(orig, None, 20.0) is orig
+    assert with_adv_dollar_20d(None, df, 20.0) is None
 
 
 def test_sto_call_cap_cross_expiry_tag() -> None:

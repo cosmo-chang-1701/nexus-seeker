@@ -94,7 +94,9 @@ def _env(
         patch("database.cache.get_kv_cache", side_effect=store.get),
         patch("database.cache.save_kv_cache", save),
         patch(f"{_MODULE}._gex_swr_last_attempt", {}),
-        patch("asyncio.create_task", create_task) if mock_background else nullcontext(),
+        patch(f"{_MODULE}.spawn_background", create_task)
+        if mock_background
+        else nullcontext(),
     ):
         yield save, create_task, store
 

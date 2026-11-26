@@ -146,7 +146,7 @@ async def test_f_nonforce_old_edge_newer_than_kv_returned_as_stale() -> None:
     with (
         _env(_client(body=_EMPTY_LIVE), _edge(168.0, 10)),
         patch("database.cache.get_kv_cache", return_value=kv),
-        patch("asyncio.create_task") as ct,
+        patch("market_analysis.index_microstructure.spawn_background") as ct,
     ):
         res = await fetch_symbol_gex_metrics("NVDA")
         for call in ct.call_args_list:
@@ -169,7 +169,7 @@ async def test_h_nonforce_kv_older_than_cap_no_edge_returns_empty() -> None:
     with (
         _env(_client(body=_EMPTY_LIVE), None),
         patch("database.cache.get_kv_cache", return_value=kv),
-        patch("asyncio.create_task") as ct,
+        patch("market_analysis.index_microstructure.spawn_background") as ct,
     ):
         res = await fetch_symbol_gex_metrics("NVDA")
         for call in ct.call_args_list:
@@ -240,7 +240,7 @@ async def test_legacy_restamped_kv_nonforce_not_fresh_shortcut() -> None:
     with (
         _env(_client(body=_EMPTY_LIVE), None),
         patch("database.cache.get_kv_cache", return_value=kv),
-        patch("asyncio.create_task") as ct,
+        patch("market_analysis.index_microstructure.spawn_background") as ct,
     ):
         res = await fetch_symbol_gex_metrics("NVDA")
         for call in ct.call_args_list:
