@@ -146,6 +146,8 @@ flowchart TD
 | `SHADOW_MIN_N` | `10` | 影子否決分組每組（旗標成立／放行）最少事件數；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SQUEEZE_MIN_DATES` | `20` | G.2／G.3 與影子否決判讀所需最少事件交易日數（處理組／各組不同事件日），與 micro-report「≥20 個可標註日」一致；不足時 G.2 顯示「樣本不足（交易日數 n／20）」、影子否決僅顯示「樣本不足」，皆不判讀 t 值與達標（§5.8 G、§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SQUEEZE_T1_WINDOW_SINCE` | `date(2026, 11, 14)` | T1 盤中觸發窗口變更的樣本切分日：事件日早於此日的等級 1 決策列不計入 G.1、G.2 處理組與影子否決事件，仍排除在對照組之外（§5.8 G） | `nexus_core/calibration/forward_log.py` |
+| `SKEW_MIN_CANONICAL_DATES` | `60` | Skew 門檻判讀所需的 `CANONICAL` 紀錄交易日數（以實際紀錄日計：已標註、全體不重複事件日、不分標的；§5.13）；未達時報表標示不判讀 | `nexus_core/calibration/forward_log.py` |
+| `DRAWDOWN_SYMBOL` / `DRAWDOWN_THRESHOLD` / `DRAWDOWN_PEAK_LOOKBACK` | `"SPY"` / `0.10` / `252` | 總經三態「≥ 10% 回檔」檢核：SPY 收盤價相對前 252 個交易日（含當日）最高收盤的跌幅（§5.15） | `nexus_core/calibration/macro_forward_report.py` |
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_DERIVED_RR_THRESHOLD` | `2.2` | 報表端衍生分組 `sv_f_rr22`（`sv_rr < 2.2`）的門檻；PRE_CALIBRATION／僅紀錄，報表端衍生，不參與判定、不寫入 `features_json`（§5.18） | `nexus_core/calibration/forward_log.py` |
@@ -287,6 +289,10 @@ G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個�
 
 第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 
+**G.2 對照組（2026-11-26 使用者決定）**：對照組為主結果同來源（`WATCHLIST_ADVISOR`）、處理組首末事件日之間、`decision = 0` 的 (標的, 日)（每組只取一列）；同一 (標的, 日) 只要在**任何來源**有 `decision = 1` 的列——含 `SYMBOL_VIEW`（`/x` 手動檢核）的進場紀錄、被 10 交易日去重丟棄的列與 T1 窗口切分排除的列——一律不得當對照組，避免已出現進場訊號的標的日混入對照組。價格可得時，報表以 `g2.control_excluded_other_source` 揭露僅因其他來源進場而排除的 (標的, 日) 數；「全部來源（參考）」本來就以全部來源的 `decision = 1` 排除，不受影響。
+
+實際送出擠壓推播另須外層總閘門 `WATCHLIST_ADVISOR_DRY_RUN = false`（§5.11）。
+
 G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超額與 t 值**）：(1) **日期匹配**——每個處理組事件減去同事件日對照組的平均 20 日報酬（無同日對照者略過並計數），以事件日叢集 bootstrap 給出超額與 95% CI；(2) **市況分層**——以基準 `SQUEEZE_BENCHMARK`（VOO）自該日起的 20 日報酬分「下跌（< −2%）／盤整／上漲（> +2%，`SQUEEZE_MARKET_BAND`）」，各狀態內重做處理組對照組比較；基準報酬未滿 20 日者排除並計數，基準無價格時顯示「基準價格不可得」。原因：目前已標註的事件集中在單一週，標的池含高 beta 與槓桿／反向 ETF，混合比較的差值主要反映 beta 與日期組成，而非擠壓進場本身的擇時價值。
 
 **T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。報表實作：`forward-report` 以 `forward_log.SQUEEZE_T1_WINDOW_SINCE`（2026-11-14）切分，`decision = 1`、`conditions_mask = 1` 且事件日（`bar_ts` 的美東日期）早於該日的列（不分觸發來源），在 10 交易日去重**之前**即移除，不計入 G.1、G.2 處理組與影子否決事件；其 (標的, 日) 仍排除在對照組之外。報表另列排除筆數與「未切分」的 G.1 數字，後者僅供參考、不參與達標判定。
@@ -373,29 +379,36 @@ UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則
 | `ENTRY_RIGHT_B` | `REGIME_III_B_TREND_CONTINUATION` |
 | `ENTRY_LEFT` | `REGIME_I_LEFT_CATCH` / `LEFT_SIDE` |
 | `ENTRY_SHORT` | `REGIME_V_BREAKDOWN_CHASE` / `SHORT_SIDE` |
+| `ENTRY_SQUEEZE` | `RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime（多時間框架擠壓，[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md)）；`conditions_mask` 存等級；只由 `WATCHLIST_ADVISOR` 與 `SYMBOL_VIEW` 寫入（`PORTFOLIO_MONITOR` 不寫） |
 | `REGIME_CLASSIFIER` | 僅分類，不代表鐵律通過，查詢須排除 |
 
 > ⚠️ 上述 evaluator 同時被 `PORTFOLIO_MONITOR`（持倉監控）與 `SYMBOL_VIEW`
 > （`/x` 手動檢核）寫入，下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，
 > 混在一起算會嚴重高估。
 
-> **現況註記（2026-11-26 稽核）**：`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端；`RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime 改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）。下方查詢 1／2 的 evaluator 清單不含 `ENTRY_SQUEEZE`，主判準因此只涵蓋左側與做空路徑；擠壓路徑的推播另受 `SQUEEZE_ENTRY_DRY_RUN` 控制，其去重後頻率不在本判準內。主判準未修改，是否納入 `ENTRY_SQUEEZE` 由使用者決定。
+> **判準口徑（2026-11-26 使用者決定）**：主判準納入擠壓路徑（`ENTRY_SQUEEZE`）。`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端，多頭建倉改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）；不納入則「$\le 5$ 則／週」只涵蓋左側與做空路徑，失去意義。
+> - **計的是全部路徑開啟時的總量**：派發函式 `_dispatch_entry_advisor_alert()`（`nexus_core/market_analysis/intraday_pipeline/pipeline.py`）先檢查 `WATCHLIST_ADVISOR_DRY_RUN`（全部路徑），再檢查 `SQUEEZE_ENTRY_DRY_RUN`（擠壓）與 `SHORT_ENTRY_DRY_RUN`（做空）。本判準只決定 `WATCHLIST_ADVISOR_DRY_RUN`；只翻轉它時實際只放行左側路徑，擠壓與做空推播仍須分別依 §5.8 G、§5.8 A 翻轉各自的旗標。三條路徑一起計數，確保任何旗標組合下的 DM 總量都不超過放行線；§5.8 G 本身沒有推播頻率條款。
+> - **擠壓路徑依等級去重**：擠壓推播的去重鍵以等級入鍵（`advisory_entry_{uid}_{SYM}_SQZ_T{n}_{日期}`，同日 T1 升級為 T3 會再推播一次），查詢對 `ENTRY_SQUEEZE` 以 (標的, 日期, `conditions_mask`) 去重；其餘路徑沿用 (標的, 日期, evaluator)。
+> - **依週判讀（口徑隨 2026-11-26 計畫核可）**：查詢 1 依週（`strftime('%Y-%W', d)`，週一起算）分組，判讀取最近一個完整週；擠壓 T1 的盤中觸發窗口於 2026-11-14 變更（§5.8 G），該日之前的週會低估擠壓頻率，不納入判讀。
+> - 超量主要來自擠壓路徑時，上表「優先收緊條件三的空間門檻」不適用（擠壓規則沒有條件三），收緊對象另依 [`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) 人工決定。
 
 ```sql
--- 1. 主判準：去重後的實際 DM 則數
-SELECT COUNT(*) AS dm_per_week FROM (
-  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator
+-- 1. 主判準：去重後的實際 DM 則數（依週；含擠壓路徑，擠壓依等級另計）
+SELECT strftime('%Y-%W', d) AS wk, COUNT(*) AS dm_per_week FROM (
+  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator,
+         CASE WHEN evaluator = 'ENTRY_SQUEEZE' THEN conditions_mask END AS tier
   FROM regime_evaluation_log
   WHERE source = 'WATCHLIST_ADVISOR' AND decision = 1
-    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT')
-);
+    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT', 'ENTRY_SQUEEZE')
+) GROUP BY wk ORDER BY wk;
 
 -- 2. 次要：單檔排行（抓「單一標的天天觸發」的異常）
 SELECT symbol, COUNT(*) AS n FROM (
-  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator
+  SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator,
+         CASE WHEN evaluator = 'ENTRY_SQUEEZE' THEN conditions_mask END AS tier
   FROM regime_evaluation_log
   WHERE source = 'WATCHLIST_ADVISOR' AND decision = 1
-    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT')
+    AND evaluator IN ('ENTRY_RIGHT', 'ENTRY_RIGHT_B', 'ENTRY_LEFT', 'ENTRY_SHORT', 'ENTRY_SQUEEZE')
 ) GROUP BY symbol ORDER BY n DESC LIMIT 15;
 
 -- 3. 健全性：管線確實有在跑（decision=0 的拒絕紀錄應遠多於 decision=1）
@@ -514,9 +527,10 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 **停損墊片比較（`micro-report` 的「停損墊片比較」段落）**：母體為 `edge_PutWall` 且 `tested` 的事件（與「支撐定義比較」同一個 tested 定義；`atr_1d` 缺失而排除的件數另列於報表「atr_1d缺失排除」與備註，與「支撐定義比較」的 edge_PutWall tested 件數差即為此數），對 `0.5×ATR15m(現行)`、`0.25×ATR1D`、`0.5×ATR1D` 三種墊片（倍數取自 `room_threshold._ROOM_STOP_ATR_15M_MULTIPLIER`／`_DAILY_NOISE_STOP_ATR_1D_MULT`，標籤動態組成），以 $\text{stop} = \text{wall} - \text{buffer}$ 計算：觸發率（觀察期最低價 $\le$ stop）、掃損收回率（觸發且最後收盤 $\ge$ wall）、真破率（觸發且最後收盤 $<$ stop），CI 同樣依日期叢集 bootstrap。**條件率的分母是該墊片的觸發數**，另輸出「掃損無條件率」「真破無條件率」（分母皆為全部 tested 事件，三種墊片共用，才能互比）。統計鍵為中性的 `{n, hits, n_dates, rate, ci}`（支撐守住率沿用既有鍵）。snapshot 沒有 15m ATR，ATR₁₅ₘ 以 ATR₁D/$\sqrt{26}$ 折算（沿用 `room_threshold._BARS_PER_SESSION`）。樣本門檻沿用可標註日期 $\ge 20$、tested $\ge 30$，不足時輸出「樣本不足，不判讀，維持現行 0.5×ATR₁₅ₘ」；**每種墊片的觸發數也須 $\ge 30$**，未達者標「觸發樣本不足」，其條件率不可判讀（可先比較無條件率）。每種墊片另列成本面：`停損距離%`（墊片 ÷ 牆價，平均與中位數）、`停損距離ATR1D`，以及 `每事件模擬報酬`（左側於牆價進場；觀察期最低價 $\le$ stop 則以 stop 成交、報酬 $\text{stop}/\text{wall}-1$，未計跳空與滑價，否則以觀察期最後收盤平倉；平均與日期叢集 95% CI，單位 %）與 `每事件模擬報酬_觸牆子集`（僅最低價 $\le$ wall、進場確實會成交的事件）。寬墊片掃損較少，但每次停損虧損較大，樣本充足時須併看各墊片 `每事件模擬報酬` 的 CI 再決定。標註事件上的 `_path` 僅供計算，輸出報表前剔除。`/x` 目前只並列日線噪音帶參考停損，閘門不動。
 
 **判讀準則**：
-- `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位。若 Q1（最淺）與 Q2 的守住率相近且顯著高於「未測試」基準，代表門檻過嚴、可下調；若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。`micro-report` 的深度四分位表每組附日期叢集 95% CI 與自動「判讀」：可標註日期 < 20 或任一組 tested < 30 輸出「樣本不足」；Q2 的 CI 上界低於 Q3 與 Q4 的 CI 下界才提示可提案上調，否則維持現行門檻（閘門仍不得先改）。
-  - **現況註記（2026-11-26 稽核）**：「未測試」基準在本規格與 `micro-report` 皆未定義，報表的自動「判讀」只檢查上調方向；下調條件目前無法客觀判定（報表以 `下調判讀` 鍵揭露），須待使用者定義基準。
-- Skew 門檻：日級母體成熟（`skew_is_canonical`）的標的累積 ≥ 60 個交易日後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
+- `GEX_WALL_MIN_DEPTH_RATIO`：累積 ≥ 20 個快照日後看 `micro-report` 的守住率 × 深度四分位，**只判讀上調方向**：若 Q2 仍明顯低於 Q3/Q4，代表門檻應上調到 Q2/Q3 分界。每組至少 30 次 tested 才下結論。`micro-report` 的深度四分位表每組附日期叢集 95% CI 與自動「判讀」：可標註日期 < 20 或任一組 tested < 30 輸出「樣本不足」；Q2 的 CI 上界低於 Q3 與 Q4 的 CI 下界才提示可提案上調，否則維持現行門檻（閘門仍不得先改）。
+  - **下調方向擱置（2026-11-26 使用者決定）**：原「Q1（最淺）與 Q2 的守住率相近且顯著高於『未測試』基準即可下調」的條件擱置，不定義該基準、不提案下調。理由：淺牆多半離現價較遠（上方基準結果：深度比 $< 10^{-5}$ 的牆幾乎都距現價 8–66%），守住率高可能只反映距離而非牆體強度；距離混淆未控制前，即使定義「未測試」基準也難以解讀。`micro-report` 深度四分位表的 `下調判讀` 鍵註明此決定。
+- Skew 門檻：`CANONICAL` 紀錄交易日數累積 ≥ 60 後，以 `features_json.skew_percentile` 分組比較閘門紀錄的事後走勢（`regime_evaluation_outcome`）。高分位組的逆向觸碰率須顯著高於基準（bootstrap CI 不重疊）才有調整依據。
+  - **計數口徑（2026-11-26 使用者決定以實際紀錄日計；細部口徑隨同日計畫核可）**：以實際紀錄日計，不是日級母體（`sentiment_daily_canonical`）累積的天數。紀錄交易日＝`forward-report`「Skew 分位區間」母體 `CANONICAL` 所用的列（已標註、非 `EXIT_*`、`skew_percentile` 有值且 `skew_percentile_source = 'CANONICAL'`，不分來源、評估器與標的）之事件日（`bar_ts` 的美東日期）不重複數；報表以 `skew_canonical_dates`（門檻 `forward_log.SKEW_MIN_CANONICAL_DATES`）輸出。
 
 ### 5.14 通知成效前向評估 (`notification_dispatch_log` / `notif-report`)
 
@@ -601,7 +615,7 @@ edge 不處理國定假日（維持輕量、不引入 NYSE 行事曆），假日
 
 **離線報告**：開發機以 `python -m calibration macro-forward-report --snapshot-db <快照>`，只讀快照、不寫 DB、不改參數。輸出已確認三態的區段（起訖日、天數）、各指標亮起時段，以及每段狀態開始後 20／60 個交易日科技池（等權）、VOO、BOXX 的報酬與「科技池 − VOO」差。**判讀**：`CAUTION`／`WORST` 開始後科技池相對轉弱，代表訊號領先；科技池反而較強，代表訊號落後（在反彈期才防守，正是歷史回測中三態切換失敗的原因）。
 
-**需要累積多久**：60 個交易日的前向報酬需要約 3 個月；要看到指標在一次真正的回檔／崩跌前後的行為，則取決於市場何時出現壓力事件——平靜期間多數指標不會亮起，只能確認「沒有誤報」。在累積到至少一次 $\ge 10\%$ 回檔之前，不應據此啟用任何切換或推播。
+**需要累積多久**：60 個交易日的前向報酬需要約 3 個月；要看到指標在一次真正的回檔／崩跌前後的行為，則取決於市場何時出現壓力事件——平靜期間多數指標不會亮起，只能確認「沒有誤報」。在累積到至少一次 $\ge 10\%$ 回檔之前，不應據此啟用任何切換或推播。 **回檔定義（2026-11-26 使用者決定量 SPY 收盤價自高點回落；高點與期間口徑隨同日計畫核可）**：不挑當時跌最多的標的。前向紀錄期間（`macro_regime_log` 首日至末日）任一交易日的收盤價，相對其前 252 個交易日（含當日）最高收盤價跌幅 $\ge 10\%$，即視為出現一次；報表以「SPY 回檔檢核」段落（`spy_drawdown`；常數 `macro_forward_report.DRAWDOWN_SYMBOL`／`DRAWDOWN_THRESHOLD`／`DRAWDOWN_PEAK_LOOKBACK`）輸出最大回落、日期與是否已出現。
 
 ---
 
