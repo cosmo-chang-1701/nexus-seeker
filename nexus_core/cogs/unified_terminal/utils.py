@@ -466,7 +466,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         and float(vix) > 20.0
     )
 
-    payout_threshold = get_safety_payout_threshold()
+    payout_threshold = await asyncio.to_thread(get_safety_payout_threshold)
 
     # 同步 SQLite 讀取移出 event loop；過期時 fedwatch_prob=None、fedwatch_is_stale=True
     (

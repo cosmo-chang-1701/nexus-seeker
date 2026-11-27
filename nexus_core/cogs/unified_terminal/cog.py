@@ -242,6 +242,10 @@ class UnifiedTerminalCog(
             logger.warning("戰略看板取得大盤體制失敗：%s", exc)
             market_regime = "UNKNOWN"
 
+        from market_analysis.trading_orchestration import get_safety_payout_threshold
+
+        payout_threshold = await asyncio.to_thread(get_safety_payout_threshold)
+
         embed = create_strategic_dash_embed(
             ctx,
             pnl_data,
@@ -251,6 +255,7 @@ class UnifiedTerminalCog(
             nav_data=nav_data,
             spy_price=spy_now,
             market_regime=market_regime,
+            payout_threshold=payout_threshold,
         )
 
         view = PortfolioHubView(user_id, self.bot)

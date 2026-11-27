@@ -788,9 +788,16 @@ def create_strategic_dash_embed(
     nav_data: Optional[Dict[str, Any]] = None,
     spy_price: Optional[float] = None,
     market_regime: Optional[str] = None,
+    *,
+    payout_threshold: Optional[float] = None,
 ) -> discord.Embed:
     """
-    建構戰略看板 (Strategic Dashboard) Embed（純呈現，不做任何網路／DB I/O）。
+    建構戰略看板 (Strategic Dashboard) Embed（純呈現，不做網路 I/O）。
+
+    `payout_threshold`（安全提領紅線）應由 async 呼叫端以
+    `asyncio.to_thread(get_safety_payout_threshold)` 先行讀取後傳入；未傳入時才在
+    此同步讀取 SQLite（僅供既有測試與直接呼叫相容），event loop 上的呼叫端不得
+    依賴此後備路徑。
 
     欄位（共兩個）：
     1. 🏁 提領跑道：NAV（按市價）、現金儲備、跑道、期權 Theta、安全提領紅線
@@ -815,9 +822,10 @@ def create_strategic_dash_embed(
     coverage_pct = (daily_theta / daily_expense * 100) if daily_expense > 0 else 100.0
     cash_reserve = _safe_float(user_ctx.cash_reserve)
 
-    from market_analysis.trading_orchestration import get_safety_payout_threshold
+    if payout_threshold is None:
+        from market_analysis.trading_orchestration import get_safety_payout_threshold
 
-    payout_threshold = get_safety_payout_threshold()
+        payout_threshold = get_safety_payout_threshold()
 
     # NAV 按市價：現金 + 現貨市值 + 期權市值 (賣方為負債)，見
     # ReportsMixin.get_market_nav。未提供 nav_data 時顯示 `--` (不再用成本
