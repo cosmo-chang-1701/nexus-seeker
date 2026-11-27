@@ -619,7 +619,10 @@ def _hold_rate_stats(events: list[tuple[str, bool]]) -> dict[str, Any]:
 
 
 # 下調方向已於 2026-11-26 由使用者決定擱置（docs/architecture/05 §5.13），自動判讀只查上調
-DEPTH_DOWNWARD_NOT_JUDGED = "下調方向已擱置（2026-11-26 使用者決定）：淺牆多半離現價較遠，距離混淆未控制前不判讀下調；本表只判讀上調"
+DEPTH_DOWNWARD_NOT_JUDGED = (
+    "下調方向已擱置（2026-11-26 使用者決定）："
+    "淺牆多半離現價較遠，距離混淆未控制前不判讀下調；本表只判讀上調"
+)
 
 
 def depth_quartile_hold_rates(labeled: list[dict[str, Any]]) -> dict[str, Any]:
