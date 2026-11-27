@@ -32,6 +32,7 @@ async def test_tunnel_url_unset_returns_warning_message() -> None:
     with (
         patch("services.reddit_service.httpx.AsyncClient") as mock_client_cls,
         patch("services.reddit_service.config") as mock_config,
+        patch("services.reddit_service.get_kv_cache_fresh", return_value=None),
     ):
         mock_config.TUNNEL_URL = ""
         from services.reddit_service import get_reddit_context
