@@ -296,7 +296,7 @@ G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個�
 
 G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超額與 t 值**）：(1) **日期匹配**——每個處理組事件減去同事件日對照組的平均 20 日報酬（無同日對照者略過並計數），以事件日叢集 bootstrap 給出超額與 95% CI；(2) **市況分層**——以基準 `SQUEEZE_BENCHMARK`（VOO）自該日起的 20 日報酬分「下跌（< −2%）／盤整／上漲（> +2%，`SQUEEZE_MARKET_BAND`）」，各狀態內重做處理組對照組比較；基準報酬未滿 20 日者排除並計數，基準無價格時顯示「基準價格不可得」。原因：目前已標註的事件集中在單一週，標的池含高 beta 與槓桿／反向 ETF，混合比較的差值主要反映 beta 與日期組成，而非擠壓進場本身的擇時價值。
 
-**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。報表實作：`forward-report` 以 `forward_log.SQUEEZE_T1_WINDOW_SINCE`（2026-11-14）切分，`decision = 1`、`conditions_mask = 1` 且事件日（`bar_ts` 的美東日期）早於該日的列（不分觸發來源），在 10 交易日去重**之前**即移除，不計入 G.1、G.2 處理組與影子否決事件；其 (標的, 日) 仍排除在對照組之外。報表另列排除筆數與「未切分」的 G.1 數字，後者僅供參考、不參與達標判定。
+**T1 盤中觸發窗口變更（2026-11-14 後部署生效）**：T1 的 15m／5m 觸發原本只檢視評估當下最後一根已收盤 K 棒（5m Green Dot 回看 3 根、Turbo 只看當根），但深度掃描每 30 分鐘（:10/:40 ET）才評估一次，兩次評估之間的觸發會被漏掉（實測 15m Turbo 約漏 1/2、5m Turbo 約 5/6、5m Green Dot 約 1/2）。現改為窗口涵蓋 ≥ 30 分鐘：`GREEN_DOT_LOOKBACK["5m"]` 3→6、新增 `TURBO_LOOKBACK`（15m 2 根、5m 6 根）。`evaluation_recorder` 所記錄的 `{tf}_turbo`（15m／5m）語意因此從「當根翻轉」改為「近 N 根內翻轉」。此日期前後的 T1 前向樣本（事件數與觸發率）**不可直接比較**，G.1／G.2 以部署後樣本另行累積判讀；W／3D／D／65m 與 T2／T3 不受影響。報表實作：`forward-report` 以 `forward_log.SQUEEZE_T1_WINDOW_SINCE`（2026-11-14）切分，`decision = 1`、`conditions_mask = 1` 且事件日（`bar_ts` 的美東日期）早於該日的列，在 10 交易日去重**之前**即移除，不計入 G.1、G.2 處理組與影子否決事件；其 (標的, 日) 仍排除在對照組之外。切分只看最終等級（`conditions_mask`），不看觸發條件（`features_json.triggers`）：僅由壓力區突破或 15m Green Dot 觸發的 T1，以及 T2 因逃頂警戒降一級而記為等級 1 的列，雖不受窗口變更影響，也一併移除；主結果（`WATCHLIST_ADVISOR`）與「全部來源（參考）」各自套用同一切分。報表另列排除筆數與「未切分」的 G.1 數字，後者僅供參考、不參與達標判定。
 
 **E. 檢視週期**：每 4 週跑一次 `forward-report`；每季以同一標的池重跑離線研究，與 §5.9 基準比較。若修改了標註定義，須遞增 `LABEL_VERSION`，新舊結果不可直接比較。
 
@@ -340,7 +340,7 @@ G.2 另附「分層」參考輸出（`g2.strata`，**不影響 `g2_passed`、超
 
 **陷阱一：乾跑期的去重是結構性失效的。** 乾跑期間 `save_kv_cache` 從不執行
 $\Rightarrow$ `get_kv_cache` 永遠回 `None` $\Rightarrow$ 去重不會抑制任何東西
-（與乾跑閘門和去重檢查的先後順序無關）。因此原始紀錄是「鐵律通過次數」而非
+（與乾跑閘門和去重檢查的先後順序無關）。因此原始紀錄是「進場判定通過次數」而非
 「會送出的 DM 數」。盤中 09:30–16:00 共 13 個 30 分鐘週期，一個成立一整天的
 setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會高估 4～13 倍**，必須
 依下方查詢 1 以 (symbol, 日期, evaluator) 離線去重後再判讀；`ENTRY_SQUEEZE` 另以等級（`conditions_mask`）入鍵，即 (symbol, 日期, `conditions_mask`)，與擠壓推播的去重鍵一致（見下方判準口徑）。
@@ -350,7 +350,7 @@ setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會�
 可能只剩最後一兩天。**主要來源是 `regime_evaluation_log`**（見 §6），它是結構化
 的且附帶當下實際使用的牆體／ATR／條件遮罩，可直接診斷觸發原因。
 
-**主判準（去重後的實際 DM 總量，非鐵律通過次數）**：
+**主判準（去重後的實際 DM 總量，非進場判定通過次數）**：
 
 | 去重後 DM／週（全標的加總） | 判定 |
 | :--- | :--- |
@@ -372,15 +372,15 @@ setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會�
 
 | `evaluator` | 對應 Regime／策略 |
 | :--- | :--- |
-| `ENTRY_RIGHT` | `REGIME_III_RIGHT_MOMENTUM` / `RIGHT_SIDE` |
-| `ENTRY_RIGHT_B` | `REGIME_III_B_TREND_CONTINUATION` |
+| `ENTRY_RIGHT` | `REGIME_III_RIGHT_MOMENTUM` / `RIGHT_SIDE`（已退役：2026-10-04 起無寫入端，只剩歷史列，見 §5.8 D 退役說明） |
+| `ENTRY_RIGHT_B` | `REGIME_III_B_TREND_CONTINUATION`（已退役，同上） |
 | `ENTRY_LEFT` | `REGIME_I_LEFT_CATCH` / `LEFT_SIDE` |
 | `ENTRY_SHORT` | `REGIME_V_BREAKDOWN_CHASE` / `SHORT_SIDE` |
 | `ENTRY_SQUEEZE` | `RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime（多時間框架擠壓，[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md)）；`conditions_mask` 存等級；只由 `WATCHLIST_ADVISOR` 與 `SYMBOL_VIEW` 寫入（`PORTFOLIO_MONITOR` 不寫） |
-| `REGIME_CLASSIFIER` | 僅分類，不代表鐵律通過，查詢須排除 |
+| `REGIME_CLASSIFIER` | 僅分類，不代表進場判定通過，查詢須排除 |
 
-> ⚠️ 上述 evaluator 除 `ENTRY_SQUEEZE` 外，同時被 `PORTFOLIO_MONITOR`（持倉監控）與 `SYMBOL_VIEW`
-> （`/x` 手動檢核）寫入；`ENTRY_SQUEEZE` 不由 `PORTFOLIO_MONITOR` 寫入，但仍有 `SYMBOL_VIEW` 的列（見上表）。
+> ⚠️ 上表 `ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端，只剩歷史列。其餘 evaluator 除 `WATCHLIST_ADVISOR` 外另有其他來源：
+> `SYMBOL_VIEW`（`/x` 手動檢核）寫入 `ENTRY_LEFT`、`ENTRY_SHORT`、`ENTRY_SQUEEZE` 與 `REGIME_CLASSIFIER`；`PORTFOLIO_MONITOR`（持倉監控）在上表中只寫入 `ENTRY_SHORT` 與 `REGIME_CLASSIFIER`（做空進場情境 `SHORT_ENTRY` 的候選評估），不寫 `ENTRY_LEFT` 與 `ENTRY_SQUEEZE`；它另寫的出場分層 `EXIT_*`（§5.12）不在本表。
 > 下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，混在一起算會嚴重高估。
 
 > **判準口徑（2026-11-26 使用者決定）**：主判準納入擠壓路徑（`ENTRY_SQUEEZE`）。`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端，多頭建倉改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）；不納入則「$\le 5$ 則／週」只涵蓋左側與做空路徑，失去意義。
@@ -439,7 +439,7 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 
 **為什麼需要**：`SATELLITE_REBALANCE` 在 2025 回測的勝率只有 54.2%，代表結構性停損有近半數可能是被洗盤掃出。
 要找出是哪一層在製造假訊號，必須分層統計「觸發後的走勢」。但 `regime_evaluation_log` 原本只記錄 Regime 分類與
-進場鐵律，**從未記錄出場分層**；`rollover_audit_log` 也只存 scenario/action，沒有分層、現價與停損價，且只記已推播的指令。
+進場鐵律，**從未記錄出場分層**；`rollover_audit_log` 也只存 scenario/action，沒有分層、現價與停損價，且只記通知頻道開啟並通過派發去重的指令（含乾跑攔下者，表內無法區分是否實際推播）。
 
 **前向記錄點**：`anti_washout.py::check_satellite_rebalancing_impl` 在 `_generate_rule_based_rebalance_report()`
 決定 `exit_tier` 之後、**顧問模式轉換之前**呼叫 `_record_exit_tier()` → `evaluation_recorder.record_exit_signal()`。
