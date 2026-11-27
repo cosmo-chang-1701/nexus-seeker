@@ -290,7 +290,7 @@ flowchart TD
 7. **趨勢延續變體的同一交易時段約束**：
    條件一變體的 6 根回看窗必須全屬同一交易日，否則 fail-safe 不通過。完整理由見 [`01_regime_routing_matrix.md`](01_regime_routing_matrix.md) §5.3（`session_vwap` 為單一時段純量，跨日比較無意義）。實務效果是趨勢延續進場最早於 11:00 ET 才可能成立。
 8. **乾跑閘門為跨情境**：
-   `REGIME_III_B_DRY_RUN` 攔截的是**由 III-B 確認出來的指令**，而這些指令不限單一情境。因此該閘門以指令的 `entry_regime` 欄位為鍵，而非比照 `SHORT_ENTRY_DRY_RUN` / `PYRAMID_ADD_DRY_RUN` 以 `scenario` 為鍵。凡由 III-B 確認的指令都必須把 `entry_regime` 掛上，否則會繞過乾跑閘門直接推播。
+   `REGIME_III_B_DRY_RUN` 攔截的是**由 III-B 確認出來的指令**，而這些指令不限單一情境。因此該閘門以指令的 `entry_regime` 欄位為鍵，而非比照 `SHORT_ENTRY_DRY_RUN` / `PYRAMID_ADD_DRY_RUN` 以 `scenario` 為鍵。凡由 III-B 確認的指令都必須把 `entry_regime` 掛上，否則會繞過乾跑閘門直接推播。（2026-11-27 查證：現行沒有任何指令帶 III-B 標記，本閘門目前攔不到指令；翻轉判準已退役。）
 9. **短路展示一致性保證**：
    當前四項條件有任一項未通過時，條件五與六不會發起任何 HTTP 或資料庫查詢，但在 `reasons` 陣列中主動寫入 `條件五⏭️` 與 `條件六⏭️`，避免前端視圖只渲染四項條件造成的使用者混淆。
 

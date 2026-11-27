@@ -14,6 +14,8 @@ from calibration.forward_log import (
     SHADOW_DERIVED_LABELS,
     SHADOW_FLAG_KEYS,
     SHADOW_MIN_N,
+    SHADOW_RETIRED_KEYS,
+    SHADOW_VERDICT_RETIRED,
     _derived_flags,
     _independent_events,
     _prepare,
@@ -295,7 +297,7 @@ _CONTRACT_KEYS = (
 def _shadow_setup(
     flags: list[Any], rets: list[float], with_features: bool = True
 ) -> tuple[pd.DataFrame, dict[str, list[tuple[date, float]]]]:
-    """每個事件一檔標的、事件日錯開；報酬剛好等於指定值。flags 為 sv_any 的值。"""
+    """每個事件一檔標的、事件日錯開；報酬剛好等於指定值。flags 為 sv_f_skew（未退役分組）的值。"""
     base = [d for d, _ in _closes(n=60)]
     rows: list[dict[str, Any]] = []
     closes: dict[str, list[tuple[date, float]]] = {}
@@ -307,7 +309,7 @@ def _shadow_setup(
         ]
         row = _sq(base[idx], symbol=sym)
         if with_features:
-            row["features_json"] = json.dumps({"sv_any": f})
+            row["features_json"] = json.dumps({"sv_f_skew": f})
         rows.append(row)
     return pd.DataFrame(rows), closes
 
@@ -320,7 +322,7 @@ def _shadow(flags: list[Any], rets: list[float]) -> dict[str, Any]:
     rows, closes = _shadow_setup(flags, rets)
     res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
     assert isinstance(res, dict)
-    return res["sv_any"]  # type: ignore[no-any-return]
+    return res["sv_f_skew"]  # type: ignore[no-any-return]
 
 
 def test_shadow_flags_from_features() -> None:
@@ -351,7 +353,8 @@ def test_shadow_legacy_no_features_column() -> None:
     res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
     for key in SHADOW_FLAG_KEYS:
         assert res[key]["n_null"] == 4
-        assert res[key]["verdict"] == "樣本不足"
+        expected = SHADOW_VERDICT_RETIRED if key in SHADOW_RETIRED_KEYS else "樣本不足"
+        assert res[key]["verdict"] == expected
     md = render_markdown(_results(rows, closes))
     assert "影子否決分組" in md
 
@@ -370,7 +373,7 @@ def test_shadow_verdict_insufficient_dates() -> None:
     rets = _jit(n, -0.10) + _jit(n, 0.10)
     rows, closes = _shadow_setup(flags, rets)
     e = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"][
-        "sv_any"
+        "sv_f_skew"
     ]
     assert e["n_flag"] == n and e["n_pass"] == n
     assert e["n_dates_flag"] < 20 and e["n_dates_pass"] < 20
@@ -430,6 +433,31 @@ def test_shadow_render() -> None:
     for label in ("封頂", "Skew 高分位", "Max Pain 引力", "停損過寬", "任一"):
         assert label in md
     assert "影子否決組顯著較差" in md
+    assert SHADOW_VERDICT_RETIRED in md
+
+
+def test_shadow_retired_groups_keep_stats_without_verdict() -> None:
+    """已退役分組：樣本足夠、差異顯著時仍照列數據，但不給判讀。"""
+    rows, closes = _shadow_setup(
+        [True] * 20 + [False] * 20, _jit(20, -0.10) + _jit(20, 0.10)
+    )
+    rows["features_json"] = [
+        json.dumps(dict.fromkeys((*SHADOW_RETIRED_KEYS, "sv_f_skew"), v) | {"sv_rr": r})
+        for v, r in zip(
+            [True] * 20 + [False] * 20, [2.0] * 20 + [2.5] * 20, strict=True
+        )
+    ]
+    res = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"]
+    assert SHADOW_RETIRED_KEYS == ("sv_f_ceil", "sv_f_rr", "sv_any", "sv_f_rr22")
+    for key in SHADOW_RETIRED_KEYS:
+        e = res[key]
+        assert (e["n_flag"], e["n_pass"]) == (20, 20), key
+        assert e["diff"] < 0 and e["ci"][1] < 0, key
+        assert e["verdict"] == SHADOW_VERDICT_RETIRED, key
+    assert (
+        res["sv_f_skew"]["verdict"]
+        == "影子否決組顯著較差（支持評估接進判定，仍須人工審核）"
+    )
 
 
 def test_shadow_g1_g2_unchanged() -> None:
@@ -533,4 +561,4 @@ def test_rr22_legacy_no_features_column() -> None:
         "sv_f_rr22"
     ]
     assert e["n_null"] == 4
-    assert e["verdict"] == "樣本不足"
+    assert e["verdict"] == SHADOW_VERDICT_RETIRED

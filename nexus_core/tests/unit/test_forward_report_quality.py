@@ -128,7 +128,7 @@ def _shadow_rows(n_dates: int) -> tuple[pd.DataFrame, dict[str, Any]]:
             sym = f"S{g}_{i}"
             idx = i % n_dates
             r = _row(idx, sym, 1)
-            r["features_json"] = json.dumps({"sv_any": flag})
+            r["features_json"] = json.dumps({"sv_f_skew": flag})
             recs.append(r)
             cl[sym] = [
                 (d, 100.0 if k < idx + 20 else (90.0 if flag else 110.0))
@@ -140,7 +140,7 @@ def _shadow_rows(n_dates: int) -> tuple[pd.DataFrame, dict[str, Any]]:
 def test_shadow_requires_date_floor() -> None:
     rows, closes = _shadow_rows(5)
     e = build_squeeze_flip_check(rows, closes, CFG)["primary"]["shadow_vetoes"][
-        "sv_any"
+        "sv_f_skew"
     ]
     assert e["n_flag"] == 12 and e["n_pass"] == 12
     assert e["n_dates_flag"] == 5 and e["n_dates_pass"] == 5

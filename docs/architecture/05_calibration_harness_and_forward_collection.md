@@ -151,6 +151,7 @@ flowchart TD
 | `EXIT_BREAKDOWN_EXCLUDED_SYMBOLS` | `BOXX, BIL, SHV, SGOV` | 出場分層表排除的現金等價標的（不分大小寫）；與 `evaluation_recorder._EXIT_RECORD_EXCLUDED_SYMBOLS` 內容相同（§5.12） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_FLAG_KEYS` | `sv_f_ceil, sv_f_skew, sv_f_mp, sv_f_rr, sv_f_wide, sv_f_mev, sv_any, sv_f_hy_lvl, sv_f_hy_chg` | 影子否決旗標鍵，與 `features_json` 契約逐字一致（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_DERIVED_RR_THRESHOLD` | `2.2` | 報表端衍生分組 `sv_f_rr22`（`sv_rr < 2.2`）的門檻；PRE_CALIBRATION／僅紀錄，報表端衍生，不參與判定、不寫入 `features_json`（§5.18） | `nexus_core/calibration/forward_log.py` |
+| `SHADOW_RETIRED_KEYS` | `sv_f_ceil, sv_f_rr, sv_any, sv_f_rr22` | 判讀已退役的影子否決分組（2026-11-27 使用者決定）：紀錄與分組數據照列，判讀欄固定為「已退役」（§5.18） | `nexus_core/calibration/forward_log.py` |
 | `SHADOW_HY_OAS_BPS` / `SHADOW_HY_CHG1M_BPS` | `400` / `50` | 影子旗標 `sv_f_hy_lvl`／`sv_f_hy_chg`：HY OAS ≥ 400 bps、1M 變動 ≥ +50 bps；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_CREDIT_STALE_DAYS` | `5` | 信用利差觀測日距 today 超過此日曆天數時，兩個信用旗標為 `null`（原始值照記）；PRE_CALIBRATION／僅紀錄，不參與判定（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_CREDIT_TIMEOUT_SECONDS` | `1.5` | `_compute_shadow` 等待 `get_credit_spreads()` 的秒數上限，逾時信用欄位為 `null`；非判定門檻，僅紀錄（§5.18） | `nexus_core/market_analysis/squeeze_entry/shadow_vetoes.py` |
@@ -246,14 +247,14 @@ FROM regime_evaluation_log WHERE evaluator = 'ENTRY_SHORT' GROUP BY vix_band, de
 
 離線報告的建議值僅在「充足」欄為 ✅ 時才納入考慮；並應以至少 40 檔、涵蓋非多頭年份的標的池重跑確認，而不是只用當下的強勢自選清單。
 
-**D. 開啟 Regime III-B 趨勢延續推播（`REGIME_III_B_DRY_RUN` 改為 `false`）**，須同時成立：
+**D. 開啟 Regime III-B 趨勢延續推播（`REGIME_III_B_DRY_RUN`）——判準已退役（2026-11-27 使用者決定）**。以下四條原文僅供歷史參考，不再作為翻轉依據：
 
 1. `ENTRY_RIGHT_B` 且 `decision = 1` 的已標註紀錄 $\ge 100$ 筆、橫跨 $\ge 30$ 個交易日。該路徑刻意使用**獨立的 evaluator 名稱**（而非沿用 `ENTRY_RIGHT`）：`regime_evaluation_log` 的去重鍵為 `(symbol, evaluator, source, bar_ts)`，同名會讓同一根 K 棒的嚴格／放寬兩套判定互相覆蓋，A/B 分離統計即不可能。
 2. `ENTRY_RIGHT_B` 的期望值**高於同期 `ENTRY_RIGHT`**。只贏過零不夠——若放寬後的期望值低於嚴格版，代表多出來的那些進場機會是負向的。
 3. （離線回測已封存，此項無法再量測；改以前向資料判定）原準則為 A/B 的**索提諾比率不下降**，且「超額報酬 vs 減碼 B&H（下行差對齊）」一列差異為正。總報酬上升但這一列下降，代表 III-B 只是把曝險加回去而未創造 alpha——那用調高 `max_satellite_budget_pct` 就能達成，不需要一條新的進場路徑。
 4. `uoa_history` 已累積 $\ge 5$ 個交易日（否則條件四的回看窗實質等同未放寬，樣本代表的不是放寬後的行為）。
 
-> **現況註記（2026-11-26 稽核）**：右側六重鐵律已於 2026-10-04 移除（commit `e8044d05`，v1.16.0），多頭建倉改由擠壓規則判定（`ENTRY_SQUEEZE`），`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自此沒有任何寫入端（快照最後一筆 `ENTRY_RIGHT_B` 為 2026-10-01，共 3 列）。第 1、2 條在現行程式下結構上無法達成；本節判準未修改，是否改寫由使用者決定。
+> **退役說明（2026-11-27 使用者決定）**：右側六重鐵律已於 2026-10-04 移除（commit `e8044d05`，v1.16.0），多頭建倉改由擠壓規則判定（`ENTRY_SQUEEZE`，翻轉依本節 G），`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自此沒有任何寫入端（快照最後一筆 `ENTRY_RIGHT_B` 為 2026-10-01，共 3 列），第 1、2 條結構上無法達成。現行程式中帶 `entry_regime` 的指令只來自做空進場（Regime V）與切換引擎路徑一（Regime I），沒有任何指令帶 III-B，`REGIME_III_B_DRY_RUN` 目前攔不到任何指令；旗標與程式保留，移除另案處理。本旗標不再有翻轉判準。
 
 > ⚠️ 回測的兩項已知侷限必須計入判讀：回測引擎只有 1h K 線，III-B 的「持續站穩」以 4 根 1h 代理 6 根 15m；且回測引擎**完全沒有 UOA 條件**，因此量測不到條件四回看窗放寬的效果。兩者都使回測**低估** production 的實際觸發頻率，結論應往保守方向折扣。
 
@@ -354,7 +355,7 @@ setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會�
 | 去重後 DM／週（全標的加總） | 判定 |
 | :--- | :--- |
 | $\le 5$ | **放行**（`WATCHLIST_ADVISOR_DRY_RUN` 改為 `false`） |
-| $5 \sim 15$ | 收緊後再觀察一週。優先收緊條件三的空間門檻，**不要動去重鍵** |
+| $5 \sim 15$ | 收緊後再觀察一週。優先收緊條件三的空間門檻，**不要動去重鍵**（僅適用左側／做空鐵律；擠壓路徑見下方口徑） |
 | $> 15$ | **不放行** |
 
 錨定依據：2025 回測三檔標的全年僅觸發右側 3 次、III-B 0 次、左側 4 次，合計
@@ -390,7 +391,8 @@ UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則
 > - **計的是全部路徑開啟時的總量**：派發函式 `_dispatch_entry_advisor_alert()`（`nexus_core/market_analysis/intraday_pipeline/pipeline.py`）先檢查 `WATCHLIST_ADVISOR_DRY_RUN`（全部路徑），再檢查 `SQUEEZE_ENTRY_DRY_RUN`（擠壓）與 `SHORT_ENTRY_DRY_RUN`（做空）。本判準只決定 `WATCHLIST_ADVISOR_DRY_RUN`；只翻轉它時實際只放行左側路徑，擠壓與做空推播仍須分別依 §5.8 G、§5.8 A 翻轉各自的旗標。三條路徑一起計數，確保任何旗標組合下的 DM 總量都不超過放行線；§5.8 G 本身沒有推播頻率條款。
 > - **擠壓路徑依等級去重**：擠壓推播的去重鍵以等級入鍵（`advisory_entry_{uid}_{SYM}_SQZ_T{n}_{日期}`，同日 T1 升級為 T3 會再推播一次），查詢對 `ENTRY_SQUEEZE` 以 (標的, 日期, `conditions_mask`) 去重；其餘路徑沿用 (標的, 日期, evaluator)。
 > - **依週判讀（口徑隨 2026-11-26 計畫核可）**：查詢 1 依週（`strftime('%Y-%W', d)`，週一起算）分組，判讀取最近一個完整週；擠壓 T1 的盤中觸發窗口於 2026-11-14 變更（§5.8 G），該日之前的週會低估擠壓頻率，不納入判讀。
-> - 超量主要來自擠壓路徑時，上表「優先收緊條件三的空間門檻」不適用（擠壓規則沒有條件三），收緊對象另依 [`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) 人工決定。
+> - **擠壓路徑超量時的收緊方式（2026-11-27 使用者決定）**：上表「優先收緊條件三的空間門檻、不要動去重鍵」只適用左側／做空鐵律（擠壓規則沒有條件三）。擠壓路徑改在推播層加冷卻：**同一標的、同一擠壓等級，距上一次推播未滿 10 個交易日者不再推播**（不同等級含降級各自計算），與 §5.8 G.1 獨立事件的去重同口徑（`forward_log.SQUEEZE_DEDUP_TRADING_DAYS`）；進場規則、前向紀錄與 §5.8 G 的樣本不受影響。依據（看過資料後選定）：截至 2026-11-25 快照，擠壓的 195 則（標的, 日, 等級）套用冷卻後剩 73 則，2026-11-16 週由 10 則降為 3 則；其他週仍可能超過 5 則。
+> - **尚未實作**：推播冷卻與查詢 1 的對應去重，於擠壓推播接近通過 §5.8 G 時一併實作；在那之前查詢 1 的擠壓則數是**未套冷卻**的口徑。
 
 ```sql
 -- 1. 主判準：去重後的實際 DM 則數（依週；含擠壓路徑，擠壓依等級另計）
@@ -430,8 +432,8 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 5 個交易日才回填走勢標註，跑滿一週只有第 1～2 天的訊號會被標註；
 `forward_log.py` 的 `FORWARD_MIN_ROWS = 100` 會讓樣本不足 100 筆的分組只印
 「資料累積中」。**這不阻塞放行決策**——放行閘門本來就只看觸發頻率（上表）；
-前向報酬是後續調參與翻轉 `REGIME_III_B_DRY_RUN` 用的，需累積一個月以上才有
-統計意義。
+前向報酬是後續調參與翻轉各路徑旗標（擠壓依 §5.8 G、做空依 §5.8 A）用的，
+需累積一個月以上才有統計意義。
 
 **上線閘門**：`pytest tests` 全綠 + 嚴格 mypy 全綠 + `verify_docs_integrity.py`
 全綠 + 乾跑滿一週後依上表主判準人工（Opus）判讀。
@@ -461,12 +463,12 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 表中另列各組的標的數與交易日數（`n_symbols`／`n_dates`），避免單一標的或單日主導。現金等價標的（`BOXX`／`BIL`／`SHV`／`SGOV`，`EXIT_BREAKDOWN_EXCLUDED_SYMBOLS`）的選擇權鏈極薄、淨 GEX 常為負而每 15 分鐘觸發 `SL_REGIME_FLIP`，會讓洗盤率恆為 100%，故不納入此表；記錄器也不再記錄這些標的（同一批次由 `evaluation_recorder` 端實作），報表排除則用來擋掉歷史列，被排除的列數另列於 `exit_tiers_excluded` 並在報表註記。
 `EXIT_*` 列會從 GEX 量值四分位分析中排除（win 的語意與進場相反，混入會失真）。
 
-**判讀準則**：
+**判讀準則（已退役，2026-11-27 使用者決定；原文僅供歷史參考）**：
 1. 同一分層、`advisory=否` 的已標註紀錄 $\ge 100$ 筆前，只能用來排定觀察優先序，不得調整 SL 常數。
 2. 洗盤率顯著高於訊號正確率（Wilson 區間不重疊）的分層，才列為候選調整對象；調整走 `calibration/` 報告 → 人工審核 → PR。
 3. 被顧問模式丟棄的分層 (`advisory=是`) 不影響任何使用者，其統計只用來佐證同一分層在指令持倉上的結論。
 
-> **現況註記（2026-11-26 稽核）**：派發端對所有多頭現貨一律寫入 `advisory_only = True`（`nexus_core/cogs/trading/portfolio_monitor.py`），`advisory=否` 的 `EXIT_*` 只可能來自空頭現貨或期權部位（期權併入 `ENABLE_OPTIONS_ROLLOVER_INGESTION` 預設關閉）。快照中排除現金等價標的後的 `EXIT_*` 列全數為 `advisory=是`，第 1 條在現行持倉型態下結構上無法達成；判準未修改。
+> **退役說明（2026-11-27 使用者決定）**：派發端對所有多頭現貨一律寫入 `advisory_only = True`（`nexus_core/cogs/trading/portfolio_monitor.py`），`advisory=否` 的 `EXIT_*` 只可能來自空頭現貨或期權部位（期權併入 `ENABLE_OPTIONS_ROLLOVER_INGESTION` 預設關閉）；快照中排除現金等價標的後的 `EXIT_*` 列全數為 `advisory=是`，第 1 條在現行持倉型態下結構上無法達成。上列三條判讀準則一併退役：`EXIT_*` 前向紀錄與「出場分層洗盤率」表保留、僅供觀察，不作為調整任何 SL 常數的依據；要重新啟用須另定判準。
 
 **回測功能開關（已封存）**：（離線回測引擎 `backtest_engine_2025.py`、回測腳本與報告已於引擎精簡時刪除，下方回測結果僅為歷史紀錄，無法再重現。）2026-09-23 的 A/B 結論：僅 `PYRAMID_ADD` 在 2025 單年對 aggressive 模式有正向 Sortino 變化（1.13 → 1.87），但在 2022–2025 多資產期間不成立；逃頂三級階梯以截斷上行換取低回撤，Sortino 下降。
 
@@ -690,7 +692,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 | `sv_any` | 上述六旗標任一為 `true` → `true`；全為 `false` → `false`；否則（無 `true` 但有 `null`）→ `null`；**不含信用利差旗標** | — |
 | `sv_f_hy_lvl` | `sv_hy_oas ≥ 400`（對齊 /market 高收益債利差黃色下限）；HY 缺值、`sv_hy_age_d` 為 `null`、`< 0`（觀測日晚於 today）或 `> 5` 時 `null` | `SHADOW_HY_OAS_BPS = 400`、`SHADOW_CREDIT_STALE_DAYS = 5` |
 | `sv_f_hy_chg` | `sv_hy_chg1m ≥ 50`（HY OAS 1M 變動 ≥ +50 bps）；1M 變動缺值、`sv_hy_age_d` 為 `null`、`< 0`（觀測日晚於 today）或 `> 5` 時 `null` | `SHADOW_HY_CHG1M_BPS = 50`、`SHADOW_CREDIT_STALE_DAYS = 5` |
-| *報表衍生* `sv_f_rr22`（不在契約內） | 由原始 `sv_rr` 於報表端計算：`sv_rr < 2.2` 為 `true`；`sv_rr` 缺值、`null`、非數字（字串／布林）或 NaN 時 `null`。**不寫入 `features_json`、不屬 `SHADOW_FLAG_KEYS`、不計入 `sv_any`**；與 `sv_f_rr`（`< 2.0`）分開，供 2.2 切點的前向判讀（約 12/1 審查） | `SHADOW_DERIVED_RR_THRESHOLD = 2.2`（報表標籤「牆位盈虧比 <2.2（報表衍生）」） |
+| *報表衍生* `sv_f_rr22`（不在契約內） | 由原始 `sv_rr` 於報表端計算：`sv_rr < 2.2` 為 `true`；`sv_rr` 缺值、`null`、非數字（字串／布林）或 NaN 時 `null`。**不寫入 `features_json`、不屬 `SHADOW_FLAG_KEYS`、不計入 `sv_any`**；與 `sv_f_rr`（`< 2.0`）分開，原供 2.2 切點的前向判讀，判讀已於 2026-11-27 退役 | `SHADOW_DERIVED_RR_THRESHOLD = 2.2`（報表標籤「牆位盈虧比 <2.2（報表衍生）」） |
 
 原始值鍵（`sv_cw`、`sv_cw_atr`、`sv_sw`、`sv_sw_atr`、`sv_pw`、`sv_rr`、`sv_wstop_pct`、`sv_stop_pct`、`sv_mp_dist`、`sv_mp_dte`、`sv_ngex`、`sv_mev_h`、`sv_gex_stale`，以及信用利差的 `sv_hy_oas`、`sv_hy_chg1m`、`sv_hy_age_d`、`sv_ig_oas`）一併寫入供離線重算；信用利差原始值（整數 bps，0 保留）不論是否過期都照記，過期只讓旗標為 `null`；`sv_hy_age_d` 為 `today − 觀測日` 的日曆天數（觀測日解析失敗為 `null`；負值代表觀測日晚於 today，兩旗標為 `null`）；IG 只記原始值、無旗標；`sv_*` 數值不得經過 `evaluation_recorder._num()`（它把 `0.0` 轉成 `None`，會讓 DTE=0、偏離 0.0%、tte 0.0h 消失）。
 
@@ -698,7 +700,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 **報表**：`calibration forward-report` 的「擠壓乾跑翻轉檢核」每個來源區塊（主結果 `WATCHLIST_ADVISOR`、全部來源參考）末尾新增「影子否決分組（僅參考，判定不動）」。分組順序為契約旗標（`SHADOW_FLAG_KEYS`）後接報表衍生分組 `sv_f_rr22`。對每個旗標，只取 20 日報酬已可得的獨立事件，分「成立」與「放行」兩組（旗標為 `null` 者計入「無資料」、不進任一組），以事件日期分群 bootstrap 比較「成立組 − 放行組」的 20 日報酬差。舊快照沒有 `features_json` 欄時，所有旗標視為無資料、判讀「樣本不足」，報表照常產出；價格不可得時顯示「價格不可得」。
 
-**判讀規則**（`SHADOW_MIN_N = 10`、`SQUEEZE_MIN_DATES = 20`）：
+**判讀規則**（`SHADOW_MIN_N = 10`、`SQUEEZE_MIN_DATES = 20`；不適用於下方退役說明所列的四組）：
 
 | 條件 | 判讀 |
 | :--- | :--- |
@@ -709,7 +711,7 @@ python -m calibration fetch-alpaca-1h --universe VOO,NVDA,META,GOOGL,TSLA,MU,PLT
 
 只有「顯著較差」且各組 n 足夠時，才由使用者決定是否把該否決接進判定；接進判定須另開 PR 並重新審核，本報表不會自動變更任何常數或閘門。
 
-> **現況註記（2026-11-26 稽核）**：自 2026-10-30 起的擠壓評估中，`sv_f_ceil`、`sv_f_rr`、`sv_any` 與報表衍生 `sv_f_rr22` 幾乎恆為 `true`（以標的日計，`sv_f_ceil` 放行約 1%）：edge CallWall 取現價以上 Call GEX 最大的履約價（`nexus_edge_scraper/gex_scraper.py`），通常緊貼現價（`sv_cw_atr` 中位數約 0.4–0.5 ATR₁D）。相對於 1.5 ATR₁D 與盈虧比 2.0 的尺度，放行組在可預見期間內難以達到「各組 ≥ 10 筆且 ≥ 20 個事件日」；截至 2026-11-25 快照，影子期獨立事件的 `sv_f_rr22` 放行組為 0。門檻與判讀規則未修改，是否調整定義由使用者決定。
+> **退役說明（2026-11-27 使用者決定）**：`sv_f_ceil`、`sv_f_rr`、`sv_any` 與報表衍生 `sv_f_rr22` 的判讀退役。自 2026-10-30 起的擠壓評估中四者幾乎恆為 `true`（以標的日計，`sv_f_ceil` 放行約 1%）：edge CallWall 取現價以上 Call GEX 最大的履約價（`nexus_edge_scraper/gex_scraper.py`），通常緊貼現價（`sv_cw_atr` 中位數約 0.4–0.5 ATR₁D）；相對於 1.5 ATR₁D 與盈虧比 2.0 的尺度，放行組在可預見期間內難以達到「各組 ≥ 10 筆且 ≥ 20 個事件日」（截至 2026-11-25 快照，影子期獨立事件的 `sv_f_rr22` 放行組為 0）。因此這四組不再據以評估接進判定，原定約 12/1 的 `sv_f_rr22` 審查取消。紀錄欄位照寫、報表照列分組數據，判讀欄固定為「已退役」（`forward_log.SHADOW_RETIRED_KEYS`）；其餘旗標（`sv_f_skew`、`sv_f_mp`、`sv_f_wide`、`sv_f_mev`、`sv_f_hy_lvl`、`sv_f_hy_chg`）的判讀規則不變。要重啟須另定定義（例如改 CallWall 口徑或門檻）。
 
 **刻意不納入**：
 - 大盤負 Gamma：已是硬否決（`SHORT_GAMMA_CRITICAL`），不重複。

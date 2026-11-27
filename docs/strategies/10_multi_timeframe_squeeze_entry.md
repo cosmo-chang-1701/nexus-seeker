@@ -192,6 +192,7 @@ flowchart TD
   2. **進場顧問不套用 `max_satellite_budget_pct`**：判定以 `(strategy:symbol, 15m bar)` 跨使用者共用快取，與使用者無關；部位上限只在加碼（條件七）套用。
 - **錨點**：W、3D、65m 依 TradingView 文件的 Bar alignment 規則切分；Yahoo 與 TradingView 的資料源若有缺漏日，個別 K 棒仍可能不同。
 - **翻轉 `SQUEEZE_ENTRY_DRY_RUN`**：依 architecture/05 §5.8 G；由人工決定，不得因單一案例翻轉。實際推播另須 `WATCHLIST_ADVISOR_DRY_RUN = false`（§5.11 判準含擠壓路徑的 DM 量）。
+- **推播冷卻（規則已定、尚未實作）**：同一標的同一等級 10 個交易日內只推播一次，見 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.11（2026-11-27 使用者決定）；接近通過 §5.8 G 時實作。
 
 ### 5.x /x 面板顯示（2026-10-07）
 

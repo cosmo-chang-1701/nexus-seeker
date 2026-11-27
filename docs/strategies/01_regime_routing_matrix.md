@@ -175,7 +175,7 @@ flowchart TD
 | `_REGIME_III_B_MIN_HELD_BARS` | `5` | 上述窗口中至少須站穩的根數；$5/6$ 容差允許 1 根洗盤針 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_III_B_RSI_MIN` | `50.0` | 趨勢延續動能下限（多空軸） | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_III_B_RSI_MAX` | `78.0` | 趨勢延續動能上限，防在超買頂部追高；刻意低於傳統超買線 $80$ | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
-| `REGIME_III_B_DRY_RUN` | `true`（預設） | III-B 確認出的指令只寫稽核軌跡、不推播 DM。放寬門檻屬「激進方向調整」，依 [`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 的不對稱原則須有前向紀錄背書才可翻轉 | `nexus_core/config.py` |
+| `REGIME_III_B_DRY_RUN` | `true`（預設） | III-B 確認出的指令只寫稽核軌跡、不推播 DM。翻轉判準已於 2026-11-27 退役（[`05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 D）；現行沒有任何指令帶 III-B 標記，本旗標目前攔不到指令 | `nexus_core/config.py` |
 | `_REGIME_I_VWAP_ATR_MULT` | `1.5` | 左側負乖離門檻：$\text{Spot} \le \text{VWAP} - 1.5 \times \text{ATR}_{15m}$ | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_I_RSI_MAX` | `30.0` | 左側接刀 15m RSI 最高超賣門檻 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
 | `_REGIME_I_PUT_WALL_LOWER_PCT` | `-0.01` ($-1.0\%$) | 左側現價距 Put Wall 允許下穿洗盤之下界 | `nexus_core/market_analysis/dynamic_rollover/constants.py` |
