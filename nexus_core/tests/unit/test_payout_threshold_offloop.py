@@ -10,11 +10,12 @@ import pytest
 
 from cogs.embed_builders.portfolio_embeds import create_strategic_dash_embed
 from cogs.unified_terminal import PortfolioHubView, UnifiedTerminalCog
+from tests.unit.macro_overview_helpers import run_macro_overview
 from tests.unit.network_guard import NetworkGuard
-from tests.unit.test_macro_spx_spy_basis import _run as run_macro_overview
 
 _THRESHOLD = "market_analysis.trading_orchestration.get_safety_payout_threshold"
 _RUNWAY = "🏁 提領跑道 (Withdrawal Runway)"
+_PAYOUT = 14321.0
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +56,11 @@ def _ctx() -> Any:
     )
 
 
+def _runway_text(embed: Any) -> str:
+    runway = next(str(f.value) for f in embed.fields if f.name == _RUNWAY)
+    return re.sub(r"\x1b\[[0-9;]*m", "", runway)
+
+
 def test_dash_embed_uses_passed_payout_threshold() -> None:
     with patch(_THRESHOLD, side_effect=AssertionError("不應同步讀取")) as mock:
         embed = create_strategic_dash_embed(
@@ -62,32 +68,20 @@ def test_dash_embed_uses_passed_payout_threshold() -> None:
         )
 
     mock.assert_not_called()
-    runway = next(str(f.value) for f in embed.fields if f.name == _RUNWAY)
-    assert "安全提領紅線: $16,500" in re.sub(r"\x1b\[[0-9;]*m", "", runway)
+    assert "安全提領紅線: $16,500" in _runway_text(embed)
 
 
 @pytest.mark.asyncio
 async def test_macro_overview_reads_payout_off_event_loop() -> None:
     loop_thread = threading.get_ident()
     threads: list[int] = []
-    with (
-        # 總經日曆預抓與 FRED 信用利差不在沿用的 patch 組內，另行替換以保持離線
-        patch(
-            "services.calendar_service.calendar_service.prefetch_monthly_macro_cache",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "cogs.unified_terminal.utils.get_credit_spreads",
-            new_callable=AsyncMock,
-            return_value={"hy": None, "ig": None},
-        ),
-        patch(_THRESHOLD, side_effect=_record_threads(threads, 13000.0)) as mock,
-    ):
-        await run_macro_overview({"^SPX": {"c": 7744.06}}, {})
+    with patch(_THRESHOLD, side_effect=_record_threads(threads, _PAYOUT)) as mock:
+        data, _ = await run_macro_overview({"^SPX": {"c": 7744.06}}, {})
 
     mock.assert_called_once_with()
     assert len(threads) == 1
     assert threads[0] != loop_thread
+    assert data["payout_threshold"] == _PAYOUT
 
 
 @pytest.mark.asyncio
@@ -125,14 +119,16 @@ async def test_portfolio_hub_reads_payout_off_event_loop(
             new_callable=AsyncMock,
             return_value={},
         ),
-        patch(_THRESHOLD, side_effect=_record_threads(threads, 13000.0)) as mock,
+        patch(_THRESHOLD, side_effect=_record_threads(threads, _PAYOUT)) as mock,
     ):
-        await cog.portfolio_hub.callback(cog, mock_interaction)  # type: ignore
+        await cog.portfolio_hub.callback(cog, mock_interaction)  # type: ignore[call-arg, arg-type]
 
     mock.assert_called_once_with()
     assert len(threads) == 1
     assert threads[0] != loop_thread
     mock_interaction.followup.send.assert_called_once()
+    _, kwargs = mock_interaction.followup.send.call_args
+    assert "安全提領紅線: $14,321" in _runway_text(kwargs["embed"])
 
 
 @pytest.mark.asyncio
@@ -175,7 +171,7 @@ async def test_portfolio_view_btn_home_reads_payout_off_event_loop(
             new_callable=AsyncMock,
             return_value="NORMAL",
         ),
-        patch(_THRESHOLD, side_effect=_record_threads(threads, 13000.0)) as mock,
+        patch(_THRESHOLD, side_effect=_record_threads(threads, _PAYOUT)) as mock,
     ):
         await view.btn_home.callback(mock_interaction)
 
@@ -184,3 +180,4 @@ async def test_portfolio_view_btn_home_reads_payout_off_event_loop(
     assert threads[0] != loop_thread
     _, kwargs = mock_interaction.edit_original_response.call_args
     assert "戰略看板" in kwargs["embed"].title
+    assert "安全提領紅線: $14,321" in _runway_text(kwargs["embed"])
