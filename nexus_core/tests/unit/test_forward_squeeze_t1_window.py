@@ -83,7 +83,7 @@ def test_pre_window_t1_excluded_from_g1_g2() -> None:
     # 影子否決與 G.2 同母體
     assert res["primary"]["shadow_vetoes"]["sv_any"]["n_null"] == 4
 
-    # 不看觸發來源：SYMBOL_VIEW 的前期 T1 在全部來源亦排除
+    # 切分不看 `source`：SYMBOL_VIEW 的前期 T1 在「全部來源」亦排除
     all_g1 = res["all_sources"]["g1"]
     assert all_g1["t1_excluded_rows"] == 3
     assert all_g1["by_tier"] == {1: 2, 2: 1, 3: 1}

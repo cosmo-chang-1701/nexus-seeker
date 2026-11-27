@@ -22,8 +22,8 @@ from calibration.report import render_markdown
 
 CFG = CalibrationConfig(n_boot=100, seed=7)
 SINCE = EDGE_DIVIDEND_FIX_SINCE
-PRE = "2026-10-29"
-POST = "2026-11-02"
+PRE = (date.fromisoformat(SINCE) - timedelta(days=1)).isoformat()
+POST = (date.fromisoformat(SINCE) + timedelta(days=3)).isoformat()
 
 
 def _snap(day: str) -> dict[str, Any]:
@@ -70,7 +70,7 @@ def test_gex_since_filters_only_gex_sections(
     res = build_micro_report(tmp_path, snapshots=_snaps(), gex_since=SINCE)
 
     assert seen == [[SINCE, POST]]  # 切分日當天照計
-    assert res["edge_gex_since"] == "2026-10-30"
+    assert res["edge_gex_since"] == SINCE
     assert res["n_snapshots_before_gex_since"] == 2
     assert res["n_with_support_wall"] == 2
     assert sum(v["n"] for v in res["依成交額分組"].values()) == 2
@@ -249,7 +249,7 @@ def test_forward_gex_studies_respect_since() -> None:
         build_threshold_studies(undated, gamma_flip_since=SINCE)[
             "gamma_flip_materiality"
         ]
-        == "資料累積中 (0/100)；樣本起日 2026-10-30，排除起日前 1 列"
+        == f"資料累積中 (0/100)；樣本起日 {SINCE}，排除起日前 1 列"
     )
 
 
@@ -269,8 +269,8 @@ def test_markdown_shows_sample_since() -> None:
     rows = _mixed_forward_rows()
     md = _markdown(build_forward_report(rows, CFG, gamma_flip_since=SINCE))
     note = "（edge 股息率修正，microstructure/03 §5.w）；排除起日前 120 列"
-    assert f"- 牆體深度比與牆距分佈：樣本起日 2026-10-30{note}" in md
-    assert f"- 樣本起日 2026-10-30{note}" in md
+    assert f"- 牆體深度比與牆距分佈：樣本起日 {SINCE}{note}" in md
+    assert f"- 樣本起日 {SINCE}{note}" in md
     assert "樣本起日" not in _markdown(build_forward_report(rows, CFG))
 
 
@@ -295,7 +295,7 @@ def test_cli_wiring_applies_edge_cutoff(
     dirs = ["--cache-dir", str(tmp_path), "--out", str(tmp_path), "--force"]
 
     assert cli.main(["micro-report", *dirs]) == 0
-    assert micro.call_args.kwargs["gex_since"] == "2026-10-30"
+    assert micro.call_args.kwargs["gex_since"] == SINCE
     assert len(micro.call_args.kwargs["snapshots"]) == 4  # 週 EM 需要全部快照
     assert written["micro-report"]["source"] == "edge"
 
@@ -307,7 +307,7 @@ def test_cli_wiring_applies_edge_cutoff(
     assert cli.main(["regime-stop-report", "--snapshot-db", "x.db", *dirs]) == 0
     assert [s["date"] for s in regime.call_args.args[0]] == [SINCE, POST]
     result = written["regime-stop-report"]
-    assert result["edge_gex_since"] == "2026-10-30"
+    assert result["edge_gex_since"] == SINCE
     assert result["n_snapshots_before_gex_since"] == 2
 
     captured: dict[str, Any] = {}
@@ -324,4 +324,4 @@ def test_cli_wiring_applies_edge_cutoff(
     monkeypatch.setattr(cli, "_squeeze_flip_check", _fake_squeeze)
     monkeypatch.setattr(report, "write_report", lambda *a, **k: tmp_path)
     assert cli.main(["forward-report", "--offline", "--universe", "AAA", *dirs]) == 0
-    assert captured["gamma_flip_since"] == "2026-10-30"
+    assert captured["gamma_flip_since"] == SINCE
