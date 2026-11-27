@@ -51,7 +51,10 @@ from market_analysis.insights_engine import (
     classify_putwall_gex,
 )
 from market_analysis.room_threshold import resolve_atr_15m
-from market_analysis.trading_orchestration import RRP_MATERIAL_BALANCE_BILLIONS
+from market_analysis.trading_orchestration import (
+    RRP_MATERIAL_BALANCE_BILLIONS,
+    evaluate_recession_warning,
+)
 
 # `import database`（模組物件 + 呼叫時屬性存取）可以留在頂層：
 # `patch("database.get_full_user_context")` 改寫的是模組屬性，仍能攔截到。
@@ -2261,22 +2264,26 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
     is_degraded = macro_data.get("is_degraded", False)
     served_stale_cache = macro_data.get("served_stale_cache", False)
 
+    recession_state_raw = macro_data.get("recession_state")
+    is_recession_warning = (
+        bool(macro_data.get("recession_warning", False))
+        or recession_state_raw == "WARNING"
+    )
+    is_recession_unknown = not is_recession_warning and recession_state_raw == "UNKNOWN"
+
     # 決定顏色
     color = discord.Color.green()
-    if macro_data.get("recession_warning", False) or macro_data.get(
-        "short_gamma_critical", False
-    ):
+    if is_recession_warning or macro_data.get("short_gamma_critical", False):
         color = discord.Color.red()
     elif is_degraded:
         color = discord.Color.orange()
-    # 🟡 負 Gamma／臨界（非 CRITICAL）：邊框改 gold，優先於降級橘色以外的綠色預設
+    # 🟡 負 Gamma／臨界（非 CRITICAL）或衰退判定資料不足：邊框改 gold，優先於降級橘色以外的綠色預設
     _pre_buf = _spy_flip_buffer_pct(
         macro_data, bool(macro_data.get("gex_is_expired", False))
     )
-    if (
-        color == discord.Color.green()
-        and _pre_buf is not None
-        and _pre_buf < _FLIP_KNIFE_EDGE_PCT
+    if color == discord.Color.green() and (
+        is_recession_unknown
+        or (_pre_buf is not None and _pre_buf < _FLIP_KNIFE_EDGE_PCT)
     ):
         color = discord.Color.gold()
 
@@ -2352,11 +2359,36 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         short_gamma_status = f"\u001b[1;33m{short_gamma_desc}\u001b[0m"
     else:
         short_gamma_status = f"\u001b[1;32m{short_gamma_desc}\u001b[0m"
-    recession_status = (
-        "\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效)\u001b[0m"
-        if macro_data.get("recession_warning", False)
-        else "\u001b[1;32m🟢 NORMAL (CC 開倉正常)\u001b[0m"
-    )
+    if is_recession_warning:
+        raw_triggers = macro_data.get("recession_triggers")
+        triggers: List[str] = (
+            [str(t) for t in raw_triggers if t]
+            if isinstance(raw_triggers, (list, tuple))
+            else []
+        )
+        if not triggers:
+            triggers = list(evaluate_recession_warning(sahm_rule, us10y, vix).triggers)
+        if triggers:
+            trigger_summary = "；".join(triggers)
+            recession_status = f"\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效：{trigger_summary})\u001b[0m"
+        else:
+            recession_status = "\u001b[1;31m🚨 WARNING (CC 開倉阻斷已生效)\u001b[0m"
+    elif is_recession_unknown:
+        raw_missing = macro_data.get("recession_missing")
+        missing: List[str] = (
+            [str(m) for m in raw_missing if m]
+            if isinstance(raw_missing, (list, tuple))
+            else []
+        )
+        if missing:
+            missing_summary = "、".join(missing)
+            recession_status = f"\u001b[1;33m⚪ 未知 (資料不足，CC 開倉保守阻斷：{missing_summary})\u001b[0m"
+        else:
+            recession_status = (
+                "\u001b[1;33m⚪ 未知 (資料不足，CC 開倉保守阻斷)\u001b[0m"
+            )
+    else:
+        recession_status = "\u001b[1;32m🟢 NORMAL (CC 開倉正常)\u001b[0m"
 
     fedwatch_prob = macro_data.get("fedwatch_probability")
     fedwatch_details = macro_data.get("fedwatch_details") or {}
@@ -2501,13 +2533,29 @@ def build_market_macro_overview_embed(macro_data: dict) -> discord.Embed:
         if (spx is not None and float(spx) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
+    vix_suffix = ""
+    if vix is not None and float(vix) > 0:
+        if macro_data.get("vix_is_expired", False):
+            vix_age_text = _format_cache_age(macro_data.get("vix_cache_age_seconds"))
+            vix_suffix = f" \u001b[1;33m[{vix_age_text}快取・不納入判定]\u001b[0m"
+        elif macro_data.get("vix_is_cache", False):
+            vix_suffix = " \u001b[1;33m[快取]\u001b[0m"
     vix_val_str = (
-        f"\u001b[1;33m{float(vix):.2f}\u001b[0m"
+        f"\u001b[1;33m{float(vix):.2f}\u001b[0m{vix_suffix}"
         if (vix is not None and float(vix) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )
+    us10y_suffix = ""
+    if us10y is not None and float(us10y) > 0:
+        if macro_data.get("us10y_is_expired", False):
+            us10y_age_text = _format_cache_age(
+                macro_data.get("us10y_cache_age_seconds")
+            )
+            us10y_suffix = f" \u001b[1;33m[{us10y_age_text}快取・不納入判定]\u001b[0m"
+        elif macro_data.get("us10y_is_cache", False):
+            us10y_suffix = " \u001b[1;33m[快取]\u001b[0m"
     us10y_val_str = (
-        f"\u001b[1;36m{float(us10y):.2f}%\u001b[0m"
+        f"\u001b[1;36m{float(us10y):.2f}%\u001b[0m{us10y_suffix}"
         if (us10y is not None and float(us10y) > 0)
         else "\u001b[1;31m獲取數據失敗\u001b[0m"
     )

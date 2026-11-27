@@ -96,12 +96,12 @@ async def test_unlock_gate_kv_reads_off_event_loop() -> None:
     calls: dict[str, int] = {}
     values = {"macro_sahm_rule": 0.35, "macro_us10y": 4.25}
 
-    def _kv(key: str) -> Any:
+    def _kv_fresh(key: str, *_args: Any, **_kwargs: Any) -> Any:
         calls[key] = threading.get_ident()
         return values.get(key)
 
     with (
-        patch("database.get_kv_cache", side_effect=_kv),
+        patch("database.get_kv_cache_fresh", side_effect=_kv_fresh),
         patch(
             "services.market_data_service.get_quote",
             new_callable=AsyncMock,
@@ -196,7 +196,7 @@ async def test_lazy_reads_preserved() -> None:
 
     # ^TNX 即時報價可用時不退回讀 macro_us10y 快取
     with (
-        patch("database.get_kv_cache", return_value=0.35) as mock_kv,
+        patch("database.get_kv_cache_fresh", return_value=0.35) as mock_kv,
         patch(
             "services.market_data_service.get_quote",
             new_callable=AsyncMock,

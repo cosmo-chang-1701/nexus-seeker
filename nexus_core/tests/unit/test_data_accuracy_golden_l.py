@@ -49,50 +49,61 @@ async def _analyze_dividend_passed(strict_value: Optional[float]) -> float:
         "hv_current": 0.3,
         "hv_rank": 40.0,
     }
-    with patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": 100.0},
-    ), patch(
-        "services.market_data_service.is_etf",
-        new_callable=AsyncMock,
-        return_value=True,
-    ), patch(
-        "services.market_data_service.get_history_df",
-        new_callable=AsyncMock,
-        return_value=df,
-    ), patch(
-        "services.market_data_service.get_dividend_yield_strict",
-        new_callable=AsyncMock,
-        return_value=strict_value,
-    ), patch(
-        "market_analysis.strategy._calculate_technical_indicators",
-        return_value=indicators,
-    ), patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=[expiry],
-    ), patch(
-        "market_analysis.strategy._fetch_opt_chain_and_best_contract",
-        new_callable=AsyncMock,
-        side_effect=_opt_chain,
-    ), patch(
-        "market_analysis.strategy.evaluate_ema_trend",
-        new_callable=AsyncMock,
-        return_value={
-            "trend": "N",
-            "ema_8": 1.0,
-            "ema_21": 1.0,
-            "distance_from_21": 0.0,
-        },
-    ), patch(
-        "market_analysis.strategy._calculate_mmm",
-        new_callable=AsyncMock,
-        return_value=(0.0, 0.0, 0.0, -1),
-    ), patch(
-        "market_analysis.strategy._calculate_term_structure",
-        new_callable=AsyncMock,
-        return_value=(1.0, "平滑 (Flat)"),
+    with (
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": 100.0},
+        ),
+        patch(
+            "services.market_data_service.is_etf",
+            new_callable=AsyncMock,
+            return_value=True,
+        ),
+        patch(
+            "services.market_data_service.get_history_df",
+            new_callable=AsyncMock,
+            return_value=df,
+        ),
+        patch(
+            "services.market_data_service.get_dividend_yield_strict",
+            new_callable=AsyncMock,
+            return_value=strict_value,
+        ),
+        patch(
+            "market_analysis.strategy._calculate_technical_indicators",
+            return_value=indicators,
+        ),
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+            return_value=[expiry],
+        ),
+        patch(
+            "market_analysis.strategy._fetch_opt_chain_and_best_contract",
+            new_callable=AsyncMock,
+            side_effect=_opt_chain,
+        ),
+        patch(
+            "market_analysis.strategy.evaluate_ema_trend",
+            new_callable=AsyncMock,
+            return_value={
+                "trend": "N",
+                "ema_8": 1.0,
+                "ema_21": 1.0,
+                "distance_from_21": 0.0,
+            },
+        ),
+        patch(
+            "market_analysis.strategy._calculate_mmm",
+            new_callable=AsyncMock,
+            return_value=(0.0, 0.0, 0.0, -1),
+        ),
+        patch(
+            "market_analysis.strategy._calculate_term_structure",
+            new_callable=AsyncMock,
+            return_value=(1.0, "平滑 (Flat)"),
+        ),
     ):
         result = await strategy.analyze_symbol("QQQ", vix_spot=15.0)
     assert result is None  # best_contract=None 提前 return
@@ -150,24 +161,30 @@ def _pcr_chain(call_vol: float, put_vol: float, call_oi: float, put_oi: float) -
 async def _run_pcr(chain: Any, last_stored: Optional[float]) -> tuple[dict, AsyncMock]:
     from market_analysis.sentiment_engine import SentimentEngine
 
-    with patch(
-        "services.market_data_service.get_all_option_expiries",
-        new_callable=AsyncMock,
-        return_value=["2026-06-19"],
-    ), patch(
-        "services.market_data_service.get_option_chain",
-        new_callable=AsyncMock,
-        return_value=chain,
-    ), patch(
-        "market_analysis.sentiment.options_flow.get_last_stored_sentiment",
-        return_value=last_stored,
-    ), patch(
-        "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
-        return_value=(None, None),
-    ), patch(
-        "market_analysis.sentiment.options_flow.save_sentiment_history",
-        new_callable=AsyncMock,
-    ) as mock_save:
+    with (
+        patch(
+            "services.market_data_service.get_all_option_expiries",
+            new_callable=AsyncMock,
+            return_value=["2026-06-19"],
+        ),
+        patch(
+            "services.market_data_service.get_option_chain",
+            new_callable=AsyncMock,
+            return_value=chain,
+        ),
+        patch(
+            "market_analysis.sentiment.options_flow.get_last_stored_sentiment",
+            return_value=last_stored,
+        ),
+        patch(
+            "market_analysis.sentiment.options_flow.get_last_stored_sentiment_with_age",
+            return_value=(None, None),
+        ),
+        patch(
+            "market_analysis.sentiment.options_flow.save_sentiment_history",
+            new_callable=AsyncMock,
+        ) as mock_save,
+    ):
         res = await SentimentEngine.calculate_pcr("AAPL")
     return res, mock_save
 
@@ -249,23 +266,38 @@ def test_l7_known_ivr_renders_value() -> None:
 async def _cc_unlock(
     sahm: Any, us10y: Any, vix: Optional[float], core: Optional[dict] = None
 ) -> bool:
+    import threading
     from market_analysis import trading_orchestration as orch
 
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
     kv = {"macro_sahm_rule": sahm, "macro_us10y": None}
-    with patch("database.get_kv_cache", side_effect=lambda k: kv.get(k)), patch(
-        "services.market_data_service.get_quote",
-        new_callable=AsyncMock,
-        return_value={"c": us10y} if us10y is not None else {},
-    ), patch(
-        "services.market_data_service.get_vix_spot_strict",
-        new_callable=AsyncMock,
-        return_value=vix,
-    ), patch(
-        "market_analysis.index_microstructure.fetch_core_macro_metrics",
-        new_callable=AsyncMock,
-        return_value=core or {"_is_fallback": True},
+
+    def _kv_fresh(k: str, *_args: Any, **_kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        return kv.get(k)
+
+    with (
+        patch("database.get_kv_cache_fresh", side_effect=_kv_fresh),
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=AsyncMock,
+            return_value={"c": us10y} if us10y is not None else {},
+        ),
+        patch(
+            "services.market_data_service.get_vix_spot_strict",
+            new_callable=AsyncMock,
+            return_value=vix,
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value=core or {"_is_fallback": True},
+        ),
     ):
-        return await orch.is_covered_call_unlock_allowed()
+        allowed = await orch.is_covered_call_unlock_allowed()
+    assert loop_thread not in threads
+    return allowed
 
 
 @pytest.mark.asyncio

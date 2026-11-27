@@ -18,6 +18,19 @@ _MACRO_KEYS: tuple[str, ...] = (
     "macro_us10y",
     "macro_wti",
     "macro_spy_spot",
+    "macro_rrp",
+    "macro_fed_balance",
+    "macro_fear_greed",
+    "macro_gamma_flip_line",
+    "macro_spy_gamma_flip",
+    "macro_uer",
+    "macro_sahm_rule",
+    "macro_sahm_rule_date",
+    "macro_rrp_change_30d",
+    "macro_gex_is_fallback",
+    "macro_vts_ratio",
+    "macro_ted_spread",
+    "macro_liquidity_is_fallback",
     "macro_cpi_actual",
     "macro_cpi_expected",
     "macro_cpi_is_fallback",
@@ -179,20 +192,29 @@ async def test_portfolio_view_btn_home_reads_user_context_off_event_loop(
 async def test_macro_overview_kv_fallback_and_cpi_reads_off_event_loop() -> None:
     loop_thread = threading.get_ident()
     reads: list[tuple[str, int]] = []
+    many_calls: list[tuple[tuple[str, ...], int]] = []
 
-    def _record_read(key: str, *_args: Any, **_kwargs: Any) -> None:
+    def _record_read(key: str, *_args: Any, **_kwargs: Any) -> Any:
         reads.append((key, threading.get_ident()))
+        if key == "macro_spx":
+            return 5000.0
+        return None
+
+    def _record_many(keys: Any, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        many_calls.append((tuple(keys), threading.get_ident()))
+        return {}
 
     with (
         patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
         patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
-        # 報價一律為空，使五個 `_parse` 都走 kv 回退
+        # 報價一律為空，使五個 `_parse` 都走 kv 回退；macro_spx 有值、macro_spy_spot 缺值則觸發 ratio 讀取
         patch(
             "services.market_data_service.get_quote",
             new_callable=AsyncMock,
             return_value={},
         ),
         patch("database.get_kv_cache", side_effect=_record_read),
+        patch("database.cache.get_kv_cache_many", side_effect=_record_many),
         patch("database.save_kv_cache", new_callable=AsyncMock),
         patch("database.cache.save_kv_cache", new_callable=AsyncMock),
         patch(
@@ -219,8 +241,77 @@ async def test_macro_overview_kv_fallback_and_cpi_reads_off_event_loop() -> None
     ):
         await get_macro_overview_data(1)
 
-    # 只斷言本次移出 event loop 的鍵；其餘 kv 讀取依設計仍在 loop 上
-    for key in _MACRO_KEYS:
+    for key in _MACRO_KEYS + ("macro_spx_spy_ratio",):
         threads = [thread for read_key, thread in reads if read_key == key]
         assert threads, f"{key} 未被讀取"
         assert loop_thread not in threads, f"{key} 在 event loop 執行緒上讀取"
+    assert all(
+        thread != loop_thread for _k, thread in reads
+    ), f"發現 event loop 上的 get_kv_cache 讀取: {reads}"
+    assert many_calls, "get_kv_cache_many 未被呼叫"
+    assert all(
+        thread != loop_thread for _keys, thread in many_calls
+    ), f"get_kv_cache_many 在 event loop 執行緒上讀取: {many_calls}"
+
+
+@pytest.mark.asyncio
+async def test_macro_overview_quote_exception_fallback_reads_off_event_loop() -> None:
+    """`get_quote` 發生例外進入 `except` 備援路徑時，所有 KV 讀取仍須離開 event loop。"""
+    loop_thread = threading.get_ident()
+    reads: list[tuple[str, int]] = []
+    many_calls: list[tuple[tuple[str, ...], int]] = []
+
+    def _record_read(key: str, *_args: Any, **_kwargs: Any) -> Any:
+        reads.append((key, threading.get_ident()))
+        if key == "macro_spy_spot":
+            return 500.0
+        return None
+
+    def _record_many(keys: Any, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        many_calls.append((tuple(keys), threading.get_ident()))
+        return {}
+
+    with (
+        patch("cogs.unified_terminal.utils.is_memory_safe", return_value=True),
+        patch("cogs.unified_terminal.utils._macro_overview_cache", {}),
+        patch(
+            "services.market_data_service.get_quote",
+            new_callable=MagicMock,
+            side_effect=RuntimeError("quote failed"),
+        ) as mock_get_quote,
+        patch("database.get_kv_cache", side_effect=_record_read),
+        patch("database.cache.get_kv_cache_many", side_effect=_record_many),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.cache.save_kv_cache", new_callable=AsyncMock),
+        patch(
+            "market_analysis.index_microstructure.fetch_gex_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "market_analysis.index_microstructure.fetch_core_macro_metrics",
+            new_callable=AsyncMock,
+            return_value={},
+        ),
+        patch(
+            "services.calendar_service.calendar_service.prefetch_monthly_macro_cache",
+            new_callable=AsyncMock,
+        ),
+        patch("database.calendar_cache.get_macro_events_between", return_value=[]),
+        patch(
+            "cogs.unified_terminal.utils.get_credit_spreads",
+            new_callable=AsyncMock,
+            return_value={"hy": None, "ig": None},
+        ),
+        patch(_THRESHOLD, return_value=13000.0),
+    ):
+        await get_macro_overview_data(2)
+
+    assert mock_get_quote.call_count == 1
+    for key in _MACRO_KEYS + ("macro_spx_spy_ratio",):
+        threads = [thread for read_key, thread in reads if read_key == key]
+        assert threads, f"except 路徑下 {key} 未被讀取"
+        assert loop_thread not in threads, f"except 路徑下 {key} 在 event loop 上讀取"
+    assert all(thread != loop_thread for _k, thread in reads)
+    assert many_calls
+    assert all(thread != loop_thread for _keys, thread in many_calls)
