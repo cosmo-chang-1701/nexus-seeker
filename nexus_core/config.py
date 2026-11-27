@@ -91,7 +91,7 @@ except (ValueError, TypeError):
 # 動態轉倉引擎：真實期權持倉併入 15 分鐘評估迴圈 (Feature Flag)
 # 預設關閉，避免 OPTIONS 快速通道/流動性警告等「首次真正被生產環境觸發」的
 # 分支在未經觀察期前意外對使用者發送大量清倉指令。開啟後預設仍為 dry-run
-# (只寫 log 與 rollover_audit_log 稽核列、不推播)，須另外關閉
+# (派發時只寫 log、去重鍵與 rollover_audit_log 稽核列、不推播)，須另外關閉
 # OPTIONS_ROLLOVER_DRY_RUN 才會實際發送 DM。
 ENABLE_OPTIONS_ROLLOVER_INGESTION = (
     get_env_or_secret("ENABLE_OPTIONS_ROLLOVER_INGESTION", "false").lower() == "true"
@@ -99,15 +99,18 @@ ENABLE_OPTIONS_ROLLOVER_INGESTION = (
 OPTIONS_ROLLOVER_DRY_RUN = (
     get_env_or_secret("OPTIONS_ROLLOVER_DRY_RUN", "true").lower() == "true"
 )
-# 下列四個乾跑旗標 SHORT_ENTRY／PYRAMID_ADD／REGIME_III_B／REGIME_HEDGE_TIER1，
-# 以及上方的 OPTIONS_ROLLOVER_DRY_RUN，在 cogs/trading/portfolio_monitor.py 派發迴圈
-# 攔下的指令，只要通知頻道開啟且通過去重，仍照常寫入 rollover_audit_log 稽核列
-# （頻道關閉者在去重前就略過、不寫入），其 delivery_status 欄記為 DRY_RUN；
+# 下方 SHORT_ENTRY／PYRAMID_ADD／REGIME_III_B／REGIME_HEDGE_TIER1 四個乾跑旗標
+# （不含夾在其間的 SQUEEZE_ENTRY_DRY_RUN，它只管自選標的進場顧問），以及上方的
+# OPTIONS_ROLLOVER_DRY_RUN，在 cogs/trading/portfolio_monitor.py 派發迴圈攔下的
+# 指令，只要通知頻道開啟且通過去重，仍照常寫入當日去重鍵與 rollover_audit_log
+# 稽核列（頻道關閉者在去重前就略過、不寫入），其 delivery_status 欄記為 DRY_RUN；
 # /rollover_history 一併列出並標示「乾跑」（沒有此欄值的舊列標示「未知」）。
-# SHORT_ENTRY_DRY_RUN 另控制自選標的進場顧問的做空推播，該路徑不寫此表。
-# SHORT_ENTRY 做空進場訊號 dry-run (預設開啟)：只寫入 rollover_audit_log 稽核
-# 軌跡、不推播 DM。做空進場的倉位與 VIX 係數皆未經回測校準，觀察稽核紀錄的
-# 觸發分佈合理後再關閉。
+# 去重鍵照寫，因此同日把乾跑旗標改為 false（需重啟）後，不會補發當天已攔下的
+# 同一則指令。
+# SHORT_ENTRY 做空進場訊號 dry-run (預設開啟)：派發迴圈對 SHORT_ENTRY 指令不推播
+# DM，只寫 log、去重鍵與 rollover_audit_log 稽核列；自選標的進場顧問的做空推播
+# 同樣攔下，該路徑只寫 log 與前向紀錄，不寫稽核表也不寫去重旗標。做空進場的倉位
+# 與 VIX 係數皆未經回測校準，觀察稽核紀錄的觸發分佈合理後再關閉。
 SHORT_ENTRY_DRY_RUN = get_env_or_secret("SHORT_ENTRY_DRY_RUN", "true").lower() == "true"
 # PYRAMID_ADD 順勢加碼 dry-run (預設開啟)：只寫入稽核軌跡、不推播 DM。加碼
 # 倉位模型與 VIX 乘數皆未經回測校準，累積至少 20 個獨立加碼事件並依
@@ -175,13 +178,15 @@ except (ValueError, TypeError):
 WATCHLIST_ADVISOR_DRY_RUN = (
     get_env_or_secret("WATCHLIST_ADVISOR_DRY_RUN", "true").lower() == "true"
 )
-# Regime／進場鐵律評估紀錄的前向蒐集 (market_analysis/evaluation_recorder.py)。
-# GEX 相關門檻無法回測，這是唯一的校準資料來源，預設開啟 (~260 列/日)。
+# Regime 分類、進場判定與出場分層訊號紀錄的前向蒐集
+# (market_analysis/evaluation_recorder.py)。GEX 相關門檻無法回測，這是唯一的校準
+# 資料來源，預設開啟 (~260 列/日)。
 ENABLE_REGIME_EVALUATION_LOG = (
     get_env_or_secret("ENABLE_REGIME_EVALUATION_LOG", "true").lower() == "true"
 )
 
-# 已送達可行動通知的前向蒐集 (services/notification_dispatch_recorder.py)。
+# notify() 回報已入列（不保證佇列寫入成功或 Discord 送達）的可行動通知之前向蒐集
+# (services/notification_dispatch_recorder.py)，只在 leader 實例記錄。
 # 評估各通知頻道「照做 vs 持有」對 Sortino / MDD / CVaR 的影響的唯一資料來源。
 ENABLE_NOTIFICATION_DISPATCH_LOG = (
     get_env_or_secret("ENABLE_NOTIFICATION_DISPATCH_LOG", "true").lower() == "true"
