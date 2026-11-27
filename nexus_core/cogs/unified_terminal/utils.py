@@ -99,21 +99,21 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             return_exceptions=True,
         )
 
-        def _parse(res: Any, key: Any, fallback: Any = None):  # type: ignore
+        async def _parse(res: Any, key: str, fallback: Any = None) -> Any:
             if isinstance(res, dict) and res.get("c", 0) > 0:
                 val = res["c"]
                 asyncio.create_task(save_kv_cache(key, val))
                 return val
-            cached = get_kv_cache(key)
+            cached = await asyncio.to_thread(get_kv_cache, key)
             if cached is not None:
                 return cached
             return fallback
 
-        spx = _parse(results[0], "macro_spx")
-        vix = _parse(results[1], "macro_vix")
-        us10y = _parse(results[2], "macro_us10y")
-        wti = _parse(results[3], "macro_wti")
-        spy_spot = _parse(results[4], "macro_spy_spot")
+        spx = await _parse(results[0], "macro_spx")
+        vix = await _parse(results[1], "macro_vix")
+        us10y = await _parse(results[2], "macro_us10y")
+        wti = await _parse(results[3], "macro_wti")
+        spy_spot = await _parse(results[4], "macro_spy_spot")
 
         # 數值 cross-check 與衍生：
         # 一方缺失時以另一方換算；換算比值用最近一次實測值而非固定 10.0
@@ -477,15 +477,14 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     ) = await asyncio.to_thread(calendar_service.get_latest_fedwatch_info)
 
     # 取得 CPI 實際值 / 預期值與偏差
-    cpi_actual = get_kv_cache("macro_cpi_actual")
-    cpi_expected = get_kv_cache("macro_cpi_expected")
-    cpi_is_fallback_val = get_kv_cache("macro_cpi_is_fallback")
+    cpi_actual = await asyncio.to_thread(get_kv_cache, "macro_cpi_actual")
+    cpi_expected = await asyncio.to_thread(get_kv_cache, "macro_cpi_expected")
+    cpi_is_fallback_val = await asyncio.to_thread(get_kv_cache, "macro_cpi_is_fallback")
     cpi_is_fallback = cpi_is_fallback_val is None or int(cpi_is_fallback_val) == 1
-    cpi_dev = (
-        cpi_actual - cpi_expected
-        if (cpi_actual is not None and cpi_expected is not None)
-        else get_kv_cache("macro_cpi_deviation")
-    )
+    if cpi_actual is not None and cpi_expected is not None:
+        cpi_dev = cpi_actual - cpi_expected
+    else:
+        cpi_dev = await asyncio.to_thread(get_kv_cache, "macro_cpi_deviation")
 
     # 多因子宏觀流動性狀態判定
     from market_analysis.index_microstructure import evaluate_escape_window_regime

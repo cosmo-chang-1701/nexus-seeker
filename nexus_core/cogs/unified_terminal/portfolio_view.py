@@ -57,7 +57,7 @@ class PortfolioHubView(discord.ui.View):
 
             trading_service = TradingService(self.bot)
             pnl_data = await trading_service.get_portfolio_pnl(self.user_id)
-            ctx = database.get_full_user_context(self.user_id)
+            ctx = await asyncio.to_thread(database.get_full_user_context, self.user_id)
             runway, runway_stale = await get_runway_display(self.user_id)
 
             vix_spot = await market_data_service.get_vix_spot_strict()

@@ -221,7 +221,7 @@ class UnifiedTerminalCog(
 
         trading_service = TradingService(self.bot)
         pnl_data = await trading_service.get_portfolio_pnl(user_id)
-        ctx = database.get_full_user_context(user_id)
+        ctx = await asyncio.to_thread(database.get_full_user_context, user_id)
         runway, runway_stale = await get_runway_display(user_id)
 
         with market_data_service.mark_interactive_request():
