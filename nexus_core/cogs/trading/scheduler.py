@@ -123,6 +123,9 @@ class SchedulerCog(commands.Cog):
         # 大幅降低對 Reddit 的請求數量與 429 風險。
         results = await get_reddit_context_batch(symbols, limit_per_symbol=5)
         for sym, sentiment in results.items():
+            if sentiment is None:
+                logger.info(f"⏭️ [{sym}] 本次 Reddit 批次無可用結果，保留既有快取。")
+                continue
             try:
                 await save_kv_cache(f"reddit_sentiment_{sym}", sentiment)
                 logger.info(f"✅ [{sym}] Reddit 情緒快取已更新。")

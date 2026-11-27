@@ -198,3 +198,15 @@ def test_e_reddit_normal_stays_sync() -> None:
     raw = _render(_sync_base("⚖️ 中性"))
     assert "\u001b[1;32m同步\u001b[0m" in raw
     assert "Reddit 缺失" not in raw
+
+
+def test_e_reddit_down_with_missing_structural_inputs() -> None:
+    d = _spcx(
+        skew=None,
+        skew_percentile=None,
+        pcr={},
+        reddit_sentiment_score="⚠️ 抓取失敗 (邊緣節點超時)",
+    )
+    raw = _render(d)
+    assert "資料不足（Skew 分位／PCR／Reddit 缺失）" in _plain(raw)
+    assert "\u001b[1;30m資料不足（Skew 分位／PCR／Reddit 缺失）\u001b[0m" in raw

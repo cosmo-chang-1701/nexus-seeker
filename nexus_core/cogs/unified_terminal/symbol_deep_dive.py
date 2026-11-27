@@ -645,22 +645,24 @@ class SymbolDeepDiveMixin:
         safe_ddp = ddp_report if isinstance(ddp_report, dict) else {}
         result["is_ddp"] = bool(safe_ddp.get("is_ddp", False))
         result["ddp_reason"] = data.get("ddp_reason")
-        result["squeeze_eval"] = data.get("squeeze_eval")
+        squeeze_eval_obj = data.get("squeeze_eval")
+        result["squeeze_eval"] = squeeze_eval_obj
+        rsi_reentry = getattr(squeeze_eval_obj, "rsi_reentry", None)
+        if rsi_reentry is None and df_hist_1d is not None and not df_hist_1d.empty:
+            from market_analysis.rsi_reentry import compute_rsi_reentry
+
+            rsi_reentry = compute_rsi_reentry(df_hist_1d, now_ny.date())
+        result["rsi_reentry"] = rsi_reentry
         result["vix"] = vix_now
         result["spy_price"] = spy_price
 
         # Reddit sentiment score
-        safe_reddit_text = reddit_text or ""
-        if any(err in safe_reddit_text for err in ["錯誤", "異常", "超時", "尚未配置"]):
-            result["reddit_sentiment_score"] = "⚠️ 抓取失敗 (邊緣節點異常)"
-        elif "看多" in safe_reddit_text or "Bullish" in safe_reddit_text:
-            result["reddit_sentiment_score"] = "🚀 樂觀 (Bullish)"
-        elif "看空" in safe_reddit_text or "Bearish" in safe_reddit_text:
-            result["reddit_sentiment_score"] = "💀 恐慌 (Bearish)"
-        else:
-            result["reddit_sentiment_score"] = "⚖️ 中性"
-
-        result["reddit_posts"] = data.get("reddit_posts", [])
+        reddit_posts_raw = data.get("reddit_posts", [])
+        result["reddit_text"] = reddit_text
+        result["reddit_sentiment_score"] = reddit_service.classify_reddit_sentiment(
+            reddit_text, reddit_posts_raw
+        )
+        result["reddit_posts"] = reddit_posts_raw
         result["polymarket_odds"] = poly_odds
         result["polymarket_summary"] = poly_summary
 

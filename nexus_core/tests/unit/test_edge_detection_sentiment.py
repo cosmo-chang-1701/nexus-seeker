@@ -696,3 +696,39 @@ async def test_polymarket_volume_weighted_bearish_probability() -> None:
     assert "🔴 20.0% 巨鯨偏空" in summary
     assert "2檔加權" in summary
     assert "$2.00M" in summary
+
+
+def test_neutral_reddit_with_posts_shows_market_intention_when_poly_na() -> None:
+    """即使 Polymarket 為 N/A 且 Reddit 為中性，只要有實質貼文清單仍應顯示意圖映射。"""
+    mock_data: Dict[str, Any] = {
+        "symbol": "NVDA",
+        "price": 120.0,
+        "quote": {
+            "c": 120.0,
+            "dp": 0.0,
+            "d": 0.0,
+            "o": 120.0,
+            "h": 121.0,
+            "l": 119.0,
+            "pc": 120.0,
+        },
+        "skew": 4.0,
+        "skew_percentile": 50.0,
+        "polymarket_odds": "N/A",
+        "reddit_sentiment_score": "⚖️ 中性",
+        "reddit_posts": [
+            {"subreddit": "stocks", "title": "NVDA Q3 preview", "url": ""}
+        ],
+        "pcr": {"volume_pcr": 0.8},
+        "iv_data": {
+            "iv_rank": 40.0,
+            "current_iv": 0.45,
+            "iv_percentile": 42.0,
+            "iv_status": "Normal",
+        },
+    }
+    embed = create_tactical_symbol_embed(mock_data)
+    fields = {f.name: f.value for f in embed.fields}
+    edge_text = str(fields["📐 情緒與邊緣偵測 (Edge Detection)"])
+    assert "巨鯨/散戶意圖映射 (Market Intention)" in edge_text
+    assert "Reddit: \x1b[1;33m⚖️ 中性\x1b[0m" in edge_text
