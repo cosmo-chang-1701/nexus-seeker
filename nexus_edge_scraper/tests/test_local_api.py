@@ -27,12 +27,43 @@ class AsyncContextManagerMock:
 
 
 def test_scrape_reddit_fallback() -> None:
-    # Mock playwright to fail at context creation inside try-except
-    with patch("local_api.async_playwright", return_value=AsyncContextManagerMock()):
+    import local_api
+
+    local_api._reddit_cache.clear()
+    called_urls: list[str] = []
+    global_xml = """<?xml version="1.0"?>
+    <feed xmlns="http://www.w3.org/2005/Atom">
+        <entry>
+            <title>AAPL earnings beat expectations</title>
+            <category term="stocks" label="r/stocks"/>
+            <link href="https://www.reddit.com/r/stocks/comments/abc/aapl/"/>
+            <published>2026-08-18T12:00:00+00:00</published>
+        </entry>
+    </feed>"""
+
+    async def fake_get(self: Any, url: str, headers: Any = None) -> httpx.Response:
+        called_urls.append(url)
+        req = httpx.Request("GET", url)
+        if "r/wallstreetbets+stocks+options/search.rss" in url:
+            return httpx.Response(404, request=req)
+        return httpx.Response(200, text=global_xml, request=req)
+
+    async def fake_sleep(_delay: float) -> None:
+        return None
+
+    with (
+        patch("httpx.AsyncClient.get", new=fake_get),
+        patch("asyncio.sleep", new=fake_sleep),
+    ):
         response = client.get("/api/v1/scrape/reddit/AAPL")
         assert response.status_code == 200
         data = response.json()
-        assert data["status"] in ["error", "success"]
+        assert data["status"] == "success"
+        assert "[stocks] AAPL earnings beat expectations" in data["data"]
+        assert len(data["posts"]) == 1
+        assert len(called_urls) == 2
+        assert "r/wallstreetbets+stocks+options/search.rss" in called_urls[0]
+        assert "https://www.reddit.com/search.rss" in called_urls[1]
 
 
 def test_scrape_reddit_retries_on_429_then_caches_result() -> None:
