@@ -512,8 +512,10 @@ class IntradayScanPipeline:
         ctx: Any,
         now_ny: datetime,
     ) -> None:
-        """自選標的進場顧問：進場條件成立時（右側為多時間框架擠壓，左側／做空為六重鐵律），
-        獨立推播一則進場 DM（含價位建議）。
+        """自選標的進場顧問：依使用者交易策略做進場確認，成立時獨立推播一則進場
+        DM（含價位建議）。`LEFT_SIDE`／`SHORT_SIDE`（含 `DYNAMIC` 分到
+        Regime I／V 者）走各自的六重鐵律；其餘（`RIGHT_SIDE`、其他策略值，以及
+        `DYNAMIC` 中非左側、非做空的 Regime）走多頭建倉的多時間框架擠壓。
 
         與 30 分鐘心跳本體**完全獨立**：不新增 `scenario`、不覆寫 `tactical`、
         不受其他訊號約束，只受 `/notif_settings` 的
