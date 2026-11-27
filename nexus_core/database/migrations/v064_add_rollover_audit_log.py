@@ -1,5 +1,7 @@
 version = 64
-description = "新增 rollover_audit_log 資料表，記錄動態轉倉引擎實際推送給使用者的每一則建議，供事後審計與回溯"
+description = (
+    "新增 rollover_audit_log 資料表，記錄動態轉倉引擎產生的轉倉建議，供事後審計與回溯"
+)
 sql = """
 CREATE TABLE IF NOT EXISTS rollover_audit_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
