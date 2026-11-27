@@ -850,10 +850,21 @@ async def test_recommend_covered_calls_partial_coverage_caps_contracts() -> Any:
 
 @pytest.mark.asyncio
 async def test_is_covered_call_unlock_allowed_logic() -> Any:
+    import threading
     from market_analysis.trading_orchestration import is_covered_call_unlock_allowed
 
+    loop_thread = threading.get_ident()
+    threads: list[int] = []
+
+    def _kv_fresh(kv: dict[str, Any]) -> Any:
+        def _inner(key: str, *_args: Any, **_kwargs: Any) -> Any:
+            threads.append(threading.get_ident())
+            return kv.get(key)
+
+        return _inner
+
     with (
-        patch("database.get_kv_cache") as mock_kv,
+        patch("database.get_kv_cache_fresh") as mock_kv,
         patch("services.market_data_service.get_quote") as mock_quote,
         # VIX 一律走嚴格即時抓取 (不再讀 macro_vix KV 舊值)
         patch(
@@ -865,32 +876,41 @@ async def test_is_covered_call_unlock_allowed_logic() -> Any:
         # We simulate get_quote throwing an Exception so it falls back to mock_kv
         mock_quote.side_effect = Exception("Mocked error")
         # Case 1: Normal
-        mock_kv.side_effect = lambda key: {
-            "macro_uer": 4.0,
-            "macro_sahm_rule": 0.35,
-            "macro_us10y": 4.25,
-            "macro_vix": 18.0,
-        }.get(key)
+        mock_kv.side_effect = _kv_fresh(
+            {
+                "macro_uer": 4.0,
+                "macro_sahm_rule": 0.35,
+                "macro_us10y": 4.25,
+                "macro_vix": 18.0,
+            }
+        )
         assert await is_covered_call_unlock_allowed() is True
 
         # Case 2: Sahm Rule triggered (recession warning)
-        mock_kv.side_effect = lambda key: {
-            "macro_uer": 4.0,
-            "macro_sahm_rule": 0.55,
-            "macro_us10y": 4.25,
-            "macro_vix": 18.0,
-        }.get(key)
+        mock_kv.side_effect = _kv_fresh(
+            {
+                "macro_uer": 4.0,
+                "macro_sahm_rule": 0.55,
+                "macro_us10y": 4.25,
+                "macro_vix": 18.0,
+            }
+        )
         assert await is_covered_call_unlock_allowed() is False
 
         # Case 3: Yield > 4.5% and VIX > 20 (recession warning)
-        mock_kv.side_effect = lambda key: {
-            "macro_uer": 4.0,
-            "macro_sahm_rule": 0.35,
-            "macro_us10y": 4.65,
-            "macro_vix": 22.0,
-        }.get(key)
+        mock_kv.side_effect = _kv_fresh(
+            {
+                "macro_uer": 4.0,
+                "macro_sahm_rule": 0.35,
+                "macro_us10y": 4.65,
+                "macro_vix": 22.0,
+            }
+        )
         mock_vix.return_value = 22.0
         assert await is_covered_call_unlock_allowed() is False
+
+    assert threads
+    assert loop_thread not in threads
 
 
 def test_safety_payout_threshold_logic() -> Any:
@@ -1299,8 +1319,11 @@ def test_calendar_service_fedwatch_lookup() -> None:
     from services.calendar_service import calendar_service
 
     # Case 1: kv_cache 命中
-    with patch("database.cache.get_kv_cache") as mock_kv, patch(
-        "database.cache.get_fedwatch_probability_fresh", return_value=(0.65, False)
+    with (
+        patch("database.cache.get_kv_cache") as mock_kv,
+        patch(
+            "database.cache.get_fedwatch_probability_fresh", return_value=(0.65, False)
+        ),
     ):
         mock_kv.side_effect = lambda k: (
             0.65
@@ -1334,8 +1357,11 @@ def test_calendar_service_fedwatch_lookup() -> None:
         mock_conn.assert_not_called()  # 沒有查 economic_calendar_events
 
     # Case 3: kv_cache 包含污染的 1.0 (100.0% 升息) 數據 -> 視為未知，不以備援值替代
-    with patch("database.cache.get_kv_cache") as mock_kv, patch(
-        "database.cache.get_fedwatch_probability_fresh", return_value=(1.0, False)
+    with (
+        patch("database.cache.get_kv_cache") as mock_kv,
+        patch(
+            "database.cache.get_fedwatch_probability_fresh", return_value=(1.0, False)
+        ),
     ):
         mock_kv.side_effect = lambda k: (
             1.0

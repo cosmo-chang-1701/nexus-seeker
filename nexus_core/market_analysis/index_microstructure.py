@@ -669,7 +669,19 @@ async def _fetch_core_macro_metrics_uncached() -> dict:
                                 "macro_sahm_rule_date": core_data.get("sahm_rule_date"),
                             }
                         )
-                    await save_kv_cache("macro_core_is_fallback", 0)
+                    all_core_present = all(
+                        core_data.get(field) is not None
+                        for field in (
+                            "rrp",
+                            "fed_balance",
+                            "fear_greed",
+                            "uer",
+                            "sahm_rule",
+                        )
+                    )
+                    await save_kv_cache(
+                        "macro_core_is_fallback", 0 if all_core_present else 1
+                    )
                     return core_data
     except Exception as e:
         logger.warning(f"無法從 Tunnel Scraper 獲取核心總經數據: {e}")
