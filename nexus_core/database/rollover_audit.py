@@ -1,9 +1,14 @@
 """動態轉倉引擎審計軌跡 (Rollover Audit Trail) CRUD。
 
 系統目前僅提供交易建議，不代為執行券商下單，因此無法追蹤「建議後的實際成交結果」；
-本模組記錄的是「系統實際推送給使用者的每一則轉倉建議」本身（scenario/action/標的/
-時間戳），供使用者事後回顧「哪個時間點、系統對哪個標的、給出了什麼建議」，
-作為問責與策略回溯依據，而非模擬真實的成交後績效歸因。
+本模組記錄的是派發迴圈（`cogs/trading/portfolio_monitor.py`）中通知頻道開啟且通過
+去重的每一則轉倉建議本身（scenario/action/標的/時間戳），供使用者事後回顧「哪個
+時間點、系統對哪個標的、給出了什麼建議」，作為問責與策略回溯依據，而非模擬真實的
+成交後績效歸因。
+
+⚠️ 乾跑旗標攔下的建議同樣會寫入，表內沒有欄位可區分；通知頻道關閉的建議在去重前
+就略過、不寫入。要看實際入列推播的紀錄，改查 `notification_dispatch_log`（送達紀錄
+功能關閉時不寫）。
 """
 
 import sqlite3
@@ -28,7 +33,10 @@ async def log_rollover_instruction(
     suggested_price: Optional[str] = None,
     cash_impact: Optional[str] = None,
 ) -> None:
-    """記錄一筆已實際推送給使用者的轉倉建議。失敗時僅記錄 log，不中斷主流程。"""
+    """記錄一筆通知頻道開啟且通過派發去重的轉倉建議（含乾跑攔下者）。
+
+    失敗時僅記錄 log，不中斷主流程。
+    """
     try:
         await execute_write_async(
             """
@@ -55,7 +63,10 @@ async def log_rollover_instruction(
 def get_rollover_audit_log(
     user_id: int, limit: int = _DEFAULT_QUERY_LIMIT
 ) -> List[dict[str, Any]]:
-    """取得指定使用者最近的轉倉建議推送紀錄，依時間新到舊排序。"""
+    """取得指定使用者最近的轉倉建議紀錄，依時間新到舊排序。
+
+    含乾跑攔下者（見模組說明），不等於實際推播紀錄。
+    """
     conn = None
     results: List[dict[str, Any]] = []
     try:

@@ -3,9 +3,10 @@
 為什麼需要自己蒐集：production 的 GEX 快取全是 upsert，歷史期權鏈也拿不到，
 所以「牆體深度 vs 事後是否守住」無法回測，只能從今天起逐日累積。
 
-- `micro-snapshot`：經 `market_data_service`（edge 代理 → 本地 yfinance）對標的池抓取期權鏈，用與 `nexus_edge_scraper/gex_scraper.py`
-  相同的公式重算 GEX 剖面（Yahoo 預設頁面＝最近到期日、t 下限 2 天、|Δ|<0.02
-  雜訊過濾、`OI × 100 × Γ × S²`），並記錄 20 日平均成交額、各到期日推算的週 EM。
+- `micro-snapshot`：經 `market_data_service`（edge 代理 → 本地 yfinance）對標的池
+  抓取期權鏈，用與 `nexus_edge_scraper/gex_scraper.py` 相同的公式重算 GEX 剖面
+  （Yahoo 預設頁面＝最近到期日、t 下限 2 天、|Δ|<0.02 雜訊過濾、
+  `OI × 100 × Γ × S²`），並記錄 20 日平均成交額、各到期日推算的週 EM。
   每天一個 JSONL 檔，建議每個交易日收盤後執行一次。
 - `micro-report`：彙整所有快照，輸出牆體深度的橫斷面分布、現行 500k 絕對門檻
   在不同規模標的上的通過率，以及以後續日線標註的「支撐牆守住率 × 深度分組」。

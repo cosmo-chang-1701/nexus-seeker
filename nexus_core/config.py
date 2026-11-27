@@ -91,13 +91,20 @@ except (ValueError, TypeError):
 # 動態轉倉引擎：真實期權持倉併入 15 分鐘評估迴圈 (Feature Flag)
 # 預設關閉，避免 OPTIONS 快速通道/流動性警告等「首次真正被生產環境觸發」的
 # 分支在未經觀察期前意外對使用者發送大量清倉指令。開啟後預設仍為 dry-run
-# (僅記錄不推播)，須另外關閉 OPTIONS_ROLLOVER_DRY_RUN 才會實際發送 DM。
+# (只寫 log 與 rollover_audit_log 稽核列、不推播)，須另外關閉
+# OPTIONS_ROLLOVER_DRY_RUN 才會實際發送 DM。
 ENABLE_OPTIONS_ROLLOVER_INGESTION = (
     get_env_or_secret("ENABLE_OPTIONS_ROLLOVER_INGESTION", "false").lower() == "true"
 )
 OPTIONS_ROLLOVER_DRY_RUN = (
     get_env_or_secret("OPTIONS_ROLLOVER_DRY_RUN", "true").lower() == "true"
 )
+# 下列四個乾跑旗標 SHORT_ENTRY／PYRAMID_ADD／REGIME_III_B／REGIME_HEDGE_TIER1，
+# 以及上方的 OPTIONS_ROLLOVER_DRY_RUN，在 cogs/trading/portfolio_monitor.py 派發迴圈
+# 攔下的指令，只要通知頻道開啟且通過去重，仍照常寫入 rollover_audit_log 稽核列
+# （頻道關閉者在去重前就略過、不寫入）；該表沒有乾跑欄位，事後無法區分哪些列
+# 實際推播過，/rollover_history 也會一併列出。SHORT_ENTRY_DRY_RUN 另控制自選
+# 標的進場顧問的做空推播，該路徑不寫此表。
 # SHORT_ENTRY 做空進場訊號 dry-run (預設開啟)：只寫入 rollover_audit_log 稽核
 # 軌跡、不推播 DM。做空進場的倉位與 VIX 係數皆未經回測校準，觀察稽核紀錄的
 # 觸發分佈合理後再關閉。
@@ -121,8 +128,8 @@ REGIME_III_B_DRY_RUN = (
     get_env_or_secret("REGIME_III_B_DRY_RUN", "true").lower() == "true"
 )
 # 兩級體制避險第一級 dry-run (預設開啟)：第一級（NORMAL 盤 PSQ 局部對沖）未經
-# 回測，先乾跑只寫去重鍵與 log、不推播 DM，累積前向紀錄後由人工決定翻轉。
-# 第二級（大盤危機）不受此旗標影響，照常推播。
+# 回測，先乾跑只寫去重鍵、log 與 rollover_audit_log 稽核列、不推播 DM，累積前向
+# 紀錄後由人工決定翻轉。第二級（大盤危機）不受此旗標影響，照常推播。
 REGIME_HEDGE_TIER1_DRY_RUN = (
     get_env_or_secret("REGIME_HEDGE_TIER1_DRY_RUN", "true").lower() == "true"
 )
