@@ -1,5 +1,6 @@
 import threading
-from typing import Any
+from datetime import datetime, tzinfo
+from typing import Any, Self
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1584,6 +1585,85 @@ async def test_monitor_real_portfolio_task_kv_dedup_reads_off_event_loop() -> No
         threads = [ident for key, ident in reads if key.startswith(prefix)]
         assert threads, f"未讀取 {prefix} 開頭的去重鍵: {reads}"
         assert loop_thread not in threads, f"{prefix} 仍在 event loop 執行緒讀取"
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_holdings_and_trades_read_off_event_loop() -> (
+    None
+):
+    """全體現貨持倉與期權部位的讀取屬同步 SQLite 讀取，
+    須離開 event loop 執行緒。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore[method-assign]
+    _mock_all_rollover_scenarios(cog)
+
+    loop_thread = threading.get_ident()
+    reads: list[tuple[str, int]] = []
+
+    def _holdings() -> list[dict[str, Any]]:
+        reads.append(("holdings", threading.get_ident()))
+        return []
+
+    def _trades() -> list[dict[str, Any]]:
+        reads.append(("trades", threading.get_ident()))
+        return []
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("config.ENABLE_OPTIONS_ROLLOVER_INGESTION", True),
+        patch("database.holdings.get_all_holdings", side_effect=_holdings),
+        patch("database.portfolio.get_all_trade_positions", side_effect=_trades),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    assert sorted(name for name, _ in reads) == ["holdings", "trades"]
+    for name, ident in reads:
+        assert ident != loop_thread, f"{name} 仍在 event loop 執行緒讀取"
+
+
+@pytest.mark.asyncio
+async def test_weekly_vtr_report_task_reads_watchlist_off_event_loop() -> None:
+    """VTR 週報的全體觀察清單讀取屬同步 SQLite 讀取，
+    須離開 event loop 執行緒。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    class _Friday(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> Self:
+            # 2026-11-27 為週五
+            return cls(2026, 11, 27, 17, 5, tzinfo=tz)
+
+    loop_thread = threading.get_ident()
+    reads: list[int] = []
+
+    def _watchlist() -> list[tuple[int, str, bool]]:
+        reads.append(threading.get_ident())
+        return [(1, "AAPL", True)]
+
+    with (
+        patch("datetime.datetime", _Friday),
+        patch("database.get_all_watchlist", side_effect=_watchlist),
+        patch("database.is_notification_enabled", return_value=False),
+    ):
+        await cog.weekly_vtr_report_task()
+
+    assert len(reads) == 1, f"觀察清單應恰好讀取一次: {reads}"
+    assert reads[0] != loop_thread, "觀察清單仍在 event loop 執行緒讀取"
+    bot.queue_dm.assert_not_awaited()
 
 
 @pytest.mark.asyncio

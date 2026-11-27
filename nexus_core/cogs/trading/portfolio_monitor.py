@@ -504,8 +504,8 @@ class PortfolioMonitorCog(commands.Cog):
             return
 
         logger.info("🛡️ [NRO] 開始執行真實持倉風險審計...")
-        # 前向蒐集：本週期內所有 Regime 分類與進場鐵律評估都標記為此來源，週期
-        # 結束時一次批次寫入 (market_analysis/evaluation_recorder.py)。
+        # 前向蒐集：本週期內的 Regime 分類、進場判定與出場分層訊號紀錄都標記為此
+        # 來源，週期結束時一次批次寫入 (market_analysis/evaluation_recorder.py)。
         from market_analysis import evaluation_recorder
 
         eval_source_token = evaluation_recorder.set_evaluation_source(
@@ -565,7 +565,7 @@ class PortfolioMonitorCog(commands.Cog):
             import asyncio
             from database.holdings import get_all_holdings
 
-            all_holdings = get_all_holdings()
+            all_holdings = await asyncio.to_thread(get_all_holdings)
 
             # 🚀 動態轉倉引擎：真實期權持倉併入評估迴圈 (Feature Flag，預設關閉)。
             # 僅納入多頭買方部位 (quantity > 0) 至 Scenario 3/4 的 SATELLITE
@@ -578,7 +578,7 @@ class PortfolioMonitorCog(commands.Cog):
             if config.ENABLE_OPTIONS_ROLLOVER_INGESTION:
                 from database.portfolio import get_all_trade_positions
 
-                all_trades_raw = get_all_trade_positions()
+                all_trades_raw = await asyncio.to_thread(get_all_trade_positions)
                 long_option_trades = [
                     t for t in all_trades_raw if float(t.get("quantity") or 0) > 0
                 ]
@@ -1717,6 +1717,7 @@ class PortfolioMonitorCog(commands.Cog):
         """每週五收盤後：自動推送 VTR 績效週報"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
+        import asyncio
         from datetime import datetime as _dt
 
         now = _dt.now(ny_tz)
@@ -1725,7 +1726,7 @@ class PortfolioMonitorCog(commands.Cog):
 
         logger.info("📅 [Weekly Report] 偵測到週五收盤，開始產生績效週報...")
 
-        all_watchlists = database.get_all_watchlist()
+        all_watchlists = await asyncio.to_thread(database.get_all_watchlist)
         unique_users = set(row[0] for row in all_watchlists)
 
         for uid in unique_users:
