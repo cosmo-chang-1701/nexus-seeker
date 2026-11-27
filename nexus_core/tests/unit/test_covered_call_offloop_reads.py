@@ -8,6 +8,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from market_analysis.trading_orchestration import (
+    _load_covered_call_inputs,
+    filter_cc_recovery_targets,
     is_covered_call_unlock_allowed,
     recommend_covered_calls,
 )
@@ -210,3 +212,41 @@ async def test_lazy_reads_preserved() -> None:
 
     read_keys = [call.args[0] for call in mock_kv.call_args_list]
     assert read_keys == ["macro_sahm_rule"]
+
+
+@pytest.mark.asyncio
+async def test_filter_cc_recovery_reads_stored_iv_off_event_loop() -> None:
+    loop_thread = threading.get_ident()
+    calls: dict[str, int] = {}
+    with (
+        patch(
+            "database.market_cache.get_market_cache",
+            return_value={"reference_spot_price": 100.0},
+        ),
+        patch(
+            f"{_MODULE}.SentimentEngine.get_last_stored_iv",
+            side_effect=_record_thread(calls, "iv", 0.30),
+        ),
+        patch(
+            f"{_MODULE}.get_all_option_expiries",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("到期日讀取失敗"),
+        ) as mock_expiries,
+    ):
+        result = await filter_cc_recovery_targets("aapl")
+
+    assert result is None
+    mock_expiries.assert_awaited_once_with("AAPL")
+    assert set(calls) == {"iv"}
+    assert loop_thread not in calls.values(), f"仍有讀取在 event loop 執行緒: {calls}"
+
+
+def test_covered_error_stored_as_message() -> None:
+    with (
+        patch(f"{_MODULE}.get_user_holdings", return_value=_HOLDINGS),
+        patch(f"{_MODULE}.get_covered_shares", side_effect=ValueError("壞資料")),
+    ):
+        inputs = _load_covered_call_inputs(1, "AAPL")
+
+    assert inputs.covered_error == "壞資料"
+    assert isinstance(inputs.covered_error, str)
