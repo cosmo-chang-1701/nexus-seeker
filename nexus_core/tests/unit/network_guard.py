@@ -47,11 +47,21 @@ def _is_loopback(host: str) -> bool:
     return ip.is_loopback
 
 
+def _host_text(host: Any) -> str:
+    """位址或 DNS 查詢的主機欄位轉為文字。
+
+    bytes／bytearray 以 UTF-8 解碼（錯誤字元取代）。
+    """
+    if isinstance(host, (bytes, bytearray)):
+        return bytes(host).decode(errors="replace")
+    return str(host)
+
+
 def _needs_dns(host: Any) -> bool:
     """主機名需要實際查詢 DNS 時回傳 True；None、空字串、IP 字面值與 localhost 放行。"""
     if host is None:
         return False
-    text = host.decode(errors="replace") if isinstance(host, bytes) else str(host)
+    text = _host_text(host)
     if text == "" or _is_localhost_name(text):
         return False
     return _parse_ip(text) is None
@@ -60,7 +70,7 @@ def _needs_dns(host: Any) -> bool:
 def _is_outbound(sock: socket.socket, address: Any) -> bool:
     if sock.family not in (socket.AF_INET, socket.AF_INET6):
         return False
-    return not _is_loopback(str(address[0]))
+    return not _is_loopback(_host_text(address[0]))
 
 
 class NetworkGuard:

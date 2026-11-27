@@ -811,9 +811,10 @@ async def test_all_commands_structure(
     from config import DISCORD_ADMIN_USER_ID
 
     mock_interaction.user.id = DISCORD_ADMIN_USER_ID
-    # 前面的指令（symbol_hub 因 mock bot 的 Polymarket 服務無法 await 而提早失敗）
-    # 會遺留背景任務，其中的進場閘門稍後呼叫 get_market_regime()，若落在下方 patch
-    # 期間就會多呼叫一次 fetch_gex_metrics mock。必須先排空再 patch。
+    # 前面的 symbol_hub 因 mock bot 的 Polymarket 服務無法 await 而提早失敗。深度
+    # 分析會取消並收回自己的子任務（_cancel_and_reap），但經 SingleFlight
+    # （asyncio.shield）共享的抓取不隨之取消、照常跑完；若有共享任務稍後呼叫
+    # fetch_gex_metrics，落在下方 patch 期間就會多呼叫一次 mock。先排空再 patch。
     await _drain_background_tasks()
     with patch(
         "market_analysis.index_microstructure.fetch_gex_metrics", new_callable=AsyncMock
