@@ -123,7 +123,7 @@ flowchart TD
 | `NOTIF_CHANNEL_RADAR`（已移除） | `"heartbeat_watchlist"` / `"intel_market_scenario"` | 15 分鐘雷達與情境事件的舊通知開關；推播來源已下線，migration `v087` 刪除殘留設定列 | `nexus_core/database/migrations/v087_remove_watchlist_radar_channels.py` |
 | `NOTIF_CHANNEL_DEEP` | `"heartbeat_symbol_deep"` | 30 分鐘深度心跳通知開關名稱（migration v070） | `nexus_core/database/notifications.py` |
 | `NOTIF_CHANNEL_ADVISORY_ENTRY` | `"advisory_entry_signal"` | 進場顧問通知開關名稱（migration `v078` 以 `heartbeat_symbol_deep` 回填，避免已靜音者被自動訂閱） | `nexus_core/database/notifications.py` |
-| `WATCHLIST_ADVISOR_DRY_RUN` | `true`（預設） | 進場顧問乾跑：只寫 log 與前向紀錄、不推播、**不寫去重旗標**。另須同時滿足 `REGIME_III_B_DRY_RUN`（III-B 確認）與 `SHORT_ENTRY_DRY_RUN`（做空方向）已關閉才會推播——本路徑不經持倉監控的派發迴圈，三道閘門由派發函式自行檢查 | `nexus_core/config.py` |
+| `WATCHLIST_ADVISOR_DRY_RUN` | `true`（預設） | 進場顧問乾跑：只寫 log 與前向紀錄、不推播、**不寫去重旗標**。本旗標是所有進場顧問路徑的總閘門；擠壓路徑另須 `SQUEEZE_ENTRY_DRY_RUN`、做空方向另須 `SHORT_ENTRY_DRY_RUN` 已關閉才會推播——本路徑不經持倉監控的派發迴圈，三道閘門由派發函式自行檢查 | `nexus_core/config.py` |
 | `_RADAR_FRESH_WINDOW_SECONDS` | `300.0` 秒 | 進場顧問取用 `bot._latest_radar_data_cache` 的保鮮窗；超過即經 `_fetch_sym_radar_data_slow` 補抓（Semaphore(3)）。原寫入端（15 分鐘雷達）已移除，快取目前恆為空，補抓是常態 | `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` |
 | `_ADVICE_CACHE_MAX_SIZE` | `256` | 進場顧問結果記憶（鍵 `(strategy:symbol, 15 分鐘 bar)`，必含 strategy），`BoundedCache` LRU | `nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` |
 
@@ -160,9 +160,9 @@ flowchart TD
 - **位置**：呼叫點在使用者／標的迴圈內、心跳推播之後；SPEAR 已於 2026-10-17 退役，前方不再有 `enable_analyst_agent` 閘門。
 - **策略分派與 `/x` 一致**：沿用 `/settings` 的 `trading_strategy`（`RIGHT_SIDE`／`LEFT_SIDE`／`SHORT_SIDE`／`DYNAMIC`），`DYNAMIC` 依 Regime 路由（III／III-B → 右側、I → 左側、V → 做空、II／IV → 不進場）。要收到左側接刀買點須先把 `/settings` 切成 `DYNAMIC`。
 - **價位沿用單一定義**：停損 `compute_reference_stop()`（牆 ∓ 0.5×ATR₁₅ₘ，**不是**心跳的 `ANTI_WASHOUT_ATR_MULT=1.5`，見 §5 ATR 消歧義）、目標 `resolve_effective_target()`（公式 D）、做空價位 `build_short_entry_levels()`；缺資料時該欄位顯示 N/A，做空價位不合法則 fail-closed 不推播。
-- **去重與乾跑**：去重鍵 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`，Regime III-B 升級為 III 是新訊號、會再發一次；任何擋下（非 green、頻道關閉、鐵律未過、乾跑）**都不寫旗標**，否則正式開啟當天所有標的都被當日旗標鎖住。
+- **去重與乾跑**：去重鍵 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`（擠壓路徑以等級入鍵：`advisory_entry_{uid}_{SYMBOL}_SQZ_T{n}_{YYYYMMDD}`，同日 T1 升級為 T3 是新訊號、會再發一次）；任何擋下（非 green、頻道關閉、鐵律未過、乾跑）**都不寫旗標**，否則正式開啟當天所有標的都被當日旗標鎖住。
 - **前向蒐集**：評估包在 `evaluation_source("WATCHLIST_ADVISOR")`，乾跑期間照常記錄，作為觀察期的資料來源。
-- **觀察指標與放行判讀**：主判準是**去重後的實際 DM 總量**而非鐵律通過次數（乾跑期間去重結構性失效，直接計數會高估 4～13 倍）；單檔每週 0–2 次僅為次要的異常偵測指標。完整的 SQL 查詢、判定門檻（$\le 5$ 放行／$5\sim15$ 收緊／$>15$ 不放行）與部署前檢查清單見 [`05_calibration_harness_and_forward_collection.md`](05_calibration_harness_and_forward_collection.md) §5.11。
+- **觀察指標與放行判讀**：主判準是**去重後的實際 DM 總量**而非鐵律通過次數（含擠壓路徑 `ENTRY_SQUEEZE`，計全部路徑開啟時的總量；2026-11-26 使用者決定）（乾跑期間去重結構性失效，直接計數會高估 4～13 倍）；單檔每週 0–2 次僅為次要的異常偵測指標。完整的 SQL 查詢、判定門檻（$\le 5$ 放行／$5\sim15$ 收緊／$>15$ 不放行）與部署前檢查清單見 [`05_calibration_harness_and_forward_collection.md`](05_calibration_harness_and_forward_collection.md) §5.11。
 
 ---
 

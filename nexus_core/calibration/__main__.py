@@ -153,7 +153,9 @@ async def _main(args: argparse.Namespace) -> int:
         import config
 
         from calibration.macro_forward_report import (
+            BENCHMARK_SYMBOLS,
             BOXX_SYMBOL,
+            DRAWDOWN_SYMBOL,
             VOO_SYMBOL,
             build_report,
             load_logs,
@@ -165,9 +167,14 @@ async def _main(args: argparse.Namespace) -> int:
             Path(args.snapshot_db) if args.snapshot_db else None
         )
         tech_prices = await load_prices(config.MACRO_TECH_POOL)
-        other = await load_prices((VOO_SYMBOL, BOXX_SYMBOL))
+        other = await load_prices(BENCHMARK_SYMBOLS)
         result = build_report(
-            regimes, signals, tech_prices, other[VOO_SYMBOL], other[BOXX_SYMBOL]
+            regimes,
+            signals,
+            tech_prices,
+            other[VOO_SYMBOL],
+            other[BOXX_SYMBOL],
+            spy_prices=other.get(DRAWDOWN_SYMBOL),
         )
         target = write_report(Path(cfg.out_dir), result)
         print(f"報告已輸出：{target}")

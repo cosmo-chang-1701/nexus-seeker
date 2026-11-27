@@ -212,6 +212,10 @@ _SKEW_BUCKETS: tuple[tuple[float, float, str], ...] = (
     (98.0, 100.01, ">=98"),
 )
 
+# Skew 門檻判讀所需 CANONICAL 紀錄交易日數；以實際紀錄日計（已標註、全體不重複事件日，
+# 不分標的），2026-11-26 使用者決定（docs/architecture/05 §5.13）
+SKEW_MIN_CANONICAL_DATES = 60
+
 
 def _features(df: pd.DataFrame) -> pd.DataFrame:
     """把 features_json 展開成欄位；無法解析的列留空。"""
@@ -279,9 +283,12 @@ def build_threshold_studies(
       REGIME_CLASSIFIER 的列；依評估器拆分的子表則使用未去重的資料。
     - `gamma_flip_since`：只作用於 edge GEX 衍生的 `wall_depth_ratio` 與
       `gamma_flip_materiality`（docs/microstructure/03 §5.w），Skew 用全部樣本。
+    - `skew_canonical_dates`：`CANONICAL` 且有 skew 分位之列的不重複事件日數，
+      與是否達 `SKEW_MIN_CANONICAL_DATES`。
     """
     feats = _features(entries)
     result: dict[str, Any] = {}
+    n_canonical_dates = 0
 
     if {"support_gex", "adv_dollar_20d"}.issubset(feats.columns):
         sg = pd.to_numeric(feats["support_gex"], errors="coerce")
@@ -321,6 +328,8 @@ def build_threshold_studies(
                 "outcome": entries["outcome"],
             }
         ).dropna(subset=["x"])
+        canonical = frame.loc[frame["source"] == "CANONICAL", "date"].astype(str)
+        n_canonical_dates = int(canonical[canonical != ""].nunique())
         by_source = _skew_by_source(_dedupe_bars(entries, frame))
         result["skew_percentile"] = by_source or "資料累積中 (尚無 skew_percentile)"
         result["skew_percentile_by_evaluator"] = _skew_by_evaluator(entries, frame)
@@ -329,10 +338,22 @@ def build_threshold_studies(
         result["skew_percentile_by_evaluator"] = (
             "資料累積中 (尚無 skew_percentile 欄位)"
         )
+    result["skew_canonical_dates"] = _skew_canonical_dates(n_canonical_dates)
     result["gamma_flip_materiality"] = _gamma_flip_materiality_study(
         entries, feats, since=gamma_flip_since
     )
     return result
+
+
+def _skew_canonical_dates(n_dates: int) -> dict[str, Any]:
+    """`CANONICAL` 紀錄交易日數與 Skew 門檻是否可判讀。"""
+    return {
+        "n_dates": n_dates,
+        "min_dates": SKEW_MIN_CANONICAL_DATES,
+        "status": "已達，可依 §5.13 判讀（各分位區間仍須 n ≥ 100）"
+        if n_dates >= SKEW_MIN_CANONICAL_DATES
+        else "未達，不判讀 Skew 門檻",
+    }
 
 
 def _dedupe_bars(entries: pd.DataFrame, frame: pd.DataFrame) -> pd.DataFrame:
@@ -1033,7 +1054,15 @@ def _squeeze_analysis(
     closes: Closes,
     cfg: CalibrationConfig,
     t1_since: Optional[date] = None,
+    *,
+    control_exclude_pairs: Optional[set[tuple[str, Optional[date]]]] = None,
 ) -> dict[str, Any]:
+    """單一母體的 G.1–G.3 與影子否決分組。
+
+    對照組一律排除 `rows` 內任何 decision=1 列的 (標的, 日)；`control_exclude_pairs`
+    非 None 時另排除其中的 (標的, 日)（例如其他來源的進場紀錄），並在
+    `g2["control_excluded_other_source"]` 揭露因此多排除的 (標的, 日) 組數。
+    """
     dates_by_sym: dict[str, list[date]] = {
         s: [c[0] for c in v] for s, v in closes.items() if v
     }
@@ -1077,6 +1106,7 @@ def _squeeze_analysis(
 
     control_v: list[float] = []
     control_c: list[str] = []
+    control_excluded = 0
     if events:
         lo_d = min(e["date"] for e in events)
         hi_d = max(e["date"] for e in events)
@@ -1102,6 +1132,16 @@ def _squeeze_analysis(
         ctrl = ctrl.dropna(subset=["_d"]).sort_values("bar_ts")
         ctrl = ctrl[(ctrl["_d"] >= lo_d) & (ctrl["_d"] <= hi_d)]
         ctrl = ctrl.drop_duplicates(subset=["symbol", "_d"], keep="first")
+        if control_exclude_pairs is not None:
+            allowed = np.array(
+                [
+                    (str(s_), d_) not in control_exclude_pairs
+                    for s_, d_ in zip(ctrl["symbol"], ctrl["_d"])
+                ],
+                dtype=bool,
+            )
+            control_excluded = int((~allowed).sum())
+            ctrl = ctrl.loc[allowed]
         for sym_, d_ in zip(ctrl["symbol"], ctrl["_d"]):
             series = closes.get(str(sym_))
             if not series:
@@ -1123,6 +1163,8 @@ def _squeeze_analysis(
         "n_dates_treat": len(set(treat_c)),
         "min_dates": SQUEEZE_MIN_DATES,
     }
+    if control_exclude_pairs is not None:
+        g2["control_excluded_other_source"] = control_excluded
     if len(treat_v) >= 1 and len(control_v) >= 1:
         diff, lo, hi, se = clustered_bootstrap_diff(
             treat_v, treat_c, control_v, control_c, cfg.n_boot, cfg.seed
@@ -1175,6 +1217,9 @@ def build_squeeze_flip_check(
 
     `t1_since` 非 None 時，事件日早於該日的等級 1 決策列不計入 G.1、G.2 處理組與
     影子否決事件（仍排除在對照組之外）；CLI 傳入 `SQUEEZE_T1_WINDOW_SINCE`。
+
+    主結果的對照組排除任何來源 decision=1 的 (標的, 日)（2026-11-26 使用者決定，含
+    SYMBOL_VIEW、10 日去重丟棄與 T1 切分排除的列）。
     """
     cfg = cfg or CalibrationConfig()
     base: pd.DataFrame = (
@@ -1185,11 +1230,18 @@ def build_squeeze_flip_check(
         )
     )
     primary = base[base["source"] == SQUEEZE_PRIMARY_SOURCE]
+    entered = base[base["decision"] == 1]
+    entered_pairs: set[tuple[str, Optional[date]]] = {
+        (str(sym), _event_date(ts))
+        for sym, ts in zip(entered["symbol"], entered["bar_ts"])
+    }
     return {
         "primary_source": SQUEEZE_PRIMARY_SOURCE,
         "n_rows": int(len(primary)),
         "t1_window_since": t1_since.isoformat() if t1_since is not None else None,
-        "primary": _squeeze_analysis(primary, closes, cfg, t1_since),
+        "primary": _squeeze_analysis(
+            primary, closes, cfg, t1_since, control_exclude_pairs=entered_pairs
+        ),
         "all_sources": {
             "n_rows": int(len(base)),
             **_squeeze_analysis(base, closes, cfg, t1_since),
