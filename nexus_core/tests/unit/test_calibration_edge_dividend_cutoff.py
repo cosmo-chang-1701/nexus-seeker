@@ -225,7 +225,12 @@ def test_forward_gex_studies_respect_since() -> None:
         pd.DataFrame(_forward_rows(PRE, 5)), CFG, gamma_flip_since=SINCE
     )
     studies = none_left["threshold_studies"]
-    assert studies["gamma_flip_materiality"] == "資料累積中 (0/100)"
+    emptied = (
+        f"資料累積中 (0/100)；樣本起日 {SINCE}，"
+        f"排除起日前 {len(_forward_rows(PRE, 5))} 列"
+    )
+    assert studies["gamma_flip_materiality"] == emptied
+    assert f"- {emptied}" in _markdown(none_left)
     assert studies["wall_depth_ratio"] == "資料累積中 (0/100)"
     assert none_left["magnitudes"]["put_wall_dist_pct"] == "資料累積中 (0/100)"
     assert none_left["n_excluded_before_gex_since"] == 5
@@ -244,7 +249,7 @@ def test_forward_gex_studies_respect_since() -> None:
         build_threshold_studies(undated, gamma_flip_since=SINCE)[
             "gamma_flip_materiality"
         ]
-        == "資料累積中 (0/100)"
+        == "資料累積中 (0/100)；樣本起日 2026-10-30，排除起日前 1 列"
     )
 
 
@@ -263,7 +268,7 @@ def _markdown(forward: dict[str, Any]) -> str:
 def test_markdown_shows_sample_since() -> None:
     rows = _mixed_forward_rows()
     md = _markdown(build_forward_report(rows, CFG, gamma_flip_since=SINCE))
-    note = "（edge 股息率修正，microstructure/03 §5.w）；排除前期 120 列"
+    note = "（edge 股息率修正，microstructure/03 §5.w）；排除起日前 120 列"
     assert f"- 牆體深度比與牆距分佈：樣本起日 2026-10-30{note}" in md
     assert f"- 樣本起日 2026-10-30{note}" in md
     assert "樣本起日" not in _markdown(build_forward_report(rows, CFG))

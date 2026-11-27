@@ -452,6 +452,11 @@ def _gamma_flip_materiality_study(
     n_eligible = len(frame)
     frame = frame[_since_mask(entries, since).reindex(frame.index)]
     if frame.empty:
+        if since is not None:
+            return (
+                f"資料累積中 (0/{FORWARD_MIN_ROWS})；樣本起日 {since}，"
+                f"排除起日前 {n_eligible} 列"
+            )
         return f"資料累積中 (0/{FORWARD_MIN_ROWS})"
     frame["group"] = [
         "雜訊交叉" if x < GAMMA_FLIP_MATERIALITY_DISPLAY else "重要交叉"
@@ -1038,8 +1043,10 @@ def _shadow_veto_groups(
 
 
 def _t1_window_excluded_mask(rows: pd.DataFrame, since: Optional[date]) -> pd.Series:
-    """T1 窗口切分前的等級 1 決策列（§5.8 G），不看觸發來源。
+    """T1 窗口切分前的等級 1 決策列（§5.8 G）。
 
+    只看最終等級（`conditions_mask`），
+    不看觸發條件（`features_json.triggers`）與 `source`。
     `since` 為 None 或事件日無法解析時該列一律 False（不排除）。
     """
     if since is None:

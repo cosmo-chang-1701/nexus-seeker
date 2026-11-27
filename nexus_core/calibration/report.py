@@ -147,7 +147,7 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
         raw = g1.get("unsegmented") or {}
         lines.append(
             f"  - T1 窗口切分（§5.8 G）：等級1 僅計 {g1['t1_since']} 起；"
-            f"排除前期等級1 決策列 {g1.get('t1_excluded_rows', 0)} 筆；"
+            f"排除起日前的等級1 決策列 {g1.get('t1_excluded_rows', 0)} 筆；"
             f"未切分（參考，不參與判定）：獨立事件 {raw.get('independent_events', 0)}"
             f"（{_tier_text(raw)}）、達標：{_flag(raw.get('g1_passed'))}"
         )
@@ -239,7 +239,7 @@ def _render_gamma_flip_materiality(data: Any) -> list[str]:
     if data.get("since"):
         lines.append(
             f"- 樣本起日 {data['since']}（edge 股息率修正，microstructure/03 §5.w）；"
-            f"排除前期 {data.get('n_excluded_before_since', 0)} 列"
+            f"排除起日前 {data.get('n_excluded_before_since', 0)} 列"
         )
     groups = data.get("groups")
     if isinstance(groups, dict) and groups:
@@ -392,7 +392,7 @@ def render_markdown(results: dict[str, Any]) -> str:
             lines += [
                 f"- 牆體深度比與牆距分佈：樣本起日 {forward['gex_since']}"
                 "（edge 股息率修正，microstructure/03 §5.w）；"
-                f"排除前期 {forward.get('n_excluded_before_gex_since', 0)} 列",
+                f"排除起日前 {forward.get('n_excluded_before_gex_since', 0)} 列",
                 "",
             ]
         canonical = studies.get("skew_canonical_dates")

@@ -173,7 +173,7 @@ def test_markdown_shows_t1_window_line() -> None:
     md = _markdown(build_squeeze_flip_check(rows, closes, CFG, t1_since=SINCE))
     assert (
         "  - T1 窗口切分（§5.8 G）：等級1 僅計 2026-11-14 起；"
-        "排除前期等級1 決策列 2 筆；未切分（參考，不參與判定）："
+        "排除起日前的等級1 決策列 2 筆；未切分（參考，不參與判定）："
         "獨立事件 6（等級1＝4、等級2＝1、等級3＝1）、達標：否"
     ) in md
     assert "T1 窗口切分" not in _markdown(build_squeeze_flip_check(rows, closes, CFG))
