@@ -754,3 +754,27 @@ def test_turbo_lookback_does_not_touch_t3_or_t2() -> None:
         **{"65m": _SQ, "5m": {"turbo": True}},
     )
     assert evaluate_squeeze_entry(m2, _NO_RES).tier == 2
+
+
+async def test_evaluate_symbol_populates_rsi_reentry_and_keeps_positional_default() -> (
+    None
+):
+    from unittest.mock import AsyncMock, patch
+
+    from market_analysis.rsi_reentry import WEEKLY_NO_DATA
+    from market_analysis.squeeze_entry import SqueezeEvaluation, evaluate_symbol
+
+    ev_pos = SqueezeEvaluation(evaluate_squeeze_entry({}, None), {}, None)
+    assert ev_pos.rsi_reentry is None
+
+    df_d = _daily(pd.bdate_range("2026-01-02", periods=25))
+    m = _matrix(D={"green_dot": True})
+    with patch(
+        "market_analysis.squeeze_entry.evaluator.fetch_psq_matrix",
+        AsyncMock(return_value=(m, df_d)),
+    ):
+        ev = await evaluate_symbol("TEST", 100.0, now_ny=datetime(2026, 2, 10, 11, 0))
+    assert ev.result == evaluate_squeeze_entry(m, ev.resistance)
+    assert ev.rsi_reentry is not None
+    assert ev.rsi_reentry.weekly_state == WEEKLY_NO_DATA
+    assert ev.rsi_reentry.daily_rsi is not None

@@ -430,6 +430,12 @@ def test_features_json_within_max() -> None:
         is_approaching=True,
     )
     radar = {"skew_percentile": 99.123456, "skew_percentile_source": "CANONICAL"}
+    rsi_status = SimpleNamespace(
+        weekly_rsi=28.45,
+        weekly_is_oversold=True,
+        daily_rsi=31.23,
+        daily_reentry_state="OVERSOLD_WATCH",
+    )
     with rec.evaluation_source("WATCHLIST_ADVISOR"):
         rec.record_squeeze_entry(
             "AAA",
@@ -439,11 +445,17 @@ def test_features_json_within_max() -> None:
             resistance,
             candidate_radar=radar,
             shadow_vetoes=shadow,
+            rsi_reentry=rsi_status,
         )
     row = rec._BUFFER[0]
     assert row["features_json"] is not None
     assert len(row["features_json"]) <= rec._FEATURES_JSON_MAX
-    assert "sv_any" in _features(row)
+    feats = _features(row)
+    assert "sv_any" in feats
+    assert feats["w_rsi_14"] == 28.45
+    assert feats["w_rsi_os"] is True
+    assert feats["d_rsi_14"] == 31.23
+    assert feats["d_reentry"] == "OVERSOLD_WATCH"
 
 
 # ------------------------------------------------------------- entry_advisor
