@@ -102,9 +102,9 @@ OPTIONS_ROLLOVER_DRY_RUN = (
 # 下列四個乾跑旗標 SHORT_ENTRY／PYRAMID_ADD／REGIME_III_B／REGIME_HEDGE_TIER1，
 # 以及上方的 OPTIONS_ROLLOVER_DRY_RUN，在 cogs/trading/portfolio_monitor.py 派發迴圈
 # 攔下的指令，只要通知頻道開啟且通過去重，仍照常寫入 rollover_audit_log 稽核列
-# （頻道關閉者在去重前就略過、不寫入）；該表沒有乾跑欄位，事後無法區分哪些列
-# 實際推播過，/rollover_history 也會一併列出。SHORT_ENTRY_DRY_RUN 另控制自選
-# 標的進場顧問的做空推播，該路徑不寫此表。
+# （頻道關閉者在去重前就略過、不寫入），其 delivery_status 欄記為 DRY_RUN；
+# /rollover_history 一併列出並標示「乾跑」（沒有此欄值的舊列標示「未知」）。
+# SHORT_ENTRY_DRY_RUN 另控制自選標的進場顧問的做空推播，該路徑不寫此表。
 # SHORT_ENTRY 做空進場訊號 dry-run (預設開啟)：只寫入 rollover_audit_log 稽核
 # 軌跡、不推播 DM。做空進場的倉位與 VIX 係數皆未經回測校準，觀察稽核紀錄的
 # 觸發分佈合理後再關閉。

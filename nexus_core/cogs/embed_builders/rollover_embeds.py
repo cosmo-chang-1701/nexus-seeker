@@ -2,6 +2,11 @@ import discord
 import logging
 from typing import Optional, Any, Callable, Coroutine, Dict, Mapping
 
+from database.rollover_audit import (
+    DELIVERY_DRY_RUN,
+    DELIVERY_NOT_QUEUED,
+    DELIVERY_QUEUED,
+)
 from cogs.embed_builders._core import NexusEmbed
 from cogs.embed_builders._ansi_utils import _render_aligned_table, fmt_or_dash
 from cogs.embed_builders._embed_helpers import (
@@ -1266,22 +1271,33 @@ _SCENARIO_SHORT_LABELS: Dict[str, str] = {
     "OPPORTUNITY_COST": "機會成本",
 }
 
+# 稽核列的推播狀態 → 表格顯示；NULL（舊列）與未知值一律顯示「未知」。
+_DELIVERY_LABELS: dict[str, str] = {
+    DELIVERY_QUEUED: "已發",
+    DELIVERY_DRY_RUN: "乾跑",
+    DELIVERY_NOT_QUEUED: "未發",
+}
+
 
 def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embed:
     """
-    產生動態轉倉引擎審計軌跡（歷史推送紀錄）Embed。
+    產生動態轉倉引擎審計軌跡（歷史建議紀錄）Embed。
 
-    系統僅提供建議、不代為執行券商下單，因此這裡呈現的是「系統實際推送過
-    哪些建議」而非「建議後的真實成交結果」，供使用者事後回顧與問責。
+    系統僅提供建議、不代為執行券商下單，因此這裡呈現的是「系統產生過哪些建議、
+    是否排入推播」而非「建議後的真實成交結果」，供使用者事後回顧與問責。
+    乾跑攔下者同樣列出；沒有推播狀態的舊紀錄顯示「未知」。
     """
     embed = NexusEmbed(
         title="📜 動態轉倉建議歷史紀錄",
-        description="以下為系統近期實際推送給您的轉倉建議（非模擬成交結果）。\n​",
+        description=(
+            "以下為系統近期產生的轉倉建議，『推播』欄標示是否發給您"
+            "（非模擬成交結果）。\n​"
+        ),
         color=discord.Color.blurple(),
     )
 
     if not records:
-        embed.description = "📭 目前尚無轉倉建議推送紀錄。"
+        embed.description = "📭 目前尚無轉倉建議紀錄。"
         return embed
 
     rows: list[list[str]] = []
@@ -1292,20 +1308,21 @@ def create_rollover_history_embed(records: list[dict[str, Any]]) -> discord.Embe
         sell_ratio = float(r.get("sell_ratio", 0.0) or 0.0)
         rows.append(
             [
-                str(r.get("created_at", ""))[:16],
+                str(r.get("created_at", ""))[5:16],  # MM-DD HH:MM（省略年份）
                 str(r.get("symbol", "")),
                 scenario_label,
                 str(r.get("action", "N/A")),
                 f"{sell_ratio:.0%}",
+                _DELIVERY_LABELS.get(str(r.get("delivery_status")), "未知"),
             ]
         )
     header_line, divider, *data_lines = _render_aligned_table(
-        ["時間 (UTC)", "標的", "情境", "動作", "比例"],
+        ["時間 (UTC)", "標的", "情境", "動作", "比例", "推播"],
         rows,
-        ["left", "left", "left", "left", "right"],
+        ["left", "left", "left", "left", "right", "left"],
         sep=" | ",
     )
     # 分塊保證每個欄位都有完整的 ```ansi 收尾 fence（不被 1024 截斷切掉）
-    _add_ansi_table_fields(embed, "🕰️ 近期推送紀錄", header_line, divider, data_lines)
-    embed.set_footer(text="Rollover Audit Trail • 僅記錄系統推送建議，非實際成交結果")
+    _add_ansi_table_fields(embed, "🕰️ 近期建議紀錄", header_line, divider, data_lines)
+    embed.set_footer(text="Rollover Audit Trail • 系統建議紀錄，非實際成交結果")
     return embed

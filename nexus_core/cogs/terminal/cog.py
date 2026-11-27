@@ -519,7 +519,8 @@ class TerminalCog(commands.Cog):
         )
 
     @app_commands.command(
-        name="rollover_history", description="查看動態轉倉引擎近期推送給您的建議紀錄"
+        name="rollover_history",
+        description="查看動態轉倉引擎近期產生的建議紀錄與推播狀態",
     )
     async def rollover_history(self, interaction: discord.Interaction) -> Any:
         return await rollover.rollover_history_impl(interaction)

@@ -1141,6 +1141,7 @@ async def test_monitor_real_portfolio_task_options_dry_run_suppresses_dm_but_log
     assert log_call.kwargs["symbol"] == "NVDA"
     assert log_call.kwargs["scenario"] == "SATELLITE_REBALANCE"
     assert log_call.kwargs["action"] == "LIQUIDATE"
+    assert log_call.kwargs["delivery_status"] == "DRY_RUN"
     save_kv_mock.assert_awaited_once()
 
 
@@ -1909,6 +1910,79 @@ async def test_monitor_real_portfolio_task_logs_rollover_instruction_with_correc
     assert call_kwargs["target_core"] == "VOO"
     assert call_kwargs["suggested_price"] == "Market"
     assert call_kwargs["cash_impact"] == "$600"
+    assert call_kwargs["delivery_status"] == "QUEUED"
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_logs_not_queued_when_notify_declines() -> (
+    None
+):
+    """頻道通過派發預檢後才被關閉時 notify() 回傳 False，稽核列須記 NOT_QUEUED
+    而非 QUEUED。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+                "cash_impact": "$600",
+            }
+        ]
+    )
+
+    log_mock = AsyncMock()
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", return_value=None),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", log_mock),
+        patch(
+            "cogs.trading.portfolio_monitor.notify",
+            new_callable=AsyncMock,
+            return_value=False,
+        ),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    log_mock.assert_awaited_once()
+    log_await_args = log_mock.await_args
+    assert log_await_args is not None
+    assert log_await_args.kwargs["delivery_status"] == "NOT_QUEUED"
 
 
 def _short_entry_instruction() -> dict:

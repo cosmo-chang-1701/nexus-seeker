@@ -439,7 +439,7 @@ SELECT COUNT(*) FROM kv_cache WHERE key LIKE 'advisory_entry_%';
 
 **為什麼需要**：`SATELLITE_REBALANCE` 在 2025 回測的勝率只有 54.2%，代表結構性停損有近半數可能是被洗盤掃出。
 要找出是哪一層在製造假訊號，必須分層統計「觸發後的走勢」。但 `regime_evaluation_log` 原本只記錄 Regime 分類與
-進場鐵律，**從未記錄出場分層**；`rollover_audit_log` 也只存 scenario/action，沒有分層、現價與停損價，且只記通知頻道開啟並通過派發去重的指令（含乾跑攔下者，表內無法區分是否實際推播）。
+進場鐵律，**從未記錄出場分層**；`rollover_audit_log` 也只存 scenario/action，沒有分層、現價與停損價，且只記通知頻道開啟並通過派發去重的指令（含乾跑攔下者；`delivery_status` 欄自 v099 起記錄 `QUEUED`（已排入推播佇列）／`DRY_RUN`（乾跑攔下）／`NOT_QUEUED`（派發途中頻道被關閉），更早的列為 NULL）。
 
 **前向記錄點**：`anti_washout.py::check_satellite_rebalancing_impl` 在 `_generate_rule_based_rebalance_report()`
 決定 `exit_tier` 之後、**顧問模式轉換之前**呼叫 `_record_exit_tier()` → `evaluation_recorder.record_exit_signal()`。

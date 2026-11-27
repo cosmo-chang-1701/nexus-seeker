@@ -15,6 +15,11 @@ import config
 import database
 import market_time
 from database.notification_channels import NotificationKey, resolve_rollover_channel
+from database.rollover_audit import (
+    DELIVERY_DRY_RUN,
+    DELIVERY_NOT_QUEUED,
+    DELIVERY_QUEUED,
+)
 from services.notification_dispatcher import is_channel_enabled, notify
 from services.notification_dispatch_recorder import (
     DispatchRecord,
@@ -1529,6 +1534,7 @@ class PortfolioMonitorCog(commands.Cog):
                                 f"action={action}"
                             )
                             _delivered = False
+                            delivery_status = DELIVERY_DRY_RUN
                         else:
                             _delivered = await notify(
                                 self.bot,
@@ -1536,6 +1542,9 @@ class PortfolioMonitorCog(commands.Cog):
                                 notif_key,
                                 embed=embed,
                                 record=rollover_dispatch_record(dict(ins)),
+                            )
+                            delivery_status = (
+                                DELIVERY_QUEUED if _delivered else DELIVERY_NOT_QUEUED
                             )
                         await database.save_kv_cache(dedup_key, 1)
 
@@ -1557,9 +1566,9 @@ class PortfolioMonitorCog(commands.Cog):
                                 **_state_patch,
                             )
                         # 審計軌跡：記錄本次通知頻道開啟且通過去重的轉倉建議本身
-                        # （含乾跑攔下者，表內無法區分；系統僅提供建議、不代為執行
-                        # 券商下單，故記錄的是「給了什麼建議」而非「後續執行結果」），
-                        # 供事後回顧與問責。
+                        # （含乾跑攔下者，以 delivery_status 區分；系統僅提供建議、
+                        # 不代為執行券商下單，故記錄的是「給了什麼建議」而非「後續
+                        # 執行結果」），供事後回顧與問責。
                         await database.log_rollover_instruction(
                             user_id=u_id,
                             symbol=ins["symbol"],
@@ -1569,6 +1578,7 @@ class PortfolioMonitorCog(commands.Cog):
                             target_core=ins.get("target_core"),
                             suggested_price=suggested_price,
                             cash_impact=ins.get("cash_impact"),
+                            delivery_status=delivery_status,
                         )
             except Exception as e:
                 logger.error(f"動態轉倉盤中審計錯誤: {e}")
