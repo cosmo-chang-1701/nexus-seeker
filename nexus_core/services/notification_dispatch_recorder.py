@@ -1,8 +1,9 @@
-"""notification_dispatch_recorder.py — 已送達可行動通知的前向蒐集記錄器。
+"""notification_dispatch_recorder.py — 回報已入列之可行動通知的前向蒐集記錄器。
 
 為什麼需要：每個通知頻道「讓使用者照做」究竟改善還是傷害了 B&H 投組的 Sortino /
-MDD / CVaR，目前沒有任何資料可以回答。唯一的資料來源是從現在開始，把使用者**實際收到**
-的可行動訊號記下來，再由 03:30 ET 離峰排程回填 20 個交易日的反事實路徑
+MDD / CVaR，目前沒有任何資料可以回答。唯一的資料來源是從現在開始，把 `notify()`
+**回報已入列**的可行動訊號記下來（不保證佇列寫入成功或送達），再由 03:30 ET 離峰排程回填
+20 個交易日的反事實路徑
 （`services/regime_outcome_labeler.py::run_dispatch_outcome_labeling`）。
 
 設計（比照 `market_analysis/evaluation_recorder.py`）：

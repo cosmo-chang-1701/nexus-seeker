@@ -1,4 +1,7 @@
-"""notification_dispatch_log.py — 已送達可行動通知與其「照做 vs 持有」反事實結果的存取層。
+"""notification_dispatch_log.py — 可行動通知入列紀錄與反事實結果的存取層。
+
+紀錄的是 notify() 回報已入列（不保證佇列寫入成功或送達）的可行動通知與「照做 vs 持有」
+反事實結果。
 
 所有寫入一律經 `database/connection.py` 的寫入佇列（單一寫入者不變式，見 AGENTS.md）。
 資料表定義見 migrations/v083_add_notification_dispatch_log.py。
