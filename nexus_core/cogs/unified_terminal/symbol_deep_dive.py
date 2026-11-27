@@ -158,6 +158,20 @@ async def _throttled_volume_profile(symbol: str) -> Any:
         return None
 
 
+def _retrieve_child_exception(task: "asyncio.Task[Any]") -> None:
+    """``done_callback``：取走子任務例外並以 debug 記錄。
+
+    作法比照 ``SingleFlightManager._discard``。呼叫端只會拋出第一個失敗的原例外；
+    其餘子任務（含被取消時才拋錯者）的例外若無人取回，asyncio 會在 GC 期印出
+    "Task exception was never retrieved"。
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.debug(f"[深度分析] 子任務以例外結束（已取回）: {exc!r}")
+
+
 async def _cancel_and_reap(tasks: list["asyncio.Task[Any]"]) -> None:
     """子任務收尾：取消尚未完成者、等它們結束，並取回所有例外。
 
@@ -169,9 +183,11 @@ async def _cancel_and_reap(tasks: list["asyncio.Task[Any]"]) -> None:
     僅結果被丟棄。
     """
     for task in tasks:
-        # 先掛回呼再等待：即使下方的等待被第二次取消打斷，例外仍會被取回，
-        # 不會出現 "Task exception was never retrieved"。
-        task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        # 先掛回呼再取消：建立任務中途失敗時 gather 尚未建立，被取消時才拋錯的子任務
+        # 沒有其他人取回例外。其餘情形 gather 清單內的子任務由 gather 取回，此回呼一併
+        # 作為後備，即使下方的等待被第二次取消打斷，也不會出現
+        # "Task exception was never retrieved"。
+        task.add_done_callback(_retrieve_child_exception)
     pending = [t for t in tasks if not t.done()]
     for task in pending:
         task.cancel()

@@ -2,6 +2,7 @@
 
 import asyncio
 import gc
+import logging
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Iterator
@@ -133,6 +134,22 @@ async def _drain(before: "set[asyncio.Task[Any]]") -> None:
         await asyncio.wait(tasks, timeout=_CALL_TIMEOUT_S)
 
 
+def _fails_on_cancel(
+    started: asyncio.Event, error: RuntimeError, raised: list[BaseException]
+) -> Any:
+    """阻塞 fake：被取消時改拋 `error`，並記錄到 `raised`。"""
+
+    async def _fake(*args: Any, **kwargs: Any) -> Any:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raised.append(error)
+            raise error
+
+    return _fake
+
+
 @pytest.mark.asyncio
 async def test_sibling_failure_cancels_pending_and_reraises() -> None:
     boom = RuntimeError("SPY 歷史抓取失敗")
@@ -168,17 +185,6 @@ async def test_multiple_failures_no_unretrieved_exception() -> None:
     gex_started, expiries_started = asyncio.Event(), asyncio.Event()
     raised_on_cancel: list[BaseException] = []
 
-    def _fails_on_cancel(started: asyncio.Event, error: RuntimeError) -> Any:
-        async def _fake(*args: Any, **kwargs: Any) -> Any:
-            started.set()
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                raised_on_cancel.append(error)
-                raise error
-
-        return _fake
-
     async def _spy_fails(*args: Any, **kwargs: Any) -> Any:
         await gex_started.wait()
         await expiries_started.wait()
@@ -192,9 +198,9 @@ async def test_multiple_failures_no_unretrieved_exception() -> None:
     try:
         with _patched(
             spy=_spy_fails,
-            gex=_fails_on_cancel(gex_started, second),
+            gex=_fails_on_cancel(gex_started, second, raised_on_cancel),
             # 到期日任務不在 gather 清單內，另行涵蓋其收尾路徑。
-            expiries=_fails_on_cancel(expiries_started, third),
+            expiries=_fails_on_cancel(expiries_started, third, raised_on_cancel),
             squeeze=AsyncMock(return_value=None),
         ):
             caught: BaseException | None = None
@@ -274,6 +280,72 @@ async def test_setup_failure_cancels_created_tasks() -> None:
             assert excinfo.value is boom
             assert not _leftover(before), f"仍有殘留任務: {_leftover(before)}"
     finally:
+        await _drain(before)
+
+
+@pytest.mark.asyncio
+async def test_setup_failure_child_raising_on_cancel_is_retrieved(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """建立任務中途失敗時，被取消才拋錯的子任務例外由收尾回呼取回並記錄。
+
+    此時 gather 尚未建立，回呼是唯一的取回者。預設的惰性任務工廠下，所有子任務
+    建立完之前沒有任何 `await`，子任務尚未開始執行就被取消，不可能在取消時拋錯；
+    改用 `asyncio.eager_task_factory`，子任務在 `create_task` 內就先跑到第一個
+    `await`，才能重現這條路徑。
+    """
+    boom = RuntimeError("建立任務中途失敗")
+    second = RuntimeError("GEX 於收尾時拋錯")
+    gex_started = asyncio.Event()
+    raised_on_cancel: list[BaseException] = []
+
+    loop = asyncio.get_running_loop()
+    previous_factory = loop.get_task_factory()
+    previous_handler = loop.get_exception_handler()
+    captured: list[dict[str, Any]] = []
+    loop.set_exception_handler(lambda _loop, context: captured.append(context))
+    before = asyncio.all_tasks()
+    try:
+        loop.set_task_factory(asyncio.eager_task_factory)
+        with (
+            caplog.at_level(logging.DEBUG, logger=_MODULE),
+            _patched(
+                gex=_fails_on_cancel(gex_started, second, raised_on_cancel),
+                session_stats=MagicMock(side_effect=boom),
+                squeeze=AsyncMock(return_value=None),
+            ),
+        ):
+            caught: BaseException | None = None
+            try:
+                await _fetch(_DD())
+            except RuntimeError as exc:
+                caught = exc
+
+            assert caught is boom, f"拋出的不是建立任務時的原例外: {caught!r}"
+            assert gex_started.is_set(), "GEX 任務未在建立時開始執行"
+            assert raised_on_cancel == [second]
+            assert not _leftover(before), f"仍有殘留任務: {_leftover(before)}"
+        loop.set_task_factory(previous_factory)
+
+        # traceback 會經由框架持有子任務；先斷開引用，GC 才能回收並觸發回報。
+        caught = None
+        for error in (boom, second):
+            error.__traceback__ = None
+        await asyncio.sleep(0)
+        gc.collect()
+        await asyncio.sleep(0)
+
+        unretrieved = [
+            c
+            for c in captured
+            if "exception was never retrieved" in str(c.get("message"))
+        ]
+        assert not unretrieved, f"GC_UNRETRIEVED={len(unretrieved)}"
+        messages = [record.getMessage() for record in caplog.records]
+        assert any(repr(second) in m for m in messages), f"未記錄子任務例外: {messages}"
+    finally:
+        loop.set_task_factory(previous_factory)
+        loop.set_exception_handler(previous_handler)
         await _drain(before)
 
 
