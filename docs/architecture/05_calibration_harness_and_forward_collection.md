@@ -290,7 +290,7 @@ G.2／G.3 另需處理組 20 日報酬已可得的事件分布於 $\ge 20$ 個�
 
 第 1–3 條由 `forward-report` 的「擠壓乾跑翻轉檢核」段落計算（主結果只用 `source = 'WATCHLIST_ADVISOR'`；`SYMBOL_VIEW` 有選樣偏差，僅列為參考）；第 4 條為人工項目。該段落只供人工審核，不會自動翻轉 `SQUEEZE_ENTRY_DRY_RUN`。
 
-**G.2 對照組（2026-11-26 使用者決定）**：對照組為主結果同來源（`WATCHLIST_ADVISOR`）、處理組首末事件日之間、`decision = 0` 的 (標的, 日)（每組只取一列）；同一 (標的, 日) 只要在**任何來源**有 `decision = 1` 的列——含 `SYMBOL_VIEW`（`/x` 手動檢核）的進場紀錄、被 10 交易日去重丟棄的列與 T1 窗口切分排除的列——一律不得當對照組，避免已出現進場訊號的標的日混入對照組。價格可得時，報表以 `g2.control_excluded_other_source` 揭露僅因其他來源進場而排除的 (標的, 日) 數；「全部來源（參考）」本來就以全部來源的 `decision = 1` 排除，不受影響。
+**G.2 對照組（2026-11-26 使用者決定）**：對照組為主結果同來源（`WATCHLIST_ADVISOR`）、處理組首末事件日之間、`decision = 0` 的 (標的, 日)（每組只取一列）；同一 (標的, 日) 只要在**任何來源**有 `ENTRY_SQUEEZE` 且 `decision = 1` 的列——含 `SYMBOL_VIEW`（`/x` 手動檢核）的進場紀錄、被 10 交易日去重丟棄的列與 T1 窗口切分排除的列——一律不得當對照組，避免已出現進場訊號的標的日混入對照組。本段只載入 `ENTRY_SQUEEZE` 判定列（`forward_log.load_squeeze_rows`），其他 evaluator（如 `ENTRY_LEFT`、`ENTRY_SHORT`）的 `decision = 1` 不影響對照組。價格可得時，報表以 `g2.control_excluded_other_source` 揭露僅因其他來源進場而排除的 (標的, 日) 數；此數在取價與 20 日報酬篩選之前計數，不等於 `n_control` 的減少量。「全部來源（參考）」本來就以全部來源 `ENTRY_SQUEEZE` 的 `decision = 1` 排除，不受影響。
 
 實際送出擠壓推播另須外層總閘門 `WATCHLIST_ADVISOR_DRY_RUN = false`（§5.11）。
 
@@ -343,7 +343,7 @@ $\Rightarrow$ `get_kv_cache` 永遠回 `None` $\Rightarrow$ 去重不會抑制�
 （與乾跑閘門和去重檢查的先後順序無關）。因此原始紀錄是「鐵律通過次數」而非
 「會送出的 DM 數」。盤中 09:30–16:00 共 13 個 30 分鐘週期，一個成立一整天的
 setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會高估 4～13 倍**，必須
-依下方查詢 1 以 (symbol, 日期, evaluator) 離線去重後再判讀。
+依下方查詢 1 以 (symbol, 日期, evaluator) 離線去重後再判讀；`ENTRY_SQUEEZE` 另以等級（`conditions_mask`）入鍵，即 (symbol, 日期, `conditions_mask`)，與擠壓推播的去重鍵一致（見下方判準口徑）。
 
 **陷阱二：不要用 `docker logs` 當主要來源。** `docker-compose.yml` 的
 `max-size: "10m"` / `max-file: "3"`（總計 30MB）會在一週內把日誌輪替掉，撈到的
@@ -358,17 +358,13 @@ setup 會留下最多 13 筆紀錄但只會送 1 則 DM——**直接計數會�
 | $5 \sim 15$ | 收緊後再觀察一週。優先收緊條件三的空間門檻，**不要動去重鍵**（僅適用左側／做空鐵律；擠壓路徑見下方口徑） |
 | $> 15$ | **不放行** |
 
-錨定依據：2025 回測三檔標的全年僅觸發右側 3 次、III-B 0 次、左側 4 次，合計
-7 次 $\Rightarrow$ 2.33 次/檔/年，外推至 88 檔約 **3.9 則／週**。該回測未實作
-UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則/週的放行線
-已含餘裕。
+錨定依據：2025 回測三檔標的全年僅觸發右側 3 次、III-B 0 次、左側 4 次，合計 7 次 $\Rightarrow$ 2.33 次/檔/年，外推至 88 檔約 **3.9 則／週**。該回測未實作 UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，當時據此認為 5 則/週的放行線已含餘裕。**此錨定不涵蓋擠壓路徑**：回測只含右側、III-B 與左側三條路徑；右側（含 III-B）六重鐵律已於 2026-10-04 移除（§5.8 D 退役說明），多頭建倉改由擠壓路徑（`ENTRY_SQUEEZE`）判定。擠壓路徑另有日線事件研究（[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md) §3.2），但 5 則/週的放行線並非依該研究訂定，本節也未據以重新錨定；擠壓路徑的實際則數見下方判準口徑（截至 2026-11-25 快照）。放行線數值不因此變更，是否調整由使用者決定。
 
 **次要指標**：單檔觸發頻率每檔每週 0–2 次（抓「單一標的天天觸發」的異常，
 非主判準，見 [`01_dual_watchlist_pipelines.md`](01_dual_watchlist_pipelines.md)
 §5.4）；訊號後 5 日前向報酬（`source='WATCHLIST_ADVISOR'` → `forward-report`，
 見下方時間軸）；通知關閉率（`advisory_entry_signal` 是否被使用者關掉）；每輪
-管線耗時（派發掛在 `for ticker in watchlist` 內逐檔序列評估，88 檔各自發動
-六重鐵律的多次網路往返，`_resolve_candidate_radar` 的 `Semaphore(3)` 在序列
+管線耗時（派發掛在 `for ticker in watchlist` 內逐檔序列評估，88 檔各自發動進場判定（多頭建倉為擠壓規則的多時間框架 K 線與否決條件，左側／做空為各自的鐵律）的多次網路往返，`_resolve_candidate_radar` 的 `Semaphore(3)` 在序列
 呼叫下拿不到併發效益，應遠低於 1800 秒）。
 
 **evaluator → Regime／策略對照表**（`record_gate_reason()` 不寫 `regime` 欄位，
@@ -383,20 +379,20 @@ UOA 條件、且以 1h K 線代理 15m，會**低估** production 頻率，5 則
 | `ENTRY_SQUEEZE` | `RIGHT_SIDE` 與 `DYNAMIC` 中非左側、非做空的 Regime（多時間框架擠壓，[`../strategies/10_multi_timeframe_squeeze_entry.md`](../strategies/10_multi_timeframe_squeeze_entry.md)）；`conditions_mask` 存等級；只由 `WATCHLIST_ADVISOR` 與 `SYMBOL_VIEW` 寫入（`PORTFOLIO_MONITOR` 不寫） |
 | `REGIME_CLASSIFIER` | 僅分類，不代表鐵律通過，查詢須排除 |
 
-> ⚠️ 上述 evaluator 同時被 `PORTFOLIO_MONITOR`（持倉監控）與 `SYMBOL_VIEW`
-> （`/x` 手動檢核）寫入，下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，
-> 混在一起算會嚴重高估。
+> ⚠️ 上述 evaluator 除 `ENTRY_SQUEEZE` 外，同時被 `PORTFOLIO_MONITOR`（持倉監控）與 `SYMBOL_VIEW`
+> （`/x` 手動檢核）寫入；`ENTRY_SQUEEZE` 不由 `PORTFOLIO_MONITOR` 寫入，但仍有 `SYMBOL_VIEW` 的列（見上表）。
+> 下列查詢的 `source = 'WATCHLIST_ADVISOR'` 過濾**不可省**，混在一起算會嚴重高估。
 
 > **判準口徑（2026-11-26 使用者決定）**：主判準納入擠壓路徑（`ENTRY_SQUEEZE`）。`ENTRY_RIGHT`／`ENTRY_RIGHT_B` 自 2026-10-04 起已無寫入端，多頭建倉改記 `ENTRY_SQUEEZE`（`nexus_core/market_analysis/intraday_pipeline/entry_advisor.py` 模組說明）；不納入則「$\le 5$ 則／週」只涵蓋左側與做空路徑，失去意義。
 > - **計的是全部路徑開啟時的總量**：派發函式 `_dispatch_entry_advisor_alert()`（`nexus_core/market_analysis/intraday_pipeline/pipeline.py`）先檢查 `WATCHLIST_ADVISOR_DRY_RUN`（全部路徑），再檢查 `SQUEEZE_ENTRY_DRY_RUN`（擠壓）與 `SHORT_ENTRY_DRY_RUN`（做空）。本判準只決定 `WATCHLIST_ADVISOR_DRY_RUN`；只翻轉它時實際只放行左側路徑，擠壓與做空推播仍須分別依 §5.8 G、§5.8 A 翻轉各自的旗標。三條路徑一起計數，確保任何旗標組合下的 DM 總量都不超過放行線；§5.8 G 本身沒有推播頻率條款。
 > - **擠壓路徑依等級去重**：擠壓推播的去重鍵以等級入鍵（`advisory_entry_{uid}_{SYM}_SQZ_T{n}_{日期}`，同日 T1 升級為 T3 會再推播一次），查詢對 `ENTRY_SQUEEZE` 以 (標的, 日期, `conditions_mask`) 去重；其餘路徑沿用 (標的, 日期, evaluator)。
-> - **依週判讀（口徑隨 2026-11-26 計畫核可）**：查詢 1 依週（`strftime('%Y-%W', d)`，週一起算）分組，判讀取最近一個完整週；擠壓 T1 的盤中觸發窗口於 2026-11-14 變更（§5.8 G），該日之前的週會低估擠壓頻率，不納入判讀。
+> - **依週判讀（口徑隨 2026-11-26 計畫核可）**：查詢 1 依週分組，週鍵 `wk` 為該週週一的日期（`date(d, 'weekday 0', '-6 days')`：先推到當週週日再退 6 天，週一起算），判讀取最近一個完整週。不用 `strftime('%Y-%W', …)`：1 月 1 日不是週一的年份，該格式會把跨年週拆成兩組（例：2025-12-29～31 為 `2025-52`、2026-01-01～04 為 `2026-00`）。擠壓 T1 的盤中觸發窗口於 2026-11-14 變更（§5.8 G），該日之前的週會低估擠壓頻率，不納入判讀。
 > - **擠壓路徑超量時的收緊方式（2026-11-27 使用者決定）**：上表「優先收緊條件三的空間門檻、不要動去重鍵」只適用左側／做空鐵律（擠壓規則沒有條件三）。擠壓路徑改在推播層加冷卻：**同一標的、同一擠壓等級，距上一次推播未滿 10 個交易日者不再推播**（不同等級含降級各自計算），與 §5.8 G.1 獨立事件的去重同口徑（`forward_log.SQUEEZE_DEDUP_TRADING_DAYS`）；進場規則、前向紀錄與 §5.8 G 的樣本不受影響。依據（看過資料後選定）：截至 2026-11-25 快照，擠壓的 195 則（標的, 日, 等級）套用冷卻後剩 73 則，2026-11-16 週由 10 則降為 3 則；其他週仍可能超過 5 則。
 > - **尚未實作**：推播冷卻與查詢 1 的對應去重，於擠壓推播接近通過 §5.8 G 時一併實作；在那之前查詢 1 的擠壓則數是**未套冷卻**的口徑。
 
 ```sql
--- 1. 主判準：去重後的實際 DM 則數（依週；含擠壓路徑，擠壓依等級另計）
-SELECT strftime('%Y-%W', d) AS wk, COUNT(*) AS dm_per_week FROM (
+-- 1. 主判準：去重後的實際 DM 則數（依週，wk 為該週週一；含擠壓路徑，擠壓依等級另計）
+SELECT date(d, 'weekday 0', '-6 days') AS wk, COUNT(*) AS dm_per_week FROM (
   SELECT DISTINCT symbol, substr(bar_ts, 1, 10) AS d, evaluator,
          CASE WHEN evaluator = 'ENTRY_SQUEEZE' THEN conditions_mask END AS tier
   FROM regime_evaluation_log

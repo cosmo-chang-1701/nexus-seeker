@@ -55,7 +55,7 @@
 | | | `vtr_virtual_trades` | 虛擬交易室自動轉倉／平倉（紙上交易，不涉及真實部位） |
 | | | `system_lifecycle` | 機器人啟動／關閉廣播（**預設關閉**） |
 
-`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、NRO 期權掃描與價量突破警報」），不再提自選雷達；新增 `alpha_wall_break` 後，該模組亦涵蓋 GEX 牆突破／跌破確認推播。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{REGIME}_{YYYYMMDD}`（同日由 III-B 升級為 III 是更強的新訊號，會再發一次）。
+`📡 盤中情報` 模組說明文字已改為中性描述（「盤中個股深度心跳（含期權合約規劃）、掛單遙測、DDP／廉價期權、NRO 期權掃描與價量突破警報」），不再提自選雷達；新增 `alpha_wall_break` 後，該模組亦涵蓋 GEX 牆突破／跌破確認推播。原本同屬此模組的 `heartbeat_watchlist`（15 分鐘批次量化雷達，`cogs/trading/heartbeat.py`）與 `intel_market_scenario`（自選股市場情境事件，`market_analysis/scenario_classifier.py`）已隨推播來源一併移除，見 §2.2.4。雷達面板仍可由 `/x` 手動查詢（詳見 [`../architecture/01_dual_watchlist_pipelines.md`](../architecture/01_dual_watchlist_pipelines.md)）。進場顧問的去重鍵為 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`；擠壓路徑以等級入鍵：`advisory_entry_{uid}_{SYMBOL}_SQZ_T{n}_{YYYYMMDD}`（同日 T1 升級為 T3 是更強的新訊號，會再發一次）。
 
 #### 2.2.2 動態轉倉指令的頻道對照
 `database/notification_channels.py::resolve_rollover_channel()` 取代 `portfolio_monitor.py` 過去的 if/elif 鏈，優先序：
