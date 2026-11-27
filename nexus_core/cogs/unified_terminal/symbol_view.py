@@ -166,12 +166,26 @@ class SymbolHubView(discord.ui.View):
             pcr_raw_val = pcr_dict.get("volume_pcr", pcr_dict.get("pcr"))
             pcr_val = _safe_float(pcr_raw_val) if pcr_raw_val is not None else None
 
-            if not reddit_text and not reddit_posts:
+            needs_reddit_fetch = (not reddit_posts) and (
+                not reddit_text or reddit_service.is_reddit_error_text(str(reddit_text))
+            )
+            if needs_reddit_fetch:
                 news_items, (reddit_text, reddit_posts) = await asyncio.gather(
                     news_task, reddit_service.get_reddit_details(self.symbol)
                 )
+                reddit_score = reddit_service.classify_reddit_sentiment(
+                    reddit_text, reddit_posts
+                )
+                self.base_data["reddit_text"] = reddit_text
+                self.base_data["reddit_posts"] = reddit_posts
+                self.base_data["reddit_sentiment_score"] = reddit_score
             else:
                 news_items = await news_task
+                if not reddit_score and (reddit_text or reddit_posts):
+                    reddit_score = reddit_service.classify_reddit_sentiment(
+                        reddit_text, reddit_posts
+                    )
+                    self.base_data["reddit_sentiment_score"] = reddit_score
 
             embed = create_media_sentiment_embed(
                 self.symbol,

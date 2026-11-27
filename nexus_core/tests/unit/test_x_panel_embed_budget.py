@@ -213,3 +213,35 @@ def test_wall_integrity_worst_case_within_budget() -> None:
     assert "STO CALL 1,200口" in text and "已跌破(價內)" in text
     # 瘦身後實測 4114 字（+100 緩衝）
     assert _total_chars(embed) <= 4250, _total_chars(embed)
+
+
+def test_mrvl_with_rsi_reentry_within_budget() -> None:
+    """帶入 Weekly RSI(14) + Daily Re-entry 狀態時，MRVL 完整卡片仍須 <= 4000 字且零丟欄。"""
+    from market_analysis.rsi_reentry import (
+        REENTRY_TRIGGERED,
+        RsiReentryStatus,
+        WEEKLY_OVERSOLD,
+    )
+
+    d = _mrvl_data()
+    d["rsi_reentry"] = RsiReentryStatus(
+        weekly_rsi=28.4,
+        weekly_rsi_live=29.1,
+        weekly_state=WEEKLY_OVERSOLD,
+        weekly_is_oversold=True,
+        daily_rsi=34.2,
+        daily_prev_rsi=29.5,
+        daily_reentry_state=REENTRY_TRIGGERED,
+        daily_above_sma20=True,
+        daily_reentry_bars_since_oversold=1,
+    )
+    embed = _render_at_night(d)
+    assert len(embed.to_dict()["fields"]) == len(embed.fields), "欄位被靜默 pop"
+    total = _total_chars(embed)
+    assert total <= 4000, f"總字數 {total} 超過 4000 緩衝線"
+    sqz_field = next(
+        (f.value or "" for f in embed.fields if "動能與擠壓狀態" in (f.name or "")),
+        "",
+    )
+    assert "週線 RSI(14): 28.4 (🟢超賣)" in sqz_field
+    assert "日線重返: 🟢觸發重返" in sqz_field

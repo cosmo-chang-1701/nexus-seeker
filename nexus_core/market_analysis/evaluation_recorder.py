@@ -374,6 +374,17 @@ def record_gate_reason(
         logger.debug(f"[EvalRecorder] gate 記錄失敗: {e}")
 
 
+def _round2_or_none(value: Any) -> Optional[float]:
+    """轉為兩位小數的有限浮點數；保留合法 0.0（不用 `_num()` 以免 RSI=0.0 被抹成 None）。"""
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(f, 2) if math.isfinite(f) else None
+
+
 def record_squeeze_entry(
     symbol: str,
     spot: float,
@@ -384,6 +395,7 @@ def record_squeeze_entry(
     *,
     candidate_radar: Optional[Mapping[str, Any]] = None,
     shadow_vetoes: Optional[Mapping[str, Any]] = None,
+    rsi_reentry: Optional[Any] = None,
 ) -> None:
     """記錄多時間框架擠壓進場判定（`SqueezeEntryResult` 以 duck typing 讀取）。
 
@@ -426,6 +438,18 @@ def record_squeeze_entry(
             for key, val in shadow_vetoes.items():
                 if isinstance(key, str) and key.startswith("sv_"):
                     features[key] = val
+        # 週線 RSI(14) 與日線重返狀態（純記錄，不參與判定；保留 0.0）
+        if rsi_reentry is not None:
+            features["w_rsi_14"] = _round2_or_none(
+                getattr(rsi_reentry, "weekly_rsi", None)
+            )
+            w_os = getattr(rsi_reentry, "weekly_is_oversold", None)
+            features["w_rsi_os"] = w_os if isinstance(w_os, bool) else None
+            features["d_rsi_14"] = _round2_or_none(
+                getattr(rsi_reentry, "daily_rsi", None)
+            )
+            d_reentry = getattr(rsi_reentry, "daily_reentry_state", None)
+            features["d_reentry"] = d_reentry if isinstance(d_reentry, str) else None
         _append(
             {
                 "symbol": symbol.upper(),

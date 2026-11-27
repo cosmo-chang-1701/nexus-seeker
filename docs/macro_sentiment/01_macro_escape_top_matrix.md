@@ -149,9 +149,9 @@ $$\text{Payout} = \begin{cases}
 - **\$20B 小基數門檻**：RRP 餘額已從 2022 年的 \$2.5T 高峰降到約 \$1B，此時 \$0.8B 的微幅變動就能產生 $+400\%$ 的百分比跳升。餘額低於 \$20B 時百分比變動不具系統意義，不觸發 \$18,000；餘額未知時保守視為具實質規模（不因缺值放寬紅線）。
 - 不存在獨立的「RRP 突波」旗標：舊版讀取的 `macro_rrp_spike` 沒有任何寫入者，已刪除。
 
-### 2.7 /market 面板呈現層標示（僅呈現，不接任何閘門）
+### 2.7 /market 面板呈現層標示（僅呈現，不接任何閘門；衰退警告與 CC 閘門同源）
 
-以下六項的使用者可見變更集中於 `build_market_macro_overview_embed()` 的文字（例外：VTS、TED 與信用利差三項另於 `get_macro_overview_data` 新增呈現用鍵，其中信用利差的 `credit_spreads` 鍵由 `services/credit_spread_service.py` 抓取；TED 項另使 `build_radar_scan_embed` 不再顯示宏觀區塊），`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動：
+以下七項的使用者可見變更集中於 `build_market_macro_overview_embed()` 與 `get_macro_overview_data()`：前六項為面板呈現（例外：VTS、TED 與信用利差三項另於 `get_macro_overview_data` 新增呈現用鍵，其中信用利差的 `credit_spreads` 鍵由 `services/credit_spread_service.py` 抓取；TED 項另使 `build_radar_scan_embed` 不再顯示宏觀區塊），`short_gamma_critical` 三條件與 `get_safety_payout_threshold()` 的判定完全不動；第七項（經濟衰退警告三態）與 `is_covered_call_unlock_allowed()` 共用 `evaluate_recession_warning()` 單一權威判定：
 
 - **VIX 期限結構 (VTS)**：位於「📊 大盤與核心指標」欄 VIX 之後，格式 `x.xx (狀態)`：< `_VTS_INVERTED_RATIO`（1.00）綠 正價差；1.00 至 < `_VTS_SEVERE_INVERTED_RATIO`（1.10）黃 期限倒掛；≥ 1.10 紅 嚴重倒掛。兩常數為 PRE_CALIBRATION／僅呈現：1.00 與 `is_backwardation` 及 VIX 尾部預警「期限倒掛」對齊，1.10 與「嚴重倒掛」及 scheduler 恐慌門檻對齊。來源 kv `macro_vts_ratio`（15 分鐘巡邏，僅 0.5–3.0 且有效時寫入）；快取逾 `MACRO_GEX_STALE_MAX_AGE_SECONDS`（3 天）顯示 `⚪ 未知 [N 天前快取・不納入判定]`，絕不顯示舊值；缺值或 ≤ 0 顯示「獲取數據失敗」。`get_macro_overview_data` 輸出 `vts_is_expired`／`vts_cache_age_seconds`。不接任何閘門。
 - **零 Gamma 踩踏三態**：以 SPY 現價與 SPY Gamma Flip（與閘門同基準，避開 SPX/SPY 10 倍基差）計算緩衝 $buf = (S_{SPY} - Flip_{SPY}) / Flip_{SPY} \times 100$。判定順序：(1) `short_gamma_critical` 成立 → 🚨 CRITICAL（既有）；(2) $buf < 0$ → 🟡 負 Gamma 區（低於 Flip），註明 VIX／VTS 未達危機門檻、網格維持；(3) $0 \le buf <$ `_FLIP_KNIFE_EDGE_PCT`（0.5%）→ 🟡 臨界，盤中轉負即踩踏；(4) 其餘 🟢 NORMAL。Flip 或 SPY 現價缺值、或 GEX 快取過期時不算緩衝，維持原顯示。GEX Flip 行另附 `(SPY 緩衝 ±x.xx%)`。2026-10-09 實跑稽查：SPY 773.93／Flip 774.17（緩衝 −0.03%），SPX 7765.36／Flip 線 7767.77，兩個尺度一致、快取無過期，未重現 −520 點。現行程式碼下基差結構上不可能造成 520 點（`unified_terminal/utils.py` 在 SPX/SPY 比值落於 [9.8, 10.3] 時以該比值換算 Flip 線，兩尺度的百分比恆等）；可能是不同時點的快照，或 edge Flip 高於現價且落在離群閘門 20% 上限以內的雜訊（520 點約為 SPX 的 6.7%）。比值超出該區間時，Flip 行不附 SPY 緩衝後綴。🟡 負 Gamma 區文案只列出實際未成立的條件（VIX ≤ 20、VTS 未倒掛／缺值時依 VIX > 25）；🟡 狀態的邊框為警示色。
@@ -159,6 +159,10 @@ $$\text{Payout} = \begin{cases}
 - **RRP 小基數**：現值與 30 天前（$past = RRP / (1 + \Delta\%/100)$）兩端皆低於 `RRP_MATERIAL_BALANCE_BILLIONS`（\$20B）時，30 日變動百分比不具意義，面板改顯示絕對變動 `(30天 +x.xB，小基數不計%)`（$past = RRP / (1 + \Delta\%/100)$）；$\Delta\% \le -100$ 時無法反推 $past$，仍印百分比。
 - **低波自滿（參考級）**：VIX < `_COMPLACENCY_VIX_MAX`（20，與 short_gamma_critical 的 VIX > 20 閘門對齊；原 16 在 VIX 16.68 配 10Y 5.146%、WTI \$98 時漏報）且下列任一成立時，於風控面板末端附加一行：10Y ≥ `_COMPLACENCY_US10Y`（5.0%）、WTI ≥ `_COMPLACENCY_WTI`（\$90）、FedWatch 升息機率 ≥ `_COMPLACENCY_HIKE_PROB_PCT`（15%，資料過期、缺值或備援值略過）。四個常數皆為 PRE_CALIBRATION／僅呈現。**盤前延後**：美股交易日 09:30 ET 開盤前，`^VIX` 仍是前日收盤，而 10Y／WTI／FedWatch 已重新定價，此時條件成立改印「⚪ 低波自滿：盤前 VIX 為前日收盤，開盤後判讀」，不印 ⚠ 判定；週末、假日與 09:30 起維持原判定。
 - **信用利差（HY／IG OAS，參考級）**：「📈 流動性與總經指標」於「聯準會資產負債表」下方新增兩列：高收益債利差（FRED `BAMLH0A0HYM2`）與投資級債利差（FRED `BAMLC0A0CM`，ICE BofA 選擇權調整利差），單位 bps（FRED 百分比值 × 100，取整），格式如 `343 bps (1M +29) 11/02`。1M 變動 = 最新觀測 − 觀測日 ≤ 最新觀測日 − 30 天的最近一筆（無此筆則省略 `(1M …)`）；末尾為觀測日 MM/DD。著色（`_HY_OAS_*`／`_IG_OAS_*`，PRE_CALIBRATION／僅呈現，不接任何閘門；另供擠壓進場影子否決前向紀錄（architecture/05 §5.18）讀取，不參與判定）：HY < 400 綠、400–499 黃、≥ 500 紅；IG < 150 綠、150–199 黃、≥ 200 紅。觀測日距今逾 `_CREDIT_SPREAD_STALE_DAYS`（5 日曆天，PRE_CALIBRATION）加黃色 `[逾 N 天]`。FRED 約落後 1 個營業日，故一律顯示觀測日。資料由 `services/credit_spread_service.py` 經 `fred` 閘門抓取，kv_cache 鍵 `macro_credit_spreads`，快取 4 小時、失敗退避 15 分鐘、單次逾時 8 秒；任何失敗沿用舊值，缺值該列顯示「獲取數據失敗」，不影響 /market 其他欄位。`recession_warning`、`short_gamma_critical`、安全提領紅線與流動性狀態判定完全不讀這兩個值。
+- **經濟衰退警告三態、觸發歸因與輸入時效邊界**：`/market` 的 `get_macro_overview_data()` 與 Covered Call 解鎖閘門 `is_covered_call_unlock_allowed()` 共用純三值函式 `evaluate_recession_warning(sahm_rule, us10y, vix)` → `RecessionWarningStatus(state, triggers, missing)`（觸發條件：$\text{Sahm} \ge \text{RECESSION\_SAHM\_THRESHOLD} (0.50)$，或 $US10Y > \text{RECESSION\_US10Y\_THRESHOLD} (4.5\%) \land VIX > \text{RECESSION\_VIX\_THRESHOLD} (20)$）。面板輸出 `recession_state`（`"WARNING"`／`"NORMAL"`／`"UNKNOWN"`）、`recession_triggers` 與 `recession_missing`：
+  - **WARNING**：紅色顯示 `🚨 WARNING (CC 開倉阻斷已生效：{觸發明細})`（如 `US10Y 4.94% > 4.5% & VIX 23.81 > 20` 或 `薩姆規則 0.55 ≥ 0.50`；同時成立時以 `；` 並列）。
+  - **UNKNOWN（Fail-Closed）**：當輸入缺失或逾時效（`macro_us10y` 退回 KV 且逾 `MACRO_US10Y_CACHE_MAX_AGE_SECONDS` 3 天、`macro_sahm_rule` 逾 `MACRO_SAHM_CACHE_MAX_AGE_SECONDS` 45 天，或即時 `^VIX` 抓取失敗改用 KV 備援）導致無法排除衰退時，面板顯示黃色 `⚪ 未知 (資料不足，CC 開倉保守阻斷：{缺失項目})` 並將綠色邊框升級為金色，與 `is_covered_call_unlock_allowed()` 回傳 `False` 完全一致；VIX／US10Y 列於使用 KV 快取時附 `[快取]` 或 `[N 天前快取・不納入判定]`。若部分核心指標刷新失敗（例如 `sahm_rule` 為 `None`），`_fetch_core_macro_metrics_uncached()` 寫入 `macro_core_is_fallback = 1`，且 `get_macro_overview_data()` 個別追蹤 `sahm_cache_age`（僅當 `sahm_rule` 實際刷新時才歸零）。
+  - **NORMAL**：兩條件皆確定不成立時顯示 `🟢 NORMAL (CC 開倉正常)`。
 
 ### 2.8 09:00 ET 盤前「宏觀逃頂」簡報 Embed
 
@@ -241,6 +245,11 @@ flowchart TD
 | `RRP_CHANGE_30D_STRESS_PCT` | `20.0` (%) | RRP 30 日變動率門檻（百分比，嚴格大於） | `nexus_core/market_analysis/trading_orchestration.py` |
 | `RRP_MATERIAL_BALANCE_BILLIONS` | `20.0` ($B) | RRP 小基數門檻：餘額低於此值時百分比變動不觸發 | `nexus_core/market_analysis/trading_orchestration.py` |
 | `MACRO_GEX_FLIP_MAX_ABOVE_SPOT_PCT` / `_BELOW_` | `0.20` / `0.08` | 因子 4 所用大盤 Flip 的非對稱合理性區間（§2.3） | `nexus_core/market_analysis/index_microstructure.py` |
+| `RECESSION_SAHM_THRESHOLD` | `0.5` | 經濟衰退警告薩姆規則門檻（§2.7） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `RECESSION_US10Y_THRESHOLD` | `4.5` (%) | 經濟衰退警告 10 年期美債殖利率門檻（§2.7） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `RECESSION_VIX_THRESHOLD` | `20.0` | 經濟衰退警告 VIX 門檻（§2.7） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `MACRO_US10Y_CACHE_MAX_AGE_SECONDS` | `259200.0` (3 天) | `macro_us10y` KV 備援快取時效上限（§2.7） | `nexus_core/market_analysis/trading_orchestration.py` |
+| `MACRO_SAHM_CACHE_MAX_AGE_SECONDS` | `3888000.0` (45 天) | `macro_sahm_rule` 月度 KV 快取時效上限（§2.7） | `nexus_core/market_analysis/trading_orchestration.py` |
 
 ---
 
@@ -288,6 +297,9 @@ flowchart TD
   - `is_macro_gamma_flip_outlier`: 因子 4 大盤 Gamma Flip 合理性閘門
 - `nexus_core/market_analysis/trading_orchestration.py`
   - `get_safety_payout_threshold`: 安全提領紅線（§2.6）
+  - `evaluate_recession_warning` / `RecessionWarningStatus` / `is_covered_call_unlock_allowed`: 三值 fail-closed 經濟衰退警告評估與 Covered Call 解鎖閘門（§2.7）
+- `nexus_core/cogs/embed_builders/market_embeds.py`
+  - `build_market_macro_overview_embed`: `/market` 面板三態衰退警告、觸發歸因與快取標示呈現（§2.7）
 - `nexus_core/cogs/unified_terminal/utils.py`
   - `get_macro_overview_data`: `/market` 面板四因子輸入組裝、離群 Flip 自癒（輸出 `vts_is_expired`／`vts_cache_age_seconds`、`escape_win_status`／`escape_window_direction`／`escape_window_tier`，鍵名沿用、值為流動性狀態；`escape_window_shift_days` 已移除）
 - `nexus_core/market_analysis/analyst_runners/strategy_runner.py`

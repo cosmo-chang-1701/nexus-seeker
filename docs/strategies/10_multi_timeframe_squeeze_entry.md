@@ -180,6 +180,10 @@ flowchart TD
 | `SHADOW_HY_CHG1M_BPS` | 50 | 影子旗標 `sv_f_hy_chg`：HY OAS 1M 變動 ≥ +50 bps；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_CREDIT_STALE_DAYS` | 5 | 信用利差觀測日距今超過 5 日曆天，兩個信用旗標為 null；PRE_CALIBRATION／僅紀錄，不參與判定 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
 | `SHADOW_CREDIT_TIMEOUT_SECONDS` | 1.5 | `_compute_shadow` 等待信用利差的秒數上限，逾時信用欄位為 null；非判定門檻，僅紀錄 | `market_analysis/squeeze_entry/shadow_vetoes.py` |
+| `RSI_LENGTH` | 14 | 週線／日線 Wilder RSI 計算期數；PRE_CALIBRATION／僅呈現與前向紀錄，不參與判定 | `market_analysis/rsi_reentry.py` |
+| `WEEKLY_RSI_OVERSOLD` / `WEEKLY_RSI_NEAR_OVERSOLD` / `WEEKLY_RSI_OVERBOUGHT` | 30.0 / 35.0 / 70.0 | 週線 RSI(14) 超賣／近超賣／過熱顯示門檻；PRE_CALIBRATION／僅呈現與前向紀錄，不參與判定 | `market_analysis/rsi_reentry.py` |
+| `DAILY_RSI_OVERSOLD` | 30.0 | 日線 Wilder RSI(14) 超賣門檻；PRE_CALIBRATION／僅呈現與前向紀錄，不參與判定 | `market_analysis/rsi_reentry.py` |
+| `DAILY_REENTRY_LOOKBACK_BARS` / `DAILY_REENTRY_SMA_LENGTH` | 5 / 20 | 日線超賣重返前向回看根數與參考均線長度；PRE_CALIBRATION／僅呈現與前向紀錄，不參與判定 | `market_analysis/rsi_reentry.py` |
 
 ## 5. 邊界條件、風控熔斷與例外處理
 
@@ -216,9 +220,12 @@ flowchart TD
 
 **影子否決（僅紀錄，判定不動）**：使用者提案的「微結構／盈虧比／總經一票否決」，既有證據不支持直接硬擋（§3.2），改為在 `record_squeeze_entry` 的 `features_json` 寫入九個影子旗標（`sv_f_ceil`、`sv_f_skew`、`sv_f_mp`、`sv_f_rr`、`sv_f_wide`、`sv_f_mev`、`sv_any`，另加信用利差旗標 `sv_f_hy_lvl`、`sv_f_hy_chg`；後兩者不併入 `sv_any`）與其原始值，由 `calibration forward-report` 比較「旗標成立」與「放行」兩組的 20 日報酬差。規則、欄位契約與判讀見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.18。`evaluate_squeeze_entry()` 的判定、停損與推播**不變**。
 
+**週線 RSI(14) 與日線超賣重返（僅呈現與前向紀錄，判定不動）**：`market_analysis/rsi_reentry.py::compute_rsi_reentry()` 為零 I/O 純函式，直接重用 `evaluate_symbol()` 既有的 2 年日線（經 `split_daily_confirmed` 與 `resample_weekly` 取已收盤週線與已收盤日線）計算 Wilder RSI(14)，並提供 `format_rsi_reentry_line()` 產生供 `/x` 面板顯示的單行繁體中文標註（週線超賣 `<= 30`、近超賣 `<= 35`、過熱 `>= 70`；日線處於超賣為 `OVERSOLD_WATCH`，近 5 根曾超賣且當根回升至 `> 30` 且高於前一根為 `TRIGGERED`）。所有門檻皆標記 `PRE_CALIBRATION`、`evaluate_squeeze_entry()` 與既有左／右側策略閘門**完全不動**；進場評估同步透過 `record_squeeze_entry()` 寫入四個影子欄位（`w_rsi_14`、`w_rsi_os`、`d_rsi_14`、`d_reentry`，保留合法 `0.0`），詳細契約見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.17 (d)。
+
 ## 6. 核心程式碼檔案路徑關聯
 
 - `nexus_core/market_analysis/psq_engine.py`：`analyze_psq()`（Green Dot 回看窗、Turbo、擠壓區間低點）、`compute_psq_series()`（逐根序列，回測用）。
+- `nexus_core/market_analysis/rsi_reentry.py`：`compute_rsi_reentry()`、`wilder_rsi_series()`、`format_rsi_reentry_line()`（週線 RSI(14) 與日線超賣重返，僅呈現與前向紀錄）。
 - `nexus_core/market_analysis/squeeze_entry/timeframes.py`：重採樣、已收盤截斷、`build_matrix()`、`fetch_psq_matrix()`。
 - `nexus_core/market_analysis/squeeze_entry/resistance.py`：`detect_resistance()`。
 - `nexus_core/market_analysis/squeeze_entry/rules.py`：`evaluate_squeeze_entry()`。

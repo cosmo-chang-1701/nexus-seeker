@@ -16,6 +16,7 @@ from market_analysis.sentiment.skew_taxonomy import (
     SKEW_BULLISH_PERCENTILE,
     SKEW_DEFENSIVE_PERCENTILE,
 )
+from services.reddit_service import is_reddit_error_text
 
 
 def create_news_scan_embed(symbol: Any, news_text: Any):  # type: ignore
@@ -69,7 +70,12 @@ def create_media_sentiment_embed(
         poly_status_line = " └─ 狀態: \u001b[1;30m暫無預測市場數據\u001b[0m"
 
     reddit_score_str = str(reddit_sentiment_score or "⚖️ 中性")
-    if (
+    _reddit_down = "抓取失敗" in reddit_score_str or "無法" in reddit_score_str
+    if _reddit_down:
+        sentiment_color = "\u001b[1;30m"
+        is_retail_bullish = False
+        is_retail_bearish = False
+    elif (
         "🚀" in reddit_score_str
         or "樂觀" in reddit_score_str
         or "Bullish" in reddit_score_str
@@ -139,6 +145,9 @@ def create_media_sentiment_embed(
     ):
         resonance_rating = "\u001b[1;31m💀 多重共振偏空，期權沽購比升溫\u001b[0m"
         resonance_guide = "防守為上；降低多頭曝險，嚴守支撐位並配置保護性頭寸"
+    elif _reddit_down:
+        resonance_rating = "\u001b[1;30m⚪ Reddit 輿情缺失，散戶共振未判定\u001b[0m"
+        resonance_guide = "Reddit 資料缺失；請以機構 Skew 與預測市場為主"
     else:
         resonance_rating = "\u001b[1;33m⚖️ 輿情多空分歧，期權籌碼處於平衡區間\u001b[0m"
         resonance_guide = "保持觀察；等待催化事件或方向性共振突破"
@@ -204,6 +213,10 @@ def create_media_sentiment_embed(
                 or "尚未配置" in reddit_str
                 or "連線異常" in reddit_str
                 or "錯誤" in reddit_str
+                or "超時" in reddit_str
+                or "限流" in reddit_str
+                or "抓取失敗" in reddit_str
+                or is_reddit_error_text(reddit_str)
             ):
                 embed.add_field(
                     name="🔥 Reddit 社群熱門討論",

@@ -1608,6 +1608,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     _reddit_down = "抓取失敗" in str(reddit_score) or "無法" in str(reddit_score)
     if divergence == "同步" and _reddit_down:
         divergence = "同步（Reddit 缺失，散戶背離未判定）"
+    elif divergence_data_missing and _reddit_down:
+        divergence = "資料不足（Skew 分位／PCR／Reddit 缺失）"
 
     skew_color = (
         "\u001b[1;35m"
@@ -1615,16 +1617,20 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
         else "\u001b[1;36m"
     )
     sentiment_color = (
-        "\u001b[1;32m"
-        if "🚀" in str(reddit_score)
-        or "樂觀" in str(reddit_score)
-        or "Bullish" in str(reddit_score)
+        "\u001b[1;30m"
+        if _reddit_down
         else (
-            "\u001b[1;31m"
-            if "💀" in str(reddit_score)
-            or "悲觀" in str(reddit_score)
-            or "Bearish" in str(reddit_score)
-            else "\u001b[1;33m"
+            "\u001b[1;32m"
+            if "🚀" in str(reddit_score)
+            or "樂觀" in str(reddit_score)
+            or "Bullish" in str(reddit_score)
+            else (
+                "\u001b[1;31m"
+                if "💀" in str(reddit_score)
+                or "悲觀" in str(reddit_score)
+                or "Bearish" in str(reddit_score)
+                else "\u001b[1;33m"
+            )
         )
     )
     if divergence_data_missing or divergence.startswith("同步（Reddit 缺失"):
@@ -1660,9 +1666,8 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
     # 動態決定是否顯示巨鯨/散戶意圖映射
     poly_summary_raw = data.get("polymarket_summary") or poly_odds
     has_market_intention = (str(poly_summary_raw).strip() != "N/A") or (
-        "中性" not in reddit_score
-        and "抓取失敗" not in reddit_score
-        and "無法" not in reddit_score
+        not _reddit_down
+        and ("中性" not in str(reddit_score) or bool(data.get("reddit_posts")))
     )
 
     if has_market_intention:
@@ -3075,6 +3080,16 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
             sqz_lines.append(f" 💡 時框建議: {sqz_vix_note}")
 
         _sq_eval = data.get("squeeze_eval")
+        _rsi_reentry = data.get("rsi_reentry")
+        if _rsi_reentry is None:
+            _rsi_reentry = getattr(_sq_eval, "rsi_reentry", None)
+        if _rsi_reentry is not None:
+            from market_analysis.rsi_reentry import format_rsi_reentry_line
+
+            _rsi_line = format_rsi_reentry_line(_rsi_reentry)
+            if _rsi_line:
+                sqz_lines.append(f" └─ {_rsi_line}")
+
         _matrix_lines = format_psq_matrix_lines(getattr(_sq_eval, "matrix", None))
         if _matrix_lines:
             # 空行讓 _add_ansi_field_safely 超過欄位上限時以整段換欄

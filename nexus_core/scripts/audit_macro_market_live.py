@@ -97,6 +97,20 @@ def _read_calendar_events_count() -> int:
         conn.close()
 
 
+def _expected_recession_for_audit(macro_data: dict[str, Any]) -> Any:
+    """依 `/market` 同一套三態時效閘門推導 Battery 6 預期衰退狀態。"""
+    from market_analysis.trading_orchestration import evaluate_recession_warning
+
+    sahm_for_gate = (
+        None if macro_data.get("sahm_is_expired") else macro_data.get("sahm_rule")
+    )
+    us10y_for_gate = (
+        None if macro_data.get("us10y_is_expired") else macro_data.get("us10y")
+    )
+    vix_for_gate = None if macro_data.get("vix_is_cache") else macro_data.get("vix")
+    return evaluate_recession_warning(sahm_for_gate, us10y_for_gate, vix_for_gate)
+
+
 def _resolve_target_db(db: str | None, allow_live_writes: bool) -> str:
     """決定本次稽查要寫入的 DB 路徑；不符合安全條件時以 SystemExit 拒絕。
 
@@ -586,21 +600,23 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
     b6_warnings: list[str] = []
     short_gamma_critical = macro_data.get("short_gamma_critical")
     recession_warning = macro_data.get("recession_warning")
+    recession_state = macro_data.get("recession_state")
     escape_win_status = macro_data.get("escape_win_status")
     escape_dir = macro_data.get("escape_window_direction")
     escape_tier = macro_data.get("escape_window_tier")
     payout_threshold = macro_data.get("payout_threshold")
 
-    # 驗證衰退警告邏輯
-    expected_recession = (sahm_rule is not None and float(sahm_rule) >= 0.5) or (
-        us10y is not None
-        and vix is not None
-        and float(us10y) > 4.5
-        and float(vix) > 20.0
-    )
+    # 驗證衰退警告邏輯（共用 evaluate_recession_warning 並套用時效與即時 VIX 閘門）
+    expected_recession_status = _expected_recession_for_audit(macro_data)
+    expected_recession = expected_recession_status.is_warning
     if recession_warning != expected_recession:
         b6_errors.append(
             f"recession_warning ({recession_warning}) 與預期 ({expected_recession}) 不一致！"
+            f" (sahm={sahm_rule}, us10y={us10y}, vix={vix})"
+        )
+    if recession_state != expected_recession_status.state:
+        b6_errors.append(
+            f"recession_state ({recession_state}) 與預期 ({expected_recession_status.state}) 不一致！"
             f" (sahm={sahm_rule}, us10y={us10y}, vix={vix})"
         )
 
@@ -659,6 +675,10 @@ async def _run_audit_phases(target_db: str) -> dict[str, Any]:
             "is_backwardation": is_backwardation,
             "recession_warning": recession_warning,
             "expected_recession": expected_recession,
+            "recession_state": recession_state,
+            "expected_recession_state": expected_recession_status.state,
+            "recession_triggers": macro_data.get("recession_triggers"),
+            "recession_missing": macro_data.get("recession_missing"),
             "escape_win_status": escape_win_status,
             "escape_window_direction": escape_dir,
             "escape_window_tier": escape_tier,

@@ -37,6 +37,8 @@ _MACRO_AGE_TRACKED_KEYS: tuple[str, ...] = _CORE_MACRO_KV_KEYS + (
     "macro_spy_gamma_flip",
     "macro_vts_ratio",
     "macro_ted_spread",
+    "macro_vix",
+    "macro_us10y",
 )
 
 
@@ -84,11 +86,19 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     # Read from SQLite kv_cache
     from database import get_kv_cache, save_kv_cache
-    from market_analysis.trading_orchestration import get_safety_payout_threshold
+    from database.cache import get_kv_cache_many
+    from market_analysis.trading_orchestration import (
+        MACRO_SAHM_CACHE_MAX_AGE_SECONDS,
+        MACRO_US10Y_CACHE_MAX_AGE_SECONDS,
+        evaluate_recession_warning,
+        get_safety_payout_threshold,
+    )
     from services.market_data_service import get_quote
 
     spx_is_derived = False
     spy_spot_is_derived = False
+    vix_is_cache = False
+    us10y_is_cache = False
     try:
         results = await asyncio.gather(
             get_quote("^SPX"),
@@ -99,21 +109,21 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
             return_exceptions=True,
         )
 
-        async def _parse(res: Any, key: str, fallback: Any = None) -> Any:
+        async def _parse(res: Any, key: str, fallback: Any = None) -> tuple[Any, bool]:
             if isinstance(res, dict) and res.get("c", 0) > 0:
                 val = res["c"]
                 asyncio.create_task(save_kv_cache(key, val))
-                return val
+                return val, False
             cached = await asyncio.to_thread(get_kv_cache, key)
             if cached is not None:
-                return cached
-            return fallback
+                return cached, True
+            return fallback, False
 
-        spx = await _parse(results[0], "macro_spx")
-        vix = await _parse(results[1], "macro_vix")
-        us10y = await _parse(results[2], "macro_us10y")
-        wti = await _parse(results[3], "macro_wti")
-        spy_spot = await _parse(results[4], "macro_spy_spot")
+        spx, _ = await _parse(results[0], "macro_spx")
+        vix, vix_is_cache = await _parse(results[1], "macro_vix")
+        us10y, us10y_is_cache = await _parse(results[2], "macro_us10y")
+        wti, _ = await _parse(results[3], "macro_wti")
+        spy_spot, _ = await _parse(results[4], "macro_spy_spot")
 
         # 數值 cross-check 與衍生：
         # 一方缺失時以另一方換算；換算比值用最近一次實測值而非固定 10.0
@@ -130,33 +140,43 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
                 asyncio.create_task(save_kv_cache("macro_spx_spy_ratio", live_ratio))
 
         if spx is None and spy_spot is not None and float(spy_spot) > 0:
-            spx = round(float(spy_spot) * _resolve_spx_spy_ratio(get_kv_cache), 2)
+            ratio = await asyncio.to_thread(_resolve_spx_spy_ratio, get_kv_cache)
+            spx = round(float(spy_spot) * ratio, 2)
             spx_is_derived = True
         elif spy_spot is None and spx is not None and float(spx) > 0:
-            spy_spot = round(float(spx) / _resolve_spx_spy_ratio(get_kv_cache), 2)
+            ratio = await asyncio.to_thread(_resolve_spx_spy_ratio, get_kv_cache)
+            spy_spot = round(float(spx) / ratio, 2)
             spy_spot_is_derived = True
 
     except Exception:
-        spx = get_kv_cache("macro_spx")
-        vix = get_kv_cache("macro_vix")
-        us10y = get_kv_cache("macro_us10y")
-        wti = get_kv_cache("macro_wti")
-        spy_spot = get_kv_cache("macro_spy_spot")
+
+        def _read_fallback_quotes() -> tuple[Any, Any, Any, Any, Any]:
+            return (
+                get_kv_cache("macro_spx"),
+                get_kv_cache("macro_vix"),
+                get_kv_cache("macro_us10y"),
+                get_kv_cache("macro_wti"),
+                get_kv_cache("macro_spy_spot"),
+            )
+
+        spx, vix, us10y, wti, spy_spot = await asyncio.to_thread(_read_fallback_quotes)
+        vix_is_cache = vix is not None
+        us10y_is_cache = us10y is not None
         spx_is_derived = False
         spy_spot_is_derived = False
         if spx is None and spy_spot is not None and float(spy_spot) > 0:
-            spx = round(float(spy_spot) * _resolve_spx_spy_ratio(get_kv_cache), 2)
+            ratio = await asyncio.to_thread(_resolve_spx_spy_ratio, get_kv_cache)
+            spx = round(float(spy_spot) * ratio, 2)
             spx_is_derived = True
         elif spy_spot is None and spx is not None and float(spx) > 0:
-            spy_spot = round(float(spx) / _resolve_spx_spy_ratio(get_kv_cache), 2)
+            ratio = await asyncio.to_thread(_resolve_spx_spy_ratio, get_kv_cache)
+            spy_spot = round(float(spx) / ratio, 2)
             spy_spot_is_derived = True
 
     # Normalize US10Y if needed
     if us10y is not None and float(us10y) > 10.0:
         us10y = float(us10y) / 10.0
 
-    rrp = get_kv_cache("macro_rrp")
-    fed_balance = get_kv_cache("macro_fed_balance")
     from datetime import datetime, timedelta
     from database.calendar_cache import get_macro_events_between
     from services.calendar_service import calendar_service
@@ -192,33 +212,56 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     else:
         cpi_nfp_calendar = "近期無重大數據"
 
-    fear_greed = get_kv_cache("macro_fear_greed")
-    gamma_flip_line = get_kv_cache("macro_gamma_flip_line")
-    spy_gamma_flip = get_kv_cache("macro_spy_gamma_flip")
-    uer = get_kv_cache("macro_uer")
-    sahm_rule = get_kv_cache("macro_sahm_rule")
-    sahm_rule_date = get_kv_cache("macro_sahm_rule_date")
-    rrp_change_30d = get_kv_cache("macro_rrp_change_30d")
+    def _load_core_and_macro_kv() -> (
+        tuple[Any, Any, Any, Any, Any, Any, Any, Any, Any, dict[str, float | None]]
+    ):
+        return (
+            get_kv_cache("macro_rrp"),
+            get_kv_cache("macro_fed_balance"),
+            get_kv_cache("macro_fear_greed"),
+            get_kv_cache("macro_gamma_flip_line"),
+            get_kv_cache("macro_spy_gamma_flip"),
+            get_kv_cache("macro_uer"),
+            get_kv_cache("macro_sahm_rule"),
+            get_kv_cache("macro_sahm_rule_date"),
+            get_kv_cache("macro_rrp_change_30d"),
+            {
+                key: age
+                for key, (_value, age) in get_kv_cache_many(
+                    _MACRO_AGE_TRACKED_KEYS
+                ).items()
+            },
+        )
+
+    (
+        rrp,
+        fed_balance,
+        fear_greed,
+        gamma_flip_line,
+        spy_gamma_flip,
+        uer,
+        sahm_rule,
+        sahm_rule_date,
+        rrp_change_30d,
+        kv_ages,
+    ) = await asyncio.to_thread(_load_core_and_macro_kv)
 
     # 各 kv 快取的年齡（秒）：快取值本身不帶時效，edge 或排程停擺時舊值會被
     # 當成現況顯示（曾出現恐懼與貪婪 65 vs 實際 28、GEX Flip 停在 24 天前）。
-    from database.cache import get_kv_cache_many
     from market_analysis.index_microstructure import (
         MACRO_GEX_STALE_MAX_AGE_SECONDS,
         is_macro_gamma_flip_outlier,
     )
-
-    kv_ages = {
-        key: age
-        for key, (_value, age) in get_kv_cache_many(_MACRO_AGE_TRACKED_KEYS).items()
-    }
 
     def _max_known_age(keys: tuple[str, ...]) -> float | None:
         known = [kv_ages[k] for k in keys if kv_ages.get(k) is not None]
         return max(cast(list[float], known)) if known else None
 
     core_cache_age = _max_known_age(_CORE_MACRO_KV_KEYS)
-    core_missing = rrp is None or fed_balance is None or fear_greed is None
+    sahm_cache_age: float | None = kv_ages.get("macro_sahm_rule")
+    core_missing = (
+        rrp is None or fed_balance is None or fear_greed is None or sahm_rule is None
+    )
     core_expired = (
         core_cache_age is not None and core_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
     )
@@ -241,12 +284,34 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
                 if core_data.get("sahm_rule") is not None:
                     sahm_rule = core_data["sahm_rule"]
                     sahm_rule_date = core_data.get("sahm_rule_date")
+                    sahm_cache_age = 0.0
                 rrp_change_30d = _pick("rrp_change_30d", rrp_change_30d)
-                if any(
-                    core_data.get(f) is not None
-                    for f in ("rrp", "fed_balance", "fear_greed", "uer", "sahm_rule")
-                ):
-                    core_cache_age = 0.0
+                refreshed_ages: dict[str, float | None] = {
+                    "macro_rrp": (
+                        0.0
+                        if core_data.get("rrp") is not None
+                        else kv_ages.get("macro_rrp")
+                    ),
+                    "macro_fed_balance": (
+                        0.0
+                        if core_data.get("fed_balance") is not None
+                        else kv_ages.get("macro_fed_balance")
+                    ),
+                    "macro_fear_greed": (
+                        0.0
+                        if core_data.get("fear_greed") is not None
+                        else kv_ages.get("macro_fear_greed")
+                    ),
+                    "macro_uer": (
+                        0.0
+                        if core_data.get("uer") is not None
+                        else kv_ages.get("macro_uer")
+                    ),
+                    "macro_sahm_rule": sahm_cache_age,
+                }
+                known_core_ages = [a for a in refreshed_ages.values() if a is not None]
+                if known_core_ages:
+                    core_cache_age = max(known_core_ages)
         except Exception:
             pass
     core_is_expired = (
@@ -386,10 +451,22 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
     # 實際 macro GEX 抓取是否降級」的持久跨呼叫訊號。若改為在此無條件呼叫
     # fetch_gex_metrics() 以直接取得新鮮的 `_is_stale_cache`，會重新引入這段
     # 條件式原本刻意避免的每次渲染網路/爬蟲成本。
-    gex_fallback_val = get_kv_cache("macro_gex_is_fallback")
+    def _load_post_gex_kv() -> tuple[Any, Any, Any, Any]:
+        return (
+            get_kv_cache("macro_gex_is_fallback"),
+            get_kv_cache("macro_vts_ratio"),
+            get_kv_cache("macro_ted_spread"),
+            get_kv_cache("macro_liquidity_is_fallback"),
+        )
+
+    (
+        gex_fallback_val,
+        vts_raw,
+        ted_raw,
+        liq_fallback_val,
+    ) = await asyncio.to_thread(_load_post_gex_kv)
     gex_is_fallback = gex_fallback_val is None or int(gex_fallback_val) == 1
 
-    vts_raw = get_kv_cache("macro_vts_ratio")
     try:
         vts_val = float(vts_raw) if vts_raw is not None else None
     except (ValueError, TypeError):
@@ -406,7 +483,6 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
 
     # CP−T-Bill 利差（TED 代理）僅供面板呈現。edge 抓取失敗時 kv 保留舊值並寫
     # macro_liquidity_is_fallback=1；未設定 TUNNEL_URL 的部署缺值屬正常。
-    ted_raw = get_kv_cache("macro_ted_spread")
     ted_spread: float | None = None
     if ted_raw is not None and not isinstance(ted_raw, bool):
         try:
@@ -421,7 +497,7 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         and ted_cache_age is not None
         and ted_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
     )
-    ted_is_fallback = get_kv_cache("macro_liquidity_is_fallback") == 1
+    ted_is_fallback = liq_fallback_val == 1
 
     vix_val_safe = float(vix) if vix is not None else 18.0
     is_backwardation = (
@@ -458,12 +534,34 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         and is_backwardation
     )
 
-    # 衰退警告 RECESSION_WARNING
-    recession_warning = (sahm_rule is not None and float(sahm_rule) >= 0.5) or (
-        us10y is not None
+    # VIX / US10Y / Sahm 來源與時效追蹤，與 is_covered_call_unlock_allowed() 共用三值判定
+    vix_cache_age: float | None = kv_ages.get("macro_vix") if vix_is_cache else None
+    vix_is_expired = bool(
+        vix_is_cache
         and vix is not None
-        and float(us10y) > 4.5
-        and float(vix) > 20.0
+        and vix_cache_age is not None
+        and vix_cache_age > MACRO_GEX_STALE_MAX_AGE_SECONDS
+    )
+    us10y_cache_age: float | None = (
+        kv_ages.get("macro_us10y") if us10y_is_cache else None
+    )
+    us10y_is_expired = bool(
+        us10y_is_cache
+        and us10y is not None
+        and us10y_cache_age is not None
+        and us10y_cache_age > MACRO_US10Y_CACHE_MAX_AGE_SECONDS
+    )
+    sahm_is_expired = bool(
+        sahm_rule is not None
+        and sahm_cache_age is not None
+        and sahm_cache_age > MACRO_SAHM_CACHE_MAX_AGE_SECONDS
+    )
+    sahm_for_gate = None if sahm_is_expired else sahm_rule
+    us10y_for_gate = None if us10y_is_expired else us10y
+    # VIX 與 CC 閘門嚴格即時一致：^VIX 失敗僅沿用 KV 供顯示，不納入判定
+    vix_for_gate = None if vix_is_cache else vix
+    recession_status = evaluate_recession_warning(
+        sahm_for_gate, us10y_for_gate, vix_for_gate
     )
 
     payout_threshold = await asyncio.to_thread(get_safety_payout_threshold)
@@ -534,7 +632,18 @@ async def get_macro_overview_data(user_id: int) -> dict[str, Any]:
         "sahm_rule_date": sahm_rule_date,
         "rrp_change_30d": rrp_change_30d,
         "short_gamma_critical": short_gamma_critical,
-        "recession_warning": recession_warning,
+        "recession_warning": recession_status.is_warning,
+        "recession_state": recession_status.state,
+        "recession_triggers": list(recession_status.triggers),
+        "recession_missing": list(recession_status.missing),
+        "vix_is_cache": vix_is_cache,
+        "vix_is_expired": vix_is_expired,
+        "vix_cache_age_seconds": vix_cache_age,
+        "us10y_is_cache": us10y_is_cache,
+        "us10y_is_expired": us10y_is_expired,
+        "us10y_cache_age_seconds": us10y_cache_age,
+        "sahm_is_expired": sahm_is_expired,
+        "sahm_cache_age_seconds": sahm_cache_age,
         "payout_threshold": payout_threshold,
         "fedwatch_probability": fedwatch_prob,
         "fedwatch_is_fallback": fedwatch_is_fallback,

@@ -5,11 +5,12 @@ import math
 import pandas as pd
 from dataclasses import dataclass, field
 from datetime import datetime, date
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Literal, Optional
 from py_vollib.black_scholes_merton.greeks.analytical import delta
 from config import RISK_FREE_RATE
 from database.holdings import get_user_holdings
 from database.orders import get_user_active_orders
+from market_analysis.index_microstructure import MACRO_GEX_STALE_MAX_AGE_SECONDS
 from market_analysis.sentiment_engine import SentimentEngine
 from market_analysis.option_quote import resolve_option_mid
 from services.market_data_service import (
@@ -523,31 +524,136 @@ def _optional_positive_float(val: Any) -> Optional[float]:
     return f if f is not None and f > 0 else None
 
 
+RECESSION_SAHM_THRESHOLD: float = 0.5
+RECESSION_US10Y_THRESHOLD: float = 4.5
+RECESSION_VIX_THRESHOLD: float = 20.0
+MACRO_US10Y_CACHE_MAX_AGE_SECONDS: float = MACRO_GEX_STALE_MAX_AGE_SECONDS
+MACRO_SAHM_CACHE_MAX_AGE_SECONDS: float = 45 * 86400.0
+
+
+@dataclass(frozen=True)
+class RecessionWarningStatus:
+    """經濟衰退警告三態判定結果（供 `/market` 面板與 Covered Call 閘門共用）。"""
+
+    state: Literal["WARNING", "NORMAL", "UNKNOWN"]
+    triggers: tuple[str, ...]
+    missing: tuple[str, ...]
+
+    @property
+    def is_warning(self) -> bool:
+        return self.state == "WARNING"
+
+    @property
+    def cc_unlock_allowed(self) -> bool:
+        return self.state == "NORMAL"
+
+
+def evaluate_recession_warning(
+    sahm_rule: Optional[float],
+    us10y: Optional[float],
+    vix: Optional[float],
+) -> RecessionWarningStatus:
+    """三值 fail-closed 評估經濟衰退警告。
+
+    觸發條件：薩姆規則 >= 0.50，或 (US10Y > 4.5% 且 VIX > 20)。
+    - 任一條件確定成立 → `WARNING`（附 triggers 明細）
+    - 兩條件皆確定不成立 → `NORMAL`
+    - 無法排除衰退（未知或過期輸入導致分支未決）→ `UNKNOWN`（僅列實際阻塞判定之缺失項目）
+    """
+    sahm = _optional_finite_float(sahm_rule)
+    y10 = _optional_positive_float(us10y)
+    if y10 is not None and y10 > 10.0:
+        y10 = y10 / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
+    vix_val = _optional_positive_float(vix)
+
+    triggers_list: list[str] = []
+    sahm_flag: Optional[bool] = None
+    if sahm is not None:
+        sahm_flag = sahm >= RECESSION_SAHM_THRESHOLD
+        if sahm_flag:
+            triggers_list.append(
+                f"薩姆規則 {sahm:.2f} ≥ {RECESSION_SAHM_THRESHOLD:.2f}"
+            )
+
+    rate_flag: Optional[bool] = (
+        y10 > RECESSION_US10Y_THRESHOLD if y10 is not None else None
+    )
+    vix_flag: Optional[bool] = (
+        vix_val > RECESSION_VIX_THRESHOLD if vix_val is not None else None
+    )
+
+    rate_vix_flag: Optional[bool]
+    if rate_flag is False or vix_flag is False:
+        rate_vix_flag = False
+    elif (
+        rate_flag is True
+        and vix_flag is True
+        and y10 is not None
+        and vix_val is not None
+    ):
+        rate_vix_flag = True
+        triggers_list.append(
+            f"US10Y {y10:.2f}% > {RECESSION_US10Y_THRESHOLD:.1f}% "
+            f"& VIX {vix_val:.2f} > {RECESSION_VIX_THRESHOLD:.0f}"
+        )
+    else:
+        rate_vix_flag = None
+
+    if triggers_list:
+        return RecessionWarningStatus(
+            state="WARNING",
+            triggers=tuple(triggers_list),
+            missing=(),
+        )
+    if sahm_flag is False and rate_vix_flag is False:
+        return RecessionWarningStatus(
+            state="NORMAL",
+            triggers=(),
+            missing=(),
+        )
+
+    missing_list: list[str] = []
+    if sahm_flag is None:
+        missing_list.append("薩姆規則")
+    if rate_vix_flag is None:
+        if rate_flag is None:
+            missing_list.append("US10Y")
+        if vix_flag is None:
+            missing_list.append("VIX")
+    return RecessionWarningStatus(
+        state="UNKNOWN",
+        triggers=(),
+        missing=tuple(missing_list),
+    )
+
+
 async def is_covered_call_unlock_allowed() -> bool:
     """判斷當前是否允許解鎖 Covered Call。
 
     RECESSION_WARNING = 薩姆規則 >= 0.5，或 (US10Y > 4.5% 且 VIX > 20)。任一輸入
-    未知時**不再補 sahm 0.35 / us10y 4.25 / VIX 18**：以三值邏輯判定，只有在
-    能確定「非衰退」時才放行，無法排除衰退時 fail-closed 回傳 False。
+    未知或過期時以三值邏輯判定，只有在能確定「非衰退」時才放行，無法排除衰退時
+    fail-closed 回傳 False。
     """
-    from database import get_kv_cache
+    from database import get_kv_cache_fresh
     from services.market_data_service import get_quote, get_vix_spot_strict
     from market_analysis.index_microstructure import fetch_core_macro_metrics
 
-    # 1. 取得薩姆規則指標 (月度資料，KV 快取即為最近一次真實值)。薩姆值可為 0
+    # 1. 取得薩姆規則指標 (月度資料，套用 45 天時效上限)。薩姆值可為 0
     # 或負值 (失業率低於前 12 個月低點)，是有效讀值，不可當成缺值。
     sahm_rule = _optional_finite_float(
-        await asyncio.to_thread(get_kv_cache, "macro_sahm_rule")
+        await asyncio.to_thread(
+            get_kv_cache_fresh, "macro_sahm_rule", MACRO_SAHM_CACHE_MAX_AGE_SECONDS
+        )
     )
     if sahm_rule is None:
         try:
             core_data = await fetch_core_macro_metrics()
-            if not core_data.get("_is_fallback"):
+            if isinstance(core_data, dict) and not core_data.get("_is_fallback"):
                 sahm_rule = _optional_finite_float(core_data.get("sahm_rule"))
         except Exception:
             sahm_rule = None
 
-    # 2. 取得國債收益率 (即時 quote，退回盤中排程寫入的 KV 快取)
+    # 2. 取得國債收益率 (即時 quote，退回具 3 天時效上限的 KV 快取)
     us10y: Optional[float] = None
     try:
         q = await get_quote("^TNX")
@@ -557,7 +663,9 @@ async def is_covered_call_unlock_allowed() -> bool:
         us10y = None
     if us10y is None:
         us10y = _optional_positive_float(
-            await asyncio.to_thread(get_kv_cache, "macro_us10y")
+            await asyncio.to_thread(
+                get_kv_cache_fresh, "macro_us10y", MACRO_US10Y_CACHE_MAX_AGE_SECONDS
+            )
         )
     if us10y is not None and us10y > 10.0:
         us10y = us10y / 10.0  # 確保百分比格式 (e.g. 43.5 -> 4.35)
@@ -568,25 +676,25 @@ async def is_covered_call_unlock_allowed() -> bool:
     except Exception:
         vix = None
 
-    sahm_flag: Optional[bool] = sahm_rule >= 0.5 if sahm_rule is not None else None
-    rate_flag: Optional[bool] = us10y > 4.5 if us10y is not None else None
-    vix_flag: Optional[bool] = vix > 20.0 if vix is not None else None
-    if rate_flag is False or vix_flag is False:
-        rate_vix_flag: Optional[bool] = False
-    elif rate_flag is True and vix_flag is True:
-        rate_vix_flag = True
-    else:
-        rate_vix_flag = None
-
-    if sahm_flag is True or rate_vix_flag is True:
-        return False  # 確定衰退警告
-    if sahm_flag is False and rate_vix_flag is False:
-        return True  # 確定非衰退
-    logger.warning(
-        "Covered Call 解鎖衰退閘門資料不足 (fail-closed)："
-        f"sahm={sahm_rule} us10y={us10y} vix={vix}"
-    )
-    return False
+    status = evaluate_recession_warning(sahm_rule, us10y, vix)
+    if status.state == "WARNING":
+        logger.warning(
+            "Covered Call 解鎖衰退閘門觸發 (%s)：sahm=%s us10y=%s vix=%s",
+            "；".join(status.triggers),
+            sahm_rule,
+            us10y,
+            vix,
+        )
+    elif status.state == "UNKNOWN":
+        logger.warning(
+            "Covered Call 解鎖衰退閘門資料不足 (fail-closed，缺少：%s)："
+            "sahm=%s us10y=%s vix=%s",
+            "、".join(status.missing),
+            sahm_rule,
+            us10y,
+            vix,
+        )
+    return status.cc_unlock_allowed
 
 
 # 安全提領紅線（規格：docs/macro_sentiment/01_macro_escape_top_matrix.md §2.6）
