@@ -303,7 +303,7 @@ flowchart TD
    - **底牆支撐緩衝雙邊界（Wall Buffer Guard）**：進場前嚴格整合 [`06_dynamic_adaptive_room_threshold.md`](06_dynamic_adaptive_room_threshold.md) 公式 B 要求 $P_{\text{close}} \ge \text{PutWall} + 0.5 \times \text{ATR}_{15m}$。
 
 8. **`PYRAMID_ADD` 條件二不變式禁止放寬**：擠壓參考停損 $\ge$ `avg_cost` 是加碼機制與盲目攤平的唯一分界。任一資料缺失導致無法判定的條件（D／W K 線缺失、參考停損算不出來）一律 fail-closed 不加碼，因為本情境是**承擔新曝險**的決策，與既有部位「是否該出場」的 fail-open 慣例刻意不同。
-9. **`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 的插入位置**：`PYRAMID_ADD` 評估插入 `check_satellite_rebalancing_impl` 的 per-asset 迴圈中、`TRANSITION_ENGINE` 之後、SL/TP 階梯計算之前，重用同一輪已算好的 `spot`／`session_vwap`／`gamma_flip`／`net_gex` 等 metrics，避免重複抓取；條件四的 60 日高點抓取延遲至條件一~三皆通過後才發動，條件八的宏觀逃頂評分延遲至條件一~四皆通過後才發動（後者由呼叫端提供一個每位使用者記憶化一次的 async callable，避免對每個持倉重複計算）。
+9. **`PYRAMID_ADD` 與 `TRANSITION_ENGINE` 的插入位置**：`PYRAMID_ADD` 評估插入 `check_satellite_rebalancing_impl` 的 per-asset 迴圈中、`TRANSITION_ENGINE` 之後、SL/TP 階梯計算之前，重用同一輪已算好的 `spot`／`session_vwap`／`gamma_flip`／`net_gex` 等 metrics，避免重複抓取；條件二～四的多時間框架擠壓判定（`squeeze_entry.evaluate_symbol()`，三次 K 線抓取）延遲至條件一／五／六皆通過後才發動，條件八的宏觀逃頂評分延遲至條件一～六皆通過後才發動（後者由呼叫端提供一個每位使用者記憶化一次的 async callable，避免對每個持倉重複計算）。
 10. **`PYRAMID_ADD` 曝險超限降量而非拒絕**：條件七超過 `profile.max_satellite_budget_pct` 時，以剩餘預算重新反推可加碼股數上限（`binding_constraint = "EXPOSURE_CAP"`），不足 1 股才拒絕，與 `short_entry_sizing.py` 既有的曝險上限降量邏輯一致。
 11. **多頭現貨一律顧問化**：多頭現貨持倉的情境三（`SATELLITE_REBALANCE`）指令固定摺疊為位階告知或丟棄（原 `portfolio_mode` COMMAND／ADVISORY 切換已移除，欄位與遷移 v079 保留但不再讀寫），情境四（`MARGIN_DEFENSE`，帳戶生存線）不受影響。轉換規則、丟棄項與唯一防護（`RolloverInstruction.action` 為純 `str`）詳見 [`05_dual_track_anti_washout_stop_loss.md`](05_dual_track_anti_washout_stop_loss.md) §3.1／§5.9。`PYRAMID_ADD`（情境十）刻意**不**受影響：加碼是新增曝險而非減碼，與 B&H 策略相容。
 
