@@ -525,12 +525,22 @@ async def test_refresh_exception_after_flag_before_first_edit_restores() -> None
     """旗標已設、第一次 edit 前拋例外（`transition_settled.clear()`）仍走復原分支。"""
     failure = RuntimeError("clear 失敗")
     flags_at_failure: list[bool] = []
+    before_click: list[bool] = []
+    disabled_at_failure: list[bool] = []
+    labels_at_failure: list[str] = []
 
     def inject(view: BatchScanPaginatedView) -> None:
+        before_click.extend(getattr(c, "disabled") for c in view.children)
+        button = _btn(view)
+
         class FailFirstClear(asyncio.Event):
             def clear(self) -> None:
                 if not flags_at_failure:
                     flags_at_failure.append(view.refresh_in_progress)
+                    disabled_at_failure.extend(
+                        getattr(c, "disabled") for c in view.children
+                    )
+                    labels_at_failure.append(str(button.label))
                     raise failure
                 super().clear()
 
@@ -545,6 +555,10 @@ async def test_refresh_exception_after_flag_before_first_edit_restores() -> None
 
     assert raised is failure
     assert flags_at_failure == [True]
+    # 失敗當下子元件已全數停用、標籤已換成更新中，復原分支才有東西可還原
+    assert disabled_at_failure and all(disabled_at_failure)
+    assert any(not d for d in before_click)
+    assert labels_at_failure and labels_at_failure[0].startswith("⏳ 更新中")
     it.response.edit_message.assert_not_awaited()
 
 

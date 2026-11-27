@@ -11,7 +11,12 @@ from typing import Any
 
 import pytest
 
-from tests.unit.network_guard import NetworkGuard, _is_loopback, _needs_dns
+from tests.unit.network_guard import (
+    NetworkGuard,
+    _is_loopback,
+    _is_outbound,
+    _needs_dns,
+)
 
 _BLOCKED = "測試不得連網"
 _HOST = "example.invalid"
@@ -90,6 +95,36 @@ def test_localhost_variants_normalized() -> None:
         assert resolved == ["LOCALHOST."]
         assert len(guard.attempts) == 1
         assert "localhost.evil.com" in guard.attempts[0]
+
+
+def test_connect_allows_localhost_variants(
+    _global_network_block: NetworkGuard,
+) -> None:
+    """str 與 bytes 的 localhost／loopback 主機可實際連線；非 loopback 照常阻擋。"""
+    before = len(_global_network_block.attempts)
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
+        server.bind(("127.0.0.1", 0))
+        server.listen(16)
+        port = server.getsockname()[1]
+        for host in ("localhost", "LOCALHOST", b"localhost", b"127.0.0.1"):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(0.5)
+                client.connect((host, port))
+                assert client.getpeername()[0] == "127.0.0.1"
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(0.5)
+                assert client.connect_ex((host, port)) == 0
+
+    assert len(_global_network_block.attempts) == before
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        assert not _is_outbound(sock, ("localhost.", 80))
+        assert not _is_outbound(sock, (b"LOCALHOST.", 80))
+        assert _is_outbound(sock, (b"192.0.2.1", 80))
+        with pytest.raises(OSError, match=_BLOCKED):
+            sock.connect((b"192.0.2.1", 9))
 
 
 def test_blocks_dns_getaddrinfo() -> None:
