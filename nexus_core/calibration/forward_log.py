@@ -712,6 +712,17 @@ SHADOW_VERDICT_WORSE = "影子否決組顯著較差（支持評估接進判定�
 SHADOW_VERDICT_BETTER = "影子否決組反而較好（不支持否決）"
 SHADOW_VERDICT_NO_DIFF = "無顯著差異（不支持否決）"
 
+# 判讀已退役的分組（2026-11-27 使用者決定，docs/architecture/05 §5.18）：自
+# 2026-10-30 起這四組幾乎恆為 true，放行組無法累積到判讀所需樣本。紀錄與分組數據
+# 照常輸出，只把判讀文字改為「已退役」。
+SHADOW_RETIRED_KEYS: tuple[str, ...] = (
+    "sv_f_ceil",
+    "sv_f_rr",
+    "sv_any",
+    "sv_f_rr22",
+)
+SHADOW_VERDICT_RETIRED = "已退役（2026-11-27；僅列數據，不判讀）"
+
 Closes = Mapping[str, Sequence[tuple[date, float]]]
 
 
@@ -1020,6 +1031,8 @@ def _shadow_veto_groups(
                     entry["verdict"] = SHADOW_VERDICT_BETTER
                 else:
                     entry["verdict"] = SHADOW_VERDICT_NO_DIFF
+        if key in SHADOW_RETIRED_KEYS:
+            entry["verdict"] = SHADOW_VERDICT_RETIRED
         out[key] = entry
     return out
 
