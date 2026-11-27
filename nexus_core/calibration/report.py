@@ -165,6 +165,11 @@ def _render_squeeze_block(title: str, data: dict[str, Any]) -> list[str]:
             f"{_fmt(g2.get('excess_ci'))}、t={_fmt(g2.get('t_stat'))}；"
             f"{verdict}"
         )
+    if "control_excluded_other_source" in g2:
+        lines.append(
+            "  - G.2 對照組：已排除其他來源（含 `SYMBOL_VIEW`）有進場紀錄的 (標的, 日) "
+            f"{g2['control_excluded_other_source']} 組"
+        )
     strata = g2.get("strata")
     if strata:
         lines += _render_squeeze_strata(strata)
@@ -388,6 +393,14 @@ def render_markdown(results: dict[str, Any]) -> str:
                 f"- 牆體深度比與牆距分佈：樣本起日 {forward['gex_since']}"
                 "（edge 股息率修正，microstructure/03 §5.w）；"
                 f"排除前期 {forward.get('n_excluded_before_gex_since', 0)} 列",
+                "",
+            ]
+        canonical = studies.get("skew_canonical_dates")
+        if isinstance(canonical, dict):
+            lines += [
+                "- Skew 門檻 `CANONICAL` 紀錄交易日數："
+                f"{canonical.get('n_dates')}／{canonical.get('min_dates')}"
+                f"（以實際紀錄日計，§5.13）；{canonical.get('status')}",
                 "",
             ]
         for name, title in (
