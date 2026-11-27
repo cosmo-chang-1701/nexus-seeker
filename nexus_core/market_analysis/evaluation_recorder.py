@@ -1,4 +1,4 @@
-"""evaluation_recorder.py — Regime 分類與進場鐵律評估的前向蒐集記錄器。
+"""evaluation_recorder.py — Regime 分類、進場判定與出場分層訊號的前向蒐集記錄器。
 
 為什麼需要：GEX 相關門檻 (Put Wall、Gamma Flip、次級負 GEX 節點、公式 A 的 2.2×Risk)
 **無法回測**——edge scraper 的 `gex_snapshot` 與 core 的 `kv_cache gex_metrics_*`

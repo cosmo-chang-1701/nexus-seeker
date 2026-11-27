@@ -235,9 +235,9 @@ class SchedulerCog(commands.Cog):
     # ==========================================
     @tasks.loop(time=time(hour=3, minute=30, tzinfo=ny_tz))
     async def regime_outcome_labeler(self) -> None:
-        """為前向蒐集的 Regime／進場鐵律評估紀錄回填事後走勢，作為 GEX 相關門檻
-        的校準資料 (services/regime_outcome_labeler.py)。與 03:00 維護任務分開：
-        本任務含逐標的網路抓取，不應拖延 WAL checkpoint。"""
+        """為前向蒐集的 Regime 分類、進場判定與出場分層訊號紀錄回填事後走勢，作為
+        GEX 相關門檻的校準資料 (services/regime_outcome_labeler.py)。與 03:00 維護
+        任務分開：本任務含逐標的網路抓取，不應拖延 WAL checkpoint。"""
         if not getattr(self.bot, "_is_leader_instance", True):
             return
 

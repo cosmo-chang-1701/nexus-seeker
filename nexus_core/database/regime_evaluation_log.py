@@ -1,4 +1,6 @@
-"""regime_evaluation_log.py — Regime／進場鐵律評估紀錄與事後結果標註的存取層。
+"""regime_evaluation_log.py — 前向蒐集評估紀錄與事後結果標註的存取層。
+
+評估紀錄涵蓋 Regime 分類、進場判定（左側／做空六重鐵律、多頭擠壓）與出場分層訊號。
 
 所有寫入一律經 `database/connection.py` 的寫入佇列 (單一寫入者不變式，見
 AGENTS.md)。資料表定義見 migrations/v075_add_regime_evaluation_log.py。
