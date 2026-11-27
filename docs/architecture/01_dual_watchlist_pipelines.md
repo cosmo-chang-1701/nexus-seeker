@@ -158,7 +158,7 @@ flowchart TD
 ### 5.4 進場顧問（`_dispatch_entry_advisor_alert`）的邊界條件
 - **不動心跳契約**：`WatchlistTacticalPlan.scenario` Literal（`premium-harvest` / `hard-hedge` / `wait`）與 `nro.py` 零改動；進場顧問原與已退役（2026-10-17）的 SPEAR 並列，現為迴圈內唯一的獨立派發。
 - **位置**：呼叫點在使用者／標的迴圈內、心跳推播之後；SPEAR 已於 2026-10-17 退役，前方不再有 `enable_analyst_agent` 閘門。
-- **策略分派與 `/x` 一致**：沿用 `/settings` 的 `trading_strategy`（`RIGHT_SIDE`／`LEFT_SIDE`／`SHORT_SIDE`／`DYNAMIC`），`DYNAMIC` 依 Regime 路由（III／III-B → 右側、I → 左側、V → 做空、II／IV → 不進場）。要收到左側接刀買點須先把 `/settings` 切成 `DYNAMIC`。
+- **策略分派與 `/x` 一致**：沿用 `/settings` 的 `trading_strategy`（`RIGHT_SIDE`／`LEFT_SIDE`／`SHORT_SIDE`／`DYNAMIC`；未設定時視為 `RIGHT_SIDE`）。`RIGHT_SIDE` 走多時間框架擠壓規則、`LEFT_SIDE` 走左側鐵律、`SHORT_SIDE` 走做空鐵律；`DYNAMIC` 依 Regime 路由（I → 左側、V → 做空、II／III／III-B／IV → 多時間框架擠壓規則）。要收到左側接刀買點須把 `/settings` 切成 `LEFT_SIDE` 或 `DYNAMIC`（後者僅 Regime I 時）。
 - **價位沿用單一定義**：停損 `compute_reference_stop()`（牆 ∓ 0.5×ATR₁₅ₘ，**不是**心跳的 `ANTI_WASHOUT_ATR_MULT=1.5`，見 §5 ATR 消歧義）、目標 `resolve_effective_target()`（公式 D）、做空價位 `build_short_entry_levels()`；缺資料時該欄位顯示 N/A，做空價位不合法則 fail-closed 不推播。
 - **去重與乾跑**：去重鍵 `advisory_entry_{uid}_{SYMBOL}_{Regime 或策略}_{YYYYMMDD}`（擠壓路徑以等級入鍵：`advisory_entry_{uid}_{SYMBOL}_SQZ_T{n}_{YYYYMMDD}`，同日 T1 升級為 T3 是新訊號、會再發一次）；任何擋下（非 green、頻道關閉、鐵律未過、乾跑）**都不寫旗標**，否則正式開啟當天所有標的都被當日旗標鎖住。
 - **前向蒐集**：評估包在 `evaluation_source("WATCHLIST_ADVISOR")`，乾跑期間照常記錄，作為觀察期的資料來源。
