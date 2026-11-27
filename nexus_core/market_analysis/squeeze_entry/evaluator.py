@@ -10,6 +10,7 @@ from typing import List, Optional
 
 import market_time
 from market_analysis.atr_utils import compute_atr_14_from_daily_df
+from market_analysis.rsi_reentry import RsiReentryStatus, compute_rsi_reentry
 from market_analysis.squeeze_entry.resistance import (
     ResistanceContext,
     detect_resistance,
@@ -30,6 +31,7 @@ class SqueezeEvaluation:
     result: SqueezeEntryResult
     matrix: PsqMatrix
     resistance: Optional[ResistanceContext]
+    rsi_reentry: Optional[RsiReentryStatus] = None
 
 
 async def evaluate_symbol(
@@ -44,13 +46,16 @@ async def evaluate_symbol(
     matrix, df_daily = await fetch_psq_matrix(symbol, now_ny)
 
     resistance: Optional[ResistanceContext] = None
-    if df_daily is not None and not df_daily.empty and spot > 0:
-        d_conf, _ = split_daily_confirmed(df_daily, now_ny.date())
-        atr_1d = compute_atr_14_from_daily_df(d_conf)
-        m65 = matrix.get("65m")
-        resistance = detect_resistance(
-            d_conf, spot, atr_1d, m65.last_close if m65 is not None else None
-        )
+    rsi_reentry: Optional[RsiReentryStatus] = None
+    if df_daily is not None and not df_daily.empty:
+        rsi_reentry = compute_rsi_reentry(df_daily, now_ny.date())
+        if spot > 0:
+            d_conf, _ = split_daily_confirmed(df_daily, now_ny.date())
+            atr_1d = compute_atr_14_from_daily_df(d_conf)
+            m65 = matrix.get("65m")
+            resistance = detect_resistance(
+                d_conf, spot, atr_1d, m65.last_close if m65 is not None else None
+            )
 
     result = evaluate_squeeze_entry(matrix, resistance, hard_vetoes, downgrade_reason)
-    return SqueezeEvaluation(result, matrix, resistance)
+    return SqueezeEvaluation(result, matrix, resistance, rsi_reentry=rsi_reentry)

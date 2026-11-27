@@ -239,6 +239,7 @@ async def _evaluate_squeeze_long(
         regime=regime_value,
         candidate_radar=radar,
         shadow_vetoes=shadow,
+        rsi_reentry=ev.rsi_reentry,
     )
     reason = r.reason
     if r.resistance_note:
