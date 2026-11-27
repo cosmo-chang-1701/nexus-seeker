@@ -1,6 +1,6 @@
 # 多時間框架擠壓進場與加碼技術規格書 (Multi-Timeframe Squeeze Entry)
 
-> 狀態：2026-10 上線，**乾跑中**（`SQUEEZE_ENTRY_DRY_RUN = true`）。`/x` 面板立即顯示判定；推播需等前向樣本通過 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 G 的準則。日線事件研究（§3.2）顯示各等級**沒有統計顯著的擇時優勢**。
+> 狀態：2026-10 上線，**乾跑中**（`SQUEEZE_ENTRY_DRY_RUN = true`）。`/x` 面板立即顯示判定；推播需等前向樣本通過 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.8 G 的準則。日線事件研究（§3.2）顯示各等級**沒有統計顯著的擇時優勢**。實際推播另須外層總閘門 `WATCHLIST_ADVISOR_DRY_RUN = false`（[`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.11）。
 
 ## 1. 核心哲學與適用市場環境
 
@@ -122,7 +122,7 @@ flowchart TD
     R -- 是 --> RW[附上壓力區警示：只標註、不擋]
     R -- 否 --> E[建議建倉：等級 + 部位 + 參考停損]
     RW --> E
-    E --> DR{SQUEEZE_ENTRY_DRY_RUN?}
+    E --> DR{WATCHLIST_ADVISOR_DRY_RUN 或 SQUEEZE_ENTRY_DRY_RUN 為 true?}
     DR -- true --> FL[只寫前向紀錄 ENTRY_SQUEEZE]
     DR -- false --> PUSH[推播 advisory_entry_signal]
 ```
@@ -191,7 +191,7 @@ flowchart TD
   1. **不套用 VIX 倉位乘數**（建倉與加碼皆然，使用者 2026-10-04 決定）。`get_vix_sizing_multiplier(vix, "DIRECTIONAL_LONG")` 走的是賣方階梯，VIX < 15 時乘數為 0，會讓平靜行情（擠壓最常出現的時候）所有建議變成 0%、加碼股數恆為 0。VIX 階梯只保留作顯示。
   2. **進場顧問不套用 `max_satellite_budget_pct`**：判定以 `(strategy:symbol, 15m bar)` 跨使用者共用快取，與使用者無關；部位上限只在加碼（條件七）套用。
 - **錨點**：W、3D、65m 依 TradingView 文件的 Bar alignment 規則切分；Yahoo 與 TradingView 的資料源若有缺漏日，個別 K 棒仍可能不同。
-- **翻轉 `SQUEEZE_ENTRY_DRY_RUN`**：依 architecture/05 §5.8 G；由人工決定，不得因單一案例翻轉。
+- **翻轉 `SQUEEZE_ENTRY_DRY_RUN`**：依 architecture/05 §5.8 G；由人工決定，不得因單一案例翻轉。實際推播另須 `WATCHLIST_ADVISOR_DRY_RUN = false`（§5.11 判準含擠壓路徑的 DM 量）。
 
 ### 5.x /x 面板顯示（2026-10-07）
 

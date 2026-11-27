@@ -228,7 +228,7 @@ elif (
 | 1 | 日級母體的實際覆蓋 | `sentiment_daily_canonical`（每個 `symbol` 的 `SKEW_D25` 筆數）、`calculate_skew()` 回傳的 `skew_percentile_source` | 上線後 v080 回填讓多少標的直接進入 `CANONICAL`；其餘標的約 20 個交易日後才離開 `INTRADAY_FALLBACK`。全部標的長期停在回退池代表 16:15 快照或 08:45 補寫沒有執行（檢查 `📸 [Canonical 日級快照]` 日誌） |
 | 2 | 分位來源切換後的觸發頻率 | 三重合流、防洗盤、偽突破訊息的每日則數 | 切換到日級母體後觸發頻率會改變（日級母體的尾端頻率與舊的 500 列池不同），這是預期中的；若單一標的連續多日每輪都觸發，檢查該標的母體是否被單一行情段支配 |
 | 3 | robust Z 的可用率 | `skew_robust_z` 為 `None` 的比例 | `ROBUST_Z_MIN_IQR`（0.25 百分點）若使大部分標的 Z 為 `None`，代表下限過高；Z 目前只作參考，不影響閘門 |
-| 4 | 門檻前向驗證 | `calibration forward-report` 的「門檻前向驗證 → Skew 分位區間」表（依 `CANONICAL`／`INTRADAY_FALLBACK` 分開） | 成熟標的（`skew_is_canonical`）累積 $\ge 60$ 個交易日、每個分位區間 $n \ge 100$ 後才可判讀。高分位組（85–90、90–98、$\ge 98$）的逆向先觸及率須**顯著高於** 15–85 組（bootstrap CI 不重疊），才有依據調整 `SKEW_*_PERCENTILE`；否則維持現值 |
+| 4 | 門檻前向驗證 | `calibration forward-report` 的「門檻前向驗證 → Skew 分位區間」表（依 `CANONICAL`／`INTRADAY_FALLBACK` 分開） | `CANONICAL` 紀錄交易日數 $\ge 60$（以實際紀錄日計，2026-11-26 使用者決定；口徑見 [`../architecture/05_calibration_harness_and_forward_collection.md`](../architecture/05_calibration_harness_and_forward_collection.md) §5.13，報表 `skew_canonical_dates`）、每個分位區間 $n \ge 100$ 後才可判讀。高分位組（85–90、90–98、$\ge 98$）的逆向先觸及率須**顯著高於** 15–85 組（bootstrap CI 不重疊），才有依據調整 `SKEW_*_PERCENTILE`；否則維持現值 |
 
 調整時只改 `skew_taxonomy.py` 的具名常數（全部閘門共用），並同步更新 §4 常數表與 `test_canonical_resampling.py::test_skew_gate_thresholds_unchanged`。
 

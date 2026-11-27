@@ -129,11 +129,20 @@ def test_depth_table_discloses_downward_not_judged() -> None:
     )
     for res in (short, same, lower):
         assert res["下調判讀"] == DEPTH_DOWNWARD_NOT_JUDGED
-    assert "下調條件未自動判讀" in DEPTH_DOWNWARD_NOT_JUDGED
+    assert DEPTH_DOWNWARD_NOT_JUDGED.startswith(
+        "下調方向已擱置（2026-11-26 使用者決定）"
+    )
     assert short["判讀"].startswith("樣本不足（可標註日期 5/20")
     assert same["判讀"] == "未見 Q2 明顯低於 Q3／Q4，維持 GEX_WALL_MIN_DEPTH_RATIO"
     assert "提案" in lower["判讀"]
     assert depth_quartile_hold_rates([]) == {}
+
+
+def test_depth_downward_text_reflects_user_decision() -> None:
+    assert "尚未定義" not in DEPTH_DOWNWARD_NOT_JUDGED
+    assert "未測試" not in DEPTH_DOWNWARD_NOT_JUDGED
+    res = depth_quartile_hold_rates(_depth_labeled(24, dict.fromkeys(range(4), True)))
+    assert res["下調判讀"] == DEPTH_DOWNWARD_NOT_JUDGED
 
 
 def _forward_rows(day: str, n: int) -> list[dict[str, Any]]:
