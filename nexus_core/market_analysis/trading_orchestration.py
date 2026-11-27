@@ -149,7 +149,7 @@ class _CoveredCallInputs:
     current_cost: float
     covered_shares: float = 0.0
     existing_calls: List[Dict[str, Any]] = field(default_factory=list)
-    covered_error: Optional[ValueError] = None
+    covered_error: Optional[str] = None
     uncovered_shares: float = 0.0
     max_new_contracts: int = 0
     orders: List[Dict[str, Any]] = field(default_factory=list)
@@ -158,8 +158,9 @@ class _CoveredCallInputs:
 def _load_covered_call_inputs(user_id: int, symbol: str) -> _CoveredCallInputs:
     """依序讀取持股、既有 Short Call 與活躍掛單 (同步 SQLite，須於工作執行緒呼叫)。
 
-    無持股、`get_covered_shares` 拋出 `ValueError` (存入 `covered_error`)、或
-    未覆蓋股數不足 100 股時提早回傳，後續資料不再讀取。其他例外一律上拋。
+    無持股、`get_covered_shares` 拋出 `ValueError`、或未覆蓋股數不足 100 股時
+    提早回傳，後續資料不再讀取。其他例外一律上拋。`ValueError` 只存訊息字串於
+    `covered_error`，不保留例外物件，以免 traceback 經 frame 形成參照循環。
     """
     holdings = get_user_holdings(user_id)
     current_shares = 0.0
@@ -179,7 +180,7 @@ def _load_covered_call_inputs(user_id: int, symbol: str) -> _CoveredCallInputs:
             user_id, symbol
         )
     except ValueError as e:
-        inputs.covered_error = e
+        inputs.covered_error = str(e)
         return inputs
     inputs.uncovered_shares = max(0.0, current_shares - inputs.covered_shares)
     inputs.max_new_contracts = int(inputs.uncovered_shares // 100)
@@ -392,7 +393,7 @@ async def filter_cc_recovery_targets(symbol: str) -> Optional[Dict[str, Any]]:
         return None
 
     # 2. 獲取波動率 (IV 優先，儲存之歷史 IV 次之，最後以 30天 HV 代理)
-    stored_iv = SentimentEngine.get_last_stored_iv(symbol)
+    stored_iv = await asyncio.to_thread(SentimentEngine.get_last_stored_iv, symbol)
     if stored_iv and stored_iv > 0.01:
         fallback_iv = stored_iv
     else:

@@ -725,7 +725,9 @@ class PortfolioMonitorCog(commands.Cog):
                         cc_unlock_cache_key = (
                             f"cc_unlock_{u_id}_{sym}_{cc_unlock_today_str}"
                         )
-                        if database.get_kv_cache(cc_unlock_cache_key):
+                        if await asyncio.to_thread(
+                            database.get_kv_cache, cc_unlock_cache_key
+                        ):
                             continue
                         # 檢查雷達數據，若符合強勢多頭+低IV+強支撐條件則阻斷
                         r_data = radar_cache_map.get(sym)
@@ -1289,7 +1291,7 @@ class PortfolioMonitorCog(commands.Cog):
                         # 兩級體制避險：預警版／確定版、第一／二級、HEDGE／STOP_SHORT
                         # 各自獨立去重。
                         dedup_key += regime_hedge_dedup_suffix(ins)
-                        if database.get_kv_cache(dedup_key):
+                        if await asyncio.to_thread(database.get_kv_cache, dedup_key):
                             continue
 
                         scenario_label = _SCENARIO_LABELS.get(scenario, "動態轉倉")
@@ -1554,10 +1556,10 @@ class PortfolioMonitorCog(commands.Cog):
                                 int(_patch_asset_id),
                                 **_state_patch,
                             )
-                        # 審計軌跡：記錄本次實際推送給使用者的轉倉建議本身
-                        # (系統僅提供建議、不代為執行券商下單，故無法追蹤實際
-                        # 成交結果，此處記錄的是「推送了什麼建議」而非「後續
-                        # 執行結果」)，供事後回顧與問責。
+                        # 審計軌跡：記錄本次通知頻道開啟且通過去重的轉倉建議本身
+                        # （含乾跑攔下者，表內無法區分；系統僅提供建議、不代為執行
+                        # 券商下單，故記錄的是「給了什麼建議」而非「後續執行結果」），
+                        # 供事後回顧與問責。
                         await database.log_rollover_instruction(
                             user_id=u_id,
                             symbol=ins["symbol"],

@@ -1,3 +1,4 @@
+import threading
 from typing import Any
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1513,6 +1514,75 @@ async def test_monitor_real_portfolio_task_dedup_suppresses_second_dm_same_day()
     bot.queue_dm.assert_not_called()
     save_kv_mock.assert_not_called()
     log_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_monitor_real_portfolio_task_kv_dedup_reads_off_event_loop() -> None:
+    """轉倉警報與 Covered Call 解鎖的去重預查屬同步 SQLite 讀取，
+    須離開 event loop 執行緒。"""
+    bot = MagicMock()
+    bot.queue_dm = AsyncMock()
+    bot.get_cog = MagicMock(return_value=None)
+
+    with patch("discord.ext.tasks.Loop.start"):
+        cog = PortfolioMonitorCog(bot)
+
+    cog.trading_service.audit_real_portfolio_risk = AsyncMock(return_value=[])  # type: ignore
+    _mock_all_rollover_scenarios(cog)
+
+    holding = {
+        "id": 1,
+        "user_id": 1,
+        "symbol": "NVDA",
+        "metadata": "{}",
+        "quantity": 10.0,
+        "avg_cost": 200.0,
+    }
+
+    cog.rollover_engine.check_satellite_rebalancing = AsyncMock(  # type: ignore
+        return_value=[
+            {
+                "symbol": "NVDA",
+                "action": "REDUCE",
+                "sell_ratio": 0.3,
+                "target_core": "VOO",
+                "reason": "test reason",
+                "scenario": "SATELLITE_REBALANCE",
+            }
+        ]
+    )
+
+    loop_thread = threading.get_ident()
+    reads: list[tuple[str, int]] = []
+
+    def _kv(key: str) -> None:
+        reads.append((key, threading.get_ident()))
+        return None
+
+    with (
+        patch(
+            "cogs.trading.portfolio_monitor.market_time.is_market_open",
+            return_value=True,
+        ),
+        patch("services.llm_service.is_memory_safe", return_value=True),
+        patch("database.holdings.get_all_holdings", return_value=[holding]),
+        patch("database.watchlist.get_user_watchlist", return_value=[]),
+        patch(
+            "market_analysis.trading_orchestration.recommend_covered_calls",
+            new_callable=AsyncMock,
+            return_value={"recommendations": []},
+        ),
+        patch("database.is_notification_enabled", return_value=True),
+        patch("database.get_kv_cache", side_effect=_kv),
+        patch("database.save_kv_cache", new_callable=AsyncMock),
+        patch("database.log_rollover_instruction", new_callable=AsyncMock),
+    ):
+        await cog.monitor_real_portfolio_task()
+
+    for prefix in ("rollover_alert_1_NVDA_", "cc_unlock_1_NVDA_"):
+        threads = [ident for key, ident in reads if key.startswith(prefix)]
+        assert threads, f"未讀取 {prefix} 開頭的去重鍵: {reads}"
+        assert loop_thread not in threads, f"{prefix} 仍在 event loop 執行緒讀取"
 
 
 @pytest.mark.asyncio
