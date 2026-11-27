@@ -2613,12 +2613,10 @@ def create_tactical_symbol_embed(data: Dict[str, Any]) -> discord.Embed:
                             _call_wall_px_outer = call_wall_float
                         elif _cw_flip_c > effective_c_val:
                             _call_wall_px_outer = _cw_flip_c
-                        # 上檔空間門檻自固定 5% 升級為動態自適應波動率門檻
-                        # (room_threshold.py 公式 A)：由該標的「下方實際要冒多少
-                        # 風險」反推「上方要留多少空間」，使 2.2:1 盈虧比成為
-                        # 結構性保證。資料缺失時退回 3.5% 絕對底線，並在旗標
-                        # 下方獨立一行揭露降級原因（使用者有權知道看到的門檻
-                        # 不是完整推導出來的）。
+                        # 這裡只列距現價空間與貼牆帶，不套用 room_threshold.py 公式 A
+                        # 的上檔空間門檻（/x GEX 區塊不發進場判定，見 strategies/06
+                        # §5 第 8 點）。ATR₁₅ₘ 只用來算貼牆帶寬，真實 15m ATR 優先，
+                        # 否則由日線 ATR（atr_14，缺值再取 atr_1d）折算。
                         _cw_atr_1d = _to_float(data.get("atr_14"), 0.0)
                         if _cw_atr_1d <= 0.0:
                             _cw_atr_1d = _to_float(data.get("atr_1d"), 0.0)

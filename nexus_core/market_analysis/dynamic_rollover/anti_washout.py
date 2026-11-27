@@ -1550,7 +1550,7 @@ async def check_satellite_rebalancing_impl(
     risk_profile = resolve_risk_profile(risk_appetite)
 
     # PYRAMID_ADD 條件八 (macro_tier == "NORMAL") 所需的宏觀逃頂評分，於首次
-    # 真正需要時才計算並快取（多數使用者的持倉可能沒有任何符合前七項條件的
+    # 真正需要時才計算並快取（多數使用者的持倉可能沒有任何通過條件一～六的
     # 部位，此舉避免每輪次對每個使用者都白算一次）。與 Scenario 6
     # (macro_top_escape_defense.py) 各自獨立呼叫 evaluate_macro_top_escape_score()
     # ——兩者觸發的動作完全不同 (條件閘門 vs 防禦性減碼)，共用的是評分公式本身。

@@ -172,8 +172,13 @@ async def evaluate_pyramid_add_impl(
     7. 加碼後總曝險未超過 profile.max_satellite_budget_pct：超過時降量而非
        直接拒絕（沿用既有股數計算，只是以曝險上限反推可加碼股數上限）
     8. 非逃頂警戒：`await resolve_macro_tier()` == "NORMAL"（呼叫端每位使用者
-       提供一個記憶化的 async callable，本函式僅在條件一~四皆通過後才真正
-       呼叫，避免對明顯不合格的部位觸發宏觀逃頂評分的多次資料抓取）
+       提供一個記憶化的 async callable；本函式在條件一～六皆通過後才呼叫——
+       條件四只標註、不擋——避免對明顯不合格的部位觸發宏觀逃頂評分的多次
+       資料抓取）
+
+    編號是規格順序，不是評估順序。實際評估順序：條件一、五、六（不需抓取）→
+    條件二～四（`squeeze_entry.evaluate_symbol()`，多時間框架 K 線）→ 條件八 →
+    倉位計算（股數不足 1 股即不加碼）→ 條件七。
 
     僅適用多頭部位 (quantity > 0)；空頭部位完全不進入本路徑。任一資料缺失
     導致無法判定的條件，一律 fail-closed（不加碼），因為本情境是**承擔新
@@ -253,9 +258,9 @@ async def evaluate_pyramid_add_impl(
             f"${resistance.overhead.top:.2f}，尚未突破（只提示，是否等突破由你決定）。"
         )
 
-    # 條件八：非逃頂警戒。刻意放在條件一~七之後才呼叫（宏觀評分呼叫端有自己的
-    # 快取，但仍涉及 VTS/Fear&Greed/FedWatch 三次資料抓取），前面已先行過濾掉
-    # 明顯不合格的部位，避免無謂觸發。
+    # 條件八：非逃頂警戒。刻意放在條件一～六之後、倉位計算與條件七之前才呼叫
+    # （宏觀評分呼叫端有自己的快取，但仍涉及 VTS/Fear&Greed/FedWatch 三次資料
+    # 抓取），前面已先行過濾掉明顯不合格的部位，避免無謂觸發。
     macro_tier = await resolve_macro_tier()
     if macro_tier != "NORMAL":
         return []
