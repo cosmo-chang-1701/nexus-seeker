@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -229,6 +230,16 @@ def _pct(v: Optional[float]) -> str:
     return "—" if v is None else f"{v * 100:+.1f}%"
 
 
+def _floor_pct(v: float) -> str:
+    """比例轉百分比字串，無條件捨去至小數一位（不加正負號）。
+
+    四捨五入會讓 9.95%～10% 的回落顯示成「10.0%」卻判為「尚未出現」；捨去後
+    除 1e-9 容差外，顯示值不會超過實際值。`+ 1e-9` 吸收 `(peak - close) / peak` 的浮點誤差，
+    恰好 10% 仍顯示 10.0%。
+    """
+    return f"{math.floor(v * 1000 + 1e-9) / 10:.1f}%"
+
+
 def _drawdown_lines(check: dict[str, Any] | str) -> list[str]:
     lines = ["", f"## {DRAWDOWN_SYMBOL} 回檔檢核（§5.15）", ""]
     if isinstance(check, str):
@@ -242,7 +253,7 @@ def _drawdown_lines(check: dict[str, Any] | str) -> list[str]:
     return lines + [
         f"- 定義：{DRAWDOWN_SYMBOL} 收盤價相對前 {DRAWDOWN_PEAK_LOOKBACK} 個交易日（含當日）"
         f"最高收盤的跌幅；≥ {threshold} 視為一次回檔（2026-11-26 使用者決定）",
-        f"- 記錄期間最大回落：{check['max_drawdown'] * 100:.1f}%（{check['max_drawdown_date']}）",
+        f"- 記錄期間最大回落：{_floor_pct(check['max_drawdown'])}（{check['max_drawdown_date']}）",
         f"- ≥ {threshold} 回檔：{status}",
     ]
 

@@ -96,6 +96,31 @@ def test_spy_drawdown_unavailable_and_no_record() -> None:
     assert f"- {DRAWDOWN_NO_RECORD}" in render_markdown(empty)
 
 
+def test_spy_drawdown_skips_non_positive_peak() -> None:
+    # 視窗高點 ≤ 0（異常價格）時該日略過：不除以零、不計入 n_days
+    result = _check(_prices([0.0, 100.0, 90.0]), 0, 2)
+    assert result["n_days"] == 2
+    assert result["reached"] is True
+    assert result["first_breach_date"] == _day(2)
+    assert (
+        spy_drawdown(_prices([0.0, -1.0]), _day(0), _day(1))
+        == DRAWDOWN_PRICE_UNAVAILABLE
+    )
+
+
+def test_markdown_floors_drawdown_just_below_threshold() -> None:
+    near = render_markdown(
+        build_report(_regimes(0, 1), [], {}, [], [], spy_prices=_prices([100.0, 90.04]))
+    )
+    assert f"- 記錄期間最大回落：9.9%（{_day(1)}）" in near
+    assert "- ≥ 10% 回檔：尚未出現" in near
+    exact = render_markdown(
+        build_report(_regimes(0, 1), [], {}, [], [], spy_prices=_prices([100.0, 90.0]))
+    )
+    assert f"- 記錄期間最大回落：10.0%（{_day(1)}）" in exact
+    assert f"- ≥ 10% 回檔：已出現（首次 {_day(1)}）" in exact
+
+
 def test_build_report_backward_compatible() -> None:
     result = build_report(_regimes(0, 1), [], {}, [], [])
     assert result["spy_drawdown"] == DRAWDOWN_PRICE_UNAVAILABLE

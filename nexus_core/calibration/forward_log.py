@@ -1075,6 +1075,8 @@ def _squeeze_analysis(
     對照組一律排除 `rows` 內任何 decision=1 列的 (標的, 日)；`control_exclude_pairs`
     非 None 時另排除其中的 (標的, 日)（例如其他來源的進場紀錄），並在
     `g2["control_excluded_other_source"]` 揭露因此多排除的 (標的, 日) 組數。
+    該數在事件日區間與每組取一列之後、取價與 20 日報酬篩選之前計數；被排除者
+    未必有價格或已滿 20 日，因此不等於 `n_control` 的減少量。
     """
     dates_by_sym: dict[str, list[date]] = {
         s: [c[0] for c in v] for s, v in closes.items() if v
